@@ -12,3 +12,11 @@ numpy<2.2                 # ctranslate2 / onnxruntime ABI constraint
 sounddevice
 pynput
 pyperclip                 # --paste mode (required on Wayland)
+
+# Wayland (Ubuntu 24.04+): evdev enables global hotkeys by reading
+# /dev/input/event* directly (requires the user to be in the 'input'
+# group — see README). scipy is used to resample audio when the
+# capture device doesn't support 16 kHz natively (e.g. sof-hda-dsp
+# at 48 kHz → resample_poly 3:1 → 16 kHz for Whisper).
+evdev; sys_platform == "linux"
+scipy; sys_platform == "linux"

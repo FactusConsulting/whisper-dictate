@@ -17,6 +17,7 @@ on Wayland use --paste with a clipboard tool (see README).
 
 Hold RIGHT CTRL, speak, release → text appears at your cursor.
   --key f9        use a different hold-to-talk key (ctrl_r, alt_r, f9…)
+  --key a+b       chord: hold BOTH keys simultaneously (e.g. shift_r+ctrl_r)
   --paste         inject via clipboard + Ctrl+V (instant, atomic — no
                   dropped spaces; clobbers the clipboard)
   --no-type       just print what was heard (don't inject — testing)
@@ -177,9 +178,38 @@ def _transcribe(model: WhisperModel, pcm: np.ndarray,
     return text
 
 
+def _find_arecord_device() -> str | None:
+    # On PipeWire (Ubuntu 24.04+) PortAudio opens ALSA hardware directly and
+    # bypasses PipeWire's mixer — the mic reads as silence. arecord with
+    # -D pipewire routes through PipeWire correctly.
+    import subprocess, shutil, signal
+    if not shutil.which("arecord"):
+        return None
+    for dev in ("pipewire", "default"):
+        try:
+            # Start without -d (duration), immediately SIGTERM after 0.3s
+            p = subprocess.Popen(
+                ["arecord", "-D", dev, "-f", "S16_LE", "-r", "16000", "-"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            time.sleep(0.3)
+            p.send_signal(signal.SIGTERM)
+            p.wait(timeout=2)
+            stderr = p.stderr.read().decode(errors="replace")
+            # SIGTERM gives "Aborted by signal Terminated" — that means it opened OK
+            if "Terminated" in stderr or p.returncode in (0, -15, 15):
+                return dev
+        except Exception:
+            pass
+    return None
+
+
+_ARECORD_DEVICE: str | None = None  # set once at startup
+
+
 class Dictate:
     def __init__(self, model: WhisperModel, key: str, mode: str,
                  lang: str | None):
+        global _ARECORD_DEVICE
         self.model = model
         self.key = key
         self.mode = mode  # "type" | "paste" | "print"
@@ -187,21 +217,48 @@ class Dictate:
         self.frames: list[np.ndarray] = []
         self.recording = False
         self._stream = None
+        self._arecord_proc = None
         self._kb = keyboard.Controller()
+        if _ARECORD_DEVICE is None:
+            _ARECORD_DEVICE = _find_arecord_device()
+        if _ARECORD_DEVICE:
+            print(f"[audio] using arecord -D {_ARECORD_DEVICE} (PipeWire route)", flush=True)
+        else:
+            print("[audio] using sounddevice (direct ALSA)", flush=True)
 
     def _cb(self, indata, frames, t, status):
         if self.recording:
             self.frames.append(indata.copy())
+
+    def _arecord_reader(self, proc):
+        # Read raw S16_LE mono 16kHz from arecord stdout into self.frames
+        chunk = SR * 2 * 1  # 1 second of S16 mono = SR*2 bytes
+        while self.recording:
+            data = proc.stdout.read(chunk // 8)  # read ~125ms chunks
+            if not data:
+                break
+            arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 1)
+            self.frames.append(arr)
 
     def _start(self):
         if self.recording:
             return
         self.frames = []
         self.recording = True
-        self._stream = sd.InputStream(
-            samplerate=SR, channels=1, dtype="int16", callback=self._cb
-        )
-        self._stream.start()
+        if _ARECORD_DEVICE:
+            import subprocess
+            self._arecord_proc = subprocess.Popen(
+                ["arecord", "-D", _ARECORD_DEVICE, "-f", "S16_LE",
+                 "-r", str(SR), "-c", "1", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+            threading.Thread(target=self._arecord_reader,
+                             args=(self._arecord_proc,), daemon=True).start()
+        else:
+            self._stream = sd.InputStream(
+                samplerate=SR, channels=1, dtype="int16", callback=self._cb
+            )
+            self._stream.start()
         print("● listening…", flush=True)
 
     def _inject(self, text: str):
@@ -227,6 +284,10 @@ class Dictate:
         if not self.recording:
             return
         self.recording = False
+        if self._arecord_proc:
+            self._arecord_proc.terminate()
+            self._arecord_proc.wait()
+            self._arecord_proc = None
         if self._stream:
             self._stream.stop()
             self._stream.close()
@@ -248,34 +309,137 @@ class Dictate:
             return
         self._inject(text)
 
+    # pynput key name → evdev key code mapping for common PTT keys
+    _EVDEV_MAP = {
+        'ctrl_l': 'KEY_LEFTCTRL',   'ctrl_r': 'KEY_RIGHTCTRL',
+        'shift_l': 'KEY_LEFTSHIFT', 'shift_r': 'KEY_RIGHTSHIFT',
+        'alt_l': 'KEY_LEFTALT',     'alt_r': 'KEY_RIGHTALT',
+        'super_l': 'KEY_LEFTMETA',  'super_r': 'KEY_RIGHTMETA',
+        **{f'f{i}': f'KEY_F{i}' for i in range(1, 13)},
+    }
+
+    def _run_evdev(self, key_names: list[str]):
+        # Global hotkey detection via evdev — reads /dev/input/event* directly.
+        # Works on pure Wayland where pynput's Xorg backend misses events from
+        # Wayland-native windows. Requires user to be in the 'input' group.
+        import evdev
+        import select
+
+        target_codes: set[int] = set()
+        for kn in key_names:
+            ecname = self._EVDEV_MAP.get(kn)
+            if ecname is None:
+                sys.exit(f"unknown key '{kn}' for evdev "
+                         f"(supported: {', '.join(self._EVDEV_MAP)})")
+            code = getattr(evdev.ecodes, ecname, None)
+            if code is None:
+                sys.exit(f"evdev has no keycode '{ecname}'")
+            target_codes.add(code)
+
+        # Open all input devices that have EV_KEY capability (keyboards)
+        devices = []
+        for path in evdev.list_devices():
+            try:
+                d = evdev.InputDevice(path)
+                if evdev.ecodes.EV_KEY in d.capabilities():
+                    devices.append(d)
+            except Exception:
+                pass
+        if not devices:
+            sys.exit("evdev: no keyboard devices found — are you in the 'input' group?")
+
+        pressed: set[int] = set()
+        recording = False
+
+        print(f"voice-pi dictation [lang={self.lang or 'auto'}] (evdev). Hold "
+              f"[{self.key}] to talk. Ctrl+C to quit.", flush=True)
+
+        try:
+            while True:
+                r, _, _ = select.select(devices, [], [], 0.5)
+                for dev in r:
+                    try:
+                        events = dev.read()
+                    except OSError:
+                        continue
+                    for ev in events:
+                        if ev.type != evdev.ecodes.EV_KEY:
+                            continue
+                        if ev.code not in target_codes:
+                            continue
+                        if ev.value == evdev.KeyEvent.key_down:
+                            pressed.add(ev.code)
+                            if target_codes.issubset(pressed) and not recording:
+                                recording = True
+                                self._start()
+                        elif ev.value == evdev.KeyEvent.key_up:
+                            pressed.discard(ev.code)
+                            if recording and not target_codes.issubset(pressed):
+                                recording = False
+                                threading.Thread(
+                                    target=self._stop_and_transcribe,
+                                    daemon=True).start()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            for d in devices:
+                try:
+                    d.close()
+                except Exception:
+                    pass
+        print("\nbye", flush=True)
+
     def run(self):
-        target = getattr(keyboard.Key, self.key, None)
-        if target is None:
-            sys.exit(f"unknown key '{self.key}' (e.g. ctrl_r, alt_r, f9)")
-        print(f"voice-pi dictation [lang={self.lang or 'auto'}]. Hold "
-              f"[{self.key}] to talk → text is "
-              f"{'printed' if self.mode == 'print' else 'typed at your cursor'}."
-              f" Press Esc (or Ctrl+C) to quit.")
+        # Support chord keys: 'shift_r+ctrl_r' means hold both simultaneously.
+        # On Wayland: use evdev (reads /dev/input/event* — global, layout-agnostic).
+        # On X11: fall back to pynput's xorg backend.
+        key_names = [n.strip() for n in self.key.split('+')]
+
+        on_wayland = bool(os.environ.get('WAYLAND_DISPLAY'))
+        try:
+            import evdev  # noqa: F401
+            have_evdev = True
+        except ImportError:
+            have_evdev = False
+
+        if on_wayland and have_evdev:
+            self._run_evdev(key_names)
+            return
+
+        # --- pynput fallback (X11 / Windows / macOS) ---
+        targets = set()
+        for kn in key_names:
+            k = getattr(keyboard.Key, kn, None)
+            if k is None:
+                sys.exit(f"unknown key '{kn}' (e.g. ctrl_r, shift_r, alt_r, f9)")
+            targets.add(k)
+
+        pressed: set = set()
+        recording = False
+
+        print(f"voice-pi dictation [lang={self.lang or 'auto'}] (pynput). Hold "
+              f"[{self.key}] to talk. Esc or Ctrl+C to quit.", flush=True)
 
         def on_press(k):
+            nonlocal recording
             if k == keyboard.Key.esc:
-                return False  # stops the Listener → guaranteed clean exit
-            if k == target:
+                return False
+            pressed.add(k)
+            if targets.issubset(pressed) and not recording:
+                recording = True
                 self._start()
 
         def on_release(k):
-            if k == target:
-                threading.Thread(target=self._stop_and_transcribe,
-                                 daemon=True).start()
+            nonlocal recording
+            if k in targets:
+                pressed.discard(k)
+                if recording and not targets.issubset(pressed):
+                    recording = False
+                    threading.Thread(target=self._stop_and_transcribe,
+                                     daemon=True).start()
 
         ln = keyboard.Listener(on_press=on_press, on_release=on_release)
         ln.start()
-        # NOT ln.join(): on Windows the global keyboard hook + a blocked
-        # join swallows the console SIGINT, so Ctrl+C never raises and
-        # the Ctrl press is eaten by the PTT handler instead. Poll the
-        # main thread so KeyboardInterrupt is actually delivered; Esc
-        # returns False above and stops the Listener (ln.running→False)
-        # as the guaranteed in-app exit that can't clash with Ctrl.
         try:
             while ln.running:
                 time.sleep(0.2)
@@ -289,7 +453,8 @@ class Dictate:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--key", default="ctrl_r",
-                    help="pynput Key name held to talk (ctrl_r, alt_r, f9…)")
+                    help="pynput Key name held to talk (ctrl_r, alt_r, f9…) "
+                         "or chord: shift_r+ctrl_r")
     ap.add_argument("--model", default=MODEL_NAME,
                     help="Whisper model (default large-v3-turbo, fastest; "
                          "env VOICEPI_MODEL)")

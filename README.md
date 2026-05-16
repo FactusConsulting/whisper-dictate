@@ -72,15 +72,12 @@ file and launcher. Unzip, run the launcher, done.
 - GPU build: ~2 GB free VRAM. Model on disk: turbo ~1.5 GB, large-v3
   ~3 GB (fetched once into the Hugging Face cache).
 
-> **Linux + Wayland (important):** global hotkey capture and synthetic
-> keystroke injection (pynput) are X11 features; GNOME/Wayland blocks
-> both for unprivileged apps, so push-to-talk and auto-typing may not
-> work out of the box. The venv, model and transcription work fine
-> regardless. Realistic options: log in as **"Ubuntu on Xorg"**; or
-> use `--no-type` to just see the transcription; or the proper Wayland
-> path (evdev hotkey + `ydotool` injection, needs one-time
-> `input`-group / uinput permissions) — a known follow-up, not yet
-> bundled. This is a genuine platform limitation, not a config bug.
+> **Linux + Wayland (Ubuntu 24.04/26.04):** global hotkeys work via
+> **evdev** — reading `/dev/input/event*` directly, bypassing the
+> Wayland compositor. Audio is captured via `arecord -D pipewire` which
+> routes through PipeWire correctly (direct ALSA open via PortAudio
+> reads silence on sof-hda-dsp devices). One-time setup required — see
+> [Wayland setup](#wayland-setup-ubuntu-2404--2604) below.
 
 ## Setup — one script, portable
 
@@ -127,11 +124,41 @@ python3 -m venv ~/.venv-whisper-dictate                 # Windows: py -m venv ..
 
 Keep the target window focused while speaking and ~1–2 s after release.
 
+## Wayland setup (Ubuntu 24.04 / 26.04)
+
+One-time setup for global hotkeys via evdev:
+
+```bash
+# 1. Add your user to the input group (read /dev/input/event*)
+sudo usermod -aG input $USER
+
+# 2. Log out and back in (group change needs a new session)
+
+# 3. First run — builds venv, installs evdev + scipy, downloads model (~1.5 GB)
+./setup.sh --paste --key shift_r+ctrl_r --lang da
+```
+
+**Default chord:** hold **right Shift + right Ctrl** → speak → release.
+Any two-key chord works: `--key alt_r+ctrl_r`, `--key shift_r+f9`, etc.
+
+**Why `arecord -D pipewire`?**  
+PortAudio opens the ALSA hardware device (`hw:0,0`) directly, bypassing
+PipeWire's virtual mixer — the mic reads as silence. `arecord -D pipewire`
+routes through PipeWire and captures correctly. `setup.sh` checks for
+`arecord` (package: `alsa-utils`) and the script falls back to direct
+ALSA if PipeWire is not available.
+
+**Audio resampling:**  
+Some devices (e.g. `sof-hda-dsp`) only support 48 kHz. The code detects
+this and resamples 48 kHz → 16 kHz (Whisper's required rate) using
+`scipy.signal.resample_poly`.
+
 ## Flags
 
 | Flag | Effect |
 |---|---|
 | `--key f9` | hold-to-talk key (`ctrl_r`, `alt_r`, `f9`…) |
+| `--key a+b` | chord: hold **both** keys simultaneously (`shift_r+ctrl_r`) |
 | `--paste` | inject via clipboard + Ctrl+V (instant, atomic — **no dropped spaces**; clobbers clipboard) |
 | `--no-type` | just print what was heard (testing) |
 | `--model NAME` | Whisper model (default `large-v3-turbo`, the fastest; env `VOICEPI_MODEL`) |
@@ -184,10 +211,8 @@ downloads the model (idempotent — later runs just launch).
 - **CPU only.** The brew install does **not** use a GPU (no NVIDIA
   acceleration path through Homebrew). For NVIDIA speed, use the
   `windows-nvidia` release bundle instead.
-- **Wayland limitation is unchanged.** `brew install` does not fix the
-  X11/Wayland input problem — global push-to-talk and auto-typing
-  (pynput) still won't work on GNOME/Wayland. Run under an Xorg
-  session, or `whisper-dictate --no-type`.
+- **Wayland works** with one-time setup (see [Wayland setup](#wayland-setup-ubuntu-2404--2604)).
+  The formula includes the evdev + PipeWire audio patches.
 - It's a **personal tap**, not homebrew-core (a GPU/ML Python app with
   a runtime venv doesn't fit homebrew-core conventions). `brew` deps:
   `python@3.12`, `portaudio`. A clipboard tool (`wl-clipboard`/`xclip`)
