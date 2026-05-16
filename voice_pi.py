@@ -339,14 +339,12 @@ class Dictate:
         except Exception:
             return False
 
-    def _try_ydotool(self, *args: str, extra_env: dict | None = None) -> bool:
+    def _try_ydotool(self, *args: str) -> bool:
         import subprocess, shutil
         if not shutil.which("ydotool"):
             return False
-        run_env = {**os.environ, **(extra_env or {})}
         try:
-            r = subprocess.run(["ydotool", *args], capture_output=True,
-                               timeout=10, env=run_env)
+            r = subprocess.run(["ydotool", *args], capture_output=True, timeout=10)
             if r.returncode != 0:
                 err = r.stderr.decode(errors="replace").strip()
                 if "ydotool_socket" in err and shutil.which("ydotoold"):
@@ -355,8 +353,7 @@ class Dictate:
                                      stderr=subprocess.DEVNULL)
                     time.sleep(0.5)
                     r = subprocess.run(["ydotool", *args],
-                                       capture_output=True, timeout=10,
-                                       env=run_env)
+                                       capture_output=True, timeout=10)
                     err = r.stderr.decode(errors="replace").strip()
                 if r.returncode != 0 and err:
                     print(f"[ydotool] {err}", flush=True)
@@ -384,14 +381,10 @@ class Dictate:
             print(f"[inject] → '{title}'", flush=True)
 
         if on_wayland:
-            # ydotoold daemon converts chars to keycodes using XKB_DEFAULT_LAYOUT
-            # from its own environment (set via systemd service). The compositor
-            # must also use the dk layout so it maps the injected keycodes back
-            # to the correct characters (done by ubuntu26.04/setup.sh).
-            layout = _detect_xkb_layout(self.lang)
-            extra = {"XKB_DEFAULT_LAYOUT": layout} if layout else {}
-            print(f"[inject] ydotool type (layout={layout or 'unset'})", flush=True)
-            if self._try_ydotool("type", "--", text, extra_env=extra):
+            # XKB_DEFAULT_LAYOUT er sat i os.environ fra --lang ved startup.
+            layout = os.environ.get("XKB_DEFAULT_LAYOUT", "unset")
+            print(f"[inject] ydotool type (layout={layout})", flush=True)
+            if self._try_ydotool("type", "--", text):
                 return
             print("[inject] ydotool type failed — fallback pynput", flush=True)
             self._kb.type(text)
@@ -604,6 +597,13 @@ if __name__ == "__main__":
     ap.set_defaults(mode="type")
     a = ap.parse_args()
     lang = None if (a.autodetect or not a.lang) else a.lang
+
+    # Sæt XKB_DEFAULT_LAYOUT fra --lang så ydotool type og evt. auto-startet
+    # ydotoold arver det rigtige layout uden manuel konfiguration.
+    if lang and not os.environ.get("XKB_DEFAULT_LAYOUT"):
+        xkb = _LANG_TO_XKB.get(lang, lang)
+        os.environ["XKB_DEFAULT_LAYOUT"] = xkb
+
     dev, ctype = _resolve_device(a.device)
 
     print(f"loading Whisper {a.model} on {dev} ({ctype})… "
