@@ -31,7 +31,7 @@ jobs:
             echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5   # v5 = Node 24 (v4/Node 20 is being removed)
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0          # full history + tags for the changelog
