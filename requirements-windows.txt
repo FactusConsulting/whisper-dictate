@@ -1,0 +1,20 @@
+# Install with NATIVE Windows Python (py -m venv ...), NOT the WSL python.
+#   py -m venv %USERPROFILE%\voice-pi-venv
+#   %USERPROFILE%\voice-pi-venv\Scripts\activate
+#   pip install -r requirements-windows.txt
+
+# STT engine — runs in-process on the RTX 3080 via native Windows CUDA.
+faster-whisper==1.1.1
+requests>=2.31            # faster-whisper 1.1.1 utils.py imports it for model download
+numpy<2.2                 # ctranslate2 / onnxruntime ABI constraint
+
+# CUDA runtime libs ctranslate2 needs (cublas/cudnn). Windows wheels;
+# voice_pi.py registers their nvidia\*\bin dirs on the DLL path at
+# startup so you don't have to touch PATH yourself.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
+
+# Mic capture + hotkey + injection (all Windows-side).
+sounddevice
+pynput
+pyperclip                 # only needed for --paste mode

@@ -1,0 +1,17 @@
+# Python venvs (machine-local — rebuilt by setup.ps1)
+.venv/
+venv/
+voice-pi-venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Model cache (fetched at runtime into the HF cache, never vendored)
+.cache/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
