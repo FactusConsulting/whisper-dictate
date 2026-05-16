@@ -128,13 +128,19 @@ SVCEOF
 
 systemctl --user daemon-reload
 systemctl --user enable ydotoold.service 2>/dev/null || true
-# Genstart altid så GNOME registrerer det virtuelle tastatur med det
-# korrekte dk-layout (sat i step 4). Kørende daemon har gammel layout.
+# Dræb evt. kørende ydotoold-proces så en gammel daemon (uden dk-layout)
+# ikke blokerer socketen og forhindrer systemd i at starte ny.
+pkill -x ydotoold 2>/dev/null || true
+sleep 0.5
 systemctl --user restart ydotoold.service 2>/dev/null || systemctl --user start ydotoold.service 2>/dev/null || true
 sleep 1
-systemctl --user is-active ydotoold.service &>/dev/null \
-    && ok "ydotoold kører (XKB_DEFAULT_LAYOUT=dk)" \
-    || warn "ydotoold startede ikke — prøv: systemctl --user start ydotoold"
+if systemctl --user is-active ydotoold.service &>/dev/null; then
+    ok "ydotoold kører (XKB_DEFAULT_LAYOUT=dk)"
+elif pgrep -x ydotoold &>/dev/null; then
+    ok "ydotoold kører (manuel start)"
+else
+    warn "ydotoold startede ikke — prøv: systemctl --user start ydotoold"
+fi
 
 # ---------------------------------------------------------------------------
 step "whisper-dictate: autostart ved login"
