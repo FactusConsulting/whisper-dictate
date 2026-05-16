@@ -44,47 +44,77 @@ capture/gate chain, not raw model size:
   and **SNR** so you can tell on data whether your mic is the limit.
 - A close-talk/headset mic beats a far-field laptop mic by a lot.
 
+## Which download (release variants)
+
+`device` auto-detects at runtime: NVIDIA GPU → CUDA, otherwise CPU
+(slower — that's why the default model is the fastest, `large-v3-turbo`).
+faster-whisper/ctranslate2 only accelerate on **NVIDIA**; an **AMD**
+GPU has no usable acceleration here and runs the CPU build.
+
+| Release asset | Use on | Engine |
+|---|---|---|
+| `whisper-dictate-windows-nvidia.zip` | Windows + NVIDIA GPU | CUDA (fast) |
+| `whisper-dictate-windows-cpu.zip` | Windows, no NVIDIA (incl. AMD-GPU boxes) | CPU |
+| `whisper-dictate-linux-cpu.zip` | Ubuntu 26.04 / 24.04, no NVIDIA | CPU |
+
+Same code in all three; they differ only in the bundled requirements
+file and launcher. Unzip, run the launcher, done.
+
 ## Requirements
 
-- Windows with an **NVIDIA GPU** + a reasonably recent driver.
-- It will fetch official **CPython 3.12** for you if missing (via
-  `winget`). 3.13/3.14 and MinGW/MSYS Python are rejected on purpose —
-  the binary wheel stack (`ctranslate2`, `onnxruntime`, `nvidia-*-cu12`)
-  ships MSVC wheels for 3.12.
-- ~2 GB free VRAM while running; ~1.5–3 GB disk for the model (fetched
-  once into the Hugging Face cache).
+- **Windows:** the launcher fetches official **CPython 3.12** if
+  missing (via `winget`). 3.13/3.14 and MinGW/MSYS Python are rejected
+  on purpose — the binary wheel stack (`ctranslate2`, `onnxruntime`,
+  `nvidia-*-cu12`) ships MSVC wheels for 3.12.
+- **Linux:** system `python3` ≥ 3.10, plus `libportaudio2` (mic) and a
+  clipboard tool (`wl-clipboard` on Wayland, `xclip` on X11) — the
+  launcher tells you the exact `apt` line if anything's missing.
+- GPU build: ~2 GB free VRAM. Model on disk: turbo ~1.5 GB, large-v3
+  ~3 GB (fetched once into the Hugging Face cache).
+
+> **Linux + Wayland (important):** global hotkey capture and synthetic
+> keystroke injection (pynput) are X11 features; GNOME/Wayland blocks
+> both for unprivileged apps, so push-to-talk and auto-typing may not
+> work out of the box. The venv, model and transcription work fine
+> regardless. Realistic options: log in as **"Ubuntu on Xorg"**; or
+> use `--no-type` to just see the transcription; or the proper Wayland
+> path (evdev hotkey + `ydotool` injection, needs one-time
+> `input`-group / uinput permissions) — a known follow-up, not yet
+> bundled. This is a genuine platform limitation, not a config bug.
 
 ## Setup — one script, portable
 
-Copy the whole folder to any Windows machine with an NVIDIA GPU and run:
+Unzip the right variant (or copy the whole repo folder), then:
 
+**Windows:**
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
-
-Idempotent and self-contained: first run finds/installs Python 3.12,
-builds a machine-local venv, installs deps, downloads the model and
-launches; later runs validate the venv and just launch. Nothing is
-hardcoded to a user or path. A different GPU needs no change —
-`device="cuda"` and the `nvidia-*-cu12` runtime wheels are
-card-agnostic.
-
-Any arguments are passed straight to `voice_pi.py`; with none it
-defaults to `--paste --model large-v3-turbo`:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File setup.ps1                # da, turbo, paste
-powershell -ExecutionPolicy Bypass -File setup.ps1 --lang de       # German
-powershell -ExecutionPolicy Bypass -File setup.ps1 --autodetect    # guess language
+**Linux:**
+```bash
+./setup.sh
 ```
 
-Manual setup (if you'd rather not use the script):
+Idempotent and self-contained: first run finds/installs Python, builds
+a **machine-local** venv (never inside the copied folder), installs
+deps, downloads the model and launches; later runs just launch.
+Nothing is hardcoded to a user or path.
+
+Any arguments pass straight to `voice_pi.py`; with none it defaults to
+`--paste` (model defaults to `large-v3-turbo`):
 
 ```powershell
-py -m venv %USERPROFILE%\voice-pi-venv
-%USERPROFILE%\voice-pi-venv\Scripts\activate
-pip install -r requirements-windows.txt
-python voice_pi.py --paste --model large-v3-turbo
+powershell -ExecutionPolicy Bypass -File setup.ps1 --lang de        # German
+powershell -ExecutionPolicy Bypass -File setup.ps1 --autodetect     # guess language
+powershell -ExecutionPolicy Bypass -File setup.ps1 --device cpu     # force CPU
+```
+
+Manual setup (if you'd rather not use the launcher):
+
+```bash
+python3 -m venv ~/.venv-whisper-dictate                 # Windows: py -m venv ...
+~/.venv-whisper-dictate/bin/pip install -r requirements-cpu.txt   # or -gpu.txt
+~/.venv-whisper-dictate/bin/python voice_pi.py --paste
 ```
 
 ## Use
@@ -105,7 +135,8 @@ Keep the target window focused while speaking and ~1–2 s after release.
 | `--key f9` | hold-to-talk key (`ctrl_r`, `alt_r`, `f9`…) |
 | `--paste` | inject via clipboard + Ctrl+V (instant, atomic — **no dropped spaces**; clobbers clipboard) |
 | `--no-type` | just print what was heard (testing) |
-| `--model NAME` | Whisper model (default `large-v3`; env `VOICEPI_MODEL`). `large-v3-turbo` ≈ 3–5× faster |
+| `--model NAME` | Whisper model (default `large-v3-turbo`, the fastest; env `VOICEPI_MODEL`) |
+| `--device D` | `auto`/`cuda`/`cpu` (default `auto`; env `VOICEPI_DEVICE`) |
 | `--lang CODE` | spoken-language hint `da`/`en`/`de`/`fr`… (default `da`; env `VOICEPI_LANG`) — reliable on short/soft speech |
 | `--autodetect` | let Whisper guess the language (less reliable on short/soft speech) |
 
@@ -120,7 +151,8 @@ atomic and instant.
 | Env | Default | Effect |
 |---|---|---|
 | `VOICEPI_TARGET_DBFS` | `-20` | lower (e.g. `-16`) = boost quiet speech harder |
-| `VOICEPI_MODEL` | `large-v3` | `large-v3-turbo` = faster, slightly lower soft-speech accuracy |
+| `VOICEPI_MODEL` | `large-v3-turbo` | the fastest; `large-v3` = slightly better soft-speech accuracy, slower |
+| `VOICEPI_DEVICE` | `auto` | `cuda` / `cpu` to force; `auto` = NVIDIA if present, else CPU |
 | `VOICEPI_LANG` | `da` | spoken-language hint (`en`, `de`, `fr`, …) |
 
 VAD threshold / temperature ladder are in `voice_pi.py` (`_transcribe`).

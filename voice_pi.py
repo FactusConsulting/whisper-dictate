@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
-r"""voice-pi — all-in-one Windows push-to-talk DICTATION.
+r"""voice-pi — all-in-one push-to-talk DICTATION.
 
 Speak prompts instead of typing them. Hold the hotkey, speak softly,
 release — the transcribed text is injected into whatever window has
-focus (Claude Code, pi, a browser chat box, an editor … anything).
-A mic→keyboard, not an AI chat: the AI is whatever app you're in.
+focus (a terminal, a browser chat box, an editor … anything).
+A mic→keyboard, not an AI chat: the "AI" is whatever app you're in.
 
-Runs ENTIRELY ON WINDOWS, in one process. Mic capture and Whisper
-both run here; Whisper uses the local RTX 3080 via native CUDA. There
-is no server, no HTTP, no WSL — the old WSL split was pure inertia and
-its cross-boundary latency bug class is gone by construction.
+One process: mic capture and Whisper run together, no server, no
+network hop. Whisper runs on your NVIDIA GPU (CUDA) when present and
+falls back to CPU otherwise — same code, see --device. Use setup.ps1
+(Windows) or setup.sh (Linux) for a one-shot, portable install.
 
-Windows setup (native Python — NOT the WSL python):
-    py -m venv %USERPROFILE%\voice-pi-venv
-    %USERPROFILE%\voice-pi-venv\Scripts\activate
-    pip install -r requirements-windows.txt
-    python voice_pi.py
-First run downloads Whisper large-v3 (~3 GB) into the Windows HF cache.
+First run downloads the model into the Hugging Face cache (turbo
+~1.5 GB; large-v3 ~3 GB). Keystroke injection needs X11 on Linux;
+on Wayland use --paste with a clipboard tool (see README).
 
 Hold RIGHT CTRL, speak, release → text appears at your cursor.
   --key f9        use a different hold-to-talk key (ctrl_r, alt_r, f9…)
   --paste         inject via clipboard + Ctrl+V (instant, atomic — no
                   dropped spaces; clobbers the clipboard)
   --no-type       just print what was heard (don't inject — testing)
-  --model NAME    Whisper model (default large-v3; env VOICEPI_MODEL)
+  --model NAME    Whisper model (default large-v3-turbo, the fastest;
+                  env VOICEPI_MODEL)
+  --device D      auto|cuda|cpu (default auto; env VOICEPI_DEVICE)
   --lang CODE     spoken-language hint da/en/de/fr… (default da;
                   env VOICEPI_LANG) — reliable on short/soft speech
   --autodetect    let Whisper guess the language (less reliable)
@@ -66,7 +65,12 @@ if os.name == "nt":
 from faster_whisper import WhisperModel  # noqa: E402 — must follow bootstrap
 
 SR = 16000
-MODEL_NAME = os.environ.get("VOICEPI_MODEL", "large-v3")
+MODEL_NAME = os.environ.get("VOICEPI_MODEL", "large-v3-turbo")
+# Compute device: "auto" tries the GPU (CUDA/NVIDIA) and falls back to
+# CPU; force with "cuda" or "cpu". faster-whisper/ctranslate2 only
+# accelerate on NVIDIA — an AMD GPU box runs CPU. CPU is usable but
+# slow, so the default model is the FASTEST (large-v3-turbo).
+DEVICE = os.environ.get("VOICEPI_DEVICE", "auto")
 # Target loudness (dBFS) quiet input is boosted toward before Whisper
 # sees it. Soft voiced speech lands at -35..-45 dBFS where Whisper's
 # no-speech gate eats it; normalising to ~-20 recovers it without
@@ -77,6 +81,25 @@ TARGET_DBFS = float(os.environ.get("VOICEPI_TARGET_DBFS", "-20"))
 # utterances (and avoids da+English mixing flip-flop). "da", "en",
 # "de", "fr", … ; --autodetect sets this to None (Whisper guesses).
 LANG = os.environ.get("VOICEPI_LANG", "da")
+
+
+def _resolve_device(want: str) -> tuple[str, str]:
+    # → (device, compute_type). "auto" uses the GPU if a CUDA/NVIDIA
+    # device is present, else CPU. faster-whisper/ctranslate2 only
+    # accelerate on NVIDIA, so an AMD-GPU machine resolves to "cpu"
+    # (same as a no-GPU box). int8_float16 on GPU, int8 on CPU.
+    want = (want or "auto").lower()
+    if want in ("cuda", "gpu"):
+        return "cuda", "int8_float16"
+    if want == "cpu":
+        return "cpu", "int8"
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", "int8_float16"
+    except Exception:  # noqa: BLE001 — any failure → safe CPU fallback
+        pass
+    return "cpu", "int8"
 
 
 def _noise_snr(a: np.ndarray) -> tuple[float, float]:
@@ -268,7 +291,8 @@ if __name__ == "__main__":
     ap.add_argument("--key", default="ctrl_r",
                     help="pynput Key name held to talk (ctrl_r, alt_r, f9…)")
     ap.add_argument("--model", default=MODEL_NAME,
-                    help="Whisper model (default large-v3; env VOICEPI_MODEL)")
+                    help="Whisper model (default large-v3-turbo, fastest; "
+                         "env VOICEPI_MODEL)")
     ap.add_argument("--lang", default=LANG,
                     help="spoken-language hint: da, en, de, fr… "
                          "(default da; env VOICEPI_LANG)")
@@ -280,14 +304,21 @@ if __name__ == "__main__":
                    const="paste", help="inject via clipboard + Ctrl+V")
     g.add_argument("--no-type", action="store_const", dest="mode",
                    const="print", help="just print, don't inject")
+    ap.add_argument("--device", default=DEVICE,
+                    help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
+                         "auto = NVIDIA GPU if present, else CPU")
     ap.set_defaults(mode="type")
     a = ap.parse_args()
     lang = None if a.autodetect else a.lang
+    dev, ctype = _resolve_device(a.device)
 
-    print(f"loading Whisper {a.model} on the RTX 3080 (CUDA)… "
-          f"first run downloads ~3 GB", flush=True)
+    print(f"loading Whisper {a.model} on {dev} ({ctype})… "
+          f"first run downloads the model", flush=True)
+    if dev == "cpu":
+        print("  note: CPU mode — transcription is slower; large-v3-turbo "
+              "(default) is the fastest model", flush=True)
     _t = time.monotonic()
-    _model = WhisperModel(a.model, device="cuda", compute_type="int8_float16")
+    _model = WhisperModel(a.model, device=dev, compute_type=ctype)
     print(f"model ready in {time.monotonic() - _t:.1f}s", flush=True)
     try:
         Dictate(_model, a.key, a.mode, lang).run()

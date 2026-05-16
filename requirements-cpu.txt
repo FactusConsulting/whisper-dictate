@@ -1,0 +1,14 @@
+# CPU build — Windows without an NVIDIA card (incl. AMD-GPU boxes) and
+# Linux. No CUDA wheels: ctranslate2 runs on the CPU. Slower, so the
+# default model is the fastest (large-v3-turbo).
+# Install: pip install -r requirements-cpu.txt
+faster-whisper==1.1.1
+requests>=2.31            # faster-whisper 1.1.1 utils.py imports it for model download
+numpy<2.2                 # ctranslate2 / onnxruntime ABI constraint
+
+# Mic capture + hotkey + injection. On Linux: sounddevice needs the
+# system PortAudio lib (libportaudio2); pyperclip needs a clipboard
+# tool (wl-clipboard on Wayland, xclip/xsel on X11). See README.
+sounddevice
+pynput
+pyperclip                 # --paste mode (required on Wayland)

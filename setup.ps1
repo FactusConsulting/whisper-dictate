@@ -1,33 +1,43 @@
 # =====================================================================
-# voice-pi — one-shot, portable setup + launcher (Windows).
+# whisper-dictate — one-shot, portable setup + launcher (Windows).
 #
-# Copy the WHOLE voice-pi folder to any Windows machine with an NVIDIA
-# GPU, then run this script. It is idempotent:
+# Copy the WHOLE folder to any Windows machine and run this. Idempotent:
 #   * first run  → finds/installs Python 3.12, builds the venv,
 #                   installs deps, downloads the model, launches.
 #   * later runs → validates the venv and just launches.
 #
-# Nothing is hardcoded to a user or path: the code lives next to this
-# script ($PSScriptRoot); the venv is machine-local (so copying the
-# folder never drags a broken venv along). Different GPU = no change:
-# device="cuda" + the nvidia-*-cu12 runtime wheels are card-agnostic;
-# all that's required on the new box is an NVIDIA GPU + recent driver.
+# Nothing is hardcoded to a user or path: code lives next to this
+# script ($PSScriptRoot); the venv is machine-local. Requirements:
+# the GPU bundle ships requirements-gpu.txt (NVIDIA/CUDA); the CPU
+# bundle ships requirements-cpu.txt (no GPU, incl. AMD-GPU boxes). A
+# release bundle ships exactly one as requirements.txt — preferred if
+# present, else this falls back to the GPU file in a dev checkout.
+# voice_pi.py auto-detects CUDA vs CPU at runtime (see --device).
 #
 # Run it (PowerShell):  powershell -ExecutionPolicy Bypass -File setup.ps1
-# Any args are passed straight to voice_pi.py, e.g.:
-#   powershell -ExecutionPolicy Bypass -File setup.ps1 --lang de
-# With no args it defaults to:  --paste --model large-v3-turbo
+# Any args pass straight to voice_pi.py, e.g. ... -File setup.ps1 --lang de
+# With no args it defaults to:  --paste   (model defaults to the
+# fastest, large-v3-turbo, in voice_pi.py).
 # Stop the running tool by pressing Esc (or Ctrl+C) — frees GPU VRAM.
 # =====================================================================
 $ErrorActionPreference = 'Stop'
 $here   = $PSScriptRoot
 $venv   = Join-Path $env:USERPROFILE 'voice-pi-venv'
 $venvPy = Join-Path $venv 'Scripts\python.exe'
-$req    = Join-Path $here 'requirements-windows.txt'
 $app    = Join-Path $here 'voice_pi.py'
 
-# Default launch args if the user passed none.
-$runArgs = if ($args.Count -gt 0) { $args } else { @('--paste','--model','large-v3-turbo') }
+# Requirements: bundle's requirements.txt wins; else GPU file (dev
+# checkout default on Windows); else the CPU file.
+$req = @(
+  (Join-Path $here 'requirements.txt'),
+  (Join-Path $here 'requirements-gpu.txt'),
+  (Join-Path $here 'requirements-cpu.txt')
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $req) { throw "no requirements file found next to setup.ps1" }
+
+# Default launch args if the user passed none (turbo is the model
+# default inside voice_pi.py, so --paste is enough).
+$runArgs = if ($args.Count -gt 0) { $args } else { @('--paste') }
 
 function Test-MsvcPy312($exe) {
   if (-not (Test-Path $exe)) { return $false }
