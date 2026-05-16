@@ -208,7 +208,7 @@ _ARECORD_DEVICE: str | None = None  # set once at startup
 
 class Dictate:
     def __init__(self, model: WhisperModel, key: str, mode: str,
-                 lang: str | None, paste_key: str = "ctrl+shift+v"):
+                 lang: str | None, paste_key: str = "ctrl+v"):
         global _ARECORD_DEVICE
         self.model = model
         self.key = key
@@ -560,9 +560,9 @@ if __name__ == "__main__":
                    const="paste", help="inject via clipboard + Ctrl+V")
     g.add_argument("--no-type", action="store_const", dest="mode",
                    const="print", help="just print, don't inject")
-    ap.add_argument("--paste-key", default="ctrl+shift+v",
+    ap.add_argument("--paste-key", default="ctrl+v",
                     help="ydotool key sequence used to paste from clipboard on Wayland "
-                         "(default ctrl+shift+v for terminals; use ctrl+v for text editors)")
+                         "(default ctrl+v; use ctrl+shift+v for terminal emulators)")
     ap.add_argument("--device", default=DEVICE,
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
                          "auto = NVIDIA GPU if present, else CPU")
