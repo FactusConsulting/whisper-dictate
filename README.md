@@ -21,16 +21,18 @@ brew install whisper-dictate
 **First run** builds a machine-local venv (`~/.venv-whisper-dictate`) and
 downloads the Whisper model (~1.5 GB). Subsequent runs just launch.
 
-**Wayland (Ubuntu 24.04/26.04) — one-time setup:**
+**Wayland (Ubuntu 24.04/26.04) — automated setup:**
 
 ```bash
-# Allow reading raw keyboard events (required for global hotkeys)
-sudo usermod -aG input $USER
-# Log out and back in, then start whisper-dictate:
-whisper-dictate --paste --key shift_r+ctrl_r --lang da
+git clone https://github.com/FactusConsulting/whisper-dictate.git
+bash whisper-dictate/ubuntu26.04/setup.sh
 ```
 
-Hold **right Shift + right Ctrl**, speak, release. Text appears at the cursor.
+This handles everything: brew install, evdev input group, udev rule for
+ydotool, ydotoold daemon, and an autostart entry for GNOME login.
+
+Log out and back in after running, then hold **right Shift + right Ctrl**,
+speak, release — text appears in whatever window had focus.
 
 ### Linux — manual
 
