@@ -285,14 +285,35 @@ class Dictate:
             print(f"[ydotool] error: {e}", flush=True)
             return False
 
+    def _focused_window(self) -> str:
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["gdbus", "call", "--session",
+                 "--dest", "org.gnome.Shell",
+                 "--object-path", "/org/gnome/Shell",
+                 "--method", "org.gnome.Shell.Eval",
+                 "global.display.focus_window?.get_title() ?? '(none)'"],
+                capture_output=True, timeout=2)
+            out = r.stdout.decode(errors="replace").strip()
+            # output is like: (true, '\'Window Title\'')
+            import re
+            m = re.search(r"'(.*)'", out)
+            return m.group(1) if m else out
+        except Exception:
+            return "?"
+
     def _inject(self, text: str):
-        # Small settle so the PTT key-up is processed and focus is
-        # stable on the target window before we emit input.
-        time.sleep(0.15)
+        # Settle: let key-up events reach the compositor and focus stabilise
+        # before injecting. The user's hand must be off the PTT keys and the
+        # TARGET window must have focus — not the terminal running this script.
+        time.sleep(0.4)
         if self.mode == "print":
             print(f"  (heard) {text}", flush=True)
             return
         on_wayland = bool(os.environ.get('WAYLAND_DISPLAY'))
+        focused = self._focused_window()
+        print(f"[inject] → '{focused}'", flush=True)
         if self.mode == "paste":
             import pyperclip
             pyperclip.copy(text)
