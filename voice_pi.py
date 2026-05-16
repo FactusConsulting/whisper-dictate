@@ -381,12 +381,20 @@ class Dictate:
             print(f"[inject] → '{title}'", flush=True)
 
         if on_wayland:
-            # XKB_DEFAULT_LAYOUT er sat i os.environ fra --lang ved startup.
-            layout = os.environ.get("XKB_DEFAULT_LAYOUT", "unset")
-            print(f"[inject] ydotool type (layout={layout})", flush=True)
-            if self._try_ydotool("type", "--", text):
-                return
-            print("[inject] ydotool type failed — fallback pynput", flush=True)
+            # ydotool type v1.0.4 (Ubuntu 26.04) linker ikke mod libxkbcommon
+            # og kan ikke injicere non-ASCII tegn (æøå droppes stille).
+            # Løsning: wl-copy til clipboard + ydotool key paste-genvej.
+            # Brugeren trykker ingenting manuelt — ydotool gør det automatisk.
+            # VOICEPI_PASTE_KEY: ctrl+shift+v (terminaler) eller ctrl+v (editorer).
+            import subprocess, shutil
+            paste_key = os.environ.get("VOICEPI_PASTE_KEY", "ctrl+shift+v")
+            if shutil.which("wl-copy"):
+                subprocess.run(["wl-copy", "--", text],
+                               capture_output=True, timeout=5)
+                print(f"[inject] wl-copy → ydotool key {paste_key}", flush=True)
+                if self._try_ydotool("key", paste_key):
+                    return
+            print("[inject] wl-copy/ydotool fejlede — fallback pynput", flush=True)
             self._kb.type(text)
             return
 
