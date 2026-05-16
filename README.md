@@ -31,13 +31,17 @@ This handles everything: evdev input group, udev rule, ydotool install,
 ydotoold daemon, and a GNOME autostart entry. Log out and back in, then:
 
 ```bash
-VOICEPI_XKB_LAYOUT=dk whisper-dictate --key shift_r+ctrl_r --lang da
+whisper-dictate --key shift_r+ctrl_r --lang da
 ```
 
 Hold **right Shift + right Ctrl**, speak, release — text appears at the cursor.
 
-> **Note:** `VOICEPI_XKB_LAYOUT` must match your keyboard layout so non-ASCII
-> characters (æøå for Danish, üöä for German, etc.) are typed correctly.
+Text is injected via clipboard + `Ctrl+Shift+V` (the terminal paste shortcut).
+For editors or browsers that use `Ctrl+V` for paste:
+
+```bash
+VOICEPI_PASTE_KEY=ctrl+v whisper-dictate --key shift_r+ctrl_r --lang da
+```
 
 ### Linux — manual
 
@@ -90,11 +94,13 @@ launches. Hold **Right Ctrl**, speak, release.
 
 ## Wayland details (Ubuntu 24.04/26.04)
 
-**Text injection — ydotool type:**
-On Wayland, whisper-dictate always uses `ydotool type` via `/dev/uinput` —
-no clipboard, no Ctrl+V. This works in all apps including terminals, editors,
-and browsers. Set `VOICEPI_XKB_LAYOUT` to your keyboard layout (e.g. `dk`)
-so ydotool correctly maps non-ASCII characters to key codes.
+**Text injection — clipboard + paste:**
+On Wayland, whisper-dictate copies text to the clipboard via `wl-copy` and
+then injects the paste keystroke via ydotool. This bypasses all XKB layout
+issues and works correctly for all Unicode characters including æøå.
+
+Default paste key is `ctrl+shift+v` (terminal emulator standard). Set
+`VOICEPI_PASTE_KEY=ctrl+v` for editors and browsers.
 
 **Hotkey detection — evdev:**
 On Wayland, pynput's Xorg backend only sees keyboard events from XWayland
@@ -145,7 +151,7 @@ text at cursor in whatever window is focused
 | `VOICEPI_MODEL` | `large-v3-turbo` | `large-v3` = slightly better accuracy, slower |
 | `VOICEPI_DEVICE` | `auto` | `cuda`/`cpu` to force; `auto` = NVIDIA if present |
 | `VOICEPI_LANG` | _(auto-detect)_ | spoken-language hint (`da`, `en`, `de`, `fr`…) |
-| `VOICEPI_XKB_LAYOUT` | _(auto-detected)_ | keyboard layout for ydotool type (Wayland) — e.g. `dk`, `de`, `us` |
+| `VOICEPI_PASTE_KEY` | `ctrl+shift+v` | paste shortcut injected on Wayland — use `ctrl+v` for editors/browsers |
 
 The `[cap]` line prints loudness, gain, noise floor and **SNR** per
 utterance — `snr` tells you if the mic is the bottleneck: ≳25 dB
