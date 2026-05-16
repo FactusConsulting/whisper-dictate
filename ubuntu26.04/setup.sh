@@ -118,14 +118,13 @@ systemctl --user is-active ydotoold.service &>/dev/null \
 # ---------------------------------------------------------------------------
 step "whisper-dictate: autostart ved login"
 # ---------------------------------------------------------------------------
-# --paste-key ctrl+shift+v: terminaler bruger Ctrl+Shift+V til at indsætte
-#   fra clipboard (Ctrl+V er readline "quoted insert", ikke paste).
-# Skift til --paste-key ctrl+v hvis du primært dikterer i teksteditorer.
+# VOICEPI_XKB_LAYOUT=dk: ydotool type bruger XKB-layoutet til at mappe
+#   tegn → keycodes. Uden DK-layout droppes æøå stille og roligt.
 mkdir -p "$HOME/.config/autostart"
 cat > "$HOME/.config/autostart/whisper-dictate.desktop" << 'EOF'
 [Desktop Entry]
 Name=Whisper Dictate
-Exec=whisper-dictate --paste --paste-key ctrl+shift+v --key shift_r+ctrl_r --lang da
+Exec=env VOICEPI_XKB_LAYOUT=dk whisper-dictate --key shift_r+ctrl_r --lang da
 Icon=audio-input-microphone
 Terminal=false
 Type=Application
@@ -144,12 +143,12 @@ if ! groups | grep -q '\binput\b'; then
     echo "  NÆSTE SKRIDT: Log ud og ind igen (input-gruppe aktiveres)"
     echo
     echo "  Kør derefter første gang for at downloade Whisper-modellen:"
-    echo "  whisper-dictate --paste --paste-key ctrl+shift+v --key shift_r+ctrl_r --lang da"
+    echo "  VOICEPI_XKB_LAYOUT=dk whisper-dictate --key shift_r+ctrl_r --lang da"
 else
     echo "  Test: hold højre Shift+Ctrl, tal, slip"
     echo "  Teksten indsættes i det vindue der havde fokus da du trykkede."
     echo
     echo "  Kør manuelt (starter også ved næste login automatisk):"
-    echo "  whisper-dictate --paste --paste-key ctrl+shift+v --key shift_r+ctrl_r --lang da"
+    echo "  VOICEPI_XKB_LAYOUT=dk whisper-dictate --key shift_r+ctrl_r --lang da"
 fi
 echo

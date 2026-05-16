@@ -12,14 +12,13 @@ falls back to CPU otherwise — same code, see --device. Use setup.ps1
 (Windows) or setup.sh (Linux) for a one-shot, portable install.
 
 First run downloads the model into the Hugging Face cache (turbo
-~1.5 GB; large-v3 ~3 GB). Keystroke injection needs X11 on Linux;
-on Wayland use --paste with a clipboard tool (see README).
+~1.5 GB; large-v3 ~3 GB).
 
 Hold RIGHT CTRL, speak, release → text appears at your cursor.
   --key f9        use a different hold-to-talk key (ctrl_r, alt_r, f9…)
   --key a+b       chord: hold BOTH keys simultaneously (e.g. shift_r+ctrl_r)
-  --paste         inject via clipboard + Ctrl+V (instant, atomic — no
-                  dropped spaces; clobbers the clipboard)
+  --paste         inject via clipboard + Ctrl+V on X11/Windows
+                  (on Wayland ydotool type is always used instead)
   --no-type       just print what was heard (don't inject — testing)
   --model NAME    Whisper model (default large-v3-turbo, the fastest;
                   env VOICEPI_MODEL)
@@ -27,7 +26,10 @@ Hold RIGHT CTRL, speak, release → text appears at your cursor.
   --lang CODE     spoken-language hint da/en/de/fr… (default da;
                   env VOICEPI_LANG) — reliable on short/soft speech
   --autodetect    let Whisper guess the language (less reliable)
-Keep the TARGET window focused while you speak and ~1-2 s after release.
+
+On Wayland, text is injected via ydotool type. Set VOICEPI_XKB_LAYOUT
+(e.g. "dk") so non-ASCII characters (æøå) are typed correctly:
+  VOICEPI_XKB_LAYOUT=dk whisper-dictate --key shift_r+ctrl_r --lang da
 Stop it by pressing Esc (or Ctrl+C) — that frees the GPU VRAM.
 """
 from __future__ import annotations
@@ -178,6 +180,23 @@ def _transcribe(model: WhisperModel, pcm: np.ndarray,
     return text
 
 
+def _detect_xkb_layout() -> str | None:
+    # Priority: explicit VOICEPI_XKB_LAYOUT > XKB_DEFAULT_LAYOUT > /etc/default/keyboard
+    for var in ("VOICEPI_XKB_LAYOUT", "XKB_DEFAULT_LAYOUT"):
+        v = os.environ.get(var, "").strip()
+        if v:
+            return v
+    try:
+        with open("/etc/default/keyboard") as f:
+            for line in f:
+                m = re.match(r'XKBLAYOUT="?([^"\s]+)"?', line)
+                if m:
+                    return m.group(1)
+    except FileNotFoundError:
+        pass
+    return None
+
+
 def _find_arecord_device() -> str | None:
     # On PipeWire (Ubuntu 24.04+) PortAudio opens ALSA hardware directly and
     # bypasses PipeWire's mixer — the mic reads as silence. arecord with
@@ -208,13 +227,12 @@ _ARECORD_DEVICE: str | None = None  # set once at startup
 
 class Dictate:
     def __init__(self, model: WhisperModel, key: str, mode: str,
-                 lang: str | None, paste_key: str = "ctrl+v"):
+                 lang: str | None):
         global _ARECORD_DEVICE
         self.model = model
         self.key = key
         self.mode = mode  # "type" | "paste" | "print"
         self.lang = lang  # ISO code, or None for auto-detect
-        self.paste_key = paste_key  # ydotool key sequence for clipboard paste
         self.frames: list[np.ndarray] = []
         self.recording = False
         self._stream = None
@@ -309,22 +327,24 @@ class Dictate:
         except Exception:
             return False
 
-    def _try_ydotool(self, *args: str) -> bool:
+    def _try_ydotool(self, *args: str, extra_env: dict | None = None) -> bool:
         import subprocess, shutil
         if not shutil.which("ydotool"):
             return False
+        run_env = {**os.environ, **(extra_env or {})}
         try:
-            r = subprocess.run(["ydotool", *args], capture_output=True, timeout=10)
+            r = subprocess.run(["ydotool", *args], capture_output=True,
+                               timeout=10, env=run_env)
             if r.returncode != 0:
                 err = r.stderr.decode(errors="replace").strip()
-                # If the daemon socket is missing, try to start it once
                 if "ydotool_socket" in err and shutil.which("ydotoold"):
                     subprocess.Popen(["ydotoold"],
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
                     time.sleep(0.5)
                     r = subprocess.run(["ydotool", *args],
-                                       capture_output=True, timeout=10)
+                                       capture_output=True, timeout=10,
+                                       env=run_env)
                     err = r.stderr.decode(errors="replace").strip()
                 if r.returncode != 0 and err:
                     print(f"[ydotool] {err}", flush=True)
@@ -346,28 +366,32 @@ class Dictate:
         # user pressed the PTT key.
         title = self._inject_target_title or '?'
         if on_wayland and self._restore_target_focus():
-            print(f"[inject] → '{title}' (refocused via xdotool)", flush=True)
-            time.sleep(0.1)  # let compositor process the focus change
+            print(f"[inject] → '{title}' (refocused)", flush=True)
+            time.sleep(0.1)
         else:
-            print(f"[inject] → '{title}' (natural focus)", flush=True)
+            print(f"[inject] → '{title}'", flush=True)
 
+        if on_wayland:
+            # ydotool type injects via /dev/uinput — works in all Wayland apps.
+            # XKB_DEFAULT_LAYOUT must match the keyboard layout so non-ASCII
+            # characters (æøå) are mapped to the correct key codes.
+            layout = _detect_xkb_layout()
+            extra = {"XKB_DEFAULT_LAYOUT": layout} if layout else {}
+            print(f"[inject] ydotool type (layout={layout or 'unset'})", flush=True)
+            if self._try_ydotool("type", "--", text, extra_env=extra):
+                return
+            print("[inject] ydotool failed — fallback pynput type", flush=True)
+            self._kb.type(text)
+            return
+
+        # X11 / Windows / macOS: paste via clipboard or type per --paste flag.
         if self.mode == "paste":
             import pyperclip
             pyperclip.copy(text)
-            print(f"[inject] clipboard set, firing ydotool key {self.paste_key} …",
-                  flush=True)
-            if on_wayland:
-                if self._try_ydotool("key", self.paste_key):
-                    print("[inject] ydotool ok", flush=True)
-                    return
-                print("[inject] ydotool failed — fallback pynput ctrl+v", flush=True)
             self._kb.press(keyboard.Key.ctrl)
             self._kb.press("v")
             self._kb.release("v")
             self._kb.release(keyboard.Key.ctrl)
-            return
-        # default: type characters. On Wayland use ydotool type, else pynput.
-        if on_wayland and self._try_ydotool("type", "--", text):
             return
         self._kb.type(text)
 
@@ -557,12 +581,11 @@ if __name__ == "__main__":
                          "on short/soft speech than a fixed --lang)")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--paste", action="store_const", dest="mode",
-                   const="paste", help="inject via clipboard + Ctrl+V")
+                   const="paste",
+                   help="inject via clipboard + Ctrl+V on X11/Windows "
+                        "(on Wayland ydotool type is always used)")
     g.add_argument("--no-type", action="store_const", dest="mode",
                    const="print", help="just print, don't inject")
-    ap.add_argument("--paste-key", default="ctrl+v",
-                    help="ydotool key sequence used to paste from clipboard on Wayland "
-                         "(default ctrl+v; use ctrl+shift+v for terminal emulators)")
     ap.add_argument("--device", default=DEVICE,
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
                          "auto = NVIDIA GPU if present, else CPU")
@@ -580,6 +603,6 @@ if __name__ == "__main__":
     _model = WhisperModel(a.model, device=dev, compute_type=ctype)
     print(f"model ready in {time.monotonic() - _t:.1f}s", flush=True)
     try:
-        Dictate(_model, a.key, a.mode, lang, paste_key=a.paste_key).run()
+        Dictate(_model, a.key, a.mode, lang).run()
     except KeyboardInterrupt:
         print("\nbye")

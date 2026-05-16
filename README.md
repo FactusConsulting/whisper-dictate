@@ -31,22 +31,22 @@ This handles everything: evdev input group, udev rule, ydotool install,
 ydotoold daemon, and a GNOME autostart entry. Log out and back in, then:
 
 ```bash
-whisper-dictate --paste --paste-key ctrl+shift+v --key shift_r+ctrl_r --lang da
+VOICEPI_XKB_LAYOUT=dk whisper-dictate --key shift_r+ctrl_r --lang da
 ```
 
 Hold **right Shift + right Ctrl**, speak, release — text appears at the cursor.
 
-> **Note:** `--paste-key ctrl+shift+v` is the paste shortcut for terminal
-> emulators. Use `--paste-key ctrl+v` when dictating into text editors.
+> **Note:** `VOICEPI_XKB_LAYOUT` must match your keyboard layout so non-ASCII
+> characters (æøå for Danish, üöä for German, etc.) are typed correctly.
 
 ### Linux — manual
 
 ```bash
 git clone https://github.com/FactusConsulting/whisper-dictate.git
 cd whisper-dictate
-./setup.sh --paste --key shift_r+ctrl_r   # Wayland
+VOICEPI_XKB_LAYOUT=dk ./setup.sh --key shift_r+ctrl_r   # Wayland (Danish)
 # or
-./setup.sh --paste                         # X11
+./setup.sh                                                # X11
 ```
 
 Requires: `python3` ≥ 3.10, `libportaudio2`, `alsa-utils`, `wl-clipboard`
@@ -81,7 +81,7 @@ launches. Hold **Right Ctrl**, speak, release.
 |---|---|
 | `--key ctrl_r` | hold-to-talk key (`ctrl_r`, `alt_r`, `f9`…) |
 | `--key a+b` | chord: hold **both** keys simultaneously, e.g. `shift_r+ctrl_r` |
-| `--paste` | inject via clipboard + Ctrl+V — **use this on Wayland** (atomic, no dropped spaces) |
+| `--paste` | inject via clipboard + Ctrl+V on X11/Windows (Wayland always uses ydotool type) |
 | `--no-type` | just print transcription, don't inject (testing) |
 | `--lang da` | spoken-language hint `da`/`en`/`de`/`fr`… (default `da`; env `VOICEPI_LANG`) |
 | `--autodetect` | let Whisper guess the language (less reliable on short/soft speech) |
@@ -90,10 +90,11 @@ launches. Hold **Right Ctrl**, speak, release.
 
 ## Wayland details (Ubuntu 24.04/26.04)
 
-**Why `--paste` on Wayland:**
-Without it, pynput types character-by-character via XWayland, which doesn't
-reach Wayland-native windows reliably. `--paste` uses `wl-clipboard` for the
-clipboard and injects a single Ctrl+V — atomic and works everywhere.
+**Text injection — ydotool type:**
+On Wayland, whisper-dictate always uses `ydotool type` via `/dev/uinput` —
+no clipboard, no Ctrl+V. This works in all apps including terminals, editors,
+and browsers. Set `VOICEPI_XKB_LAYOUT` to your keyboard layout (e.g. `dk`)
+so ydotool correctly maps non-ASCII characters to key codes.
 
 **Hotkey detection — evdev:**
 On Wayland, pynput's Xorg backend only sees keyboard events from XWayland
@@ -144,6 +145,7 @@ text at cursor in whatever window is focused
 | `VOICEPI_MODEL` | `large-v3-turbo` | `large-v3` = slightly better accuracy, slower |
 | `VOICEPI_DEVICE` | `auto` | `cuda`/`cpu` to force; `auto` = NVIDIA if present |
 | `VOICEPI_LANG` | `da` | spoken-language hint (`en`, `de`, `fr`…) |
+| `VOICEPI_XKB_LAYOUT` | _(auto-detected)_ | keyboard layout for ydotool type (Wayland) — e.g. `dk`, `de`, `us` |
 
 The `[cap]` line prints loudness, gain, noise floor and **SNR** per
 utterance — `snr` tells you if the mic is the bottleneck: ≳25 dB
