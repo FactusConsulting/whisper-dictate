@@ -37,7 +37,7 @@ if (-not $req) { throw "no requirements file found next to setup.ps1" }
 
 # Default launch args if the user passed none (turbo is the model
 # default inside voice_pi.py, so --paste is enough).
-$runArgs = if ($args.Count -gt 0) { $args } else { @('--paste') }
+[string[]]$runArgs = if ($args.Count -gt 0) { $args } else { @('--paste') }
 
 function Test-MsvcPy312($exe) {
   if (-not (Test-Path $exe)) { return $false }
@@ -92,4 +92,4 @@ if (-not $venvOk) {
 # --- 4. launch (first run also downloads the model, ~1.5-3 GB once) ---
 Write-Host "Starting voice-pi - press Esc (or Ctrl+C) to stop." -ForegroundColor Cyan
 Set-Location $here
-& $venvPy $app @runArgs
+& $venvPy $app $runArgs

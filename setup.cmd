@@ -1,5 +1,5 @@
 @echo off
-REM whisper-dictate — double-clickable one-click setup/launcher (Windows).
+REM whisper-dictate - double-clickable one-click setup/launcher (Windows).
 REM Just double-click this file. It runs setup.ps1 with the execution
 REM policy bypassed (a .ps1 can't be double-clicked directly), passing
 REM any args straight through. The window stays open at the end so you
