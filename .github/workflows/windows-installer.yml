@@ -180,8 +180,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           cp -r manifests /tmp/winget-manifests
           git fetch origin main
-          git checkout main
-          cp -r /tmp/winget-manifests/* manifests/
+          git checkout -f main
+          cp -r /tmp/winget-manifests/. manifests/
           git add manifests/
           git diff --cached --quiet && echo "no manifest changes" && exit 0
           git commit -m "chore: update winget manifests for $TAG"
