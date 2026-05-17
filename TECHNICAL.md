@@ -3,17 +3,17 @@
 ## Architecture overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       whisper-dictate                       │
-│                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────────┐  │
-│  │  Hotkey      │    │  Audio       │    │  Text         │  │
-│  │  detection   │───▶│  capture     │───▶│  injection    │  │
-│  └──────────────┘    └──────────────┘    └───────────────┘  │
-│         │                   │                    │          │
-│   evdev (Wayland)     arecord/pipewire     ydotool (Wayland)│
-│   pynput (X11/Win)    sounddevice (X11)    pynput (X11/Win) │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                          whisper-dictate                           │
+│                                                                    │
+│  ┌────────────────┐    ┌─────────────────┐    ┌─────────────────┐  │
+│  │  Hotkey        │    │  Audio          │    │  Text           │  │
+│  │  detection     │───▶│  capture        │───▶│  injection      │  │
+│  └────────────────┘    └─────────────────┘    └─────────────────┘  │
+│           │                     │                      │           │
+│  evdev (Wayland)        arecord/pipewire       ydotool (Wayland)   │
+│  pynput (X11/Win)       sounddevice (X11)      pynput (X11/Win)    │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ## End-to-end data flow
@@ -70,7 +70,7 @@ User holds hotkey
 │                                                             │
 │  Wayland ──────────────────────────────────────────────┐    │
 │                                                        │    │
-│    Split text on æøåÆØÅ                                │    │
+│    For each char: keycode map or ASCII buffer           │    │
 │         │                                              │    │
 │         ├── ASCII part ──▶ ydotool type -- "..."       │    │
 │         │                                              │    │

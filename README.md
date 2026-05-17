@@ -110,8 +110,17 @@ Once accepted into the winget package index (PR pending):
 winget install FactusConsulting.WhisperDictate
 ```
 
-> **Note:** `winget install --manifest <path-or-url>` requires the
-> `LocalManifestFiles` policy to be enabled by an administrator.
+**Until the PR is accepted** you can install from the manifest directly,
+but this requires an administrator to enable the setting first:
+
+```powershell
+# Run once as administrator:
+winget settings --enable LocalManifestFiles
+
+# Then install (no admin needed for this part):
+winget install --manifest "https://raw.githubusercontent.com/FactusConsulting/whisper-dictate/main/manifests/FactusConsulting.WhisperDictate.yaml"
+```
+
 > Use the `.exe` installer above if you don't have admin access.
 
 ### Install manually (zip)

@@ -9,6 +9,15 @@
   #define VARIANT "cpu"
 #endif
 
+; Map installer variant names to actual requirements files:
+;   nvidia  → requirements-gpu.txt  (CUDA wheels)
+;   cpu/amd → requirements-cpu.txt  (CPU-only, AMD has no CUDA path)
+#if VARIANT == "nvidia"
+  #define REQFILE "requirements-gpu.txt"
+#else
+  #define REQFILE "requirements-cpu.txt"
+#endif
+
 [Setup]
 AppId={{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}
 AppName=whisper-dictate
@@ -39,7 +48,7 @@ Source: "..\setup.ps1";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\setup.cmd";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\TECHNICAL.md";       DestDir: "{app}"; Flags: ignoreversion
-Source: "..\requirements-{#VARIANT}.txt"; DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
+Source: "..\{#REQFILE}";               DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\setup.cmd"

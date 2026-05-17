@@ -50,7 +50,7 @@ jobs:
           fi
           changed=$(git diff --name-only "$prev" HEAD -- \
             voice_pi.py setup.cmd setup.ps1 \
-            requirements-cpu.txt requirements-nvidia.txt requirements-amd.txt \
+            requirements-cpu.txt requirements-gpu.txt \
             installer/)
           if [ -n "$changed" ]; then
             echo "changed=true"  >> "$GITHUB_OUTPUT"
@@ -74,9 +74,6 @@ jobs:
           $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $outDir  = "$PWD\Output"
           New-Item -ItemType Directory -Force $outDir | Out-Null
-          if (!(Test-Path "requirements-amd.txt")) {
-            Copy-Item "requirements-cpu.txt" "requirements-amd.txt"
-          }
           foreach ($variant in @("cpu","nvidia","amd")) {
             & $iscc /DVERSION=$version /DVARIANT=$variant /O"$outDir" installer\whisper-dictate.iss
             if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $variant" }
