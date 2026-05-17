@@ -109,8 +109,7 @@ jobs:
           $tag     = "${{ env.TAG }}"
           $hashes  = Get-Content sha256sums.json | ConvertFrom-Json
 
-          $cpuHash    = ($hashes | Where-Object File -like "*-cpu-*").SHA256
-          $nvidiaHash = ($hashes | Where-Object File -like "*-nvidia-*").SHA256
+          $cpuHash = ($hashes | Where-Object File -like "*-cpu-*").SHA256
 
           $baseUrl = "https://github.com/$repo/releases/download/$tag"
           $date    = Get-Date -Format 'yyyy-MM-dd'
@@ -163,25 +162,9 @@ jobs:
             "    ProductCode: '$productCode'",
             "    InstallerSwitches:",
             "      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
-            "    InstallerSuccessCodes: [0]",
             "    ReleaseDate: $date",
             "    AppsAndFeaturesEntries:",
             "      - DisplayName: whisper-dictate",
-            "        Publisher: FactusConsulting",
-            "        DisplayVersion: $version",
-            "        ProductCode: '$productCode'",
-            "  - Architecture: x64",
-            "    Scope: user",
-            "    InstallerType: inno",
-            "    InstallerUrl: $baseUrl/whisper-dictate-windows-nvidia-setup.exe",
-            "    InstallerSha256: $nvidiaHash",
-            "    ProductCode: '$productCode'",
-            "    InstallerSwitches:",
-            "      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
-            "    InstallerSuccessCodes: [0]",
-            "    ReleaseDate: $date",
-            "    AppsAndFeaturesEntries:",
-            "      - DisplayName: whisper-dictate (NVIDIA GPU)",
             "        Publisher: FactusConsulting",
             "        DisplayVersion: $version",
             "        ProductCode: '$productCode'",
