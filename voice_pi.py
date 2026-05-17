@@ -27,9 +27,9 @@ Hold RIGHT CTRL, speak, release → text appears at your cursor.
                   omit to let Whisper auto-detect (less reliable on short speech)
   --autodetect    alias for omitting --lang
 
-On Wayland, text is injected via ydotool type. Set VOICEPI_XKB_LAYOUT
-(e.g. "dk") so non-ASCII characters (æøå) are typed correctly:
-  VOICEPI_XKB_LAYOUT=dk whisper-dictate --key shift_r+ctrl_r --lang da
+On Wayland (Ubuntu 26.04), text is injected directly via ydotool:
+ASCII via ydotool type, æøå via evdev keycodes (compositor maps them
+through the DK XKB layout — no clipboard, no paste shortcut).
 Stop it by pressing Esc (or Ctrl+C) — that frees the GPU VRAM.
 """
 from __future__ import annotations
@@ -186,6 +186,14 @@ _LANG_TO_XKB = {
     "es": "es", "it": "it", "ru": "ru",
 }
 
+# DK-layout: direkte evdev-keycodes for æøå (og store varianter).
+# Compositor fortolker dem via XKB dk-layout — ingen clipboard/paste nødvendig.
+_DK_CHAR_TO_KEY = {
+    'å': 'KEY_LEFTBRACE',              'Å': 'KEY_LEFTSHIFT+KEY_LEFTBRACE',
+    'æ': 'KEY_APOSTROPHE',             'Æ': 'KEY_LEFTSHIFT+KEY_APOSTROPHE',
+    'ø': 'KEY_SEMICOLON',              'Ø': 'KEY_LEFTSHIFT+KEY_SEMICOLON',
+}
+
 
 def _detect_xkb_layout(lang: str | None = None) -> str | None:
     # Priority: VOICEPI_XKB_LAYOUT > XKB_DEFAULT_LAYOUT > /etc/default/keyboard > lang hint
@@ -339,6 +347,21 @@ class Dictate:
         except Exception:
             return False
 
+    def _wayland_type(self, text: str) -> bool:
+        # Split på DK-specialtegn: ASCII-dele sendes via ydotool type,
+        # æøå (og store varianter) sendes som direkte evdev-keycodes
+        # via ydotool key — compositor fortolker dem via XKB dk-layout.
+        for part in re.split(r'([åÅæÆøØ])', text):
+            if not part:
+                continue
+            if part in _DK_CHAR_TO_KEY:
+                if not self._try_ydotool('key', _DK_CHAR_TO_KEY[part]):
+                    return False
+            else:
+                if not self._try_ydotool('type', '--', part):
+                    return False
+        return True
+
     def _try_ydotool(self, *args: str) -> bool:
         import subprocess, shutil
         if not shutil.which("ydotool"):
@@ -381,30 +404,14 @@ class Dictate:
             print(f"[inject] → '{title}'", flush=True)
 
         if on_wayland:
-            # ydotool type v1.0.4 (Ubuntu 26.04) linker ikke mod libxkbcommon
-            # og kan ikke injicere non-ASCII tegn (æøå droppes stille).
-            # Løsning: wl-copy til clipboard + ydotool key paste-genvej.
-            # Brugeren trykker ingenting manuelt — ydotool gør det automatisk.
-            # VOICEPI_PASTE_KEY: ctrl+shift+v (terminaler) eller ctrl+v (editorer).
-            import subprocess, shutil
-            paste_key = os.environ.get("VOICEPI_PASTE_KEY", "ctrl+shift+v")
-            if shutil.which("wl-copy"):
-                # wl-copy skal leve til compositor beder om clipboard-indholdet.
-                # Kør i baggrunden, send paste-tasten, og vent på at wl-copy afslutter.
-                proc = subprocess.Popen(["wl-copy", "--", text],
-                                        stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL)
-                time.sleep(0.15)  # lad wl-copy nå at gøre krav på clipboard
-                print(f"[inject] wl-copy → ydotool key {paste_key}", flush=True)
-                ok = self._try_ydotool("key", paste_key)
-                try:
-                    proc.wait(timeout=3)  # venter på at paste-request er færdig
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                if ok:
-                    return
-            print("[inject] wl-copy/ydotool fejlede — fallback pynput", flush=True)
-            self._kb.type(text)
+            # ASCII via ydotool type, æøå via direkte evdev-keycodes (ydotool key).
+            # ydotool type v1.0.4 mangler libxkbcommon og dropper non-ASCII stille;
+            # men compositor fortolker KEY_LEFTBRACE→å, KEY_SEMICOLON→ø osv. via
+            # XKB dk-layout på ydotoold's uinput-enhed — ingen clipboard nødvendig.
+            print(f"[inject] ydotool (direkte)", flush=True)
+            if not self._wayland_type(text):
+                print("[inject] ydotool fejlede — fallback pynput", flush=True)
+                self._kb.type(text)
             return
 
         # X11 / Windows / macOS: paste via clipboard or type per --paste flag.
