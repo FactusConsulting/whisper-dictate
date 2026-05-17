@@ -202,6 +202,11 @@ Then bump `url`/`sha256` in
 [`FactusConsulting/homebrew-tap`](https://github.com/FactusConsulting/homebrew-tap)
 `Formula/whisper-dictate.rb`.
 
+## Technical documentation
+
+Architecture, data flow, Wayland injection details, evdev keycode
+reference, and audio routing: see [TECHNICAL.md](TECHNICAL.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
