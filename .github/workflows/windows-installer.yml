@@ -1,8 +1,8 @@
 name: windows-installer
 
 # Triggers after the main release workflow creates the GitHub Release.
-# Builds Inno Setup .exe installers (CPU + NVIDIA + AMD), uploads them to
-# the release, and commits updated winget manifests to main.
+# Only builds and submits to winget when Windows-relevant files changed.
+# Windows-relevant: voice_pi.py, setup.cmd/ps1, requirements-*.txt, installer/
 
 on:
   release:
@@ -33,12 +33,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Check for Windows-relevant changes
+        id: win-check
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$prev" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$prev" HEAD -- \
+            voice_pi.py setup.cmd setup.ps1 \
+            requirements-cpu.txt requirements-nvidia.txt requirements-amd.txt \
+            installer/)
+          if [ -n "$changed" ]; then
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+            echo "Windows files changed since $prev:"
+            echo "$changed"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No Windows-specific changes since $prev — skipping build"
+          fi
 
       - name: Install Inno Setup
+        if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: choco install innosetup -y --no-progress
 
       - name: Build installers
+        if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: |
           $version = "${{ env.TAG }}" -replace '^v',''
@@ -54,6 +83,7 @@ jobs:
           }
 
       - name: Compute SHA256 hashes
+        if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: |
           $out = @()
@@ -66,6 +96,7 @@ jobs:
           Get-Content sha256sums.txt
 
       - name: Upload installers to release
+        if: steps.win-check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -73,6 +104,7 @@ jobs:
           gh release upload "$TAG" Output/*.exe --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Generate winget manifests
+        if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: |
           $version = "${{ env.TAG }}" -replace '^v',''
@@ -161,6 +193,7 @@ jobs:
           ) | Set-Content "manifests\FactusConsulting.WhisperDictate.installer.yaml" -Encoding utf8
 
       - name: Commit updated manifests to main
+        if: steps.win-check.outputs.changed == 'true'
         shell: bash
         run: |
           git config user.name  "github-actions[bot]"
@@ -173,6 +206,7 @@ jobs:
           git push origin main
 
       - name: Submit PR to microsoft/winget-pkgs
+        if: steps.win-check.outputs.changed == 'true'
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
         shell: pwsh

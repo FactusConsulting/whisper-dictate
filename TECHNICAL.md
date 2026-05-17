@@ -4,15 +4,15 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        whisper-dictate                       │
-│                                                              │
+│                       whisper-dictate                       │
+│                                                             │
 │  ┌──────────────┐    ┌──────────────┐    ┌───────────────┐  │
 │  │  Hotkey      │    │  Audio       │    │  Text         │  │
 │  │  detection   │───▶│  capture     │───▶│  injection    │  │
 │  └──────────────┘    └──────────────┘    └───────────────┘  │
-│         │                   │                    │           │
-│   evdev (Wayland)     arecord/pipewire     ydotool (Wayland) │
-│   pynput (X11/Win)    sounddevice (X11)    pynput (X11/Win)  │
+│         │                   │                    │          │
+│   evdev (Wayland)     arecord/pipewire     ydotool (Wayland)│
+│   pynput (X11/Win)    sounddevice (X11)    pynput (X11/Win) │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -23,40 +23,40 @@ User holds hotkey
       │
       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ HOTKEY DETECTION                                             │
-│                                                              │
+│ HOTKEY DETECTION                                            │
+│                                                             │
 │  Wayland: evdev reads /dev/input/event* directly            │
 │           — global, works in all apps, layout-agnostic      │
 │           — requires user in 'input' group                  │
-│                                                              │
+│                                                             │
 │  X11/Win: pynput listener via Xorg/Win32 API                │
 └───────────────────────────┬─────────────────────────────────┘
                             │ key_down event
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ AUDIO CAPTURE                                                │
-│                                                              │
+│ AUDIO CAPTURE                                               │
+│                                                             │
 │  Wayland: arecord -D pipewire (S16_LE mono 16 kHz)          │
 │           — routes through PipeWire mixer                   │
 │           — avoids silence on sof-hda-dsp (Intel laptops)   │
 │           — read in ~125 ms chunks via background thread    │
-│                                                              │
+│                                                             │
 │  X11/Win: sounddevice (PortAudio) direct ALSA/WASAPI        │
 └───────────────────────────┬─────────────────────────────────┘
                             │ key_up event → stop recording
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ PREPROCESSING                                                │
-│                                                              │
+│ PREPROCESSING                                               │
+│                                                             │
 │  int16 frames → float32 → gain boost toward -20 dBFS        │
 │  48 kHz → resample → 16 kHz  (if device only supports 48k)  │
-│  VAD filter (Silero, threshold 0.3)                          │
-│  SNR diagnostics printed per utterance                       │
+│  VAD filter (Silero, threshold 0.3)                         │
+│  SNR diagnostics printed per utterance                      │
 └───────────────────────────┬─────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ TRANSCRIPTION — faster-whisper                               │
-│                                                              │
+│ TRANSCRIPTION — faster-whisper                              │
+│                                                             │
 │  Model: large-v3-turbo (default, fastest)                   │
 │  Device: NVIDIA GPU (CUDA) if present, else CPU             │
 │  beam_size=1, temperature fallback [0.0, 0.2]               │
@@ -66,15 +66,15 @@ User holds hotkey
                             │ text string (e.g. "Rødgrød med fløde.")
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ TEXT INJECTION                                               │
-│                                                              │
+│ TEXT INJECTION                                              │
+│                                                             │
 │  Wayland ──────────────────────────────────────────────┐    │
 │                                                        │    │
 │    Split text on æøåÆØÅ                                │    │
 │         │                                              │    │
 │         ├── ASCII part ──▶ ydotool type -- "..."       │    │
 │         │                                              │    │
-│         └── DK char ────▶ ydotool key <code>:<press>  │    │
+│         └── DK char ────▶ ydotool key <code>:<press>   │    │
 │                            å = 26:1 26:0               │    │
 │                            æ = 39:1 39:0               │    │
 │                            ø = 40:1 40:0               │    │
@@ -85,7 +85,7 @@ User holds hotkey
 │  X11/Windows ──────────────────────────────────────────┘    │
 │                                                             │
 │    --paste flag: pyperclip.copy() + pynput Ctrl+V           │
-│    default:      pynput keyboard.Controller().type()         │
+│    default:      pynput keyboard.Controller().type()        │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
