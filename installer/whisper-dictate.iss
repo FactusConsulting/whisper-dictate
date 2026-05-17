@@ -62,6 +62,51 @@ Filename: "{app}\setup.cmd"; Description: "Run first-time setup now (downloads ~
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+const
+  UninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1';
+
+function GetUninstallString(): String;
+var
+  S: String;
+begin
+  S := '';
+  if not RegQueryStringValue(HKCU, UninstKey, 'UninstallString', S) then
+    RegQueryStringValue(HKLM, UninstKey, 'UninstallString', S);
+  Result := S;
+end;
+
+procedure UninstallPrevious();
+var
+  UnStr: String;
+  ResultCode, I: Integer;
+begin
+  UnStr := RemoveQuotes(GetUninstallString());
+  if UnStr = '' then
+    Exit;
+  if Exec(UnStr, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '',
+          SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    // The Inno uninstaller relaunches a temp copy and returns early; wait
+    // until the uninstall registry key is gone (max ~60 s) so the freshly
+    // installed files are not deleted by the in-progress old uninstaller.
+    for I := 1 to 120 do
+    begin
+      if GetUninstallString() = '' then
+        Break;
+      Sleep(500);
+    end;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  // On upgrade, fully remove the previous version first so no orphaned
+  // files survive. The venv (%USERPROFILE%\voice-pi-venv) and the model
+  // cache live outside {app}, so they are preserved across upgrades.
+  UninstallPrevious();
+  Result := '';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Path, NewPath: string;
