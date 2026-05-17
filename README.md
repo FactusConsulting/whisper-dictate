@@ -156,14 +156,30 @@ Double-click the installer. It installs to `%LOCALAPPDATA%\Programs\WhisperDicta
 
 ### Install via winget
 
-A PR to the official winget package index has been submitted and is
-pending review. Once merged:
+Once the [pending PR](https://github.com/microsoft/winget-pkgs/pull/375681)
+to the official winget package index merges:
 
 ```powershell
 winget install FactusConsulting.WhisperDictate
 ```
 
-Until then, use the `.exe` installer above.
+**Until then**, install from this repo's manifests directly:
+
+```powershell
+# One-time, in an elevated (admin) PowerShell:
+winget settings --enable LocalManifestFiles
+
+# Then (no admin needed):
+git clone https://github.com/FactusConsulting/whisper-dictate.git
+winget install --manifest .\whisper-dictate\manifests
+```
+
+> The installer is not yet code-signed, so Windows SmartScreen warns
+> that the publisher is unknown — choose **More info → Run anyway**.
+> Do **not** pass `--disable-interactivity`: SmartScreen blocks the
+> unsigned installer when it cannot prompt. Passing a raw manifest
+> *URL* to `--manifest` does **not** work — winget only accepts a
+> local path, not a URL.
 
 ### Install manually (zip)
 

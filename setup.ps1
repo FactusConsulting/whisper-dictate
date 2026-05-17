@@ -1,16 +1,16 @@
 # =====================================================================
-# whisper-dictate — one-shot, portable setup + launcher (Windows).
+# whisper-dictate - one-shot, portable setup + launcher (Windows).
 #
 # Copy the WHOLE folder to any Windows machine and run this. Idempotent:
-#   * first run  → finds/installs Python 3.12, builds the venv,
+#   * first run  -> finds/installs Python 3.12, builds the venv,
 #                   installs deps, downloads the model, launches.
-#   * later runs → validates the venv and just launches.
+#   * later runs -> validates the venv and just launches.
 #
 # Nothing is hardcoded to a user or path: code lives next to this
 # script ($PSScriptRoot); the venv is machine-local. Requirements:
 # the GPU bundle ships requirements-gpu.txt (NVIDIA/CUDA); the CPU
 # bundle ships requirements-cpu.txt (no GPU, incl. AMD-GPU boxes). A
-# release bundle ships exactly one as requirements.txt — preferred if
+# release bundle ships exactly one as requirements.txt - preferred if
 # present, else this falls back to the GPU file in a dev checkout.
 # voice_pi.py auto-detects CUDA vs CPU at runtime (see --device).
 #
@@ -18,7 +18,7 @@
 # Any args pass straight to voice_pi.py, e.g. ... -File setup.ps1 --lang de
 # With no args it defaults to:  --paste   (model defaults to the
 # fastest, large-v3-turbo, in voice_pi.py).
-# Stop the running tool by pressing Esc (or Ctrl+C) — frees GPU VRAM.
+# Stop the running tool by pressing Esc (or Ctrl+C) - frees GPU VRAM.
 # =====================================================================
 $ErrorActionPreference = 'Stop'
 $here   = $PSScriptRoot
@@ -46,7 +46,7 @@ function Test-MsvcPy312($exe) {
 }
 
 function Find-Py312 {
-  # ONLY the canonical python.org/winget locations — never a broad
+  # ONLY the canonical python.org/winget locations - never a broad
   # Program Files recurse (that picks up Autodesk/Blender/etc.).
   $cands = @(
     "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
@@ -58,7 +58,7 @@ function Find-Py312 {
 
 # --- 1. fast path: a valid venv that can already import the engine ---
 $venvOk = (Test-MsvcPy312 $venvPy) -and
-          (& $venvPy -c "import faster_whisper, numpy, sounddevice, pynput" 2>$null; $LASTEXITCODE -eq 0)
+          $(& $venvPy -c "import faster_whisper, numpy, sounddevice, pynput" 2>$null; $LASTEXITCODE -eq 0)
 
 if (-not $venvOk) {
   Write-Host "Setting up voice-pi (one-time on this machine)..." -ForegroundColor Cyan
@@ -90,6 +90,6 @@ if (-not $venvOk) {
 }
 
 # --- 4. launch (first run also downloads the model, ~1.5-3 GB once) ---
-Write-Host "Starting voice-pi — press Esc (or Ctrl+C) to stop." -ForegroundColor Cyan
+Write-Host "Starting voice-pi - press Esc (or Ctrl+C) to stop." -ForegroundColor Cyan
 Set-Location $here
 & $venvPy $app @runArgs

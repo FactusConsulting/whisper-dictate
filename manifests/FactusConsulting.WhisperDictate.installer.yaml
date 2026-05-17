@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 PackageIdentifier: FactusConsulting.WhisperDictate
 PackageVersion: 0.2.23
 Installers:
@@ -16,4 +17,4 @@ Installers:
         DisplayVersion: 0.2.23
         ProductCode: '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
 ManifestType: installer
-ManifestVersion: 1.6.0
+ManifestVersion: 1.12.0
