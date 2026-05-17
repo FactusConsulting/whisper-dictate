@@ -15,6 +15,7 @@ already in. Switching target = just focus a different window.
 |----------|---------------|-------|
 | Ubuntu 24.04 / 26.04 — Wayland | Homebrew | Recommended |
 | Linux — X11 | Manual | Any distro |
+| NixOS / nix-env | Nix flake | `nix run` or NixOS module |
 | Windows 10 / 11 | setup.cmd | CPU or NVIDIA GPU |
 
 ---
@@ -85,6 +86,57 @@ Or after the venv is built:
 
 ```bash
 ~/.venv-whisper-dictate/bin/python voice_pi.py --key ctrl_r --lang en
+```
+
+---
+
+## NixOS / Nix
+
+### Run without installing
+
+```bash
+nix run github:FactusConsulting/whisper-dictate -- --key shift_r+ctrl_r --lang da
+```
+
+### Install into a profile
+
+```bash
+nix profile install github:FactusConsulting/whisper-dictate
+whisper-dictate --key shift_r+ctrl_r --lang da
+```
+
+### NixOS module (recommended for NixOS users)
+
+Add to your `flake.nix`:
+
+```nix
+inputs.whisper-dictate.url = "github:FactusConsulting/whisper-dictate";
+```
+
+Then in your NixOS configuration:
+
+```nix
+imports = [ inputs.whisper-dictate.nixosModules.default ];
+
+services.whisperDictate = {
+  enable = true;
+  users  = [ "yourname" ];   # added to the 'input' group
+};
+```
+
+The module enables `ydotool` (Wayland text injection), adds the udev rule
+for `/dev/uinput`, and installs the package system-wide. Log out and back
+in after the first activation (required for the `input` group to take effect).
+
+### Official nixpkgs (pending PR)
+
+A PR to [NixOS/nixpkgs](https://github.com/NixOS/nixpkgs) is open. Once
+merged, you can install without the flake:
+
+```bash
+nix-env -iA nixpkgs.whisper-dictate
+# or in configuration.nix:
+environment.systemPackages = [ pkgs.whisper-dictate ];
 ```
 
 ---

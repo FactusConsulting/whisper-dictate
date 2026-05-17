@@ -114,7 +114,7 @@ jobs:
 
           $baseUrl = "https://github.com/$repo/releases/download/$tag"
           $date    = Get-Date -Format 'yyyy-MM-dd'
-          $pid     = '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
+          $productCode = '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
 
           New-Item -ItemType Directory -Force manifests | Out-Null
 
@@ -160,7 +160,7 @@ jobs:
             "    InstallerType: inno",
             "    InstallerUrl: $baseUrl/whisper-dictate-windows-cpu-setup.exe",
             "    InstallerSha256: $cpuHash",
-            "    ProductCode: '$pid'",
+            "    ProductCode: '$productCode'",
             "    InstallerSwitches:",
             "      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
             "    InstallerSuccessCodes: [0]",
@@ -169,13 +169,13 @@ jobs:
             "      - DisplayName: whisper-dictate",
             "        Publisher: FactusConsulting",
             "        DisplayVersion: $version",
-            "        ProductCode: '$pid'",
+            "        ProductCode: '$productCode'",
             "  - Architecture: x64",
             "    Scope: user",
             "    InstallerType: inno",
             "    InstallerUrl: $baseUrl/whisper-dictate-windows-nvidia-setup.exe",
             "    InstallerSha256: $nvidiaHash",
-            "    ProductCode: '$pid'",
+            "    ProductCode: '$productCode'",
             "    InstallerSwitches:",
             "      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
             "    InstallerSuccessCodes: [0]",
@@ -184,7 +184,7 @@ jobs:
             "      - DisplayName: whisper-dictate (NVIDIA GPU)",
             "        Publisher: FactusConsulting",
             "        DisplayVersion: $version",
-            "        ProductCode: '$pid'",
+            "        ProductCode: '$productCode'",
             "ManifestType: installer",
             "ManifestVersion: 1.6.0"
           ) | Set-Content "manifests\FactusConsulting.WhisperDictate.installer.yaml" -Encoding utf8
