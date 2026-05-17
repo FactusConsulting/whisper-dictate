@@ -148,15 +148,15 @@ environment.systemPackages = [ pkgs.whisper-dictate ];
 Download the `.exe` installer from
 [GitHub Releases](https://github.com/FactusConsulting/whisper-dictate/releases/latest):
 
-- **`whisper-dictate-windows-cpu-setup.exe`** — works on all machines
-- **`whisper-dictate-windows-nvidia-setup.exe`** — NVIDIA GPU acceleration
+- **`whisper-dictate-windows-cpu-setup-<version>.exe`** — works on all machines
+- **`whisper-dictate-windows-nvidia-setup-<version>.exe`** — NVIDIA GPU acceleration
 
 Double-click the installer. It installs to `%LOCALAPPDATA%\Programs\WhisperDictate`
 (no admin required) and adds the directory to your user PATH.
 
 ### Install via winget
 
-Once the [pending PR](https://github.com/microsoft/winget-pkgs/pull/375681)
+Once the [pending PR](https://github.com/microsoft/winget-pkgs/pulls?q=is%3Apr+FactusConsulting.WhisperDictate)
 to the official winget package index merges:
 
 ```powershell

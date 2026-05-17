@@ -160,7 +160,7 @@ jobs:
             "  - Architecture: x64",
             "    Scope: user",
             "    InstallerType: inno",
-            "    InstallerUrl: $baseUrl/whisper-dictate-windows-cpu-setup.exe",
+            "    InstallerUrl: $baseUrl/whisper-dictate-windows-cpu-setup-$version.exe",
             "    InstallerSha256: $cpuHash",
             "    ProductCode: '$productCode'",
             "    InstallerSwitches:",
