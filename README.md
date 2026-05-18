@@ -128,17 +128,6 @@ The module enables `ydotool` (Wayland text injection), adds the udev rule
 for `/dev/uinput`, and installs the package system-wide. Log out and back
 in after the first activation (required for the `input` group to take effect).
 
-### Official nixpkgs (pending PR)
-
-A PR to [NixOS/nixpkgs](https://github.com/NixOS/nixpkgs) is open. Once
-merged, you can install without the flake:
-
-```bash
-nix-env -iA nixpkgs.whisper-dictate
-# or in configuration.nix:
-environment.systemPackages = [ pkgs.whisper-dictate ];
-```
-
 ---
 
 ## Windows 10 / 11
