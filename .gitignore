@@ -16,5 +16,5 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Claude Code local settings (personal, machine-local)
-.claude/settings.local.json
+# Claude Code settings (personal, machine-local — never commit)
+.claude/
