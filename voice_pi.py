@@ -69,7 +69,7 @@ from faster_whisper import WhisperModel  # noqa: E402 — must follow bootstrap
 
 SR = 16000
 MODEL_NAME = os.environ.get("VOICEPI_MODEL", "large-v3-turbo")
-VALID_DEVICES = ("auto", "cuda", "cpu")
+from vp_device import VALID_DEVICES, _resolve_device  # noqa: E402 - sits next to this script
 # Compute device: "auto" tries the GPU (CUDA/NVIDIA) and falls back to
 # CPU; force with "cuda" or "cpu". faster-whisper/ctranslate2 only
 # accelerate on NVIDIA — an AMD GPU box runs CPU. CPU is usable but
@@ -98,28 +98,6 @@ BEAM_SIZE = int(os.environ.get("VOICEPI_BEAM_SIZE", "1"))
 # recognition of domain-specific terms (product names, jargon, names).
 # Example: VOICEPI_INITIAL_PROMPT="Winget, whisper-dictate, FactusConsulting"
 INITIAL_PROMPT = os.environ.get("VOICEPI_INITIAL_PROMPT") or None
-
-
-def _resolve_device(want: str) -> tuple[str, str]:
-    # → (device, compute_type). "auto" uses the GPU if a CUDA/NVIDIA
-    # device is present, else CPU. faster-whisper/ctranslate2 only
-    # accelerate on NVIDIA, so an AMD-GPU machine resolves to "cpu"
-    # (same as a no-GPU box). int8_float16 on GPU, int8 on CPU.
-    want = (want or "auto").lower()
-    if want not in VALID_DEVICES:
-        raise ValueError(f"invalid device '{want}' (expected: "
-                         f"{', '.join(VALID_DEVICES)})")
-    if want == "cuda":
-        return "cuda", "int8_float16"
-    if want == "cpu":
-        return "cpu", "int8"
-    try:
-        import ctranslate2
-        if ctranslate2.get_cuda_device_count() > 0:
-            return "cuda", "int8_float16"
-    except Exception:  # noqa: BLE001 — any failure → safe CPU fallback
-        pass
-    return "cpu", "int8"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
