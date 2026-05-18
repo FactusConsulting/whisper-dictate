@@ -29,10 +29,9 @@ in {
     # ydotoold — virtual uinput keyboard daemon for Wayland text injection.
     services.ydotool.enable = true;
 
-    # udev rule so /dev/uinput is writable by the 'input' group.
-    services.udev.extraRules = ''
-      KERNEL=="uinput", GROUP="input", MODE="0660"
-    '';
+    # /dev/uinput access for the 'input' group is provided by
+    # services.ydotool.enable above (it ships the uinput udev rule on
+    # current nixpkgs), so no hand-rolled services.udev.extraRules here.
 
     # Add specified users to the input group.
     users.users = lib.listToAttrs (map (u: {
