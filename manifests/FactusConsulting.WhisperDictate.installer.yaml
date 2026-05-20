@@ -1,20 +1,20 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 PackageIdentifier: FactusConsulting.WhisperDictate
-PackageVersion: 0.2.29
+PackageVersion: 0.2.30
 Installers:
   - Architecture: x64
     Scope: user
     InstallerType: inno
-    InstallerUrl: https://github.com/FactusConsulting/whisper-dictate/releases/download/v0.2.29/whisper-dictate-windows-cpu-setup-0.2.29.exe
-    InstallerSha256: 60dbaee57be890da76de19b10490d3565149a5eeaf7d0bc3eb3657d57c1732a6
+    InstallerUrl: https://github.com/FactusConsulting/whisper-dictate/releases/download/v0.2.30/whisper-dictate-windows-cpu-setup-0.2.30.exe
+    InstallerSha256: ddf661deac8919d1056e0b87e86706ce9cae34b9fceac5904d6fbb10651e219a
     ProductCode: '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
     InstallerSwitches:
       Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-    ReleaseDate: 2026-05-19
+    ReleaseDate: 2026-05-20
     AppsAndFeaturesEntries:
       - DisplayName: whisper-dictate
         Publisher: FactusConsulting
-        DisplayVersion: 0.2.29
+        DisplayVersion: 0.2.30
         ProductCode: '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
 ManifestType: installer
 ManifestVersion: 1.12.0
