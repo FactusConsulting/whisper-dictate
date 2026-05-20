@@ -190,6 +190,59 @@ class DeviceResolutionTests(unittest.TestCase):
             voice_pi._resolve_device("cdua")
 
 
+class ComputeTypeOverrideTests(unittest.TestCase):
+    """VOICEPI_COMPUTE_TYPE overrides the auto-picked compute_type for
+    cuda / cpu / auto-on-gpu / auto-on-cpu — and an unset/empty env leaves
+    the int8_float16-on-GPU / int8-on-CPU defaults untouched."""
+
+    def setUp(self):
+        self._old = os.environ.pop("VOICEPI_COMPUTE_TYPE", None)
+
+    def tearDown(self):
+        os.environ.pop("VOICEPI_COMPUTE_TYPE", None)
+        if self._old is not None:
+            os.environ["VOICEPI_COMPUTE_TYPE"] = self._old
+
+    def test_override_applies_to_explicit_cuda(self):
+        os.environ["VOICEPI_COMPUTE_TYPE"] = "float16"
+        voice_pi = load_voice_pi(cuda_devices=1)
+        self.assertEqual(
+            voice_pi._resolve_device("cuda"), ("cuda", "float16"))
+
+    def test_override_applies_to_explicit_cpu(self):
+        os.environ["VOICEPI_COMPUTE_TYPE"] = "float32"
+        voice_pi = load_voice_pi()
+        self.assertEqual(
+            voice_pi._resolve_device("cpu"), ("cpu", "float32"))
+
+    def test_override_applies_to_auto_on_gpu(self):
+        os.environ["VOICEPI_COMPUTE_TYPE"] = "bfloat16"
+        voice_pi = load_voice_pi(cuda_devices=1)
+        self.assertEqual(
+            voice_pi._resolve_device("auto"), ("cuda", "bfloat16"))
+
+    def test_override_applies_to_auto_on_cpu(self):
+        os.environ["VOICEPI_COMPUTE_TYPE"] = "float32"
+        voice_pi = load_voice_pi(cuda_devices=0)
+        self.assertEqual(
+            voice_pi._resolve_device("auto"), ("cpu", "float32"))
+
+    def test_empty_env_leaves_defaults_untouched(self):
+        os.environ["VOICEPI_COMPUTE_TYPE"] = "   "  # whitespace only
+        voice_pi = load_voice_pi(cuda_devices=1)
+        self.assertEqual(
+            voice_pi._resolve_device("cuda"), ("cuda", "int8_float16"))
+        self.assertEqual(
+            voice_pi._resolve_device("cpu"), ("cpu", "int8"))
+
+    def test_default_unchanged_when_env_unset(self):
+        voice_pi = load_voice_pi(cuda_devices=1)
+        self.assertEqual(
+            voice_pi._resolve_device("cuda"), ("cuda", "int8_float16"))
+        self.assertEqual(
+            voice_pi._resolve_device("cpu"), ("cpu", "int8"))
+
+
 class ArgumentParserTests(unittest.TestCase):
     def test_parser_rejects_invalid_device(self):
         voice_pi = load_voice_pi()

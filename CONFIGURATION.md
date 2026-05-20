@@ -20,6 +20,7 @@ upgrade wipes them.
 |---|---|---|---|
 | `VOICEPI_MODEL` | `large-v3-turbo` | any faster-whisper model: `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3` … | Whisper model. `large-v3-turbo` = fastest (default); `large-v3` = best accuracy, slower. Also `--model`. |
 | `VOICEPI_DEVICE` | `auto` | `auto` \| `cuda` \| `cpu` | Compute device. `auto` = NVIDIA GPU if present, else CPU. Invalid value → error. Also `--device`. |
+| `VOICEPI_COMPUTE_TYPE` | *(unset → `int8_float16` on GPU, `int8` on CPU)* | `int8` \| `int8_float16` \| `float16` \| `bfloat16` \| `float32` … (any ctranslate2-supported type) | Overrides the auto-picked compute precision. Big-GPU users gain accuracy with `float16` (or `bfloat16` on Ampere/Ada+); `int8_float16` defaults trade a little accuracy for VRAM/speed. Validated by ctranslate2 at model-load — an unsupported value raises then. Env only — no flag. |
 | `VOICEPI_LANG` | *(unset → auto-detect)* | ISO 639-1: `da en de fr sv nb nn nl fi pl pt es it uk` … (any Whisper language); empty/unset = auto-detect | Force the spoken language. Strongly recommended for short/soft dictation — auto-detect flip-flops on short utterances. Also `--lang`. |
 | `VOICEPI_BEAM_SIZE` | `1` | integer ≥ 1 (typical `1`–`5`) | Beam-search width. `1` = fastest; `5` = better accuracy, 3–4× slower on CPU (cheap on GPU). Env only — no flag. |
 | `VOICEPI_INITIAL_PROMPT` | *(none)* | free text | Context/vocabulary hint biasing recognition toward your terms/names. Env only. |
@@ -124,7 +125,8 @@ module already wires up ydotool/uinput for Wayland.
 - **Daily Danish dictation:** `VOICEPI_LANG=da` (persistent). Add
   `VOICEPI_INITIAL_PROMPT` with your domain terms.
 - **GPU desktop, max quality:** `--device cuda --model large-v3` +
-  `VOICEPI_BEAM_SIZE=5` (latency is cheap on GPU).
+  `VOICEPI_BEAM_SIZE=5` + `VOICEPI_COMPUTE_TYPE=float16` (full half-precision
+  instead of the quantised `int8_float16` default; latency is cheap on GPU).
 - **Multilingual:** leave `VOICEPI_LANG` unset (auto-detect) — but speak full,
   clear sentences; auto-detect is unreliable on short utterances.
 - **Mic too quiet / noisy:** see [MICROPHONE.md](MICROPHONE.md) before tuning
