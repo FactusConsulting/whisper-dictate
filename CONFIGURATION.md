@@ -120,13 +120,42 @@ NixOS module — set env in the service/user environment (e.g.
 it. `VOICEPI_XKB_LAYOUT` is auto-derived from `--lang`/the session layout; the
 module already wires up ydotool/uinput for Wayland.
 
+## GPU VRAM sizing — what to set per card
+
+Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
+--format=csv` — browser/IDE/Discord eat 1–3 GB before whisper-dictate starts,
+so free ≠ total). Round down to the nearest row. If the first transcription
+OOMs, drop `BEAM_SIZE` one row or `COMPUTE_TYPE` one tier (`float16` →
+`int8_float16`).
+
+| Free VRAM | Device | Model | `BEAM_SIZE` | `COMPUTE_TYPE` | Footprint¹ | Notes |
+|---|---|---|---:|---|---:|---|
+| **CPU only / <2 GB** | `cpu` | `large-v3-turbo` | `1` | *(default `int8`)* | RAM, not VRAM | `beam>1` too slow on CPU; turbo beats large-v3 here |
+| **2–4 GB** *(GTX 1660, mobile RTX 3050)* | `cuda` | `large-v3-turbo` | `1`–`5` | *(default `int8_float16`)* | ~1–1.5 GB | small footprint, near-large quality |
+| **4–6 GB** *(RTX 3050 8 GB, mobile 4060)* | `cuda` | `large-v3` | `5` | *(default `int8_float16`)* | ~2.5–3 GB | quantised default keeps room for other apps |
+| **6–8 GB** *(RTX 3060 8 GB, RTX 4060)* | `cuda` | `large-v3` | `5`–`8` | `float16` | ~3.5–4.5 GB | full half-precision; small accuracy win |
+| **8–12 GB** *(RTX 3080 10 GB, RTX 4070)* | `cuda` | `large-v3` | `8` | `float16` | ~4–5 GB | sweet spot for desktop GPUs |
+| **12–16 GB** *(RTX 3060 12 GB, RTX 4080, 5070 Ti)* | `cuda` | `large-v3` | `10` | `float16` *(or `bfloat16` on Ampere+)* | ~5–6 GB | wider beam helps on hard/short utterances |
+| **16–24 GB** *(RTX 4080/5080 16 GB)* | `cuda` | `large-v3` | `10`–`16` | `float16` | ~6–8 GB | beam past 16 has diminishing returns |
+| **24+ GB** *(RTX 3090/4090/5090, A40, A100, H100)* | `cuda` | `large-v3` | `16` | `float32` *(or stay on `float16`)* | ~10–12 GB | `float32` is overkill — Whisper accuracy plateaus before this |
+
+¹ Footprint = model weights + KV cache (~25 MB per beam at ~30 s audio) +
+ctranslate2/CUDA context (~300–500 MB). `large-v3` weights alone:
+~1.6 GB `int8_float16`, ~3.1 GB `float16`/`bfloat16`, ~6.2 GB `float32`.
+`large-v3-turbo` is roughly half of those.
+
+**One-liner to set the 8–12 GB row** (RTX 3080 / 4070):
+```powershell
+setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8; setx VOICEPI_COMPUTE_TYPE float16; setx VOICEPI_LANG da
+# restart whisper-dictate; first [stt] line in the log will show your new compute type
+```
+
 ## Quick recommendations
 
 - **Daily Danish dictation:** `VOICEPI_LANG=da` (persistent). Add
   `VOICEPI_INITIAL_PROMPT` with your domain terms.
-- **GPU desktop, max quality:** `--device cuda --model large-v3` +
-  `VOICEPI_BEAM_SIZE=5` + `VOICEPI_COMPUTE_TYPE=float16` (full half-precision
-  instead of the quantised `int8_float16` default; latency is cheap on GPU).
+- **GPU desktop, max quality:** see the VRAM sizing table above — pick the row
+  matching your free VRAM, not your total.
 - **Multilingual:** leave `VOICEPI_LANG` unset (auto-detect) — but speak full,
   clear sentences; auto-detect is unreliable on short utterances.
 - **Mic too quiet / noisy:** see [MICROPHONE.md](MICROPHONE.md) before tuning
