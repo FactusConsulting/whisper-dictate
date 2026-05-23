@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 def load_voice_pi(cuda_devices: int = 0):
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
+                 "vp_cli", "vp_transcribe",
                  "ctranslate2", "faster_whisper", "numpy",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -49,6 +50,7 @@ def load_voice_pi_realnp():
     """Import voice_pi with the REAL numpy (for audio-DSP tests) but the
     heavy/uninstalled deps stubbed. CI installs numpy (see tests workflow)."""
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
+                 "vp_cli", "vp_transcribe",
                  "ctranslate2", "faster_whisper",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)

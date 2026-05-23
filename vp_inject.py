@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 import time
 
-from pynput import keyboard
 from vp_keymap import _build_ydotool_ops
 
 
@@ -174,6 +173,7 @@ class InjectMixin:
         # X11 / Windows / macOS: paste via clipboard or type per --paste flag.
         if self.mode == "paste":
             import pyperclip
+            from pynput import keyboard
             pyperclip.copy(text)
             self._kb.press(keyboard.Key.ctrl)
             self._kb.press("v")
