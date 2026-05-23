@@ -45,3 +45,38 @@ jobs:
         uses: docker://rhysd/actionlint:1.7.7
         with:
           args: -color
+
+  smoke:
+    # End-to-end import sanity: numpy is the only heavy dep needed for
+    # --help (sounddevice, pynput, faster_whisper are lazy-loaded inside
+    # Dictate / __main__). If a future change re-couples them to import
+    # time, this job fails on Windows + Linux before users see the
+    # broken installer.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install minimal deps
+        # numpy: required at voice_pi import time. pynput: required by
+        # probe-key.py. sounddevice + faster_whisper stay lazy so they
+        # don't bloat the smoke job.
+        run: python -m pip install --quiet numpy pynput
+      - name: voice_pi --help
+        run: python voice_pi.py --help
+      - name: probe-key.py sanity (returns 3 for unknown key)
+        shell: bash
+        run: |
+          set +e
+          python scripts/probe-key.py bogus_key 1
+          rc=$?
+          set -e
+          if [ "$rc" != "3" ]; then
+            echo "expected exit 3 (unknown key), got $rc"
+            exit 1
+          fi
