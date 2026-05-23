@@ -11,8 +11,20 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.2.36] - 2026-05-23
+
+### Added
+- `CHANGELOG.md` (Keep-a-Changelog) covering every release from v0.1.0 onward.
+- `vp_cli.py` (argparse + `VOICEPI_DEBUG` settings dump) and `vp_transcribe.py` (Whisper call + hallucination filter) — extracted from `voice_pi.py` so each module has a single responsibility. `voice_pi.py` re-exports every name so installer/tests/downstream callers are unaffected.
+- Cross-platform `smoke` CI job (ubuntu-latest + windows-latest) running `voice_pi.py --help` and `scripts/probe-key.py bogus_key 1`.
+- `lint-workflows` CI job: `yaml.safe_load` of every workflow + `rhysd/actionlint`.
+- 15 new unit tests: `ModuleSurfaceTests`, `HallucinationFilterTests`, `CliModuleIsolationTests` (48 → 63 total).
+
 ### Changed
-- Soft-pinned `sounddevice`, `pynput`, `pyperclip`, `evdev` to major-compatible ranges in both `requirements-cpu.txt` and `requirements-gpu.txt`.
+- `voice_pi.py` shrunk from 577 to 401 lines after the split.
+- `sounddevice`, `pynput`, and `faster_whisper` are now lazy-imported inside `Dictate` methods and `__main__`. `python voice_pi.py --help` runs with only `numpy` installed.
+- Soft-pinned `sounddevice>=0.4,<0.6`, `pynput>=1.7,<2.0`, `pyperclip>=1.8,<2.0`, `evdev>=1.6,<2.0` in both `requirements-cpu.txt` and `requirements-gpu.txt`.
+- `release.yml` builds the release asset list as a bash array (shellcheck SC2086).
 
 ### Fixed
 - `DeviceResolutionTests` now isolates `VOICEPI_COMPUTE_TYPE` so the suite passes on machines where the user has the env var set.
