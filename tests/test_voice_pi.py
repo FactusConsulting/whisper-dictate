@@ -594,5 +594,92 @@ class DetectXkbLayoutTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class ModuleSurfaceTests(unittest.TestCase):
+    """voice_pi.py re-exports names that were moved into vp_cli / vp_transcribe
+    when the file was split. Tests, the installer, and downstream callers
+    still reach for these on the voice_pi module — make sure they resolve."""
+
+    def test_voice_pi_reexports_cli_symbols(self):
+        vp = load_voice_pi()
+        for name in ("build_arg_parser", "_print_effective_config",
+                     "KEY", "MODEL_NAME", "DEVICE", "LANG",
+                     "INJECT_MODE", "VALID_INJECT_MODES",
+                     "QUIT_COUNT", "QUIT_WINDOW_MS", "BEAM_SIZE"):
+            self.assertTrue(hasattr(vp, name),
+                            f"voice_pi.{name} missing — re-export broken")
+
+    def test_voice_pi_reexports_transcribe_symbols(self):
+        vp = load_voice_pi()
+        for name in ("_transcribe", "_HALLUCINATIONS",
+                     "is_hallucination", "SR", "INITIAL_PROMPT"):
+            self.assertTrue(hasattr(vp, name),
+                            f"voice_pi.{name} missing — re-export broken")
+
+    def test_voice_pi_reexports_device_audio_keymap(self):
+        vp = load_voice_pi()
+        for name in ("_resolve_device", "VALID_DEVICES",
+                     "_noise_snr", "_boost_quiet", "_looks_like_speech",
+                     "TARGET_DBFS",
+                     "_LAYOUT_KEYCODES", "_LANG_TO_XKB",
+                     "_detect_xkb_layout", "_build_ydotool_ops"):
+            self.assertTrue(hasattr(vp, name),
+                            f"voice_pi.{name} missing — re-export broken")
+
+
+class HallucinationFilterTests(unittest.TestCase):
+    """is_hallucination filters Whisper's known output when fed near-silence."""
+
+    def setUp(self):
+        # Pure import — no numpy / faster_whisper needed for this surface.
+        for n in ("vp_transcribe", "vp_audio"):
+            sys.modules.pop(n, None)
+        sys.modules.setdefault("numpy", types.ModuleType("numpy"))
+        import vp_transcribe
+        self.t = vp_transcribe
+
+    def test_known_hallucination_filtered(self):
+        for phrase in ("tak", "Tak.", "TAK FORDI DU SÅ MED",
+                       "thank you for watching", "Undertekster af"):
+            self.assertTrue(self.t.is_hallucination(phrase),
+                            f"{phrase!r} should match")
+
+    def test_trailing_whitespace_still_matches(self):
+        self.assertTrue(self.t.is_hallucination("tak.  \n"))
+
+    def test_genuine_text_not_filtered(self):
+        for phrase in ("hello world", "tak for hjælpen",
+                       "dette er en sætning der ikke er hallucination"):
+            self.assertFalse(self.t.is_hallucination(phrase),
+                             f"{phrase!r} should NOT match")
+
+
+class CliModuleIsolationTests(unittest.TestCase):
+    """vp_cli.build_arg_parser must work standalone — no voice_pi import.
+    Catches regressions where someone accidentally re-couples them."""
+
+    def setUp(self):
+        # vp_cli depends only on vp_audio, vp_device, vp_transcribe — all
+        # of which need numpy. Stub it the same way load_voice_pi does so
+        # this test runs even without numpy installed.
+        for n in ("voice_pi", "vp_cli", "vp_transcribe",
+                  "vp_audio", "vp_device"):
+            sys.modules.pop(n, None)
+        sys.modules.setdefault("numpy", types.ModuleType("numpy"))
+
+    def test_parser_works_without_voice_pi(self):
+        before = set(sys.modules)
+        import vp_cli
+        ns = vp_cli.build_arg_parser().parse_args([])
+        # Defaults pulled from env vars; just check the shape.
+        for attr in ("key", "model", "lang", "device", "mode", "autodetect"):
+            self.assertTrue(hasattr(ns, attr),
+                            f"parser missing --{attr}")
+        # voice_pi may already have been loaded by an earlier test, but
+        # importing vp_cli here must NOT pull it in fresh.
+        newly_loaded = set(sys.modules) - before
+        self.assertNotIn("voice_pi", newly_loaded,
+                         "vp_cli must not pull in voice_pi")
+
+
 if __name__ == "__main__":
     unittest.main()
