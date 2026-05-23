@@ -95,7 +95,10 @@ class AudioDspTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.vp = load_voice_pi_realnp()
+        try:
+            cls.vp = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
         import numpy as np
         cls.np = np
 
@@ -161,6 +164,14 @@ class AudioDspTests(unittest.TestCase):
 
 
 class DeviceResolutionTests(unittest.TestCase):
+    def setUp(self):
+        self._old_compute = os.environ.pop("VOICEPI_COMPUTE_TYPE", None)
+
+    def tearDown(self):
+        os.environ.pop("VOICEPI_COMPUTE_TYPE", None)
+        if self._old_compute is not None:
+            os.environ["VOICEPI_COMPUTE_TYPE"] = self._old_compute
+
     def test_auto_uses_cuda_when_available(self):
         voice_pi = load_voice_pi(cuda_devices=1)
 
