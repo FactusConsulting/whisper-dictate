@@ -63,13 +63,24 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install minimal deps
-        # numpy: required at voice_pi import time. pynput: required by
-        # probe-key.py. sounddevice + faster_whisper stay lazy so they
-        # don't bloat the smoke job.
-        run: python -m pip install --quiet numpy pynput
+        # numpy: required at voice_pi import time. sounddevice +
+        # faster_whisper stay lazy so they don't bloat the smoke job.
+        run: python -m pip install --quiet numpy
+      - name: Install pynput (Windows only)
+        # pynput imports an X11/evdev backend on Linux which fails on
+        # headless runners. We only need it for the probe-key step
+        # which is Windows-only anyway.
+        if: runner.os == 'Windows'
+        run: python -m pip install --quiet pynput
       - name: voice_pi --help
         run: python voice_pi.py --help
       - name: probe-key.py sanity (returns 3 for unknown key)
+        # pynput needs a display backend on Linux (Xlib / evdev); the
+        # headless Ubuntu runner can't import it, and probe-key.py is
+        # primarily a Windows-side tool (Pause/Break, caps_lock toggle
+        # warnings, IME chord checks) so skip it there. The Windows
+        # runner is the meaningful target.
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           set +e
