@@ -85,16 +85,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          assets="whisper-dictate-windows-nvidia-${VERSION}.zip \
-                  whisper-dictate-windows-cpu-${VERSION}.zip \
-                  whisper-dictate-windows-amd-${VERSION}.zip \
-                  whisper-dictate-linux-cpu-${VERSION}.zip"
+          assets=(
+            "whisper-dictate-windows-nvidia-${VERSION}.zip"
+            "whisper-dictate-windows-cpu-${VERSION}.zip"
+            "whisper-dictate-windows-amd-${VERSION}.zip"
+            "whisper-dictate-linux-cpu-${VERSION}.zip"
+          )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "$TAG — download, unzip, run" --notes-file NOTES.md
-            gh release upload "$TAG" $assets --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" $assets --repo "$GITHUB_REPOSITORY" \
+            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
               --title "$TAG — download, unzip, run" --notes-file NOTES.md
           fi
 
