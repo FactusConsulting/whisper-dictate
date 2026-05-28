@@ -1,0 +1,8 @@
+# Optional NVIDIA Parakeet backend.
+# Install after the normal CPU/GPU requirements when you want:
+#   VOICEPI_STT_BACKEND=parakeet
+#
+# NeMo pulls PyTorch/torchaudio. If pip chooses the wrong CUDA build for your
+# machine, install torch + torchaudio first from:
+#   https://pytorch.org/get-started/locally/
+nemo_toolkit[asr]

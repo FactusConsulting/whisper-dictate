@@ -19,6 +19,7 @@ upgrade wipes them.
 | Knob | Env var | CLI flag | Default | Range / options | What it does |
 |---|---|---|---|---|---|
 | **Whisper model** | `VOICEPI_MODEL` | `--model` | `large-v3-turbo` | `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3`, … | turbo = fastest default; `large-v3` = best accuracy |
+| **STT backend** | `VOICEPI_STT_BACKEND` | _none_ | `whisper` | `whisper` \| `parakeet` | default uses faster-whisper; `parakeet` uses optional NVIDIA NeMo dependencies |
 | **Device** | `VOICEPI_DEVICE` | `--device` | `auto` | `auto` \| `cuda` \| `cpu` | auto picks NVIDIA GPU if present, else CPU |
 | **Compute type / precision** | `VOICEPI_COMPUTE_TYPE` | _none_ | `int8_float16` (GPU) / `int8` (CPU) | `int8`, `int8_float16`, `float16`, `bfloat16`, `float32` | precision override — `float16` for accuracy on big GPUs; see VRAM table below |
 | **Spoken language** | `VOICEPI_LANG` | `--lang` / `--autodetect` | _(unset → auto-detect)_ | ISO 639-1: `da`, `en`, `de`, `fr`, `sv`, `nb`, `nl`, `fi`, `pl`, `pt`, `es`, `it`, `uk`, … | language hint; strongly recommended for short utterances |
@@ -52,6 +53,8 @@ the **GPU VRAM sizing** table further down.
 | Variable | Default | Values | Effect |
 |---|---|---|---|
 | `VOICEPI_MODEL` | `large-v3-turbo` | any faster-whisper model: `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3` … | Whisper model. `large-v3-turbo` = fastest (default); `large-v3` = best accuracy, slower. Also `--model`. |
+| `VOICEPI_STT_BACKEND` | `whisper` | `whisper` \| `parakeet` | Selects the local STT engine. `parakeet` loads NVIDIA NeMo lazily and uses `nvidia/parakeet-tdt-0.6b-v3` when the normal Whisper default model is unchanged. |
+| `VOICEPI_PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | NeMo ASR model name | Optional Parakeet-specific model override. Takes precedence over `VOICEPI_MODEL` when `VOICEPI_STT_BACKEND=parakeet`. |
 | `VOICEPI_DEVICE` | `auto` | `auto` \| `cuda` \| `cpu` | Compute device. `auto` = NVIDIA GPU if present, else CPU. Invalid value → error. Also `--device`. |
 | `VOICEPI_COMPUTE_TYPE` | *(unset → `int8_float16` on GPU, `int8` on CPU)* | `int8` \| `int8_float16` \| `float16` \| `bfloat16` \| `float32` … (any ctranslate2-supported type) | Overrides the auto-picked compute precision. Big-GPU users gain accuracy with `float16` (or `bfloat16` on Ampere/Ada+); `int8_float16` defaults trade a little accuracy for VRAM/speed. Validated by ctranslate2 at model-load — an unsupported value raises then. Env only — no flag. |
 | `VOICEPI_LANG` | *(unset → auto-detect)* | ISO 639-1: `da en de fr sv nb nn nl fi pl pt es it uk` … (any Whisper language); empty/unset = auto-detect | Force the spoken language. Strongly recommended for short/soft dictation — auto-detect flip-flops on short utterances. Also `--lang`. |
@@ -127,6 +130,7 @@ setting + the env var that supplied it:
   --model            large-v3  (env VOICEPI_MODEL=large-v3)
   --lang             da  (env VOICEPI_LANG=da, --autodetect=False)
   --device           cuda  ->  resolved: cuda / float16
+  stt backend        whisper  (env VOICEPI_STT_BACKEND=(unset))
   compute_type       float16  (env VOICEPI_COMPUTE_TYPE=float16)
   beam_size          8  (env VOICEPI_BEAM_SIZE=8)
   initial_prompt     899 chars: "Factus Consulting, TwoDay, Hetzner, konsulent..."  (env VOICEPI_INITIAL_PROMPT)
@@ -189,6 +193,26 @@ One-off via terminal (the installer put the dir on PATH):
 Or make your **own** shortcut whose Target is
 `%LOCALAPPDATA%\Programs\WhisperDictate\setup.cmd --key ctrl_r --lang da`
 
+### Optional NVIDIA Parakeet backend
+
+The default backend remains faster-whisper. To try NVIDIA Parakeet, install the
+normal requirements first, then the optional NeMo requirements. This path is
+experimental on Windows because NeMo/PyTorch wheel compatibility depends on the
+local CUDA/Python combination:
+
+```powershell
+& "$env:USERPROFILE\voice-pi-venv\Scripts\python.exe" -m pip install `
+  -r "$env:LOCALAPPDATA\Programs\WhisperDictate\requirements-parakeet.txt"
+setx VOICEPI_STT_BACKEND parakeet
+```
+
+`VOICEPI_STT_BACKEND=parakeet` loads NeMo only when transcription starts, so
+`--help`, `--doctor`, and the default Whisper backend do not require Parakeet
+dependencies. With the default `VOICEPI_MODEL=large-v3-turbo`, the adapter uses
+`nvidia/parakeet-tdt-0.6b-v3`; set `VOICEPI_PARAKEET_MODEL` or `--model` to use
+another NeMo ASR model. v3 is multilingual and includes Danish, which makes it
+the right first Parakeet candidate for mixed Danish/English dictation.
+
 ### Custom dictionary
 
 Use a dictionary when product names, app names and mixed-language terms are
@@ -212,6 +236,15 @@ Dictionary terms bias Whisper through a bounded prompt
 (`VOICEPI_DICTIONARY_MAX_TERMS`, `VOICEPI_DICTIONARY_PROMPT_CHARS`). Smart
 replacements run after transcription and are recorded in JSON/metrics output
 along with the raw text.
+
+Manage the default dictionary without loading Whisper:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-status
+& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-open
+& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-add "Claude Code"
+& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-replace "Cloud Code=Claude Code"
+```
 
 ### Injection smoke test
 

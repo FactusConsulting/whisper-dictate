@@ -303,6 +303,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_MIN_INPUT_DBFS` | `-55` | reject raw input quieter than this before Whisper |
 | `VOICEPI_MIN_SNR_DB` | `6` | reject raw input without enough speech-vs-noise contrast |
 | `VOICEPI_MODEL` | `large-v3-turbo` | `large-v3` = slightly better accuracy, slower |
+| `VOICEPI_STT_BACKEND` | `whisper` | `whisper` (default faster-whisper) or `parakeet` (optional NVIDIA NeMo backend) |
 | `VOICEPI_DEVICE` | `auto` | `cuda`/`cpu` to force; `auto` = NVIDIA if present |
 | `VOICEPI_LANG` | _(auto-detect)_ | spoken-language hint (`da`, `en`, `de`, `fr`…) |
 | `VOICEPI_KEY` | `ctrl_r` | hold-to-talk key or chord, e.g. `f9`, `alt_r`, `ctrl_l+space` |
@@ -317,6 +318,15 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
 | `VOICEPI_VAD_THRESHOLD` | `0.3` | Silero VAD speech threshold passed to faster-whisper |
 | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | minimum silence gap used by VAD segmentation |
+
+Dictionary helper commands run before Whisper loads, for example
+`setup.ps1 --dictionary-status`, `setup.ps1 --dictionary-open`,
+`setup.ps1 --dictionary-add "Claude Code"`, and
+`setup.ps1 --dictionary-replace "Cloud Code=Claude Code"`.
+
+Optional Parakeet backend: install `requirements-parakeet.txt`, then set
+`VOICEPI_STT_BACKEND=parakeet`. NeMo is imported lazily, so default Whisper
+runs and `--doctor` do not need Parakeet dependencies.
 
 The `[gate]` line shows whether the raw input was accepted before gain
 boost. The `[cap]` line prints loudness, gain, noise floor and **SNR** per

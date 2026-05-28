@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -120,6 +122,111 @@ def _load_path(path: Path) -> tuple[list[str], dict[str, str]]:
                     replacements[str(item["from"])] = str(item["to"])
         return terms, replacements
     return _parse_text_config(data)
+
+
+def dictionary_target_path() -> Path:
+    """Return the path managed by the dictionary CLI."""
+    paths = _candidate_paths()
+    return paths[0] if paths else _default_path()
+
+
+def _read_dictionary_file(
+    path: Path,
+) -> tuple[dict[str, object], list[str], dict[str, str]]:
+    if not path.exists():
+        return {}, [], {}
+    if path.suffix.lower() == ".json":
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(obj, dict):
+            raise ValueError("dictionary JSON root must be an object")
+        terms, replacements = _load_path(path)
+        return obj, terms, replacements
+    terms, replacements = _load_path(path)
+    return {}, terms, replacements
+
+
+def _write_dictionary_file(
+    path: Path,
+    terms: list[str],
+    replacements: dict[str, str],
+    base: dict[str, object] | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    obj = dict(base or {})
+    obj["terms"] = _dedupe(terms)
+    obj["replacements"] = dict(sorted(replacements.items()))
+    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+
+
+def ensure_dictionary_file(path: Path | None = None) -> Path:
+    path = path or dictionary_target_path()
+    if not path.exists():
+        _write_dictionary_file(path, [], {})
+    return path
+
+
+def add_dictionary_term(term: str, path: Path | None = None) -> tuple[Path, bool]:
+    term = term.strip()
+    if not term:
+        raise ValueError("dictionary term cannot be empty")
+    path = path or dictionary_target_path()
+    base, terms, replacements = _read_dictionary_file(path)
+    before = {item.casefold() for item in terms}
+    added = term.casefold() not in before
+    if added:
+        terms.append(term)
+        _write_dictionary_file(path, terms, replacements, base)
+    return path, added
+
+
+def add_dictionary_replacement(
+    mapping: str,
+    path: Path | None = None,
+) -> tuple[Path, str, str, bool]:
+    parsed = _parse_mapping_line(mapping)
+    if not parsed:
+        raise ValueError("replacement must be FROM=TO")
+    src, dst = parsed
+    path = path or dictionary_target_path()
+    base, terms, replacements = _read_dictionary_file(path)
+    changed = replacements.get(src) != dst
+    if changed:
+        replacements[src] = dst
+        _write_dictionary_file(path, terms, replacements, base)
+    return path, src, dst, changed
+
+
+def dictionary_status() -> str:
+    paths = _candidate_paths()
+    dictionary = DICTIONARY
+    enabled = _truthy(os.environ.get("VOICEPI_DICTIONARY_ENABLED", "1"))
+    lines = [
+        f"enabled: {enabled}",
+        f"managed path: {dictionary_target_path()}",
+        "configured paths: "
+        f"{', '.join(str(p) for p in paths) if paths else '(none)'}",
+        "loaded paths: "
+        f"{', '.join(str(p) for p in dictionary.paths) if dictionary.paths else '(none)'}",
+        f"terms: {len(dictionary.terms)}",
+        f"replacements: {len(dictionary.replacements)}",
+    ]
+    preview = dictionary.terms[:10]
+    if preview:
+        suffix = " ..." if len(dictionary.terms) > len(preview) else ""
+        lines.append(f"term preview: {', '.join(preview)}{suffix}")
+    return "\n".join(lines)
+
+
+def open_dictionary(path: Path | None = None) -> Path:
+    path = ensure_dictionary_file(path)
+    if os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+    return path
 
 
 @dataclass

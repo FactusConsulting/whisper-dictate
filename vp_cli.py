@@ -34,6 +34,32 @@ def _truthy_env(name: str) -> bool:
         "", "0", "false", "no", "off")
 
 
+class _DictionaryAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        from vp_dictionary import (
+            add_dictionary_replacement, add_dictionary_term,
+            dictionary_status, open_dictionary,
+        )
+
+        try:
+            if option_string == "--dictionary-status":
+                print(dictionary_status(), flush=True)
+            elif option_string == "--dictionary-open":
+                path = open_dictionary()
+                print(f"opened dictionary: {path}", flush=True)
+            elif option_string == "--dictionary-add":
+                path, added = add_dictionary_term(values)
+                verb = "added" if added else "already present"
+                print(f"{verb}: {values} ({path})", flush=True)
+            elif option_string == "--dictionary-replace":
+                path, src, dst, changed = add_dictionary_replacement(values)
+                verb = "saved" if changed else "already present"
+                print(f"{verb}: {src} -> {dst} ({path})", flush=True)
+        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+            parser.error(str(e))
+        raise SystemExit(0)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--key", default=KEY,
@@ -62,6 +88,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "env VOICEPI_JSON")
     ap.add_argument("--doctor", action="store_true",
                     help="run Linux/Wayland health checks and exit")
+    ap.add_argument("--dictionary-status", nargs=0, action=_DictionaryAction,
+                    help="show dictionary paths, counts and preview, then exit")
+    ap.add_argument("--dictionary-open", nargs=0, action=_DictionaryAction,
+                    help="create/open the managed dictionary file, then exit")
+    ap.add_argument("--dictionary-add", metavar="TERM", action=_DictionaryAction,
+                    help="add TERM to the managed dictionary, then exit")
+    ap.add_argument("--dictionary-replace", metavar="FROM=TO",
+                    action=_DictionaryAction,
+                    help="add a smart replacement to the managed dictionary, then exit")
     ap.add_argument("--device", default=DEVICE, choices=VALID_DEVICES,
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
                          "auto = NVIDIA GPU if present, else CPU")
@@ -90,7 +125,7 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
 
     from vp_audio import MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
     from vp_transcribe import (
-        BEAM_SIZE, CONTEXT_MIN_SECONDS, TEMPERATURES,
+        BEAM_SIZE, CONTEXT_MIN_SECONDS, STT_BACKEND, TEMPERATURES,
         VAD_MIN_SILENCE_MS, VAD_THRESHOLD,
     )
     from vp_dictionary import DICTIONARY, _default_path
@@ -102,6 +137,7 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
                              f"(env VOICEPI_LANG={_env('VOICEPI_LANG')}, "
                              f"--autodetect={args.autodetect})"),
         ("--device",         f"{args.device}  ->  resolved: {dev} / {ctype}"),
+        ("stt backend",      f"{STT_BACKEND}  (env VOICEPI_STT_BACKEND={_env('VOICEPI_STT_BACKEND')})"),
         ("compute_type",     f"{ctype}  (env VOICEPI_COMPUTE_TYPE={_env('VOICEPI_COMPUTE_TYPE')})"),
         ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env('VOICEPI_BEAM_SIZE')})"),
         ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env('VOICEPI_TEMPERATURE')})"),

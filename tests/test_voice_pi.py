@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -13,7 +14,7 @@ from unittest.mock import patch
 
 def load_voice_pi(cuda_devices: int = 0):
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
-                 "vp_cli", "vp_transcribe", "vp_dictionary",
+                 "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
                  "ctranslate2", "faster_whisper", "numpy",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -50,7 +51,7 @@ def load_voice_pi_realnp():
     """Import voice_pi with the REAL numpy (for audio-DSP tests) but the
     heavy/uninstalled deps stubbed. CI installs numpy (see tests workflow)."""
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
-                 "vp_cli", "vp_transcribe", "vp_dictionary",
+                 "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
                  "ctranslate2", "faster_whisper",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -270,6 +271,7 @@ class DebugConfigTests(unittest.TestCase):
             "VOICEPI_LANG", "VOICEPI_MODEL", "VOICEPI_DEVICE",
             "VOICEPI_KEY", "VOICEPI_INJECT_MODE",
             "VOICEPI_DICTIONARY", "VOICEPI_DICTIONARY_ENABLED",
+            "VOICEPI_STT_BACKEND",
         )}
 
     def tearDown(self):
@@ -296,7 +298,7 @@ class DebugConfigTests(unittest.TestCase):
         # header + every row label appears
         self.assertIn("[debug] effective settings:", out)
         for label in ("--key", "--model", "--lang", "--device",
-                      "compute_type", "beam_size", "initial_prompt",
+                      "stt backend", "compute_type", "beam_size", "initial_prompt",
                       "dictionary", "quit", "audio thresholds", "XKB (Wayland)",
                       "inject mode"):
             self.assertIn(label, out)
@@ -402,6 +404,37 @@ class ArgumentParserTests(unittest.TestCase):
 
         self.assertTrue(ns.json)
         self.assertTrue(ns.doctor)
+
+    def test_dictionary_status_exits_from_parser(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "dictionary.json")
+            with _env(VOICEPI_DICTIONARY=path):
+                voice_pi = load_voice_pi()
+                parser = voice_pi.build_arg_parser()
+
+                with _capture_stdout() as buf:
+                    with self.assertRaises(SystemExit) as cm:
+                        parser.parse_args(["--dictionary-status"])
+
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn("managed path:", buf.getvalue())
+
+    def test_dictionary_add_exits_from_parser_and_writes_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "dictionary.json")
+            with _env(VOICEPI_DICTIONARY=path):
+                voice_pi = load_voice_pi()
+                parser = voice_pi.build_arg_parser()
+
+                with _capture_stdout():
+                    with self.assertRaises(SystemExit) as cm:
+                        parser.parse_args(["--dictionary-add", "OpenClaw"])
+
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+        self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(data["terms"], ["OpenClaw"])
 
 
 class InjectStrategyTests(unittest.TestCase):
@@ -669,7 +702,9 @@ class ModuleSurfaceTests(unittest.TestCase):
         vp = load_voice_pi()
         for name in ("_transcribe", "_HALLUCINATIONS",
                      "is_hallucination", "SR", "INITIAL_PROMPT",
-                     "TEMPERATURES", "CONTEXT_MIN_SECONDS"):
+                     "TEMPERATURES", "CONTEXT_MIN_SECONDS",
+                     "STT_BACKEND", "VALID_STT_BACKENDS",
+                     "load_stt_model"):
             self.assertTrue(hasattr(vp, name),
                             f"voice_pi.{name} missing — re-export broken")
 
@@ -872,6 +907,136 @@ class TranscribeDetailTests(unittest.TestCase):
         )
 
 
+class STTBackendTests(unittest.TestCase):
+    def setUp(self):
+        self._old = {k: os.environ.pop(k, None) for k in (
+            "VOICEPI_STT_BACKEND", "VOICEPI_MODEL", "VOICEPI_PARAKEET_MODEL",
+        )}
+        for n in list(sys.modules):
+            if (n in ("vp_transcribe", "vp_audio", "vp_parakeet",
+                      "faster_whisper", "nemo")
+                    or n.startswith("nemo.")):
+                sys.modules.pop(n, None)
+
+    def tearDown(self):
+        for k, v in self._old.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        for n in list(sys.modules):
+            if n in ("vp_transcribe", "vp_parakeet") or n.startswith("nemo."):
+                sys.modules.pop(n, None)
+
+    def test_default_backend_loads_faster_whisper_without_nemo(self):
+        created = {}
+        fw = types.ModuleType("faster_whisper")
+
+        class WhisperModel:
+            def __init__(self, model_name, *, device, compute_type):
+                created["args"] = (model_name, device, compute_type)
+
+        fw.WhisperModel = WhisperModel
+        sys.modules["faster_whisper"] = fw
+        sys.modules["numpy"] = getattr(AudioDspTests, "np", types.ModuleType("numpy"))
+
+        import vp_transcribe
+
+        model = vp_transcribe.load_stt_model("large-v3-turbo", "cpu", "int8")
+
+        self.assertIsInstance(model, WhisperModel)
+        self.assertEqual(created["args"], ("large-v3-turbo", "cpu", "int8"))
+        self.assertNotIn("nemo.collections.asr", sys.modules)
+
+    def test_invalid_backend_is_rejected(self):
+        os.environ["VOICEPI_STT_BACKEND"] = "bogus"
+        sys.modules["numpy"] = getattr(AudioDspTests, "np", types.ModuleType("numpy"))
+        import vp_transcribe
+
+        with self.assertRaisesRegex(ValueError, "VOICEPI_STT_BACKEND"):
+            vp_transcribe.load_stt_model("large-v3-turbo", "cpu", "int8")
+
+    def test_parakeet_missing_deps_error_is_actionable(self):
+        os.environ["VOICEPI_STT_BACKEND"] = "parakeet"
+        sys.modules["numpy"] = getattr(AudioDspTests, "np", types.ModuleType("numpy"))
+        import vp_transcribe
+
+        real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "nemo.collections.asr" or name.startswith("nemo"):
+                raise ImportError("no nemo")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaisesRegex(RuntimeError, "requirements-parakeet.txt"):
+                vp_transcribe.load_stt_model("large-v3-turbo", "cuda", "float16")
+
+    def test_parakeet_adapter_uses_nemo_stub_and_default_model(self):
+        calls = {}
+
+        fake_np = types.ModuleType("numpy")
+        fake_np.float32 = object()
+        sys.modules["numpy"] = fake_np
+
+        class FakeNemoModel:
+            def to(self, device):
+                calls["device"] = device
+
+            def eval(self):
+                calls["eval"] = True
+
+            def freeze(self):
+                calls["freeze"] = True
+
+            def transcribe(self, paths, batch_size=1):
+                calls["path"] = paths[0]
+                calls["path_exists_during_call"] = os.path.exists(paths[0])
+                calls["batch_size"] = batch_size
+                return [" hello"]
+
+        class ASRModel:
+            @staticmethod
+            def from_pretrained(model_name):
+                calls["model_name"] = model_name
+                return FakeNemoModel()
+
+        nemo = types.ModuleType("nemo")
+        collections = types.ModuleType("nemo.collections")
+        asr = types.ModuleType("nemo.collections.asr")
+        asr.models = types.SimpleNamespace(ASRModel=ASRModel)
+        collections.asr = asr
+        nemo.collections = collections
+        sys.modules["nemo"] = nemo
+        sys.modules["nemo.collections"] = collections
+        sys.modules["nemo.collections.asr"] = asr
+
+        import vp_parakeet
+        model = vp_parakeet.ParakeetModel("large-v3-turbo", device="cuda")
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            path = f.name
+
+        class FakeAudio:
+            def reshape(self, *_args):
+                return self
+
+            def astype(self, *_args):
+                return self
+
+        with patch.object(vp_parakeet, "_write_wav", return_value=path):
+            segments, info = model.transcribe(FakeAudio())
+
+        self.assertEqual(
+            calls["model_name"], "nvidia/parakeet-tdt-0.6b-v3")
+        self.assertEqual(calls["device"], "cuda")
+        self.assertTrue(calls["eval"])
+        self.assertTrue(calls["freeze"])
+        self.assertTrue(calls["path_exists_during_call"])
+        self.assertFalse(os.path.exists(calls["path"]))
+        self.assertEqual(calls["batch_size"], 1)
+        self.assertEqual(segments[0].text, "hello")
+        self.assertIsNone(info.language)
+
+
 class DictionaryTests(unittest.TestCase):
     def setUp(self):
         self._old = {k: os.environ.pop(k, None) for k in (
@@ -931,6 +1096,43 @@ class DictionaryTests(unittest.TestCase):
         with _capture_stdout() as buf:
             self.assertEqual(d.prompt_terms(), ["Slack", "Claude Code"])
         self.assertIn("ignoring invalid VOICEPI_DICTIONARY_MAX_TERMS", buf.getvalue())
+
+    def test_dictionary_add_term_creates_json_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "dictionary.json")
+            os.environ["VOICEPI_DICTIONARY"] = path
+            import vp_dictionary
+
+            written, added = vp_dictionary.add_dictionary_term("Claude Code")
+            _, added_again = vp_dictionary.add_dictionary_term("claude code")
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+
+        self.assertEqual(str(written), path)
+        self.assertTrue(added)
+        self.assertFalse(added_again)
+        self.assertEqual(data["terms"], ["Claude Code"])
+        self.assertEqual(data["replacements"], {})
+
+    def test_dictionary_add_replacement_preserves_terms(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            f.write('{"terms":["Codex"],"replacements":{}}')
+            path = f.name
+        try:
+            os.environ["VOICEPI_DICTIONARY"] = path
+            import vp_dictionary
+
+            written, src, dst, changed = vp_dictionary.add_dictionary_replacement(
+                "code X=Codex")
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        finally:
+            os.remove(path)
+
+        self.assertEqual(str(written), path)
+        self.assertEqual((src, dst, changed), ("code X", "Codex", True))
+        self.assertEqual(data["terms"], ["Codex"])
+        self.assertEqual(data["replacements"], {"code X": "Codex"})
 
 
 if __name__ == "__main__":

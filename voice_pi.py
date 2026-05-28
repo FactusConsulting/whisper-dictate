@@ -114,8 +114,9 @@ _LAZY_EXPORTS = {
     ),
     "vp_transcribe": (
         "BEAM_SIZE", "CONTEXT_MIN_SECONDS", "HALLUCINATIONS",
-        "INITIAL_PROMPT", "SR", "TEMPERATURES", "_transcribe",
-        "_transcribe_detail", "is_hallucination",
+        "INITIAL_PROMPT", "SR", "STT_BACKEND", "TEMPERATURES",
+        "VALID_STT_BACKENDS", "_transcribe", "_transcribe_detail",
+        "is_hallucination", "load_stt_model",
     ),
 }
 _EXPORT_ALIASES = {"_HALLUCINATIONS": ("vp_transcribe", "HALLUCINATIONS")}
@@ -142,7 +143,8 @@ def _load_runtime_modules() -> None:
     global MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
     global _boost_quiet, _find_arecord_device, _looks_like_speech, _noise_snr
     global BEAM_SIZE, CONTEXT_MIN_SECONDS, _HALLUCINATIONS, INITIAL_PROMPT
-    global SR, TEMPERATURES, _transcribe, _transcribe_detail, is_hallucination
+    global SR, STT_BACKEND, TEMPERATURES, VALID_STT_BACKENDS
+    global _transcribe, _transcribe_detail, is_hallucination, load_stt_model
 
     import numpy as np  # noqa: F401
     from vp_audio import (
@@ -152,8 +154,8 @@ def _load_runtime_modules() -> None:
     from vp_transcribe import (
         BEAM_SIZE, CONTEXT_MIN_SECONDS,
         HALLUCINATIONS as _HALLUCINATIONS,
-        INITIAL_PROMPT, SR, TEMPERATURES, _transcribe, _transcribe_detail,
-        is_hallucination,
+        INITIAL_PROMPT, SR, STT_BACKEND, TEMPERATURES, VALID_STT_BACKENDS,
+        _transcribe, _transcribe_detail, is_hallucination, load_stt_model,
     )
 
 
@@ -491,14 +493,30 @@ if __name__ == "__main__":
             "", "0", "false", "no", "off"):
         _print_effective_config(a, dev, ctype)
 
-    print(f"loading Whisper {a.model} on {dev} ({ctype})… "
+    try:
+        backend = STT_BACKEND
+        if backend not in VALID_STT_BACKENDS:
+            raise ValueError(
+                "invalid VOICEPI_STT_BACKEND="
+                f"{backend!r}; expected one of {', '.join(VALID_STT_BACKENDS)}")
+    except ValueError as e:
+        ap.error(str(e))
+
+    label = "NVIDIA Parakeet" if backend == "parakeet" else "Whisper"
+    loaded_model_name = a.model
+    if backend == "parakeet":
+        loaded_model_name = (
+            os.environ.get("VOICEPI_PARAKEET_MODEL")
+            or ("nvidia/parakeet-tdt-0.6b-v3"
+                if a.model == "large-v3-turbo" else a.model)
+        )
+    print(f"loading {label} {loaded_model_name} on {dev} ({ctype})… "
           f"first run downloads the model", flush=True)
     if dev == "cpu":
         print("  note: CPU mode — transcription is slower; large-v3-turbo "
               "(default) is the fastest model", flush=True)
-    from faster_whisper import WhisperModel
     _t = time.monotonic()
-    _model = WhisperModel(a.model, device=dev, compute_type=ctype)
+    _model = load_stt_model(a.model, dev, ctype)
     _model_load_s = time.monotonic() - _t
     print(f"model ready in {_model_load_s:.1f}s", flush=True)
     try:
@@ -506,7 +524,7 @@ if __name__ == "__main__":
             _model, a.key, a.mode, lang,
             json_output=a.json,
             metrics_jsonl=os.environ.get("VOICEPI_METRICS_JSONL"),
-            model_name=a.model,
+            model_name=loaded_model_name,
             device=dev,
             compute_type=ctype,
             model_load_s=_model_load_s,

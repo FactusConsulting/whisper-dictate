@@ -56,13 +56,15 @@ User holds hotkey
 └───────────────────────────┬─────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ TRANSCRIPTION — faster-whisper                              │
+│ TRANSCRIPTION — faster-whisper or optional Parakeet          │
 │                                                             │
+│  Backend: VOICEPI_STT_BACKEND=whisper (default)              │
 │  Model: large-v3-turbo (default, fastest)                   │
 │  Device: NVIDIA GPU (CUDA) if present, else CPU             │
 │  beam_size=1, temperature fallback [0.0, 0.2]               │
 │  condition_on_previous_text=False  (avoids hallucinations)  │
 │  no_speech_threshold=0.45  (lets quiet speech through)      │
+│  Optional: VOICEPI_STT_BACKEND=parakeet loads NeMo lazily    │
 └───────────────────────────┬─────────────────────────────────┘
                             │ text string (e.g. "Rødgrød med fløde.")
                             ▼

@@ -50,6 +50,7 @@ Source: "..\setup.cmd";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\TECHNICAL.md";       DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dictionary.example.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\requirements-parakeet.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\scripts\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\{#REQFILE}";               DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion

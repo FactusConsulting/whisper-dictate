@@ -59,6 +59,28 @@ VAD_THRESHOLD = float(os.environ.get("VOICEPI_VAD_THRESHOLD", "0.3"))
 VAD_MIN_SILENCE_MS = int(os.environ.get("VOICEPI_VAD_MIN_SILENCE_MS", "600"))
 STT_DEBUG = (os.environ.get("VOICEPI_STT_DEBUG") or "").strip().lower() not in (
     "", "0", "false", "no", "off")
+VALID_STT_BACKENDS = ("whisper", "parakeet")
+STT_BACKEND = (os.environ.get("VOICEPI_STT_BACKEND") or "whisper").strip().lower()
+if STT_BACKEND == "faster-whisper":
+    STT_BACKEND = "whisper"
+
+
+def load_stt_model(model_name: str, device: str, compute_type: str):
+    """Load the selected STT backend lazily.
+
+    The default path preserves the existing faster-whisper behaviour. The
+    Parakeet path imports NeMo only after VOICEPI_STT_BACKEND=parakeet is set.
+    """
+    backend = STT_BACKEND
+    if backend not in VALID_STT_BACKENDS:
+        raise ValueError(
+            "invalid VOICEPI_STT_BACKEND="
+            f"{backend!r}; expected one of {', '.join(VALID_STT_BACKENDS)}")
+    if backend == "parakeet":
+        from vp_parakeet import ParakeetModel
+        return ParakeetModel(model_name, device=device, compute_type=compute_type)
+    from faster_whisper import WhisperModel
+    return WhisperModel(model_name, device=device, compute_type=compute_type)
 
 
 @dataclass
