@@ -19,7 +19,7 @@
 #   Global hotkeys work via evdev — reading /dev/input/event* directly.
 #   This requires:
 #     1. sudo usermod -aG input $USER    (then log out and back in)
-#     2. First run rebuilds the venv with evdev + scipy
+#     2. First run rebuilds the venv with evdev
 #   After that, hold right Shift + right Ctrl to talk (default chord).
 #   Audio is captured via arecord -D pipewire, bypassing PortAudio's
 #   direct ALSA open which misses PipeWire's virtual mic routing.
@@ -84,7 +84,7 @@ if [ "${WAYLAND_DISPLAY:-}" != "" ] || [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; 
 fi
 
 # --- fast path: venv that can already import the engine -------------
-if "$VENVPY" -c 'import faster_whisper, numpy, sounddevice, pynput' >/dev/null 2>&1; then
+if "$VENVPY" -c 'import faster_whisper, numpy, sounddevice, pynput; import sys; sys.exit(0 if sys.platform != "linux" else (__import__("evdev") and 0))' >/dev/null 2>&1; then
   :
 else
   echo "Setting up whisper-dictate (one-time on this machine)..."

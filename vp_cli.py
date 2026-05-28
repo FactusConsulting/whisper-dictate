@@ -29,6 +29,11 @@ QUIT_COUNT = int(os.environ.get("VOICEPI_QUIT_COUNT", "3"))
 QUIT_WINDOW_MS = int(os.environ.get("VOICEPI_QUIT_WINDOW_MS", "1500"))
 
 
+def _truthy_env(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() not in (
+        "", "0", "false", "no", "off")
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--key", default=KEY,
@@ -52,6 +57,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "(on Wayland direct evdev keycodes are always used)")
     g.add_argument("--no-type", action="store_const", dest="mode",
                    const="print", help="just print, don't inject")
+    ap.add_argument("--json", action="store_true", default=_truthy_env("VOICEPI_JSON"),
+                    help="also emit one structured JSON event per utterance; "
+                         "env VOICEPI_JSON")
+    ap.add_argument("--doctor", action="store_true",
+                    help="run Linux/Wayland health checks and exit")
     ap.add_argument("--device", default=DEVICE, choices=VALID_DEVICES,
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
                          "auto = NVIDIA GPU if present, else CPU")
@@ -79,7 +89,10 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
     prompt_preview = f"{prompt_body}  (env VOICEPI_INITIAL_PROMPT)"
 
     from vp_audio import MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
-    from vp_transcribe import BEAM_SIZE, CONTEXT_MIN_SECONDS, TEMPERATURES
+    from vp_transcribe import (
+        BEAM_SIZE, CONTEXT_MIN_SECONDS, TEMPERATURES,
+        VAD_MIN_SILENCE_MS, VAD_THRESHOLD,
+    )
 
     rows = [
         ("--key",            f"{args.key}  (env VOICEPI_KEY={_env('VOICEPI_KEY')})"),
@@ -92,6 +105,8 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env('VOICEPI_BEAM_SIZE')})"),
         ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env('VOICEPI_TEMPERATURE')})"),
         ("context_min_s",    f"{CONTEXT_MIN_SECONDS}  (env VOICEPI_CONTEXT_MIN_SECONDS={_env('VOICEPI_CONTEXT_MIN_SECONDS')})"),
+        ("vad",              f"threshold={VAD_THRESHOLD}  "
+                             f"min_silence_ms={VAD_MIN_SILENCE_MS}"),
         ("initial_prompt",   prompt_preview),
         ("quit",             f"{QUIT_COUNT}x Esc within {QUIT_WINDOW_MS}ms  "
                              f"(env VOICEPI_QUIT_COUNT={_env('VOICEPI_QUIT_COUNT')})"),
@@ -101,6 +116,9 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("XKB (Wayland)",    f"VOICEPI_XKB_LAYOUT={_env('VOICEPI_XKB_LAYOUT')}  "
                              f"XKB_DEFAULT_LAYOUT={_env('XKB_DEFAULT_LAYOUT')}"),
         ("inject mode",      f"{args.mode}  (env VOICEPI_INJECT_MODE={_env('VOICEPI_INJECT_MODE')})"),
+        ("json output",      f"{getattr(args, 'json', False)}  (env VOICEPI_JSON={_env('VOICEPI_JSON')})"),
+        ("metrics jsonl",    f"{_env('VOICEPI_METRICS_JSONL')}  (env VOICEPI_METRICS_JSONL)"),
+        ("stt debug",        f"{_env('VOICEPI_STT_DEBUG')}  (env VOICEPI_STT_DEBUG)"),
     ]
     print("[debug] effective settings:", flush=True)
     for k, v in rows:

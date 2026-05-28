@@ -100,6 +100,7 @@ from vp_inject import InjectMixin  # noqa: E402
 from vp_keymap import (  # noqa: E402
     _LANG_TO_XKB, _LAYOUT_KEYCODES, _build_ydotool_ops, _detect_xkb_layout,
 )
+from vp_metrics import append_jsonl, base_event, compact_text, emit_json  # noqa: E402
 from vp_version import VERSION  # noqa: E402
 
 
@@ -114,7 +115,7 @@ _LAZY_EXPORTS = {
     "vp_transcribe": (
         "BEAM_SIZE", "CONTEXT_MIN_SECONDS", "HALLUCINATIONS",
         "INITIAL_PROMPT", "SR", "TEMPERATURES", "_transcribe",
-        "is_hallucination",
+        "_transcribe_detail", "is_hallucination",
     ),
 }
 _EXPORT_ALIASES = {"_HALLUCINATIONS": ("vp_transcribe", "HALLUCINATIONS")}
@@ -141,7 +142,7 @@ def _load_runtime_modules() -> None:
     global MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
     global _boost_quiet, _find_arecord_device, _looks_like_speech, _noise_snr
     global BEAM_SIZE, CONTEXT_MIN_SECONDS, _HALLUCINATIONS, INITIAL_PROMPT
-    global SR, TEMPERATURES, _transcribe, is_hallucination
+    global SR, TEMPERATURES, _transcribe, _transcribe_detail, is_hallucination
 
     import numpy as np  # noqa: F401
     from vp_audio import (
@@ -151,20 +152,31 @@ def _load_runtime_modules() -> None:
     from vp_transcribe import (
         BEAM_SIZE, CONTEXT_MIN_SECONDS,
         HALLUCINATIONS as _HALLUCINATIONS,
-        INITIAL_PROMPT, SR, TEMPERATURES, _transcribe, is_hallucination,
+        INITIAL_PROMPT, SR, TEMPERATURES, _transcribe, _transcribe_detail,
+        is_hallucination,
     )
 
 
 class Dictate(InjectMixin):
     def __init__(self, model: "WhisperModel", key: str, mode: str,
-                 lang: str | None):
+                 lang: str | None, *, json_output: bool = False,
+                 metrics_jsonl: str | None = None, model_name: str = "",
+                 device: str = "", compute_type: str = "",
+                 model_load_s: float | None = None):
         global _ARECORD_DEVICE
         self.model = model
         self.key = key
         self.mode = mode  # "auto" | "type" | "paste" | "print"
         self.lang = lang  # ISO code, or None for auto-detect
+        self.json_output = json_output
+        self.metrics_jsonl = metrics_jsonl
+        self.model_name = model_name
+        self.device = device
+        self.compute_type = compute_type
+        self.model_load_s = model_load_s
         self.frames: list[np.ndarray] = []
         self.recording = False
+        self._record_started = 0.0
         self._stream = None
         self._arecord_proc = None
         from pynput import keyboard
@@ -207,6 +219,7 @@ class Dictate(InjectMixin):
         self._capture_target_window()
         self.frames = []
         self.recording = True
+        self._record_started = time.monotonic()
         if _ARECORD_DEVICE:
             import subprocess
             self._arecord_proc = subprocess.Popen(
@@ -239,11 +252,16 @@ class Dictate(InjectMixin):
         if not self.frames:
             return
         pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
+        recording_s = (
+            time.monotonic() - self._record_started
+            if self._record_started else len(pcm) / SR
+        )
         if len(pcm) < SR * 0.3:  # <0.3 s — almost certainly a misfire
             print("  (too short — hold the key while you speak)", flush=True)
             return
         try:
-            text = _transcribe(self.model, pcm, self.lang)
+            result = _transcribe_detail(self.model, pcm, self.lang)
+            text = result.text
         except Exception as e:  # noqa: BLE001 — surface any failure
             print(f"  ✗ transcribe error: {e}", flush=True)
             return
@@ -254,7 +272,36 @@ class Dictate(InjectMixin):
         if is_hallucination(text):
             print(f"  (hallucination filtreret: {text!r})", flush=True)
             return
+        inject_t0 = time.monotonic()
         self._inject(text)
+        inject_elapsed_ms = int((time.monotonic() - inject_t0) * 1000)
+        event = base_event(
+            event="utterance",
+            text=text,
+            text_preview=compact_text(text),
+            text_chars=len(text),
+            recording_s=recording_s,
+            audio_duration_s=result.duration_s,
+            post_boost_dbfs=result.post_boost_dbfs,
+            compute_s=result.compute_s,
+            real_time_factor=result.real_time_factor,
+            language=result.language or self.lang or "auto",
+            language_probability=result.language_probability,
+            gate=result.gate,
+            model=self.model_name,
+            device=self.device,
+            compute_type=self.compute_type,
+            model_load_s=self.model_load_s,
+            inject_mode=self.mode,
+            inject_strategy=getattr(self, "_last_inject_strategy", None),
+            inject_elapsed_ms=inject_elapsed_ms,
+            target_title=getattr(self, "_inject_target_title", None),
+            target_process=getattr(self, "_inject_target_process", None),
+            segments=result.segments,
+        )
+        append_jsonl(self.metrics_jsonl, event)
+        if self.json_output:
+            emit_json(event)
 
     # pynput key name → evdev key code mapping for common PTT keys
     _EVDEV_MAP = {
@@ -352,6 +399,10 @@ class Dictate(InjectMixin):
         if on_wayland and have_evdev:
             self._run_evdev(key_names)
             return
+        if on_wayland and not have_evdev:
+            sys.exit("Wayland requires evdev for global hotkeys. "
+                     "Run setup.sh again or install requirements-cpu.txt; "
+                     "use --doctor for a full health check.")
 
         # --- pynput fallback (X11 / Windows / macOS) ---
         from pynput import keyboard
@@ -415,6 +466,9 @@ if __name__ == "__main__":
         print(f"whisper-dictate {VERSION}", flush=True)
     ap = build_arg_parser()
     a = ap.parse_args()
+    if a.doctor:
+        from vp_doctor import run_doctor
+        raise SystemExit(run_doctor())
     lang = None if (a.autodetect or not a.lang) else a.lang
 
     # Sæt XKB_DEFAULT_LAYOUT fra --lang så ydotool type og evt. auto-startet
@@ -442,8 +496,17 @@ if __name__ == "__main__":
     from faster_whisper import WhisperModel
     _t = time.monotonic()
     _model = WhisperModel(a.model, device=dev, compute_type=ctype)
-    print(f"model ready in {time.monotonic() - _t:.1f}s", flush=True)
+    _model_load_s = time.monotonic() - _t
+    print(f"model ready in {_model_load_s:.1f}s", flush=True)
     try:
-        Dictate(_model, a.key, a.mode, lang).run()
+        Dictate(
+            _model, a.key, a.mode, lang,
+            json_output=a.json,
+            metrics_jsonl=os.environ.get("VOICEPI_METRICS_JSONL"),
+            model_name=a.model,
+            device=dev,
+            compute_type=ctype,
+            model_load_s=_model_load_s,
+        ).run()
     except KeyboardInterrupt:
         print("\nbye")

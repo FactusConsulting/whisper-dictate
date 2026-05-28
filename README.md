@@ -55,6 +55,15 @@ whisper-dictate --key shift_r+ctrl_r --lang da
 Hold **right Shift + right Ctrl**, speak, release — text appears directly
 at the cursor. No clipboard, no paste shortcut.
 
+If Wayland hotkeys or injection fail, run:
+
+```bash
+whisper-dictate --doctor
+```
+
+It checks `evdev`, `ydotool`, `ydotoold`, the socket, `input` group
+membership, session env vars, and readable `/dev/input/event*` devices.
+
 To start automatically at login, the setup script creates
 `~/.config/autostart/whisper-dictate.desktop`. No manual step needed.
 
@@ -250,6 +259,8 @@ NVIDIA GPU is used automatically if present.
 | `--type` | force direct keyboard typing on X11/Windows (env `VOICEPI_INJECT_MODE=type`; Wayland always uses direct evdev keycodes) |
 | `--paste` | force clipboard + Ctrl+V on X11/Windows (env `VOICEPI_INJECT_MODE=paste`; Wayland always uses direct evdev keycodes) |
 | `--no-type` | print transcription only, don't inject (env `VOICEPI_INJECT_MODE=print`; useful for testing) |
+| `--json` | also emit one structured JSON event per utterance (env `VOICEPI_JSON=1`) |
+| `--doctor` | run Linux/Wayland health checks and exit |
 | `--model NAME` | Whisper model (default `large-v3-turbo`; env `VOICEPI_MODEL`) |
 | `--device D` | `auto`/`cuda`/`cpu` (default `auto`; env `VOICEPI_DEVICE`; invalid values are rejected) |
 
@@ -300,11 +311,18 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_INITIAL_PROMPT` | _(none)_ | context hint for domain-specific terms, e.g. `"Winget, whisper-dictate"` |
 | `VOICEPI_COMPUTE_TYPE` | _(default: `int8_float16` on GPU, `int8` on CPU)_ | force precision (`float16`, `bfloat16`, `float32`) — see VRAM table in [CONFIGURATION.md](CONFIGURATION.md) |
 | `VOICEPI_DEBUG` | _(unset)_ | `1` → log every effective setting + which env var supplied it at startup (verifies `setx` actually arrived) |
+| `VOICEPI_JSON` | _(unset)_ | `1` → print one JSON event per accepted utterance |
+| `VOICEPI_METRICS_JSONL` | _(unset)_ | append one JSON metrics event per accepted utterance to this file |
+| `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
+| `VOICEPI_VAD_THRESHOLD` | `0.3` | Silero VAD speech threshold passed to faster-whisper |
+| `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | minimum silence gap used by VAD segmentation |
 
 The `[gate]` line shows whether the raw input was accepted before gain
 boost. The `[cap]` line prints loudness, gain, noise floor and **SNR** per
 accepted utterance — `snr` tells you if the mic is the bottleneck: ≳25 dB
 excellent, 15–25 dB workable, <15 dB the mic or room is the limit.
+The `[stt]` line also includes `rtf` (real-time factor): `0.50` means the
+transcription took half as long as the recording, `2.00` means twice as long.
 
 Full reference — every `[cap]`/`[gate]`/`[stt]` field, what good vs bad looks
 like, and how to compare two microphones: see
@@ -342,18 +360,10 @@ auto-bumps `url`/`sha256` in
 [`FactusConsulting/homebrew-tap`](https://github.com/FactusConsulting/homebrew-tap)
 `Formula/whisper-dictate.rb`.
 
-The Windows `.exe` installer is **not** built automatically: a tag-created
-Release runs under `GITHUB_TOKEN`, which by GitHub design cannot trigger
-downstream workflows. After the release publishes, manually run the
-**`windows-installer`** workflow for the tag:
-
-```bash
-gh workflow run windows-installer.yml -f tag=v0.2.1
-```
-
-That builds the versioned installers, uploads them to the Release, and
-regenerates the local winget manifests in this repo (used for the
-`winget install --manifest` install path).
+The Windows `.exe` installers are built by the release workflow itself.
+After the tag is pushed, CI publishes the zip bundles, builds the versioned
+installers, uploads them to the Release, and regenerates the local winget
+manifests in this repo (used for the `winget install --manifest` install path).
 
 ## Wayland keyboard-layout testing status
 

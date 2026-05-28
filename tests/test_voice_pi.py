@@ -393,6 +393,15 @@ class ArgumentParserTests(unittest.TestCase):
 
         self.assertEqual(parser.parse_args([]).mode, "auto")
 
+    def test_parser_accepts_json_and_doctor(self):
+        voice_pi = load_voice_pi()
+        parser = voice_pi.build_arg_parser()
+
+        ns = parser.parse_args(["--json", "--doctor"])
+
+        self.assertTrue(ns.json)
+        self.assertTrue(ns.doctor)
+
 
 class InjectStrategyTests(unittest.TestCase):
     def setUp(self):
@@ -783,6 +792,83 @@ class ContextMinSecondsTests(unittest.TestCase):
         self.assertFalse(self._gate(5.0, 4.9))
         self.assertTrue(self._gate(5.0, 5.0))
         self.assertTrue(self._gate(5.0, 19.4))
+
+
+class MetricsTests(unittest.TestCase):
+    def test_append_jsonl_writes_unicode_event(self):
+        for n in ("vp_metrics",):
+            sys.modules.pop(n, None)
+        import vp_metrics
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            path = f.name
+        try:
+            vp_metrics.append_jsonl(path, {"text": "rødgrød", "n": 1})
+            with open(path, encoding="utf-8") as f:
+                data = f.read()
+            self.assertIn('"text": "rødgrød"', data)
+            self.assertIn('"n": 1', data)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+class TranscribeDetailTests(unittest.TestCase):
+    def setUp(self):
+        if not hasattr(AudioDspTests, "np"):
+            raise unittest.SkipTest("real numpy unavailable")
+        for n in ("vp_transcribe", "vp_audio"):
+            sys.modules.pop(n, None)
+        sys.modules["numpy"] = AudioDspTests.np
+        import vp_transcribe
+        self.t = vp_transcribe
+        self.np = AudioDspTests.np
+
+    def test_transcribe_detail_collects_metadata_and_vad_settings(self):
+        np = self.np
+
+        class Segment:
+            text = " hej"
+            start = 0.0
+            end = 1.0
+            avg_logprob = -0.1
+            no_speech_prob = 0.02
+            compression_ratio = 1.1
+
+        class Info:
+            language = "da"
+            language_probability = 0.98
+
+        class Model:
+            def __init__(self):
+                self.kwargs = None
+
+            def transcribe(self, audio, **kwargs):
+                self.kwargs = kwargs
+                return [Segment()], Info()
+
+        audio = np.concatenate([
+            np.full(480, 0.8 if i % 2 == 0 else 0.05, dtype=np.float32)
+            for i in range(40)
+        ]).reshape(-1, 1)
+        pcm = (audio * 32767).astype(np.int16)
+        model = Model()
+
+        with _capture_stdout():
+            result = self.t._transcribe_detail(model, pcm, "da")
+
+        self.assertEqual(result.text, "hej")
+        self.assertEqual(result.language, "da")
+        self.assertEqual(result.language_probability, 0.98)
+        self.assertGreaterEqual(result.compute_s, 0)
+        self.assertIsNotNone(result.real_time_factor)
+        self.assertEqual(result.segments[0]["avg_logprob"], -0.1)
+        self.assertEqual(
+            model.kwargs["vad_parameters"]["threshold"],
+            self.t.VAD_THRESHOLD,
+        )
 
 
 if __name__ == "__main__":

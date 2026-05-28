@@ -59,12 +59,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install minimal deps
-        # numpy is required at voice_pi import time. pynput, sounddevice and
-        # faster_whisper stay lazy so they don't bloat or break --help.
-        run: python -m pip install --quiet numpy
       - name: voice_pi --help
         run: python voice_pi.py --help
+      - name: voice_pi --doctor smoke
+        run: python voice_pi.py --doctor
+        continue-on-error: true
       - name: Install pynput (Windows only)
         if: runner.os == 'Windows'
         run: python -m pip install --quiet pynput

@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import re
 import time
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -52,6 +54,23 @@ TEMPERATURES = _parse_temperatures(os.environ.get("VOICEPI_TEMPERATURE"))
 # long utterances into context-conditioned decode, which helps
 # Whisper keep word boundaries coherent across segments.
 CONTEXT_MIN_SECONDS = float(os.environ.get("VOICEPI_CONTEXT_MIN_SECONDS", "0"))
+VAD_THRESHOLD = float(os.environ.get("VOICEPI_VAD_THRESHOLD", "0.3"))
+VAD_MIN_SILENCE_MS = int(os.environ.get("VOICEPI_VAD_MIN_SILENCE_MS", "600"))
+STT_DEBUG = (os.environ.get("VOICEPI_STT_DEBUG") or "").strip().lower() not in (
+    "", "0", "false", "no", "off")
+
+
+@dataclass
+class TranscribeResult:
+    text: str
+    duration_s: float = 0.0
+    post_boost_dbfs: float | None = None
+    compute_s: float = 0.0
+    real_time_factor: float | None = None
+    language: str | None = None
+    language_probability: float | None = None
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    gate: str = ""
 
 # Whisper hallucinerer disse sætninger på kort/stille lyd — ignorer dem.
 HALLUCINATIONS: frozenset[str] = frozenset({
@@ -86,7 +105,19 @@ def is_hallucination(text: str) -> bool:
     return text.lower().rstrip() in HALLUCINATIONS
 
 
-def _transcribe(model, pcm: np.ndarray, lang: str | None) -> str:
+def _segment_metric(segment) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "start": getattr(segment, "start", None),
+        "end": getattr(segment, "end", None),
+        "text": getattr(segment, "text", ""),
+    }
+    for name in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+        if hasattr(segment, name):
+            out[name] = getattr(segment, name)
+    return out
+
+
+def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeResult:
     # pcm: int16 mono @ 16 kHz straight from sounddevice — already the
     # rate/layout Whisper wants, so no WAV round-trip or resample. Just
     # int16 -> float32 -> boost.
@@ -94,14 +125,14 @@ def _transcribe(model, pcm: np.ndarray, lang: str | None) -> str:
     ok, gate = _looks_like_speech(raw_audio)
     if not ok:
         print(f"[gate] {gate}", flush=True)
-        return ""
+        return TranscribeResult(text="", gate=gate)
     print(f"[gate] {gate}", flush=True)
     audio = _boost_quiet(raw_audio)
     dur = len(audio) / SR
     in_dbfs = 20 * np.log10(float(np.sqrt(np.mean(audio**2)) or 1e-9))
     use_context = CONTEXT_MIN_SECONDS > 0 and dur >= CONTEXT_MIN_SECONDS
     t0 = time.monotonic()
-    segments, _ = model.transcribe(
+    segments, info = model.transcribe(
         audio,
         language=lang,
         initial_prompt=INITIAL_PROMPT,
@@ -111,13 +142,35 @@ def _transcribe(model, pcm: np.ndarray, lang: str | None) -> str:
         no_speech_threshold=0.45,
         log_prob_threshold=-1.0,
         vad_filter=True,
-        vad_parameters=dict(threshold=0.3, min_silence_duration_ms=600),
+        vad_parameters=dict(threshold=VAD_THRESHOLD,
+                            min_silence_duration_ms=VAD_MIN_SILENCE_MS),
     )
+    segment_list = list(segments)
     # Concatenate with Whisper's OWN spacing. Each segment text already
     # carries a leading space on word boundaries (BPE tokens); strip()+
     # " ".join() drops that at segment joins -> "hørerdig". Join raw,
     # then collapse whitespace runs to one space.
-    text = re.sub(r"\s+", " ", "".join(s.text for s in segments)).strip()
+    text = re.sub(r"\s+", " ", "".join(s.text for s in segment_list)).strip()
+    compute_s = time.monotonic() - t0
+    rtf = compute_s / dur if dur > 0 else None
+    seg_metrics = [_segment_metric(s) for s in segment_list]
     print(f"[stt] dur={dur:.1f}s post-boost={in_dbfs:.0f}dBFS "
-          f"compute={time.monotonic() - t0:.1f}s text={text!r}", flush=True)
-    return text
+          f"compute={compute_s:.1f}s rtf={rtf:.2f} text={text!r}", flush=True)
+    if STT_DEBUG:
+        for i, segment in enumerate(seg_metrics, 1):
+            print(f"[stt-debug] segment#{i} {segment}", flush=True)
+    return TranscribeResult(
+        text=text,
+        duration_s=dur,
+        post_boost_dbfs=in_dbfs,
+        compute_s=compute_s,
+        real_time_factor=rtf,
+        language=getattr(info, "language", None),
+        language_probability=getattr(info, "language_probability", None),
+        segments=seg_metrics,
+        gate=gate,
+    )
+
+
+def _transcribe(model, pcm: np.ndarray, lang: str | None) -> str:
+    return _transcribe_detail(model, pcm, lang).text

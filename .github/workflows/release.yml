@@ -5,7 +5,8 @@ name: release
 # (or run this workflow manually from the Actions tab with an existing
 # tag). It builds the four platform bundles, generates release notes
 # from the commit messages since the previous tag, appends the
-# evergreen RELEASE_NOTES.md body, and publishes the GitHub Release.
+# evergreen RELEASE_NOTES.md body, publishes the GitHub Release, and
+# builds/uploads the Windows .exe installers.
 
 on:
   push:
@@ -147,3 +148,174 @@ jobs:
           fi
           git commit -m "whisper-dictate ${VERSION}"
           git push origin HEAD:main
+
+  windows-installer:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: Resolve tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Check for Windows-relevant changes
+        id: win-check
+        shell: bash
+        run: |
+          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$prev" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$prev" HEAD -- \
+            voice_pi.py 'vp_*.py' setup.cmd setup.ps1 \
+            requirements-cpu.txt requirements-gpu.txt \
+            scripts/ \
+            installer/)
+          if [ -n "$changed" ]; then
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+            echo "Windows files changed since $prev:"
+            echo "$changed"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No Windows-specific changes since $prev - skipping installer build"
+          fi
+
+      - name: Install Inno Setup
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installers
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ env.TAG }}" -replace '^v',''
+          Set-Content VERSION $version -Encoding ascii
+          $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $outDir  = "$PWD\Output"
+          New-Item -ItemType Directory -Force $outDir | Out-Null
+          foreach ($variant in @("cpu","nvidia","amd")) {
+            & $iscc /DVERSION=$version /DVARIANT=$variant /O"$outDir" installer\whisper-dictate.iss
+            if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $variant" }
+          }
+
+      - name: Compute SHA256 hashes
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $out = @()
+          foreach ($f in Get-ChildItem "Output\*.exe") {
+            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+            "$($f.Name)=$hash" | Tee-Object -Append sha256sums.txt
+            $out += [pscustomobject]@{ File = $f.Name; SHA256 = $hash }
+          }
+          $out | ConvertTo-Json | Set-Content sha256sums.json -Encoding utf8
+          Get-Content sha256sums.txt
+
+      - name: Upload installers + checksums to release
+        if: steps.win-check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "$TAG" Output/*.exe sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Generate winget manifests
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ env.TAG }}" -replace '^v',''
+          $repo    = "${{ github.repository }}"
+          $tag     = "${{ env.TAG }}"
+          $hashes  = Get-Content sha256sums.json | ConvertFrom-Json
+
+          $cpuHash = ($hashes | Where-Object File -like "*-cpu-*").SHA256
+
+          $baseUrl = "https://github.com/$repo/releases/download/$tag"
+          $date    = Get-Date -Format 'yyyy-MM-dd'
+          $productCode = '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
+
+          New-Item -ItemType Directory -Force manifests | Out-Null
+
+          @(
+            '# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json',
+            "PackageIdentifier: FactusConsulting.WhisperDictate",
+            "PackageVersion: $version",
+            "DefaultLocale: en-US",
+            "ManifestType: version",
+            "ManifestVersion: 1.12.0"
+          ) | Set-Content "manifests\FactusConsulting.WhisperDictate.yaml" -Encoding utf8
+
+          @(
+            '# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json',
+            "PackageIdentifier: FactusConsulting.WhisperDictate",
+            "PackageVersion: $version",
+            "PackageLocale: en-US",
+            "Publisher: FactusConsulting",
+            "PublisherUrl: https://github.com/FactusConsulting",
+            "PackageName: whisper-dictate",
+            "PackageUrl: https://github.com/$repo",
+            "License: MIT",
+            "LicenseUrl: https://github.com/$repo/blob/main/LICENSE",
+            "ShortDescription: Local push-to-talk dictation -- speak prompts instead of typing them",
+            "Description: >-",
+            "  App-agnostic push-to-talk dictation. Hold a key, speak quietly but clearly,",
+            "  release -- the transcribed text is injected into whatever window has focus.",
+            "  Whisper runs fully locally on your own machine; nothing leaves the box.",
+            "Tags:",
+            "  - dictation",
+            "  - speech-to-text",
+            "  - whisper",
+            "  - voice",
+            "  - ai",
+            "ManifestType: defaultLocale",
+            "ManifestVersion: 1.12.0"
+          ) | Set-Content "manifests\FactusConsulting.WhisperDictate.locale.en-US.yaml" -Encoding utf8
+
+          @(
+            '# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json',
+            "PackageIdentifier: FactusConsulting.WhisperDictate",
+            "PackageVersion: $version",
+            "Installers:",
+            "  - Architecture: x64",
+            "    Scope: user",
+            "    InstallerType: inno",
+            "    InstallerUrl: $baseUrl/whisper-dictate-windows-cpu-setup-$version.exe",
+            "    InstallerSha256: $cpuHash",
+            "    ProductCode: '$productCode'",
+            "    InstallerSwitches:",
+            "      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+            "    ReleaseDate: $date",
+            "    AppsAndFeaturesEntries:",
+            "      - DisplayName: whisper-dictate",
+            "        Publisher: FactusConsulting",
+            "        DisplayVersion: $version",
+            "        ProductCode: '$productCode'",
+            "ManifestType: installer",
+            "ManifestVersion: 1.12.0"
+          ) | Set-Content "manifests\FactusConsulting.WhisperDictate.installer.yaml" -Encoding utf8
+
+      - name: Commit updated manifests to main
+        if: steps.win-check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cp -r manifests /tmp/winget-manifests
+          git fetch origin main
+          git checkout -f main
+          cp -r /tmp/winget-manifests/. manifests/
+          git add manifests/
+          git diff --cached --quiet && echo "no manifest changes" && exit 0
+          git commit -m "chore: update winget manifests for $TAG"
+          git push origin main

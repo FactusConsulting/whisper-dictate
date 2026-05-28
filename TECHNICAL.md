@@ -94,6 +94,14 @@ User holds hotkey
               text at cursor in focused window
 ```
 
+After each accepted utterance, the runtime can emit the same structured
+event to stdout (`--json` / `VOICEPI_JSON=1`) and/or append it to a JSONL
+file (`VOICEPI_METRICS_JSONL=/path/to/file.jsonl`). The event records audio
+duration, transcription compute time, real-time factor, model/device,
+language confidence, injection strategy and target metadata. This is meant
+for comparing microphones, models and injection behaviour without scraping
+human log lines.
+
 ## Wayland text injection — why evdev keycodes
 
 `ydotool type` on Ubuntu 26.04 (v1.0.4) is not linked against
@@ -165,6 +173,11 @@ The daemon must be started AFTER the GNOME session is running (it
 needs the uinput device to be openable by the input group). It is
 configured as a systemd user service that starts with the graphical
 session.
+
+`whisper-dictate --doctor` runs a no-model-load health check for the
+Wayland path: `evdev`, `ydotool`, `ydotoold`, socket readiness, `input`
+group membership, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and readable
+`/dev/input/event*` devices.
 
 ## Audio — PipeWire routing
 

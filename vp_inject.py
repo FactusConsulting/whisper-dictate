@@ -9,6 +9,7 @@ suite importing Dictate, and smoke-tested on Linux.
 from __future__ import annotations
 
 import os
+import socket
 import time
 
 from vp_keymap import _build_ydotool_ops
@@ -133,7 +134,7 @@ class InjectMixin:
         import subprocess, shutil
         if not shutil.which("ydotoold"):
             return
-        if subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True).returncode == 0:
+        if self._wait_for_ydotoold(timeout=0.2):
             return
         # Ryd stale socket så ny instans kan binde
         runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
@@ -162,16 +163,26 @@ class InjectMixin:
                          stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL,
                          env=env)
-        self._wait_for_ydotoold()
-        print(f"[inject] ydotoold startet (XKB={self._xkb_layout or '?'})", flush=True)
+        if self._wait_for_ydotoold():
+            print(f"[inject] ydotoold startet (XKB={self._xkb_layout or '?'})", flush=True)
+        else:
+            print("[inject] ydotoold kunne ikke startes eller socket er ikke klar", flush=True)
 
     def _wait_for_ydotoold(self, timeout: float = 1.0) -> bool:
-        import subprocess
         deadline = time.monotonic() + timeout
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        sock = os.environ.get("YDOTOOL_SOCKET") or os.path.join(runtime, ".ydotool_socket")
         while time.monotonic() < deadline:
-            if subprocess.run(["pgrep", "-x", "ydotoold"],
-                              capture_output=True).returncode == 0:
-                return True
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(0.1)
+                try:
+                    s.connect(sock)
+                    return True
+                finally:
+                    s.close()
+            except OSError:
+                pass
             time.sleep(0.05)
         return False
 
@@ -183,7 +194,9 @@ class InjectMixin:
             r = subprocess.run(["ydotool", *args], capture_output=True, timeout=10)
             if r.returncode != 0:
                 err = r.stderr.decode(errors="replace").strip()
-                if "ydotool_socket" in err:
+                err_l = err.lower()
+                if any(s in err_l for s in (
+                        "ydotool_socket", "no such file", "connection refused")):
                     self._ensure_ydotoold()
                     r = subprocess.run(["ydotool", *args],
                                        capture_output=True, timeout=10)
@@ -215,7 +228,9 @@ class InjectMixin:
         self._kb.release(keyboard.Key.ctrl)
 
     def _inject(self, text: str):
+        self._last_inject_strategy = None
         if self.mode == "print":
+            self._last_inject_strategy = "print"
             print(f"  (heard) {text}", flush=True)
             return
         on_wayland = bool(os.environ.get('WAYLAND_DISPLAY'))
@@ -245,8 +260,10 @@ class InjectMixin:
             # men compositor fortolker KEY_LEFTBRACE→å, KEY_SEMICOLON→ø osv. via
             # XKB dk-layout på ydotoold's uinput-enhed — ingen clipboard nødvendig.
             print(f"[inject] ydotool (direkte)", flush=True)
+            self._last_inject_strategy = "ydotool"
             if not self._wayland_type(text):
                 print("[inject] ydotool fejlede — fallback pynput", flush=True)
+                self._last_inject_strategy = "type-fallback"
                 self._kb.type(text)
             return
 
@@ -257,6 +274,8 @@ class InjectMixin:
             mode = "paste" if self._target_prefers_paste() else "type"
             print(f"[inject] strategy: {mode}", flush=True)
         if mode == "paste":
+            self._last_inject_strategy = "paste"
             self._paste(text)
             return
+        self._last_inject_strategy = "type"
         self._kb.type(text)
