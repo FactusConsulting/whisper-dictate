@@ -23,6 +23,7 @@ _WINDOWS_PASTE_TARGETS = (
     "claude",
     "codex",
 )
+_WINDOWS_LAYOUT_SENSITIVE_CHARS = frozenset("'`´^~\"")
 
 
 class InjectMixin:
@@ -217,6 +218,11 @@ class InjectMixin:
         ))).lower()
         return any(term in target for term in _WINDOWS_PASTE_TARGETS)
 
+    def _text_prefers_paste(self, text: str) -> bool:
+        if os.name != "nt":
+            return False
+        return any(ch in _WINDOWS_LAYOUT_SENSITIVE_CHARS for ch in text)
+
     def _paste(self, text: str) -> None:
         import pyperclip
         from pynput import keyboard
@@ -271,7 +277,9 @@ class InjectMixin:
         # targets, otherwise direct typing. Explicit --paste/--type override it.
         mode = self.mode
         if mode == "auto":
-            mode = "paste" if self._target_prefers_paste() else "type"
+            mode = "paste" if (
+                self._target_prefers_paste() or self._text_prefers_paste(text)
+            ) else "type"
             print(f"[inject] strategy: {mode}", flush=True)
         if mode == "paste":
             self._last_inject_strategy = "paste"

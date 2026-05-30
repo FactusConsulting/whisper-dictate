@@ -147,6 +147,8 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env('VOICEPI_BEAM_SIZE')})"),
         ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env('VOICEPI_TEMPERATURE')})"),
         ("context_min_s",    f"{CONTEXT_MIN_SECONDS}  (env VOICEPI_CONTEXT_MIN_SECONDS={_env('VOICEPI_CONTEXT_MIN_SECONDS')})"),
+        ("parakeet_min_s",   f"{get_value('VOICEPI_PARAKEET_MIN_SECONDS', '1.5')}  "
+                             f"(env VOICEPI_PARAKEET_MIN_SECONDS={_env('VOICEPI_PARAKEET_MIN_SECONDS')})"),
         ("vad",              f"threshold={VAD_THRESHOLD}  "
                              f"min_silence_ms={VAD_MIN_SILENCE_MS}"),
         ("initial_prompt",   prompt_preview),

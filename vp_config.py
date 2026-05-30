@@ -38,6 +38,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOICEPI_BEAM_SIZE", "beam_size", "1", live=True),
     Setting("VOICEPI_TEMPERATURE", "temperature", "0.0,0.2", live=True),
     Setting("VOICEPI_CONTEXT_MIN_SECONDS", "context_min_seconds", "0", live=True),
+    Setting("VOICEPI_PARAKEET_MIN_SECONDS", "parakeet_min_seconds", "1.5", live=True),
     Setting("VOICEPI_VAD_THRESHOLD", "vad_threshold", "0.3", live=True),
     Setting("VOICEPI_VAD_MIN_SILENCE_MS", "vad_min_silence_ms", "600", live=True),
     Setting("VOICEPI_TARGET_DBFS", "target_dbfs", "-20", live=True),

@@ -65,7 +65,9 @@ def run_settings_ui() -> int:
             self.setWindowTitle("whisper-dictate settings")
             self.resize(860, 680)
             self._controls: dict[str, object] = {}
+            self._labels: dict[str, QLabel] = {}
             self._status = QLabel("")
+            self._backend_note = QLabel("")
             self._settings_buttons: QWidget | None = None
             self._runtime_status = QLabel("Stopped")
             self._runtime_log = QPlainTextEdit()
@@ -90,6 +92,7 @@ def run_settings_ui() -> int:
             tabs.addTab(self._build_dictionary_tab(), "Dictionary")
             tabs.addTab(self._build_output_tab(), "Output")
 
+            self._backend_note.setWordWrap(True)
             save_btn = QPushButton("Save")
             save_btn.clicked.connect(self.save)
             reload_btn = QPushButton("Signal reload")
@@ -106,6 +109,7 @@ def run_settings_ui() -> int:
             tabs.currentChanged.connect(lambda _: self._update_settings_buttons_visibility(tabs))
 
             root = QVBoxLayout()
+            root.addWidget(self._backend_note)
             root.addWidget(tabs)
             root.addWidget(buttons_w)
             w = QWidget()
@@ -173,17 +177,26 @@ def run_settings_ui() -> int:
 
         def _build_core_tab(self) -> QWidget:
             form = QFormLayout()
-            form.addRow("STT backend", self._combo("stt_backend", ["whisper", "parakeet"]))
-            form.addRow("Whisper model", self._combo("model", [
+            backend = self._combo("stt_backend", ["whisper", "parakeet"])
+            backend.currentTextChanged.connect(lambda _: self._update_backend_controls())
+            self._add_help_row(
+                form, "STT backend", backend,
+                "Whisper is recommended for Danish accuracy. Parakeet is experimental, very fast on NVIDIA CUDA, and autodetects language.")
+            self._add_help_row(form, "Whisper model", self._combo("model", [
                 "large-v3-turbo", "large-v3", "distil-large-v3", "medium", "small", "base", "tiny"
-            ], editable=True))
-            form.addRow("Parakeet model", self._combo("parakeet_model", PARAKEET_MODELS, editable=True))
-            form.addRow("Device", self._combo("device", ["auto", "cuda", "cpu"]))
-            form.addRow("Compute type", self._combo("compute_type", [
+            ], editable=True), "Whisper-only model. large-v3 is most accurate; large-v3-turbo is faster.")
+            self._add_help_row(
+                form, "Parakeet model", self._combo("parakeet_model", PARAKEET_MODELS, editable=True),
+                "Parakeet-only NVIDIA NeMo model. v3 is multilingual and supports Danish via automatic language detection.")
+            self._add_help_row(form, "Device", self._combo("device", ["auto", "cuda", "cpu"]),
+                               "Compute device. Use cuda for NVIDIA GPU acceleration.")
+            self._add_help_row(form, "Compute type", self._combo("compute_type", [
                 "", "int8_float16", "float16", "bfloat16", "float32", "int8"
-            ], editable=True))
-            form.addRow("Language", self._combo("lang", ["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"], editable=True))
-            form.addRow("Hotkey", self._line("key"))
+            ], editable=True), "Precision override. Usually leave empty unless debugging performance or quality.")
+            self._add_help_row(
+                form, "Language", self._combo("lang", ["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"], editable=True),
+                "Whisper-only language hint. Parakeet v3 autodetects language and does not use this setting.")
+            self._add_help_row(form, "Hotkey", self._line("key"), "Hold-to-talk key or chord, for example shift_l+ctrl_l.")
             return self._wrap(form)
 
         def _build_quality_tab(self) -> QWidget:
@@ -197,6 +210,9 @@ def run_settings_ui() -> int:
             self._add_help_row(
                 form, "Context min seconds", self._dspin("context_min_seconds", 0, 60, 0.5),
                 "Minimum utterance length before Whisper can condition on previous text. 0 disables contextual carry-over.")
+            self._add_help_row(
+                form, "Parakeet min seconds", self._dspin("parakeet_min_seconds", 0, 10, 0.25),
+                "Parakeet-only minimum recording length. Shorter clips are ignored because language autodetection is weaker on very short audio.")
             self._add_help_row(
                 form, "VAD threshold", self._dspin("vad_threshold", 0, 1, 0.05),
                 "Voice activity sensitivity. Lower catches quieter speech; higher rejects more background noise.")
@@ -224,7 +240,33 @@ def run_settings_ui() -> int:
             label_w = QLabel(label)
             label_w.setToolTip(help_text)
             control.setToolTip(help_text)
+            for key, widget in self._controls.items():
+                if widget is control:
+                    self._labels[key] = label_w
+                    break
             form.addRow(label_w, control)
+
+        def _set_control_enabled(self, key: str, enabled: bool) -> None:
+            control = self._controls.get(key)
+            if control is not None:
+                control.setEnabled(enabled)  # type: ignore[attr-defined]
+            label = self._labels.get(key)
+            if label is not None:
+                label.setEnabled(enabled)
+
+        def _update_backend_controls(self) -> None:
+            backend_control = self._controls.get("stt_backend")
+            backend = backend_control.currentText() if isinstance(backend_control, QComboBox) else "whisper"
+            is_parakeet = backend == "parakeet"
+            for key in ("model", "lang", "beam_size", "temperature", "context_min_seconds", "initial_prompt"):
+                self._set_control_enabled(key, not is_parakeet)
+            for key in ("parakeet_model", "parakeet_min_seconds"):
+                self._set_control_enabled(key, is_parakeet)
+            self._backend_note.setText(
+                "Parakeet is experimental and very fast on NVIDIA CUDA. It autodetects language, so Language, Whisper model, beam size, temperature and initial prompt are disabled."
+                if is_parakeet else
+                "Whisper is recommended for Danish accuracy. Parakeet settings are disabled while Whisper is selected."
+            )
 
         def _build_dictionary_tab(self) -> QWidget:
             form = QFormLayout()
@@ -291,6 +333,7 @@ def run_settings_ui() -> int:
                 elif isinstance(control, QTextEdit):
                     control.setPlainText(str(value))
             self._status.setText(f"Config: {config_path()}")
+            self._update_backend_controls()
 
         def _collect(self) -> dict[str, str]:
             out: dict[str, str] = {}
@@ -438,7 +481,40 @@ def run_settings_ui() -> int:
                 self._runtime_status.setText("Ready")
             elif "listening" in data:
                 self._runtime_status.setText("Listening")
-            self._append_runtime_log(data)
+            filtered = self._filter_runtime_log(data)
+            if filtered:
+                self._append_runtime_log(filtered)
+
+        def _filter_runtime_log(self, data: str) -> str:
+            noisy = (
+                "If you intend to do training or fine-tuning",
+                "If you intend to do validation",
+                "Train config :",
+                "Validation config :",
+                "The following configuration keys are ignored by Lhotse dataloader",
+                "pretokenize=True",
+                "Transcribing:",
+                "Couldn't find ffmpeg or avconv",
+                "triton not found; flop counting will not work",
+                "Redirects are currently not supported in Windows or MacOs",
+                "No exporters were provided",
+                "OneLogger: Setting error_handling_strategy",
+            )
+            lines = []
+            skipping_block = False
+            for line in data.splitlines():
+                stripped = line.strip()
+                if any(pattern in line for pattern in noisy):
+                    skipping_block = stripped.endswith(":")
+                    continue
+                if skipping_block:
+                    if stripped.startswith("[") or stripped.startswith("W") or stripped.startswith("Traceback"):
+                        skipping_block = False
+                    else:
+                        continue
+                if stripped:
+                    lines.append(line)
+            return "\n".join(lines)
 
         def _runtime_finished(self, code: int, status) -> None:
             self._runtime_status.setText(f"Stopped ({code})" if code else "Stopped")

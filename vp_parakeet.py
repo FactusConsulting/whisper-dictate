@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import warnings
 import wave
 from dataclasses import dataclass
 from typing import Any
@@ -106,6 +107,12 @@ def _text_from_item(item: Any) -> str:
 class ParakeetModel:
     def __init__(self, model_name: str | None = None, *,
                  device: str = "auto", compute_type: str = ""):
+        warnings.filterwarnings(
+            "ignore",
+            message="Couldn't find ffmpeg or avconv.*",
+            category=RuntimeWarning,
+            module="pydub.utils",
+        )
         try:
             import nemo.collections.asr as nemo_asr
         except ImportError as exc:

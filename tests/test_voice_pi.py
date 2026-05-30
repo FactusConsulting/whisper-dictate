@@ -475,6 +475,24 @@ class InjectStrategyTests(unittest.TestCase):
             self.assertFalse(
                 self.inject.InjectMixin._target_prefers_paste(target))
 
+    def test_windows_layout_sensitive_text_prefers_paste(self):
+        target = self._dummy("Untitled - Notepad", "notepad.exe")
+
+        with patch.object(self.inject.os, "name", "nt"):
+            self.assertTrue(
+                self.inject.InjectMixin._text_prefers_paste(target, "I'm testing"))
+            self.assertTrue(
+                self.inject.InjectMixin._text_prefers_paste(target, 'say "hello"'))
+            self.assertFalse(
+                self.inject.InjectMixin._text_prefers_paste(target, "plain ascii"))
+
+    def test_windows_auto_pastes_layout_sensitive_text(self):
+        with open("vp_inject.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("_WINDOWS_LAYOUT_SENSITIVE_CHARS", script)
+        self.assertIn("self._text_prefers_paste(text)", script)
+
     def test_non_windows_targets_still_type(self):
         target = self._dummy("Windows Terminal", "WindowsTerminal.exe")
 
@@ -1169,6 +1187,14 @@ class STTBackendTests(unittest.TestCase):
         self.assertIn("nvidia/parakeet-rnnt-1.1b", vp_parakeet.PARAKEET_MODELS)
         self.assertIn("nvidia/parakeet-ctc-1.1b", vp_parakeet.PARAKEET_MODELS)
 
+    def test_parakeet_suppresses_irrelevant_pydub_ffmpeg_warning(self):
+        import vp_parakeet
+
+        with open(vp_parakeet.__file__, encoding="utf-8") as f:
+            script = f.read()
+        self.assertIn("warnings.filterwarnings", script)
+        self.assertIn("Couldn't find ffmpeg or avconv", script)
+
 
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_setup_warning_escapes_config_path_before_colon(self):
@@ -1347,6 +1373,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('self._combo("parakeet_model", PARAKEET_MODELS, editable=True)', script)
         self.assertNotIn('self._line("parakeet_model")', script)
 
+    def test_settings_ui_disables_backend_specific_controls(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("def _update_backend_controls", script)
+        self.assertIn('"Whisper is recommended for Danish accuracy', script)
+        self.assertIn('"Parakeet is experimental and very fast', script)
+        self.assertIn('"model", "lang", "beam_size", "temperature", "context_min_seconds", "initial_prompt"', script)
+        self.assertIn('"parakeet_model", "parakeet_min_seconds"', script)
+
     def test_settings_buttons_are_hidden_on_runtime_tab(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:
             script = f.read()
@@ -1367,6 +1403,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Beam size",
             "Temperature ladder",
             "Context min seconds",
+            "Parakeet min seconds",
             "VAD threshold",
             "VAD min silence ms",
             "Target dBFS",
@@ -1375,6 +1412,15 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Initial prompt",
         ):
             self.assertIn(label, script)
+
+    def test_settings_ui_filters_noisy_nemo_runtime_logs(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("def _filter_runtime_log", script)
+        self.assertIn("Couldn't find ffmpeg or avconv", script)
+        self.assertIn("Transcribing:", script)
+        self.assertIn("If you intend to do training or fine-tuning", script)
 
     def test_settings_ui_launcher_bootstraps_before_installing_ui_deps(self):
         with open("settings-ui.ps1", encoding="utf-8") as f:
@@ -1407,6 +1453,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             script = f.read()
 
         self.assertIn('reconfigure(encoding="utf-8", errors="replace")', script)
+
+    def test_voice_pi_has_parakeet_min_duration_and_backend_metrics(self):
+        with open("voice_pi.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("self.parakeet_min_seconds", script)
+        self.assertIn("too short for Parakeet", script)
+        self.assertIn("stt_backend=self.stt_backend", script)
+
+    def test_cli_debug_prints_parakeet_min_seconds(self):
+        with open("vp_cli.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("parakeet_min_s", script)
+        self.assertIn("VOICEPI_PARAKEET_MIN_SECONDS", script)
 
 
 class DictionaryTests(unittest.TestCase):

@@ -186,9 +186,12 @@ class Dictate(InjectMixin):
         self.model_name = model_name
         self.device = device
         self.compute_type = compute_type
-        self.model_load_s = model_load_s
+        self.stt_backend = STT_BACKEND
         self._config_mtime = config_mtime()
         self._effective_config = effective_config()
+        self.parakeet_min_seconds = float(
+            self._effective_config.get("parakeet_min_seconds", "1.5"))
+        self.model_load_s = model_load_s
         self._restart_required_reported = False
         self.frames: list[np.ndarray] = []
         self.recording = False
@@ -258,6 +261,7 @@ class Dictate(InjectMixin):
         vp_transcribe.BEAM_SIZE = int(after.get("beam_size", "1"))
         vp_transcribe.TEMPERATURES = vp_transcribe._parse_temperatures(after.get("temperature"))
         vp_transcribe.CONTEXT_MIN_SECONDS = float(after.get("context_min_seconds", "0"))
+        self.parakeet_min_seconds = float(after.get("parakeet_min_seconds", "1.5"))
         vp_transcribe.VAD_THRESHOLD = float(after.get("vad_threshold", "0.3"))
         vp_transcribe.VAD_MIN_SILENCE_MS = int(after.get("vad_min_silence_ms", "600"))
         vp_transcribe.INITIAL_PROMPT = after.get("initial_prompt") or None
@@ -329,6 +333,12 @@ class Dictate(InjectMixin):
         if len(pcm) < SR * 0.3:  # <0.3 s — almost certainly a misfire
             print("  (too short — hold the key while you speak)", flush=True)
             return
+        if self.stt_backend == "parakeet" and recording_s < self.parakeet_min_seconds:
+            print(
+                f"  (too short for Parakeet — speak at least {self.parakeet_min_seconds:.1f}s)",
+                flush=True,
+            )
+            return
         try:
             result = _transcribe_detail(self.model, pcm, self.lang)
             text = result.text
@@ -360,6 +370,7 @@ class Dictate(InjectMixin):
             language_probability=result.language_probability,
             gate=result.gate,
             model=self.model_name,
+            stt_backend=self.stt_backend,
             device=self.device,
             compute_type=self.compute_type,
             model_load_s=self.model_load_s,
