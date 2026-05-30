@@ -93,6 +93,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="run Linux/Wayland health checks and exit")
     ap.add_argument("--settings-ui", action="store_true",
                     help="open the PySide/Qt settings and tray UI, then exit")
+    ap.add_argument("--transcribe-file", metavar="PATH",
+                    help="transcribe an audio file with the selected backend, "
+                         "then exit. 16-bit WAV works natively; mp3/m4a and "
+                         "other formats require ffmpeg.")
     ap.add_argument("--dictionary-status", nargs=0, action=_DictionaryAction,
                     help="show dictionary paths, counts and preview, then exit")
     ap.add_argument("--dictionary-open", nargs=0, action=_DictionaryAction,

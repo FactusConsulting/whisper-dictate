@@ -11,6 +11,14 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.2.53] - 2026-05-30
+
+### Added
+- `--transcribe-file PATH` command for reproducible file transcription using the selected backend/config.
+- Native 16-bit WAV decoding with mono conversion and resampling to 16 kHz.
+- ffmpeg fallback for mp3/m4a/other formats when ffmpeg is installed.
+- File transcription JSON output using `--json`, including backend/model, timing, language, source file and dictionary replacement metadata.
+
 ## [0.2.52] - 2026-05-30
 
 ### Added

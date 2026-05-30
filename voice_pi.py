@@ -607,6 +607,21 @@ if __name__ == "__main__":
     _model = load_stt_model(a.model, dev, ctype)
     _model_load_s = time.monotonic() - _t
     print(f"model ready in {_model_load_s:.1f}s", flush=True)
+    if a.transcribe_file:
+        from vp_file_transcribe import (
+            print_transcribe_file_result, transcribe_file_event,
+        )
+        event = transcribe_file_event(
+            _model,
+            a.transcribe_file,
+            lang,
+            model_name=loaded_model_name,
+            stt_backend=backend,
+            device=dev,
+            compute_type=ctype,
+        )
+        print_transcribe_file_result(event, as_json=a.json)
+        raise SystemExit(0)
     try:
         Dictate(
             _model, a.key, a.mode, lang,

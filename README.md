@@ -343,6 +343,17 @@ practical Parakeet models: 0.6B v3 for Danish/mixed Danish-English, TDT 1.1B
 for pure English quality experiments, and 0.6B v2 as a fast English-only
 baseline.
 
+File transcription for benchmarks/debugging uses the same backend, dictionary
+and replacement pipeline as live dictation:
+
+```powershell
+python voice_pi.py --transcribe-file sample.wav
+python voice_pi.py --transcribe-file sample.wav --json
+```
+
+16-bit WAV works without extra tools. Other formats such as mp3/m4a require
+`ffmpeg` on `PATH`.
+
 Optional PySide/Qt settings UI: on Windows, use the Start-menu
 **whisper-dictate** shortcut. It owns the dictation process, shows the runtime
 log, hides dependency install progress behind the UI, and restarts dictation

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
+import wave
 from contextlib import redirect_stderr, contextmanager
 from unittest.mock import patch
 
@@ -1533,6 +1534,107 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("VOICEPI_PARAKEET_MIN_SECONDS", script)
         self.assertIn("release_tail_ms", script)
         self.assertIn("VOICEPI_RELEASE_TAIL_MS", script)
+
+
+class TranscribeFileTests(unittest.TestCase):
+    def _write_test_wav(self, path, *, rate=16000, seconds=0.8):
+        import numpy as np
+
+        t = np.linspace(0, seconds, int(rate * seconds), endpoint=False)
+        audio = (0.25 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        pcm = (audio * 32767).astype(np.int16)
+        with wave.open(path, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(rate)
+            wav.writeframes(pcm.tobytes())
+
+    def test_parser_accepts_transcribe_file(self):
+        sys.modules.pop("vp_cli", None)
+        import vp_cli
+
+        args = vp_cli.build_arg_parser().parse_args(
+            ["--transcribe-file", "sample.wav"])
+        self.assertEqual(args.transcribe_file, "sample.wav")
+
+    def test_load_audio_file_decodes_wav_as_16khz_int16_mono(self):
+        import vp_file_transcribe
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            path = f.name
+        try:
+            self._write_test_wav(path, rate=8000)
+            pcm = vp_file_transcribe.load_audio_file(path)
+        finally:
+            os.remove(path)
+
+        self.assertEqual(pcm.dtype.name, "int16")
+        self.assertEqual(pcm.ndim, 2)
+        self.assertEqual(pcm.shape[1], 1)
+        self.assertGreaterEqual(len(pcm), 12000)
+
+    def test_transcribe_file_event_uses_dictionary_replacements(self):
+        import vp_file_transcribe
+        import vp_transcribe
+
+        class Segment:
+            text = " lead death"
+            start = 0.0
+            end = 0.8
+
+        class Info:
+            language = "en"
+            language_probability = 0.9
+
+        class Model:
+            def transcribe(self, *_args, **_kwargs):
+                return [Segment()], Info()
+
+        class Dict:
+            def build_prompt(self, prompt):
+                return prompt
+
+            def apply_replacements(self, text):
+                return text.replace("lead death", "lead dev"), [
+                    {"from": "lead death", "to": "lead dev", "count": 1}
+                ]
+
+            def prompt_terms(self):
+                return ["lead dev"]
+
+        old_dict = vp_transcribe.DICTIONARY
+        old_gate = vp_transcribe._looks_like_speech
+        vp_transcribe.DICTIONARY = Dict()
+        vp_transcribe._looks_like_speech = lambda _audio: (True, "test gate")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            path = f.name
+        try:
+            self._write_test_wav(path)
+            event = vp_file_transcribe.transcribe_file_event(
+                Model(), path, "en",
+                model_name="fake", stt_backend="whisper",
+                device="cpu", compute_type="int8",
+            )
+        finally:
+            vp_transcribe.DICTIONARY = old_dict
+            vp_transcribe._looks_like_speech = old_gate
+            os.remove(path)
+
+        self.assertEqual(event["event"], "file_transcription")
+        self.assertEqual(event["text"], "lead dev")
+        self.assertEqual(event["raw_text"], "lead death")
+        self.assertEqual(event["source_file"], path)
+        self.assertEqual(event["dictionary_terms"], ["lead dev"])
+        self.assertEqual(event["dictionary_replacements"][0]["from"], "lead death")
+
+    def test_transcribe_file_json_output_is_single_json_object(self):
+        import vp_file_transcribe
+
+        event = {"event": "file_transcription", "text": "hello"}
+        with _capture_stdout() as buf:
+            vp_file_transcribe.print_transcribe_file_result(event, as_json=True)
+
+        self.assertEqual(json.loads(buf.getvalue()), event)
 
 
 class DictionaryTests(unittest.TestCase):

@@ -171,6 +171,8 @@ Passed after the launcher (`setup.cmd` / `setup.sh` / `whisper-dictate`):
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `--doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
+| `--settings-ui` | off | — | Open the optional PySide/Qt settings UI and exit. |
+| `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
 
 ## How to set them, per environment
 
