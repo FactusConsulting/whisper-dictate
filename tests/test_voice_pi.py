@@ -1158,6 +1158,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("importlib.util.find_spec('nemo.collections.asr')", script)
         self.assertNotIn('-c "import nemo.collections.asr"', script)
 
+    def test_settings_ui_sets_non_empty_tray_icon(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)", script)
+        self.assertNotIn("QSystemTrayIcon(QIcon(), app)", script)
+
 
 class DictionaryTests(unittest.TestCase):
     def setUp(self):

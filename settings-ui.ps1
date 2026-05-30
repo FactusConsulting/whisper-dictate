@@ -7,6 +7,9 @@ $uiReq = Join-Path $here 'requirements-ui.txt'
 $logDir = Join-Path $env:APPDATA 'WhisperDictate'
 $log = Join-Path $logDir 'settings-ui.log'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+if (Get-Variable PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+  $global:PSNativeCommandUseErrorActionPreference = $false
+}
 
 function Show-LaunchError([string]$message) {
   try {
@@ -30,7 +33,13 @@ try {
     "[$(Get-Date -Format o)] installing UI dependencies" | Out-File -FilePath $log -Append -Encoding utf8
     & $venvPy -m pip install --disable-pip-version-check --progress-bar off -r $uiReq *>> $log
   }
-  & $venvPy $app --settings-ui *>> $log
+  $oldEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & $venvPy $app --settings-ui *>> $log
+  } finally {
+    $ErrorActionPreference = $oldEap
+  }
 } catch {
   $msg = "Could not start whisper-dictate Settings UI. See log: $log`n`n$_"
   $msg | Out-File -FilePath $log -Append -Encoding utf8

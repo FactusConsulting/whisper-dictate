@@ -24,7 +24,7 @@ def run_settings_ui() -> int:
             QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
             QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
             QPlainTextEdit, QPushButton, QSpinBox, QDoubleSpinBox, QSystemTrayIcon,
-            QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+            QStyle, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
         )
     except ImportError as exc:
         raise _missing_pyside_error() from exc
@@ -387,7 +387,10 @@ def run_settings_ui() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     win = SettingsWindow()
-    tray = QSystemTrayIcon(QIcon(), app)
+    icon = app.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+    if not isinstance(icon, QIcon) or icon.isNull():
+        icon = win.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+    tray = QSystemTrayIcon(icon, app)
     tray.setToolTip("whisper-dictate")
     menu = tray.contextMenu()
     if menu is None:
