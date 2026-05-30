@@ -107,6 +107,21 @@ function Get-VoicePiConfigValue([string]$key) {
   return $null
 }
 
+function Get-VoicePiFileHash([string]$path) {
+  if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+    return (Get-FileHash -Algorithm SHA256 $path).Hash
+  }
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($path)
+  try {
+    $bytes = $sha.ComputeHash($stream)
+    return ([System.BitConverter]::ToString($bytes)).Replace('-', '')
+  } finally {
+    $stream.Dispose()
+    $sha.Dispose()
+  }
+}
+
 function Test-WantsParakeet {
   $configuredBackend = Get-VoicePiConfigValue 'stt_backend'
   if ($configuredBackend) { return ($configuredBackend.ToLowerInvariant() -eq 'parakeet') }
@@ -145,7 +160,7 @@ function Test-TorchCudaReady {
 }
 
 $req = Select-Requirements $runArgs
-$reqHash = (Get-FileHash -Algorithm SHA256 $req).Hash
+$reqHash = Get-VoicePiFileHash $req
 $wantsParakeet = (Test-LaunchesDictation $runArgs) -and (Test-WantsParakeet)
 $wantsParakeetCuda = $wantsParakeet -and ((Test-WantsCuda $runArgs) -or ((Get-VoicePiConfigValue 'device') -in @($null, '', 'auto') -and (Test-NvidiaPresent)))
 $parakeetReq = Join-Path $here 'requirements-parakeet.txt'
@@ -216,7 +231,7 @@ if ($wantsParakeet) {
     & $venvPy -m pip install @pipInstallArgs --upgrade --force-reinstall torch torchaudio --index-url $torchCudaIndex
     if ($LASTEXITCODE -ne 0) { throw "CUDA PyTorch install failed (see error above)" }
   }
-  $parakeetHash = (Get-FileHash -Algorithm SHA256 $parakeetReq).Hash
+  $parakeetHash = Get-VoicePiFileHash $parakeetReq
   $storedParakeetHash = if (Test-Path $parakeetStamp) { (Get-Content $parakeetStamp -Raw).Trim() } else { '' }
   if (($storedParakeetHash -ne $parakeetHash) -or -not (Test-ParakeetReady)) {
     Write-Host "Installing optional NVIDIA Parakeet dependencies..." -ForegroundColor Cyan

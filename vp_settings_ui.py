@@ -314,7 +314,7 @@ def run_settings_ui() -> int:
             here = Path(__file__).resolve().parent
             setup = here / "setup.ps1"
             if os.name == "nt" and setup.exists():
-                return "powershell.exe", [
+                return "pwsh.exe", [
                     "-NoProfile", "-ExecutionPolicy", "Bypass",
                     "-File", str(setup),
                 ]

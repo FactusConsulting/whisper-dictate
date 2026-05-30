@@ -1242,6 +1242,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('env.insert("PYTHONIOENCODING", "utf-8")', script)
         self.assertIn('raw.decode("utf-8")', script)
 
+    def test_windows_ui_launch_chain_uses_pwsh(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            ui_script = f.read()
+        with open("settings-ui.ps1", encoding="utf-8") as f:
+            ps_script = f.read()
+        with open("settings-ui.vbs", encoding="utf-8") as f:
+            vbs_script = f.read()
+
+        self.assertIn('return "pwsh.exe"', ui_script)
+        self.assertIn("pwsh.exe -NoProfile", ps_script)
+        self.assertIn("pwsh.exe -NoProfile", vbs_script)
+        self.assertNotIn('return "powershell.exe"', ui_script)
+        self.assertNotIn("powershell.exe -NoProfile", ps_script)
+        self.assertNotIn("powershell.exe -NoProfile", vbs_script)
+
     def test_settings_ui_has_single_instance_guard_and_foreground_show(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:
             script = f.read()
@@ -1279,6 +1294,17 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn("[Console]::OutputEncoding", script)
         self.assertIn("UTF8Encoding", script)
+
+    def test_setup_has_get_file_hash_fallback(self):
+        with open("setup.ps1", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("function Get-VoicePiFileHash", script)
+        self.assertIn("Get-Command Get-FileHash", script)
+        self.assertIn("[System.Security.Cryptography.SHA256]::Create()", script)
+        self.assertIn("$reqHash = Get-VoicePiFileHash $req", script)
+        self.assertIn("$parakeetHash = Get-VoicePiFileHash $parakeetReq", script)
+        self.assertNotIn("$reqHash = (Get-FileHash", script)
 
     def test_voice_pi_reconfigures_windows_streams_to_utf8(self):
         with open("voice_pi.py", encoding="utf-8") as f:

@@ -25,7 +25,7 @@ try {
   $env:PIP_PROGRESS_BAR = 'off'
   if (-not (Test-Path $venvPy)) {
     "[$(Get-Date -Format o)] venv missing; bootstrapping with setup.ps1 --doctor" | Out-File -FilePath $log -Append -Encoding utf8
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File (Join-Path $here 'setup.ps1') --doctor *>> $log
+    pwsh.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File (Join-Path $here 'setup.ps1') --doctor *>> $log
     if ($LASTEXITCODE -ne 0) {
       throw "Base setup failed with exit code $LASTEXITCODE"
     }
