@@ -1242,6 +1242,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('env.insert("PYTHONIOENCODING", "utf-8")', script)
         self.assertIn('raw.decode("utf-8")', script)
 
+    def test_ui_managed_pip_installs_show_raw_progress(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            ui_script = f.read()
+        with open("settings-ui.ps1", encoding="utf-8") as f:
+            launcher_script = f.read()
+        with open("setup.ps1", encoding="utf-8") as f:
+            setup_script = f.read()
+
+        self.assertIn('env.insert("PIP_PROGRESS_BAR", "raw")', ui_script)
+        self.assertIn("$env:PIP_PROGRESS_BAR = 'raw'", launcher_script)
+        self.assertIn("--progress-bar raw", launcher_script)
+        self.assertIn('$pipProgressBar = if ($env:VOICEPI_MANAGED_BY_UI) { "raw" }', setup_script)
+        self.assertIn('$pipInstallArgs = @("--disable-pip-version-check", "--progress-bar", $pipProgressBar)', setup_script)
+        self.assertNotIn('env.insert("PIP_PROGRESS_BAR", "off")', ui_script)
+
     def test_windows_ui_launch_chain_uses_pwsh(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:
             ui_script = f.read()

@@ -165,7 +165,8 @@ $wantsParakeet = (Test-LaunchesDictation $runArgs) -and (Test-WantsParakeet)
 $wantsParakeetCuda = $wantsParakeet -and ((Test-WantsCuda $runArgs) -or ((Get-VoicePiConfigValue 'device') -in @($null, '', 'auto') -and (Test-NvidiaPresent)))
 $parakeetReq = Join-Path $here 'requirements-parakeet.txt'
 $parakeetStamp = Join-Path $venv '.requirements-parakeet.sha256'
-$pipInstallArgs = @("--disable-pip-version-check", "--progress-bar", "off")
+$pipProgressBar = if ($env:VOICEPI_MANAGED_BY_UI) { "raw" } elseif ($env:PIP_PROGRESS_BAR) { $env:PIP_PROGRESS_BAR } else { "off" }
+$pipInstallArgs = @("--disable-pip-version-check", "--progress-bar", $pipProgressBar)
 $torchCudaIndex = "https://download.pytorch.org/whl/cu121"
 
 function Test-MsvcPy312($exe) {

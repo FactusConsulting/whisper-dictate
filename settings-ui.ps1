@@ -47,7 +47,7 @@ function Show-LaunchError([string]$message) {
 try {
   "[$(Get-Date -Format o)] starting settings UI launcher" | Out-File -FilePath $log -Append -Encoding utf8
   Stop-OldWhisperDictateProcesses
-  $env:PIP_PROGRESS_BAR = 'off'
+  $env:PIP_PROGRESS_BAR = 'raw'
   if (-not (Test-Path $venvPy)) {
     "[$(Get-Date -Format o)] venv missing; bootstrapping with setup.ps1 --doctor" | Out-File -FilePath $log -Append -Encoding utf8
     pwsh.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File (Join-Path $here 'setup.ps1') --doctor *>> $log
@@ -61,7 +61,7 @@ try {
   & $venvPy -c "import PySide6" *> $null
   if ($LASTEXITCODE -ne 0 -and (Test-Path $uiReq)) {
     "[$(Get-Date -Format o)] installing UI dependencies" | Out-File -FilePath $log -Append -Encoding utf8
-    & $venvPy -m pip install --disable-pip-version-check --progress-bar off -r $uiReq *>> $log
+    & $venvPy -m pip install --disable-pip-version-check --progress-bar raw -r $uiReq *>> $log
   }
   $oldEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'

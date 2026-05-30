@@ -339,7 +339,7 @@ def run_settings_ui() -> int:
             env = QProcessEnvironment.systemEnvironment()
             env.insert("PYTHONUNBUFFERED", "1")
             env.insert("PYTHONIOENCODING", "utf-8")
-            env.insert("PIP_PROGRESS_BAR", "off")
+            env.insert("PIP_PROGRESS_BAR", "raw")
             env.insert("VOICEPI_MANAGED_BY_UI", "1")
             proc.setProcessEnvironment(env)
             proc.readyReadStandardOutput.connect(self._read_runtime_output)
