@@ -325,6 +325,8 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_DEBUG` | _(unset)_ | `1` → log every effective setting + which env var supplied it at startup (verifies `setx` actually arrived) |
 | `VOICEPI_JSON` | _(unset)_ | `1` → print one JSON event per accepted utterance |
 | `VOICEPI_METRICS_JSONL` | _(unset)_ | append one JSON metrics event per accepted utterance to this file |
+| `VOICEPI_HISTORY_ENABLED` | `1` | store accepted live dictations in local history |
+| `VOICEPI_HISTORY_JSONL` | user state path | override the local history JSONL path |
 | `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
 | `VOICEPI_VAD_THRESHOLD` | `0.3` | Silero VAD speech threshold passed to faster-whisper |
 | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | minimum silence gap used by VAD segmentation |
@@ -354,6 +356,8 @@ python voice_pi.py --benchmark-files sample.wav `
   --benchmark-jsonl benchmark.jsonl
 python voice_pi.py --calibrate-mic 5
 python voice_pi.py --calibrate-file sample.wav --json
+python voice_pi.py --history-last
+python voice_pi.py --history-copy-last
 ```
 
 16-bit WAV works without extra tools. Other formats such as mp3/m4a require
@@ -361,6 +365,10 @@ python voice_pi.py --calibrate-file sample.wav --json
 child process and writes one JSONL result per file/backend, including failures.
 Calibration prints raw dBFS, noise floor, SNR, peak and recommended audio
 threshold settings without loading an STT model.
+
+Local history stores accepted live dictations as JSONL. It is local-only,
+disabled with `VOICEPI_HISTORY_ENABLED=0`, and can be used to recover the last
+transcript if injection/focus failed.
 
 Optional PySide/Qt settings UI: on Windows, use the Start-menu
 **whisper-dictate** shortcut. It owns the dictation process, shows the runtime

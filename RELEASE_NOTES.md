@@ -1,19 +1,19 @@
-Adds microphone calibration commands for actionable audio threshold tuning.
+Adds local dictation history for recovery, copy, and reinject workflows.
 
 ## Download
 
 | Asset | Use on |
 |---|---|
-| **whisper-dictate-windows-nvidia-setup-0.2.55.exe** | Windows with NVIDIA CUDA |
+| **whisper-dictate-windows-nvidia-setup-0.2.56.exe** | Windows with NVIDIA CUDA |
 
 ## Highlights
 
-- New `--calibrate-mic [SECONDS]` command records a short sample and prints pass/warn/fail diagnostics.
-- New `--calibrate-file PATH` analyzes an existing audio file with the same calibration logic.
-- `--json` outputs structured calibration data for automation.
-- Recommendations include `VOICEPI_TARGET_DBFS`, `VOICEPI_MIN_INPUT_DBFS`, and `VOICEPI_MIN_SNR_DB`.
+- Accepted live dictations are stored locally as JSONL history.
+- `--history-list`, `--history-last`, `--history-copy-last`, and `--history-reinject-last` expose recovery workflows.
+- `VOICEPI_HISTORY_ENABLED=0` disables history.
+- `VOICEPI_HISTORY_JSONL` overrides the history path.
 
 ## Notes
 
-- Calibration runs before model load, so it is quick and works without Whisper/Parakeet startup.
-- Use calibration output to tune Quality settings when the mic or room is the bottleneck.
+- History is local-only and stores compact utterance metadata, not audio.
+- File transcription and benchmark commands do not automatically add to live dictation history.

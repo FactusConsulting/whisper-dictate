@@ -11,6 +11,13 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.2.56] - 2026-05-30
+
+### Added
+- Local dictation history JSONL storage for accepted live utterances.
+- `VOICEPI_HISTORY_ENABLED` and `VOICEPI_HISTORY_JSONL` settings for local history control/location.
+- History CLI helpers: `--history-list`, `--history-last`, `--history-copy-last`, and `--history-reinject-last`.
+
 ## [0.2.55] - 2026-05-30
 
 ### Added

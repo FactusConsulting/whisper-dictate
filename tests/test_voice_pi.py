@@ -10,6 +10,7 @@ import types
 import unittest
 import wave
 from contextlib import redirect_stderr, contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -1820,6 +1821,115 @@ class CalibrationTests(unittest.TestCase):
         calibration = script.index("if a.calibrate_mic is not None or a.calibrate_file")
         model_load = script.index("_model = load_stt_model")
         self.assertLess(calibration, model_load)
+
+
+class HistoryTests(unittest.TestCase):
+    def test_append_and_read_history_keeps_core_fields(self):
+        import vp_history
+
+        event = {
+            "ts": 1,
+            "event": "utterance",
+            "text": "hello",
+            "raw_text": "hallo",
+            "stt_backend": "whisper",
+            "target_title": "Editor",
+            "large_unused_blob": "drop",
+        }
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            vp_history.append_history(event, Path(path))
+            rows = vp_history.read_history(10, Path(path))
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+        self.assertEqual(rows[0]["text"], "hello")
+        self.assertEqual(rows[0]["raw_text"], "hallo")
+        self.assertEqual(rows[0]["target_title"], "Editor")
+        self.assertNotIn("large_unused_blob", rows[0])
+
+    def test_history_last_returns_latest_item(self):
+        import vp_history
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
+            path = f.name
+            f.write(json.dumps({"text": "first"}) + "\n")
+            f.write(json.dumps({"text": "second"}) + "\n")
+        try:
+            item = vp_history.last_history(Path(path))
+        finally:
+            os.remove(path)
+
+        self.assertEqual(item["text"], "second")
+
+    def test_history_can_be_disabled(self):
+        old = os.environ.get("VOICEPI_HISTORY_ENABLED")
+        os.environ["VOICEPI_HISTORY_ENABLED"] = "0"
+        sys.modules.pop("vp_history", None)
+        import vp_history
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            written = vp_history.append_history({"text": "hidden"}, Path(path))
+            self.assertIsNone(written)
+            self.assertFalse(os.path.exists(path))
+        finally:
+            if old is None:
+                os.environ.pop("VOICEPI_HISTORY_ENABLED", None)
+            else:
+                os.environ["VOICEPI_HISTORY_ENABLED"] = old
+            sys.modules.pop("vp_history", None)
+
+    def test_history_copy_last_uses_clipboard(self):
+        import vp_history
+
+        copied = {}
+
+        fake_pyperclip = types.ModuleType("pyperclip")
+        fake_pyperclip.copy = lambda text: copied.setdefault("text", text)
+        sys.modules["pyperclip"] = fake_pyperclip
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
+            path = f.name
+            f.write(json.dumps({"text": "copy me"}) + "\n")
+        try:
+            text = vp_history.copy_last_to_clipboard(Path(path))
+        finally:
+            os.remove(path)
+            sys.modules.pop("pyperclip", None)
+
+        self.assertEqual(text, "copy me")
+        self.assertEqual(copied["text"], "copy me")
+
+    def test_parser_accepts_history_options(self):
+        sys.modules.pop("vp_cli", None)
+        import vp_cli
+
+        args = vp_cli.build_arg_parser().parse_args(["--history-list"])
+        self.assertEqual(args.history_list, 10)
+        args = vp_cli.build_arg_parser().parse_args(["--history-list", "3"])
+        self.assertEqual(args.history_list, 3)
+        args = vp_cli.build_arg_parser().parse_args(["--history-last"])
+        self.assertTrue(args.history_last)
+        args = vp_cli.build_arg_parser().parse_args(["--history-copy-last"])
+        self.assertTrue(args.history_copy_last)
+        args = vp_cli.build_arg_parser().parse_args(["--history-reinject-last"])
+        self.assertTrue(args.history_reinject_last)
+
+    def test_voice_pi_appends_history_after_metrics(self):
+        with open("voice_pi.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("from vp_history import append_history", script)
+        self.assertIn("append_history(event)", script)
+        self.assertLess(script.index("append_jsonl(self.metrics_jsonl, event)"),
+                        script.index("append_history(event)"))
 
 
 class DictionaryTests(unittest.TestCase):

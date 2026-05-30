@@ -113,6 +113,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--calibrate-file", metavar="PATH",
                     help="analyze an existing audio file and recommend audio "
                          "threshold settings, then exit")
+    ap.add_argument("--history-list", nargs="?", const=10, type=int,
+                    metavar="N",
+                    help="print the last N local dictation history entries, "
+                         "then exit")
+    ap.add_argument("--history-last", action="store_true",
+                    help="print the last local dictation transcript, then exit")
+    ap.add_argument("--history-copy-last", action="store_true",
+                    help="copy the last local dictation transcript to the "
+                         "clipboard, then exit")
+    ap.add_argument("--history-reinject-last", action="store_true",
+                    help="paste the last local dictation transcript into the "
+                         "active window, then exit")
     ap.add_argument("--dictionary-status", nargs=0, action=_DictionaryAction,
                     help="show dictionary paths, counts and preview, then exit")
     ap.add_argument("--dictionary-open", nargs=0, action=_DictionaryAction,

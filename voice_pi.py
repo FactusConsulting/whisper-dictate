@@ -111,6 +111,7 @@ from vp_keymap import (  # noqa: E402
     _LANG_TO_XKB, _LAYOUT_KEYCODES, _build_ydotool_ops, _detect_xkb_layout,
 )
 from vp_metrics import append_jsonl, base_event, compact_text, emit_json  # noqa: E402
+from vp_history import append_history  # noqa: E402
 from vp_version import VERSION  # noqa: E402
 from vp_config import apply_config_to_environ, config_mtime, effective_config  # noqa: E402
 
@@ -390,6 +391,10 @@ class Dictate(InjectMixin):
             dictionary_replacements=result.dictionary_replacements,
         )
         append_jsonl(self.metrics_jsonl, event)
+        try:
+            append_history(event)
+        except OSError as e:
+            print(f"[history] could not write history: {e}", file=sys.stderr, flush=True)
         if self.json_output:
             emit_json(event)
 
@@ -583,6 +588,21 @@ if __name__ == "__main__":
                 calibrate_file(a.calibrate_file, as_json=a.json)
             else:
                 calibrate_microphone(a.calibrate_mic, as_json=a.json)
+        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+            ap.error(str(e))
+        raise SystemExit(0)
+    if (a.history_list is not None or a.history_last or
+            a.history_copy_last or a.history_reinject_last):
+        from vp_history import run_history_command
+        try:
+            if a.history_last:
+                run_history_command("last", as_json=a.json)
+            elif a.history_copy_last:
+                run_history_command("copy-last")
+            elif a.history_reinject_last:
+                run_history_command("reinject-last")
+            else:
+                run_history_command("list", limit=a.history_list, as_json=a.json)
         except Exception as e:  # noqa: BLE001 - argparse should report cleanly
             ap.error(str(e))
         raise SystemExit(0)
