@@ -1461,6 +1461,67 @@ class PostprocessTests(unittest.TestCase):
         self.assertIn("post_fallback=post_result.fallback", script)
 
 
+class CommandHookTests(unittest.TestCase):
+    def test_command_hook_sends_event_json_on_stdin(self):
+        import vp_command_hook
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            out_path = f.name
+        code = (
+            "import json,sys,pathlib;"
+            "event=json.loads(sys.stdin.read());"
+            f"pathlib.Path({out_path!r}).write_text(event['text'], encoding='utf-8')"
+        )
+        command = json.dumps([sys.executable, "-c", code])
+        try:
+            with patch.dict(os.environ, {
+                "VOICEPI_COMMAND_HOOK": command,
+                "VOICEPI_COMMAND_HOOK_TIMEOUT_MS": "2000",
+            }, clear=False):
+                result = vp_command_hook.run_command_hook({"text": "hello Codex"})
+            with open(out_path, encoding="utf-8") as f:
+                written = f.read()
+        finally:
+            os.remove(out_path)
+
+        self.assertTrue(result.enabled)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(written, "hello Codex")
+
+    def test_command_hook_timeout_is_nonfatal(self):
+        import vp_command_hook
+
+        command = json.dumps([sys.executable, "-c", "import time; time.sleep(2)"])
+        with patch.dict(os.environ, {
+            "VOICEPI_COMMAND_HOOK": command,
+            "VOICEPI_COMMAND_HOOK_TIMEOUT_MS": "100",
+        }, clear=False):
+            result = vp_command_hook.run_command_hook({"text": "slow"})
+
+        self.assertTrue(result.enabled)
+        self.assertTrue(result.timeout)
+        self.assertIn("timed out", result.error)
+
+    def test_command_hook_rejects_invalid_json_array(self):
+        import vp_command_hook
+
+        with patch.dict(os.environ, {"VOICEPI_COMMAND_HOOK": '["ok", 5]'}, clear=False):
+            result = vp_command_hook.run_command_hook({"text": "bad"})
+
+        self.assertTrue(result.enabled)
+        self.assertIn("array of strings", result.error)
+
+    def test_voice_pi_records_command_hook_after_event_creation(self):
+        with open("voice_pi.py", encoding="utf-8") as f:
+            script = f.read()
+
+        event_pos = script.index("event = base_event(")
+        hook_pos = script.index("hook_result = run_command_hook(event)")
+        metrics_pos = script.index("append_jsonl(self.metrics_jsonl, event)")
+        self.assertLess(event_pos, hook_pos)
+        self.assertLess(hook_pos, metrics_pos)
+
+
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_setup_warning_escapes_config_path_before_colon(self):
         with open("setup.ps1", encoding="utf-8") as f:

@@ -325,6 +325,8 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_DEBUG` | _(unset)_ | `1` → log every effective setting + which env var supplied it at startup (verifies `setx` actually arrived) |
 | `VOICEPI_JSON` | _(unset)_ | `1` → print one JSON event per accepted utterance |
 | `VOICEPI_METRICS_JSONL` | _(unset)_ | append one JSON metrics event per accepted utterance to this file |
+| `VOICEPI_COMMAND_HOOK` | _(unset)_ | advanced opt-in command hook; receives one utterance JSON event on stdin with no shell interpolation |
+| `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | `2000` | maximum time to wait for the command hook before logging a non-fatal timeout |
 | `VOICEPI_HISTORY_ENABLED` | `1` | store accepted live dictations in local history |
 | `VOICEPI_HISTORY_JSONL` | user state path | override the local history JSONL path |
 | `VOICEPI_LOCAL_ONLY` | _(unset)_ | `1` → block cloud/BYOK backends and force model libraries offline; local models must already be downloaded |
@@ -382,6 +384,19 @@ threshold settings without loading an STT model.
 Local history stores accepted live dictations as JSONL. It is local-only,
 disabled with `VOICEPI_HISTORY_ENABLED=0`, and can be used to recover the last
 transcript if injection/focus failed.
+
+Advanced automation can run a command after each accepted live utterance:
+
+```powershell
+setx VOICEPI_COMMAND_HOOK '["python","D:\scripts\handle-dictation.py"]'
+setx VOICEPI_COMMAND_HOOK_TIMEOUT_MS 2000
+```
+
+The hook receives the same structured utterance event as JSON on stdin. It is
+started directly with `shell=False`; transcript text is never interpolated into
+a shell command. Prefer the JSON-array form above for exact arguments. Hook
+errors/timeouts are logged and recorded in metrics/history, but dictation text
+is still injected normally.
 
 Target profiles can be added to `%APPDATA%\WhisperDictate\config.json` under a
 `profiles` array. Profiles match active window title/process substrings and

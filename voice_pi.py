@@ -113,6 +113,7 @@ from vp_keymap import (  # noqa: E402
 from vp_metrics import append_jsonl, base_event, compact_text, emit_json  # noqa: E402
 from vp_history import append_history  # noqa: E402
 from vp_version import VERSION  # noqa: E402
+from vp_command_hook import annotate_event_with_hook, run_command_hook  # noqa: E402
 from vp_privacy import apply_local_only_network_lock  # noqa: E402
 from vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402
 from vp_config import (  # noqa: E402
@@ -436,6 +437,10 @@ class Dictate(InjectMixin):
             post_fallback=post_result.fallback,
             post_error=post_result.error or None,
         )
+        hook_result = run_command_hook(event)
+        annotate_event_with_hook(event, hook_result)
+        if hook_result.error:
+            print(f"[hook] {hook_result.error}", file=sys.stderr, flush=True)
         append_jsonl(self.metrics_jsonl, event)
         try:
             append_history(event)

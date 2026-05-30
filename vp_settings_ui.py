@@ -346,6 +346,12 @@ def run_settings_ui() -> int:
             self._add_help_row(
                 form, "Metrics JSONL", self._line("metrics_jsonl"),
                 "Append one JSON object per utterance to this file, including timings, backend, model, language and injection metadata.")
+            self._add_help_row(
+                form, "Command hook", self._line("command_hook"),
+                "Optional advanced automation command. Receives one utterance JSON event on stdin; no shell interpolation is used. Prefer JSON array form for exact arguments.")
+            self._add_help_row(
+                form, "Command hook timeout ms", self._spin("command_hook_timeout_ms", 100, 30000),
+                "Maximum wait for the command hook. Timeout or failure is logged but never blocks or loses dictation text.")
             processor = self._combo("post_processor", ["none", "ollama"])
             processor.currentTextChanged.connect(lambda _: self._update_post_controls())
             self._add_help_row(

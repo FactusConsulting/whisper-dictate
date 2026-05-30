@@ -11,6 +11,13 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.2.58] - 2026-05-30
+
+### Added
+- `VOICEPI_COMMAND_HOOK` advanced automation hook for running an opt-in command after each accepted utterance.
+- `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` to bound hook latency; hook failures/timeouts are logged and recorded without blocking injection.
+- Settings UI and documentation for the command hook.
+
 ## [0.2.57] - 2026-05-30
 
 ### Added

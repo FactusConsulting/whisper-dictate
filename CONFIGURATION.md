@@ -50,6 +50,8 @@ requiring restart/model reload.
 | **XKB layout (Wayland)** | `VOICEPI_XKB_LAYOUT` (highest), `XKB_DEFAULT_LAYOUT` (fallback) | _none_ | _(auto-detect)_ | `dk`, `se`, `de`, `fi`, `no`, `es`, `pt`, `br`, `pl`, `ua`, … | force keycode layout for special-char injection |
 | **JSON output** | `VOICEPI_JSON` | `--json` | _(unset)_ | truthy / falsey | print one structured JSON event per accepted utterance |
 | **Metrics file** | `VOICEPI_METRICS_JSONL` | _none_ | _(unset)_ | file path | append one structured JSON event per accepted utterance |
+| **Command hook** | `VOICEPI_COMMAND_HOOK` | _none_ | _(unset)_ | command string or JSON string array | Advanced opt-in automation hook. Receives one utterance JSON event on stdin and is executed without shell interpolation. |
+| **Command hook timeout** | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | _none_ | `2000` | integer ms | Maximum wait for the command hook. Timeout/failure is logged and recorded but does not block injection success. |
 | **Local history** | `VOICEPI_HISTORY_ENABLED` | _none_ | `1` | truthy / falsey | store accepted live dictations locally for copy/reinject/debug recovery |
 | **History file** | `VOICEPI_HISTORY_JSONL` | _none_ | user state path | file path | override the local history JSONL path |
 | **Local only** | `VOICEPI_LOCAL_ONLY` | _none_ | _(unset)_ | truthy / falsey | block cloud/BYOK backends and force model libraries into offline mode |
@@ -87,6 +89,8 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_DICTIONARY_MAX_TERMS` | `80` | integer ≥ 0 | Maximum number of dictionary terms appended to the prompt. Keeps prompt injection bounded as the dictionary grows. |
 | `VOICEPI_DICTIONARY_PROMPT_CHARS` | `1200` | integer ≥ 0 | Maximum total characters used by dictionary terms in the prompt. |
 | `VOICEPI_INJECT_MODE` | `auto` | `auto` \| `type` \| `paste` \| `print` | Controls text output injection. `auto` types directly except for known fragile Windows terminal targets, where it uses clipboard paste. `type` always sends direct keystrokes, `paste` copies the text to the clipboard and sends paste on X11/Windows, and `print` only writes the transcription to stdout. `--type`/`--paste`/`--no-type` override this env var. |
+| `VOICEPI_COMMAND_HOOK` | *(unset)* | command string or JSON string array | Optional advanced automation command run after each accepted live utterance. The full utterance event is sent as JSON on stdin. The command is started directly with `shell=False`; transcript text is never shell-interpolated. Prefer JSON array form such as `["python","D:\\scripts\\hook.py"]`. |
+| `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | `2000` | integer ms | Maximum wait for `VOICEPI_COMMAND_HOOK`. Timeout/failure is logged and included in metrics/history as `command_hook_*` fields, but text injection is not undone or blocked. |
 | `VOICEPI_QUIT_COUNT` | `3` | integer ≥ 0 | **Windows/X11 only** (pynput path). N consecutive Esc presses within `VOICEPI_QUIT_WINDOW_MS` quit the app. Default `3` avoids accidental shutdown since pynput catches Esc system-wide. Set `0` to disable global Esc-quit entirely (rely on Ctrl+C in the launcher console); set `1` for legacy single-Esc behaviour. |
 | `VOICEPI_QUIT_WINDOW_MS` | `1500` | integer ms | Time window within which the consecutive Esc presses count toward `VOICEPI_QUIT_COUNT`. Any non-Esc key press resets the counter. |
 | `VOICEPI_TARGET_DBFS` | `-20` | float (dBFS, ≤ 0) | Loudness quiet input is normalised toward. Lower (e.g. `-16`) = boost quiet speech harder. |

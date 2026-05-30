@@ -210,6 +210,8 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("inject mode",      f"{args.mode}  (env VOICEPI_INJECT_MODE={_env('VOICEPI_INJECT_MODE')})"),
         ("json output",      f"{getattr(args, 'json', False)}  (env VOICEPI_JSON={_env('VOICEPI_JSON')})"),
         ("metrics jsonl",    f"{_env('VOICEPI_METRICS_JSONL')}  (env VOICEPI_METRICS_JSONL)"),
+        ("command hook",     f"{_env('VOICEPI_COMMAND_HOOK')}  "
+                             f"(timeout_ms={_env('VOICEPI_COMMAND_HOOK_TIMEOUT_MS')})"),
         ("local only",       f"{local_only_enabled()}  (env VOICEPI_LOCAL_ONLY={_env('VOICEPI_LOCAL_ONLY')})"),
         ("post process",     f"{post.processor}/{post.mode} model={post.model} "
                              f"url={post.base_url} timeout_ms={post.timeout_ms}"),
