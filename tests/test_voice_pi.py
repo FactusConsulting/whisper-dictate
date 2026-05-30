@@ -1031,6 +1031,9 @@ class STTBackendTests(unittest.TestCase):
         fake_np = types.ModuleType("numpy")
         fake_np.float32 = object()
         sys.modules["numpy"] = fake_np
+        torch = types.ModuleType("torch")
+        torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+        sys.modules["torch"] = torch
 
         class FakeNemoModel:
             def to(self, device):
@@ -1094,6 +1097,9 @@ class STTBackendTests(unittest.TestCase):
         calls = {}
         fake_np = types.ModuleType("numpy")
         sys.modules["numpy"] = fake_np
+        torch = types.ModuleType("torch")
+        torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+        sys.modules["torch"] = torch
 
         class ASRModel:
             @staticmethod
@@ -1113,6 +1119,29 @@ class STTBackendTests(unittest.TestCase):
 
         self.assertEqual(
             calls["model_name"], "nvidia/parakeet-tdt-0.6b-v3")
+
+    def test_parakeet_cuda_requires_cuda_enabled_torch(self):
+        fake_np = types.ModuleType("numpy")
+        sys.modules["numpy"] = fake_np
+        torch = types.ModuleType("torch")
+        torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+        sys.modules["torch"] = torch
+
+        class ASRModel:
+            @staticmethod
+            def from_pretrained(model_name):
+                return types.SimpleNamespace()
+
+        asr = types.ModuleType("nemo.collections.asr")
+        asr.models = types.SimpleNamespace(ASRModel=ASRModel)
+        sys.modules["nemo"] = types.ModuleType("nemo")
+        sys.modules["nemo.collections"] = types.ModuleType("nemo.collections")
+        sys.modules["nemo.collections.asr"] = asr
+
+        import vp_parakeet
+
+        with self.assertRaisesRegex(RuntimeError, "CUDA-enabled PyTorch"):
+            vp_parakeet.ParakeetModel("large-v3", device="cuda")
 
     def test_parakeet_accepts_explicit_nvidia_model_name(self):
         import vp_parakeet
@@ -1158,12 +1187,47 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("importlib.util.find_spec('nemo.collections.asr')", script)
         self.assertNotIn('-c "import nemo.collections.asr"', script)
 
+    def test_setup_installs_cuda_torch_for_parakeet_cuda(self):
+        with open("setup.ps1", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("function Test-TorchCudaReady", script)
+        self.assertIn("https://download.pytorch.org/whl/cu121", script)
+        self.assertIn("torch torchaudio --index-url $torchCudaIndex", script)
+
+    def test_setup_propagates_voice_pi_exit_code(self):
+        with open("setup.ps1", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("& $venvPy $app $runArgs", script)
+        self.assertIn("exit $LASTEXITCODE", script)
+
     def test_settings_ui_sets_non_empty_tray_icon(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)", script)
         self.assertNotIn("QSystemTrayIcon(QIcon(), app)", script)
+
+    def test_settings_ui_forces_utf8_child_output(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn('env.insert("PYTHONIOENCODING", "utf-8")', script)
+        self.assertIn('raw.decode("utf-8")', script)
+
+    def test_setup_uses_utf8_output_encoding(self):
+        with open("setup.ps1", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("[Console]::OutputEncoding", script)
+        self.assertIn("UTF8Encoding", script)
+
+    def test_voice_pi_reconfigures_windows_streams_to_utf8(self):
+        with open("voice_pi.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn('reconfigure(encoding="utf-8", errors="replace")', script)
 
 
 class DictionaryTests(unittest.TestCase):

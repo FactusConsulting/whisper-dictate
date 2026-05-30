@@ -51,6 +51,24 @@ def _missing_deps_error() -> RuntimeError:
     )
 
 
+def _cuda_torch_error() -> RuntimeError:
+    return RuntimeError(
+        "VOICEPI_STT_BACKEND=parakeet with --device cuda requires a "
+        "CUDA-enabled PyTorch wheel, but the installed torch build is CPU-only. "
+        "Run setup.ps1 again after installing the latest whisper-dictate, or "
+        "install manually: python -m pip install --upgrade --force-reinstall "
+        "torch torchaudio --index-url https://download.pytorch.org/whl/cu121"
+    )
+
+
+def _torch_cuda_available() -> bool:
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def _write_wav(audio: np.ndarray) -> str:
     fd, path = tempfile.mkstemp(prefix="voicepi-parakeet-", suffix=".wav")
     os.close(fd)
@@ -85,6 +103,8 @@ class ParakeetModel:
         self.model_name = resolve_parakeet_model_name(model_name)
         self.device = device
         self.compute_type = compute_type
+        if device == "cuda" and not _torch_cuda_available():
+            raise _cuda_torch_error()
         self._model = nemo_asr.models.ASRModel.from_pretrained(
             model_name=self.model_name)
         if device in ("cuda", "cpu") and hasattr(self._model, "to"):

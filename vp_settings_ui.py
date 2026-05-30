@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import locale
 import sys
 from pathlib import Path
 
@@ -309,6 +310,7 @@ def run_settings_ui() -> int:
             proc.setProcessChannelMode(QProcess.MergedChannels)
             env = QProcessEnvironment.systemEnvironment()
             env.insert("PYTHONUNBUFFERED", "1")
+            env.insert("PYTHONIOENCODING", "utf-8")
             env.insert("PIP_PROGRESS_BAR", "off")
             env.insert("VOICEPI_MANAGED_BY_UI", "1")
             proc.setProcessEnvironment(env)
@@ -343,8 +345,12 @@ def run_settings_ui() -> int:
         def _read_runtime_output(self) -> None:
             if self._runtime_proc is None:
                 return
-            data = bytes(self._runtime_proc.readAllStandardOutput()).decode(
-                errors="replace")
+            raw = bytes(self._runtime_proc.readAllStandardOutput())
+            encoding = locale.getpreferredencoding(False) or "utf-8"
+            try:
+                data = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                data = raw.decode(encoding, errors="replace")
             if not data:
                 return
             if "Installing optional NVIDIA Parakeet dependencies" in data:

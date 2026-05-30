@@ -44,6 +44,16 @@ import sys
 import threading
 import time
 
+if os.name == "nt":
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
 # --- CUDA runtime DLL bootstrap (Windows) -------------------------------
 # ctranslate2 (faster-whisper's backend) needs the CUDA runtime libs
 # (cublas/cudnn). On Windows the nvidia-*-cu12 pip wheels drop those

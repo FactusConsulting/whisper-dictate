@@ -21,6 +21,11 @@
 # Stop the running tool by pressing Esc (or Ctrl+C) - frees GPU VRAM.
 # =====================================================================
 $ErrorActionPreference = 'Stop'
+try {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+  $OutputEncoding = [System.Text.UTF8Encoding]::new()
+} catch {
+}
 $here   = $PSScriptRoot
 $venv   = Join-Path $env:USERPROFILE 'voice-pi-venv'
 $venvPy = Join-Path $venv 'Scripts\python.exe'
@@ -47,6 +52,8 @@ $env:VOICEPI_LAUNCHER_PRINTED_VERSION = '1'
 function Test-WantsCuda([string[]]$argv) {
   $envDevice = if ($env:VOICEPI_DEVICE) { $env:VOICEPI_DEVICE.ToLowerInvariant() } else { '' }
   if ($envDevice -eq 'cuda') { return $true }
+  $configDevice = Get-VoicePiConfigValue 'device'
+  if ($configDevice -and $configDevice.ToLowerInvariant() -eq 'cuda') { return $true }
   for ($i = 0; $i -lt $argv.Count; $i++) {
     if ($argv[$i] -eq '--device' -and ($i + 1) -lt $argv.Count -and $argv[$i + 1] -eq 'cuda') { return $true }
     if ($argv[$i] -eq '--device=cuda') { return $true }
@@ -131,12 +138,20 @@ function Test-ParakeetReady {
   return ($LASTEXITCODE -eq 0)
 }
 
+function Test-TorchCudaReady {
+  if (-not (Test-Path $venvPy)) { return $false }
+  & $venvPy -c "import sys, torch; sys.exit(0 if torch.cuda.is_available() else 1)" *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
 $req = Select-Requirements $runArgs
 $reqHash = (Get-FileHash -Algorithm SHA256 $req).Hash
 $wantsParakeet = (Test-LaunchesDictation $runArgs) -and (Test-WantsParakeet)
+$wantsParakeetCuda = $wantsParakeet -and ((Test-WantsCuda $runArgs) -or ((Get-VoicePiConfigValue 'device') -in @($null, '', 'auto') -and (Test-NvidiaPresent)))
 $parakeetReq = Join-Path $here 'requirements-parakeet.txt'
 $parakeetStamp = Join-Path $venv '.requirements-parakeet.sha256'
 $pipInstallArgs = @("--disable-pip-version-check", "--progress-bar", "off")
+$torchCudaIndex = "https://download.pytorch.org/whl/cu121"
 
 function Test-MsvcPy312($exe) {
   if (-not (Test-Path $exe)) { return $false }
@@ -196,6 +211,11 @@ if ($wantsParakeet) {
   if (-not (Test-Path $parakeetReq)) {
     throw "VOICEPI_STT_BACKEND=parakeet is configured, but requirements-parakeet.txt is missing next to setup.ps1"
   }
+  if ($wantsParakeetCuda -and -not (Test-TorchCudaReady)) {
+    Write-Host "Installing CUDA PyTorch for NVIDIA Parakeet..." -ForegroundColor Cyan
+    & $venvPy -m pip install @pipInstallArgs --upgrade --force-reinstall torch torchaudio --index-url $torchCudaIndex
+    if ($LASTEXITCODE -ne 0) { throw "CUDA PyTorch install failed (see error above)" }
+  }
   $parakeetHash = (Get-FileHash -Algorithm SHA256 $parakeetReq).Hash
   $storedParakeetHash = if (Test-Path $parakeetStamp) { (Get-Content $parakeetStamp -Raw).Trim() } else { '' }
   if (($storedParakeetHash -ne $parakeetHash) -or -not (Test-ParakeetReady)) {
@@ -210,3 +230,4 @@ if ($wantsParakeet) {
 Write-Host "Starting whisper-dictate - press Esc (or Ctrl+C) to stop." -ForegroundColor Cyan
 Set-Location $here
 & $venvPy $app $runArgs
+exit $LASTEXITCODE
