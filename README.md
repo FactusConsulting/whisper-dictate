@@ -399,11 +399,13 @@ manifests in this repo (used for the `winget install --manifest` install path).
 For a faster local Windows test loop without creating a release:
 
 ```powershell
-.\scripts\build-windows-installer.ps1 -Variant nvidia -Version 0.0.0-local
+.\scripts\build-windows-installer.ps1 -Variant nvidia -Version 0.0.0.1
 ```
 
 The local installer is written to `Output\`. The script uses Inno Setup 6 and
-installs it via Chocolatey when it is missing.
+installs it via winget, or Chocolatey as a fallback, when it is missing. Use a
+numeric four-part version for local builds because the Windows installer
+metadata rejects labels such as `-local`.
 
 ## Wayland keyboard-layout testing status
 
