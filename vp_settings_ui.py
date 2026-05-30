@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from vp_config import SETTING_BY_KEY, config_path, effective_config, load_config, save_config, touch_reload_signal
-from vp_parakeet import DEFAULT_MODEL as DEFAULT_PARAKEET_MODEL
+from vp_parakeet import DEFAULT_MODEL as DEFAULT_PARAKEET_MODEL, PARAKEET_MODELS
 
 
 def _missing_pyside_error() -> RuntimeError:
@@ -66,6 +66,7 @@ def run_settings_ui() -> int:
             self.resize(860, 680)
             self._controls: dict[str, object] = {}
             self._status = QLabel("")
+            self._settings_buttons: QWidget | None = None
             self._runtime_status = QLabel("Stopped")
             self._runtime_log = QPlainTextEdit()
             self._runtime_log.setReadOnly(True)
@@ -99,13 +100,23 @@ def run_settings_ui() -> int:
             buttons.addWidget(reload_btn)
             buttons.addStretch(1)
             buttons.addWidget(self._status)
+            buttons_w = QWidget()
+            buttons_w.setLayout(buttons)
+            self._settings_buttons = buttons_w
+            tabs.currentChanged.connect(lambda _: self._update_settings_buttons_visibility(tabs))
 
             root = QVBoxLayout()
             root.addWidget(tabs)
-            root.addLayout(buttons)
+            root.addWidget(buttons_w)
             w = QWidget()
             w.setLayout(root)
             self.setCentralWidget(w)
+            self._update_settings_buttons_visibility(tabs)
+
+        def _update_settings_buttons_visibility(self, tabs: QTabWidget) -> None:
+            if self._settings_buttons is None:
+                return
+            self._settings_buttons.setVisible(tabs.tabText(tabs.currentIndex()) != "Runtime")
 
         def _build_runtime_tab(self) -> QWidget:
             start_btn = QPushButton("Start")
@@ -166,7 +177,7 @@ def run_settings_ui() -> int:
             form.addRow("Whisper model", self._combo("model", [
                 "large-v3-turbo", "large-v3", "distil-large-v3", "medium", "small", "base", "tiny"
             ], editable=True))
-            form.addRow("Parakeet model", self._line("parakeet_model"))
+            form.addRow("Parakeet model", self._combo("parakeet_model", PARAKEET_MODELS, editable=True))
             form.addRow("Device", self._combo("device", ["auto", "cuda", "cpu"]))
             form.addRow("Compute type", self._combo("compute_type", [
                 "", "int8_float16", "float16", "bfloat16", "float32", "int8"
@@ -177,19 +188,43 @@ def run_settings_ui() -> int:
 
         def _build_quality_tab(self) -> QWidget:
             form = QFormLayout()
-            form.addRow("Beam size", self._spin("beam_size", 1, 16))
-            form.addRow("Temperature ladder", self._line("temperature"))
-            form.addRow("Context min seconds", self._dspin("context_min_seconds", 0, 60, 0.5))
-            form.addRow("VAD threshold", self._dspin("vad_threshold", 0, 1, 0.05))
-            form.addRow("VAD min silence ms", self._spin("vad_min_silence_ms", 0, 5000))
-            form.addRow("Target dBFS", self._dspin("target_dbfs", -60, 0, 1))
-            form.addRow("Min input dBFS", self._dspin("min_input_dbfs", -90, 0, 1))
-            form.addRow("Min SNR dB", self._dspin("min_snr_db", 0, 80, 1))
+            self._add_help_row(
+                form, "Beam size", self._spin("beam_size", 1, 16),
+                "Higher values can improve Whisper accuracy but increase compute time. Parakeet ignores this.")
+            self._add_help_row(
+                form, "Temperature ladder", self._line("temperature"),
+                "Comma-separated Whisper decode temperatures. 0.0 is deterministic; fallback values can recover uncertain audio.")
+            self._add_help_row(
+                form, "Context min seconds", self._dspin("context_min_seconds", 0, 60, 0.5),
+                "Minimum utterance length before Whisper can condition on previous text. 0 disables contextual carry-over.")
+            self._add_help_row(
+                form, "VAD threshold", self._dspin("vad_threshold", 0, 1, 0.05),
+                "Voice activity sensitivity. Lower catches quieter speech; higher rejects more background noise.")
+            self._add_help_row(
+                form, "VAD min silence ms", self._spin("vad_min_silence_ms", 0, 5000),
+                "Silence duration that ends a speech segment. Higher values wait longer before finalizing text.")
+            self._add_help_row(
+                form, "Target dBFS", self._dspin("target_dbfs", -60, 0, 1),
+                "Audio normalization target volume before transcription. Less negative is louder.")
+            self._add_help_row(
+                form, "Min input dBFS", self._dspin("min_input_dbfs", -90, 0, 1),
+                "Reject recordings below this level as too quiet.")
+            self._add_help_row(
+                form, "Min SNR dB", self._dspin("min_snr_db", 0, 80, 1),
+                "Minimum signal-to-noise ratio. Higher values reject more noisy captures.")
             prompt = QTextEdit()
             prompt.setMaximumHeight(90)
             self._controls["initial_prompt"] = prompt
-            form.addRow("Initial prompt", prompt)
+            self._add_help_row(
+                form, "Initial prompt", prompt,
+                "Short Whisper-only context hint. Prefer dictionary terms for product names and repeated technical words.")
             return self._wrap(form)
+
+        def _add_help_row(self, form: QFormLayout, label: str, control: QWidget, help_text: str) -> None:
+            label_w = QLabel(label)
+            label_w.setToolTip(help_text)
+            control.setToolTip(help_text)
+            form.addRow(label_w, control)
 
         def _build_dictionary_tab(self) -> QWidget:
             form = QFormLayout()

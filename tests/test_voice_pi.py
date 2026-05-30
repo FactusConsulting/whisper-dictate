@@ -1160,6 +1160,15 @@ class STTBackendTests(unittest.TestCase):
             "nvidia/explicit-parakeet",
         )
 
+    def test_parakeet_model_dropdown_options_are_exported(self):
+        import vp_parakeet
+
+        self.assertEqual(vp_parakeet.PARAKEET_MODELS[0], vp_parakeet.DEFAULT_MODEL)
+        self.assertIn("nvidia/parakeet-tdt-0.6b-v3", vp_parakeet.PARAKEET_MODELS)
+        self.assertIn("nvidia/parakeet-tdt-1.1b", vp_parakeet.PARAKEET_MODELS)
+        self.assertIn("nvidia/parakeet-rnnt-1.1b", vp_parakeet.PARAKEET_MODELS)
+        self.assertIn("nvidia/parakeet-ctc-1.1b", vp_parakeet.PARAKEET_MODELS)
+
 
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_setup_warning_escapes_config_path_before_colon(self):
@@ -1319,6 +1328,43 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("whisper-dictate.ico", script)
         self.assertIn("app.setWindowIcon(icon)", script)
         self.assertIn("win.setWindowIcon(icon)", script)
+
+    def test_settings_ui_uses_parakeet_model_dropdown(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("PARAKEET_MODELS", script)
+        self.assertIn('self._combo("parakeet_model", PARAKEET_MODELS, editable=True)', script)
+        self.assertNotIn('self._line("parakeet_model")', script)
+
+    def test_settings_buttons_are_hidden_on_runtime_tab(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("self._settings_buttons", script)
+        self.assertIn("currentChanged.connect", script)
+        self.assertIn("def _update_settings_buttons_visibility", script)
+        self.assertIn('tabs.tabText(tabs.currentIndex()) != "Runtime"', script)
+
+    def test_quality_tab_has_mouseover_help(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("def _add_help_row", script)
+        self.assertIn("label_w.setToolTip(help_text)", script)
+        self.assertIn("control.setToolTip(help_text)", script)
+        for label in (
+            "Beam size",
+            "Temperature ladder",
+            "Context min seconds",
+            "VAD threshold",
+            "VAD min silence ms",
+            "Target dBFS",
+            "Min input dBFS",
+            "Min SNR dB",
+            "Initial prompt",
+        ):
+            self.assertIn(label, script)
 
     def test_settings_ui_launcher_bootstraps_before_installing_ui_deps(self):
         with open("settings-ui.ps1", encoding="utf-8") as f:

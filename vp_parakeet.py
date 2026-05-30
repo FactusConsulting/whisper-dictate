@@ -16,6 +16,16 @@ import numpy as np
 
 SR = 16000
 DEFAULT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
+PARAKEET_MODELS = [
+    DEFAULT_MODEL,
+    "nvidia/parakeet-tdt-0.6b-v2",
+    "nvidia/parakeet-tdt-1.1b",
+    "nvidia/parakeet-tdt_ctc-1.1b",
+    "nvidia/parakeet-rnnt-1.1b",
+    "nvidia/parakeet-rnnt-0.6b",
+    "nvidia/parakeet-ctc-1.1b",
+    "nvidia/parakeet-ctc-0.6b",
+]
 WHISPER_DEFAULT_MODEL = "large-v3-turbo"
 
 
@@ -56,7 +66,7 @@ def _cuda_torch_error() -> RuntimeError:
         "VOICEPI_STT_BACKEND=parakeet with --device cuda requires a "
         "CUDA-enabled PyTorch wheel, but the installed torch build is CPU-only. "
         "Run setup.ps1 again after installing the latest whisper-dictate, or "
-        "install manually: python -m pip install --upgrade --force-reinstall "
+        "install manually: python -m pip install --upgrade "
         "torch torchaudio --index-url https://download.pytorch.org/whl/cu121"
     )
 
