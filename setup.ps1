@@ -136,6 +136,7 @@ $reqHash = (Get-FileHash -Algorithm SHA256 $req).Hash
 $wantsParakeet = (Test-LaunchesDictation $runArgs) -and (Test-WantsParakeet)
 $parakeetReq = Join-Path $here 'requirements-parakeet.txt'
 $parakeetStamp = Join-Path $venv '.requirements-parakeet.sha256'
+$pipInstallArgs = @("--disable-pip-version-check", "--progress-bar", "off")
 
 function Test-MsvcPy312($exe) {
   if (-not (Test-Path $exe)) { return $false }
@@ -183,9 +184,9 @@ if (-not $venvOk) {
   if (Test-Path $venv) { Remove-Item -Recurse -Force $venv }
   & $py -m venv $venv
   if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
-  & $venvPy -m pip install --upgrade pip
+  & $venvPy -m pip install @pipInstallArgs --upgrade pip
   if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
-  & $venvPy -m pip install -r $req
+  & $venvPy -m pip install @pipInstallArgs -r $req
   if ($LASTEXITCODE -ne 0) { throw "dependency install failed (see error above)" }
   Set-Content -Path $reqStamp -Value $reqHash -Encoding ASCII
   Write-Host "Setup complete." -ForegroundColor Green
@@ -199,7 +200,7 @@ if ($wantsParakeet) {
   $storedParakeetHash = if (Test-Path $parakeetStamp) { (Get-Content $parakeetStamp -Raw).Trim() } else { '' }
   if (($storedParakeetHash -ne $parakeetHash) -or -not (Test-ParakeetReady)) {
     Write-Host "Installing optional NVIDIA Parakeet dependencies..." -ForegroundColor Cyan
-    & $venvPy -m pip install -r $parakeetReq
+    & $venvPy -m pip install @pipInstallArgs -r $parakeetReq
     if ($LASTEXITCODE -ne 0) { throw "Parakeet dependency install failed (see error above)" }
     Set-Content -Path $parakeetStamp -Value $parakeetHash -Encoding ASCII
   }

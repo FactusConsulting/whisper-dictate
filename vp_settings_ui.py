@@ -1,6 +1,7 @@
 """Optional PySide/Qt settings UI for whisper-dictate."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,12 +18,12 @@ def _missing_pyside_error() -> RuntimeError:
 
 def run_settings_ui() -> int:
     try:
-        from PySide6.QtCore import Qt
-        from PySide6.QtGui import QAction, QIcon
+        from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
+        from PySide6.QtGui import QAction, QIcon, QTextCursor
         from PySide6.QtWidgets import (
             QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
             QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-            QPushButton, QSpinBox, QDoubleSpinBox, QSystemTrayIcon,
+            QPlainTextEdit, QPushButton, QSpinBox, QDoubleSpinBox, QSystemTrayIcon,
             QTabWidget, QTextEdit, QVBoxLayout, QWidget,
         )
     except ImportError as exc:
@@ -34,14 +35,26 @@ def run_settings_ui() -> int:
         def __init__(self):
             super().__init__()
             self.setWindowTitle("whisper-dictate settings")
-            self.resize(760, 560)
+            self.resize(860, 680)
             self._controls: dict[str, object] = {}
             self._status = QLabel("")
+            self._runtime_status = QLabel("Stopped")
+            self._runtime_log = QPlainTextEdit()
+            self._runtime_log.setReadOnly(True)
+            self._runtime_log.setMaximumBlockCount(2000)
+            self._runtime_proc: QProcess | None = None
+            self._restart_after_stop = False
+            self._quit_after_stop = False
             self._build()
             self._load()
+            if os.name == "nt" and (os.environ.get("VOICEPI_UI_AUTOSTART") or "1").lower() not in (
+                "0", "false", "no", "off"):
+                QTimer.singleShot(0, self.start_runtime)
 
         def _build(self) -> None:
             tabs = QTabWidget()
+            if os.name == "nt":
+                tabs.addTab(self._build_runtime_tab(), "Runtime")
             tabs.addTab(self._build_core_tab(), "Core")
             tabs.addTab(self._build_quality_tab(), "Quality")
             tabs.addTab(self._build_dictionary_tab(), "Dictionary")
@@ -64,6 +77,28 @@ def run_settings_ui() -> int:
             w = QWidget()
             w.setLayout(root)
             self.setCentralWidget(w)
+
+        def _build_runtime_tab(self) -> QWidget:
+            start_btn = QPushButton("Start")
+            start_btn.clicked.connect(self.start_runtime)
+            stop_btn = QPushButton("Stop")
+            stop_btn.clicked.connect(self.stop_runtime)
+            restart_btn = QPushButton("Restart")
+            restart_btn.clicked.connect(self.restart_runtime)
+
+            row = QHBoxLayout()
+            row.addWidget(start_btn)
+            row.addWidget(stop_btn)
+            row.addWidget(restart_btn)
+            row.addStretch(1)
+            row.addWidget(self._runtime_status)
+
+            root = QVBoxLayout()
+            root.addLayout(row)
+            root.addWidget(self._runtime_log)
+            w = QWidget()
+            w.setLayout(root)
+            return w
 
         def _combo(self, key: str, values: list[str], editable: bool = False) -> QComboBox:
             c = QComboBox()
@@ -217,20 +252,137 @@ def run_settings_ui() -> int:
             return out
 
         def save(self) -> None:
+            before = effective_config()
             data = load_config()
             collected = self._collect()
+            for key in self._controls:
+                if key in SETTING_BY_KEY and key not in collected:
+                    data.pop(key, None)
             if "parakeet_model" not in collected and data.get("parakeet_model") == DEFAULT_PARAKEET_MODEL:
                 data.pop("parakeet_model", None)
             data.update(collected)
             path = save_config(data)
             ensure_dictionary_file(Path(data["dictionary"])) if data.get("dictionary") else ensure_dictionary_file()
-            self.signal_reload(show=False)
+            after = effective_config()
+            restart_keys = {s.key for s in SETTING_BY_KEY.values() if not s.live}
+            changed_restart = [k for k in sorted(restart_keys) if before.get(k) != after.get(k)]
+            if changed_restart and self._is_runtime_running():
+                self._append_runtime_log(
+                    "[ui] restart required after settings change: "
+                    + ", ".join(changed_restart))
+                self.restart_runtime()
+            else:
+                self.signal_reload(show=False)
             self._status.setText(f"Saved: {path}")
 
         def signal_reload(self, show: bool = True) -> None:
             path = touch_reload_signal()
             if show:
                 QMessageBox.information(self, "Reload signalled", f"Runtime reload signal written:\n{path}")
+
+        def _is_runtime_running(self) -> bool:
+            return bool(self._runtime_proc and self._runtime_proc.state() != QProcess.ProcessState.NotRunning)
+
+        def _runtime_command(self) -> tuple[str, list[str]]:
+            here = Path(__file__).resolve().parent
+            setup = here / "setup.ps1"
+            if os.name == "nt" and setup.exists():
+                return "powershell.exe", [
+                    "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(setup),
+                ]
+            return sys.executable, [str(here / "voice_pi.py")]
+
+        def _append_runtime_log(self, text: str) -> None:
+            self._runtime_log.appendPlainText(text.rstrip())
+            self._runtime_log.moveCursor(QTextCursor.MoveOperation.End)
+            self._runtime_log.ensureCursorVisible()
+
+        def start_runtime(self) -> None:
+            if self._is_runtime_running():
+                return
+            program, args = self._runtime_command()
+            proc = QProcess(self)
+            proc.setProgram(program)
+            proc.setArguments(args)
+            proc.setWorkingDirectory(str(Path(__file__).resolve().parent))
+            proc.setProcessChannelMode(QProcess.MergedChannels)
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("PYTHONUNBUFFERED", "1")
+            env.insert("PIP_PROGRESS_BAR", "off")
+            env.insert("VOICEPI_MANAGED_BY_UI", "1")
+            proc.setProcessEnvironment(env)
+            proc.readyReadStandardOutput.connect(self._read_runtime_output)
+            proc.started.connect(lambda: self._runtime_status.setText("Running"))
+            proc.finished.connect(self._runtime_finished)
+            self._runtime_proc = proc
+            self._append_runtime_log(f"[ui] starting: {program} {' '.join(args)}")
+            proc.start()
+
+        def stop_runtime(self) -> None:
+            if not self._is_runtime_running():
+                self._runtime_status.setText("Stopped")
+                return
+            assert self._runtime_proc is not None
+            self._runtime_status.setText("Stopping")
+            self._runtime_proc.terminate()
+            QTimer.singleShot(3000, self._kill_runtime_if_needed)
+
+        def restart_runtime(self) -> None:
+            self._restart_after_stop = True
+            if self._is_runtime_running():
+                self.stop_runtime()
+            else:
+                self.start_runtime()
+
+        def _kill_runtime_if_needed(self) -> None:
+            if self._is_runtime_running() and self._runtime_proc is not None:
+                self._append_runtime_log("[ui] runtime did not stop cleanly; killing process")
+                self._runtime_proc.kill()
+
+        def _read_runtime_output(self) -> None:
+            if self._runtime_proc is None:
+                return
+            data = bytes(self._runtime_proc.readAllStandardOutput()).decode(
+                errors="replace")
+            if not data:
+                return
+            if "Installing optional NVIDIA Parakeet dependencies" in data:
+                self._runtime_status.setText("Installing Parakeet dependencies")
+            elif "Setting up whisper-dictate" in data:
+                self._runtime_status.setText("Installing dependencies")
+            elif "model ready" in data:
+                self._runtime_status.setText("Ready")
+            elif "listening" in data:
+                self._runtime_status.setText("Listening")
+            self._append_runtime_log(data)
+
+        def _runtime_finished(self, code: int, status) -> None:
+            self._runtime_status.setText(f"Stopped ({code})" if code else "Stopped")
+            self._append_runtime_log(f"[ui] runtime exited with code {code}")
+            self._runtime_proc = None
+            if self._quit_after_stop:
+                app = QApplication.instance()
+                if app is not None:
+                    app.quit()
+                return
+            if self._restart_after_stop:
+                self._restart_after_stop = False
+                QTimer.singleShot(250, self.start_runtime)
+
+        def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+            self.hide()
+            event.ignore()
+
+        def quit_app(self) -> None:
+            self._restart_after_stop = False
+            if self._is_runtime_running():
+                self._quit_after_stop = True
+                self.stop_runtime()
+                return
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -247,7 +399,7 @@ def run_settings_ui() -> int:
     dict_action = QAction("Open dictionary", tray)
     dict_action.triggered.connect(lambda: open_dictionary())
     quit_action = QAction("Quit UI", tray)
-    quit_action.triggered.connect(app.quit)
+    quit_action.triggered.connect(win.quit_app)
     menu.addAction(show_action)
     menu.addAction(dict_action)
     menu.addSeparator()

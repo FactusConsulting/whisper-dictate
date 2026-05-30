@@ -19,6 +19,15 @@ DEFAULT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
 WHISPER_DEFAULT_MODEL = "large-v3-turbo"
 
 
+def resolve_parakeet_model_name(model_name: str | None = None) -> str:
+    explicit = os.environ.get("VOICEPI_PARAKEET_MODEL")
+    if explicit:
+        return explicit
+    if model_name and ("/" in model_name or "parakeet" in model_name.lower()):
+        return model_name
+    return DEFAULT_MODEL
+
+
 @dataclass
 class ParakeetSegment:
     text: str
@@ -73,13 +82,7 @@ class ParakeetModel:
         except ImportError as exc:
             raise _missing_deps_error() from exc
 
-        explicit = os.environ.get("VOICEPI_PARAKEET_MODEL")
-        if explicit:
-            self.model_name = explicit
-        elif not model_name or model_name == WHISPER_DEFAULT_MODEL:
-            self.model_name = DEFAULT_MODEL
-        else:
-            self.model_name = model_name
+        self.model_name = resolve_parakeet_model_name(model_name)
         self.device = device
         self.compute_type = compute_type
         self._model = nemo_asr.models.ASRModel.from_pretrained(

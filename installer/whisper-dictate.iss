@@ -59,12 +59,13 @@ Source: "..\scripts\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignorever
 Source: "..\{#REQFILE}";               DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\setup.cmd"
+Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"
 Name: "{userprograms}\whisper-dictate\Settings UI";        Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"
+Name: "{userprograms}\whisper-dictate\Terminal launcher";  Filename: "{app}\setup.cmd"
 Name: "{userprograms}\whisper-dictate\Uninstall";          Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\setup.cmd"; Description: "Run first-time setup now (downloads ~1.5 GB model)"; \
+Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; Description: "Launch whisper-dictate now"; \
   Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]

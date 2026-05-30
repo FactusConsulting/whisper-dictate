@@ -220,8 +220,11 @@ the right first Parakeet candidate for mixed Danish/English dictation.
 ### Optional PySide/Qt settings UI
 
 Install the optional UI dependency into the same venv, then open the settings
-window. The Windows installer also adds a Start-menu **Settings UI** shortcut
-which runs the UI without leaving a terminal window open:
+window. On Windows, the installer adds a Start-menu **whisper-dictate**
+shortcut which opens a unified control UI: it starts/stops dictation, shows the
+runtime log, saves settings and restarts dictation automatically when a
+restart-only setting changes. On Linux/macOS the UI remains settings-only; keep
+the normal terminal dictation process for now.
 
 ```powershell
 & "$env:USERPROFILE\voice-pi-venv\Scripts\python.exe" -m pip install `
@@ -234,7 +237,8 @@ can open the dictionary file, and writes a reload signal after saving. A
 running dictation process applies live-safe changes on the next record
 start/stop: language, inject mode, dictionary, VAD, audio thresholds, prompt,
 JSON/metrics and debug flags. Backend, model, device, compute type and hotkey
-are saved but require restart/model reload.
+are restart-only; the Windows control UI restarts its managed dictation process
+for those changes.
 
 To signal a manual reload without the UI:
 

@@ -1090,6 +1090,67 @@ class STTBackendTests(unittest.TestCase):
         self.assertEqual(segments[0].text, "hello")
         self.assertIsNone(info.language)
 
+    def test_parakeet_ignores_whisper_model_names_without_explicit_override(self):
+        calls = {}
+        fake_np = types.ModuleType("numpy")
+        sys.modules["numpy"] = fake_np
+
+        class ASRModel:
+            @staticmethod
+            def from_pretrained(model_name):
+                calls["model_name"] = model_name
+                return types.SimpleNamespace()
+
+        asr = types.ModuleType("nemo.collections.asr")
+        asr.models = types.SimpleNamespace(ASRModel=ASRModel)
+        sys.modules["nemo"] = types.ModuleType("nemo")
+        sys.modules["nemo.collections"] = types.ModuleType("nemo.collections")
+        sys.modules["nemo.collections.asr"] = asr
+
+        import vp_parakeet
+
+        vp_parakeet.ParakeetModel("large-v3", device="cuda")
+
+        self.assertEqual(
+            calls["model_name"], "nvidia/parakeet-tdt-0.6b-v3")
+
+    def test_parakeet_accepts_explicit_nvidia_model_name(self):
+        import vp_parakeet
+
+        self.assertEqual(
+            vp_parakeet.resolve_parakeet_model_name("nvidia/custom-parakeet"),
+            "nvidia/custom-parakeet",
+        )
+
+    def test_parakeet_env_override_wins_over_whisper_model_name(self):
+        os.environ["VOICEPI_PARAKEET_MODEL"] = "nvidia/explicit-parakeet"
+        import vp_parakeet
+
+        self.assertEqual(
+            vp_parakeet.resolve_parakeet_model_name("large-v3"),
+            "nvidia/explicit-parakeet",
+        )
+
+
+class WindowsLauncherRegressionTests(unittest.TestCase):
+    def test_setup_warning_escapes_config_path_before_colon(self):
+        with open("setup.ps1", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("Could not read config ${cfg}: $_", script)
+        self.assertNotIn("Could not read config $cfg: $_", script)
+
+    def test_settings_ui_does_not_trigger_parakeet_dependency_install(self):
+        with open("setup.ps1", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("function Test-LaunchesDictation", script)
+        self.assertIn("'--settings-ui'", script)
+        self.assertIn(
+            "$wantsParakeet = (Test-LaunchesDictation $runArgs) -and (Test-WantsParakeet)",
+            script,
+        )
+
 
 class DictionaryTests(unittest.TestCase):
     def setUp(self):

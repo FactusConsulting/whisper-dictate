@@ -569,11 +569,8 @@ if __name__ == "__main__":
     label = "NVIDIA Parakeet" if backend == "parakeet" else "Whisper"
     loaded_model_name = a.model
     if backend == "parakeet":
-        loaded_model_name = (
-            os.environ.get("VOICEPI_PARAKEET_MODEL")
-            or ("nvidia/parakeet-tdt-0.6b-v3"
-                if a.model == "large-v3-turbo" else a.model)
-        )
+        from vp_parakeet import resolve_parakeet_model_name
+        loaded_model_name = resolve_parakeet_model_name(a.model)
     print(f"loading {label} {loaded_model_name} on {dev} ({ctype})… "
           f"first run downloads the model", flush=True)
     if dev == "cpu":

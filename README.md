@@ -150,7 +150,10 @@ Download the `.exe` installer from
 - **`whisper-dictate-windows-nvidia-setup-<version>.exe`** — NVIDIA GPU acceleration
 
 Double-click the installer. It installs to `%LOCALAPPDATA%\Programs\WhisperDictate`
-(no admin required) and adds the directory to your user PATH.
+(no admin required), adds the directory to your user PATH, and creates a
+Start-menu **whisper-dictate** shortcut. On Windows that shortcut opens the
+unified control UI: runtime start/stop/restart, settings, dictionary access and
+logs in one window.
 
 ### Verify the download
 
@@ -211,7 +214,9 @@ winget install --manifest .\whisper-dictate\manifests
 ### Install manually (zip)
 
 Download the zip from [GitHub Releases](https://github.com/FactusConsulting/whisper-dictate/releases/latest),
-unzip anywhere, and double-click **`setup.cmd`**.
+unzip anywhere, and double-click **`settings-ui.vbs`** for the unified Windows
+control UI. Use **`setup.cmd`** when you explicitly want the classic terminal
+launcher.
 
 First-time setup downloads Python 3.12 via winget (if needed), builds a
 local venv, and downloads the Whisper model (~1.5 GB).
@@ -222,7 +227,11 @@ local venv, and downloads the Whisper model (~1.5 GB).
 setup.cmd --key ctrl_r --lang en
 ```
 
-Or after first-time setup, launch directly:
+Or use the Start-menu **whisper-dictate** shortcut to run dictation and settings
+from one UI. The **Terminal launcher** shortcut remains available for debugging
+or classic terminal use.
+
+After first-time setup, launch directly:
 
 ```powershell
 setup.cmd --key ctrl_r --lang da
@@ -328,13 +337,16 @@ Optional Parakeet backend: install `requirements-parakeet.txt`, then set
 `VOICEPI_STT_BACKEND=parakeet`. NeMo is imported lazily, so default Whisper
 runs and `--doctor` do not need Parakeet dependencies.
 
-Optional PySide/Qt settings UI: use the Start-menu **Settings UI** shortcut, or
-install `requirements-ui.txt` and run `setup.ps1 --settings-ui`. The UI writes
-`%APPDATA%\WhisperDictate\config.json`, keeps a tray icon alive, and signals
-the running dictation process to reload live-safe settings such as language,
-dictionary, VAD, audio thresholds and injection mode. Backend/model/device
-changes are saved but require restart/model reload. The shortcut logs first-run
-UI setup to `%APPDATA%\WhisperDictate\settings-ui.log`.
+Optional PySide/Qt settings UI: on Windows, use the Start-menu
+**whisper-dictate** shortcut. It owns the dictation process, shows the runtime
+log, hides dependency install progress behind the UI, and restarts dictation
+when backend/model/device/hotkey settings change. On Linux/macOS, install
+`requirements-ui.txt` and run `setup.ps1 --settings-ui` or
+`python voice_pi.py --settings-ui`; the terminal dictation process remains
+separate for now. The UI writes `%APPDATA%\WhisperDictate\config.json` on
+Windows and signals live-safe setting reloads such as language, dictionary,
+VAD, audio thresholds and injection mode. The shortcut logs first-run UI setup
+to `%APPDATA%\WhisperDictate\settings-ui.log`.
 
 The `[gate]` line shows whether the raw input was accepted before gain
 boost. The `[cap]` line prints loudness, gain, noise floor and **SNR** per
