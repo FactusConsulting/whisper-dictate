@@ -95,7 +95,7 @@ function Get-VoicePiConfigValue([string]$key) {
       return [string]$prop.Value
     }
   } catch {
-    Write-Warning "Could not read config $cfg: $_"
+    Write-Warning "Could not read config ${cfg}: $_"
   }
   return $null
 }
