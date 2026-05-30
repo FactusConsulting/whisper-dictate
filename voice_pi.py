@@ -113,6 +113,7 @@ from vp_keymap import (  # noqa: E402
 from vp_metrics import append_jsonl, base_event, compact_text, emit_json  # noqa: E402
 from vp_history import append_history  # noqa: E402
 from vp_version import VERSION  # noqa: E402
+from vp_privacy import apply_local_only_network_lock  # noqa: E402
 from vp_config import (  # noqa: E402
     apply_config_to_environ, config_mtime, effective_config, load_config,
 )
@@ -644,6 +645,9 @@ if __name__ == "__main__":
         dev, ctype = _resolve_device(a.device)
     except ValueError as e:
         ap.error(str(e))
+
+    if apply_local_only_network_lock():
+        print("[privacy] local-only mode enabled; cloud backends and model downloads are blocked", flush=True)
 
     _load_runtime_modules()
 

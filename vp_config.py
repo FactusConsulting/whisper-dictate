@@ -53,6 +53,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOICEPI_METRICS_JSONL", "metrics_jsonl", None, live=True),
     Setting("VOICEPI_HISTORY_ENABLED", "history_enabled", "1", live=True),
     Setting("VOICEPI_HISTORY_JSONL", "history_jsonl", None, live=True),
+    Setting("VOICEPI_LOCAL_ONLY", "local_only", None, live=False),
     Setting("VOICEPI_DEBUG", "debug", None, live=True),
     Setting("VOICEPI_STT_DEBUG", "stt_debug", None, live=True),
     Setting("VOICEPI_QUIT_COUNT", "quit_count", "3", live=False),

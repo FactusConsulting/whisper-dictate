@@ -11,8 +11,10 @@ import os
 
 from vp_config import apply_config_to_environ, get_value
 from vp_device import VALID_DEVICES
+from vp_privacy import apply_local_only_network_lock, local_only_enabled
 
 apply_config_to_environ()
+apply_local_only_network_lock()
 
 MODEL_NAME = get_value("VOICEPI_MODEL", "large-v3-turbo")
 DEVICE = get_value("VOICEPI_DEVICE", "auto")
@@ -199,6 +201,7 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("inject mode",      f"{args.mode}  (env VOICEPI_INJECT_MODE={_env('VOICEPI_INJECT_MODE')})"),
         ("json output",      f"{getattr(args, 'json', False)}  (env VOICEPI_JSON={_env('VOICEPI_JSON')})"),
         ("metrics jsonl",    f"{_env('VOICEPI_METRICS_JSONL')}  (env VOICEPI_METRICS_JSONL)"),
+        ("local only",       f"{local_only_enabled()}  (env VOICEPI_LOCAL_ONLY={_env('VOICEPI_LOCAL_ONLY')})"),
         ("stt debug",        f"{_env('VOICEPI_STT_DEBUG')}  (env VOICEPI_STT_DEBUG)"),
     ]
     print("[debug] effective settings:", flush=True)

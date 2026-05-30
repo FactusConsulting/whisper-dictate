@@ -25,7 +25,7 @@ except OSError:
 def load_voice_pi(cuda_devices: int = 0):
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
                  "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
-                 "vp_config", "vp_settings_ui",
+                 "vp_config", "vp_privacy", "vp_settings_ui",
                  "ctranslate2", "faster_whisper", "numpy",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -63,7 +63,7 @@ def load_voice_pi_realnp():
     heavy/uninstalled deps stubbed. CI installs numpy (see tests workflow)."""
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
                  "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
-                 "vp_config", "vp_settings_ui",
+                 "vp_config", "vp_privacy", "vp_settings_ui",
                  "ctranslate2", "faster_whisper",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -1263,6 +1263,78 @@ class STTBackendTests(unittest.TestCase):
         transcribe = script.index("result = self._call_transcribe(path)")
         self.assertLess(script.rfind("with _nemo_output_context():", 0, load), load)
         self.assertLess(script.rfind("with _nemo_output_context():", 0, transcribe), transcribe)
+
+
+class PrivacyModeTests(unittest.TestCase):
+    def setUp(self):
+        self._old = {k: os.environ.pop(k, None) for k in (
+            "VOICEPI_LOCAL_ONLY", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE",
+            "HF_DATASETS_OFFLINE", "HF_HUB_DISABLE_TELEMETRY",
+            "WANDB_DISABLED", "WANDB_MODE",
+        )}
+        for n in ("vp_privacy", "vp_config", "vp_cli", "vp_transcribe"):
+            sys.modules.pop(n, None)
+
+    def tearDown(self):
+        for k in self._old:
+            os.environ.pop(k, None)
+        for k, v in self._old.items():
+            if v is not None:
+                os.environ[k] = v
+        for n in ("vp_privacy", "vp_config", "vp_cli", "vp_transcribe"):
+            sys.modules.pop(n, None)
+
+    def test_local_only_applies_offline_environment_gates(self):
+        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
+        import vp_privacy
+
+        self.assertTrue(vp_privacy.apply_local_only_network_lock())
+        self.assertEqual(os.environ["HF_HUB_OFFLINE"], "1")
+        self.assertEqual(os.environ["TRANSFORMERS_OFFLINE"], "1")
+        self.assertEqual(os.environ["HF_DATASETS_OFFLINE"], "1")
+        self.assertEqual(os.environ["HF_HUB_DISABLE_TELEMETRY"], "1")
+        self.assertEqual(os.environ["WANDB_DISABLED"], "true")
+        self.assertEqual(os.environ["WANDB_MODE"], "offline")
+
+    def test_local_only_does_not_override_existing_offline_values(self):
+        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
+        os.environ["HF_HUB_OFFLINE"] = "custom"
+        import vp_privacy
+
+        vp_privacy.apply_local_only_network_lock()
+
+        self.assertEqual(os.environ["HF_HUB_OFFLINE"], "custom")
+
+    def test_local_only_blocks_cloud_backends(self):
+        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
+        import vp_privacy
+
+        with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
+            vp_privacy.assert_local_backend("openai:gpt-4o-transcribe")
+
+    def test_local_only_allows_current_local_backends(self):
+        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
+        import vp_privacy
+
+        for backend in ("whisper", "faster-whisper", "parakeet"):
+            vp_privacy.assert_local_backend(backend)
+
+    def test_local_only_is_registered_as_config_setting(self):
+        import vp_config
+
+        self.assertIn("VOICEPI_LOCAL_ONLY", vp_config.SETTING_BY_ENV)
+        self.assertEqual(
+            vp_config.SETTING_BY_ENV["VOICEPI_LOCAL_ONLY"].key,
+            "local_only",
+        )
+        self.assertFalse(vp_config.SETTING_BY_ENV["VOICEPI_LOCAL_ONLY"].live)
+
+    def test_debug_dump_reports_local_only_setting(self):
+        with open("vp_cli.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn('"local only"', script)
+        self.assertIn("VOICEPI_LOCAL_ONLY", script)
 
 
 class WindowsLauncherRegressionTests(unittest.TestCase):

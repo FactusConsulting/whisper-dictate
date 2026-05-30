@@ -347,6 +347,9 @@ def run_settings_ui() -> int:
                 form, "Metrics JSONL", self._line("metrics_jsonl"),
                 "Append one JSON object per utterance to this file, including timings, backend, model, language and injection metadata.")
             self._add_help_row(
+                form, "Local only", self._check("local_only"),
+                "Block cloud/BYOK providers and force Hugging Face/Transformers offline mode. Local models must already be downloaded.")
+            self._add_help_row(
                 form, "VOICEPI_DEBUG", self._check("debug"),
                 "Print the effective startup settings before model load. Useful for verifying config/env values.")
             self._add_help_row(

@@ -327,6 +327,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_METRICS_JSONL` | _(unset)_ | append one JSON metrics event per accepted utterance to this file |
 | `VOICEPI_HISTORY_ENABLED` | `1` | store accepted live dictations in local history |
 | `VOICEPI_HISTORY_JSONL` | user state path | override the local history JSONL path |
+| `VOICEPI_LOCAL_ONLY` | _(unset)_ | `1` → block cloud/BYOK backends and force model libraries offline; local models must already be downloaded |
 | `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty value → keep interactive terminal status lines plain |
 | `VOICEPI_VAD_THRESHOLD` | `0.3` | Silero VAD speech threshold passed to faster-whisper |

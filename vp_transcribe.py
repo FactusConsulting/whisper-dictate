@@ -17,8 +17,10 @@ import numpy as np
 from vp_audio import _boost_quiet, _looks_like_speech
 from vp_config import apply_config_to_environ, get_value
 from vp_dictionary import DICTIONARY
+from vp_privacy import apply_local_only_network_lock, assert_local_backend
 
 apply_config_to_environ()
+apply_local_only_network_lock()
 
 SR = 16000
 
@@ -75,6 +77,7 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
     Parakeet path imports NeMo only after VOICEPI_STT_BACKEND=parakeet is set.
     """
     backend = STT_BACKEND
+    assert_local_backend(backend)
     if backend not in VALID_STT_BACKENDS:
         raise ValueError(
             "invalid VOICEPI_STT_BACKEND="
