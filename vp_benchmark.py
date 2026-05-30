@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 from vp_config import get_value
 from vp_corpus import annotate_event, load_corpus, skipped_event
+from vp_device import _resolve_device
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,67 @@ def run_one(
     return event
 
 
+def _load_model_for_spec(spec: BackendSpec) -> tuple[Any, str, str, str]:
+    device, compute_type = _resolve_device(get_value("VOICEPI_DEVICE", "auto") or "auto")
+    if spec.backend == "parakeet":
+        from vp_parakeet import ParakeetModel, resolve_parakeet_model_name
+        model_name = resolve_parakeet_model_name(spec.model)
+        return (
+            ParakeetModel(model_name, device=device, compute_type=compute_type),
+            model_name,
+            device,
+            compute_type,
+        )
+
+    from faster_whisper import WhisperModel
+    model_name = spec.model or get_value("VOICEPI_MODEL", "large-v3-turbo")
+    return (
+        WhisperModel(model_name, device=device, compute_type=compute_type),
+        model_name,
+        device,
+        compute_type,
+    )
+
+
+def _run_loaded_model(audio_file: str | Path, item: Any | None, spec: BackendSpec,
+                      loaded: tuple[Any, str, str, str]) -> dict[str, Any]:
+    from vp_file_transcribe import transcribe_file_event
+
+    model, model_name, device, compute_type = loaded
+    lang = getattr(item, "language", None) or get_value("VOICEPI_LANG")
+    t0 = time.monotonic()
+    try:
+        event = transcribe_file_event(
+            model,
+            audio_file,
+            lang,
+            model_name=model_name,
+            stt_backend=spec.backend,
+            device=device,
+            compute_type=compute_type,
+        )
+        success = bool(event.get("text"))
+        returncode = 0
+    except Exception as exc:  # noqa: BLE001 - benchmarks should record failures
+        event = {
+            "event": "benchmark_result",
+            "text": "",
+            "raw_text": "",
+            "source_file": str(audio_file),
+            "benchmark_error": str(exc),
+        }
+        success = False
+        returncode = 1
+
+    event.update({
+        "event": "benchmark_result",
+        "benchmark_elapsed_s": time.monotonic() - t0,
+        "benchmark_success": success,
+        "benchmark_returncode": returncode,
+    })
+    return event
+
+
 def run_benchmark(
     audio_files: Iterable[str | Path] | None,
     backend_specs: str | Iterable[str] | None = None,
@@ -137,14 +199,18 @@ def run_benchmark(
             out_path = Path(output_jsonl)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             sink = out_path.open("a", encoding="utf-8")
-        for audio_file, item in work:
-            for spec in specs:
+        for spec in specs:
+            loaded = None
+            if corpus_items and any(Path(audio_file).exists() for audio_file, _ in work):
+                loaded = _load_model_for_spec(spec)
+            for audio_file, item in work:
                 if item is not None and not Path(audio_file).exists():
                     event = skipped_event(item, "audio file missing")
+                elif item is not None:
+                    event = _run_loaded_model(audio_file, item, spec, loaded)
+                    annotate_event(event, item)
                 else:
                     event = run_one(audio_file, spec)
-                    if item is not None:
-                        annotate_event(event, item)
                 event.update({
                     "benchmark_backend_spec": spec.raw,
                     "benchmark_backend": spec.backend,

@@ -2055,6 +2055,49 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIsNone(rows[0]["benchmark_model"])
         self.assertEqual(rows[0]["term_misses"], ["Codex"])
 
+    def test_benchmark_corpus_reuses_loaded_model_per_backend(self):
+        import vp_benchmark
+
+        manifest = {
+            "audio_dir": "audio",
+            "items": [
+                {"id": "one", "language": "da", "text": "Hej Codex", "terms": ["Codex"]},
+                {"id": "two", "language": "en", "text": "Hello Claude Code", "terms": ["Claude Code"]},
+            ]
+        }
+        calls = []
+
+        def fake_transcribe(model, path, lang, **kwargs):
+            calls.append((model, Path(path).name, lang, kwargs["stt_backend"]))
+            text = "Hej Codex" if lang == "da" else "Hello Claude Code"
+            return {"event": "file_transcription", "text": text, "source_file": str(path)}
+
+        with tempfile.TemporaryDirectory() as d:
+            manifest_path = Path(d) / "corpus.json"
+            audio_dir = Path(d) / "audio"
+            audio_dir.mkdir()
+            for name in ("one.wav", "two.wav"):
+                (audio_dir / name).write_bytes(b"not used by patched transcriber")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            try:
+                with patch("vp_benchmark._load_model_for_spec", return_value=("model", "m", "cpu", "int8")) as load:
+                    with patch("vp_file_transcribe.transcribe_file_event", side_effect=fake_transcribe):
+                        results = vp_benchmark.run_benchmark(
+                            None,
+                            "whisper:tiny",
+                            corpus_manifest=manifest_path,
+                        )
+            finally:
+                sys.modules.pop("vp_file_transcribe", None)
+                sys.modules.pop("vp_transcribe", None)
+
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([c[2] for c in calls], ["da", "en"])
+        self.assertTrue(all(r["benchmark_success"] for r in results))
+        self.assertEqual(results[1]["term_hits"], ["Claude Code"])
+
     def test_record_corpus_imports_sounddevice_lazily_with_help(self):
         with open("scripts/record-corpus.py", encoding="utf-8") as f:
             script = f.read()
