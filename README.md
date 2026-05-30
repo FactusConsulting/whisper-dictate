@@ -352,11 +352,15 @@ python voice_pi.py --transcribe-file sample.wav --json
 python voice_pi.py --benchmark-files sample.wav `
   --benchmark-backends "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3" `
   --benchmark-jsonl benchmark.jsonl
+python voice_pi.py --calibrate-mic 5
+python voice_pi.py --calibrate-file sample.wav --json
 ```
 
 16-bit WAV works without extra tools. Other formats such as mp3/m4a require
 `ffmpeg` on `PATH`. Benchmark mode runs each backend/model spec in an isolated
 child process and writes one JSONL result per file/backend, including failures.
+Calibration prints raw dBFS, noise floor, SNR, peak and recommended audio
+threshold settings without loading an STT model.
 
 Optional PySide/Qt settings UI: on Windows, use the Start-menu
 **whisper-dictate** shortcut. It owns the dictation process, shows the runtime

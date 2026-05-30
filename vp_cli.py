@@ -106,6 +106,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--benchmark-jsonl", default=None,
                     help="append benchmark JSONL results to this path instead "
                          "of stdout")
+    ap.add_argument("--calibrate-mic", nargs="?", const=5.0, type=float,
+                    metavar="SECONDS",
+                    help="record a short sample, recommend audio threshold "
+                         "settings, then exit")
+    ap.add_argument("--calibrate-file", metavar="PATH",
+                    help="analyze an existing audio file and recommend audio "
+                         "threshold settings, then exit")
     ap.add_argument("--dictionary-status", nargs=0, action=_DictionaryAction,
                     help="show dictionary paths, counts and preview, then exit")
     ap.add_argument("--dictionary-open", nargs=0, action=_DictionaryAction,

@@ -576,6 +576,16 @@ if __name__ == "__main__":
         except Exception as e:  # noqa: BLE001 - argparse should report cleanly
             ap.error(str(e))
         raise SystemExit(0)
+    if a.calibrate_mic is not None or a.calibrate_file:
+        from vp_calibration import calibrate_file, calibrate_microphone
+        try:
+            if a.calibrate_file:
+                calibrate_file(a.calibrate_file, as_json=a.json)
+            else:
+                calibrate_microphone(a.calibrate_mic, as_json=a.json)
+        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+            ap.error(str(e))
+        raise SystemExit(0)
     lang = None if (a.autodetect or not a.lang) else a.lang
 
     # Sæt XKB_DEFAULT_LAYOUT fra --lang så ydotool type og evt. auto-startet

@@ -1,19 +1,19 @@
-Adds a reproducible STT benchmark command on top of file transcription.
+Adds microphone calibration commands for actionable audio threshold tuning.
 
 ## Download
 
 | Asset | Use on |
 |---|---|
-| **whisper-dictate-windows-nvidia-setup-0.2.54.exe** | Windows with NVIDIA CUDA |
+| **whisper-dictate-windows-nvidia-setup-0.2.55.exe** | Windows with NVIDIA CUDA |
 
 ## Highlights
 
-- New `--benchmark-files PATH...` command evaluates audio files through backend/model specs.
-- `--benchmark-backends` supports specs such as `whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3`.
-- `--benchmark-jsonl` writes one structured event per file/backend, including backend failures.
-- Each benchmark run invokes `--transcribe-file --json` in an isolated child process so model state and backend dependencies do not leak between candidates.
+- New `--calibrate-mic [SECONDS]` command records a short sample and prints pass/warn/fail diagnostics.
+- New `--calibrate-file PATH` analyzes an existing audio file with the same calibration logic.
+- `--json` outputs structured calibration data for automation.
+- Recommendations include `VOICEPI_TARGET_DBFS`, `VOICEPI_MIN_INPUT_DBFS`, and `VOICEPI_MIN_SNR_DB`.
 
 ## Notes
 
-- This is a local benchmark foundation for comparing Whisper and Parakeet on the same recordings.
-- Cloud backends remain future work and should stay opt-in when added.
+- Calibration runs before model load, so it is quick and works without Whisper/Parakeet startup.
+- Use calibration output to tune Quality settings when the mic or room is the bottleneck.

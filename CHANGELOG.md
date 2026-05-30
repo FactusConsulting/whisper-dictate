@@ -11,6 +11,13 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.2.55] - 2026-05-30
+
+### Added
+- `--calibrate-mic [SECONDS]` records a short microphone sample and recommends audio threshold settings.
+- `--calibrate-file PATH` analyzes an existing audio file for repeatable calibration/testing.
+- Calibration JSON output via `--json`, including raw dBFS, noise floor, SNR, peak and recommended `VOICEPI_TARGET_DBFS`, `VOICEPI_MIN_INPUT_DBFS`, and `VOICEPI_MIN_SNR_DB`.
+
 ## [0.2.54] - 2026-05-30
 
 ### Added

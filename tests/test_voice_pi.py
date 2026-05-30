@@ -1753,6 +1753,75 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(args.benchmark_jsonl, "out.jsonl")
 
 
+class CalibrationTests(unittest.TestCase):
+    def test_calibration_analysis_passes_clean_audio(self):
+        np = AudioDspTests.np
+        sys.modules["numpy"] = np
+        sys.modules.pop("vp_calibration", None)
+        import vp_calibration
+
+        quiet = np.full(4000, 0.001, dtype=np.float32)
+        speech = np.full(12000, 0.15, dtype=np.float32)
+        pcm = (np.concatenate([quiet, speech]) * 32767).astype(np.int16)
+
+        result = vp_calibration.analyze_calibration_audio(pcm)
+
+        self.assertEqual(result["event"], "mic_calibration")
+        self.assertEqual(result["status"], "pass")
+        self.assertGreater(result["snr_db"], 15)
+        self.assertIn("VOICEPI_MIN_INPUT_DBFS", result["recommended"])
+
+    def test_calibration_analysis_warns_on_low_snr(self):
+        np = AudioDspTests.np
+        sys.modules["numpy"] = np
+        sys.modules.pop("vp_calibration", None)
+        import vp_calibration
+
+        pcm = (np.full(16000, 0.01, dtype=np.float32) * 32767).astype(np.int16)
+
+        result = vp_calibration.analyze_calibration_audio(pcm)
+
+        self.assertIn(result["status"], ("warn", "fail"))
+        self.assertTrue(result["warnings"])
+
+    def test_calibration_json_output_is_single_json_object(self):
+        import vp_calibration
+
+        result = {
+            "event": "mic_calibration",
+            "status": "pass",
+            "warnings": [],
+            "raw_dbfs": -20.0,
+            "noise_dbfs": -60.0,
+            "snr_db": 40.0,
+            "peak": 0.5,
+            "recommended": {},
+        }
+        with _capture_stdout() as buf:
+            vp_calibration.print_calibration_result(result, as_json=True)
+
+        self.assertEqual(json.loads(buf.getvalue()), result)
+
+    def test_parser_accepts_calibration_options(self):
+        sys.modules.pop("vp_cli", None)
+        import vp_cli
+
+        args = vp_cli.build_arg_parser().parse_args(["--calibrate-mic"])
+        self.assertEqual(args.calibrate_mic, 5.0)
+        args = vp_cli.build_arg_parser().parse_args(["--calibrate-mic", "3"])
+        self.assertEqual(args.calibrate_mic, 3.0)
+        args = vp_cli.build_arg_parser().parse_args(["--calibrate-file", "sample.wav"])
+        self.assertEqual(args.calibrate_file, "sample.wav")
+
+    def test_voice_pi_handles_calibration_before_model_load(self):
+        with open("voice_pi.py", encoding="utf-8") as f:
+            script = f.read()
+
+        calibration = script.index("if a.calibrate_mic is not None or a.calibrate_file")
+        model_load = script.index("_model = load_stt_model")
+        self.assertLess(calibration, model_load)
+
+
 class DictionaryTests(unittest.TestCase):
     def setUp(self):
         self._old = {k: os.environ.pop(k, None) for k in (

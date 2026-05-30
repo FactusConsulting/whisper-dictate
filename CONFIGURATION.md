@@ -176,6 +176,8 @@ Passed after the launcher (`setup.cmd` / `setup.sh` / `whisper-dictate`):
 | `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |
 | `--benchmark-backends SPEC` | current backend | CSV specs | Backend/model specs for benchmarking, e.g. `whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3`. |
 | `--benchmark-jsonl PATH` | stdout | file path | Append benchmark JSONL results to a file instead of stdout. |
+| `--calibrate-mic [SECONDS]` | off | seconds, default `5` | Record a short mic sample, print pass/warn/fail audio diagnostics and recommended threshold settings, then exit. |
+| `--calibrate-file PATH` | off | audio path | Analyze an existing audio file with the same calibration logic. Combine with `--json` for structured output. |
 
 ## How to set them, per environment
 
