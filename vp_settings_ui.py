@@ -33,7 +33,12 @@ def run_settings_ui() -> int:
     except ImportError as exc:
         raise _missing_pyside_error() from exc
 
-    from vp_dictionary import dictionary_target_path, ensure_dictionary_file, open_dictionary
+    from vp_dictionary import (
+        add_dictionary_replacements,
+        dictionary_target_path,
+        ensure_dictionary_file,
+        open_dictionary,
+    )
 
     def activation_server_name() -> str:
         key = str(config_path().with_name("settings-ui")).lower().encode("utf-8", errors="replace")
@@ -73,6 +78,11 @@ def run_settings_ui() -> int:
             self._runtime_log = QPlainTextEdit()
             self._runtime_log.setReadOnly(True)
             self._runtime_log.setMaximumBlockCount(2000)
+            self._dictionary_suggestions: list[object] = []
+            self._dictionary_suggest_output = QPlainTextEdit()
+            self._dictionary_suggest_output.setReadOnly(True)
+            self._dictionary_suggest_output.setMaximumHeight(180)
+            self._dictionary_apply_button: QPushButton | None = None
             self._runtime_proc: QProcess | None = None
             self._restart_after_stop = False
             self._quit_after_stop = False
@@ -333,6 +343,22 @@ def run_settings_ui() -> int:
             self._add_help_row(
                 form, "Prompt char cap", self._spin("dictionary_prompt_chars", 0, 10000),
                 "Maximum total characters from dictionary terms used in the Whisper prompt. Replacements still run even when prompt terms are capped.")
+            suggest_row = QHBoxLayout()
+            suggest_btn = QPushButton("Suggest replacements")
+            suggest_btn.clicked.connect(self._suggest_dictionary_replacements)
+            apply_btn = QPushButton("Apply suggestions")
+            apply_btn.setEnabled(False)
+            apply_btn.clicked.connect(self._apply_dictionary_suggestions)
+            self._dictionary_apply_button = apply_btn
+            suggest_row.addWidget(suggest_btn)
+            suggest_row.addWidget(apply_btn)
+            suggest_row.addStretch(1)
+            suggest_w = QWidget()
+            suggest_w.setLayout(suggest_row)
+            self._add_help_row(
+                form, "Benchmark suggestions", suggest_w,
+                "Choose a benchmark/history JSONL file and propose deterministic replacements for repeated transcription misses. Suggestions are previewed and only written if you apply them.")
+            form.addRow("", self._dictionary_suggest_output)
             return self._wrap(form)
 
         def _build_output_tab(self) -> QWidget:
@@ -398,6 +424,68 @@ def run_settings_ui() -> int:
                 self, "Dictionary JSON", str(dictionary_target_path()), "JSON (*.json);;All files (*)")
             if path:
                 self._controls["dictionary"].setText(path)  # type: ignore[attr-defined]
+
+        def _suggest_dictionary_replacements(self) -> None:
+            default_path = Path.cwd() / "benchmark" / "results.jsonl"
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Benchmark or history JSONL",
+                str(default_path),
+                "JSONL (*.jsonl);;All files (*)",
+            )
+            if not path:
+                return
+            try:
+                from vp_dictionary_suggest import suggest_replacements
+
+                suggestions = suggest_replacements(path)
+            except Exception as exc:  # noqa: BLE001 - surface UI errors instead of crashing
+                self._dictionary_suggestions = []
+                if self._dictionary_apply_button is not None:
+                    self._dictionary_apply_button.setEnabled(False)
+                QMessageBox.warning(self, "Dictionary suggestions failed", str(exc))
+                return
+            self._dictionary_suggestions = suggestions
+            if self._dictionary_apply_button is not None:
+                self._dictionary_apply_button.setEnabled(bool(suggestions))
+            self._dictionary_suggest_output.setPlainText(
+                self._format_dictionary_suggestions(suggestions)
+            )
+
+        def _format_dictionary_suggestions(self, suggestions: list[object]) -> str:
+            if not suggestions:
+                return "No dictionary replacement suggestions found."
+            lines = []
+            for item in suggestions:
+                source = getattr(item, "source", "")
+                target = getattr(item, "target", "")
+                count = getattr(item, "count", 0)
+                confidence = getattr(item, "confidence", 0.0)
+                reason = getattr(item, "reason", "")
+                lines.append(f"{source} -> {target}  ({confidence:.2f}, {count}x, {reason})")
+            return "\n".join(lines)
+
+        def _apply_dictionary_suggestions(self) -> None:
+            mappings = {
+                str(getattr(item, "source", "")).strip(): str(getattr(item, "target", "")).strip()
+                for item in self._dictionary_suggestions
+            }
+            mappings = {src: dst for src, dst in mappings.items() if src and dst}
+            if not mappings:
+                QMessageBox.information(self, "Dictionary suggestions", "No suggestions to apply.")
+                return
+            control = self._controls.get("dictionary")
+            raw_path = control.text().strip() if isinstance(control, QLineEdit) else ""
+            path, changed = add_dictionary_replacements(
+                mappings,
+                Path(raw_path) if raw_path else None,
+            )
+            self.signal_reload(show=False)
+            QMessageBox.information(
+                self,
+                "Dictionary suggestions applied",
+                f"Added or updated {changed} replacements in:\n{path}",
+            )
 
         def _load(self) -> None:
             values = effective_config()

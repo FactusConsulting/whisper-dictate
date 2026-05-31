@@ -15,6 +15,7 @@ release because `release.yml` bumps in-place after the tag is pushed.
 - `VOICEPI_FORMAT_COMMANDS` opt-in spoken formatting commands for deterministic punctuation and line breaks.
 - Settings UI support for enabling English, Danish or combined formatting command sets.
 - `--dictionary-suggest JSONL` to propose smart replacements from benchmark/history output without mutating the dictionary.
+- Settings UI dictionary suggestion preview/apply flow for benchmark/history JSONL.
 
 ## [0.2.58] - 2026-05-30
 

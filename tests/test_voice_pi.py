@@ -1910,6 +1910,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Dictionary enabled",
             "Max prompt terms",
             "Prompt char cap",
+            "Benchmark suggestions",
             "Inject mode",
             "JSON stdout",
             "Metrics JSONL",
@@ -1926,6 +1927,18 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("Use 0.6B v3 for Danish/mixed Danish-English", script)
         self.assertIn("raw STT backend debug output", script)
         self.assertIn("qwen2.5:3b", script)
+
+    def test_settings_ui_can_preview_and_apply_dictionary_suggestions(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("Suggest replacements", script)
+        self.assertIn("Apply suggestions", script)
+        self.assertIn("def _suggest_dictionary_replacements", script)
+        self.assertIn("suggest_replacements(path)", script)
+        self.assertIn("def _apply_dictionary_suggestions", script)
+        self.assertIn("add_dictionary_replacements", script)
+        self.assertIn("self.signal_reload(show=False)", script)
 
     def test_settings_ui_filters_noisy_nemo_runtime_logs(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:
@@ -2677,6 +2690,29 @@ class DictionaryTests(unittest.TestCase):
         self.assertEqual((src, dst, changed), ("code X", "Codex", True))
         self.assertEqual(data["terms"], ["Codex"])
         self.assertEqual(data["replacements"], {"code X": "Codex"})
+
+    def test_dictionary_add_replacements_preserves_terms_and_counts_changes(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            f.write('{"terms":["Codex"],"replacements":{"old":"Old"}}')
+            path = f.name
+        try:
+            os.environ["VOICEPI_DICTIONARY"] = path
+            import vp_dictionary
+
+            written, changed = vp_dictionary.add_dictionary_replacements({
+                "code X": "Codex",
+                "old": "Old",
+                "": "ignored",
+            })
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        finally:
+            os.remove(path)
+
+        self.assertEqual(str(written), path)
+        self.assertEqual(changed, 1)
+        self.assertEqual(data["terms"], ["Codex"])
+        self.assertEqual(data["replacements"], {"code X": "Codex", "old": "Old"})
 
 
 if __name__ == "__main__":

@@ -349,7 +349,9 @@ Dictionary helper commands run before Whisper loads, for example
 `setup.ps1 --dictionary-replace "Cloud Code=Claude Code"`. Use
 `setup.ps1 --dictionary-suggest benchmark\results.jsonl` to inspect benchmark
 or history JSONL and print suggested smart replacements without mutating the
-dictionary.
+dictionary. In the Windows Settings UI, open the Dictionary tab and use
+Benchmark suggestions to preview the same suggestions and apply the shown
+replacement candidates to the configured dictionary.
 
 Optional Parakeet backend: install `requirements-parakeet.txt`, then set
 `VOICEPI_STT_BACKEND=parakeet`. NeMo is imported lazily, so default Whisper

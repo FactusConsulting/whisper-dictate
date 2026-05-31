@@ -339,6 +339,10 @@ Manage the default dictionary without loading Whisper:
 & "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-suggest benchmark\results.jsonl
 ```
 
+On Windows, the Settings UI exposes the same suggestion flow on the Dictionary
+tab. Pick a benchmark/history JSONL file, review the proposed replacements, and
+apply them to the configured dictionary when they look correct.
+
 ### Target profiles
 
 Profiles live in `%APPDATA%\WhisperDictate\config.json` on Windows or

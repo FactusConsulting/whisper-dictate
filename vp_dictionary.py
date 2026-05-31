@@ -201,6 +201,26 @@ def add_dictionary_replacement(
     return path, src, dst, changed
 
 
+def add_dictionary_replacements(
+    mappings: dict[str, str],
+    path: Path | None = None,
+) -> tuple[Path, int]:
+    path = path or dictionary_target_path()
+    base, terms, replacements = _read_dictionary_file(path)
+    changed = 0
+    for src, dst in mappings.items():
+        src = str(src).strip()
+        dst = str(dst).strip()
+        if not src or not dst:
+            continue
+        if replacements.get(src) != dst:
+            replacements[src] = dst
+            changed += 1
+    if changed:
+        _write_dictionary_file(path, terms, replacements, base)
+    return path, changed
+
+
 def dictionary_status() -> str:
     paths = _candidate_paths()
     dictionary = DICTIONARY
