@@ -1367,6 +1367,41 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(result.provider, "none")
         self.assertEqual(result.mode, "raw")
 
+    def test_postprocess_mode_prompts_cover_roadmap_modes(self):
+        import vp_postprocess
+
+        expectations = {
+            "clean": "Clean punctuation",
+            "prompt": "AI coding agent",
+            "terminal": "Preserve commands",
+            "slack": "Slack-style message",
+            "email": "polished but faithful email",
+            "bullets": "concise bullet points",
+            "bullet-list": "concise bullet points",
+        }
+        for mode, phrase in expectations.items():
+            with self.subTest(mode=mode):
+                prompt = vp_postprocess.build_prompt("hello world", mode)
+                self.assertIn(phrase, prompt)
+                self.assertIn("Return only the rewritten text", prompt)
+
+    def test_postprocess_accepts_bullet_list_alias(self):
+        os.environ["VOICEPI_POST_PROCESSOR"] = "ollama"
+        os.environ["VOICEPI_POST_MODE"] = "bullet-list"
+        import vp_postprocess
+
+        settings = vp_postprocess.load_postprocess_settings()
+
+        self.assertEqual(settings.mode, "bullets")
+        result = vp_postprocess.postprocess_text("fallback", vp_postprocess.PostprocessSettings(
+            processor="ollama",
+            mode="bullet-list",
+            base_url="http://127.0.0.1:1",
+            timeout_ms=100,
+        ))
+        self.assertEqual(result.mode, "bullets")
+        self.assertTrue(result.fallback)
+
     def test_clean_mode_uses_fake_ollama_server(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1583,6 +1618,8 @@ class DictionarySuggestTests(unittest.TestCase):
     def test_suggests_replacements_from_benchmark_term_misses(self):
         import vp_dictionary_suggest
 
+        old_terms = vp_dictionary_suggest.DICTIONARY.terms
+        old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
         rows = [{
             "corpus_id": "da-tech-004",
             "text": "Murch branchedes og de plåede den nye version bagefter.",
@@ -1591,11 +1628,48 @@ class DictionarySuggestTests(unittest.TestCase):
             "reference_terms": ["merge", "deploy"],
         }]
 
-        suggestions = vp_dictionary_suggest.suggest_replacements_from_rows(
-            rows, min_confidence=0.55)
+        try:
+            vp_dictionary_suggest.DICTIONARY.terms = []
+            vp_dictionary_suggest.DICTIONARY.replacements = {}
+            suggestions = vp_dictionary_suggest.suggest_replacements_from_rows(
+                rows, min_confidence=0.55)
+        finally:
+            vp_dictionary_suggest.DICTIONARY.terms = old_terms
+            vp_dictionary_suggest.DICTIONARY.replacements = old_replacements
 
         pairs = {(s.source.casefold(), s.target.casefold()) for s in suggestions}
         self.assertIn(("murch", "merge"), pairs)
+        self.assertNotIn(("de", "deploy"), pairs)
+
+    def test_suggest_filters_common_word_sources(self):
+        import vp_dictionary_suggest
+
+        old_terms = vp_dictionary_suggest.DICTIONARY.terms
+        old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
+        rows = [{
+            "corpus_id": "sample",
+            "text": "og de til le as skal Code Large MCP Claude Set",
+            "reference_text": "vLLM deploy type Codex bullets Hetzner Codex large v3",
+            "term_misses": [
+                "vLLM", "deploy", "type", "Codex", "bullets", "Hetzner",
+                "large v3", "RAG", "Claude Code", "STT",
+            ],
+        }]
+
+        try:
+            vp_dictionary_suggest.DICTIONARY.terms = ["MCP", "Claude"]
+            vp_dictionary_suggest.DICTIONARY.replacements = {}
+            suggestions = vp_dictionary_suggest.suggest_replacements_from_rows(
+                rows, min_confidence=0.55)
+        finally:
+            vp_dictionary_suggest.DICTIONARY.terms = old_terms
+            vp_dictionary_suggest.DICTIONARY.replacements = old_replacements
+
+        sources = {s.source.casefold() for s in suggestions}
+        self.assertFalse(sources & {
+            "og", "de", "til", "le", "as", "skal", "code", "large",
+            "mcp", "claude", "set", "mig", "køre", "typ",
+        })
 
     def test_suggests_dictionary_term_near_misses(self):
         import vp_dictionary_suggest

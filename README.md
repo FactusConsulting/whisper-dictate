@@ -332,7 +332,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_HISTORY_JSONL` | user state path | override the local history JSONL path |
 | `VOICEPI_LOCAL_ONLY` | _(unset)_ | `1` → block cloud/BYOK backends and force model libraries offline; local models must already be downloaded |
 | `VOICEPI_POST_PROCESSOR` | `none` | `ollama` → run optional local second text pass after STT/dictionary |
-| `VOICEPI_POST_MODE` | `raw` | `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets`; `raw` keeps current behavior |
+| `VOICEPI_POST_MODE` | `raw` | `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets`; `bullet-list` is accepted as an alias; `raw` keeps current behavior |
 | `VOICEPI_POST_MODEL` | `qwen2.5:3b` | local Ollama rewrite model; 3B is the practical start alongside Parakeet on 10 GB GPUs |
 | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` | local Ollama endpoint |
 | `VOICEPI_POST_TIMEOUT_MS` | `2000` | fallback to dictionary-final text if local rewrite is too slow |

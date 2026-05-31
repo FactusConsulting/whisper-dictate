@@ -15,6 +15,11 @@ apply_config_to_environ()
 
 VALID_PROCESSORS = ("none", "ollama")
 VALID_MODES = ("raw", "clean", "prompt", "terminal", "slack", "email", "bullets")
+MODE_ALIASES = {
+    "bullet-list": "bullets",
+    "bullet_list": "bullets",
+    "bulletlist": "bullets",
+}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
@@ -51,7 +56,7 @@ def _int_setting(name: str, default: int, minimum: int = 0) -> int:
 
 def load_postprocess_settings() -> PostprocessSettings:
     processor = (get_value("VOICEPI_POST_PROCESSOR", "none") or "none").strip().lower()
-    mode = (get_value("VOICEPI_POST_MODE", "raw") or "raw").strip().lower()
+    mode = normalize_mode(get_value("VOICEPI_POST_MODE", "raw") or "raw")
     if processor not in VALID_PROCESSORS:
         processor = "none"
     if mode not in VALID_MODES:
@@ -73,12 +78,18 @@ def _is_local_url(url: str) -> bool:
     return (parsed.hostname or "").lower() in LOCAL_HOSTS
 
 
+def normalize_mode(mode: str) -> str:
+    value = (mode or "raw").strip().lower()
+    return MODE_ALIASES.get(value, value)
+
+
 def validate_postprocess_settings(settings: PostprocessSettings) -> None:
-    if settings.processor == "none" or settings.mode == "raw":
+    mode = normalize_mode(settings.mode)
+    if settings.processor == "none" or mode == "raw":
         return
     if settings.processor not in VALID_PROCESSORS:
         raise ValueError(f"invalid post processor: {settings.processor}")
-    if settings.mode not in VALID_MODES:
+    if mode not in VALID_MODES:
         raise ValueError(f"invalid post mode: {settings.mode}")
     parsed = urllib.parse.urlparse(settings.base_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -115,6 +126,7 @@ _MODE_INSTRUCTIONS = {
 
 
 def build_prompt(text: str, mode: str) -> str:
+    mode = normalize_mode(mode)
     instruction = _MODE_INSTRUCTIONS.get(mode, _MODE_INSTRUCTIONS["clean"])
     return (
         "You are a local text post-processor for speech dictation.\n"
@@ -125,9 +137,10 @@ def build_prompt(text: str, mode: str) -> str:
 
 
 def _ollama_generate(settings: PostprocessSettings, text: str) -> str:
+    mode = normalize_mode(settings.mode)
     payload = {
         "model": settings.model,
-        "prompt": build_prompt(text, settings.mode),
+        "prompt": build_prompt(text, mode),
         "stream": False,
         "options": {
             "temperature": 0,
@@ -149,13 +162,14 @@ def _ollama_generate(settings: PostprocessSettings, text: str) -> str:
 
 def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> PostprocessResult:
     settings = settings or load_postprocess_settings()
-    if settings.processor == "none" or settings.mode == "raw" or not text.strip():
+    mode = normalize_mode(settings.mode)
+    if settings.processor == "none" or mode == "raw" or not text.strip():
         return PostprocessResult(
             text=text,
             raw_text=text,
             changed=False,
             provider=settings.processor,
-            mode=settings.mode,
+            mode=mode,
             model=settings.model,
         )
 
@@ -174,7 +188,7 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             raw_text=text,
             changed=out != text,
             provider=settings.processor,
-            mode=settings.mode,
+            mode=mode,
             model=settings.model,
             latency_ms=latency_ms,
         )
@@ -185,7 +199,7 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             raw_text=text,
             changed=False,
             provider=settings.processor,
-            mode=settings.mode,
+            mode=mode,
             model=settings.model,
             latency_ms=latency_ms,
             fallback=True,

@@ -57,7 +57,7 @@ requiring restart/model reload.
 | **History file** | `VOICEPI_HISTORY_JSONL` | _none_ | user state path | file path | override the local history JSONL path |
 | **Local only** | `VOICEPI_LOCAL_ONLY` | _none_ | _(unset)_ | truthy / falsey | block cloud/BYOK backends and force model libraries into offline mode |
 | **Post processor** | `VOICEPI_POST_PROCESSOR` | _none_ | `none` | `none` \| `ollama` | optional local second text pass after STT and dictionary replacements |
-| **Post mode** | `VOICEPI_POST_MODE` | _none_ | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` | rewrite style for the optional second pass |
+| **Post mode** | `VOICEPI_POST_MODE` | _none_ | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` (`bullet-list` alias) | rewrite style for the optional second pass |
 | **Post model** | `VOICEPI_POST_MODEL` | _none_ | `qwen2.5:3b` | Ollama model name | local text model used by the post processor |
 | **Post base URL** | `VOICEPI_POST_BASE_URL` | _none_ | `http://localhost:11434` | URL | local Ollama endpoint |
 | **Post timeout** | `VOICEPI_POST_TIMEOUT_MS` | _none_ | `2000` | integer ms | fallback to dictionary-final text if local rewrite is too slow |
@@ -106,7 +106,7 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_HISTORY_JSONL` | user state path | file path | Override the local history JSONL location. Default is `%APPDATA%\WhisperDictate\history.jsonl` on Windows and `${XDG_STATE_HOME:-~/.local/state}/whisper-dictate/history.jsonl` elsewhere. |
 | `VOICEPI_LOCAL_ONLY` | *(unset)* | truthy / falsey | Privacy lock. Blocks cloud/BYOK backends and sets `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_DATASETS_OFFLINE=1`, `HF_HUB_DISABLE_TELEMETRY=1`, and Weights & Biases offline/disabled defaults before models load. Local models must already be downloaded. This is a library/runtime guard, not an OS firewall rule. |
 | `VOICEPI_POST_PROCESSOR` | `none` | `none` \| `ollama` | Optional local second text pass after STT and dictionary replacements. `none` preserves current behavior. |
-| `VOICEPI_POST_MODE` | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` | Rewrite style. `raw` preserves current behavior; `terminal` is conservative for commands, flags, paths and technical terms. |
+| `VOICEPI_POST_MODE` | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` (`bullet-list` alias) | Rewrite style. `raw` preserves current behavior; `terminal` is conservative for commands, flags, paths and technical terms. |
 | `VOICEPI_POST_MODEL` | `qwen2.5:3b` | Ollama model name | Local text model used by `VOICEPI_POST_PROCESSOR=ollama`. On 10 GB GPUs running Parakeet, 3B is the practical starting point. |
 | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` | URL | Ollama endpoint. With `VOICEPI_LOCAL_ONLY=1`, this must be localhost/127.0.0.1. |
 | `VOICEPI_POST_TIMEOUT_MS` | `2000` | integer ms | Maximum wait for the local rewrite before falling back to the dictionary-final text. |

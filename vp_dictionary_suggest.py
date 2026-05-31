@@ -11,6 +11,30 @@ from typing import Any, Iterable
 
 from vp_dictionary import DICTIONARY
 
+_COMMON_SOURCE_WORDS = {
+    "a", "an", "and", "as", "at", "be", "but", "by", "for", "from", "i",
+    "in", "is", "it", "le", "of", "og", "on", "or", "skal", "the", "til",
+    "to", "with", "de", "den", "det", "der", "du", "en", "et", "jeg",
+    "kan", "med", "mig", "på", "så", "vi", "eller", "set", "fra", "type",
+}
+_COMMON_SOURCE_PHRASES = {
+    "begge", "begge forstå", "code", "code i", "consulting", "day", "kode",
+    "large", "le code", "le terminal", "terminal", "two", "whisper",
+    "claude", "consulting 2d", "contre celui", "dæv eller",
+    "eller brød", "faktus consulting 2d", "faktus consulting og",
+    "kom", "kobberites klosteret", "kodex versus", "køre", "køre klosteret",
+    "large-v3 and", "mcp", "mcp rac", "pisit backend",
+    "que", "serveren til remote lokal postprocessing",
+    "serveren til remote lokal postprocessing.", "sit",
+    "signal-to-noise-ratio tydelig i terminalen",
+    "signal-to-noise-ratio tydelig i terminalen.", "typ", "voice pisit",
+    "ændringen pudst", "ændringen pudste",
+}
+_SHORT_SOURCE_ALLOWLIST = {
+    "2d", "dbfs", "qn", "rac", "rag", "snr", "stt", "ui", "vad", "vlm",
+    "xkb",
+}
+
 
 @dataclass
 class ReplacementSuggestion:
@@ -40,6 +64,30 @@ def _normalize(text: str) -> str:
     return " ".join(_words(text)).casefold()
 
 
+def _is_risky_source(source: str) -> bool:
+    normalized = _normalize(source)
+    if not normalized:
+        return True
+    words = normalized.split()
+    if normalized in _COMMON_SOURCE_PHRASES:
+        return True
+    if len(words) == 1:
+        word = words[0]
+        return (
+            word in _COMMON_SOURCE_WORDS
+            or (len(word) <= 2 and word not in _SHORT_SOURCE_ALLOWLIST)
+        )
+    if words[0] in _COMMON_SOURCE_WORDS or words[-1] in _COMMON_SOURCE_WORDS:
+        return True
+    if len(words) <= 3 and any(word in _COMMON_SOURCE_WORDS for word in words):
+        return True
+    return False
+
+
+def _known_source_terms() -> set[str]:
+    return {_normalize(term) for term in DICTIONARY.terms if _normalize(term)}
+
+
 def _ngrams(words: list[str], size: int) -> Iterable[str]:
     if size <= 0 or len(words) < size:
         return
@@ -65,6 +113,10 @@ def _add_suggestion(
     source_norm = _normalize(source)
     target_norm = _normalize(target)
     if not source_norm or not target_norm or source_norm == target_norm:
+        return
+    if _is_risky_source(source):
+        return
+    if source_norm in _known_source_terms():
         return
     if (source_norm, target_norm) in existing:
         return

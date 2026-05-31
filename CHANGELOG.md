@@ -11,6 +11,14 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.2.60] - 2026-05-31
+
+### Added
+- `VOICEPI_POST_MODE=bullet-list` alias for the existing `bullets` post-processing mode, matching the roadmap wording.
+
+### Changed
+- Dictionary replacement suggestions now filter common words, known source terms and noisy benchmark fragments more aggressively.
+
 ## [0.2.59] - 2026-05-31
 
 ### Added
