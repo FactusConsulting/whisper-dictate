@@ -35,6 +35,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOICEPI_LANG", "lang", None, live=True),
     Setting("VOICEPI_INITIAL_PROMPT", "initial_prompt", None, live=True),
     Setting("VOICEPI_INJECT_MODE", "inject_mode", "auto", live=True),
+    Setting("VOICEPI_FORMAT_COMMANDS", "format_commands", "off", live=True),
     Setting("VOICEPI_BEAM_SIZE", "beam_size", "1", live=True),
     Setting("VOICEPI_TEMPERATURE", "temperature", "0.0,0.2", live=True),
     Setting("VOICEPI_CONTEXT_MIN_SECONDS", "context_min_seconds", "0", live=True),

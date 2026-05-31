@@ -341,6 +341,9 @@ def run_settings_ui() -> int:
                 form, "Inject mode", self._combo("inject_mode", ["auto", "type", "paste", "print"]),
                 "How recognized text is delivered. Auto types normally, but uses paste for fragile Windows terminals and layout-sensitive punctuation.")
             self._add_help_row(
+                form, "Format commands", self._combo("format_commands", ["off", "en", "da", "both"]),
+                "Optional spoken formatting commands. Off is safest. English supports commands like new line, comma and period; Danish supports ny linje, komma and punktum.")
+            self._add_help_row(
                 form, "JSON stdout", self._check("json_output"),
                 "Print one structured JSON event for each accepted utterance. Useful for automation and integration testing.")
             self._add_help_row(

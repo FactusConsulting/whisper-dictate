@@ -1,19 +1,19 @@
-Adds an opt-in command hook for advanced local automation.
+Adds opt-in spoken formatting commands for punctuation and line breaks.
 
 ## Download
 
 | Asset | Use on |
 |---|---|
-| **whisper-dictate-windows-nvidia-setup-0.2.58.exe** | Windows with NVIDIA CUDA |
+| **whisper-dictate-windows-nvidia-setup-0.2.59.exe** | Windows with NVIDIA CUDA |
 
 ## Highlights
 
-- `VOICEPI_COMMAND_HOOK` can run an advanced opt-in command after each accepted utterance.
-- The hook receives the structured utterance event as JSON on stdin.
-- The hook is executed with `shell=False`, so transcript text is not interpolated into a shell command.
-- Hook result fields are recorded in metrics/history as `command_hook_*`.
+- `VOICEPI_FORMAT_COMMANDS` enables deterministic spoken formatting commands.
+- English command set: `new line`, `comma`, `period`, `question mark`, `bullet list`, and related commands.
+- Danish command set: `ny linje`, `komma`, `punktum`, `spørgsmålstegn`, `punktliste`, and related commands.
+- Formatting command results are recorded in metrics/history as `format_commands_*`.
 
 ## Notes
 
-- Prefer JSON-array command form, for example `["python","D:\\scripts\\handle-dictation.py"]`.
-- `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` defaults to `2000`; timeout/failure is logged but dictation injection still succeeds.
+- The feature is off by default to avoid changing literal dictation.
+- Enable globally or per profile with `VOICEPI_FORMAT_COMMANDS=en`, `da`, or `both`.

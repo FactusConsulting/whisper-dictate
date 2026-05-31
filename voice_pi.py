@@ -116,6 +116,7 @@ from vp_version import VERSION  # noqa: E402
 from vp_command_hook import annotate_event_with_hook, run_command_hook  # noqa: E402
 from vp_privacy import apply_local_only_network_lock  # noqa: E402
 from vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402
+from vp_formatting import apply_format_commands  # noqa: E402
 from vp_config import (  # noqa: E402
     apply_config_to_environ, config_mtime, effective_config, load_config,
 )
@@ -396,7 +397,10 @@ class Dictate(InjectMixin):
         elif post_result.changed:
             print(f"[post] {post_result.mode}/{post_result.provider} "
                   f"{post_result.latency_ms}ms text={post_result.text!r}", flush=True)
-        final_text = post_result.text
+        format_result = apply_format_commands(post_result.text)
+        if format_result.changed:
+            print(f"[format] {format_result.command_set} commands={format_result.applied}", flush=True)
+        final_text = format_result.text
         inject_t0 = time.monotonic()
         self._inject(final_text)
         inject_elapsed_ms = int((time.monotonic() - inject_t0) * 1000)
@@ -436,6 +440,10 @@ class Dictate(InjectMixin):
             post_changed=post_result.changed,
             post_fallback=post_result.fallback,
             post_error=post_result.error or None,
+            format_commands_enabled=format_result.enabled,
+            format_commands_set=format_result.command_set,
+            format_commands_changed=format_result.changed,
+            format_commands_applied=format_result.applied,
         )
         hook_result = run_command_hook(event)
         annotate_event_with_hook(event, hook_result)

@@ -208,6 +208,8 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("XKB (Wayland)",    f"VOICEPI_XKB_LAYOUT={_env('VOICEPI_XKB_LAYOUT')}  "
                              f"XKB_DEFAULT_LAYOUT={_env('XKB_DEFAULT_LAYOUT')}"),
         ("inject mode",      f"{args.mode}  (env VOICEPI_INJECT_MODE={_env('VOICEPI_INJECT_MODE')})"),
+        ("format commands",  f"{get_value('VOICEPI_FORMAT_COMMANDS', 'off')}  "
+                             f"(env VOICEPI_FORMAT_COMMANDS={_env('VOICEPI_FORMAT_COMMANDS')})"),
         ("json output",      f"{getattr(args, 'json', False)}  (env VOICEPI_JSON={_env('VOICEPI_JSON')})"),
         ("metrics jsonl",    f"{_env('VOICEPI_METRICS_JSONL')}  (env VOICEPI_METRICS_JSONL)"),
         ("command hook",     f"{_env('VOICEPI_COMMAND_HOOK')}  "

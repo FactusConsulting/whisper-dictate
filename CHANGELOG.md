@@ -11,6 +11,10 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+### Added
+- `VOICEPI_FORMAT_COMMANDS` opt-in spoken formatting commands for deterministic punctuation and line breaks.
+- Settings UI support for enabling English, Danish or combined formatting command sets.
+
 ## [0.2.58] - 2026-05-30
 
 ### Added

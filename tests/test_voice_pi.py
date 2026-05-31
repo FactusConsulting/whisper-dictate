@@ -1522,6 +1522,63 @@ class CommandHookTests(unittest.TestCase):
         self.assertLess(hook_pos, metrics_pos)
 
 
+class FormatCommandTests(unittest.TestCase):
+    def test_format_commands_are_off_by_default(self):
+        import vp_formatting
+
+        result = vp_formatting.apply_format_commands("write comma literally")
+
+        self.assertFalse(result.enabled)
+        self.assertEqual(result.text, "write comma literally")
+
+    def test_english_format_commands_replace_whole_phrases(self):
+        import vp_formatting
+
+        result = vp_formatting.apply_format_commands(
+            "first item comma new line second item period", "en")
+
+        self.assertTrue(result.enabled)
+        self.assertTrue(result.changed)
+        self.assertEqual(result.text, "first item,\nsecond item.")
+        self.assertIn({"command": "new line", "replacement": "\n", "count": "1"}, result.applied)
+
+    def test_danish_format_commands_replace_whole_phrases(self):
+        import vp_formatting
+
+        result = vp_formatting.apply_format_commands(
+            "første punkt komma ny linje andet punkt punktum", "da")
+
+        self.assertEqual(result.text, "første punkt,\nandet punkt.")
+
+    def test_format_commands_do_not_replace_inside_words(self):
+        import vp_formatting
+
+        result = vp_formatting.apply_format_commands(
+            "Common words and kommandolinje stay literal", "both")
+
+        self.assertFalse(result.changed)
+        self.assertEqual(result.text, "Common words and kommandolinje stay literal")
+
+    def test_voice_pi_applies_formatting_before_injection_and_metrics(self):
+        with open("voice_pi.py", encoding="utf-8") as f:
+            script = f.read()
+
+        post_pos = script.index("post_result = postprocess_text")
+        format_pos = script.index("format_result = apply_format_commands")
+        inject_pos = script.index("self._inject(final_text)")
+        metrics_pos = script.index("format_commands_applied=format_result.applied")
+        self.assertLess(post_pos, format_pos)
+        self.assertLess(format_pos, inject_pos)
+        self.assertLess(inject_pos, metrics_pos)
+
+    def test_settings_ui_exposes_format_commands(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn('"format_commands", ["off", "en", "da", "both"]', script)
+        self.assertIn("Optional spoken formatting commands", script)
+
+
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_setup_warning_escapes_config_path_before_colon(self):
         with open("setup.ps1", encoding="utf-8") as f:

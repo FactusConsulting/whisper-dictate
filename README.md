@@ -318,6 +318,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_LANG` | _(auto-detect)_ | spoken-language hint (`da`, `en`, `de`, `fr`…) |
 | `VOICEPI_KEY` | `ctrl_r` | hold-to-talk key or chord, e.g. `f9`, `alt_r`, `ctrl_l+space` |
 | `VOICEPI_INJECT_MODE` | `auto` | `auto`, `type`, `paste`, or `print`; `auto` types directly except for known fragile Windows terminal targets, where it uses paste |
+| `VOICEPI_FORMAT_COMMANDS` | `off` | optional spoken formatting commands: `off`, `en`, `da`, or `both` |
 | `VOICEPI_BEAM_SIZE` | `1` | raise to `5` for better accuracy — 3-4× slower on CPU |
 | `VOICEPI_INITIAL_PROMPT` | _(none)_ | context hint for domain-specific terms, e.g. `"Winget, whisper-dictate"` |
 | `VOICEPI_DICTIONARY` | user config path | JSON/text dictionary of product names and smart replacements, e.g. `Cloud Code` → `Claude Code` |
@@ -403,6 +404,13 @@ Target profiles can be added to `%APPDATA%\WhisperDictate\config.json` under a
 override settings for that utterance, for example using paste mode and an
 English technical prompt in Claude Code/Codex terminals while keeping defaults
 elsewhere.
+
+Spoken formatting commands are deterministic and opt-in. Set
+`VOICEPI_FORMAT_COMMANDS=en`, `da`, or `both` globally or in a target profile.
+Examples such as `first item comma new line second item period` or `første
+punkt komma ny linje andet punkt punktum` become formatted punctuation and
+line breaks. The feature is off by default so literal dictation of words like
+`comma` or `punktum` is not changed unless you explicitly enable it.
 
 Optional PySide/Qt settings UI: on Windows, use the Start-menu
 **whisper-dictate** shortcut. It owns the dictation process, shows the runtime
