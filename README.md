@@ -346,7 +346,10 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 Dictionary helper commands run before Whisper loads, for example
 `setup.ps1 --dictionary-status`, `setup.ps1 --dictionary-open`,
 `setup.ps1 --dictionary-add "Claude Code"`, and
-`setup.ps1 --dictionary-replace "Cloud Code=Claude Code"`.
+`setup.ps1 --dictionary-replace "Cloud Code=Claude Code"`. Use
+`setup.ps1 --dictionary-suggest benchmark\results.jsonl` to inspect benchmark
+or history JSONL and print suggested smart replacements without mutating the
+dictionary.
 
 Optional Parakeet backend: install `requirements-parakeet.txt`, then set
 `VOICEPI_STT_BACKEND=parakeet`. NeMo is imported lazily, so default Whisper
@@ -371,6 +374,7 @@ python voice_pi.py --calibrate-mic 5
 python voice_pi.py --calibrate-file sample.wav --json
 python voice_pi.py --history-last
 python voice_pi.py --history-copy-last
+python voice_pi.py --dictionary-suggest benchmark\results.jsonl --json
 ```
 
 16-bit WAV works without extra tools. Other formats such as mp3/m4a require

@@ -144,6 +144,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dictionary-replace", metavar="FROM=TO",
                     action=_DictionaryAction,
                     help="add a smart replacement to the managed dictionary, then exit")
+    ap.add_argument("--dictionary-suggest", metavar="JSONL",
+                    help="suggest smart replacements from benchmark/history JSONL, then exit")
+    ap.add_argument("--dictionary-suggest-min-confidence", type=float, default=0.62,
+                    help="minimum fuzzy-match confidence for --dictionary-suggest")
     ap.add_argument("--device", default=DEVICE, choices=VALID_DEVICES,
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
                          "auto = NVIDIA GPU if present, else CPU")

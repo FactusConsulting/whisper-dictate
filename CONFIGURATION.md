@@ -336,6 +336,7 @@ Manage the default dictionary without loading Whisper:
 & "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-open
 & "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-add "Claude Code"
 & "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-replace "Cloud Code=Claude Code"
+& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-suggest benchmark\results.jsonl
 ```
 
 ### Target profiles

@@ -673,6 +673,17 @@ if __name__ == "__main__":
             print(f"[post] fallback: {result.error}", file=sys.stderr, flush=True)
         print(result.text, flush=True)
         raise SystemExit(0)
+    if a.dictionary_suggest:
+        from vp_dictionary_suggest import print_suggestions, suggest_replacements
+        try:
+            suggestions = suggest_replacements(
+                a.dictionary_suggest,
+                min_confidence=a.dictionary_suggest_min_confidence,
+            )
+            print_suggestions(suggestions, as_json=a.json)
+        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+            ap.error(str(e))
+        raise SystemExit(0)
     lang = None if (a.autodetect or not a.lang) else a.lang
 
     # Sæt XKB_DEFAULT_LAYOUT fra --lang så ydotool type og evt. auto-startet

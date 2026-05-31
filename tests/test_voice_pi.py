@@ -1579,6 +1579,97 @@ class FormatCommandTests(unittest.TestCase):
         self.assertIn("Optional spoken formatting commands", script)
 
 
+class DictionarySuggestTests(unittest.TestCase):
+    def test_suggests_replacements_from_benchmark_term_misses(self):
+        import vp_dictionary_suggest
+
+        rows = [{
+            "corpus_id": "da-tech-004",
+            "text": "Murch branchedes og de plåede den nye version bagefter.",
+            "reference_text": "Merge branchen og deploy den nye version bagefter.",
+            "term_misses": ["merge", "deploy"],
+            "reference_terms": ["merge", "deploy"],
+        }]
+
+        suggestions = vp_dictionary_suggest.suggest_replacements_from_rows(
+            rows, min_confidence=0.55)
+
+        pairs = {(s.source.casefold(), s.target.casefold()) for s in suggestions}
+        self.assertIn(("murch", "merge"), pairs)
+
+    def test_suggests_dictionary_term_near_misses(self):
+        import vp_dictionary_suggest
+
+        old_terms = vp_dictionary_suggest.DICTIONARY.terms
+        old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
+        try:
+            vp_dictionary_suggest.DICTIONARY.terms = ["Claude Code"]
+            vp_dictionary_suggest.DICTIONARY.replacements = {}
+            suggestions = vp_dictionary_suggest.suggest_replacements_from_rows(
+                [{"text": "Clort kode should work", "corpus_id": "sample"}],
+                min_confidence=0.45,
+            )
+        finally:
+            vp_dictionary_suggest.DICTIONARY.terms = old_terms
+            vp_dictionary_suggest.DICTIONARY.replacements = old_replacements
+
+        self.assertTrue(any(s.target == "Claude Code" for s in suggestions))
+
+    def test_benchmark_rows_without_misses_do_not_scan_whole_dictionary(self):
+        import vp_dictionary_suggest
+
+        old_terms = vp_dictionary_suggest.DICTIONARY.terms
+        old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
+        try:
+            vp_dictionary_suggest.DICTIONARY.terms = ["AMD"]
+            vp_dictionary_suggest.DICTIONARY.replacements = {}
+            suggestions = vp_dictionary_suggest.suggest_replacements_from_rows(
+                [{
+                    "text": "and then continue",
+                    "reference_text": "and then continue",
+                    "reference_terms": [],
+                    "term_misses": [],
+                }],
+                min_confidence=0.5,
+            )
+        finally:
+            vp_dictionary_suggest.DICTIONARY.terms = old_terms
+            vp_dictionary_suggest.DICTIONARY.replacements = old_replacements
+
+        self.assertEqual(suggestions, [])
+
+    def test_suggest_does_not_duplicate_existing_replacements(self):
+        import vp_dictionary_suggest
+
+        old_terms = vp_dictionary_suggest.DICTIONARY.terms
+        old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
+        try:
+            vp_dictionary_suggest.DICTIONARY.terms = ["lead dev"]
+            vp_dictionary_suggest.DICTIONARY.replacements = {"lead death": "lead dev"}
+            suggestions = vp_dictionary_suggest.suggest_replacements_from_rows(
+                [{"text": "lead death", "term_misses": ["lead dev"]}],
+                min_confidence=0.5,
+            )
+        finally:
+            vp_dictionary_suggest.DICTIONARY.terms = old_terms
+            vp_dictionary_suggest.DICTIONARY.replacements = old_replacements
+
+        self.assertFalse(any(s.source == "lead death" and s.target == "lead dev"
+                             for s in suggestions))
+
+    def test_parser_accepts_dictionary_suggest(self):
+        sys.modules.pop("vp_cli", None)
+        import vp_cli
+
+        args = vp_cli.build_arg_parser().parse_args([
+            "--dictionary-suggest", "benchmark/results.jsonl",
+            "--dictionary-suggest-min-confidence", "0.7",
+        ])
+
+        self.assertEqual(args.dictionary_suggest, "benchmark/results.jsonl")
+        self.assertEqual(args.dictionary_suggest_min_confidence, 0.7)
+
+
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_setup_warning_escapes_config_path_before_colon(self):
         with open("setup.ps1", encoding="utf-8") as f:
