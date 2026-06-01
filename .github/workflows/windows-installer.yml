@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build-installer:
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
 
     steps:
       - name: Resolve tag
@@ -28,7 +28,7 @@ jobs:
             echo "TAG=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0

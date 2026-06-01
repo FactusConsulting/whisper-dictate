@@ -3121,6 +3121,22 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/install-linux-rust-ui.sh", workflow)
         self.assertIn("bash -n scripts/install-linux-rust-ui.sh", workflow)
 
+    def test_workflows_use_node24_checkout_action(self):
+        for path in Path(".github/workflows").glob("*.yml"):
+            workflow = path.read_text(encoding="utf-8")
+            self.assertNotIn("actions/checkout@v4", workflow, path.as_posix())
+            self.assertIn("actions/checkout@v5", workflow, path.as_posix())
+
+    def test_windows_workflows_pin_current_windows_runner(self):
+        for path in Path(".github/workflows").glob("*.yml"):
+            workflow = path.read_text(encoding="utf-8")
+            self.assertNotIn("windows-latest", workflow, path.as_posix())
+        workflow_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in Path(".github/workflows").glob("*.yml")
+        )
+        self.assertIn("windows-2025-vs2026", workflow_text)
+
 
 if __name__ == "__main__":
     unittest.main()
