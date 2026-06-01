@@ -8,8 +8,8 @@ A mic→keyboard, not an AI chat: the "AI" is whatever app you're in.
 
 One process: mic capture and Whisper run together, no server, no
 network hop. Whisper runs on your NVIDIA GPU (CUDA) when present and
-falls back to CPU otherwise — same code, see --device. Use setup.ps1
-(Windows) or setup.sh (Linux) for a one-shot, portable install.
+falls back to CPU otherwise — same code, see --device. Use the Rust
+whisper-dictate controller for install, settings and runtime management.
 
 First run downloads the model into the Hugging Face cache (turbo
 ~1.5 GB; large-v3 ~3 GB).
@@ -557,7 +557,7 @@ class Dictate(InjectMixin):
             return
         if on_wayland and not have_evdev:
             sys.exit("Wayland requires evdev for global hotkeys. "
-                     "Run setup.sh again or install requirements-cpu.txt; "
+                     "Run whisper-dictate install again or install requirements-cpu.txt; "
                      "use --doctor for a full health check.")
 
         # --- pynput fallback (X11 / Windows / macOS) ---
@@ -622,12 +622,6 @@ if __name__ == "__main__":
         print(f"whisper-dictate {VERSION}", flush=True)
     ap = build_arg_parser()
     a = ap.parse_args()
-    if a.settings_ui:
-        from vp_settings_ui import run_settings_ui
-        try:
-            raise SystemExit(run_settings_ui())
-        except RuntimeError as e:
-            ap.error(str(e))
     if a.doctor:
         from vp_doctor import run_doctor
         raise SystemExit(run_doctor())

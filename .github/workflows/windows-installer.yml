@@ -2,7 +2,7 @@ name: windows-installer
 
 # Triggers after the main release workflow creates the GitHub Release.
 # Only builds and submits to winget when Windows-relevant files changed.
-# Windows-relevant: Rust app, voice_pi.py, vp_*.py, setup.cmd/ps1, requirements-*.txt, scripts/, installer/
+# Windows-relevant: Rust app, voice_pi.py, vp_*.py, requirements-*.txt, scripts/, installer/
 
 on:
   workflow_dispatch:
@@ -48,7 +48,7 @@ jobs:
           fi
           changed=$(git diff --name-only "$prev" HEAD -- \
             Cargo.toml Cargo.lock crates/ \
-            voice_pi.py 'vp_*.py' setup.cmd setup.ps1 \
+            voice_pi.py 'vp_*.py' \
             requirements-cpu.txt requirements-gpu.txt \
             scripts/ \
             installer/)
@@ -88,12 +88,43 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $variant" }
           }
 
+      - name: Build Windows ZIP packages
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ env.TAG }}" -replace '^v',''
+          $outDir = "$PWD\Output"
+          $variants = @{
+            cpu = "requirements-cpu.txt"
+            nvidia = "requirements-gpu.txt"
+            amd = "requirements-cpu.txt"
+          }
+          foreach ($variant in $variants.Keys) {
+            $bundle = Join-Path $outDir "zip-$variant\whisper-dictate"
+            Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force $bundle | Out-Null
+            Copy-Item voice_pi.py $bundle
+            Copy-Item vp_*.py $bundle
+            Copy-Item README.md,TECHNICAL.md,LICENSE,VERSION $bundle
+            Copy-Item dictionary.example.json $bundle -ErrorAction SilentlyContinue
+            Copy-Item requirements-parakeet.txt $bundle -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
+            Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
+            Copy-Item $variants[$variant] (Join-Path $bundle "requirements.txt")
+            Copy-Item target\release\whisper-dictate.exe $bundle
+            New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
+            Copy-Item scripts\inject-smoke.py (Join-Path $bundle "scripts")
+            $zip = Join-Path $outDir "whisper-dictate-windows-$variant-$version.zip"
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
+          }
+
       - name: Compute SHA256 hashes
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: |
           $out = @()
-          foreach ($f in Get-ChildItem "Output\*.exe") {
+          foreach ($f in Get-ChildItem "Output\*.exe", "Output\*.zip") {
             $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
             "$($f.Name)=$hash" | Tee-Object -Append sha256sums.txt
             $out += [pscustomobject]@{ File = $f.Name; SHA256 = $hash }
@@ -107,7 +138,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release upload "$TAG" Output/*.exe sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" Output/*.exe Output/*.zip sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Generate winget manifests
         if: steps.win-check.outputs.changed == 'true'

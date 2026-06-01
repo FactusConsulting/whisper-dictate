@@ -16,6 +16,8 @@ const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeState {
@@ -132,13 +134,15 @@ impl RuntimeSupervisor {
 
         self.state = RuntimeState::Starting;
         let display = command.display();
-        let mut child = Command::new(&command.program)
+        let mut process = Command::new(&command.program);
+        process
             .args(&command.args)
             .current_dir(&command.working_dir)
             .env(WORKER_EVENTS_ENV, "1")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        configure_background_process(&mut process);
+        let mut child = process.spawn()?;
 
         if let Some(stdout) = child.stdout.take() {
             stream_lines(stdout, self.tx.clone(), RuntimeStream::Stdout);
@@ -159,17 +163,26 @@ impl RuntimeSupervisor {
             return Ok(());
         };
 
-        kill_child(&mut child)?;
-        let status = child.wait()?;
         self.state = RuntimeState::Stopped;
-        let _ = self.tx.send(RuntimeEvent::Exited {
-            code: status.code(),
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let result = kill_child(&mut child).and_then(|_| child.wait().map_err(Into::into));
+            match result {
+                Ok(status) => {
+                    let _ = tx.send(RuntimeEvent::Exited {
+                        code: status.code(),
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(RuntimeEvent::Error(format!("stop failed: {err}")));
+                }
+            }
         });
         Ok(())
     }
 
     pub fn restart(&mut self, command: WorkerCommand) -> Result<()> {
-        self.stop()?;
+        self.stop_and_wait()?;
         self.start(command)
     }
 
@@ -193,6 +206,21 @@ impl RuntimeSupervisor {
         }
 
         self.rx.try_iter().collect()
+    }
+
+    fn stop_and_wait(&mut self) -> Result<()> {
+        let Some(mut child) = self.child.take() else {
+            self.state = RuntimeState::Stopped;
+            return Ok(());
+        };
+
+        kill_child(&mut child)?;
+        let status = child.wait()?;
+        self.state = RuntimeState::Stopped;
+        let _ = self.tx.send(RuntimeEvent::Exited {
+            code: status.code(),
+        });
+        Ok(())
     }
 }
 
@@ -470,10 +498,12 @@ impl WorkerOutput {
 }
 
 pub fn run_capture(command: &WorkerCommand) -> Result<WorkerOutput> {
-    let output = Command::new(&command.program)
+    let mut process = Command::new(&command.program);
+    process
         .args(&command.args)
-        .current_dir(&command.working_dir)
-        .output()?;
+        .current_dir(&command.working_dir);
+    configure_background_process(&mut process);
+    let output = process.output()?;
 
     Ok(WorkerOutput {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -488,6 +518,14 @@ pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
         .current_dir(&command.working_dir)
         .status()?;
     exit_status_to_result(status)
+}
+
+fn configure_background_process(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
 }
 
 fn exit_status_to_result(status: ExitStatus) -> Result<()> {

@@ -67,7 +67,7 @@ requiring restart/model reload.
 | **Disable terminal color** | `VOICEPI_NO_COLOR` / `NO_COLOR` | _none_ | _(unset)_ | any non-empty | keep terminal status lines plain even when stdout is interactive |
 | **VAD threshold** | `VOICEPI_VAD_THRESHOLD` | _none_ | `0.3` | float | Silero VAD speech threshold passed to faster-whisper |
 | **VAD silence** | `VOICEPI_VAD_MIN_SILENCE_MS` | _none_ | `600` | integer ms | minimum silence gap used by VAD segmentation |
-| **Skip syscheck** | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `setup.sh` apt-dep check (auto-set by brew/nix) |
+| **Skip syscheck** | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
 | **Debug dump** | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | log every effective setting at startup |
 
 The detailed tables below are the same knobs split by surface (env vars
@@ -83,7 +83,7 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_STT_MODEL` | *(unset → `gpt-4o-mini-transcribe` for local Whisper names)* | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`, or compatible model name | External transcription model used only when `VOICEPI_STT_BACKEND=openai`. If you leave `VOICEPI_MODEL=large-v3-turbo`/`large-v3`, the adapter maps it to `gpt-4o-mini-transcribe` unless this is set. |
 | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | URL | OpenAI-compatible transcription API base URL used only when `VOICEPI_STT_BACKEND=openai`. |
 | `VOICEPI_STT_TIMEOUT_MS` | `30000` | integer ms | Maximum wait for an external transcription request. |
-| `VOICEPI_STT_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for `VOICEPI_STT_BACKEND=openai`. `VOICEPI_STT_API_KEY` takes precedence over `OPENAI_API_KEY` for transcription. API keys are read from env only and are not saved by the Settings UI. |
+| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for `VOICEPI_STT_BACKEND=openai`. `VOICEPI_STT_API_KEY` takes precedence; `GROQ_API_KEY` is used when `VOICEPI_STT_BASE_URL` points at Groq; `OPENAI_API_KEY` is the generic fallback. API keys are read from env only and are not saved by the Settings UI. |
 | `VOICEPI_PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | NeMo ASR model name | Optional Parakeet-specific model override. Takes precedence over `VOICEPI_MODEL` when `VOICEPI_STT_BACKEND=parakeet`. |
 | `VOICEPI_DEVICE` | `auto` | `auto` \| `cuda` \| `cpu` | Compute device. `auto` = NVIDIA GPU if present, else CPU. Invalid value → error. Also `--device`. |
 | `VOICEPI_COMPUTE_TYPE` | *(unset → `int8_float16` on GPU, `int8` on CPU)* | `int8` \| `int8_float16` \| `float16` \| `bfloat16` \| `float32` … (any ctranslate2-supported type) | Whisper-only precision override for faster-whisper/CTranslate2. Big-GPU users gain accuracy with `float16` (or `bfloat16` on Ampere/Ada+); `int8_float16` defaults trade a little accuracy for VRAM/speed. Parakeet uses PyTorch/NeMo and currently ignores this setting, so the UI disables it when Parakeet is selected. |
@@ -125,7 +125,7 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | integer ms | Minimum silence gap used by VAD segmentation. Lower can reduce latency on clipped phrases; higher keeps phrases together. |
 | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | float seconds (`0` disables) | Parakeet-only minimum recording length. Shorter clips are ignored to avoid poor language autodetection and low-context mistakes. |
 | `VOICEPI_RELEASE_TAIL_MS` | `200` | integer milliseconds (`0` disables) | Extra audio captured after the hotkey is released. Useful when the last syllable or word is clipped because the key is released slightly before speech fully ends. Live-reloadable. |
-| `VOICEPI_SKIP_SYSCHECK` | *(unset)* | any non-empty value | Linux: skip the `setup.sh` apt dependency check. Set automatically by the Homebrew/Nix wrappers; rarely set by hand. |
+| `VOICEPI_SKIP_SYSCHECK` | *(unset)* | any non-empty value | Linux: skip the `ubuntu26.04/setup.sh` apt dependency check. Set automatically by the Homebrew/Nix wrappers; rarely set by hand. |
 | `VOICEPI_DEBUG` | *(unset)* | `1` / `true` / any truthy (empty, `0`, `false`, `no`, `off` = disabled) | At startup, prints a `[debug] effective settings:` block listing every setting + which env var supplied it. Useful for "is my `setx` actually arriving in the running process?" — run with `VOICEPI_DEBUG=1` and the first lines of the log show the truth. Zero runtime cost when unset. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR
@@ -196,7 +196,7 @@ normal use; the dump adds ~10 lines on startup and zero runtime cost.
 
 ## CLI flags
 
-Passed after the launcher (`setup.cmd` / `setup.sh` / `whisper-dictate`):
+Passed after the Rust controller (`whisper-dictate run -- ...`):
 
 | Flag | Default | Values | Effect |
 |---|---|---|---|
@@ -211,7 +211,6 @@ Passed after the launcher (`setup.cmd` / `setup.sh` / `whisper-dictate`):
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `--doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
 | `--model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table before loading Whisper. |
-| `--settings-ui` | off | — | Open the optional PySide/Qt settings UI and exit. |
 | `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
 | `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |
 | `--benchmark-corpus PATH` | off | manifest path | Run a benchmark corpus manifest and annotate results with reference text, WER/CER and technical-term hits/misses. |
@@ -294,6 +293,17 @@ setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_MODEL gpt-4o-mini-transcribe
 ```
 
+For Groq cloud transcription, use the Rust UI **Use Groq cloud STT** preset or
+set the equivalent values manually. The UI can open Groq's API key page, but it
+does not create or store keys for you:
+
+```powershell
+setx GROQ_API_KEY "gsk_..."
+setx VOICEPI_STT_BACKEND openai
+setx VOICEPI_STT_BASE_URL https://api.groq.com/openai/v1
+setx VOICEPI_STT_MODEL whisper-large-v3-turbo
+```
+
 For external text cleanup after local STT/dictionary replacements, set:
 
 ```powershell
@@ -319,14 +329,6 @@ control surface:
 ```bash
 scripts/install-linux-rust-ui.sh
 whisper-dictate ui
-```
-
-The legacy PySide UI remains available for compatibility:
-
-```powershell
-& "$env:USERPROFILE\voice-pi-venv\Scripts\python.exe" -m pip install `
-  -r "$env:LOCALAPPDATA\Programs\WhisperDictate\requirements-ui.txt"
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --settings-ui
 ```
 
 The Rust UI edits `%APPDATA%\WhisperDictate\config.json`, can create/open the
@@ -371,11 +373,11 @@ along with the raw text.
 Manage the default dictionary without loading Whisper:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-status
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-open
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-add "Claude Code"
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-replace "Cloud Code=Claude Code"
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --dictionary-suggest benchmark\results.jsonl
+whisper-dictate run --dictionary-status
+whisper-dictate run --dictionary-open
+whisper-dictate run --dictionary-add "Claude Code"
+whisper-dictate run --dictionary-replace "Cloud Code=Claude Code"
+whisper-dictate run --dictionary-suggest benchmark\results.jsonl
 ```
 
 On Windows, the Settings UI exposes the same suggestion flow on the Dictionary
@@ -456,12 +458,13 @@ Or inline for one run:
 VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 whisper-dictate --key shift_r+ctrl_r
 ```
 
-### Linux — manual (`./setup.sh`)
+### Linux — manual Rust controller
 
-Same as Homebrew — env vars or flags:
+Install the Rust controller, then use env vars or flags:
 
 ```bash
-VOICEPI_LANG=da ./setup.sh --key ctrl_r --lang da
+scripts/install-linux-rust-ui.sh
+VOICEPI_LANG=da whisper-dictate run --key ctrl_r --lang da
 ```
 
 ### NixOS / Nix

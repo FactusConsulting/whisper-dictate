@@ -16,11 +16,16 @@ release because `release.yml` bumps in-place after the tag is pushed.
 - Optional OpenAI-compatible STT backend via `VOICEPI_STT_BACKEND=openai`, `VOICEPI_STT_MODEL`, `VOICEPI_STT_BASE_URL`, `VOICEPI_STT_TIMEOUT_MS`, and `VOICEPI_STT_API_KEY`/`OPENAI_API_KEY`.
 - Optional OpenAI-compatible post-processing provider via `VOICEPI_POST_PROCESSOR=openai` and `VOICEPI_POST_API_KEY`/`OPENAI_API_KEY`.
 - Settings UI controls and benchmark specs for external STT models, including `openai:gpt-4o-mini-transcribe`.
+- Rust UI Groq cloud STT preset, Groq API key shortcut, and `GROQ_API_KEY` support when using Groq's OpenAI-compatible endpoint.
 - The Windows PowerShell title, Settings UI title and tray tooltip now show the running whisper-dictate version.
+- The official whisper-dictate logo is used as the Windows application icon and shown on the GitHub README/release notes.
 
 ### Changed
 - Rust Windows UI now uses the Windows GUI subsystem so normal UI launch does not create an extra console window.
+- Rust UI-managed worker, doctor and install commands now hide child console windows on Windows while streaming logs into the Runtime tab.
 - Rust Runtime log now expands to the available window width/height instead of staying as a narrow text box.
+- Rust Runtime tab now has a Clear button for clearing the visible log without stopping dictation.
+- Rust Runtime Stop now returns immediately and tears down the Python worker process tree in the background.
 - External API keys are read from environment variables only and are not stored in the Settings UI config JSON.
 
 ## [0.2.60] - 2026-05-31

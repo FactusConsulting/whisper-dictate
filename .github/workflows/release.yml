@@ -42,7 +42,6 @@ jobs:
       - name: Sanity-check scripts
         run: |
           python3 -c "import ast; ast.parse(open('voice_pi.py').read())"
-          bash -n setup.sh
           bash -n scripts/install-linux-rust-ui.sh
 
       - name: Install Linux Rust UI build deps
@@ -64,32 +63,26 @@ jobs:
       - name: Build bundles
         run: |
           set -e
-          mkbundle() {   # $1 zip  $2 requirements-file  $3... launchers
+          mkbundle() {   # $1 zip  $2 requirements-file
             zip_name="$1"
             requirements_file="$2"
-            shift 2
+            shift 2 || true
             d=whisper-dictate; rm -rf "$d"; mkdir "$d"
             cp voice_pi.py vp_*.py README.md LICENSE "$d/"
             [ -f dictionary.example.json ] && cp dictionary.example.json "$d/"
             [ -f requirements-parakeet.txt ] && cp requirements-parakeet.txt "$d/"
-            [ -f requirements-ui.txt ] && cp requirements-ui.txt "$d/"
             mkdir -p "$d/scripts"
             cp scripts/inject-smoke.py scripts/install-linux-rust-ui.sh "$d/scripts/"
             printf "%s\n" "$VERSION" > "$d/VERSION"
             cp "$requirements_file" "$d/requirements.txt"
-            for f in "$@"; do cp "$f" "$d/"; done
             if [ "${INCLUDE_RUST_UI:-0}" = "1" ]; then
               install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"
             fi
-            [ -f "$d/setup.sh" ] && chmod +x "$d/setup.sh"
             [ -f "$d/scripts/install-linux-rust-ui.sh" ] && chmod +x "$d/scripts/install-linux-rust-ui.sh"
             zip -q -r "$zip_name" "$d"; rm -rf "$d"
           }
           install -m 0755 target/release/whisper-dictate "whisper-dictate-linux-rust-ui-${VERSION}"
-          mkbundle "whisper-dictate-windows-nvidia-${VERSION}.zip" requirements-gpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
-          mkbundle "whisper-dictate-windows-cpu-${VERSION}.zip"    requirements-cpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
-          mkbundle "whisper-dictate-windows-amd-${VERSION}.zip"    requirements-cpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
-          INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip" requirements-cpu.txt setup.sh
+          INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip" requirements-cpu.txt
 
       - name: Generate release notes from commit messages
         run: |
@@ -118,9 +111,6 @@ jobs:
         run: |
           set -e
           assets=(
-            "whisper-dictate-windows-nvidia-${VERSION}.zip"
-            "whisper-dictate-windows-cpu-${VERSION}.zip"
-            "whisper-dictate-windows-amd-${VERSION}.zip"
             "whisper-dictate-linux-cpu-${VERSION}.zip"
             "whisper-dictate-linux-rust-ui-${VERSION}"
           )
@@ -207,7 +197,7 @@ jobs:
           fi
           changed=$(git diff --name-only "$prev" HEAD -- \
             Cargo.toml Cargo.lock crates/ \
-            voice_pi.py 'vp_*.py' setup.cmd setup.ps1 \
+            voice_pi.py 'vp_*.py' \
             requirements-cpu.txt requirements-gpu.txt \
             scripts/ \
             installer/)
@@ -247,12 +237,43 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $variant" }
           }
 
+      - name: Build Windows ZIP packages
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ env.TAG }}" -replace '^v',''
+          $outDir = "$PWD\Output"
+          $variants = @{
+            cpu = "requirements-cpu.txt"
+            nvidia = "requirements-gpu.txt"
+            amd = "requirements-cpu.txt"
+          }
+          foreach ($variant in $variants.Keys) {
+            $bundle = Join-Path $outDir "zip-$variant\whisper-dictate"
+            Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force $bundle | Out-Null
+            Copy-Item voice_pi.py $bundle
+            Copy-Item vp_*.py $bundle
+            Copy-Item README.md,TECHNICAL.md,LICENSE,VERSION $bundle
+            Copy-Item dictionary.example.json $bundle -ErrorAction SilentlyContinue
+            Copy-Item requirements-parakeet.txt $bundle -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
+            Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
+            Copy-Item $variants[$variant] (Join-Path $bundle "requirements.txt")
+            Copy-Item target\release\whisper-dictate.exe $bundle
+            New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
+            Copy-Item scripts\inject-smoke.py (Join-Path $bundle "scripts")
+            $zip = Join-Path $outDir "whisper-dictate-windows-$variant-$version.zip"
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
+          }
+
       - name: Compute SHA256 hashes
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: |
           $out = @()
-          foreach ($f in Get-ChildItem "Output\*.exe") {
+          foreach ($f in Get-ChildItem "Output\*.exe", "Output\*.zip") {
             $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
             "$($f.Name)=$hash" | Tee-Object -Append sha256sums.txt
             $out += [pscustomobject]@{ File = $f.Name; SHA256 = $hash }
@@ -266,7 +287,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release upload "$TAG" Output/*.exe sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" Output/*.exe Output/*.zip sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Generate winget manifests
         if: steps.win-check.outputs.changed == 'true'

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use eframe::egui;
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
@@ -9,6 +10,10 @@ use crate::runtime::{
     default_worker_command, doctor_command, install_command, run_capture, RuntimeEvent,
     RuntimeState, RuntimeSupervisor, WorkerCommand,
 };
+
+const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
+const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
+const GROQ_KEYS_URL: &str = "https://console.groq.com/keys";
 
 pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
@@ -156,6 +161,9 @@ impl WhisperDictateApp {
             {
                 self.run_install();
             }
+            if ui.button("Clear").clicked() {
+                self.runtime_log.clear();
+            }
             ui.separator();
             ui.label(format!("Status: {}", self.runtime_state.label()));
             if let Some(label) = self.background_task_label {
@@ -238,6 +246,34 @@ impl WhisperDictateApp {
                 text(ui, "Quit count", &mut self.settings.quit_count);
                 text(ui, "Quit window ms", &mut self.settings.quit_window_ms);
             });
+        ui.horizontal(|ui| {
+            if ui.button("Use Groq cloud STT").clicked() {
+                self.settings.stt_backend = "openai".to_owned();
+                self.settings.stt_model = GROQ_STT_MODEL.to_owned();
+                self.settings.stt_base_url = GROQ_STT_BASE_URL.to_owned();
+                self.settings_status =
+                    "Groq preset applied. Set GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY before starting."
+                        .to_owned();
+            }
+            if ui.button("Groq API keys").clicked() {
+                match open_url(GROQ_KEYS_URL) {
+                    Ok(()) => {
+                        self.settings_status =
+                            "Opened Groq API keys. Store the key in GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY."
+                                .to_owned();
+                    }
+                    Err(err) => {
+                        self.settings_status =
+                            format!("Could not open Groq API keys page: {err}");
+                    }
+                }
+            }
+        });
+        if self.settings.stt_backend == "openai" {
+            ui.label(
+                "Cloud STT sends recorded audio to the configured provider. API keys are read from environment variables only.",
+            );
+        }
     }
 
     fn quality_tab(&mut self, ui: &mut egui::Ui) {
@@ -696,4 +732,24 @@ fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str]) {
             }
         });
     ui.end_row();
+}
+
+fn open_url(url: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        Command::new("cmd").args(["/C", "start", "", url]).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(url).spawn()?;
+        Ok(())
+    }
 }

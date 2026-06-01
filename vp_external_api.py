@@ -19,6 +19,7 @@ SR = 16000
 
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 LOCAL_WHISPER_MODEL_NAMES = {
     "tiny", "base", "small", "medium", "large-v3", "large-v3-turbo",
     "distil-large-v3",
@@ -54,10 +55,12 @@ def _int_value(name: str, default: int, minimum: int = 100) -> int:
         return default
 
 
-def _api_key(primary_env: str) -> str:
+def _api_key(primary_env: str, *, base_url: str = "") -> str:
+    groq_key = os.environ.get("GROQ_API_KEY") if "api.groq.com" in base_url.lower() else ""
     return (
         get_value(primary_env)
         or os.environ.get(primary_env)
+        or groq_key
         or os.environ.get("OPENAI_API_KEY")
         or ""
     ).strip()
@@ -67,12 +70,13 @@ def load_stt_api_settings(model_name: str) -> ExternalApiSettings:
     configured_model = get_value("VOICEPI_STT_MODEL")
     if not configured_model and (model_name or "").strip() in LOCAL_WHISPER_MODEL_NAMES:
         model_name = "gpt-4o-mini-transcribe"
+    base_url = (get_value("VOICEPI_STT_BASE_URL", DEFAULT_OPENAI_BASE_URL)
+                or DEFAULT_OPENAI_BASE_URL).rstrip("/")
     return ExternalApiSettings(
         provider="openai",
         model=configured_model or model_name or "gpt-4o-mini-transcribe",
-        base_url=(get_value("VOICEPI_STT_BASE_URL", DEFAULT_OPENAI_BASE_URL)
-                  or DEFAULT_OPENAI_BASE_URL).rstrip("/"),
-        api_key=_api_key("VOICEPI_STT_API_KEY"),
+        base_url=base_url,
+        api_key=_api_key("VOICEPI_STT_API_KEY", base_url=base_url),
         timeout_ms=_int_value("VOICEPI_STT_TIMEOUT_MS", 30000, 1000),
     )
 
@@ -80,7 +84,8 @@ def load_stt_api_settings(model_name: str) -> ExternalApiSettings:
 def _require_api_key(settings: ExternalApiSettings) -> None:
     if not settings.api_key:
         raise RuntimeError(
-            f"{settings.provider} API requires OPENAI_API_KEY or VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY")
+            f"{settings.provider} API requires OPENAI_API_KEY, GROQ_API_KEY, "
+            "or VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY")
 
 
 def _request_json(

@@ -54,8 +54,38 @@ fn supervisor_stops_running_process() {
     assert_eq!(supervisor.state(), RuntimeState::Running);
 
     supervisor.stop().unwrap();
-    let events = supervisor.poll();
+    assert_eq!(supervisor.state(), RuntimeState::Stopped);
+    let events = collect_until(&mut supervisor, has_exit);
     assert!(has_exit(&events));
+    assert_eq!(supervisor.state(), RuntimeState::Stopped);
+}
+
+#[test]
+fn supervisor_stop_returns_without_waiting_for_process_exit_event() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import time; print('worker-ready', flush=True); time.sleep(30)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| has_stdout(events, "worker-ready"));
+    assert!(has_stdout(&events, "worker-ready"));
+
+    let started = Instant::now();
+    supervisor.stop().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "stop should return immediately instead of waiting for process teardown"
+    );
     assert_eq!(supervisor.state(), RuntimeState::Stopped);
 }
 

@@ -1,4 +1,10 @@
-# whisper-dictate — speak prompts instead of typing them
+<p align="center">
+  <img src="assets/whisper-dictate-logo.svg" width="112" height="112" alt="whisper-dictate logo">
+</p>
+
+<h1 align="center">whisper-dictate</h1>
+
+<p align="center"><strong>Speak prompts instead of typing them.</strong></p>
 
 App-agnostic **push-to-talk dictation**. Hold a key, speak quietly but
 clearly, release — the transcribed text is injected into whatever window
@@ -211,13 +217,13 @@ workflow from this source — it has not been tampered with.
 > heuristics (detection names ending in `!ml`, e.g. `Wacatac`, `Sabsik`) may
 > flag it. The installer payload is listed in
 > [`installer/whisper-dictate.iss`](installer/whisper-dictate.iss): the
-> Python runtime files, compatibility scripts, docs, and the Rust controller
+> Python runtime files, docs, and the Rust controller
 > binary built by CI. After
 > verifying the SHA256 above you can cross-check on
 > [VirusTotal](https://www.virustotal.com/): a handful of heuristic engines
 > flag it, the large majority report clean. To avoid the heuristic entirely,
-> use the [zip / source install](#install-manually-zip) and run `setup.cmd`
-> — identical software, no installer stub.
+> build from source and run the Rust controller directly — identical software,
+> no installer stub.
 
 ### Install via winget
 
@@ -249,9 +255,9 @@ winget install --manifest .\whisper-dictate\manifests
 ### Install manually (zip)
 
 Download the zip from [GitHub Releases](https://github.com/FactusConsulting/whisper-dictate/releases/latest),
-unzip anywhere, and run **`setup.cmd`**. Portable Windows zips keep this
-compatibility wrapper for machines where you do not want the installer; the
-`.exe` installer is the Rust-primary path.
+unzip anywhere, and run **`whisper-dictate.exe install`** once, then
+**`whisper-dictate.exe ui`**. The `.exe` installer remains the recommended
+Windows path.
 
 First-time setup downloads Python 3.12 via winget (if needed), builds a
 local venv, and downloads the Whisper model (~1.5 GB).
@@ -259,12 +265,13 @@ local venv, and downloads the Whisper model (~1.5 GB).
 ### Start
 
 ```powershell
-setup.cmd --key ctrl_r --lang en
+whisper-dictate.exe run --key ctrl_r --lang en
 ```
 
 With the `.exe` installer, use the Start-menu **whisper-dictate** shortcut to
-run dictation and settings from one UI. The **whisper-dictate Terminal**
-shortcut opens the legacy terminal launcher for visible Python/runtime logs.
+run dictation and settings from one UI. The normal **whisper-dictate** shortcut
+runs the Rust UI and starts the Python worker hidden underneath it, with logs
+streamed into the Runtime tab.
 
 After first-time setup, launch directly:
 
@@ -351,7 +358,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_STT_BACKEND` | `whisper` | `whisper`, `parakeet`, or explicit opt-in `openai` external transcription |
 | `VOICEPI_STT_MODEL` | _(unset)_ | external transcription model, for example `gpt-4o-mini-transcribe` |
 | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible transcription API base URL |
-| `VOICEPI_STT_API_KEY` | _(unset)_ | optional external transcription key; `OPENAI_API_KEY` also works |
+| `VOICEPI_STT_API_KEY` | _(unset)_ | optional external transcription key; `GROQ_API_KEY` works for Groq URLs and `OPENAI_API_KEY` also works |
 | `VOICEPI_PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet model; v3 is best default for Danish/mixed Danish-English, TDT 1.1B is for pure English quality tests |
 | `VOICEPI_DEVICE` | `auto` | `cuda`/`cpu` to force; `auto` = NVIDIA if present |
 | `VOICEPI_LANG` | _(auto-detect)_ | spoken-language hint (`da`, `en`, `de`, `fr`…) |
@@ -384,10 +391,11 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_RELEASE_TAIL_MS` | `200` | keep capturing briefly after hotkey release to avoid clipping final words |
 
 Dictionary helper commands run before Whisper loads, for example
-`setup.ps1 --dictionary-status`, `setup.ps1 --dictionary-open`,
-`setup.ps1 --dictionary-add "Claude Code"`, and
-`setup.ps1 --dictionary-replace "Cloud Code=Claude Code"`. Use
-`setup.ps1 --dictionary-suggest benchmark\results.jsonl` to inspect benchmark
+`whisper-dictate run --dictionary-status`,
+`whisper-dictate run --dictionary-open`,
+`whisper-dictate run --dictionary-add "Claude Code"`, and
+`whisper-dictate run --dictionary-replace "Cloud Code=Claude Code"`. Use
+`whisper-dictate run --dictionary-suggest benchmark\results.jsonl` to inspect benchmark
 or history JSONL and print suggested smart replacements without mutating the
 dictionary. In the Windows Settings UI, open the Dictionary tab and use
 Benchmark suggestions to preview the same suggestions and apply the shown
@@ -408,9 +416,19 @@ for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY` or
 `OPENAI_API_KEY` or `VOICEPI_POST_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
 external providers before requests are made.
 
+Groq is available as an opt-in cloud STT preset in the Rust UI. It uses Groq's
+OpenAI-compatible transcription endpoint and `whisper-large-v3-turbo`:
+
+```powershell
+setx GROQ_API_KEY "gsk_..."
+setx VOICEPI_STT_BACKEND openai
+setx VOICEPI_STT_BASE_URL https://api.groq.com/openai/v1
+setx VOICEPI_STT_MODEL whisper-large-v3-turbo
+```
+
 API keys are not saved in the Settings UI config file. whisper-dictate reads
 them only from the process/user environment (`OPENAI_API_KEY`,
-`VOICEPI_STT_API_KEY`, `VOICEPI_POST_API_KEY`).
+`GROQ_API_KEY`, `VOICEPI_STT_API_KEY`, `VOICEPI_POST_API_KEY`).
 
 File transcription for benchmarks/debugging uses the same backend, dictionary
 and replacement pipeline as live dictation:
@@ -518,16 +536,18 @@ Push a version tag:
 git tag v0.2.1 && git push origin v0.2.1
 ```
 
-This triggers **`release.yml`**: it builds the four zip bundles, publishes
-the GitHub Release, and (when the `HOMEBREW_TAP_TOKEN` repo secret is set)
+This triggers **`release.yml`**: it publishes the Linux bundle and Rust UI
+binary, then builds Windows installers and portable Windows ZIP bundles on a
+Windows runner. It also publishes the GitHub Release and (when the
+`HOMEBREW_TAP_TOKEN` repo secret is set)
 auto-bumps `url`/`sha256` in
 [`FactusConsulting/homebrew-tap`](https://github.com/FactusConsulting/homebrew-tap)
 `Formula/whisper-dictate.rb`.
 
-The Windows `.exe` installers are built by the release workflow itself.
-After the tag is pushed, CI publishes the zip bundles, builds the versioned
-installers, uploads them to the Release, and regenerates the local winget
-manifests in this repo (used for the `winget install --manifest` install path).
+The Windows `.exe` installers and Windows ZIP bundles are built by the release
+workflow itself. After the tag is pushed, CI uploads them to the Release and
+regenerates the local winget manifests in this repo (used for the
+`winget install --manifest` install path).
 
 For a faster local Windows test loop without creating a release:
 
@@ -535,10 +555,10 @@ For a faster local Windows test loop without creating a release:
 .\scripts\build-windows-installer.ps1 -Variant nvidia -Version 0.0.0.1
 ```
 
-The local installer is written to `Output\`. The script uses Inno Setup 6 and
-installs it via winget, or Chocolatey as a fallback, when it is missing. Use a
-numeric four-part version for local builds because the Windows installer
-metadata rejects labels such as `-local`.
+The local installer and portable ZIP are written to `Output\`. The script uses
+Inno Setup 6 and installs it via winget, or Chocolatey as a fallback, when it is
+missing. Use a numeric four-part version for local builds because the Windows
+installer metadata rejects labels such as `-local`.
 
 ## Wayland keyboard-layout testing status
 

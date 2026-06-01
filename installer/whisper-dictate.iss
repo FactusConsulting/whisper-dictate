@@ -45,25 +45,18 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "..\voice_pi.py";        DestDir: "{app}"; Flags: ignoreversion
 Source: "..\vp_*.py";            DestDir: "{app}"; Flags: ignoreversion
-Source: "..\setup.ps1";          DestDir: "{app}"; Flags: ignoreversion
-Source: "..\setup.cmd";          DestDir: "{app}"; Flags: ignoreversion
-Source: "..\settings-ui.ps1";    DestDir: "{app}"; Flags: ignoreversion
-Source: "..\settings-ui.vbs";    DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\TECHNICAL.md";       DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dictionary.example.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\requirements-parakeet.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\requirements-ui.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\scripts\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\{#REQFILE}";               DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
-Name: "{userprograms}\whisper-dictate\whisper-dictate Legacy Settings UI"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
-Name: "{userprograms}\whisper-dictate\whisper-dictate Terminal"; Filename: "{app}\setup.cmd"; WorkingDir: "{app}"; IconFilename: "{cmd}"
 Name: "{userprograms}\whisper-dictate\Uninstall";          Filename: "{uninstallexe}"
 Name: "{userdesktop}\whisper-dictate";                     Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
 

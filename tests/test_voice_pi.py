@@ -26,7 +26,7 @@ except OSError:
 def load_voice_pi(cuda_devices: int = 0):
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
                  "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
-                 "vp_config", "vp_privacy", "vp_postprocess", "vp_settings_ui",
+                 "vp_config", "vp_privacy", "vp_postprocess",
                  "ctranslate2", "faster_whisper", "numpy",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -64,7 +64,7 @@ def load_voice_pi_realnp():
     heavy/uninstalled deps stubbed. CI installs numpy (see tests workflow)."""
     for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
                  "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
-                 "vp_config", "vp_privacy", "vp_postprocess", "vp_settings_ui",
+                 "vp_config", "vp_privacy", "vp_postprocess",
                  "ctranslate2", "faster_whisper",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -483,15 +483,14 @@ class ArgumentParserTests(unittest.TestCase):
 
         self.assertEqual(parser.parse_args([]).mode, "auto")
 
-    def test_parser_accepts_json_and_doctor(self):
+    def test_parser_accepts_json_doctor_and_model_capacity(self):
         voice_pi = load_voice_pi()
         parser = voice_pi.build_arg_parser()
 
-        ns = parser.parse_args(["--json", "--doctor", "--settings-ui", "--model-capacity"])
+        ns = parser.parse_args(["--json", "--doctor", "--model-capacity"])
 
         self.assertTrue(ns.json)
         self.assertTrue(ns.doctor)
-        self.assertTrue(ns.settings_ui)
         self.assertTrue(ns.model_capacity)
 
     def test_dictionary_status_exits_from_parser(self):
@@ -601,6 +600,38 @@ class ExternalApiTests(unittest.TestCase):
             settings = vp_external_api.load_stt_api_settings("large-v3")
 
         self.assertEqual(settings.model, "gpt-4o-transcribe")
+
+    def test_groq_base_url_accepts_groq_api_key_alias(self):
+        with _env(
+            VOICEPI_STT_API_KEY=None,
+            OPENAI_API_KEY=None,
+            GROQ_API_KEY="groq-key",
+            VOICEPI_STT_BASE_URL="https://api.groq.com/openai/v1",
+            VOICEPI_STT_MODEL="whisper-large-v3-turbo",
+        ):
+            sys.modules.pop("vp_external_api", None)
+            import vp_external_api
+
+            settings = vp_external_api.load_stt_api_settings("large-v3")
+
+        self.assertEqual(settings.base_url, "https://api.groq.com/openai/v1")
+        self.assertEqual(settings.model, "whisper-large-v3-turbo")
+        self.assertEqual(settings.api_key, "groq-key")
+
+    def test_non_groq_base_url_does_not_use_groq_api_key_alias(self):
+        with _env(
+            VOICEPI_STT_API_KEY=None,
+            OPENAI_API_KEY=None,
+            GROQ_API_KEY="groq-key",
+            VOICEPI_STT_BASE_URL="https://api.example.test/v1",
+            VOICEPI_STT_MODEL="custom-transcribe",
+        ):
+            sys.modules.pop("vp_external_api", None)
+            import vp_external_api
+
+            settings = vp_external_api.load_stt_api_settings("large-v3")
+
+        self.assertEqual(settings.api_key, "")
 
     def test_external_transcription_posts_multipart_audio(self):
         import threading
@@ -1117,21 +1148,6 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(vp_config.get_value("VOICEPI_MODEL"), "large-v3")
             self.assertEqual(vp_config.apply_config_to_environ(), {"VOICEPI_LANG", "VOICEPI_MODEL"})
             self.assertEqual(os.environ["VOICEPI_LANG"], "da")
-
-    def test_settings_ui_reports_missing_pyside(self):
-        import vp_settings_ui
-
-        real_import = __import__
-
-        def fake_import(name, *args, **kwargs):
-            if name.startswith("PySide6"):
-                raise ImportError("no PySide")
-            return real_import(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=fake_import):
-            with self.assertRaisesRegex(RuntimeError, "requirements-ui.txt"):
-                vp_settings_ui.run_settings_ui()
-
 
 class TranscribeDetailTests(unittest.TestCase):
     def setUp(self):
@@ -1853,14 +1869,6 @@ class FormatCommandTests(unittest.TestCase):
         self.assertLess(format_pos, inject_pos)
         self.assertLess(inject_pos, metrics_pos)
 
-    def test_settings_ui_exposes_format_commands(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn('"format_commands", ["off", "en", "da", "both"]', script)
-        self.assertIn("Optional spoken formatting commands", script)
-
-
 class DictionarySuggestTests(unittest.TestCase):
     def test_suggests_replacements_from_benchmark_term_misses(self):
         import vp_dictionary_suggest
@@ -1992,83 +2000,22 @@ class DictionarySuggestTests(unittest.TestCase):
 
 
 class WindowsLauncherRegressionTests(unittest.TestCase):
-    def test_setup_warning_escapes_config_path_before_colon(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("Could not read config ${cfg}: $_", script)
-        self.assertNotIn("Could not read config $cfg: $_", script)
-
-    def test_settings_ui_does_not_trigger_parakeet_dependency_install(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("function Test-LaunchesDictation", script)
-        self.assertIn("'--settings-ui'", script)
-        self.assertIn(
-            "$wantsParakeet = (Test-LaunchesDictation $runArgs) -and (Test-WantsParakeet)",
-            script,
-        )
-
-    def test_parakeet_readiness_check_does_not_import_nemo(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("importlib.util.find_spec('nemo.collections.asr')", script)
-        self.assertNotIn('-c "import nemo.collections.asr"', script)
-
-    def test_setup_installs_cuda_torch_for_parakeet_cuda(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("function Test-ParakeetCudaReady", script)
-        self.assertIn("import torchaudio", script)
-        self.assertIn("https://download.pytorch.org/whl/cu126", script)
-        self.assertIn('"torch==2.11.0+cu126", "torchaudio==2.11.0+cu126"', script)
-        self.assertIn("--force-reinstall --no-deps @torchCudaPackages --index-url $torchCudaIndex", script)
-        self.assertNotIn("--force-reinstall torch torchaudio", script)
-
-    def test_setup_repairs_cuda_torch_after_parakeet_dependencies(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        parakeet_install = script.index("Installing optional NVIDIA Parakeet dependencies")
-        cuda_repair = script.index("Installing CUDA PyTorch + torchaudio for NVIDIA Parakeet")
-        self.assertLess(parakeet_install, cuda_repair)
-
-    def test_setup_propagates_voice_pi_exit_code(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("& $venvPy $app $runArgs", script)
-        self.assertIn("$exitCode = $LASTEXITCODE", script)
-        self.assertIn("exit $exitCode", script)
-
-    def test_setup_shows_version_in_powershell_window_title(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn('$Host.UI.RawUI.WindowTitle = "whisper-dictate $version"', script)
-        self.assertIn('$Host.UI.RawUI.WindowTitle = "whisper-dictate $version - running"', script)
-        self.assertIn('$Host.UI.RawUI.WindowTitle = "whisper-dictate $version - stopped"', script)
-
-    def test_installer_names_debug_terminal_shortcut_clearly(self):
+    def test_installer_no_longer_packages_legacy_launchers(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
             script = f.read()
 
-        self.assertIn(r"whisper-dictate Terminal", script)
-        self.assertIn(r'Filename: "{app}\setup.cmd"', script)
-        self.assertIn(r'IconFilename: "{cmd}"', script)
-        self.assertNotIn(r"Debug Terminal", script)
-
-    def test_setup_cmd_keeps_terminal_runs_visible_when_rust_is_bundled(self):
-        script = Path("setup.cmd").read_text(encoding="utf-8")
-
-        self.assertIn(r'set "RUST_EXE=%~dp0whisper-dictate.exe"', script)
-        self.assertIn(r'if exist "%RUST_EXE%" (', script)
-        self.assertIn(r'"%RUST_EXE%" ui', script)
-        self.assertIn(r'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %*', script)
-        self.assertNotIn(r'"%RUST_EXE%" run %*', script)
+        for legacy in (
+            "setup.ps1",
+            "setup.cmd",
+            "settings-ui.ps1",
+            "settings-ui.vbs",
+            "requirements-ui.txt",
+            "Legacy Settings UI",
+            "whisper-dictate Terminal",
+        ):
+            self.assertNotIn(legacy, script)
+        self.assertIn(r'Source: "..\target\release\whisper-dictate.exe"', script)
+        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"', script)
 
     def test_rust_windows_ui_uses_gui_subsystem(self):
         script = Path("crates/whisper-dictate-app/src/main.rs").read_text(encoding="utf-8")
@@ -2078,6 +2025,14 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             script,
         )
 
+    def test_rust_background_processes_hide_windows_console(self):
+        script = Path("crates/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
+
+        self.assertIn("const CREATE_NO_WINDOW: u32 = 0x08000000;", script)
+        self.assertIn("fn configure_background_process(command: &mut Command)", script)
+        self.assertIn("command.creation_flags(CREATE_NO_WINDOW);", script)
+        self.assertIn("configure_background_process(&mut process);", script)
+
     def test_rust_runtime_log_expands_to_available_width(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 
@@ -2085,21 +2040,49 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".min_size(egui::vec2(ui.available_width(), height))", script)
         self.assertIn(".auto_shrink([false, false])", script)
 
+    def test_rust_runtime_tab_can_clear_log_without_stopping_runtime(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn('ui.button("Clear").clicked()', script)
+        self.assertIn("self.runtime_log.clear();", script)
+
+    def test_rust_ui_has_groq_cloud_stt_preset_and_key_link(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn('GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1"', script)
+        self.assertIn('GROQ_STT_MODEL: &str = "whisper-large-v3-turbo"', script)
+        self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', script)
+        self.assertIn('ui.button("Use Groq cloud STT").clicked()', script)
+        self.assertIn('ui.button("Groq API keys").clicked()', script)
+        self.assertIn('open_url(GROQ_KEYS_URL)', script)
+        self.assertIn('GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY', script)
+
     def test_windows_docs_use_rust_terminal_entrypoint(self):
         readme = Path("README.md").read_text(encoding="utf-8")
         config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
         technical = Path("TECHNICAL.md").read_text(encoding="utf-8")
 
-        self.assertIn("whisper-dictate Terminal", readme)
-        self.assertIn("legacy terminal launcher for visible Python/runtime logs", readme)
+        self.assertIn("runs the Rust UI and starts the Python worker hidden underneath it", readme)
         self.assertIn("whisper-dictate run --key ctrl_r --lang da", readme)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device cuda", readme)
         self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device cuda", config)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da", config)
         self.assertIn("Rust UI is the installer Start-menu", technical)
-        self.assertIn("setup.cmd` is a compatibility wrapper", technical)
+        self.assertIn("no compatibility script is installed", technical)
+        self.assertNotIn("whisper-dictate Terminal", readme)
         self.assertNotIn("whisper-dictate Debug Terminal", readme)
         self.assertNotIn("Current primary path is the installed PySide/PowerShell UI", technical)
+
+    def test_docs_describe_groq_as_explicit_opt_in_without_storing_keys(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+        config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+
+        for doc in (readme, config):
+            self.assertIn("https://api.groq.com/openai/v1", doc)
+            self.assertIn("whisper-large-v3-turbo", doc)
+            self.assertIn("GROQ_API_KEY", doc)
+        self.assertIn("Use Groq cloud STT", config)
+        self.assertIn("API keys are not saved in the Settings UI config file", readme)
 
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
@@ -2107,9 +2090,34 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn(r"SetupIconFile=..\assets\whisper-dictate.ico", script)
         self.assertIn(r'Source: "..\assets\whisper-dictate.ico"', script)
-        self.assertIn(r"whisper-dictate Legacy Settings UI", script)
         self.assertIn(r'IconFilename: "{app}\whisper-dictate.ico"', script)
+        self.assertNotIn(r"Legacy Settings UI", script)
         self.assertNotIn(r"\Settings UI", script)
+
+    def test_windows_icon_is_multiresolution_and_has_source_logo(self):
+        icon = Path("assets/whisper-dictate.ico").read_bytes()
+        svg = Path("assets/whisper-dictate-logo.svg").read_text(encoding="utf-8")
+
+        self.assertGreater(len(icon), 90_000)
+        self.assertEqual(int.from_bytes(icon[0:2], "little"), 0)
+        self.assertEqual(int.from_bytes(icon[2:4], "little"), 1)
+        self.assertEqual(int.from_bytes(icon[4:6], "little"), 7)
+        sizes = {
+            256 if icon[6 + i * 16] == 0 else icon[6 + i * 16]
+            for i in range(7)
+        }
+        self.assertEqual(sizes, {16, 24, 32, 48, 64, 128, 256})
+        self.assertIn("viewBox=\"0 0 256 256\"", svg)
+        self.assertIn("linearGradient", svg)
+        self.assertIn("fill=\"#FFFFFF\"", svg)
+
+    def test_github_docs_show_logo(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+        release_notes = Path("RELEASE_NOTES.md").read_text(encoding="utf-8")
+
+        self.assertIn('src="assets/whisper-dictate-logo.svg"', readme)
+        self.assertIn("<h1 align=\"center\">whisper-dictate</h1>", readme)
+        self.assertIn('src="assets/whisper-dictate-logo.svg"', release_notes)
 
     def test_installer_creates_desktop_ui_shortcut(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
@@ -2142,262 +2150,35 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
         self.assertIn("cargo build failed", script)
 
-    def test_settings_ui_sets_non_empty_tray_icon(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
+    def test_windows_zip_packages_are_built_on_windows_with_rust_exe(self):
+        for path in (".github/workflows/release.yml", ".github/workflows/windows-installer.yml"):
+            workflow = Path(path).read_text(encoding="utf-8")
 
-        self.assertIn("standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)", script)
-        self.assertNotIn("QSystemTrayIcon(QIcon(), app)", script)
+            self.assertIn("Build Windows ZIP packages", workflow)
+            self.assertIn("whisper-dictate-windows-$variant-$version.zip", workflow)
+            self.assertIn("Copy-Item target\\release\\whisper-dictate.exe", workflow)
+            self.assertIn("Copy-Item assets\\whisper-dictate.ico", workflow)
+            self.assertIn('Copy-Item $variants[$variant] (Join-Path $bundle "requirements.txt")', workflow)
+            self.assertIn("Output/*.exe Output/*.zip sha256sums.txt", workflow)
 
-    def test_settings_ui_forces_utf8_child_output(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
+        script = Path("scripts/build-windows-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("Building $v portable ZIP version $Version", script)
+        self.assertIn("whisper-dictate-windows-$v-$Version.zip", script)
+        self.assertIn("target\\release\\whisper-dictate.exe", script)
+        self.assertIn("assets\\whisper-dictate.ico", script)
+        self.assertIn("Compress-Archive", script)
 
-        self.assertIn('env.insert("PYTHONIOENCODING", "utf-8")', script)
-        self.assertIn('raw.decode("utf-8")', script)
+    def test_docs_describe_windows_zip_and_installer_outputs(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+        release_notes = Path("RELEASE_NOTES.md").read_text(encoding="utf-8")
+        agents = Path("AGENTS.md").read_text(encoding="utf-8")
+        technical = Path("TECHNICAL.md").read_text(encoding="utf-8")
 
-    def test_ui_managed_pip_installs_show_raw_progress(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            ui_script = f.read()
-        with open("settings-ui.ps1", encoding="utf-8") as f:
-            launcher_script = f.read()
-        with open("setup.ps1", encoding="utf-8") as f:
-            setup_script = f.read()
-
-        self.assertIn('env.insert("PIP_PROGRESS_BAR", "raw")', ui_script)
-        self.assertIn("$env:PIP_PROGRESS_BAR = 'raw'", launcher_script)
-        self.assertIn("--progress-bar raw", launcher_script)
-        self.assertIn('$pipProgressBar = if ($env:VOICEPI_MANAGED_BY_UI) { "raw" }', setup_script)
-        self.assertIn('$pipInstallArgs = @("--disable-pip-version-check", "--progress-bar", $pipProgressBar)', setup_script)
-        self.assertNotIn('env.insert("PIP_PROGRESS_BAR", "off")', ui_script)
-
-    def test_windows_ui_launch_chain_uses_pwsh(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            ui_script = f.read()
-        with open("settings-ui.ps1", encoding="utf-8") as f:
-            ps_script = f.read()
-        with open("settings-ui.vbs", encoding="utf-8") as f:
-            vbs_script = f.read()
-
-        self.assertIn('return "pwsh.exe"', ui_script)
-        self.assertIn("pwsh.exe -NoProfile", ps_script)
-        self.assertIn("pwsh.exe -NoProfile", vbs_script)
-        self.assertNotIn('return "powershell.exe"', ui_script)
-        self.assertNotIn("powershell.exe -NoProfile", ps_script)
-        self.assertNotIn("powershell.exe -NoProfile", vbs_script)
-
-    def test_settings_ui_startup_cleans_old_installed_processes(self):
-        with open("settings-ui.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("function Stop-OldWhisperDictateProcesses", script)
-        self.assertIn("$_.ProcessId -ne $PID", script)
-        self.assertIn("$_.CommandLine.Contains($needle)", script)
-        self.assertIn("voice_pi\\.py|settings-ui\\.ps1|setup\\.ps1|setup\\.cmd", script)
-        self.assertIn("taskkill.exe /PID $proc.ProcessId /T /F", script)
-        self.assertIn("Stop-OldWhisperDictateProcesses", script)
-
-    def test_settings_ui_close_stops_runtime_and_quits(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("def closeEvent", script)
-        self.assertIn("self._quit_after_stop = True", script)
-        self.assertIn("self.stop_runtime()", script)
-        self.assertIn("app.quit()", script)
-        self.assertIn("def _kill_runtime_tree", script)
-        self.assertIn('"taskkill"', script)
-        self.assertIn('"/T"', script)
-        self.assertIn('"/F"', script)
-
-    def test_settings_ui_has_single_instance_guard_and_foreground_show(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("QLockFile", script)
-        self.assertIn("QLocalServer", script)
-        self.assertIn("QLocalSocket", script)
-        self.assertIn("settings-ui.lock", script)
-        self.assertIn("activate_existing_ui(server_name)", script)
-        self.assertIn("Settings UI is already running", script)
-        self.assertIn("def show_and_activate", script)
-        self.assertIn("self.raise_()", script)
-        self.assertIn("self.activateWindow()", script)
-
-    def test_settings_ui_loads_app_icon(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("def load_app_icon", script)
-        self.assertIn("whisper-dictate.ico", script)
-        self.assertIn("app.setWindowIcon(icon)", script)
-        self.assertIn("win.setWindowIcon(icon)", script)
-
-    def test_settings_ui_shows_version_in_titles(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("from vp_version import VERSION", script)
-        self.assertIn('self.setWindowTitle(f"whisper-dictate {VERSION} settings")', script)
-        self.assertIn('app.setApplicationDisplayName(f"whisper-dictate {VERSION}")', script)
-        self.assertIn('tray.setToolTip(f"whisper-dictate {VERSION}")', script)
-
-    def test_settings_ui_does_not_store_external_api_keys(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            ui_script = f.read()
-        with open("vp_config.py", encoding="utf-8") as f:
-            config_script = f.read()
-
-        self.assertIn("VOICEPI_STT_API_KEY", ui_script)
-        self.assertIn("VOICEPI_POST_API_KEY", ui_script)
-        self.assertIn("API key status", ui_script)
-        self.assertNotIn('"post_api_key"', ui_script)
-        self.assertNotIn('Setting("VOICEPI_POST_API_KEY"', config_script)
-
-    def test_settings_ui_uses_parakeet_model_dropdown(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("PARAKEET_MODELS", script)
-        self.assertIn('self._combo("parakeet_model", PARAKEET_MODELS, editable=True)', script)
-        self.assertNotIn('self._line("parakeet_model")', script)
-
-    def test_settings_ui_disables_backend_specific_controls(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("def _update_backend_controls", script)
-        self.assertIn('"Whisper is recommended for Danish accuracy', script)
-        self.assertIn('"Parakeet is experimental and very fast', script)
-        self.assertIn('"model", "compute_type", "lang", "beam_size", "temperature",', script)
-        self.assertIn('"parakeet_model", "parakeet_min_seconds"', script)
-
-    def test_settings_buttons_are_hidden_on_runtime_tab(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("self._settings_buttons", script)
-        self.assertIn("currentChanged.connect", script)
-        self.assertIn("def _update_settings_buttons_visibility", script)
-        self.assertIn('tabs.tabText(tabs.currentIndex()) != "Runtime"', script)
-
-    def test_quality_tab_has_mouseover_help(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("def _add_help_row", script)
-        self.assertIn("QToolButton", script)
-        self.assertIn("QToolTip", script)
-        self.assertIn("class HelpButton(QToolButton)", script)
-        self.assertIn("def enterEvent", script)
-        self.assertIn("QToolTip.showText", script)
-        self.assertIn("self.HelpButton()", script)
-        self.assertIn('help_btn.setText("?")', script)
-        self.assertIn("label_w.setToolTip(help_text)", script)
-        self.assertIn("help_btn.setToolTip(help_text)", script)
-        self.assertIn("help_btn.setToolTipDuration(30000)", script)
-        self.assertIn("help_btn.clicked.connect", script)
-        self.assertIn("QMessageBox.information(self, title, text)", script)
-        self.assertIn("control.setToolTip(help_text)", script)
-        for label in (
-            "Beam size",
-            "Temperature ladder",
-            "Context min seconds",
-            "Parakeet min seconds",
-            "Release tail ms",
-            "VAD threshold",
-            "VAD min silence ms",
-            "Target dBFS",
-            "Min input dBFS",
-            "Min SNR dB",
-            "Initial prompt",
-        ):
-            self.assertIn(label, script)
-
-    def test_core_dictionary_and_output_tabs_have_mouseover_help(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        for label in (
-            "STT backend",
-            "External STT model",
-            "Parakeet model",
-            "STT API URL",
-            "Model fit",
-            "Dictionary path",
-            "Dictionary enabled",
-            "Max prompt terms",
-            "Prompt char cap",
-            "Benchmark suggestions",
-            "Inject mode",
-            "JSON stdout",
-            "Metrics JSONL",
-            "Post processor",
-            "Post mode",
-            "Post model",
-            "Post base URL",
-            "API key status",
-            "Post timeout ms",
-            "Local only",
-            "VOICEPI_DEBUG",
-            "VOICEPI_STT_DEBUG",
-        ):
-            self.assertIn(label, script)
-        self.assertIn("Use 0.6B v3 for Danish/mixed Danish-English", script)
-        self.assertIn("OpenAI-compatible transcription model", script)
-        self.assertIn("OpenAI-compatible STT sends audio", script)
-        self.assertIn("API keys are not stored in the UI config", script)
-        self.assertIn("raw STT backend debug output", script)
-        self.assertIn("qwen2.5:3b", script)
-        self.assertIn("Check GPU capacity", script)
-        self.assertIn("capacity_report", script)
-
-    def test_settings_ui_can_preview_and_apply_dictionary_suggestions(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("Suggest replacements", script)
-        self.assertIn("Apply suggestions", script)
-        self.assertIn("def _suggest_dictionary_replacements", script)
-        self.assertIn("suggest_replacements(path)", script)
-        self.assertIn("def _apply_dictionary_suggestions", script)
-        self.assertIn("add_dictionary_replacements", script)
-        self.assertIn("self.signal_reload(show=False)", script)
-
-    def test_settings_ui_filters_noisy_nemo_runtime_logs(self):
-        with open("vp_settings_ui.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("def _filter_runtime_log", script)
-        self.assertIn("Couldn't find ffmpeg or avconv", script)
-        self.assertIn("Transcribing:", script)
-        self.assertIn("If you intend to do training or fine-tuning", script)
-
-    def test_settings_ui_launcher_bootstraps_before_installing_ui_deps(self):
-        with open("settings-ui.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("setup.ps1') --doctor", script)
-        self.assertNotIn("setup.ps1') --settings-ui", script)
-        self.assertIn("Base setup failed with exit code", script)
-
-    def test_setup_uses_utf8_output_encoding(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("[Console]::OutputEncoding", script)
-        self.assertIn("UTF8Encoding", script)
-
-    def test_setup_has_get_file_hash_fallback(self):
-        with open("setup.ps1", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn("function Get-VoicePiFileHash", script)
-        self.assertIn("Get-Command Get-FileHash", script)
-        self.assertIn("[System.Security.Cryptography.SHA256]::Create()", script)
-        self.assertIn("$reqHash = Get-VoicePiFileHash $req", script)
-        self.assertIn("$parakeetHash = Get-VoicePiFileHash $parakeetReq", script)
-        self.assertNotIn("$reqHash = (Get-FileHash", script)
+        self.assertIn("portable Windows ZIP bundles", readme)
+        self.assertIn("installer and portable ZIP are written to `Output\\`", readme)
+        self.assertIn("whisper-dictate-windows-nvidia-<version>.zip", release_notes)
+        self.assertIn("Output\\*.exe` and `Output\\*.zip", agents)
+        self.assertIn("Output\\*.exe` and `Output\\*.zip", technical)
 
     def test_voice_pi_reconfigures_windows_streams_to_utf8(self):
         with open("voice_pi.py", encoding="utf-8") as f:

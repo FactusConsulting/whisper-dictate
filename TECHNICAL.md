@@ -134,13 +134,13 @@ streams logs, and keeps the terminal workflow available through
 
 | Capability | Windows 10/11 | Linux Wayland | Linux X11 |
 |------------|---------------|---------------|-----------|
-| Settings UI | Rust UI is the installer Start-menu, desktop, and postinstall launch target; legacy PySide remains a fallback shortcut | Supported by `scripts/install-linux-rust-ui.sh` and desktop entry | Supported by the same Rust binary and config flow |
-| Terminal command | `whisper-dictate.exe run -- ...`; `setup.cmd` is a compatibility wrapper that prefers the Rust controller | `whisper-dictate run -- ...` delegates to the installed venv Python when present | Same as Wayland |
+| Settings UI | Rust UI is the installer Start-menu, desktop, and postinstall launch target | Supported by `scripts/install-linux-rust-ui.sh` and desktop entry | Supported by the same Rust binary and config flow |
+| Terminal command | `whisper-dictate.exe run -- ...`; no compatibility script is installed | `whisper-dictate run -- ...` delegates to the installed venv Python when present | Same as Wayland |
 | Runtime start/stop/restart | Rust supervisor uses process-tree cleanup through the same worker boundary | Rust supervisor starts/stops/restarts the Python worker and parses worker status events | Same as Wayland |
 | Hotkeys | Python `pynput` path remains authoritative | Python `evdev` path remains authoritative because Wayland global hotkeys require input permissions | Python `pynput` path remains authoritative |
 | Text injection | Python direct type or clipboard paste remains authoritative, with paste fallback for fragile terminals | Python `ydotool`/`ydotoold` path remains authoritative | Python `pynput`/clipboard path remains authoritative |
 | Active-window profiles | Python target detection remains authoritative | Limited by compositor behavior; keep Python fallback and profile metadata when available | Python X11 target detection remains authoritative |
-| Tray and autostart | Installer shortcuts launch Rust UI; legacy tray behavior remains available only through the PySide fallback | No Rust tray requirement for first Linux release; desktop entry launches the control window | No Rust tray requirement for first Linux release |
+| Tray and autostart | Installer shortcuts launch Rust UI | No Rust tray requirement for first Linux release; desktop entry launches the control window | No Rust tray requirement for first Linux release |
 
 Graceful fallback rule: the Rust UI should expose controls for the managed
 runtime and config, but platform integrations that are not yet native Rust
@@ -157,7 +157,7 @@ Manual smoke procedures before tagging a Rust UI release:
    `~/.local/bin/whisper-dictate ui`
 4. Windows installer changes: build locally with
    `scripts/build-windows-installer.ps1` and report the generated
-   `Output\*.exe`
+   `Output\*.exe` and `Output\*.zip`
 
 ## Wayland text injection — why evdev keycodes
 

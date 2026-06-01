@@ -77,7 +77,7 @@ def _cuda_torch_error() -> RuntimeError:
     return RuntimeError(
         "VOICEPI_STT_BACKEND=parakeet with --device cuda requires a "
         "CUDA-enabled PyTorch wheel, but the installed torch build is CPU-only. "
-        "Run setup.ps1 again after installing the latest whisper-dictate, or "
+        "Run whisper-dictate install again after installing the latest whisper-dictate, or "
         "install manually: python -m pip install --upgrade --force-reinstall --no-deps "
         "torch==2.11.0+cu126 torchaudio==2.11.0+cu126 "
         "--index-url https://download.pytorch.org/whl/cu126"

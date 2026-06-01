@@ -1,4 +1,0 @@
-# Optional PySide/Qt settings UI.
-# Install after the normal CPU/GPU requirements when you want:
-#   voice_pi.py --settings-ui
-PySide6>=6.7,<7.0
