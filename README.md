@@ -73,10 +73,22 @@ To start automatically at login, the setup script creates
 
 ### Install
 
+From a release zip, use the bundled Rust controller:
+
+```bash
+unzip whisper-dictate-linux-cpu-<version>.zip
+cd whisper-dictate
+./whisper-dictate install
+./whisper-dictate ui
+```
+
+From a source checkout:
+
 ```bash
 git clone https://github.com/FactusConsulting/whisper-dictate.git
 cd whisper-dictate
-./setup.sh
+cargo run --release -p whisper-dictate-app -- install
+cargo run --release -p whisper-dictate-app -- ui
 ```
 
 Requires: `python3` ≥ 3.10, `libportaudio2`, `alsa-utils`, `xclip`:
@@ -110,13 +122,13 @@ adds `~/.local/share/applications/whisper-dictate.desktop`.
 ### Start
 
 ```bash
-./setup.sh --key ctrl_r --lang en
+./whisper-dictate run -- --key ctrl_r --lang en
 ```
 
-Or after the venv is built:
+Or from a source checkout after the venv is built:
 
 ```bash
-~/.venv-whisper-dictate/bin/python voice_pi.py --key ctrl_r --lang en
+cargo run --release -p whisper-dictate-app -- run -- --key ctrl_r --lang en
 ```
 
 ---

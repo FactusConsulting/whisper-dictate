@@ -78,6 +78,9 @@ jobs:
             printf "%s\n" "$VERSION" > "$d/VERSION"
             cp "$requirements_file" "$d/requirements.txt"
             for f in "$@"; do cp "$f" "$d/"; done
+            if [ "${INCLUDE_RUST_UI:-0}" = "1" ]; then
+              install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"
+            fi
             [ -f "$d/setup.sh" ] && chmod +x "$d/setup.sh"
             [ -f "$d/scripts/install-linux-rust-ui.sh" ] && chmod +x "$d/scripts/install-linux-rust-ui.sh"
             zip -q -r "$zip_name" "$d"; rm -rf "$d"
@@ -86,7 +89,7 @@ jobs:
           mkbundle "whisper-dictate-windows-nvidia-${VERSION}.zip" requirements-gpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
           mkbundle "whisper-dictate-windows-cpu-${VERSION}.zip"    requirements-cpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
           mkbundle "whisper-dictate-windows-amd-${VERSION}.zip"    requirements-cpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
-          mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip"      requirements-cpu.txt setup.sh
+          INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip" requirements-cpu.txt setup.sh
 
       - name: Generate release notes from commit messages
         run: |

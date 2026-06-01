@@ -3140,6 +3140,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
 
         self.assertIn("cargo build --release -p whisper-dictate-app", workflow)
         self.assertIn("whisper-dictate-linux-rust-ui-${VERSION}", workflow)
+        self.assertIn('install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"', workflow)
+        self.assertIn('INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip"', workflow)
         self.assertIn("scripts/install-linux-rust-ui.sh", workflow)
         self.assertIn("bash -n scripts/install-linux-rust-ui.sh", workflow)
 
