@@ -72,8 +72,8 @@ pub fn setup_ubuntu() -> Result<()> {
     }
 }
 
+#[cfg(windows)]
 pub fn cleanup_stale_desktop_processes() {
-    #[cfg(windows)]
     if let Err(err) = cleanup_stale_desktop_processes_windows() {
         eprintln!("warning: could not clean stale whisper-dictate processes: {err}");
     }
@@ -618,11 +618,11 @@ pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
     exit_status_to_result(status)
 }
 
-fn configure_background_process(command: &mut Command) {
+fn configure_background_process(_command: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NO_WINDOW);
+        _command.creation_flags(CREATE_NO_WINDOW);
     }
 }
 

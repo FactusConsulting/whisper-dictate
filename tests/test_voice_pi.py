@@ -2029,8 +2029,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         script = Path("crates/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
 
         self.assertIn("const CREATE_NO_WINDOW: u32 = 0x08000000;", script)
-        self.assertIn("fn configure_background_process(command: &mut Command)", script)
-        self.assertIn("command.creation_flags(CREATE_NO_WINDOW);", script)
+        self.assertIn("fn configure_background_process(", script)
+        self.assertIn(".creation_flags(CREATE_NO_WINDOW);", script)
         self.assertIn("configure_background_process(&mut process);", script)
 
     def test_rust_ui_cleans_stale_desktop_processes_before_starting_window(self):
@@ -2041,7 +2041,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             ui_script.index("runtime::cleanup_stale_desktop_processes();"),
             ui_script.index("eframe::run_native("),
         )
-        self.assertIn("pub fn cleanup_stale_desktop_processes()", runtime_script)
+        self.assertIn("#[cfg(windows)]\npub fn cleanup_stale_desktop_processes()", runtime_script)
+        self.assertIn("#[cfg(not(windows))]\npub fn cleanup_stale_desktop_processes() {}", runtime_script)
         self.assertIn("fn cleanup_stale_desktop_processes_windows() -> Result<()>", runtime_script)
         self.assertIn("fn stale_process_cleanup_script(", runtime_script)
         self.assertIn("$cleanupPid = $PID", runtime_script)
