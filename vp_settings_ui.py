@@ -83,6 +83,9 @@ def run_settings_ui() -> int:
             self._dictionary_suggest_output.setReadOnly(True)
             self._dictionary_suggest_output.setMaximumHeight(180)
             self._dictionary_apply_button: QPushButton | None = None
+            self._capacity_output = QPlainTextEdit()
+            self._capacity_output.setReadOnly(True)
+            self._capacity_output.setMaximumHeight(180)
             self._runtime_proc: QProcess | None = None
             self._restart_after_stop = False
             self._quit_after_stop = False
@@ -220,6 +223,12 @@ def run_settings_ui() -> int:
                 form, "Language", self._combo("lang", ["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"], editable=True),
                 "Whisper-only language hint. Parakeet v3 autodetects language and does not use this setting.")
             self._add_help_row(form, "Hotkey", self._line("key"), "Hold-to-talk key or chord, for example shift_l+ctrl_l.")
+            capacity_btn = QPushButton("Check GPU capacity")
+            capacity_btn.clicked.connect(self._check_model_capacity)
+            self._add_help_row(
+                form, "Model fit", capacity_btn,
+                "Inspect local NVIDIA GPU free/total VRAM and show which Whisper, Parakeet and local post-processing models can run now or after freeing VRAM.")
+            form.addRow("", self._capacity_output)
             return self._wrap(form)
 
         def _build_quality_tab(self) -> QWidget:
@@ -424,6 +433,14 @@ def run_settings_ui() -> int:
                 self, "Dictionary JSON", str(dictionary_target_path()), "JSON (*.json);;All files (*)")
             if path:
                 self._controls["dictionary"].setText(path)  # type: ignore[attr-defined]
+
+        def _check_model_capacity(self) -> None:
+            try:
+                from vp_model_capacity import capacity_report
+
+                self._capacity_output.setPlainText(capacity_report())
+            except Exception as exc:  # noqa: BLE001 - surface UI errors instead of crashing
+                QMessageBox.warning(self, "GPU capacity check failed", str(exc))
 
         def _suggest_dictionary_replacements(self) -> None:
             default_path = Path.cwd() / "benchmark" / "results.jsonl"

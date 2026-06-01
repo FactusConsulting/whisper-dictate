@@ -94,6 +94,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "env VOICEPI_JSON")
     ap.add_argument("--doctor", action="store_true",
                     help="run Linux/Wayland health checks and exit")
+    ap.add_argument("--model-capacity", action="store_true",
+                    help="show local GPU VRAM and which local models can fit, then exit")
     ap.add_argument("--settings-ui", action="store_true",
                     help="open the PySide/Qt settings and tray UI, then exit")
     ap.add_argument("--transcribe-file", metavar="PATH",

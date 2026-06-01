@@ -203,6 +203,7 @@ Passed after the launcher (`setup.cmd` / `setup.sh` / `whisper-dictate`):
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `--doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
+| `--model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table before loading Whisper. |
 | `--settings-ui` | off | — | Open the optional PySide/Qt settings UI and exit. |
 | `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
 | `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |
@@ -440,6 +441,11 @@ it. `VOICEPI_XKB_LAYOUT` is auto-derived from `--lang`/the session layout; the
 module already wires up ydotool/uinput for Wayland.
 
 ## GPU VRAM sizing — what to set per card
+
+Run `python voice_pi.py --model-capacity` to inspect local NVIDIA GPU free/total
+VRAM and get a model-fit table for Whisper, Parakeet and local Ollama
+post-processing models. On Windows, the Settings UI exposes the same check on
+the Core tab as **Model fit**.
 
 Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
 --format=csv` — browser/IDE/Discord eat 1–3 GB before whisper-dictate starts,

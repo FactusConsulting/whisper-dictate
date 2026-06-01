@@ -629,6 +629,10 @@ if __name__ == "__main__":
     if a.doctor:
         from vp_doctor import run_doctor
         raise SystemExit(run_doctor())
+    if a.model_capacity:
+        from vp_model_capacity import capacity_report
+        print(capacity_report(as_json=a.json), flush=True)
+        raise SystemExit(0)
     if a.benchmark_files or a.benchmark_corpus:
         from vp_benchmark import run_benchmark
         try:

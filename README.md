@@ -270,6 +270,7 @@ NVIDIA GPU is used automatically if present.
 | `--no-type` | print transcription only, don't inject (env `VOICEPI_INJECT_MODE=print`; useful for testing) |
 | `--json` | also emit one structured JSON event per utterance (env `VOICEPI_JSON=1`) |
 | `--doctor` | run Linux/Wayland health checks and exit |
+| `--model-capacity` | show local GPU VRAM and which local models can fit |
 | `--model NAME` | Whisper model (default `large-v3-turbo`; env `VOICEPI_MODEL`) |
 | `--device D` | `auto`/`cuda`/`cpu` (default `auto`; env `VOICEPI_DEVICE`; invalid values are rejected) |
 
@@ -387,6 +388,10 @@ expected technical-term hits/misses. Record missing local corpus audio with
 `py -3.12 scripts\record-corpus.py --manifest benchmark\corpus.json --seconds 7`.
 Calibration prints raw dBFS, noise floor, SNR, peak and recommended audio
 threshold settings without loading an STT model.
+`python voice_pi.py --model-capacity` prints NVIDIA GPU free/total VRAM and
+which Whisper, Parakeet and local Ollama post-processing models can fit now or
+after freeing VRAM. The Windows Settings UI exposes the same check on the Core
+tab as **Model fit**.
 
 Local history stores accepted live dictations as JSONL. It is local-only,
 disabled with `VOICEPI_HISTORY_ENABLED=0`, and can be used to recover the last

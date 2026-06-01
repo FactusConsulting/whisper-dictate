@@ -457,11 +457,12 @@ class ArgumentParserTests(unittest.TestCase):
         voice_pi = load_voice_pi()
         parser = voice_pi.build_arg_parser()
 
-        ns = parser.parse_args(["--json", "--doctor", "--settings-ui"])
+        ns = parser.parse_args(["--json", "--doctor", "--settings-ui", "--model-capacity"])
 
         self.assertTrue(ns.json)
         self.assertTrue(ns.doctor)
         self.assertTrue(ns.settings_ui)
+        self.assertTrue(ns.model_capacity)
 
     def test_dictionary_status_exits_from_parser(self):
         with tempfile.TemporaryDirectory() as d:
@@ -493,6 +494,49 @@ class ArgumentParserTests(unittest.TestCase):
 
         self.assertEqual(cm.exception.code, 0)
         self.assertEqual(data["terms"], ["OpenClaw"])
+
+
+class ModelCapacityTests(unittest.TestCase):
+    def test_estimate_model_fits_uses_free_and_total_vram(self):
+        import vp_model_capacity
+
+        gpus = [vp_model_capacity.GpuInfo(
+            index=0,
+            name="RTX Test",
+            total_mb=8192,
+            free_mb=4096,
+        )]
+
+        _, fits = vp_model_capacity.estimate_model_fits(gpus)
+        by_name = {fit.profile.name: fit for fit in fits}
+
+        self.assertEqual(by_name["Whisper large-v3-turbo"].status, "ok")
+        self.assertEqual(by_name["Whisper large-v3 float16"].status, "free-vram")
+        self.assertEqual(by_name["NVIDIA Parakeet TDT 1.1B"].status, "too-small")
+
+    def test_capacity_report_json_shape(self):
+        import vp_model_capacity
+
+        with patch("vp_model_capacity.query_gpus", return_value=[
+            vp_model_capacity.GpuInfo(0, "RTX Test", 16384, 12000),
+        ]):
+            data = json.loads(vp_model_capacity.capacity_report(as_json=True))
+
+        self.assertEqual(data["gpus"][0]["name"], "RTX Test")
+        self.assertTrue(any(item["name"] == "Whisper large-v3 float16"
+                            for item in data["models"]))
+
+    def test_capacity_report_plain_mentions_free_vram(self):
+        import vp_model_capacity
+
+        with patch("vp_model_capacity.query_gpus", return_value=[
+            vp_model_capacity.GpuInfo(0, "RTX Test", 8192, 4096),
+        ]):
+            report = vp_model_capacity.capacity_report()
+
+        self.assertIn("4096 MB free / 8192 MB total", report)
+        self.assertIn("Whisper large-v3-turbo", report)
+        self.assertIn("Use free VRAM", report)
 
 
 class InjectStrategyTests(unittest.TestCase):
@@ -1980,6 +2024,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         for label in (
             "STT backend",
             "Parakeet model",
+            "Model fit",
             "Dictionary path",
             "Dictionary enabled",
             "Max prompt terms",
@@ -2001,6 +2046,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("Use 0.6B v3 for Danish/mixed Danish-English", script)
         self.assertIn("raw STT backend debug output", script)
         self.assertIn("qwen2.5:3b", script)
+        self.assertIn("Check GPU capacity", script)
+        self.assertIn("capacity_report", script)
 
     def test_settings_ui_can_preview_and_apply_dictionary_suggestions(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:

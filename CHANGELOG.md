@@ -11,6 +11,9 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+### Added
+- `--model-capacity` and Settings UI model-fit check for local GPU VRAM and Whisper/Parakeet/Ollama model guidance.
+
 ## [0.2.60] - 2026-05-31
 
 ### Added
