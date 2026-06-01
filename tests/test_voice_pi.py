@@ -3084,7 +3084,10 @@ class RustUiInstallerTests(unittest.TestCase):
 
         self.assertTrue(os.access(path, os.X_OK))
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
-        self.assertIn('install -m 0755 "${HERE}/target/release/whisper-dictate"', script)
+        self.assertIn('REAL_BIN="${LIB_DIR}/whisper-dictate-app"', script)
+        self.assertIn('install -m 0755 "${HERE}/target/release/whisper-dictate" "${REAL_BIN}"', script)
+        self.assertIn('export VOICEPI_APP_ROOT="${HERE}"', script)
+        self.assertIn('exec "${REAL_BIN}" "\\$@"', script)
         self.assertIn("whisper-dictate.desktop", script)
         self.assertIn("Exec=${BIN} ui", script)
         self.assertNotIn("setup.ps1", script)

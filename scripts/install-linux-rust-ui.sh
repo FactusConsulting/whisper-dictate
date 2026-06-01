@@ -4,8 +4,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${HOME}/.local/bin"
+LIB_DIR="${HOME}/.local/lib/whisper-dictate"
 APP_DIR="${HOME}/.local/share/applications"
 BIN="${BIN_DIR}/whisper-dictate"
+REAL_BIN="${LIB_DIR}/whisper-dictate-app"
 DESKTOP="${APP_DIR}/whisper-dictate.desktop"
 
 command -v cargo >/dev/null 2>&1 || {
@@ -15,8 +17,15 @@ command -v cargo >/dev/null 2>&1 || {
 
 cargo build --release -p whisper-dictate-app --manifest-path "${HERE}/Cargo.toml"
 
-mkdir -p "${BIN_DIR}" "${APP_DIR}"
-install -m 0755 "${HERE}/target/release/whisper-dictate" "${BIN}"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}"
+install -m 0755 "${HERE}/target/release/whisper-dictate" "${REAL_BIN}"
+
+cat > "${BIN}" <<EOF
+#!/usr/bin/env bash
+export VOICEPI_APP_ROOT="${HERE}"
+exec "${REAL_BIN}" "\$@"
+EOF
+chmod 0755 "${BIN}"
 
 cat > "${DESKTOP}" <<EOF
 [Desktop Entry]
@@ -32,5 +41,6 @@ EOF
 chmod 0644 "${DESKTOP}"
 
 echo "Installed ${BIN}"
+echo "Installed ${REAL_BIN}"
 echo "Installed ${DESKTOP}"
 echo "Run: whisper-dictate ui"

@@ -9,6 +9,7 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 const PYTHON_ENV: &str = "VOICEPI_PYTHON";
+const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 
@@ -197,7 +198,7 @@ pub fn worker_command(app_root: impl AsRef<Path>) -> WorkerCommand {
 }
 
 pub fn default_worker_command() -> WorkerCommand {
-    worker_command(source_root())
+    worker_command(app_root())
 }
 
 pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
@@ -310,6 +311,12 @@ fn source_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn app_root() -> PathBuf {
+    env::var_os(APP_ROOT_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(source_root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +354,18 @@ mod tests {
         env::remove_var(PYTHON_ENV);
 
         assert_eq!(command.program, PathBuf::from("/custom/python"));
+    }
+
+    #[test]
+    fn default_worker_command_honors_app_root_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        env::set_var(APP_ROOT_ENV, "/installed/app");
+
+        let command = default_worker_command();
+        env::remove_var(APP_ROOT_ENV);
+
+        assert_eq!(command.working_dir, PathBuf::from("/installed/app"));
+        assert_eq!(command.args, vec!["/installed/app/voice_pi.py"]);
     }
 
     #[test]
