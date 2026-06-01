@@ -11,6 +11,11 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-02
+
+### Changed
+- Release-only bump after v0.3.1 packaging metadata updates.
+
 ## [0.3.1] - 2026-06-01
 
 ### Added
