@@ -245,14 +245,14 @@ setx VOICEPI_INJECT_MODE auto
 # then restart whisper-dictate (new process picks them up)
 ```
 
-One-off via terminal (the installer put the dir on PATH):
+One-off via terminal (the installer put the Rust controller on PATH):
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.cmd" --key ctrl_r --lang da --model large-v3 --device cuda
+& "$env:LOCALAPPDATA\Programs\WhisperDictate\whisper-dictate.exe" run --key ctrl_r --lang da --model large-v3 --device cuda
 ```
 
 Or make your **own** shortcut whose Target is
-`%LOCALAPPDATA%\Programs\WhisperDictate\setup.cmd --key ctrl_r --lang da`
+`%LOCALAPPDATA%\Programs\WhisperDictate\whisper-dictate.exe run --key ctrl_r --lang da`
 
 ### Optional NVIDIA Parakeet backend
 

@@ -209,9 +209,10 @@ workflow from this source — it has not been tampered with.
 > synthetic keystroke injection. By design that is the same behavioural
 > profile as a keylogger, so Microsoft Defender's machine-learning
 > heuristics (detection names ending in `!ml`, e.g. `Wacatac`, `Sabsik`) may
-> flag it. The installer payload is **only** the text files listed in
-> [`installer/whisper-dictate.iss`](installer/whisper-dictate.iss) — the
-> `.py`/`.ps1`/`.cmd`/`.md` scripts in this repo, no compiled binary. After
+> flag it. The installer payload is listed in
+> [`installer/whisper-dictate.iss`](installer/whisper-dictate.iss): the
+> Python runtime files, compatibility scripts, docs, and the Rust controller
+> binary built by CI. After
 > verifying the SHA256 above you can cross-check on
 > [VirusTotal](https://www.virustotal.com/): a handful of heuristic engines
 > flag it, the large majority report clean. To avoid the heuristic entirely,
@@ -262,20 +263,20 @@ setup.cmd --key ctrl_r --lang en
 ```
 
 Or use the Start-menu **whisper-dictate** shortcut to run dictation and settings
-from one UI. The **whisper-dictate Debug Terminal** shortcut remains available
-for debugging or classic terminal use.
+from one UI. The **whisper-dictate Terminal** shortcut runs the Rust controller
+in terminal mode.
 
 After first-time setup, launch directly:
 
 ```powershell
-setup.cmd --key ctrl_r --lang da
+whisper-dictate run --key ctrl_r --lang da
 ```
 
 On an NVIDIA machine, force CUDA explicitly with:
 
 ```powershell
 cd C:\source\whisper-dictate
-.\setup.cmd --key ctrl_r --lang da --device cuda
+.\whisper-dictate.exe run --key ctrl_r --lang da --device cuda
 ```
 
 Hold **Right Ctrl**, speak, release — text appears at the cursor.

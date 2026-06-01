@@ -2072,6 +2072,17 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(r'"%RUST_EXE%" run %*', script)
         self.assertIn(r'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %*', script)
 
+    def test_windows_docs_use_rust_terminal_entrypoint(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+        config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+
+        self.assertIn("whisper-dictate Terminal", readme)
+        self.assertIn("whisper-dictate run --key ctrl_r --lang da", readme)
+        self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device cuda", readme)
+        self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device cuda", config)
+        self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da", config)
+        self.assertNotIn("whisper-dictate Debug Terminal", readme)
+
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
             script = f.read()
