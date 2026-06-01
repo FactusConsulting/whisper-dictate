@@ -12,6 +12,10 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if cli.version {
+        println!("whisper-dictate {}", runtime::version());
+        return Ok(());
+    }
 
     match cli.command.unwrap_or(Command::Ui) {
         Command::Ui | Command::Settings => ui::run(),

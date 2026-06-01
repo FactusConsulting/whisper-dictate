@@ -44,6 +44,32 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+pub fn version() -> String {
+    let root = app_root();
+    if let Ok(raw) = std::fs::read_to_string(root.join("VERSION")) {
+        let version = raw.trim().trim_start_matches('v');
+        if !version.is_empty() {
+            return version.to_owned();
+        }
+    }
+
+    if let Ok(output) = Command::new("git")
+        .args(["describe", "--tags", "--always", "--dirty"])
+        .current_dir(&root)
+        .output()
+    {
+        if output.status.success() {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let version = version.trim().trim_start_matches('v');
+            if !version.is_empty() {
+                return version.to_owned();
+            }
+        }
+    }
+
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeEvent {
     Started { command: String },
@@ -511,6 +537,16 @@ mod tests {
 
         assert_eq!(command.working_dir, PathBuf::from("/installed/app"));
         assert_eq!(command.args, vec!["/installed/app/voice_pi.py"]);
+    }
+
+    #[test]
+    fn version_prefers_version_file_without_v_prefix() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("VERSION"), "v9.8.7\n").unwrap();
+        let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, dir.path());
+
+        assert_eq!(version(), "9.8.7");
     }
 
     #[test]

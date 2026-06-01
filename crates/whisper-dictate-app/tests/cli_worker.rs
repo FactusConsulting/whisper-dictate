@@ -2,6 +2,33 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn help_uses_public_binary_name_even_when_binary_path_differs() {
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("--help")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.contains("Usage: whisper-dictate [COMMAND]"));
+    assert!(!stdout.contains("Usage: whisper-dictate-app"));
+}
+
+#[test]
+fn version_flag_prints_public_version_line() {
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(stdout.starts_with("whisper-dictate "));
+}
+
+#[test]
 fn worker_failure_does_not_print_rust_backtrace() {
     let dir = tempfile::tempdir().unwrap();
     let worker = dir.path().join("voice_pi.py");

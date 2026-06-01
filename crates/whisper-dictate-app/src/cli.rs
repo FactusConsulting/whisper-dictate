@@ -2,8 +2,13 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "whisper-dictate")]
+#[command(bin_name = "whisper-dictate")]
 #[command(about = "Desktop and terminal controller for whisper-dictate")]
 pub struct Cli {
+    /// Print version and exit.
+    #[arg(long)]
+    pub version: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -46,6 +51,14 @@ mod tests {
     #[test]
     fn no_subcommand_opens_ui_by_default() {
         let cli = Cli::parse_from(["whisper-dictate"]);
+        assert!(!cli.version);
+        assert_eq!(cli.command, None);
+    }
+
+    #[test]
+    fn parses_version_flag() {
+        let cli = Cli::parse_from(["whisper-dictate", "--version"]);
+        assert!(cli.version);
         assert_eq!(cli.command, None);
     }
 
