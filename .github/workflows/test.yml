@@ -84,3 +84,32 @@ jobs:
             echo "expected exit 3 (unknown key), got $rc"
             exit 1
           fi
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux Rust UI build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Rust tests
+        run: cargo test -p whisper-dictate-app
+      - name: Rust CLI smoke
+        run: |
+          cargo run -q -p whisper-dictate-app -- --help
+          cargo run -q -p whisper-dictate-app -- config path
