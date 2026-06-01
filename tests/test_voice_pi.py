@@ -2033,6 +2033,27 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("command.creation_flags(CREATE_NO_WINDOW);", script)
         self.assertIn("configure_background_process(&mut process);", script)
 
+    def test_rust_ui_cleans_stale_desktop_processes_before_starting_window(self):
+        ui_script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        runtime_script = Path("crates/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
+
+        self.assertLess(
+            ui_script.index("runtime::cleanup_stale_desktop_processes();"),
+            ui_script.index("eframe::run_native("),
+        )
+        self.assertIn("pub fn cleanup_stale_desktop_processes()", runtime_script)
+        self.assertIn("fn cleanup_stale_desktop_processes_windows() -> Result<()>", runtime_script)
+        self.assertIn("fn stale_process_cleanup_script(", runtime_script)
+        self.assertIn("$cleanupPid = $PID", runtime_script)
+        self.assertIn("$_.ProcessId -ne $cleanupPid", runtime_script)
+        self.assertIn("fn windows_shell_program() -> &'static str", runtime_script)
+        self.assertIn('"pwsh.exe"', runtime_script)
+        self.assertIn("$_.ExecutablePath -eq $exe", runtime_script)
+        self.assertIn('$_.CommandLine -like "*voice_pi.py*"', runtime_script)
+        self.assertIn('$_.CommandLine -like "*$root*"', runtime_script)
+        runtime_without_tests = runtime_script.split("#[cfg(test)]", 1)[0]
+        self.assertNotIn("Stop-Process -Name python", runtime_without_tests)
+
     def test_rust_runtime_log_expands_to_available_width(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 

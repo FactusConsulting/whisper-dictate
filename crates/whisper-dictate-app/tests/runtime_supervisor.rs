@@ -1,9 +1,17 @@
 use std::env;
+#[cfg(windows)]
+use std::ffi::{OsStr, OsString};
+#[cfg(windows)]
+use std::fs;
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::process::Child;
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use whisper_dictate_app::runtime::cleanup_stale_desktop_processes;
 use whisper_dictate_app::runtime::{RuntimeEvent, RuntimeState, RuntimeSupervisor, WorkerCommand};
 
 #[test]
@@ -117,6 +125,34 @@ fn supervisor_parses_worker_events_from_stderr() {
     )));
 }
 
+#[cfg(windows)]
+#[test]
+fn cleanup_stale_desktop_processes_stops_worker_from_same_app_root() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let worker = dir.path().join("voice_pi.py");
+    fs::write(
+        &worker,
+        "import time\nprint('worker-ready', flush=True)\ntime.sleep(60)\n",
+    )
+    .unwrap();
+    let mut child = Command::new(python)
+        .arg(&worker)
+        .current_dir(dir.path())
+        .spawn()
+        .unwrap();
+    let _app_root_guard = EnvVarGuard::set("VOICEPI_APP_ROOT", dir.path());
+
+    cleanup_stale_desktop_processes();
+
+    assert!(
+        wait_for_exit(&mut child, Duration::from_secs(5)),
+        "stale worker should be stopped by startup cleanup"
+    );
+}
+
 fn test_python() -> Option<PathBuf> {
     for candidate in python_candidates() {
         if Command::new(&candidate).arg("--version").output().is_ok() {
@@ -124,6 +160,45 @@ fn test_python() -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(windows)]
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if child.try_wait().unwrap().is_some() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    let _ = child.kill();
+    false
+}
+
+#[cfg(windows)]
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+#[cfg(windows)]
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        let original = env::var_os(key);
+        env::set_var(key, value);
+        Self { key, original }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(value) = &self.original {
+            env::set_var(self.key, value);
+        } else {
+            env::remove_var(self.key);
+        }
+    }
 }
 
 fn python_candidates() -> &'static [&'static str] {

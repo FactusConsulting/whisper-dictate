@@ -72,6 +72,82 @@ pub fn setup_ubuntu() -> Result<()> {
     }
 }
 
+pub fn cleanup_stale_desktop_processes() {
+    #[cfg(windows)]
+    if let Err(err) = cleanup_stale_desktop_processes_windows() {
+        eprintln!("warning: could not clean stale whisper-dictate processes: {err}");
+    }
+}
+
+#[cfg(not(windows))]
+pub fn cleanup_stale_desktop_processes() {}
+
+#[cfg(windows)]
+fn cleanup_stale_desktop_processes_windows() -> Result<()> {
+    let current_pid = std::process::id();
+    let exe = env::current_exe()
+        .ok()
+        .unwrap_or_else(|| PathBuf::from("whisper-dictate.exe"));
+    let app_root = app_root();
+    let script = stale_process_cleanup_script(current_pid, &exe, &app_root);
+
+    let mut command = Command::new(windows_shell_program());
+    command.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        &script,
+    ]);
+    configure_background_process(&mut command);
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("stale process cleanup exited with {status}"))
+    }
+}
+
+#[cfg(windows)]
+fn stale_process_cleanup_script(current_pid: u32, exe: &Path, app_root: &Path) -> String {
+    let exe = escape_powershell_single_quoted(&exe.display().to_string());
+    let app_root = escape_powershell_single_quoted(&app_root.display().to_string());
+    format!(
+        r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$currentPid = {current_pid}
+$cleanupPid = $PID
+$exe = '{exe}'
+$root = '{app_root}'
+Get-CimInstance Win32_Process |
+  Where-Object {{
+    $_.ProcessId -ne $currentPid -and $_.ProcessId -ne $cleanupPid -and (
+      ($_.ExecutablePath -eq $exe) -or
+      ($_.CommandLine -like "*voice_pi.py*" -and $_.CommandLine -like "*$root*")
+    )
+  }} |
+  ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+"#
+    )
+}
+
+#[cfg(windows)]
+fn escape_powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(windows)]
+fn windows_shell_program() -> &'static str {
+    if env::var_os("PATH")
+        .map(|path| env::split_paths(&path).any(|dir| dir.join("pwsh.exe").exists()))
+        .unwrap_or(false)
+    {
+        "pwsh.exe"
+    } else {
+        "powershell.exe"
+    }
+}
+
 pub fn version() -> String {
     let root = app_root();
     if let Ok(raw) = std::fs::read_to_string(root.join("VERSION")) {
@@ -855,6 +931,45 @@ mod tests {
         let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, dir.path());
 
         assert_eq!(version(), "9.8.7");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stale_process_cleanup_script_is_scoped_to_current_exe_and_app_root() {
+        let script = stale_process_cleanup_script(
+            123,
+            Path::new(r"C:\Program Files\WhisperDictate\whisper-dictate.exe"),
+            Path::new(r"C:\Program Files\WhisperDictate"),
+        );
+
+        assert!(script.contains("$currentPid = 123"));
+        assert!(script.contains("$cleanupPid = $PID"));
+        assert!(script.contains(r"$_.ExecutablePath -eq $exe"));
+        assert!(script.contains("$_.ProcessId -ne $cleanupPid"));
+        assert!(script.contains(r#"$_.CommandLine -like "*voice_pi.py*""#));
+        assert!(script.contains(r#"$_.CommandLine -like "*$root*""#));
+        assert!(!script.contains("Stop-Process -Name python"));
+        assert!(!script.contains("taskkill /IM python"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_single_quote_escape_doubles_quotes() {
+        assert_eq!(
+            escape_powershell_single_quoted(r"C:\It's\app"),
+            r"C:\It''s\app"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_prefers_pwsh_when_present_on_path() {
+        if env::var_os("PATH")
+            .map(|path| env::split_paths(&path).any(|dir| dir.join("pwsh.exe").exists()))
+            .unwrap_or(false)
+        {
+            assert_eq!(windows_shell_program(), "pwsh.exe");
+        }
     }
 
     #[test]

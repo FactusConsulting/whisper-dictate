@@ -11,11 +11,16 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-01
+
 ### Added
 - Ubuntu setup now creates a GNOME **Whisper Dictate** launcher/autostart entry and opens the Rust UI after setup.
 - Rust UI window title and top bar show the running whisper-dictate version.
 - `whisper-dictate setup-ubuntu` runs the bundled Ubuntu Wayland desktop setup helper after Homebrew/source install.
 - Rust UI now sets its runtime window icon and exposes cloud STT and Parakeet models as dropdowns, including Groq `whisper-large-v3-turbo`.
+
+### Fixed
+- Rust UI startup now cleans stale whisper-dictate UI/worker processes scoped to the same install root before opening the window.
 
 ## [0.3.0] - 2026-06-01
 

@@ -31,6 +31,7 @@ const PARAKEET_MODELS: &[&str] = &[
 ];
 
 pub fn run() -> Result<()> {
+    runtime::cleanup_stale_desktop_processes();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([920.0, 680.0])
