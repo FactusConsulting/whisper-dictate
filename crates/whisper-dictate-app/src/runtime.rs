@@ -36,9 +36,7 @@ pub fn run_terminal(args: Vec<String>) -> Result<()> {
 }
 
 pub fn doctor() -> Result<()> {
-    run_foreground(&default_worker_command_with_args(vec![
-        "--doctor".to_owned()
-    ]))
+    run_foreground(&doctor_command())
 }
 
 pub fn install() -> Result<()> {
@@ -213,6 +211,40 @@ pub fn default_worker_command() -> WorkerCommand {
 
 pub fn default_worker_command_with_args(args: Vec<String>) -> WorkerCommand {
     worker_command_with_args(app_root(), args)
+}
+
+pub fn doctor_command() -> WorkerCommand {
+    default_worker_command_with_args(vec!["--doctor".to_owned()])
+}
+
+#[derive(Debug)]
+pub struct WorkerOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub status: ExitStatus,
+}
+
+impl WorkerOutput {
+    pub fn success(&self) -> bool {
+        self.status.success()
+    }
+
+    pub fn code(&self) -> Option<i32> {
+        self.status.code()
+    }
+}
+
+pub fn run_capture(command: &WorkerCommand) -> Result<WorkerOutput> {
+    let output = Command::new(&command.program)
+        .args(&command.args)
+        .current_dir(&command.working_dir)
+        .output()?;
+
+    Ok(WorkerOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        status: output.status,
+    })
 }
 
 pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
@@ -479,6 +511,47 @@ mod tests {
 
         assert_eq!(command.working_dir, PathBuf::from("/installed/app"));
         assert_eq!(command.args, vec!["/installed/app/voice_pi.py"]);
+    }
+
+    #[test]
+    fn doctor_command_adds_doctor_argument() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");
+        let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+        let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+        let command = doctor_command();
+
+        assert_eq!(
+            command.args,
+            vec![
+                "/installed/app/voice_pi.py".to_owned(),
+                "--doctor".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn run_capture_returns_stdout_stderr_and_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("worker.py");
+        std::fs::write(
+            &script,
+            "import sys\nprint('out line')\nprint('err line', file=sys.stderr)\nsys.exit(7)\n",
+        )
+        .unwrap();
+        let command = WorkerCommand {
+            program: PathBuf::from(default_python_name()),
+            args: vec![script.display().to_string()],
+            working_dir: dir.path().to_path_buf(),
+        };
+
+        let output = run_capture(&command).unwrap();
+
+        assert!(!output.success());
+        assert_eq!(output.code(), Some(7));
+        assert!(output.stdout.contains("out line"));
+        assert!(output.stderr.contains("err line"));
     }
 
     #[test]

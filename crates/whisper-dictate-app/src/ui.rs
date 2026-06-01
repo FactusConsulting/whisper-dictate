@@ -2,7 +2,10 @@ use anyhow::Result;
 use eframe::egui;
 
 use crate::config::{self, AppSettings};
-use crate::runtime::{default_worker_command, RuntimeEvent, RuntimeState, RuntimeSupervisor};
+use crate::runtime::{
+    default_worker_command, doctor_command, run_capture, RuntimeEvent, RuntimeState,
+    RuntimeSupervisor,
+};
 
 pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
@@ -121,6 +124,9 @@ impl WhisperDictateApp {
             }
             if ui.button("Restart").clicked() {
                 self.restart_runtime();
+            }
+            if ui.button("Doctor").clicked() {
+                self.run_doctor();
             }
             ui.separator();
             ui.label(format!("Status: {}", self.runtime_state.label()));
@@ -364,6 +370,28 @@ impl WhisperDictateApp {
         self.runtime_state = self.supervisor.state();
     }
 
+    fn run_doctor(&mut self) {
+        let command = doctor_command();
+        self.append_runtime_log(format!("[ui] doctor: {}", command.display()));
+        match run_capture(&command) {
+            Ok(output) => {
+                self.append_runtime_output(output.stdout.trim_end());
+                self.append_runtime_output(output.stderr.trim_end());
+                if output.success() {
+                    self.append_runtime_log("[ui] doctor passed");
+                } else {
+                    self.append_runtime_log(format!(
+                        "[ui] doctor failed with code {}",
+                        output
+                            .code()
+                            .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+                    ));
+                }
+            }
+            Err(err) => self.append_runtime_log(format!("[ui] doctor failed to run: {err}")),
+        }
+    }
+
     fn poll_runtime(&mut self) {
         for event in self.supervisor.poll() {
             match event {
@@ -399,6 +427,13 @@ impl WhisperDictateApp {
             self.runtime_log.push('\n');
         }
         self.runtime_log.push_str(line.as_ref());
+    }
+
+    fn append_runtime_output(&mut self, output: &str) {
+        if output.is_empty() {
+            return;
+        }
+        self.append_runtime_log(output);
     }
 
     fn save_settings(&mut self) {
