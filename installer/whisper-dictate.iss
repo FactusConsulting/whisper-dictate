@@ -49,6 +49,7 @@ Source: "..\setup.ps1";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\setup.cmd";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\settings-ui.ps1";    DestDir: "{app}"; Flags: ignoreversion
 Source: "..\settings-ui.vbs";    DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\TECHNICAL.md";       DestDir: "{app}"; Flags: ignoreversion
@@ -60,14 +61,14 @@ Source: "..\scripts\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignorever
 Source: "..\{#REQFILE}";               DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
-Name: "{userprograms}\whisper-dictate\whisper-dictate Settings UI"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
+Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
+Name: "{userprograms}\whisper-dictate\whisper-dictate Legacy Settings UI"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
 Name: "{userprograms}\whisper-dictate\whisper-dictate Debug Terminal"; Filename: "{app}\setup.cmd"; IconFilename: "{cmd}"
 Name: "{userprograms}\whisper-dictate\Uninstall";          Filename: "{uninstallexe}"
-Name: "{userdesktop}\whisper-dictate";                     Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
+Name: "{userdesktop}\whisper-dictate";                     Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
 
 [Run]
-Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; Description: "Launch whisper-dictate now"; \
+Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; Description: "Launch whisper-dictate now"; \
   Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]

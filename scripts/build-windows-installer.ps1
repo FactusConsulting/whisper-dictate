@@ -56,6 +56,13 @@ if (-not $iscc) {
   throw "Inno Setup compiler ISCC.exe was not found. Install Inno Setup 6, then rerun this script."
 }
 
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+  throw "cargo was not found. Install Rust, then rerun this script."
+}
+Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
+cargo build --release -p whisper-dictate-app
+if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+
 $versionFile = Join-Path $root 'VERSION'
 $hadVersion = Test-Path $versionFile
 $oldVersion = if ($hadVersion) { Get-Content $versionFile -Raw } else { $null }

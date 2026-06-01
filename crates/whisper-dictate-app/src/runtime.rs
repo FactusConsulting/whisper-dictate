@@ -584,9 +584,22 @@ fn source_root() -> PathBuf {
 }
 
 fn app_root() -> PathBuf {
-    env::var_os(APP_ROOT_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(source_root)
+    if let Some(raw) = env::var_os(APP_ROOT_ENV) {
+        return PathBuf::from(raw);
+    }
+    if let Ok(exe) = env::current_exe() {
+        if let Some(root) = app_root_from_exe_path(&exe) {
+            return root;
+        }
+    }
+    source_root()
+}
+
+fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
+    let root = exe.parent()?;
+    root.join("voice_pi.py")
+        .exists()
+        .then(|| root.to_path_buf())
 }
 
 #[cfg(test)]
@@ -713,6 +726,19 @@ mod tests {
 
         assert_eq!(command.working_dir, PathBuf::from("/installed/app"));
         assert_eq!(command.args, vec!["/installed/app/voice_pi.py"]);
+    }
+
+    #[test]
+    fn app_root_can_be_inferred_from_installed_exe_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join(if cfg!(windows) {
+            "whisper-dictate.exe"
+        } else {
+            "whisper-dictate"
+        });
+        std::fs::write(dir.path().join("voice_pi.py"), "").unwrap();
+
+        assert_eq!(app_root_from_exe_path(&exe), Some(dir.path().to_path_buf()));
     }
 
     #[test]

@@ -2066,7 +2066,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn(r"SetupIconFile=..\assets\whisper-dictate.ico", script)
         self.assertIn(r'Source: "..\assets\whisper-dictate.ico"', script)
-        self.assertIn(r"whisper-dictate Settings UI", script)
+        self.assertIn(r"whisper-dictate Legacy Settings UI", script)
         self.assertIn(r'IconFilename: "{app}\whisper-dictate.ico"', script)
         self.assertNotIn(r"\Settings UI", script)
 
@@ -2075,8 +2075,30 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             script = f.read()
 
         self.assertIn(r'Name: "{userdesktop}\whisper-dictate"', script)
-        self.assertIn(r'Filename: "{sys}\wscript.exe"', script)
-        self.assertIn(r'Parameters: """{app}\settings-ui.vbs"""', script)
+        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"', script)
+        self.assertIn(r'Parameters: "ui"', script)
+
+    def test_installer_packages_rust_ui_as_primary_desktop_entry(self):
+        with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn(r'Source: "..\target\release\whisper-dictate.exe"', script)
+        self.assertIn(
+            r'Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"',
+            script,
+        )
+        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; Description: "Launch whisper-dictate now"', script)
+
+    def test_windows_installer_workflows_build_rust_ui_before_inno(self):
+        for path in (".github/workflows/release.yml", ".github/workflows/windows-installer.yml"):
+            workflow = Path(path).read_text(encoding="utf-8")
+            rust_build = workflow.index("cargo build --release -p whisper-dictate-app")
+            installer_build = workflow.index("Build installers")
+            self.assertLess(rust_build, installer_build)
+
+        script = Path("scripts/build-windows-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("cargo build --release -p whisper-dictate-app", script)
+        self.assertIn("cargo build failed", script)
 
     def test_settings_ui_sets_non_empty_tray_icon(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:
