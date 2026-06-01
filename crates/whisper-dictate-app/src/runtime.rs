@@ -50,6 +50,28 @@ pub fn install() -> Result<()> {
     plan.run()
 }
 
+pub fn setup_ubuntu() -> Result<()> {
+    let script = app_root().join("ubuntu26.04").join("setup.sh");
+    if !script.exists() {
+        return Err(anyhow!(
+            "Ubuntu setup script not found at {}",
+            script.display()
+        ));
+    }
+    let status = Command::new("bash").arg(&script).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Ubuntu setup failed with exit code {}",
+            status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_owned())
+        ))
+    }
+}
+
 pub fn version() -> String {
     let root = app_root();
     if let Ok(raw) = std::fs::read_to_string(root.join("VERSION")) {

@@ -24,6 +24,7 @@ fn run() -> anyhow::Result<()> {
         Command::Run { args } => runtime::run_terminal(args),
         Command::Doctor => runtime::doctor(),
         Command::Install => runtime::install(),
+        Command::SetupUbuntu => runtime::setup_ubuntu(),
         Command::Config { command } => config::handle_command(command),
     }
 }

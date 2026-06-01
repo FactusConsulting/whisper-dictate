@@ -327,7 +327,7 @@ changes. On Ubuntu with Homebrew, run the bundled setup once; it creates a
 GNOME **Whisper Dictate** app launcher, login autostart entry, and opens the UI:
 
 ```bash
-bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"
+whisper-dictate setup-ubuntu
 ```
 
 After that, open **Whisper Dictate** from the Ubuntu launcher or run:

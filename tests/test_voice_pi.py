@@ -2051,17 +2051,42 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
         self.assertIn('ui.label(format!("whisper-dictate {}", runtime::version()))', script)
+        self.assertIn(".with_icon(app_icon())", script)
+        self.assertIn("fn app_icon() -> egui::IconData", script)
 
     def test_rust_ui_has_groq_cloud_stt_preset_and_key_link(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 
         self.assertIn('GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1"', script)
         self.assertIn('GROQ_STT_MODEL: &str = "whisper-large-v3-turbo"', script)
+        self.assertIn("const EXTERNAL_STT_MODELS: &[&str]", script)
+        self.assertIn('"distil-whisper-large-v3-en"', script)
+        self.assertIn('"gpt-4o-mini-transcribe"', script)
+        self.assertIn('"Cloud STT model (Groq/OpenAI)",', script)
+        self.assertIn("EXTERNAL_STT_MODELS", script)
+        self.assertIn("const PARAKEET_MODELS: &[&str]", script)
+        self.assertIn('"nvidia/parakeet-tdt-0.6b-v3"', script)
+        self.assertIn('"nvidia/parakeet-tdt-1.1b"', script)
+        self.assertIn('"nvidia/parakeet-tdt-0.6b-v2"', script)
+        self.assertIn('"Parakeet model",', script)
+        self.assertIn("PARAKEET_MODELS", script)
         self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', script)
         self.assertIn('ui.button("Use Groq cloud STT").clicked()', script)
         self.assertIn('ui.button("Groq API keys").clicked()', script)
         self.assertIn('open_url(GROQ_KEYS_URL)', script)
         self.assertIn('GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY', script)
+
+    def test_rust_cli_has_explicit_ubuntu_setup_command(self):
+        cli = Path("crates/whisper-dictate-app/src/cli.rs").read_text(encoding="utf-8")
+        main = Path("crates/whisper-dictate-app/src/main.rs").read_text(encoding="utf-8")
+        runtime = Path("crates/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
+
+        self.assertIn("SetupUbuntu", cli)
+        self.assertIn('["whisper-dictate", "setup-ubuntu"]', cli)
+        self.assertIn("Command::SetupUbuntu => runtime::setup_ubuntu()", main)
+        self.assertIn("pub fn setup_ubuntu() -> Result<()>", runtime)
+        self.assertIn('join("ubuntu26.04").join("setup.sh")', runtime)
+        self.assertIn('Command::new("bash").arg(&script).status()?', runtime)
 
     def test_ubuntu_setup_creates_launcher_autostart_and_starts_rust_ui(self):
         script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")
@@ -2107,7 +2132,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
 
         for doc in (readme, config):
-            self.assertIn('bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"', doc)
+            self.assertIn("whisper-dictate setup-ubuntu", doc)
             self.assertIn("Whisper Dictate", doc)
             self.assertIn("whisper-dictate ui", doc)
         self.assertIn("Then press **Start** in the Runtime tab", readme)

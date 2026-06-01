@@ -35,7 +35,7 @@ Requires [Homebrew](https://brew.sh):
 ```bash
 brew tap factusconsulting/tap
 brew install whisper-dictate
-bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"
+whisper-dictate setup-ubuntu
 ```
 
 **First run** builds a machine-local venv (`~/.venv-whisper-dictate`) and
@@ -59,7 +59,7 @@ The setup command above runs once after installing and sets up evdev input group
 desktop/login autostart entry:
 
 ```bash
-bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"
+whisper-dictate setup-ubuntu
 ```
 
 Log out and back in after this runs (required for the `input` group to activate).

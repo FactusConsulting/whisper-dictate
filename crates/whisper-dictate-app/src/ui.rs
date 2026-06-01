@@ -14,10 +14,27 @@ use crate::runtime::{
 const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
 const GROQ_KEYS_URL: &str = "https://console.groq.com/keys";
+const EXTERNAL_STT_MODELS: &[&str] = &[
+    "",
+    "whisper-large-v3-turbo",
+    "whisper-large-v3",
+    "distil-whisper-large-v3-en",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-transcribe",
+    "whisper-1",
+];
+const PARAKEET_MODELS: &[&str] = &[
+    "",
+    "nvidia/parakeet-tdt-0.6b-v3",
+    "nvidia/parakeet-tdt-1.1b",
+    "nvidia/parakeet-tdt-0.6b-v2",
+];
 
 pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([920.0, 680.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([920.0, 680.0])
+            .with_icon(app_icon()),
         ..Default::default()
     };
 
@@ -222,8 +239,18 @@ impl WhisperDictateApp {
                     &["whisper", "parakeet", "openai"],
                 );
                 text(ui, "Whisper model", &mut self.settings.model);
-                text(ui, "External STT model", &mut self.settings.stt_model);
-                text(ui, "Parakeet model", &mut self.settings.parakeet_model);
+                combo(
+                    ui,
+                    "Cloud STT model (Groq/OpenAI)",
+                    &mut self.settings.stt_model,
+                    EXTERNAL_STT_MODELS,
+                );
+                combo(
+                    ui,
+                    "Parakeet model",
+                    &mut self.settings.parakeet_model,
+                    PARAKEET_MODELS,
+                );
                 combo(
                     ui,
                     "Device",
@@ -734,6 +761,86 @@ fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str]) {
             }
         });
     ui.end_row();
+}
+
+fn app_icon() -> egui::IconData {
+    const SIZE: u32 = 256;
+    let mut rgba = vec![0; (SIZE * SIZE * 4) as usize];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let idx = ((y * SIZE + x) * 4) as usize;
+            if !inside_rounded_square(x as i32, y as i32, SIZE as i32, 60) {
+                rgba[idx + 3] = 0;
+                continue;
+            }
+            let t = (x + y) as f32 / ((SIZE - 1) * 2) as f32;
+            rgba[idx] = 255;
+            rgba[idx + 1] = (42.0 * (1.0 - t)) as u8;
+            rgba[idx + 2] = (42.0 * (1.0 - t) + 16.0 * t) as u8;
+            rgba[idx + 3] = 255;
+        }
+    }
+
+    for (x, y, w, h, r) in [
+        (56, 112, 16, 32, 8),
+        (84, 92, 16, 72, 8),
+        (112, 64, 16, 128, 8),
+        (140, 84, 16, 88, 8),
+        (168, 104, 16, 48, 8),
+        (196, 118, 16, 20, 8),
+    ] {
+        fill_rounded_rect(&mut rgba, SIZE, x, y, w, h, r, [255, 255, 255, 255]);
+    }
+
+    egui::IconData {
+        rgba,
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+fn inside_rounded_square(x: i32, y: i32, size: i32, radius: i32) -> bool {
+    inside_rounded_rect(x, y, 0, 0, size, size, radius)
+}
+
+fn fill_rounded_rect(
+    rgba: &mut [u8],
+    canvas: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    radius: i32,
+    color: [u8; 4],
+) {
+    for py in y..(y + height) {
+        for px in x..(x + width) {
+            if inside_rounded_rect(px, py, x, y, width, height, radius) {
+                let idx = ((py as u32 * canvas + px as u32) * 4) as usize;
+                rgba[idx..idx + 4].copy_from_slice(&color);
+            }
+        }
+    }
+}
+
+fn inside_rounded_rect(
+    px: i32,
+    py: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    radius: i32,
+) -> bool {
+    let left = x + radius;
+    let right = x + width - radius - 1;
+    let top = y + radius;
+    let bottom = y + height - radius - 1;
+    let cx = px.clamp(left, right);
+    let cy = py.clamp(top, bottom);
+    let dx = px - cx;
+    let dy = py - cy;
+    dx * dx + dy * dy <= radius * radius
 }
 
 fn open_url(url: &str) -> Result<()> {

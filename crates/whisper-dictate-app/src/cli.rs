@@ -29,6 +29,8 @@ pub enum Command {
     Doctor,
     /// Install or repair local runtime dependencies.
     Install,
+    /// Run the Ubuntu Wayland desktop setup helper.
+    SetupUbuntu,
     /// Inspect configuration paths and values.
     Config {
         #[command(subcommand)]
@@ -95,6 +97,12 @@ mod tests {
     fn parses_settings_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "settings"]);
         assert_eq!(cli.command, Some(Command::Settings));
+    }
+
+    #[test]
+    fn parses_setup_ubuntu_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "setup-ubuntu"]);
+        assert_eq!(cli.command, Some(Command::SetupUbuntu));
     }
 
     #[test]
