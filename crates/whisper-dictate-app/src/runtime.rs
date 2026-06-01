@@ -8,11 +8,14 @@ use std::thread;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
+use crate::config;
+
 const PYTHON_ENV: &str = "VOICEPI_PYTHON";
 const BOOTSTRAP_PYTHON_ENV: &str = "VOICEPI_BOOTSTRAP_PYTHON";
 const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
+const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeState {
@@ -264,12 +267,10 @@ impl InstallPlan {
             .unwrap_or_else(|| PathBuf::from(default_python_name()));
 
         if let Some(override_python) = env::var_os(PYTHON_ENV) {
-            return Ok(Self::from_parts(
-                app_root,
-                requirements,
-                PathBuf::from(override_python),
-                None,
-            ));
+            let mut plan =
+                Self::from_parts(app_root, requirements, PathBuf::from(override_python), None);
+            plan.add_optional_requirements();
+            return Ok(plan);
         }
 
         let home = home_dir().ok_or_else(|| anyhow!("HOME/USERPROFILE is not set"))?;
@@ -285,12 +286,9 @@ impl InstallPlan {
             working_dir: app_root.clone(),
         });
 
-        Ok(Self::from_parts(
-            app_root,
-            requirements,
-            venv_python,
-            create_venv,
-        ))
+        let mut plan = Self::from_parts(app_root, requirements, venv_python, create_venv);
+        plan.add_optional_requirements();
+        Ok(plan)
     }
 
     fn from_parts(
@@ -311,17 +309,7 @@ impl InstallPlan {
                 ],
                 working_dir: app_root.clone(),
             },
-            PlannedCommand {
-                program: venv_python.clone(),
-                args: vec![
-                    "-m".to_owned(),
-                    "pip".to_owned(),
-                    "install".to_owned(),
-                    "-r".to_owned(),
-                    requirements.display().to_string(),
-                ],
-                working_dir: app_root.clone(),
-            },
+            pip_install_command(&venv_python, &requirements, &app_root),
         ];
 
         Self {
@@ -330,6 +318,19 @@ impl InstallPlan {
             venv_python,
             create_venv,
             install_commands,
+        }
+    }
+
+    fn add_optional_requirements(&mut self) {
+        if wants_parakeet_backend() {
+            let requirements = self.app_root.join("requirements-parakeet.txt");
+            if requirements.exists() {
+                self.install_commands.push(pip_install_command(
+                    &self.venv_python,
+                    &requirements,
+                    &self.app_root,
+                ));
+            }
         }
     }
 
@@ -350,6 +351,20 @@ impl InstallPlan {
     }
 }
 
+fn pip_install_command(venv_python: &Path, requirements: &Path, app_root: &Path) -> PlannedCommand {
+    PlannedCommand {
+        program: venv_python.to_path_buf(),
+        args: vec![
+            "-m".to_owned(),
+            "pip".to_owned(),
+            "install".to_owned(),
+            "-r".to_owned(),
+            requirements.display().to_string(),
+        ],
+        working_dir: app_root.to_path_buf(),
+    }
+}
+
 fn run_install_command(command: &PlannedCommand) -> Result<()> {
     println!("> {}", command.display());
     let status = Command::new(&command.program)
@@ -361,6 +376,15 @@ fn run_install_command(command: &PlannedCommand) -> Result<()> {
     } else {
         Err(anyhow!("install command failed with status {status}"))
     }
+}
+
+fn wants_parakeet_backend() -> bool {
+    if env::var(STT_BACKEND_ENV).is_ok_and(|value| value.eq_ignore_ascii_case("parakeet")) {
+        return true;
+    }
+    config::load_settings()
+        .map(|settings| settings.stt_backend.eq_ignore_ascii_case("parakeet"))
+        .unwrap_or(false)
 }
 
 fn requirements_path(app_root: &Path) -> Result<PathBuf> {
@@ -846,6 +870,40 @@ mod tests {
                 plan.requirements.to_str().unwrap()
             ]
         );
+    }
+
+    #[test]
+    fn install_plan_includes_parakeet_requirements_when_backend_requests_it() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+        std::fs::write(dir.path().join("requirements-parakeet.txt"), "").unwrap();
+
+        let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
+        let _backend_guard = EnvVarGuard::set(STT_BACKEND_ENV, "parakeet");
+        let plan = InstallPlan::for_current_environment(dir.path().to_path_buf()).unwrap();
+
+        assert_eq!(plan.install_commands.len(), 3);
+        assert_eq!(
+            plan.install_commands[2].args[4],
+            dir.path()
+                .join("requirements-parakeet.txt")
+                .display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn install_plan_skips_missing_parakeet_requirements() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+
+        let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
+        let _backend_guard = EnvVarGuard::set(STT_BACKEND_ENV, "parakeet");
+        let plan = InstallPlan::for_current_environment(dir.path().to_path_buf()).unwrap();
+
+        assert_eq!(plan.install_commands.len(), 2);
     }
 
     #[test]
