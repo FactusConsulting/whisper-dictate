@@ -539,6 +539,77 @@ class ModelCapacityTests(unittest.TestCase):
         self.assertIn("Use free VRAM", report)
 
 
+class ExternalApiTests(unittest.TestCase):
+    def test_external_stt_maps_local_whisper_default_to_openai_model(self):
+        with _env(VOICEPI_MODEL="large-v3-turbo", VOICEPI_STT_API_KEY="test-key"):
+            sys.modules.pop("vp_external_api", None)
+            import vp_external_api
+
+            settings = vp_external_api.load_stt_api_settings("large-v3-turbo")
+
+        self.assertEqual(settings.model, "gpt-4o-mini-transcribe")
+
+    def test_external_stt_configured_model_takes_precedence(self):
+        with _env(VOICEPI_STT_MODEL="gpt-4o-transcribe", VOICEPI_STT_API_KEY="test-key"):
+            sys.modules.pop("vp_external_api", None)
+            import vp_external_api
+
+            settings = vp_external_api.load_stt_api_settings("large-v3")
+
+        self.assertEqual(settings.model, "gpt-4o-transcribe")
+
+    def test_external_transcription_posts_multipart_audio(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        sys.modules.pop("vp_external_api", None)
+        np = getattr(AudioDspTests, "np", None)
+        if np is None:
+            import numpy as np
+        sys.modules["numpy"] = np
+
+        calls = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls["path"] = self.path
+                calls["auth"] = self.headers.get("Authorization")
+                calls["content_type"] = self.headers.get("Content-Type")
+                calls["body"] = body
+                data = json.dumps({"text": "Hello Codex", "language": "en"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        with _env(
+            VOICEPI_STT_API_KEY="test-key",
+            VOICEPI_STT_BASE_URL=f"http://127.0.0.1:{server.server_port}/v1",
+        ):
+            import vp_external_api
+
+            model = vp_external_api.ExternalTranscriptionModel("gpt-4o-mini-transcribe")
+            segments, info = model.transcribe(np.zeros(1600, dtype=np.float32), language="en")
+
+        self.assertEqual(calls["path"], "/v1/audio/transcriptions")
+        self.assertEqual(calls["auth"], "Bearer test-key")
+        self.assertIn("multipart/form-data", calls["content_type"])
+        self.assertIn(b'gpt-4o-mini-transcribe', calls["body"])
+        self.assertIn(b"audio.wav", calls["body"])
+        self.assertEqual(segments[0].text.strip(), "Hello Codex")
+        self.assertEqual(info.language, "en")
+
+
 class InjectStrategyTests(unittest.TestCase):
     def setUp(self):
         for n in ("vp_inject", "vp_keymap"):
@@ -1074,6 +1145,7 @@ class STTBackendTests(unittest.TestCase):
     def setUp(self):
         self._old = {k: os.environ.pop(k, None) for k in (
             "VOICEPI_STT_BACKEND", "VOICEPI_MODEL", "VOICEPI_PARAKEET_MODEL",
+            "VOICEPI_STT_BASE_URL", "VOICEPI_STT_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
         for n in list(sys.modules):
             if (n in ("vp_transcribe", "vp_audio", "vp_parakeet",
@@ -1133,6 +1205,26 @@ class STTBackendTests(unittest.TestCase):
         with patch("builtins.__import__", side_effect=fake_import):
             with self.assertRaisesRegex(RuntimeError, "requirements-parakeet.txt"):
                 vp_transcribe.load_stt_model("large-v3-turbo", "cuda", "float16")
+
+    def test_openai_backend_uses_external_transcription_adapter(self):
+        os.environ["VOICEPI_STT_BACKEND"] = "openai"
+        os.environ["VOICEPI_STT_API_KEY"] = "test-key"
+        import vp_transcribe
+        import vp_external_api
+
+        with patch.object(vp_external_api.ExternalTranscriptionModel, "__init__", return_value=None) as init:
+            model = vp_transcribe.load_stt_model("gpt-4o-mini-transcribe", "cpu", "int8")
+
+        self.assertIsInstance(model, vp_external_api.ExternalTranscriptionModel)
+        init.assert_called_once_with("gpt-4o-mini-transcribe")
+
+    def test_local_only_blocks_openai_stt_backend(self):
+        os.environ["VOICEPI_STT_BACKEND"] = "openai"
+        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
+        import vp_transcribe
+
+        with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
+            vp_transcribe.load_stt_model("gpt-4o-mini-transcribe", "cpu", "int8")
 
     def test_parakeet_adapter_uses_nemo_stub_and_default_model(self):
         calls = {}
@@ -1387,9 +1479,9 @@ class PostprocessTests(unittest.TestCase):
             "VOICEPI_POST_PROCESSOR", "VOICEPI_POST_MODE", "VOICEPI_POST_MODEL",
             "VOICEPI_POST_BASE_URL", "VOICEPI_POST_TIMEOUT_MS",
             "VOICEPI_POST_MAX_INPUT_CHARS", "VOICEPI_POST_MAX_OUTPUT_CHARS",
-            "VOICEPI_LOCAL_ONLY",
+            "VOICEPI_POST_API_KEY", "OPENAI_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
-        for n in ("vp_postprocess", "vp_config", "vp_privacy"):
+        for n in ("vp_postprocess", "vp_config", "vp_privacy", "vp_external_api"):
             sys.modules.pop(n, None)
 
     def tearDown(self):
@@ -1398,7 +1490,7 @@ class PostprocessTests(unittest.TestCase):
         for k, v in self._old.items():
             if v is not None:
                 os.environ[k] = v
-        for n in ("vp_postprocess", "vp_config", "vp_privacy"):
+        for n in ("vp_postprocess", "vp_config", "vp_privacy", "vp_external_api"):
             sys.modules.pop(n, None)
 
     def test_raw_mode_returns_text_unchanged(self):
@@ -1470,8 +1562,8 @@ class PostprocessTests(unittest.TestCase):
         server = HTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(server.shutdown)
         self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
 
         import vp_postprocess
 
@@ -1489,6 +1581,55 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(calls["path"], "/api/generate")
         self.assertEqual(calls["payload"]["model"], "qwen2.5:3b")
         self.assertIn("Clean punctuation", calls["payload"]["prompt"])
+
+    def test_openai_postprocessor_uses_fake_chat_server(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        calls = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls["path"] = self.path
+                calls["auth"] = self.headers.get("Authorization")
+                calls["payload"] = json.loads(body.decode("utf-8"))
+                data = json.dumps({
+                    "choices": [{
+                        "message": {"content": "Cleaned text."}
+                    }]
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        import vp_postprocess
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            model="gpt-4o-mini",
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            api_key="test-key",
+        )
+        result = vp_postprocess.postprocess_text("cleaned text", settings)
+
+        self.assertEqual(result.text, "Cleaned text.")
+        self.assertEqual(result.provider, "openai")
+        self.assertEqual(calls["path"], "/v1/chat/completions")
+        self.assertEqual(calls["auth"], "Bearer test-key")
+        self.assertIn("Clean punctuation", calls["payload"]["messages"][1]["content"])
 
     def test_ollama_failure_falls_back_to_original_text(self):
         import vp_postprocess
@@ -1513,6 +1654,20 @@ class PostprocessTests(unittest.TestCase):
             processor="ollama",
             mode="clean",
             base_url="https://example.com",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
+            vp_postprocess.validate_postprocess_settings(settings)
+
+    def test_local_only_blocks_openai_postprocessor_even_on_localhost(self):
+        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
+        import vp_postprocess
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            base_url="http://localhost:11434",
+            api_key="test-key",
         )
 
         with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
@@ -2023,7 +2178,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         for label in (
             "STT backend",
+            "External STT model",
             "Parakeet model",
+            "STT API URL",
             "Model fit",
             "Dictionary path",
             "Dictionary enabled",
@@ -2037,6 +2194,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Post mode",
             "Post model",
             "Post base URL",
+            "Post API key",
             "Post timeout ms",
             "Local only",
             "VOICEPI_DEBUG",
@@ -2044,6 +2202,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         ):
             self.assertIn(label, script)
         self.assertIn("Use 0.6B v3 for Danish/mixed Danish-English", script)
+        self.assertIn("OpenAI-compatible transcription model", script)
+        self.assertIn("OpenAI-compatible STT sends audio", script)
         self.assertIn("raw STT backend debug output", script)
         self.assertIn("qwen2.5:3b", script)
         self.assertIn("Check GPU capacity", script)
@@ -2266,12 +2426,14 @@ class BenchmarkTests(unittest.TestCase):
         import vp_benchmark
 
         specs = vp_benchmark.parse_backend_specs(
-            "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3")
+            "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3,openai:gpt-4o-mini-transcribe")
 
         self.assertEqual(specs[0].backend, "whisper")
         self.assertEqual(specs[0].model, "large-v3")
         self.assertEqual(specs[1].backend, "parakeet")
         self.assertEqual(specs[1].model, "nvidia/parakeet-tdt-0.6b-v3")
+        self.assertEqual(specs[2].backend, "openai")
+        self.assertEqual(specs[2].model, "gpt-4o-mini-transcribe")
 
     def test_parse_backend_specs_rejects_unknown_backend(self):
         import vp_benchmark

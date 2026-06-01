@@ -187,11 +187,15 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
     rows = [
         ("--key",            f"{args.key}  (env VOICEPI_KEY={_env('VOICEPI_KEY')})"),
         ("--model",          f"{args.model}  (env VOICEPI_MODEL={_env('VOICEPI_MODEL')})"),
+        ("stt model",        f"{get_value('VOICEPI_STT_MODEL', '(unset)')}  "
+                             f"(env VOICEPI_STT_MODEL={_env('VOICEPI_STT_MODEL')})"),
         ("--lang",           f"{(None if (args.autodetect or not args.lang) else args.lang) or 'auto'}  "
                              f"(env VOICEPI_LANG={_env('VOICEPI_LANG')}, "
                              f"--autodetect={args.autodetect})"),
         ("--device",         f"{args.device}  ->  resolved: {dev} / {ctype}"),
         ("stt backend",      f"{STT_BACKEND}  (env VOICEPI_STT_BACKEND={_env('VOICEPI_STT_BACKEND')})"),
+        ("stt api",          f"url={get_value('VOICEPI_STT_BASE_URL', '(unset)')} "
+                             f"key={'set' if (os.environ.get('VOICEPI_STT_API_KEY') or os.environ.get('OPENAI_API_KEY')) else 'unset'}"),
         ("compute_type",     f"{ctype}  (env VOICEPI_COMPUTE_TYPE={_env('VOICEPI_COMPUTE_TYPE')})"),
         ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env('VOICEPI_BEAM_SIZE')})"),
         ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env('VOICEPI_TEMPERATURE')})"),

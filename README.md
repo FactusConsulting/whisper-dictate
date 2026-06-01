@@ -313,7 +313,10 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_MIN_INPUT_DBFS` | `-55` | reject raw input quieter than this before Whisper |
 | `VOICEPI_MIN_SNR_DB` | `6` | reject raw input without enough speech-vs-noise contrast |
 | `VOICEPI_MODEL` | `large-v3-turbo` | `large-v3` = slightly better accuracy, slower |
-| `VOICEPI_STT_BACKEND` | `whisper` | `whisper` (default faster-whisper) or `parakeet` (optional NVIDIA NeMo backend) |
+| `VOICEPI_STT_BACKEND` | `whisper` | `whisper`, `parakeet`, or explicit opt-in `openai` external transcription |
+| `VOICEPI_STT_MODEL` | _(unset)_ | external transcription model, for example `gpt-4o-mini-transcribe` |
+| `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible transcription API base URL |
+| `VOICEPI_STT_API_KEY` | _(unset)_ | optional external transcription key; `OPENAI_API_KEY` also works |
 | `VOICEPI_PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet model; v3 is best default for Danish/mixed Danish-English, TDT 1.1B is for pure English quality tests |
 | `VOICEPI_DEVICE` | `auto` | `cuda`/`cpu` to force; `auto` = NVIDIA if present |
 | `VOICEPI_LANG` | _(auto-detect)_ | spoken-language hint (`da`, `en`, `de`, `fr`…) |
@@ -332,10 +335,11 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_HISTORY_ENABLED` | `1` | store accepted live dictations in local history |
 | `VOICEPI_HISTORY_JSONL` | user state path | override the local history JSONL path |
 | `VOICEPI_LOCAL_ONLY` | _(unset)_ | `1` → block cloud/BYOK backends and force model libraries offline; local models must already be downloaded |
-| `VOICEPI_POST_PROCESSOR` | `none` | `ollama` → run optional local second text pass after STT/dictionary |
+| `VOICEPI_POST_PROCESSOR` | `none` | `ollama` or `openai` → run optional second text pass after STT/dictionary |
 | `VOICEPI_POST_MODE` | `raw` | `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets`; `bullet-list` is accepted as an alias; `raw` keeps current behavior |
-| `VOICEPI_POST_MODEL` | `qwen2.5:3b` | local Ollama rewrite model; 3B is the practical start alongside Parakeet on 10 GB GPUs |
-| `VOICEPI_POST_BASE_URL` | `http://localhost:11434` | local Ollama endpoint |
+| `VOICEPI_POST_MODEL` | `qwen2.5:3b` | local Ollama model or OpenAI-compatible chat model |
+| `VOICEPI_POST_BASE_URL` | `http://localhost:11434` / `https://api.openai.com/v1` | Ollama or OpenAI-compatible chat endpoint |
+| `VOICEPI_POST_API_KEY` | _(unset)_ | optional external post-processing key; `OPENAI_API_KEY` also works |
 | `VOICEPI_POST_TIMEOUT_MS` | `2000` | fallback to dictionary-final text if local rewrite is too slow |
 | `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty value → keep interactive terminal status lines plain |
@@ -360,6 +364,14 @@ runs and `--doctor` do not need Parakeet dependencies. The UI lists only the
 practical Parakeet models: 0.6B v3 for Danish/mixed Danish-English, TDT 1.1B
 for pure English quality experiments, and 0.6B v2 as a fast English-only
 baseline.
+
+Optional external API backends are explicit opt-in. Set `VOICEPI_STT_BACKEND=openai`
+for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY` or
+`VOICEPI_STT_API_KEY`. Use `VOICEPI_STT_MODEL=gpt-4o-mini-transcribe` or
+`gpt-4o-transcribe`. For external text cleanup, set
+`VOICEPI_POST_PROCESSOR=openai`, `VOICEPI_POST_MODEL=<chat-model>` and
+`OPENAI_API_KEY` or `VOICEPI_POST_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
+external providers before requests are made.
 
 File transcription for benchmarks/debugging uses the same backend, dictionary
 and replacement pipeline as live dictation:

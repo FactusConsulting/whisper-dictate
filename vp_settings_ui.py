@@ -203,7 +203,7 @@ def run_settings_ui() -> int:
 
         def _build_core_tab(self) -> QWidget:
             form = QFormLayout()
-            backend = self._combo("stt_backend", ["whisper", "parakeet"])
+            backend = self._combo("stt_backend", ["whisper", "parakeet", "openai"])
             backend.currentTextChanged.connect(lambda _: self._update_backend_controls())
             self._add_help_row(
                 form, "STT backend", backend,
@@ -211,6 +211,9 @@ def run_settings_ui() -> int:
             self._add_help_row(form, "Whisper model", self._combo("model", [
                 "large-v3-turbo", "large-v3", "distil-large-v3", "medium", "small", "base", "tiny"
             ], editable=True), "Whisper-only model. large-v3 is most accurate; large-v3-turbo is faster.")
+            self._add_help_row(form, "External STT model", self._combo("stt_model", [
+                "", "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"
+            ], editable=True), "OpenAI-compatible transcription model. Used only when STT backend is openai.")
             self._add_help_row(
                 form, "Parakeet model", self._combo("parakeet_model", PARAKEET_MODELS, editable=True),
                 "Parakeet-only NVIDIA NeMo model. Use 0.6B v3 for Danish/mixed Danish-English dictation; try TDT 1.1B only for pure English quality; 0.6B v2 is a fast English-only baseline.")
@@ -222,6 +225,9 @@ def run_settings_ui() -> int:
             self._add_help_row(
                 form, "Language", self._combo("lang", ["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"], editable=True),
                 "Whisper-only language hint. Parakeet v3 autodetects language and does not use this setting.")
+            self._add_help_row(
+                form, "STT API URL", self._line("stt_base_url"),
+                "OpenAI-compatible transcription base URL. Used only when STT backend is openai; API key comes from OPENAI_API_KEY or VOICEPI_STT_API_KEY.")
             self._add_help_row(form, "Hotkey", self._line("key"), "Hold-to-talk key or chord, for example shift_l+ctrl_l.")
             capacity_btn = QPushButton("Check GPU capacity")
             capacity_btn.clicked.connect(self._check_model_capacity)
@@ -314,14 +320,22 @@ def run_settings_ui() -> int:
             backend_control = self._controls.get("stt_backend")
             backend = backend_control.currentText() if isinstance(backend_control, QComboBox) else "whisper"
             is_parakeet = backend == "parakeet"
+            is_openai = backend == "openai"
             for key in (
                 "model", "compute_type", "lang", "beam_size", "temperature",
                 "context_min_seconds", "initial_prompt",
             ):
                 self._set_control_enabled(key, not is_parakeet)
+            for key in ("device", "compute_type", "beam_size", "temperature",
+                        "context_min_seconds", "initial_prompt"):
+                self._set_control_enabled(key, not is_openai and not is_parakeet)
+            self._set_control_enabled("stt_model", is_openai)
             for key in ("parakeet_model", "parakeet_min_seconds"):
                 self._set_control_enabled(key, is_parakeet)
+            self._set_control_enabled("stt_base_url", is_openai)
             self._backend_note.setText(
+                "OpenAI-compatible STT sends audio to the configured API. It requires OPENAI_API_KEY or VOICEPI_STT_API_KEY and is blocked by Local only mode."
+                if is_openai else
                 "Parakeet is experimental and very fast on NVIDIA CUDA. It autodetects language, so Language, Whisper model, compute type, beam size, temperature and initial prompt are disabled."
                 if is_parakeet else
                 "Whisper is recommended for Danish accuracy. Parakeet settings are disabled while Whisper is selected."
@@ -390,7 +404,7 @@ def run_settings_ui() -> int:
             self._add_help_row(
                 form, "Command hook timeout ms", self._spin("command_hook_timeout_ms", 100, 30000),
                 "Maximum wait for the command hook. Timeout or failure is logged but never blocks or loses dictation text.")
-            processor = self._combo("post_processor", ["none", "ollama"])
+            processor = self._combo("post_processor", ["none", "ollama", "openai"])
             processor.currentTextChanged.connect(lambda _: self._update_post_controls())
             self._add_help_row(
                 form, "Post processor", processor,
@@ -405,7 +419,10 @@ def run_settings_ui() -> int:
                 "Local Ollama model, for example qwen2.5:3b. Smaller models are safer alongside Parakeet on 10 GB GPUs.")
             self._add_help_row(
                 form, "Post base URL", self._line("post_base_url"),
-                "Local Ollama URL. With Local only enabled this must be localhost.")
+                "Ollama or OpenAI-compatible chat completions base URL. With Local only enabled this must be localhost.")
+            self._add_help_row(
+                form, "Post API key", self._line("post_api_key"),
+                "Optional API key for external post-processing. Prefer OPENAI_API_KEY for shared machine config.")
             self._add_help_row(
                 form, "Post timeout ms", self._spin("post_timeout_ms", 100, 30000),
                 "Maximum wait for local rewrite. On timeout whisper-dictate falls back to the dictionary-final text.")
@@ -538,7 +555,7 @@ def run_settings_ui() -> int:
             processor = processor_control.currentText() if isinstance(processor_control, QComboBox) else "none"
             mode = mode_control.currentText() if isinstance(mode_control, QComboBox) else "raw"
             enabled = processor != "none" and mode != "raw"
-            for key in ("post_model", "post_base_url", "post_timeout_ms"):
+            for key in ("post_model", "post_base_url", "post_timeout_ms", "post_api_key"):
                 self._set_control_enabled(key, enabled)
 
         def _collect(self) -> dict[str, str]:

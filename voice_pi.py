@@ -719,14 +719,24 @@ if __name__ == "__main__":
     except ValueError as e:
         ap.error(str(e))
 
-    label = "NVIDIA Parakeet" if backend == "parakeet" else "Whisper"
+    label = (
+        "NVIDIA Parakeet" if backend == "parakeet"
+        else "External API" if backend == "openai"
+        else "Whisper"
+    )
     loaded_model_name = a.model
     if backend == "parakeet":
         from vp_parakeet import resolve_parakeet_model_name
         loaded_model_name = resolve_parakeet_model_name(a.model)
-    print(f"loading {label} {loaded_model_name} on {dev} ({ctype})… "
-          f"first run downloads the model", flush=True)
-    if dev == "cpu":
+    elif backend == "openai":
+        from vp_external_api import load_stt_api_settings
+        loaded_model_name = load_stt_api_settings(a.model).model
+    if backend == "openai":
+        print(f"using {label} {loaded_model_name} via configured API", flush=True)
+    else:
+        print(f"loading {label} {loaded_model_name} on {dev} ({ctype})… "
+              f"first run downloads the model", flush=True)
+    if dev == "cpu" and backend != "openai":
         print("  note: CPU mode — transcription is slower; large-v3-turbo "
               "(default) is the fastest model", flush=True)
     _t = time.monotonic()

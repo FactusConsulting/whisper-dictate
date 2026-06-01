@@ -8,6 +8,7 @@ from vp_config import apply_config_to_environ, get_value
 apply_config_to_environ()
 
 LOCAL_BACKENDS = frozenset({"whisper", "faster-whisper", "parakeet"})
+LOCAL_PROCESSORS = frozenset({"none", "ollama"})
 _OFFLINE_ENV = (
     "HF_HUB_OFFLINE",
     "TRANSFORMERS_OFFLINE",
@@ -48,3 +49,13 @@ def assert_local_backend(backend: str, *, feature: str = "STT") -> None:
         raise RuntimeError(
             f"VOICEPI_LOCAL_ONLY=1 blocks {feature} backend {backend!r}; "
             "choose a local backend or disable local-only mode.")
+
+
+def assert_local_processor(processor: str) -> None:
+    if not local_only_enabled():
+        return
+    normalized = (processor or "").strip().lower()
+    if normalized not in LOCAL_PROCESSORS:
+        raise RuntimeError(
+            f"VOICEPI_LOCAL_ONLY=1 blocks post-processing provider {processor!r}; "
+            "choose a local provider or disable local-only mode.")

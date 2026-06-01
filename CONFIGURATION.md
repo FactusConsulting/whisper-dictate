@@ -29,7 +29,9 @@ requiring restart/model reload.
 | Knob | Env var | CLI flag | Default | Range / options | What it does |
 |---|---|---|---|---|---|
 | **Whisper model** | `VOICEPI_MODEL` | `--model` | `large-v3-turbo` | `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3`, … | turbo = fastest default; `large-v3` = best accuracy |
-| **STT backend** | `VOICEPI_STT_BACKEND` | _none_ | `whisper` | `whisper` \| `parakeet` | default uses faster-whisper and is recommended for Danish accuracy; `parakeet` uses optional NVIDIA NeMo dependencies and is very fast but experimental |
+| **STT backend** | `VOICEPI_STT_BACKEND` | _none_ | `whisper` | `whisper` \| `parakeet` \| `openai` | default uses faster-whisper; `openai` sends audio to an external OpenAI-compatible API |
+| **External STT model** | `VOICEPI_STT_MODEL` | _none_ | _(unset)_ | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`, compatible names | model used when `VOICEPI_STT_BACKEND=openai` |
+| **External STT URL** | `VOICEPI_STT_BASE_URL` | _none_ | `https://api.openai.com/v1` | URL | OpenAI-compatible transcription API base URL |
 | **Device** | `VOICEPI_DEVICE` | `--device` | `auto` | `auto` \| `cuda` \| `cpu` | auto picks NVIDIA GPU if present, else CPU |
 | **Compute type / precision** | `VOICEPI_COMPUTE_TYPE` | _none_ | `int8_float16` (GPU) / `int8` (CPU) | `int8`, `int8_float16`, `float16`, `bfloat16`, `float32` | Whisper/CTranslate2 precision override — Parakeet currently ignores this setting; see VRAM table below |
 | **Spoken language** | `VOICEPI_LANG` | `--lang` / `--autodetect` | _(unset → auto-detect)_ | ISO 639-1: `da`, `en`, `de`, `fr`, `sv`, `nb`, `nl`, `fi`, `pl`, `pt`, `es`, `it`, `uk`, … | Whisper language hint; Parakeet v3 autodetects language and does not use this setting |
@@ -56,7 +58,7 @@ requiring restart/model reload.
 | **Local history** | `VOICEPI_HISTORY_ENABLED` | _none_ | `1` | truthy / falsey | store accepted live dictations locally for copy/reinject/debug recovery |
 | **History file** | `VOICEPI_HISTORY_JSONL` | _none_ | user state path | file path | override the local history JSONL path |
 | **Local only** | `VOICEPI_LOCAL_ONLY` | _none_ | _(unset)_ | truthy / falsey | block cloud/BYOK backends and force model libraries into offline mode |
-| **Post processor** | `VOICEPI_POST_PROCESSOR` | _none_ | `none` | `none` \| `ollama` | optional local second text pass after STT and dictionary replacements |
+| **Post processor** | `VOICEPI_POST_PROCESSOR` | _none_ | `none` | `none` \| `ollama` \| `openai` | optional second text pass after STT and dictionary replacements |
 | **Post mode** | `VOICEPI_POST_MODE` | _none_ | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` (`bullet-list` alias) | rewrite style for the optional second pass |
 | **Post model** | `VOICEPI_POST_MODEL` | _none_ | `qwen2.5:3b` | Ollama model name | local text model used by the post processor |
 | **Post base URL** | `VOICEPI_POST_BASE_URL` | _none_ | `http://localhost:11434` | URL | local Ollama endpoint |
@@ -77,7 +79,11 @@ the **GPU VRAM sizing** table further down.
 | Variable | Default | Values | Effect |
 |---|---|---|---|
 | `VOICEPI_MODEL` | `large-v3-turbo` | any faster-whisper model: `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3` … | Whisper model. `large-v3-turbo` = fastest (default); `large-v3` = best accuracy, slower. Also `--model`. |
-| `VOICEPI_STT_BACKEND` | `whisper` | `whisper` \| `parakeet` | Selects the local STT engine. `whisper` is recommended for Danish accuracy. `parakeet` loads NVIDIA NeMo lazily, is experimental on Windows, is very fast on NVIDIA CUDA, and uses `nvidia/parakeet-tdt-0.6b-v3` when the normal Whisper default model is unchanged. |
+| `VOICEPI_STT_BACKEND` | `whisper` | `whisper` \| `parakeet` \| `openai` | Selects the STT engine. `whisper` is recommended for Danish accuracy. `parakeet` loads NVIDIA NeMo lazily, is experimental on Windows, is very fast on NVIDIA CUDA, and uses `nvidia/parakeet-tdt-0.6b-v3` when the normal Whisper default model is unchanged. `openai` sends recorded audio to an OpenAI-compatible transcription API and is blocked by `VOICEPI_LOCAL_ONLY=1`. |
+| `VOICEPI_STT_MODEL` | *(unset → `gpt-4o-mini-transcribe` for local Whisper names)* | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`, or compatible model name | External transcription model used only when `VOICEPI_STT_BACKEND=openai`. If you leave `VOICEPI_MODEL=large-v3-turbo`/`large-v3`, the adapter maps it to `gpt-4o-mini-transcribe` unless this is set. |
+| `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | URL | OpenAI-compatible transcription API base URL used only when `VOICEPI_STT_BACKEND=openai`. |
+| `VOICEPI_STT_TIMEOUT_MS` | `30000` | integer ms | Maximum wait for an external transcription request. |
+| `VOICEPI_STT_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for `VOICEPI_STT_BACKEND=openai`. `VOICEPI_STT_API_KEY` takes precedence over `OPENAI_API_KEY` for transcription. |
 | `VOICEPI_PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | NeMo ASR model name | Optional Parakeet-specific model override. Takes precedence over `VOICEPI_MODEL` when `VOICEPI_STT_BACKEND=parakeet`. |
 | `VOICEPI_DEVICE` | `auto` | `auto` \| `cuda` \| `cpu` | Compute device. `auto` = NVIDIA GPU if present, else CPU. Invalid value → error. Also `--device`. |
 | `VOICEPI_COMPUTE_TYPE` | *(unset → `int8_float16` on GPU, `int8` on CPU)* | `int8` \| `int8_float16` \| `float16` \| `bfloat16` \| `float32` … (any ctranslate2-supported type) | Whisper-only precision override for faster-whisper/CTranslate2. Big-GPU users gain accuracy with `float16` (or `bfloat16` on Ampere/Ada+); `int8_float16` defaults trade a little accuracy for VRAM/speed. Parakeet uses PyTorch/NeMo and currently ignores this setting, so the UI disables it when Parakeet is selected. |
@@ -105,11 +111,12 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_HISTORY_ENABLED` | `1` | truthy / falsey | Store accepted live dictations in local history. Set `0`, `false`, `no`, or `off` to disable. |
 | `VOICEPI_HISTORY_JSONL` | user state path | file path | Override the local history JSONL location. Default is `%APPDATA%\WhisperDictate\history.jsonl` on Windows and `${XDG_STATE_HOME:-~/.local/state}/whisper-dictate/history.jsonl` elsewhere. |
 | `VOICEPI_LOCAL_ONLY` | *(unset)* | truthy / falsey | Privacy lock. Blocks cloud/BYOK backends and sets `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_DATASETS_OFFLINE=1`, `HF_HUB_DISABLE_TELEMETRY=1`, and Weights & Biases offline/disabled defaults before models load. Local models must already be downloaded. This is a library/runtime guard, not an OS firewall rule. |
-| `VOICEPI_POST_PROCESSOR` | `none` | `none` \| `ollama` | Optional local second text pass after STT and dictionary replacements. `none` preserves current behavior. |
+| `VOICEPI_POST_PROCESSOR` | `none` | `none` \| `ollama` \| `openai` | Optional second text pass after STT and dictionary replacements. `none` preserves current behavior. `ollama` is local. `openai` sends the dictionary-final text to an OpenAI-compatible chat API and is blocked by `VOICEPI_LOCAL_ONLY=1`. |
 | `VOICEPI_POST_MODE` | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` (`bullet-list` alias) | Rewrite style. `raw` preserves current behavior; `terminal` is conservative for commands, flags, paths and technical terms. |
-| `VOICEPI_POST_MODEL` | `qwen2.5:3b` | Ollama model name | Local text model used by `VOICEPI_POST_PROCESSOR=ollama`. On 10 GB GPUs running Parakeet, 3B is the practical starting point. |
-| `VOICEPI_POST_BASE_URL` | `http://localhost:11434` | URL | Ollama endpoint. With `VOICEPI_LOCAL_ONLY=1`, this must be localhost/127.0.0.1. |
-| `VOICEPI_POST_TIMEOUT_MS` | `2000` | integer ms | Maximum wait for the local rewrite before falling back to the dictionary-final text. |
+| `VOICEPI_POST_MODEL` | `qwen2.5:3b` | Ollama model name or OpenAI-compatible chat model | Text model used by the selected post processor. On 10 GB GPUs running Parakeet locally, 3B is the practical Ollama starting point. |
+| `VOICEPI_POST_BASE_URL` | `http://localhost:11434` for Ollama, `https://api.openai.com/v1` for OpenAI | URL | Post-processing endpoint. With `VOICEPI_LOCAL_ONLY=1`, external providers are blocked. |
+| `VOICEPI_POST_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for `VOICEPI_POST_PROCESSOR=openai`. `VOICEPI_POST_API_KEY` takes precedence over `OPENAI_API_KEY` for post-processing. |
+| `VOICEPI_POST_TIMEOUT_MS` | `2000` | integer ms | Maximum wait for the rewrite before falling back to the dictionary-final text. |
 | `VOICEPI_POST_MAX_INPUT_CHARS` | `4000` | integer chars | Maximum text sent to the local post-processor. |
 | `VOICEPI_POST_MAX_OUTPUT_CHARS` | `4000` | integer chars | Maximum rewritten text accepted from the local post-processor. |
 | `VOICEPI_STT_DEBUG` | *(unset)* | `1` / `true` / any truthy | Print per-segment Whisper metadata when available. Useful for diagnosing hallucinations and low-confidence output. |
@@ -208,11 +215,11 @@ Passed after the launcher (`setup.cmd` / `setup.sh` / `whisper-dictate`):
 | `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
 | `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |
 | `--benchmark-corpus PATH` | off | manifest path | Run a benchmark corpus manifest and annotate results with reference text, WER/CER and technical-term hits/misses. |
-| `--benchmark-backends SPEC` | current backend | CSV specs | Backend/model specs for benchmarking, e.g. `whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3`. |
+| `--benchmark-backends SPEC` | current backend | CSV specs | Backend/model specs for benchmarking, e.g. `whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3,openai:gpt-4o-mini-transcribe`. |
 | `--benchmark-jsonl PATH` | stdout | file path | Append benchmark JSONL results to a file instead of stdout. |
 | `--calibrate-mic [SECONDS]` | off | seconds, default `5` | Record a short mic sample, print pass/warn/fail audio diagnostics and recommended threshold settings, then exit. |
 | `--calibrate-file PATH` | off | audio path | Analyze an existing audio file with the same calibration logic. Combine with `--json` for structured output. |
-| `--post-process-text TEXT` | off | text | Run the configured local post-processor on text and exit. Useful for testing Ollama without recording audio. |
+| `--post-process-text TEXT` | off | text | Run the configured post-processor on text and exit. Useful for testing Ollama/OpenAI text cleanup without recording audio. |
 | `--history-list [N]` | off | count, default `10` | Print recent local dictation history entries and exit. |
 | `--history-last` | off | — | Print the last local dictation transcript and exit. |
 | `--history-copy-last` | off | — | Copy the last local dictation transcript to the clipboard and exit. |
@@ -275,6 +282,31 @@ short push-to-talk clips and tune empirically. NeMo may emit training/dataloader
 /ffmpeg startup logs during model load and progress logs during transcription;
 whisper-dictate hides those by default and shows them only when
 `VOICEPI_STT_DEBUG=1`.
+
+### Optional external API backends
+
+External providers are explicit opt-in and are not used by default. For
+OpenAI-compatible transcription, set an API key and switch the STT backend:
+
+```powershell
+setx OPENAI_API_KEY "sk-..."
+setx VOICEPI_STT_BACKEND openai
+setx VOICEPI_STT_MODEL gpt-4o-mini-transcribe
+```
+
+For external text cleanup after local STT/dictionary replacements, set:
+
+```powershell
+setx OPENAI_API_KEY "sk-..."
+setx VOICEPI_POST_PROCESSOR openai
+setx VOICEPI_POST_MODEL gpt-4o-mini
+setx VOICEPI_POST_MODE clean
+```
+
+Use `VOICEPI_STT_BASE_URL` and `VOICEPI_POST_BASE_URL` for compatible endpoints
+that expose `/audio/transcriptions` and `/chat/completions`. `VOICEPI_LOCAL_ONLY=1`
+blocks the external STT backend and external post-processor before any request is
+made.
 
 ### Optional PySide/Qt settings UI
 

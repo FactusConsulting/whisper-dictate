@@ -36,9 +36,9 @@ def parse_backend_specs(spec: str | Iterable[str] | None = None) -> list[Backend
         backend, sep, model = part.partition(":")
         backend = backend.strip().lower()
         model = model.strip() if sep else None
-        if backend not in ("whisper", "parakeet"):
+        if backend not in ("whisper", "parakeet", "openai"):
             raise ValueError(
-                f"unsupported benchmark backend {backend!r}; expected whisper or parakeet")
+                f"unsupported benchmark backend {backend!r}; expected whisper, parakeet or openai")
         out.append(BackendSpec(raw=part, backend=backend, model=model or None))
     if not out:
         raise ValueError("at least one benchmark backend is required")
@@ -124,6 +124,15 @@ def _load_model_for_spec(spec: BackendSpec) -> tuple[Any, str, str, str]:
             model_name,
             device,
             compute_type,
+        )
+    if spec.backend == "openai":
+        from vp_external_api import ExternalTranscriptionModel
+        model_name = spec.model or get_value("VOICEPI_STT_MODEL", "gpt-4o-mini-transcribe")
+        return (
+            ExternalTranscriptionModel(model_name),
+            model_name,
+            "api",
+            "remote",
         )
 
     from faster_whisper import WhisperModel

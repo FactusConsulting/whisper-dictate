@@ -9,11 +9,12 @@ import urllib.request
 from dataclasses import dataclass
 
 from vp_config import apply_config_to_environ, get_value
-from vp_privacy import local_only_enabled
+from vp_external_api import DEFAULT_OPENAI_BASE_URL, openai_chat_completion
+from vp_privacy import assert_local_processor, local_only_enabled
 
 apply_config_to_environ()
 
-VALID_PROCESSORS = ("none", "ollama")
+VALID_PROCESSORS = ("none", "ollama", "openai")
 VALID_MODES = ("raw", "clean", "prompt", "terminal", "slack", "email", "bullets")
 MODE_ALIASES = {
     "bullet-list": "bullets",
@@ -32,6 +33,7 @@ class PostprocessSettings:
     timeout_ms: int = 2000
     max_input_chars: int = 4000
     max_output_chars: int = 4000
+    api_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,15 +63,19 @@ def load_postprocess_settings() -> PostprocessSettings:
         processor = "none"
     if mode not in VALID_MODES:
         mode = "raw"
+    default_base_url = DEFAULT_OPENAI_BASE_URL if processor == "openai" else "http://localhost:11434"
     return PostprocessSettings(
         processor=processor,
         mode=mode,
         model=get_value("VOICEPI_POST_MODEL", "qwen2.5:3b") or "qwen2.5:3b",
-        base_url=(get_value("VOICEPI_POST_BASE_URL", "http://localhost:11434")
-                  or "http://localhost:11434").rstrip("/"),
+        base_url=(get_value("VOICEPI_POST_BASE_URL", default_base_url)
+                  or default_base_url).rstrip("/"),
         timeout_ms=_int_setting("VOICEPI_POST_TIMEOUT_MS", 2000, 100),
         max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100),
         max_output_chars=_int_setting("VOICEPI_POST_MAX_OUTPUT_CHARS", 4000, 100),
+        api_key=(get_value("VOICEPI_POST_API_KEY")
+                 or get_value("OPENAI_API_KEY")
+                 or "").strip(),
     )
 
 
@@ -91,6 +97,7 @@ def validate_postprocess_settings(settings: PostprocessSettings) -> None:
         raise ValueError(f"invalid post processor: {settings.processor}")
     if mode not in VALID_MODES:
         raise ValueError(f"invalid post mode: {settings.mode}")
+    assert_local_processor(settings.processor)
     parsed = urllib.parse.urlparse(settings.base_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError(f"invalid post-process base URL: {settings.base_url!r}")
@@ -179,9 +186,17 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
     try:
         if settings.processor == "ollama":
             out = _ollama_generate(settings, clipped)
+            latency_ms = int((time.monotonic() - t0) * 1000)
+        elif settings.processor == "openai":
+            out, latency_ms = openai_chat_completion(
+                base_url=settings.base_url,
+                api_key=settings.api_key,
+                model=settings.model,
+                prompt=build_prompt(clipped, mode),
+                timeout_ms=settings.timeout_ms,
+            )
         else:
             raise ValueError(f"unsupported post processor: {settings.processor}")
-        latency_ms = int((time.monotonic() - t0) * 1000)
         out = out[: settings.max_output_chars].strip() or text
         return PostprocessResult(
             text=out,
@@ -192,7 +207,7 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             model=settings.model,
             latency_ms=latency_ms,
         )
-    except (OSError, TimeoutError, urllib.error.URLError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, TimeoutError, urllib.error.URLError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         latency_ms = int((time.monotonic() - t0) * 1000)
         return PostprocessResult(
             text=text,
