@@ -2008,7 +2008,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             script = f.read()
 
         self.assertIn("& $venvPy $app $runArgs", script)
-        self.assertIn("exit $LASTEXITCODE", script)
+        self.assertIn("$exitCode = $LASTEXITCODE", script)
+        self.assertIn("exit $exitCode", script)
+
+    def test_setup_shows_version_in_powershell_window_title(self):
+        with open("setup.ps1", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn('$Host.UI.RawUI.WindowTitle = "whisper-dictate $version"', script)
+        self.assertIn('$Host.UI.RawUI.WindowTitle = "whisper-dictate $version - running"', script)
+        self.assertIn('$Host.UI.RawUI.WindowTitle = "whisper-dictate $version - stopped"', script)
 
     def test_installer_names_debug_terminal_shortcut_clearly(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
@@ -2127,6 +2136,27 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("app.setWindowIcon(icon)", script)
         self.assertIn("win.setWindowIcon(icon)", script)
 
+    def test_settings_ui_shows_version_in_titles(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("from vp_version import VERSION", script)
+        self.assertIn('self.setWindowTitle(f"whisper-dictate {VERSION} settings")', script)
+        self.assertIn('app.setApplicationDisplayName(f"whisper-dictate {VERSION}")', script)
+        self.assertIn('tray.setToolTip(f"whisper-dictate {VERSION}")', script)
+
+    def test_settings_ui_does_not_store_external_api_keys(self):
+        with open("vp_settings_ui.py", encoding="utf-8") as f:
+            ui_script = f.read()
+        with open("vp_config.py", encoding="utf-8") as f:
+            config_script = f.read()
+
+        self.assertIn("VOICEPI_STT_API_KEY", ui_script)
+        self.assertIn("VOICEPI_POST_API_KEY", ui_script)
+        self.assertIn("API key status", ui_script)
+        self.assertNotIn('"post_api_key"', ui_script)
+        self.assertNotIn('Setting("VOICEPI_POST_API_KEY"', config_script)
+
     def test_settings_ui_uses_parakeet_model_dropdown(self):
         with open("vp_settings_ui.py", encoding="utf-8") as f:
             script = f.read()
@@ -2209,7 +2239,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Post mode",
             "Post model",
             "Post base URL",
-            "Post API key",
+            "API key status",
             "Post timeout ms",
             "Local only",
             "VOICEPI_DEBUG",
@@ -2219,6 +2249,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("Use 0.6B v3 for Danish/mixed Danish-English", script)
         self.assertIn("OpenAI-compatible transcription model", script)
         self.assertIn("OpenAI-compatible STT sends audio", script)
+        self.assertIn("API keys are not stored in the UI config", script)
         self.assertIn("raw STT backend debug output", script)
         self.assertIn("qwen2.5:3b", script)
         self.assertIn("Check GPU capacity", script)

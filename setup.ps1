@@ -41,6 +41,10 @@ $version = if (Test-Path $versionFile) {
     'dev'
 }
 Write-Host "whisper-dictate $version"
+try {
+  $Host.UI.RawUI.WindowTitle = "whisper-dictate $version"
+} catch {
+}
 $env:VOICEPI_LAUNCHER_PRINTED_VERSION = '1'
 
 [string[]]$runArgs = if ($args.Count -gt 0) {
@@ -245,6 +249,15 @@ if ($wantsParakeet) {
 
 # --- 4. launch (first run also downloads the model, ~1.5-3 GB once) ---
 Write-Host "Starting whisper-dictate - press Esc (or Ctrl+C) to stop." -ForegroundColor Cyan
+try {
+  $Host.UI.RawUI.WindowTitle = "whisper-dictate $version - running"
+} catch {
+}
 Set-Location $here
 & $venvPy $app $runArgs
-exit $LASTEXITCODE
+$exitCode = $LASTEXITCODE
+try {
+  $Host.UI.RawUI.WindowTitle = "whisper-dictate $version - stopped"
+} catch {
+}
+exit $exitCode

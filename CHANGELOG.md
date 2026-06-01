@@ -16,6 +16,10 @@ release because `release.yml` bumps in-place after the tag is pushed.
 - Optional OpenAI-compatible STT backend via `VOICEPI_STT_BACKEND=openai`, `VOICEPI_STT_MODEL`, `VOICEPI_STT_BASE_URL`, `VOICEPI_STT_TIMEOUT_MS`, and `VOICEPI_STT_API_KEY`/`OPENAI_API_KEY`.
 - Optional OpenAI-compatible post-processing provider via `VOICEPI_POST_PROCESSOR=openai` and `VOICEPI_POST_API_KEY`/`OPENAI_API_KEY`.
 - Settings UI controls and benchmark specs for external STT models, including `openai:gpt-4o-mini-transcribe`.
+- The Windows PowerShell title, Settings UI title and tray tooltip now show the running whisper-dictate version.
+
+### Changed
+- External API keys are read from environment variables only and are not stored in the Settings UI config JSON.
 
 ## [0.2.60] - 2026-05-31
 

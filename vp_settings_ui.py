@@ -10,6 +10,7 @@ from pathlib import Path
 
 from vp_config import SETTING_BY_KEY, config_path, effective_config, load_config, save_config, touch_reload_signal
 from vp_parakeet import DEFAULT_MODEL as DEFAULT_PARAKEET_MODEL, PARAKEET_MODELS
+from vp_version import VERSION
 
 
 def _missing_pyside_error() -> RuntimeError:
@@ -67,12 +68,13 @@ def run_settings_ui() -> int:
     class SettingsWindow(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle("whisper-dictate settings")
+            self.setWindowTitle(f"whisper-dictate {VERSION} settings")
             self.resize(860, 680)
             self._controls: dict[str, object] = {}
             self._labels: dict[str, QLabel] = {}
             self._status = QLabel("")
             self._backend_note = QLabel("")
+            self._api_key_status = QLabel("")
             self._settings_buttons: QWidget | None = None
             self._runtime_status = QLabel("Stopped")
             self._runtime_log = QPlainTextEdit()
@@ -421,8 +423,8 @@ def run_settings_ui() -> int:
                 form, "Post base URL", self._line("post_base_url"),
                 "Ollama or OpenAI-compatible chat completions base URL. With Local only enabled this must be localhost.")
             self._add_help_row(
-                form, "Post API key", self._line("post_api_key"),
-                "Optional API key for external post-processing. Prefer OPENAI_API_KEY for shared machine config.")
+                form, "API key status", self._api_key_status,
+                "API keys are not stored in the UI config. Set OPENAI_API_KEY, VOICEPI_STT_API_KEY or VOICEPI_POST_API_KEY in the process/user environment.")
             self._add_help_row(
                 form, "Post timeout ms", self._spin("post_timeout_ms", 100, 30000),
                 "Maximum wait for local rewrite. On timeout whisper-dictate falls back to the dictionary-final text.")
@@ -546,8 +548,17 @@ def run_settings_ui() -> int:
                 elif isinstance(control, QTextEdit):
                     control.setPlainText(str(value))
             self._status.setText(f"Config: {config_path()}")
+            self._update_api_key_status()
             self._update_backend_controls()
             self._update_post_controls()
+
+        def _update_api_key_status(self) -> None:
+            stt = bool(os.environ.get("VOICEPI_STT_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+            post = bool(os.environ.get("VOICEPI_POST_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+            self._api_key_status.setText(
+                f"External STT key: {'set' if stt else 'unset'}; "
+                f"post-processing key: {'set' if post else 'unset'}"
+            )
 
         def _update_post_controls(self) -> None:
             processor_control = self._controls.get("post_processor")
@@ -555,7 +566,7 @@ def run_settings_ui() -> int:
             processor = processor_control.currentText() if isinstance(processor_control, QComboBox) else "none"
             mode = mode_control.currentText() if isinstance(mode_control, QComboBox) else "raw"
             enabled = processor != "none" and mode != "raw"
-            for key in ("post_model", "post_base_url", "post_timeout_ms", "post_api_key"):
+            for key in ("post_model", "post_base_url", "post_timeout_ms"):
                 self._set_control_enabled(key, enabled)
 
         def _collect(self) -> dict[str, str]:
@@ -787,7 +798,7 @@ def run_settings_ui() -> int:
                 app.quit()
 
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setApplicationDisplayName("whisper-dictate")
+    app.setApplicationDisplayName(f"whisper-dictate {VERSION}")
     app.setQuitOnLastWindowClosed(False)
 
     lock_path = config_path().with_name("settings-ui.lock")
@@ -827,7 +838,7 @@ def run_settings_ui() -> int:
     activation_server.newConnection.connect(handle_activation_request)
     activation_server.listen(server_name)
     tray = QSystemTrayIcon(icon, app)
-    tray.setToolTip("whisper-dictate")
+    tray.setToolTip(f"whisper-dictate {VERSION}")
     menu = tray.contextMenu()
     if menu is None:
         from PySide6.QtWidgets import QMenu

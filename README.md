@@ -339,7 +339,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_POST_MODE` | `raw` | `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets`; `bullet-list` is accepted as an alias; `raw` keeps current behavior |
 | `VOICEPI_POST_MODEL` | `qwen2.5:3b` | local Ollama model or OpenAI-compatible chat model |
 | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` / `https://api.openai.com/v1` | Ollama or OpenAI-compatible chat endpoint |
-| `VOICEPI_POST_API_KEY` | _(unset)_ | optional external post-processing key; `OPENAI_API_KEY` also works |
+| `VOICEPI_POST_API_KEY` | _(unset)_ | optional external post-processing key from env only; `OPENAI_API_KEY` also works |
 | `VOICEPI_POST_TIMEOUT_MS` | `2000` | fallback to dictionary-final text if local rewrite is too slow |
 | `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty value → keep interactive terminal status lines plain |
@@ -372,6 +372,10 @@ for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY` or
 `VOICEPI_POST_PROCESSOR=openai`, `VOICEPI_POST_MODEL=<chat-model>` and
 `OPENAI_API_KEY` or `VOICEPI_POST_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
 external providers before requests are made.
+
+API keys are not saved in the Settings UI config file. whisper-dictate reads
+them only from the process/user environment (`OPENAI_API_KEY`,
+`VOICEPI_STT_API_KEY`, `VOICEPI_POST_API_KEY`).
 
 File transcription for benchmarks/debugging uses the same backend, dictionary
 and replacement pipeline as live dictation:

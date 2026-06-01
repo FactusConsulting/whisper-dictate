@@ -64,7 +64,6 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOICEPI_POST_MODE", "post_mode", "raw", live=True),
     Setting("VOICEPI_POST_MODEL", "post_model", "qwen2.5:3b", live=True),
     Setting("VOICEPI_POST_BASE_URL", "post_base_url", "http://localhost:11434", live=True),
-    Setting("VOICEPI_POST_API_KEY", "post_api_key", None, live=True),
     Setting("VOICEPI_POST_TIMEOUT_MS", "post_timeout_ms", "2000", live=True),
     Setting("VOICEPI_POST_MAX_INPUT_CHARS", "post_max_input_chars", "4000", live=True),
     Setting("VOICEPI_POST_MAX_OUTPUT_CHARS", "post_max_output_chars", "4000", live=True),
