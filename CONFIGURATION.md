@@ -308,14 +308,20 @@ that expose `/audio/transcriptions` and `/chat/completions`. `VOICEPI_LOCAL_ONLY
 blocks the external STT backend and external post-processor before any request is
 made.
 
-### Optional PySide/Qt settings UI
+### Desktop settings UI
 
-Install the optional UI dependency into the same venv, then open the settings
-window. On Windows, the installer adds a Start-menu **whisper-dictate**
-shortcut which opens a unified control UI: it starts/stops dictation, shows the
-runtime log, saves settings and restarts dictation automatically when a
-restart-only setting changes. On Linux/macOS the UI remains settings-only; keep
-the normal terminal dictation process for now.
+On Windows, the installer adds a Start-menu **whisper-dictate** shortcut which
+opens a unified control UI: it starts/stops dictation, shows the runtime log,
+saves settings and restarts dictation automatically when a restart-only setting
+changes. On Linux, install the Rust UI/controller and open the same kind of
+control surface:
+
+```bash
+scripts/install-linux-rust-ui.sh
+whisper-dictate ui
+```
+
+The legacy PySide UI remains available for compatibility:
 
 ```powershell
 & "$env:USERPROFILE\voice-pi-venv\Scripts\python.exe" -m pip install `

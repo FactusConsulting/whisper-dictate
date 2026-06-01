@@ -85,6 +85,28 @@ Requires: `python3` ≥ 3.10, `libportaudio2`, `alsa-utils`, `xclip`:
 sudo apt install libportaudio2 alsa-utils xclip
 ```
 
+### Optional Rust desktop UI
+
+The Rust UI is the cross-platform control surface being introduced for Linux
+and Windows. It edits the same config JSON as the Python runtime, starts and
+stops dictation directly, streams logs, and restarts its managed runtime when
+restart-only settings change.
+
+Install it for your user:
+
+```bash
+scripts/install-linux-rust-ui.sh
+```
+
+Then run:
+
+```bash
+whisper-dictate ui
+```
+
+The installer copies the Rust binary to `~/.local/bin/whisper-dictate` and
+adds `~/.local/share/applications/whisper-dictate.desktop`.
+
 ### Start
 
 ```bash
@@ -439,16 +461,12 @@ punkt komma ny linje andet punkt punktum` become formatted punctuation and
 line breaks. The feature is off by default so literal dictation of words like
 `comma` or `punktum` is not changed unless you explicitly enable it.
 
-Optional PySide/Qt settings UI: on Windows, use the Start-menu
-**whisper-dictate** shortcut. It owns the dictation process, shows the runtime
-log, hides dependency install progress behind the UI, and restarts dictation
-when backend/model/device/hotkey settings change. On Linux/macOS, install
-`requirements-ui.txt` and run `setup.ps1 --settings-ui` or
-`python voice_pi.py --settings-ui`; the terminal dictation process remains
-separate for now. The UI writes `%APPDATA%\WhisperDictate\config.json` on
-Windows and signals live-safe setting reloads such as language, dictionary,
-VAD, audio thresholds and injection mode. The shortcut logs first-run UI setup
-to `%APPDATA%\WhisperDictate\settings-ui.log`.
+Desktop UI: on Windows, use the Start-menu **whisper-dictate** shortcut. On
+Linux, install the Rust UI with `scripts/install-linux-rust-ui.sh` and run
+`whisper-dictate ui`. The UI owns the dictation process, shows the runtime log,
+saves settings and restarts dictation when backend/model/device/hotkey settings
+change. It writes `%APPDATA%\WhisperDictate\config.json` on Windows and
+`${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json` on Linux.
 
 The `[gate]` line shows whether the raw input was accepted before gain
 boost. The `[cap]` line prints loudness, gain, noise floor and **SNR** per

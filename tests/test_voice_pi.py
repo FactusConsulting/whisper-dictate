@@ -3077,5 +3077,28 @@ class DictionaryTests(unittest.TestCase):
         self.assertEqual(data["replacements"], {"code X": "Codex", "old": "Old"})
 
 
+class RustUiInstallerTests(unittest.TestCase):
+    def test_linux_rust_ui_installer_builds_release_binary_and_desktop_entry(self):
+        path = Path("scripts/install-linux-rust-ui.sh")
+        script = path.read_text(encoding="utf-8")
+
+        self.assertTrue(os.access(path, os.X_OK))
+        self.assertIn("cargo build --release -p whisper-dictate-app", script)
+        self.assertIn('install -m 0755 "${HERE}/target/release/whisper-dictate"', script)
+        self.assertIn("whisper-dictate.desktop", script)
+        self.assertIn("Exec=${BIN} ui", script)
+        self.assertNotIn("setup.ps1", script)
+
+    def test_linux_ui_docs_point_to_rust_ui_not_pyside_powershell(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+        config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+
+        self.assertIn("scripts/install-linux-rust-ui.sh", readme)
+        self.assertIn("whisper-dictate ui", readme)
+        self.assertIn("scripts/install-linux-rust-ui.sh", config)
+        self.assertNotIn("On Linux/macOS, install\n`requirements-ui.txt`", readme)
+        self.assertNotIn("setup.ps1 --settings-ui", readme)
+
+
 if __name__ == "__main__":
     unittest.main()
