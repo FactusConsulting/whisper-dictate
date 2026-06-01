@@ -7,6 +7,9 @@ voice-pi-venv/
 __pycache__/
 *.py[cod]
 
+# Rust build output
+target/
+
 # Model cache (fetched at runtime into the HF cache, never vendored)
 .cache/
 
