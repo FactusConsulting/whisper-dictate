@@ -25,6 +25,7 @@ struct WhisperDictateApp {
     runtime_log: String,
     config_path: String,
     settings: AppSettings,
+    saved_settings: AppSettings,
     settings_status: String,
     supervisor: RuntimeSupervisor,
 }
@@ -44,6 +45,7 @@ impl Default for WhisperDictateApp {
             runtime_log: "Rust UI ready. Start launches the Python dictation worker directly."
                 .to_owned(),
             config_path: config::config_path().display().to_string(),
+            saved_settings: settings.clone(),
             settings,
             settings_status,
             supervisor: RuntimeSupervisor::new(),
@@ -235,6 +237,14 @@ impl WhisperDictateApp {
 
     fn dictionary_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Dictionary");
+        ui.horizontal(|ui| {
+            if ui.button("Ensure file").clicked() {
+                self.ensure_dictionary();
+            }
+            if ui.button("Open").clicked() {
+                self.open_dictionary();
+            }
+        });
         egui::Grid::new("dictionary_settings")
             .num_columns(2)
             .show(ui, |ui| {
@@ -398,7 +408,17 @@ impl WhisperDictateApp {
         }
         match config::save_settings(&self.settings) {
             Ok(path) => {
+                let restart_keys =
+                    config::restart_required_keys(&self.saved_settings, &self.settings);
+                self.saved_settings = self.settings.clone();
                 self.settings_status = format!("Saved: {}", path.display());
+                if self.supervisor.is_running() && !restart_keys.is_empty() {
+                    self.append_runtime_log(format!(
+                        "[ui] restart required after settings change: {}",
+                        restart_keys.join(", ")
+                    ));
+                    self.restart_runtime();
+                }
             }
             Err(err) => {
                 self.settings_status = format!("Save failed: {err}");
@@ -409,11 +429,34 @@ impl WhisperDictateApp {
     fn reload_settings(&mut self) {
         match config::load_settings() {
             Ok(settings) => {
+                self.saved_settings = settings.clone();
                 self.settings = settings;
                 self.settings_status = "Reloaded config".to_owned();
             }
             Err(err) => {
                 self.settings_status = format!("Reload failed: {err}");
+            }
+        }
+    }
+
+    fn ensure_dictionary(&mut self) {
+        match config::ensure_dictionary_file(&self.settings.dictionary) {
+            Ok(path) => {
+                self.settings_status = format!("Dictionary ready: {}", path.display());
+            }
+            Err(err) => {
+                self.settings_status = format!("Dictionary create failed: {err}");
+            }
+        }
+    }
+
+    fn open_dictionary(&mut self) {
+        match config::open_dictionary(&self.settings.dictionary) {
+            Ok(path) => {
+                self.settings_status = format!("Opened dictionary: {}", path.display());
+            }
+            Err(err) => {
+                self.settings_status = format!("Open dictionary failed: {err}");
             }
         }
     }

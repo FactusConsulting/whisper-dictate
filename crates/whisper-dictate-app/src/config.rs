@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,21 @@ const SETTINGS_KEYS: &[&str] = &[
     "post_max_output_chars",
     "debug",
     "stt_debug",
+    "quit_count",
+    "quit_window_ms",
+];
+
+const RESTART_KEYS: &[&str] = &[
+    "key",
+    "model",
+    "stt_backend",
+    "stt_model",
+    "stt_base_url",
+    "stt_timeout_ms",
+    "parakeet_model",
+    "device",
+    "compute_type",
+    "local_only",
     "quit_count",
     "quit_window_ms",
 ];
@@ -123,6 +139,29 @@ pub fn save_settings_to_path(settings: &AppSettings, path: impl AsRef<Path>) -> 
         serde_json::to_string_pretty(&Value::Object(object))? + "\n",
     )?;
     Ok(path.to_path_buf())
+}
+
+pub fn ensure_dictionary_file(path: impl AsRef<Path>) -> Result<PathBuf> {
+    let path = path.as_ref();
+    if !path.exists() {
+        path.parent().map(fs::create_dir_all).transpose()?;
+        fs::write(path, "{\n  \"terms\": [],\n  \"replacements\": {}\n}\n")?;
+    }
+    Ok(path.to_path_buf())
+}
+
+pub fn open_dictionary(path: impl AsRef<Path>) -> Result<PathBuf> {
+    let path = ensure_dictionary_file(path)?;
+    open_path(&path)?;
+    Ok(path)
+}
+
+pub fn restart_required_keys(before: &AppSettings, after: &AppSettings) -> Vec<&'static str> {
+    RESTART_KEYS
+        .iter()
+        .copied()
+        .filter(|key| before.setting_value(key) != after.setting_value(key))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -391,6 +430,24 @@ impl AppSettings {
             }
         }
     }
+
+    fn setting_value(&self, key: &str) -> Option<&str> {
+        match key {
+            "key" => Some(&self.key),
+            "model" => Some(&self.model),
+            "stt_backend" => Some(&self.stt_backend),
+            "stt_model" => Some(&self.stt_model),
+            "stt_base_url" => Some(&self.stt_base_url),
+            "stt_timeout_ms" => Some(&self.stt_timeout_ms),
+            "parakeet_model" => Some(&self.parakeet_model),
+            "device" => Some(&self.device),
+            "compute_type" => Some(&self.compute_type),
+            "local_only" => Some(if self.local_only { "1" } else { "0" }),
+            "quit_count" => Some(&self.quit_count),
+            "quit_window_ms" => Some(&self.quit_window_ms),
+            _ => None,
+        }
+    }
 }
 
 fn platform_config_dir() -> PathBuf {
@@ -455,6 +512,28 @@ fn set_bool(object: &mut Map<String, Value>, key: &str, value: bool) {
         key.to_owned(),
         Value::String(if value { "1" } else { "0" }.to_owned()),
     );
+}
+
+fn open_path(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", &path.display().to_string()])
+            .spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(path).spawn()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -555,5 +634,30 @@ mod tests {
         let saved: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
 
         assert!(saved.get("profiles").is_none());
+    }
+
+    #[test]
+    fn restart_required_keys_reports_restart_only_changes() {
+        let before = AppSettings::default();
+        let after = AppSettings {
+            key: "shift_r+ctrl_r".to_owned(),
+            lang: "da".to_owned(),
+            inject_mode: "print".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(restart_required_keys(&before, &after), vec!["key"]);
+    }
+
+    #[test]
+    fn ensure_dictionary_file_creates_empty_json_dictionary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dictionary.json");
+
+        ensure_dictionary_file(&path).unwrap();
+        let saved: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+
+        assert_eq!(saved["terms"], serde_json::json!([]));
+        assert_eq!(saved["replacements"], serde_json::json!({}));
     }
 }
