@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use crate::config::{self, AppSettings};
+use crate::dictionary;
 use crate::runtime::{
     default_worker_command, doctor_command, install_command, run_capture, RuntimeEvent,
     RuntimeState, RuntimeSupervisor, WorkerCommand,
@@ -31,6 +32,7 @@ struct WhisperDictateApp {
     settings: AppSettings,
     saved_settings: AppSettings,
     settings_status: String,
+    dictionary_preview: String,
     supervisor: RuntimeSupervisor,
     background_task: Option<Receiver<BackgroundTaskResult>>,
     background_task_label: Option<&'static str>,
@@ -54,6 +56,7 @@ impl Default for WhisperDictateApp {
             saved_settings: settings.clone(),
             settings,
             settings_status,
+            dictionary_preview: String::new(),
             supervisor: RuntimeSupervisor::new(),
             background_task: None,
             background_task_label: None,
@@ -278,6 +281,9 @@ impl WhisperDictateApp {
             if ui.button("Open").clicked() {
                 self.open_dictionary();
             }
+            if ui.button("Preview").clicked() {
+                self.preview_dictionary();
+            }
         });
         egui::Grid::new("dictionary_settings")
             .num_columns(2)
@@ -299,6 +305,16 @@ impl WhisperDictateApp {
                     &mut self.settings.dictionary_prompt_chars,
                 );
             });
+        if !self.dictionary_preview.is_empty() {
+            ui.label("Prompt preview");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.dictionary_preview)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(8)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+        }
     }
 
     fn output_tab(&mut self, ui: &mut egui::Ui) {
@@ -608,6 +624,39 @@ impl WhisperDictateApp {
             }
             Err(err) => {
                 self.settings_status = format!("Open dictionary failed: {err}");
+            }
+        }
+    }
+
+    fn preview_dictionary(&mut self) {
+        let max_terms = self
+            .settings
+            .dictionary_max_terms
+            .parse::<usize>()
+            .unwrap_or(80);
+        let max_chars = self
+            .settings
+            .dictionary_prompt_chars
+            .parse::<usize>()
+            .unwrap_or(1200);
+        match dictionary::preview_dictionary(
+            self.settings.dictionary.clone(),
+            Some(&self.settings.initial_prompt),
+            max_terms,
+            max_chars,
+        ) {
+            Ok(preview) => {
+                self.settings_status = format!(
+                    "Dictionary preview: {} terms, {} replacements",
+                    preview.term_count, preview.replacement_count
+                );
+                self.dictionary_preview = preview.prompt.unwrap_or_else(|| {
+                    "(No prompt terms selected by current dictionary limits)".to_owned()
+                });
+            }
+            Err(err) => {
+                self.settings_status = format!("Dictionary preview failed: {err}");
+                self.dictionary_preview.clear();
             }
         }
     }

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use regex::RegexBuilder;
@@ -152,6 +153,43 @@ pub fn parse_json_dictionary(raw: &str) -> Result<Dictionary> {
     Ok(Dictionary {
         terms: dedupe_terms(terms),
         replacements,
+    })
+}
+
+pub fn parse_dictionary(raw: &str) -> Result<Dictionary> {
+    if raw.trim_start().starts_with('{') {
+        parse_json_dictionary(raw)
+    } else {
+        Ok(parse_text_dictionary(raw))
+    }
+}
+
+pub fn load_dictionary(path: impl AsRef<Path>) -> Result<Dictionary> {
+    let raw = std::fs::read_to_string(path)?;
+    parse_dictionary(&raw)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DictionaryPreview {
+    pub path: PathBuf,
+    pub term_count: usize,
+    pub replacement_count: usize,
+    pub prompt: Option<String>,
+}
+
+pub fn preview_dictionary(
+    path: impl Into<PathBuf>,
+    base_prompt: Option<&str>,
+    max_terms: usize,
+    max_chars: usize,
+) -> Result<DictionaryPreview> {
+    let path = path.into();
+    let dictionary = load_dictionary(&path)?;
+    Ok(DictionaryPreview {
+        path,
+        term_count: dictionary.terms.len(),
+        replacement_count: dictionary.replacements.len(),
+        prompt: dictionary.build_prompt(base_prompt, max_terms, max_chars),
     })
 }
 
@@ -321,6 +359,36 @@ mod tests {
                     to: "Codex".to_owned()
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn parse_dictionary_selects_json_or_text_shape() {
+        let json =
+            parse_dictionary(r#"{"terms":["Codex"],"replacements":{"code X":"Codex"}}"#).unwrap();
+        let text = parse_dictionary("terms:\n- Codex\nreplacements:\ncode X => Codex\n").unwrap();
+
+        assert_eq!(json, text);
+    }
+
+    #[test]
+    fn preview_dictionary_reports_counts_and_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dictionary.json");
+        std::fs::write(
+            &path,
+            r#"{"terms":["Codex","Claude Code"],"replacements":{"code X":"Codex"}}"#,
+        )
+        .unwrap();
+
+        let preview = preview_dictionary(&path, Some("Base prompt"), 10, 1200).unwrap();
+
+        assert_eq!(preview.path, path);
+        assert_eq!(preview.term_count, 2);
+        assert_eq!(preview.replacement_count, 1);
+        assert_eq!(
+            preview.prompt.as_deref(),
+            Some("Base prompt\nVocabulary: Codex, Claude Code")
         );
     }
 
