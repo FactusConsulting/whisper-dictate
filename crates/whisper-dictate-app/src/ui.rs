@@ -1,10 +1,12 @@
 use anyhow::Result;
 use eframe::egui;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 
 use crate::config::{self, AppSettings};
 use crate::runtime::{
-    default_worker_command, doctor_command, run_capture, RuntimeEvent, RuntimeState,
-    RuntimeSupervisor,
+    default_worker_command, doctor_command, install_command, run_capture, RuntimeEvent,
+    RuntimeState, RuntimeSupervisor, WorkerCommand,
 };
 
 pub fn run() -> Result<()> {
@@ -21,7 +23,6 @@ pub fn run() -> Result<()> {
     .map_err(|err| anyhow::anyhow!(err.to_string()))
 }
 
-#[derive(Debug)]
 struct WhisperDictateApp {
     selected_tab: Tab,
     runtime_state: RuntimeState,
@@ -31,6 +32,8 @@ struct WhisperDictateApp {
     saved_settings: AppSettings,
     settings_status: String,
     supervisor: RuntimeSupervisor,
+    background_task: Option<Receiver<BackgroundTaskResult>>,
+    background_task_label: Option<&'static str>,
 }
 
 impl Default for WhisperDictateApp {
@@ -52,8 +55,20 @@ impl Default for WhisperDictateApp {
             settings,
             settings_status,
             supervisor: RuntimeSupervisor::new(),
+            background_task: None,
+            background_task_label: None,
         }
     }
+}
+
+struct BackgroundTaskResult {
+    label: &'static str,
+    command: String,
+    stdout: String,
+    stderr: String,
+    success: bool,
+    code: Option<i32>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +106,7 @@ impl Tab {
 impl eframe::App for WhisperDictateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_runtime();
+        self.poll_background_task();
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
@@ -128,8 +144,20 @@ impl WhisperDictateApp {
             if ui.button("Doctor").clicked() {
                 self.run_doctor();
             }
+            if ui
+                .add_enabled(
+                    self.background_task.is_none(),
+                    egui::Button::new("Install/Repair"),
+                )
+                .clicked()
+            {
+                self.run_install();
+            }
             ui.separator();
             ui.label(format!("Status: {}", self.runtime_state.label()));
+            if let Some(label) = self.background_task_label {
+                ui.label(format!("Task: {label} running"));
+            }
         });
 
         ui.separator();
@@ -389,6 +417,94 @@ impl WhisperDictateApp {
                 }
             }
             Err(err) => self.append_runtime_log(format!("[ui] doctor failed to run: {err}")),
+        }
+    }
+
+    fn run_install(&mut self) {
+        self.run_background_command("install/repair", install_command());
+    }
+
+    fn run_background_command(&mut self, label: &'static str, command: WorkerCommand) {
+        if self.background_task.is_some() {
+            self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
+            return;
+        }
+
+        let display = command.display();
+        self.append_runtime_log(format!("[ui] {label}: {display}"));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = match run_capture(&command) {
+                Ok(output) => {
+                    let success = output.success();
+                    let code = output.code();
+                    BackgroundTaskResult {
+                        label,
+                        command: display,
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                        success,
+                        code,
+                        error: None,
+                    }
+                }
+                Err(err) => BackgroundTaskResult {
+                    label,
+                    command: display,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                    code: None,
+                    error: Some(err.to_string()),
+                },
+            };
+            let _ = tx.send(result);
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some(label);
+    }
+
+    fn poll_background_task(&mut self) {
+        let Some(rx) = self.background_task.as_ref() else {
+            return;
+        };
+
+        let result = match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(BackgroundTaskResult {
+                label: self.background_task_label.unwrap_or("background task"),
+                command: String::new(),
+                stdout: String::new(),
+                stderr: String::new(),
+                success: false,
+                code: None,
+                error: Some("background task stopped without reporting a result".to_owned()),
+            }),
+        };
+
+        if let Some(result) = result {
+            self.background_task = None;
+            self.background_task_label = None;
+            self.append_runtime_log(format!(
+                "[ui] {} completed: {}",
+                result.label, result.command
+            ));
+            self.append_runtime_output(result.stdout.trim_end());
+            self.append_runtime_output(result.stderr.trim_end());
+            if let Some(error) = result.error {
+                self.append_runtime_log(format!("[ui] {} failed to run: {error}", result.label));
+            } else if result.success {
+                self.append_runtime_log(format!("[ui] {} passed", result.label));
+            } else {
+                self.append_runtime_log(format!(
+                    "[ui] {} failed with code {}",
+                    result.label,
+                    result
+                        .code
+                        .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+                ));
+            }
         }
     }
 

@@ -410,6 +410,24 @@ pub fn doctor_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--doctor".to_owned()])
 }
 
+pub fn install_command() -> WorkerCommand {
+    install_command_from_exe(
+        env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),
+        app_root(),
+    )
+}
+
+pub fn install_command_from_exe(
+    exe: impl Into<PathBuf>,
+    app_root: impl Into<PathBuf>,
+) -> WorkerCommand {
+    WorkerCommand {
+        program: exe.into(),
+        args: vec!["install".to_owned()],
+        working_dir: app_root.into(),
+    }
+}
+
 #[derive(Debug)]
 pub struct WorkerOutput {
     pub stdout: String,
@@ -768,6 +786,18 @@ mod tests {
             command.args,
             vec![voice_pi_arg("/installed/app"), "--doctor".to_owned()]
         );
+    }
+
+    #[test]
+    fn install_command_runs_rust_cli_from_app_root() {
+        let command = install_command_from_exe("/installed/app/whisper-dictate", "/installed/app");
+
+        assert_eq!(
+            command.program,
+            PathBuf::from("/installed/app/whisper-dictate")
+        );
+        assert_eq!(command.args, vec!["install".to_owned()]);
+        assert_eq!(command.working_dir, PathBuf::from("/installed/app"));
     }
 
     #[test]
