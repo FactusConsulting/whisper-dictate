@@ -2062,6 +2062,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn(r"Debug Terminal", script)
         self.assertNotIn(r'Filename: "{app}\setup.cmd"; IconFilename: "{cmd}"', script)
 
+    def test_setup_cmd_prefers_rust_controller_when_bundled(self):
+        script = Path("setup.cmd").read_text(encoding="utf-8")
+
+        self.assertIn(r'set "RUST_EXE=%~dp0whisper-dictate.exe"', script)
+        self.assertIn(r'if exist "%RUST_EXE%" (', script)
+        self.assertIn(r'"%RUST_EXE%" ui', script)
+        self.assertIn(r'"%RUST_EXE%" doctor', script)
+        self.assertIn(r'"%RUST_EXE%" run %*', script)
+        self.assertIn(r'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %*', script)
+
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
             script = f.read()
