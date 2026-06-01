@@ -9,10 +9,9 @@ suite importing Dictate, and smoke-tested on Linux.
 from __future__ import annotations
 
 import os
-import socket
-import time
 
 from vp_keymap import _build_ydotool_ops
+from vp_ydotool import ydotool_socket_path, ydotoold_ready
 
 
 _WINDOWS_PASTE_TARGETS = (
@@ -170,22 +169,7 @@ class InjectMixin:
             print("[inject] ydotoold kunne ikke startes eller socket er ikke klar", flush=True)
 
     def _wait_for_ydotoold(self, timeout: float = 1.0) -> bool:
-        deadline = time.monotonic() + timeout
-        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-        sock = os.environ.get("YDOTOOL_SOCKET") or os.path.join(runtime, ".ydotool_socket")
-        while time.monotonic() < deadline:
-            try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(0.1)
-                try:
-                    s.connect(sock)
-                    return True
-                finally:
-                    s.close()
-            except OSError:
-                pass
-            time.sleep(0.05)
-        return False
+        return ydotoold_ready(ydotool_socket_path(), timeout=timeout)
 
     def _try_ydotool(self, *args: str) -> bool:
         import subprocess, shutil

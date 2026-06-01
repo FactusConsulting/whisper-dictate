@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import glob
 import os
-import socket
 import subprocess
 import sys
 from dataclasses import dataclass
 from shutil import which
+
+from vp_ydotool import ydotool_socket_path, ydotoold_ready
 
 try:
     import grp
@@ -33,19 +34,6 @@ def _in_group(name: str) -> bool:
     return gid in os.getgroups()
 
 
-def _socket_ready(path: str) -> bool:
-    try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(0.2)
-        try:
-            s.connect(path)
-            return True
-        finally:
-            s.close()
-    except OSError:
-        return False
-
-
 def _can_import(name: str) -> bool:
     try:
         __import__(name)
@@ -62,11 +50,6 @@ def _event_devices_readable() -> tuple[bool, str]:
     if readable:
         return True, f"{len(readable)}/{len(paths)} readable"
     return False, f"0/{len(paths)} readable; add user to input group and log in again"
-
-
-def _ydotool_socket_path() -> str:
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    return os.environ.get("YDOTOOL_SOCKET") or os.path.join(runtime, ".ydotool_socket")
 
 
 def run_doctor() -> int:
@@ -92,9 +75,9 @@ def run_doctor() -> int:
     checks.append(Check("XDG_RUNTIME_DIR", bool(os.environ.get("XDG_RUNTIME_DIR")), os.environ.get("XDG_RUNTIME_DIR", "unset"), required=False))
     checks.append(Check("WAYLAND_DISPLAY", bool(os.environ.get("WAYLAND_DISPLAY")), os.environ.get("WAYLAND_DISPLAY", "unset"), required=False))
 
-    sock = _ydotool_socket_path()
+    sock = ydotool_socket_path()
     checks.append(Check("ydotool socket", os.path.exists(sock), sock, required=False))
-    checks.append(Check("ydotool socket ready", _socket_ready(sock), sock))
+    checks.append(Check("ydotool socket ready", ydotoold_ready(sock, timeout=0.6), sock))
 
     try:
         r = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, timeout=1)
