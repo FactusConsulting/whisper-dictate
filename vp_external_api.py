@@ -13,8 +13,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-import numpy as np
-
 from vp_config import get_value
 
 SR = 16000
@@ -99,7 +97,9 @@ def _request_json(
         return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
-def _wav_bytes(audio: np.ndarray) -> bytes:
+def _wav_bytes(audio) -> bytes:
+    import numpy as np
+
     clipped = np.clip(audio.reshape(-1), -1.0, 1.0)
     pcm = (clipped * 32767.0).astype(np.int16)
     buf = io.BytesIO()

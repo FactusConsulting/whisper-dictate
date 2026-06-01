@@ -4,6 +4,7 @@ import importlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -540,6 +541,20 @@ class ModelCapacityTests(unittest.TestCase):
 
 
 class ExternalApiTests(unittest.TestCase):
+    def test_external_api_import_path_does_not_require_numpy_until_transcription(self):
+        completed = subprocess.run(
+            [sys.executable, "-S", "-c",
+             "import vp_external_api, vp_postprocess; "
+             "assert vp_external_api.DEFAULT_OPENAI_BASE_URL; "
+             "assert 'openai' in vp_postprocess.VALID_PROCESSORS"],
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_external_stt_maps_local_whisper_default_to_openai_model(self):
         with _env(VOICEPI_MODEL="large-v3-turbo", VOICEPI_STT_API_KEY="test-key"):
             sys.modules.pop("vp_external_api", None)
