@@ -64,7 +64,10 @@ jobs:
       - name: Build bundles
         run: |
           set -e
-          mkbundle() {   # $1 zip  $2 requirements-file  $3 launchers
+          mkbundle() {   # $1 zip  $2 requirements-file  $3... launchers
+            zip_name="$1"
+            requirements_file="$2"
+            shift 2
             d=whisper-dictate; rm -rf "$d"; mkdir "$d"
             cp voice_pi.py vp_*.py README.md LICENSE "$d/"
             [ -f dictionary.example.json ] && cp dictionary.example.json "$d/"
@@ -73,18 +76,17 @@ jobs:
             mkdir -p "$d/scripts"
             cp scripts/inject-smoke.py scripts/install-linux-rust-ui.sh "$d/scripts/"
             printf "%s\n" "$VERSION" > "$d/VERSION"
-            cp "$2" "$d/requirements.txt"
-            read -r -a launchers <<< "$3"
-            for f in "${launchers[@]}"; do cp "$f" "$d/"; done
+            cp "$requirements_file" "$d/requirements.txt"
+            for f in "$@"; do cp "$f" "$d/"; done
             [ -f "$d/setup.sh" ] && chmod +x "$d/setup.sh"
             [ -f "$d/scripts/install-linux-rust-ui.sh" ] && chmod +x "$d/scripts/install-linux-rust-ui.sh"
-            zip -q -r "$1" "$d"; rm -rf "$d"
+            zip -q -r "$zip_name" "$d"; rm -rf "$d"
           }
-          install -m 0755 target/release/whisper-dictate whisper-dictate-linux-rust-ui-${VERSION}
-          mkbundle "whisper-dictate-windows-nvidia-${VERSION}.zip" requirements-gpu.txt "setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs"
-          mkbundle "whisper-dictate-windows-cpu-${VERSION}.zip"    requirements-cpu.txt "setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs"
-          mkbundle "whisper-dictate-windows-amd-${VERSION}.zip"    requirements-cpu.txt "setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs"
-          mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip"      requirements-cpu.txt "setup.sh"
+          install -m 0755 target/release/whisper-dictate "whisper-dictate-linux-rust-ui-${VERSION}"
+          mkbundle "whisper-dictate-windows-nvidia-${VERSION}.zip" requirements-gpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
+          mkbundle "whisper-dictate-windows-cpu-${VERSION}.zip"    requirements-cpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
+          mkbundle "whisper-dictate-windows-amd-${VERSION}.zip"    requirements-cpu.txt setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs
+          mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip"      requirements-cpu.txt setup.sh
 
       - name: Generate release notes from commit messages
         run: |
