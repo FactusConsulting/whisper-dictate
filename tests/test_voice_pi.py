@@ -3153,11 +3153,12 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         for path in Path(".github/workflows").glob("*.yml"):
             workflow = path.read_text(encoding="utf-8")
             self.assertNotIn("windows-latest", workflow, path.as_posix())
+            self.assertNotIn("windows-2025-vs2026", workflow, path.as_posix())
         workflow_text = "\n".join(
             path.read_text(encoding="utf-8")
             for path in Path(".github/workflows").glob("*.yml")
         )
-        self.assertIn("windows-2025-vs2026", workflow_text)
+        self.assertIn("windows-2025", workflow_text)
 
 
 if __name__ == "__main__":

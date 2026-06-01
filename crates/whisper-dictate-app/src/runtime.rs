@@ -610,6 +610,10 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn voice_pi_arg(root: impl AsRef<Path>) -> String {
+        root.as_ref().join("voice_pi.py").display().to_string()
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         original: Option<OsString>,
@@ -656,7 +660,7 @@ mod tests {
         let command = worker_command(&root);
 
         assert_eq!(command.program, PathBuf::from(default_python_name()));
-        assert_eq!(command.args, vec!["/tmp/whisper-dictate/voice_pi.py"]);
+        assert_eq!(command.args, vec![voice_pi_arg("/tmp/whisper-dictate")]);
         assert_eq!(command.working_dir, root);
     }
 
@@ -674,9 +678,9 @@ mod tests {
         assert_eq!(
             command.args,
             vec![
-                "/tmp/whisper-dictate/voice_pi.py",
-                "--key",
-                "shift_r+ctrl_r",
+                voice_pi_arg("/tmp/whisper-dictate"),
+                "--key".to_owned(),
+                "shift_r+ctrl_r".to_owned(),
             ]
         );
     }
@@ -725,7 +729,7 @@ mod tests {
         let command = default_worker_command();
 
         assert_eq!(command.working_dir, PathBuf::from("/installed/app"));
-        assert_eq!(command.args, vec!["/installed/app/voice_pi.py"]);
+        assert_eq!(command.args, vec![voice_pi_arg("/installed/app")]);
     }
 
     #[test]
@@ -762,10 +766,7 @@ mod tests {
 
         assert_eq!(
             command.args,
-            vec![
-                "/installed/app/voice_pi.py".to_owned(),
-                "--doctor".to_owned()
-            ]
+            vec![voice_pi_arg("/installed/app"), "--doctor".to_owned()]
         );
     }
 

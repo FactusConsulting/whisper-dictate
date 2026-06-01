@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build-installer:
-    runs-on: windows-2025-vs2026
+    runs-on: windows-2025
 
     steps:
       - name: Resolve tag
