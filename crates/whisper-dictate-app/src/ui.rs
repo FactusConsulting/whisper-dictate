@@ -1,7 +1,7 @@
 use anyhow::Result;
 use eframe::egui;
 
-use crate::config;
+use crate::config::{self, AppSettings};
 use crate::runtime::{default_worker_command, RuntimeEvent, RuntimeState, RuntimeSupervisor};
 
 pub fn run() -> Result<()> {
@@ -24,17 +24,28 @@ struct WhisperDictateApp {
     runtime_state: RuntimeState,
     runtime_log: String,
     config_path: String,
+    settings: AppSettings,
+    settings_status: String,
     supervisor: RuntimeSupervisor,
 }
 
 impl Default for WhisperDictateApp {
     fn default() -> Self {
+        let (settings, settings_status) = match config::load_settings() {
+            Ok(settings) => (settings, String::new()),
+            Err(err) => (
+                AppSettings::default(),
+                format!("Could not load config, using defaults: {err}"),
+            ),
+        };
         Self {
             selected_tab: Tab::Runtime,
             runtime_state: RuntimeState::Stopped,
             runtime_log: "Rust UI ready. Start launches the Python dictation worker directly."
                 .to_owned(),
             config_path: config::config_path().display().to_string(),
+            settings,
+            settings_status,
             supervisor: RuntimeSupervisor::new(),
         }
     }
@@ -87,11 +98,11 @@ impl eframe::App for WhisperDictateApp {
 
         egui::CentralPanel::default().show(ctx, |ui| match self.selected_tab {
             Tab::Runtime => self.runtime_tab(ui),
-            Tab::Core => self.placeholder_tab(ui, "Core settings"),
-            Tab::Quality => self.placeholder_tab(ui, "Quality settings"),
-            Tab::Dictionary => self.placeholder_tab(ui, "Dictionary"),
-            Tab::Output => self.placeholder_tab(ui, "Output settings"),
-            Tab::Profiles => self.placeholder_tab(ui, "Profiles"),
+            Tab::Core => self.settings_panel(ui, Self::core_tab),
+            Tab::Quality => self.settings_panel(ui, Self::quality_tab),
+            Tab::Dictionary => self.settings_panel(ui, Self::dictionary_tab),
+            Tab::Output => self.settings_panel(ui, Self::output_tab),
+            Tab::Profiles => self.settings_panel(ui, Self::profiles_tab),
         });
     }
 }
@@ -129,10 +140,192 @@ impl WhisperDictateApp {
             });
     }
 
-    fn placeholder_tab(&self, ui: &mut egui::Ui, title: &str) {
-        ui.heading(title);
-        ui.label("This section is scaffolded for the Rust UI migration.");
-        ui.label(format!("Config: {}", self.config_path));
+    fn settings_panel(&mut self, ui: &mut egui::Ui, body: fn(&mut Self, &mut egui::Ui)) {
+        body(self, ui);
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Save").clicked() {
+                self.save_settings();
+            }
+            if ui.button("Reload").clicked() {
+                self.reload_settings();
+            }
+            ui.label(format!("Config: {}", self.config_path));
+        });
+        if !self.settings_status.is_empty() {
+            ui.label(&self.settings_status);
+        }
+    }
+
+    fn core_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Core");
+        egui::Grid::new("core_settings")
+            .num_columns(2)
+            .show(ui, |ui| {
+                combo(
+                    ui,
+                    "STT backend",
+                    &mut self.settings.stt_backend,
+                    &["whisper", "parakeet", "openai"],
+                );
+                text(ui, "Whisper model", &mut self.settings.model);
+                text(ui, "External STT model", &mut self.settings.stt_model);
+                text(ui, "Parakeet model", &mut self.settings.parakeet_model);
+                combo(
+                    ui,
+                    "Device",
+                    &mut self.settings.device,
+                    &["auto", "cuda", "cpu"],
+                );
+                combo(
+                    ui,
+                    "Compute type",
+                    &mut self.settings.compute_type,
+                    &["", "int8_float16", "float16", "bfloat16", "float32", "int8"],
+                );
+                combo(
+                    ui,
+                    "Language",
+                    &mut self.settings.lang,
+                    &["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"],
+                );
+                text(ui, "STT API URL", &mut self.settings.stt_base_url);
+                text(ui, "STT timeout ms", &mut self.settings.stt_timeout_ms);
+                text(ui, "Hotkey", &mut self.settings.key);
+                text(ui, "Quit count", &mut self.settings.quit_count);
+                text(ui, "Quit window ms", &mut self.settings.quit_window_ms);
+            });
+    }
+
+    fn quality_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Quality");
+        egui::Grid::new("quality_settings")
+            .num_columns(2)
+            .show(ui, |ui| {
+                text(ui, "Beam size", &mut self.settings.beam_size);
+                text(ui, "Temperature ladder", &mut self.settings.temperature);
+                text(
+                    ui,
+                    "Context min seconds",
+                    &mut self.settings.context_min_seconds,
+                );
+                text(
+                    ui,
+                    "Parakeet min seconds",
+                    &mut self.settings.parakeet_min_seconds,
+                );
+                text(ui, "Release tail ms", &mut self.settings.release_tail_ms);
+                text(ui, "VAD threshold", &mut self.settings.vad_threshold);
+                text(
+                    ui,
+                    "VAD min silence ms",
+                    &mut self.settings.vad_min_silence_ms,
+                );
+                text(ui, "Target dBFS", &mut self.settings.target_dbfs);
+                text(ui, "Min input dBFS", &mut self.settings.min_input_dbfs);
+                text(ui, "Min SNR dB", &mut self.settings.min_snr_db);
+            });
+        ui.label("Initial prompt");
+        ui.add(
+            egui::TextEdit::multiline(&mut self.settings.initial_prompt)
+                .desired_rows(4)
+                .desired_width(f32::INFINITY),
+        );
+    }
+
+    fn dictionary_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Dictionary");
+        egui::Grid::new("dictionary_settings")
+            .num_columns(2)
+            .show(ui, |ui| {
+                text(ui, "Dictionary path", &mut self.settings.dictionary);
+                checkbox(
+                    ui,
+                    "Dictionary enabled",
+                    &mut self.settings.dictionary_enabled,
+                );
+                text(
+                    ui,
+                    "Max prompt terms",
+                    &mut self.settings.dictionary_max_terms,
+                );
+                text(
+                    ui,
+                    "Prompt char cap",
+                    &mut self.settings.dictionary_prompt_chars,
+                );
+            });
+    }
+
+    fn output_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Output");
+        egui::Grid::new("output_settings")
+            .num_columns(2)
+            .show(ui, |ui| {
+                combo(
+                    ui,
+                    "Inject mode",
+                    &mut self.settings.inject_mode,
+                    &["auto", "type", "paste", "print"],
+                );
+                combo(
+                    ui,
+                    "Format commands",
+                    &mut self.settings.format_commands,
+                    &["off", "en", "da", "both"],
+                );
+                checkbox(ui, "JSON stdout", &mut self.settings.inject_json);
+                text(ui, "Metrics JSONL", &mut self.settings.metrics_jsonl);
+                text(ui, "Command hook", &mut self.settings.command_hook);
+                text(
+                    ui,
+                    "Command hook timeout ms",
+                    &mut self.settings.command_hook_timeout_ms,
+                );
+                combo(
+                    ui,
+                    "Post processor",
+                    &mut self.settings.post_processor,
+                    &["none", "ollama", "openai"],
+                );
+                combo(
+                    ui,
+                    "Post mode",
+                    &mut self.settings.post_mode,
+                    &[
+                        "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
+                    ],
+                );
+                text(ui, "Post model", &mut self.settings.post_model);
+                text(ui, "Post base URL", &mut self.settings.post_base_url);
+                text(ui, "Post timeout ms", &mut self.settings.post_timeout_ms);
+                text(
+                    ui,
+                    "Post max input chars",
+                    &mut self.settings.post_max_input_chars,
+                );
+                text(
+                    ui,
+                    "Post max output chars",
+                    &mut self.settings.post_max_output_chars,
+                );
+                checkbox(ui, "History enabled", &mut self.settings.history_enabled);
+                text(ui, "History JSONL", &mut self.settings.history_jsonl);
+                checkbox(ui, "Local only", &mut self.settings.local_only);
+                checkbox(ui, "VOICEPI_DEBUG", &mut self.settings.debug);
+                checkbox(ui, "VOICEPI_STT_DEBUG", &mut self.settings.stt_debug);
+            });
+    }
+
+    fn profiles_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Profiles");
+        ui.label("Profiles JSON");
+        ui.add(
+            egui::TextEdit::multiline(&mut self.settings.profiles_json)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(22)
+                .desired_width(f32::INFINITY),
+        );
     }
 
     fn start_runtime(&mut self) {
@@ -197,4 +390,63 @@ impl WhisperDictateApp {
         }
         self.runtime_log.push_str(line.as_ref());
     }
+
+    fn save_settings(&mut self) {
+        if let Err(err) = serde_json::from_str::<serde_json::Value>(&self.settings.profiles_json) {
+            self.settings_status = format!("Profiles JSON is invalid: {err}");
+            return;
+        }
+        match config::save_settings(&self.settings) {
+            Ok(path) => {
+                self.settings_status = format!("Saved: {}", path.display());
+            }
+            Err(err) => {
+                self.settings_status = format!("Save failed: {err}");
+            }
+        }
+    }
+
+    fn reload_settings(&mut self) {
+        match config::load_settings() {
+            Ok(settings) => {
+                self.settings = settings;
+                self.settings_status = "Reloaded config".to_owned();
+            }
+            Err(err) => {
+                self.settings_status = format!("Reload failed: {err}");
+            }
+        }
+    }
+}
+
+fn text(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.label(label);
+    ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
+    ui.end_row();
+}
+
+fn checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool) {
+    ui.label(label);
+    ui.checkbox(value, "");
+    ui.end_row();
+}
+
+fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str]) {
+    ui.label(label);
+    egui::ComboBox::from_id_salt(label)
+        .selected_text(if value.is_empty() {
+            "(empty)"
+        } else {
+            value.as_str()
+        })
+        .show_ui(ui, |ui| {
+            for option in options {
+                ui.selectable_value(
+                    value,
+                    (*option).to_owned(),
+                    if option.is_empty() { "(empty)" } else { option },
+                );
+            }
+        });
+    ui.end_row();
 }
