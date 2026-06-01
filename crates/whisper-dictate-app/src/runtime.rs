@@ -9,6 +9,7 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 const PYTHON_ENV: &str = "VOICEPI_PYTHON";
+const BOOTSTRAP_PYTHON_ENV: &str = "VOICEPI_BOOTSTRAP_PYTHON";
 const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
@@ -40,8 +41,8 @@ pub fn doctor() -> Result<()> {
 }
 
 pub fn install() -> Result<()> {
-    println!("Rust install command is scaffolded. Bootstrap work is tracked in issue #29.");
-    Ok(())
+    let plan = InstallPlan::for_current_environment(app_root())?;
+    plan.run()
 }
 
 pub fn version() -> String {
@@ -213,6 +214,172 @@ impl WorkerCommand {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Platform {
+    Windows,
+    Unix,
+}
+
+impl Platform {
+    fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub working_dir: PathBuf,
+}
+
+impl PlannedCommand {
+    fn display(&self) -> String {
+        let mut parts = vec![self.program.display().to_string()];
+        parts.extend(self.args.iter().cloned());
+        parts.join(" ")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstallPlan {
+    app_root: PathBuf,
+    requirements: PathBuf,
+    venv_python: PathBuf,
+    create_venv: Option<PlannedCommand>,
+    install_commands: Vec<PlannedCommand>,
+}
+
+impl InstallPlan {
+    fn for_current_environment(app_root: PathBuf) -> Result<Self> {
+        let requirements = requirements_path(&app_root)?;
+        let platform = Platform::current();
+        let bootstrap_python = env::var_os(BOOTSTRAP_PYTHON_ENV)
+            .or_else(|| env::var_os(PYTHON_ENV))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(default_python_name()));
+
+        if let Some(override_python) = env::var_os(PYTHON_ENV) {
+            return Ok(Self::from_parts(
+                app_root,
+                requirements,
+                PathBuf::from(override_python),
+                None,
+            ));
+        }
+
+        let home = home_dir().ok_or_else(|| anyhow!("HOME/USERPROFILE is not set"))?;
+        let venv_dir = default_venv_dir(&home, platform);
+        let venv_python = venv_python_path(&venv_dir, platform);
+        let create_venv = (!venv_python.exists()).then(|| PlannedCommand {
+            program: bootstrap_python,
+            args: vec![
+                "-m".to_owned(),
+                "venv".to_owned(),
+                venv_dir.display().to_string(),
+            ],
+            working_dir: app_root.clone(),
+        });
+
+        Ok(Self::from_parts(
+            app_root,
+            requirements,
+            venv_python,
+            create_venv,
+        ))
+    }
+
+    fn from_parts(
+        app_root: PathBuf,
+        requirements: PathBuf,
+        venv_python: PathBuf,
+        create_venv: Option<PlannedCommand>,
+    ) -> Self {
+        let install_commands = vec![
+            PlannedCommand {
+                program: venv_python.clone(),
+                args: vec![
+                    "-m".to_owned(),
+                    "pip".to_owned(),
+                    "install".to_owned(),
+                    "--upgrade".to_owned(),
+                    "pip".to_owned(),
+                ],
+                working_dir: app_root.clone(),
+            },
+            PlannedCommand {
+                program: venv_python.clone(),
+                args: vec![
+                    "-m".to_owned(),
+                    "pip".to_owned(),
+                    "install".to_owned(),
+                    "-r".to_owned(),
+                    requirements.display().to_string(),
+                ],
+                working_dir: app_root.clone(),
+            },
+        ];
+
+        Self {
+            app_root,
+            requirements,
+            venv_python,
+            create_venv,
+            install_commands,
+        }
+    }
+
+    fn run(&self) -> Result<()> {
+        println!(
+            "Installing whisper-dictate runtime with {}",
+            self.venv_python.display()
+        );
+        println!("Requirements: {}", self.requirements.display());
+        if let Some(command) = &self.create_venv {
+            run_install_command(command)?;
+        }
+        for command in &self.install_commands {
+            run_install_command(command)?;
+        }
+        println!("Install complete. Run `whisper-dictate doctor` to verify the runtime.");
+        Ok(())
+    }
+}
+
+fn run_install_command(command: &PlannedCommand) -> Result<()> {
+    println!("> {}", command.display());
+    let status = Command::new(&command.program)
+        .args(&command.args)
+        .current_dir(&command.working_dir)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("install command failed with status {status}"))
+    }
+}
+
+fn requirements_path(app_root: &Path) -> Result<PathBuf> {
+    for filename in [
+        "requirements.txt",
+        "requirements-cpu.txt",
+        "requirements-gpu.txt",
+    ] {
+        let path = app_root.join(filename);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    Err(anyhow!(
+        "no requirements file found in {}",
+        app_root.display()
+    ))
+}
+
 pub fn worker_command(app_root: impl AsRef<Path>) -> WorkerCommand {
     worker_command_with_args(app_root, Vec::<String>::new())
 }
@@ -373,16 +540,25 @@ fn python_program() -> PathBuf {
 
 fn default_venv_python() -> Option<PathBuf> {
     let home = home_dir()?;
-    let path = if cfg!(windows) {
-        home.join("voice-pi-venv")
-            .join("Scripts")
-            .join("python.exe")
-    } else {
-        home.join(".venv-whisper-dictate")
-            .join("bin")
-            .join("python")
-    };
+    let path = venv_python_path(
+        &default_venv_dir(&home, Platform::current()),
+        Platform::current(),
+    );
     path.exists().then_some(path)
+}
+
+fn default_venv_dir(home: &Path, platform: Platform) -> PathBuf {
+    match platform {
+        Platform::Windows => home.join("voice-pi-venv"),
+        Platform::Unix => home.join(".venv-whisper-dictate"),
+    }
+}
+
+fn venv_python_path(venv_dir: &Path, platform: Platform) -> PathBuf {
+    match platform {
+        Platform::Windows => venv_dir.join("Scripts").join("python.exe"),
+        Platform::Unix => venv_dir.join("bin").join("python"),
+    }
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -588,6 +764,49 @@ mod tests {
         assert_eq!(output.code(), Some(7));
         assert!(output.stdout.contains("out line"));
         assert!(output.stderr.contains("err line"));
+    }
+
+    #[test]
+    fn install_plan_prefers_bundle_requirements_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("requirements-cpu.txt"), "").unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+        let plan = InstallPlan::from_parts(
+            dir.path().to_path_buf(),
+            requirements_path(dir.path()).unwrap(),
+            PathBuf::from("/venv/bin/python"),
+            None,
+        );
+
+        assert_eq!(plan.requirements, dir.path().join("requirements.txt"));
+        assert_eq!(
+            plan.install_commands[1].args,
+            vec![
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                plan.requirements.to_str().unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn venv_paths_match_platform_conventions() {
+        let home = PathBuf::from("/home/person");
+        assert_eq!(
+            venv_python_path(&default_venv_dir(&home, Platform::Unix), Platform::Unix),
+            PathBuf::from("/home/person/.venv-whisper-dictate/bin/python")
+        );
+
+        let home = PathBuf::from("C:/Users/Person");
+        assert_eq!(
+            venv_python_path(
+                &default_venv_dir(&home, Platform::Windows),
+                Platform::Windows
+            ),
+            PathBuf::from("C:/Users/Person/voice-pi-venv/Scripts/python.exe")
+        );
     }
 
     #[test]
