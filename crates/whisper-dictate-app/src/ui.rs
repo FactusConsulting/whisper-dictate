@@ -833,6 +833,10 @@ fn inside_rounded_rect(
     height: i32,
     radius: i32,
 ) -> bool {
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    let radius = radius.max(0).min((width - 1) / 2).min((height - 1) / 2);
     let left = x + radius;
     let right = x + width - radius - 1;
     let top = y + radius;
@@ -861,5 +865,34 @@ fn open_url(url: &str) -> Result<()> {
     {
         Command::new("xdg-open").arg(url).spawn()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_icon_builds_valid_rgba_buffer() {
+        let icon = app_icon();
+
+        assert_eq!(icon.width, 256);
+        assert_eq!(icon.height, 256);
+        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
+        assert!(icon
+            .rgba
+            .chunks_exact(4)
+            .any(|px| px == [255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn rounded_rect_handles_radius_larger_than_half_width() {
+        assert!(inside_rounded_rect(15, 72, 8, 56, 16, 32, 8));
+    }
+
+    #[test]
+    fn rounded_rect_rejects_empty_dimensions_without_panicking() {
+        assert!(!inside_rounded_rect(0, 0, 0, 0, 0, 16, 8));
+        assert!(!inside_rounded_rect(0, 0, 0, 0, 16, 0, 8));
     }
 }

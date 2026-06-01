@@ -11,6 +11,11 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-02
+
+### Fixed
+- Rust UI no longer panics while building the Windows window icon during startup.
+
 ## [0.3.2] - 2026-06-02
 
 ### Changed
