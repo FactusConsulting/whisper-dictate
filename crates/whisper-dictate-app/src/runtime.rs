@@ -30,14 +30,15 @@ impl RuntimeState {
     }
 }
 
-pub fn run_terminal() -> Result<()> {
-    let command = default_worker_command();
+pub fn run_terminal(args: Vec<String>) -> Result<()> {
+    let command = default_worker_command_with_args(args);
     run_foreground(&command)
 }
 
 pub fn doctor() -> Result<()> {
-    println!("Rust doctor command is scaffolded. Dependency checks will move here from the platform scripts.");
-    Ok(())
+    run_foreground(&default_worker_command_with_args(vec![
+        "--doctor".to_owned()
+    ]))
 }
 
 pub fn install() -> Result<()> {
@@ -189,16 +190,29 @@ impl WorkerCommand {
 }
 
 pub fn worker_command(app_root: impl AsRef<Path>) -> WorkerCommand {
+    worker_command_with_args(app_root, Vec::<String>::new())
+}
+
+pub fn worker_command_with_args(
+    app_root: impl AsRef<Path>,
+    passthrough_args: impl IntoIterator<Item = String>,
+) -> WorkerCommand {
     let app_root = app_root.as_ref().to_path_buf();
+    let mut args = vec![app_root.join("voice_pi.py").display().to_string()];
+    args.extend(passthrough_args);
     WorkerCommand {
         program: python_program(),
-        args: vec![app_root.join("voice_pi.py").display().to_string()],
+        args,
         working_dir: app_root,
     }
 }
 
 pub fn default_worker_command() -> WorkerCommand {
     worker_command(app_root())
+}
+
+pub fn default_worker_command_with_args(args: Vec<String>) -> WorkerCommand {
+    worker_command_with_args(app_root(), args)
 }
 
 pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
@@ -342,6 +356,26 @@ mod tests {
         assert_eq!(command.program, PathBuf::from(default_python_name()));
         assert_eq!(command.args, vec!["/tmp/whisper-dictate/voice_pi.py"]);
         assert_eq!(command.working_dir, root);
+    }
+
+    #[test]
+    fn worker_command_appends_passthrough_args() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        env::remove_var(PYTHON_ENV);
+
+        let command = worker_command_with_args(
+            "/tmp/whisper-dictate",
+            ["--key".to_owned(), "shift_r+ctrl_r".to_owned()],
+        );
+
+        assert_eq!(
+            command.args,
+            vec![
+                "/tmp/whisper-dictate/voice_pi.py",
+                "--key",
+                "shift_r+ctrl_r",
+            ]
+        );
     }
 
     #[test]
