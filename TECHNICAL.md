@@ -104,6 +104,20 @@ language confidence, dictionary replacements, injection strategy and target
 metadata. This is meant for comparing microphones, models, vocabulary fixes
 and injection behaviour without scraping human log lines.
 
+The Rust desktop app/controller also enables a narrower worker event stream
+with `VOICEPI_WORKER_EVENTS=1`. These events are compact JSON objects on
+stderr prefixed with `[worker-event] ` so ordinary stdout remains compatible
+with the terminal workflow. Current status events use this shape:
+
+```json
+{"event":"status","state":"loading_model","backend":"whisper","model":"large-v3-turbo","device":"cuda","compute_type":"float16"}
+{"event":"status","state":"ready","backend":"whisper","model":"large-v3-turbo","device":"cuda","compute_type":"float16","model_load_s":1.234}
+{"event":"status","state":"listening"}
+```
+
+The Rust supervisor parses only prefixed stderr lines as worker events; all
+other stdout/stderr lines remain normal log output.
+
 Runtime configuration can also come from
 `%APPDATA%\WhisperDictate\config.json` (or
 `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`). The optional

@@ -165,10 +165,11 @@ class AudioDspTests(unittest.TestCase):
                 return True
 
         with patch.object(vp_audio.sys, "stdout", Tty()):
-            self.assertEqual(
-                vp_audio._highlight_cap_line("[cap] raw=-20dBFS"),
-                "\033[1m[cap] raw=-20dBFS\033[0m",
-            )
+            with _env(NO_COLOR=None, VOICEPI_NO_COLOR=None):
+                self.assertEqual(
+                    vp_audio._highlight_cap_line("[cap] raw=-20dBFS"),
+                    "\033[1m[cap] raw=-20dBFS\033[0m",
+                )
 
     def test_cap_line_stays_plain_for_piped_output(self):
         import vp_audio
@@ -222,6 +223,34 @@ class AudioDspTests(unittest.TestCase):
             for i in range(10)])
         ok, _ = self.vp._looks_like_speech(a)
         self.assertTrue(ok)
+
+
+class WorkerEventTests(unittest.TestCase):
+    def test_worker_events_disabled_by_default(self):
+        import vp_worker_events
+
+        with patch.dict(os.environ, {}, clear=True):
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                vp_worker_events.emit("status", state="ready")
+            self.assertEqual(buf.getvalue(), "")
+
+    def test_worker_events_emit_compact_json_on_stderr(self):
+        import vp_worker_events
+
+        with patch.dict(os.environ, {"VOICEPI_WORKER_EVENTS": "1"}, clear=True):
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                vp_worker_events.emit("status", state="ready", model="large-v3")
+            line = buf.getvalue().strip()
+
+        self.assertTrue(line.startswith("[worker-event] "))
+        payload = json.loads(line.removeprefix("[worker-event] "))
+        self.assertEqual(payload, {
+            "event": "status",
+            "state": "ready",
+            "model": "large-v3",
+        })
 
 
 class DeviceResolutionTests(unittest.TestCase):
@@ -681,7 +710,11 @@ class InjectStrategyTests(unittest.TestCase):
 @contextmanager
 def _env(**kwargs):
     old = {k: os.environ.get(k) for k in kwargs}
-    os.environ.update(kwargs)
+    for k, v in kwargs.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
     try:
         yield
     finally:

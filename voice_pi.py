@@ -113,6 +113,7 @@ from vp_keymap import (  # noqa: E402
 from vp_metrics import append_jsonl, base_event, compact_text, emit_json  # noqa: E402
 from vp_history import append_history  # noqa: E402
 from vp_version import VERSION  # noqa: E402
+from vp_worker_events import emit as emit_worker_event  # noqa: E402
 from vp_command_hook import annotate_event_with_hook, run_command_hook  # noqa: E402
 from vp_privacy import apply_local_only_network_lock  # noqa: E402
 from vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402
@@ -344,6 +345,7 @@ class Dictate(InjectMixin):
                 samplerate=SR, channels=1, dtype="int16", callback=self._cb
             )
             self._stream.start()
+        emit_worker_event("status", state="listening")
         print("● listening…", flush=True)
 
     def _stop_and_transcribe(self):
@@ -736,12 +738,29 @@ if __name__ == "__main__":
     else:
         print(f"loading {label} {loaded_model_name} on {dev} ({ctype})… "
               f"first run downloads the model", flush=True)
+    emit_worker_event(
+        "status",
+        state="loading_model",
+        backend=backend,
+        model=loaded_model_name,
+        device=dev,
+        compute_type=ctype,
+    )
     if dev == "cpu" and backend != "openai":
         print("  note: CPU mode — transcription is slower; large-v3-turbo "
               "(default) is the fastest model", flush=True)
     _t = time.monotonic()
     _model = load_stt_model(a.model, dev, ctype)
     _model_load_s = time.monotonic() - _t
+    emit_worker_event(
+        "status",
+        state="ready",
+        backend=backend,
+        model=loaded_model_name,
+        device=dev,
+        compute_type=ctype,
+        model_load_s=round(_model_load_s, 3),
+    )
     print(f"model ready in {_model_load_s:.1f}s", flush=True)
     if a.transcribe_file:
         from vp_file_transcribe import (
