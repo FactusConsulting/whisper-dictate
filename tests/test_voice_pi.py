@@ -3102,6 +3102,15 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertNotIn("On Linux/macOS, install\n`requirements-ui.txt`", readme)
         self.assertNotIn("setup.ps1 --settings-ui", readme)
 
+    def test_technical_docs_include_rust_platform_capability_matrix(self):
+        technical = Path("TECHNICAL.md").read_text(encoding="utf-8")
+
+        self.assertIn("Rust desktop platform capability matrix", technical)
+        self.assertIn("| Capability | Windows 10/11 | Linux Wayland | Linux X11 |", technical)
+        self.assertIn("whisper-dictate run -- ...", technical)
+        self.assertIn("scripts/install-linux-rust-ui.sh", technical)
+        self.assertIn("scripts/build-windows-installer.ps1", technical)
+
 
 class RustReleaseWorkflowTests(unittest.TestCase):
     def test_release_uploads_linux_rust_ui_binary(self):

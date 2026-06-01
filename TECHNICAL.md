@@ -125,6 +125,40 @@ PySide settings UI edits that file and touches a reload signal. The dictation
 loop checks for config changes at recording boundaries and applies settings
 that do not require rebuilding the model.
 
+## Rust desktop platform capability matrix
+
+The Rust egui app is the shared desktop control surface for Windows and Linux.
+It owns the managed Python runtime process, edits the existing config JSON,
+streams logs, and keeps the terminal workflow available through
+`whisper-dictate run -- ...`.
+
+| Capability | Windows 10/11 | Linux Wayland | Linux X11 |
+|------------|---------------|---------------|-----------|
+| Settings UI | Current primary path is the installed PySide/PowerShell UI; Rust UI is packaged as the migration target in #36 | Supported by `scripts/install-linux-rust-ui.sh` and desktop entry | Supported by the same Rust binary and config flow |
+| Terminal command | Existing installer and scripts remain supported; Rust `run` delegates to `voice_pi.py` | `whisper-dictate run -- ...` delegates to the installed venv Python when present | Same as Wayland |
+| Runtime start/stop/restart | Rust supervisor uses process-tree cleanup through the same worker boundary; installer packaging is tracked in #36 | Rust supervisor starts/stops/restarts the Python worker and parses worker status events | Same as Wayland |
+| Hotkeys | Python `pynput` path remains authoritative | Python `evdev` path remains authoritative because Wayland global hotkeys require input permissions | Python `pynput` path remains authoritative |
+| Text injection | Python direct type or clipboard paste remains authoritative, with paste fallback for fragile terminals | Python `ydotool`/`ydotoold` path remains authoritative | Python `pynput`/clipboard path remains authoritative |
+| Active-window profiles | Python target detection remains authoritative | Limited by compositor behavior; keep Python fallback and profile metadata when available | Python X11 target detection remains authoritative |
+| Tray and autostart | Legacy Windows shortcuts remain authoritative until #36 replaces or previews them explicitly | No Rust tray requirement for first Linux release; desktop entry launches the control window | No Rust tray requirement for first Linux release |
+
+Graceful fallback rule: the Rust UI should expose controls for the managed
+runtime and config, but platform integrations that are not yet native Rust
+stay behind the Python worker until there is tested parity on both Windows and
+Linux. This avoids splitting hotkey, injection, and profile behavior between
+two implementations during the migration.
+
+Manual smoke procedures before tagging a Rust UI release:
+
+1. `cargo test -p whisper-dictate-app`
+2. `python -m unittest discover -s tests -v`
+3. Linux: `scripts/install-linux-rust-ui.sh`, then
+   `~/.local/bin/whisper-dictate doctor` and
+   `~/.local/bin/whisper-dictate ui`
+4. Windows installer changes: build locally with
+   `scripts/build-windows-installer.ps1` and report the generated
+   `Output\*.exe`
+
 ## Wayland text injection — why evdev keycodes
 
 `ydotool type` on Ubuntu 26.04 (v1.0.4) is not linked against
