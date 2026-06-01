@@ -63,7 +63,7 @@ Source: "..\{#REQFILE}";               DestDir: "{app}"; DestName: "requirements
 [Icons]
 Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
 Name: "{userprograms}\whisper-dictate\whisper-dictate Legacy Settings UI"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\settings-ui.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
-Name: "{userprograms}\whisper-dictate\whisper-dictate Debug Terminal"; Filename: "{app}\setup.cmd"; IconFilename: "{cmd}"
+Name: "{userprograms}\whisper-dictate\whisper-dictate Terminal"; Filename: "{app}\whisper-dictate.exe"; Parameters: "run"; WorkingDir: "{app}"; IconFilename: "{cmd}"
 Name: "{userprograms}\whisper-dictate\Uninstall";          Filename: "{uninstallexe}"
 Name: "{userdesktop}\whisper-dictate";                     Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
 
@@ -129,7 +129,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    // Add install dir to user PATH so 'setup.cmd' is runnable from anywhere
+    // Add install dir to user PATH so 'whisper-dictate' is runnable from anywhere
     RegQueryStringValue(HKCU, 'Environment', 'PATH', Path);
     NewPath := ExpandConstant('{app}');
     Paths := TStringList.Create;

@@ -2056,9 +2056,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
             script = f.read()
 
-        self.assertIn(r"whisper-dictate Debug Terminal", script)
+        self.assertIn(r"whisper-dictate Terminal", script)
+        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "run"', script)
         self.assertIn(r'IconFilename: "{cmd}"', script)
-        self.assertNotIn(r"Terminal launcher", script)
+        self.assertNotIn(r"Debug Terminal", script)
+        self.assertNotIn(r'Filename: "{app}\setup.cmd"; IconFilename: "{cmd}"', script)
 
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
