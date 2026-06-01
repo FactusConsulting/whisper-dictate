@@ -1,19 +1,26 @@
-Improves post-processing mode compatibility and makes dictionary benchmark
-suggestions safer by filtering common words and noisy fragments.
+Moves the Windows and Linux control surface to the Rust UI/controller while
+keeping the Python audio/ML worker and legacy scripts as compatibility
+fallbacks.
 
 ## Download
 
 | Asset | Use on |
 |---|---|
-| **whisper-dictate-windows-nvidia-setup-0.2.60.exe** | Windows with NVIDIA CUDA |
+| **whisper-dictate-windows-cpu-setup-<version>.exe** | Windows CPU / AMD |
+| **whisper-dictate-windows-nvidia-setup-<version>.exe** | Windows with NVIDIA CUDA |
+| **whisper-dictate-linux-rust-ui-<version>** | Linux Rust UI/controller binary |
+| **whisper-dictate-linux-cpu-<version>.zip** | Linux portable bundle with Rust controller |
 
 ## Highlights
 
-- `VOICEPI_POST_MODE=bullet-list` is accepted as an alias for the existing `bullets` post-processing mode.
-- Dictionary suggestions now reject common words, known source terms, and noisy benchmark fragments such as ordinary Danish/English function words.
-- The current benchmark corpus no longer proposes unsafe replacements after applying the safer suggestion rules.
+- Windows installer shortcuts now launch the Rust UI as the primary control surface.
+- The Rust UI can start, stop, restart, doctor, install/repair, edit settings, preview dictionaries, and stream worker logs.
+- The Rust terminal controller supports `run`, `doctor`, `install`, `settings`, and `config`.
+- Linux release bundles include the Rust controller, and the standalone Linux Rust UI binary is published as a release asset.
+- `setup.cmd` now prefers the bundled Rust controller when present and falls back to PowerShell only for legacy portable folders.
+- Deterministic dictionary parsing, prompt construction, replacements, and spoken formatting commands are covered in Rust tests.
 
 ## Notes
 
-- Raw post-processing remains the default.
-- Dictionary suggestions are still manual: inspect them before pressing Apply in the UI.
+- Python remains the worker boundary for audio capture, Whisper/Parakeet/OpenAI STT, hotkeys, text injection, history, and metrics.
+- Legacy PySide/PowerShell UI files are still shipped as fallbacks while Rust UI parity continues beyond the core workflows.

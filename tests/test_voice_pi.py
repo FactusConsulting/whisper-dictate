@@ -2075,13 +2075,17 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_windows_docs_use_rust_terminal_entrypoint(self):
         readme = Path("README.md").read_text(encoding="utf-8")
         config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+        technical = Path("TECHNICAL.md").read_text(encoding="utf-8")
 
         self.assertIn("whisper-dictate Terminal", readme)
         self.assertIn("whisper-dictate run --key ctrl_r --lang da", readme)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device cuda", readme)
         self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device cuda", config)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da", config)
+        self.assertIn("Rust UI is the installer Start-menu", technical)
+        self.assertIn("setup.cmd` is a compatibility wrapper", technical)
         self.assertNotIn("whisper-dictate Debug Terminal", readme)
+        self.assertNotIn("Current primary path is the installed PySide/PowerShell UI", technical)
 
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
@@ -2118,6 +2122,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             rust_build = workflow.index("cargo build --release -p whisper-dictate-app")
             installer_build = workflow.index("Build installers")
             self.assertLess(rust_build, installer_build)
+            self.assertIn("Cargo.toml Cargo.lock crates/", workflow)
 
         script = Path("scripts/build-windows-installer.ps1").read_text(encoding="utf-8")
         self.assertIn("cargo build --release -p whisper-dictate-app", script)

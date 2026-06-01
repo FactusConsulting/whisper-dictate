@@ -120,10 +120,10 @@ other stdout/stderr lines remain normal log output.
 
 Runtime configuration can also come from
 `%APPDATA%\WhisperDictate\config.json` (or
-`${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`). The optional
-PySide settings UI edits that file and touches a reload signal. The dictation
-loop checks for config changes at recording boundaries and applies settings
-that do not require rebuilding the model.
+`${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json`). The Rust UI edits
+that file directly and restarts its managed worker when restart-only settings
+change. The dictation loop also checks for config changes at recording
+boundaries and applies settings that do not require rebuilding the model.
 
 ## Rust desktop platform capability matrix
 
@@ -134,13 +134,13 @@ streams logs, and keeps the terminal workflow available through
 
 | Capability | Windows 10/11 | Linux Wayland | Linux X11 |
 |------------|---------------|---------------|-----------|
-| Settings UI | Current primary path is the installed PySide/PowerShell UI; Rust UI is packaged as the migration target in #36 | Supported by `scripts/install-linux-rust-ui.sh` and desktop entry | Supported by the same Rust binary and config flow |
-| Terminal command | Existing installer and scripts remain supported; Rust `run` delegates to `voice_pi.py` | `whisper-dictate run -- ...` delegates to the installed venv Python when present | Same as Wayland |
-| Runtime start/stop/restart | Rust supervisor uses process-tree cleanup through the same worker boundary; installer packaging is tracked in #36 | Rust supervisor starts/stops/restarts the Python worker and parses worker status events | Same as Wayland |
+| Settings UI | Rust UI is the installer Start-menu, desktop, and postinstall launch target; legacy PySide remains a fallback shortcut | Supported by `scripts/install-linux-rust-ui.sh` and desktop entry | Supported by the same Rust binary and config flow |
+| Terminal command | `whisper-dictate.exe run -- ...`; `setup.cmd` is a compatibility wrapper that prefers the Rust controller | `whisper-dictate run -- ...` delegates to the installed venv Python when present | Same as Wayland |
+| Runtime start/stop/restart | Rust supervisor uses process-tree cleanup through the same worker boundary | Rust supervisor starts/stops/restarts the Python worker and parses worker status events | Same as Wayland |
 | Hotkeys | Python `pynput` path remains authoritative | Python `evdev` path remains authoritative because Wayland global hotkeys require input permissions | Python `pynput` path remains authoritative |
 | Text injection | Python direct type or clipboard paste remains authoritative, with paste fallback for fragile terminals | Python `ydotool`/`ydotoold` path remains authoritative | Python `pynput`/clipboard path remains authoritative |
 | Active-window profiles | Python target detection remains authoritative | Limited by compositor behavior; keep Python fallback and profile metadata when available | Python X11 target detection remains authoritative |
-| Tray and autostart | Legacy Windows shortcuts remain authoritative until #36 replaces or previews them explicitly | No Rust tray requirement for first Linux release; desktop entry launches the control window | No Rust tray requirement for first Linux release |
+| Tray and autostart | Installer shortcuts launch Rust UI; legacy tray behavior remains available only through the PySide fallback | No Rust tray requirement for first Linux release; desktop entry launches the control window | No Rust tray requirement for first Linux release |
 
 Graceful fallback rule: the Rust UI should expose controls for the managed
 runtime and config, but platform integrations that are not yet native Rust

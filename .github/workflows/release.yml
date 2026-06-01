@@ -206,6 +206,7 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "$prev" HEAD -- \
+            Cargo.toml Cargo.lock crates/ \
             voice_pi.py 'vp_*.py' setup.cmd setup.ps1 \
             requirements-cpu.txt requirements-gpu.txt \
             scripts/ \

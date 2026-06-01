@@ -16,7 +16,7 @@ already in. Switching target = just focus a different window.
 | Ubuntu 24.04 / 26.04 — Wayland | Homebrew | Recommended |
 | Linux — X11 | Manual | Any distro |
 | NixOS / nix-env | Nix flake | `nix run` or NixOS module |
-| Windows 10 / 11 | setup.cmd | CPU or NVIDIA GPU |
+| Windows 10 / 11 | Rust UI installer | CPU or NVIDIA GPU |
 
 ---
 
@@ -249,9 +249,9 @@ winget install --manifest .\whisper-dictate\manifests
 ### Install manually (zip)
 
 Download the zip from [GitHub Releases](https://github.com/FactusConsulting/whisper-dictate/releases/latest),
-unzip anywhere, and double-click **`settings-ui.vbs`** for the unified Windows
-control UI. Use **`setup.cmd`** when you explicitly want the classic terminal
-launcher.
+unzip anywhere, and run **`setup.cmd`**. Portable Windows zips keep this
+compatibility wrapper for machines where you do not want the installer; the
+`.exe` installer is the Rust-primary path.
 
 First-time setup downloads Python 3.12 via winget (if needed), builds a
 local venv, and downloads the Whisper model (~1.5 GB).
@@ -262,9 +262,9 @@ local venv, and downloads the Whisper model (~1.5 GB).
 setup.cmd --key ctrl_r --lang en
 ```
 
-Or use the Start-menu **whisper-dictate** shortcut to run dictation and settings
-from one UI. The **whisper-dictate Terminal** shortcut runs the Rust controller
-in terminal mode.
+With the `.exe` installer, use the Start-menu **whisper-dictate** shortcut to
+run dictation and settings from one UI. The **whisper-dictate Terminal**
+shortcut runs the Rust controller in terminal mode.
 
 After first-time setup, launch directly:
 

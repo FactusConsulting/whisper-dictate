@@ -2,7 +2,7 @@ name: windows-installer
 
 # Triggers after the main release workflow creates the GitHub Release.
 # Only builds and submits to winget when Windows-relevant files changed.
-# Windows-relevant: voice_pi.py, vp_*.py, setup.cmd/ps1, requirements-*.txt, scripts/, installer/
+# Windows-relevant: Rust app, voice_pi.py, vp_*.py, setup.cmd/ps1, requirements-*.txt, scripts/, installer/
 
 on:
   workflow_dispatch:
@@ -47,6 +47,7 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "$prev" HEAD -- \
+            Cargo.toml Cargo.lock crates/ \
             voice_pi.py 'vp_*.py' setup.cmd setup.ps1 \
             requirements-cpu.txt requirements-gpu.txt \
             scripts/ \

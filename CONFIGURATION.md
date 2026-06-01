@@ -329,13 +329,13 @@ The legacy PySide UI remains available for compatibility:
 & "$env:LOCALAPPDATA\Programs\WhisperDictate\setup.ps1" --settings-ui
 ```
 
-The UI edits `%APPDATA%\WhisperDictate\config.json`, keeps a tray icon alive,
-can open the dictionary file, and writes a reload signal after saving. A
-running dictation process applies live-safe changes on the next record
-start/stop: language, inject mode, dictionary, VAD, audio thresholds, prompt,
-JSON/metrics and debug flags. Backend, model, device, compute type and hotkey
-are restart-only; the Windows control UI restarts its managed dictation process
-for those changes.
+The Rust UI edits `%APPDATA%\WhisperDictate\config.json`, can create/open the
+dictionary file, previews dictionary prompt terms, and restarts its managed
+dictation process when restart-only settings change. A running standalone
+dictation process also applies live-safe changes on the next record start/stop:
+language, inject mode, dictionary, VAD, audio thresholds, prompt, JSON/metrics
+and debug flags. Backend, model, device, compute type and hotkey are
+restart-only.
 
 To signal a manual reload without the UI:
 
