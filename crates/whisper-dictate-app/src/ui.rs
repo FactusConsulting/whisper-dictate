@@ -168,12 +168,16 @@ impl WhisperDictateApp {
         ui.add_space(8.0);
         ui.label("Runtime log");
         egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
+                let height = (ui.available_height() - 8.0).max(240.0);
                 ui.add(
                     egui::TextEdit::multiline(&mut self.runtime_log)
                         .font(egui::TextStyle::Monospace)
-                        .desired_rows(24)
+                        .desired_width(ui.available_width())
+                        .desired_rows(28)
+                        .min_size(egui::vec2(ui.available_width(), height))
                         .interactive(false),
                 );
             });

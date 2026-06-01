@@ -2057,20 +2057,33 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             script = f.read()
 
         self.assertIn(r"whisper-dictate Terminal", script)
-        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "run"', script)
+        self.assertIn(r'Filename: "{app}\setup.cmd"', script)
         self.assertIn(r'IconFilename: "{cmd}"', script)
         self.assertNotIn(r"Debug Terminal", script)
-        self.assertNotIn(r'Filename: "{app}\setup.cmd"; IconFilename: "{cmd}"', script)
 
-    def test_setup_cmd_prefers_rust_controller_when_bundled(self):
+    def test_setup_cmd_keeps_terminal_runs_visible_when_rust_is_bundled(self):
         script = Path("setup.cmd").read_text(encoding="utf-8")
 
         self.assertIn(r'set "RUST_EXE=%~dp0whisper-dictate.exe"', script)
         self.assertIn(r'if exist "%RUST_EXE%" (', script)
         self.assertIn(r'"%RUST_EXE%" ui', script)
-        self.assertIn(r'"%RUST_EXE%" doctor', script)
-        self.assertIn(r'"%RUST_EXE%" run %*', script)
         self.assertIn(r'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %*', script)
+        self.assertNotIn(r'"%RUST_EXE%" run %*', script)
+
+    def test_rust_windows_ui_uses_gui_subsystem(self):
+        script = Path("crates/whisper-dictate-app/src/main.rs").read_text(encoding="utf-8")
+
+        self.assertIn(
+            '#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]',
+            script,
+        )
+
+    def test_rust_runtime_log_expands_to_available_width(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn(".desired_width(ui.available_width())", script)
+        self.assertIn(".min_size(egui::vec2(ui.available_width(), height))", script)
+        self.assertIn(".auto_shrink([false, false])", script)
 
     def test_windows_docs_use_rust_terminal_entrypoint(self):
         readme = Path("README.md").read_text(encoding="utf-8")
@@ -2078,6 +2091,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         technical = Path("TECHNICAL.md").read_text(encoding="utf-8")
 
         self.assertIn("whisper-dictate Terminal", readme)
+        self.assertIn("legacy terminal launcher for visible Python/runtime logs", readme)
         self.assertIn("whisper-dictate run --key ctrl_r --lang da", readme)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device cuda", readme)
         self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device cuda", config)

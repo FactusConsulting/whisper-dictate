@@ -41,7 +41,7 @@ fn worker_failure_does_not_print_rust_backtrace() {
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .arg("doctor")
         .env("VOICEPI_APP_ROOT", dir.path())
-        .env("VOICEPI_PYTHON", "python3")
+        .env("VOICEPI_PYTHON", test_python())
         .env("RUST_BACKTRACE", "1")
         .output()
         .unwrap();
@@ -53,4 +53,12 @@ fn worker_failure_does_not_print_rust_backtrace() {
     assert!(stdout.contains("fake doctor failed"));
     assert!(stderr.contains("worker exited with status"));
     assert!(!stderr.contains("Stack backtrace"));
+}
+
+fn test_python() -> &'static str {
+    if cfg!(windows) {
+        "python"
+    } else {
+        "python3"
+    }
 }

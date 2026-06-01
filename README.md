@@ -264,7 +264,7 @@ setup.cmd --key ctrl_r --lang en
 
 With the `.exe` installer, use the Start-menu **whisper-dictate** shortcut to
 run dictation and settings from one UI. The **whisper-dictate Terminal**
-shortcut runs the Rust controller in terminal mode.
+shortcut opens the legacy terminal launcher for visible Python/runtime logs.
 
 After first-time setup, launch directly:
 

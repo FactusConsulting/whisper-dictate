@@ -19,6 +19,8 @@ release because `release.yml` bumps in-place after the tag is pushed.
 - The Windows PowerShell title, Settings UI title and tray tooltip now show the running whisper-dictate version.
 
 ### Changed
+- Rust Windows UI now uses the Windows GUI subsystem so normal UI launch does not create an extra console window.
+- Rust Runtime log now expands to the available window width/height instead of staying as a narrow text box.
 - External API keys are read from environment variables only and are not stored in the Settings UI config JSON.
 
 ## [0.2.60] - 2026-05-31
