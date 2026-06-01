@@ -304,9 +304,33 @@ fn kill_child(child: &mut Child) -> Result<()> {
 }
 
 fn python_program() -> PathBuf {
-    env::var_os(PYTHON_ENV)
+    if let Some(raw) = env::var_os(PYTHON_ENV) {
+        return PathBuf::from(raw);
+    }
+    if let Some(path) = default_venv_python() {
+        return path;
+    }
+    PathBuf::from(default_python_name())
+}
+
+fn default_venv_python() -> Option<PathBuf> {
+    let home = home_dir()?;
+    let path = if cfg!(windows) {
+        home.join("voice-pi-venv")
+            .join("Scripts")
+            .join("python.exe")
+    } else {
+        home.join(".venv-whisper-dictate")
+            .join("bin")
+            .join("python")
+    };
+    path.exists().then_some(path)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default_python_name()))
 }
 
 fn default_python_name() -> &'static str {
@@ -334,9 +358,39 @@ fn app_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let original = env::var_os(key);
+            env::set_var(key, value);
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = env::var_os(key);
+            env::remove_var(key);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                env::set_var(self.key, value);
+            } else {
+                env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn runtime_state_labels_are_stable() {
@@ -348,7 +402,8 @@ mod tests {
     #[test]
     fn worker_command_launches_python_directly() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var(PYTHON_ENV);
+        let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+        let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
 
         let root = PathBuf::from("/tmp/whisper-dictate");
         let command = worker_command(&root);
@@ -361,7 +416,8 @@ mod tests {
     #[test]
     fn worker_command_appends_passthrough_args() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var(PYTHON_ENV);
+        let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+        let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
 
         let command = worker_command_with_args(
             "/tmp/whisper-dictate",
@@ -383,20 +439,43 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let root = PathBuf::from("/tmp/whisper-dictate");
 
-        env::set_var(PYTHON_ENV, "/custom/python");
+        let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
         let command = worker_command(root);
-        env::remove_var(PYTHON_ENV);
 
         assert_eq!(command.program, PathBuf::from("/custom/python"));
     }
 
     #[test]
+    fn worker_command_prefers_existing_project_venv_python() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let python = if cfg!(windows) {
+            dir.path()
+                .join("voice-pi-venv")
+                .join("Scripts")
+                .join("python.exe")
+        } else {
+            dir.path()
+                .join(".venv-whisper-dictate")
+                .join("bin")
+                .join("python")
+        };
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, "").unwrap();
+
+        let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let command = worker_command("/tmp/whisper-dictate");
+
+        assert_eq!(command.program, python);
+    }
+
+    #[test]
     fn default_worker_command_honors_app_root_override() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::set_var(APP_ROOT_ENV, "/installed/app");
+        let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");
 
         let command = default_worker_command();
-        env::remove_var(APP_ROOT_ENV);
 
         assert_eq!(command.working_dir, PathBuf::from("/installed/app"));
         assert_eq!(command.args, vec!["/installed/app/voice_pi.py"]);
