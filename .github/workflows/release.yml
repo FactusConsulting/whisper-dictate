@@ -43,6 +43,23 @@ jobs:
         run: |
           python3 -c "import ast; ast.parse(open('voice_pi.py').read())"
           bash -n setup.sh
+          bash -n scripts/install-linux-rust-ui.sh
+
+      - name: Install Linux Rust UI build deps
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust desktop UI
+        run: cargo build --release -p whisper-dictate-app
 
       - name: Build bundles
         run: |
@@ -54,13 +71,15 @@ jobs:
             [ -f requirements-parakeet.txt ] && cp requirements-parakeet.txt "$d/"
             [ -f requirements-ui.txt ] && cp requirements-ui.txt "$d/"
             mkdir -p "$d/scripts"
-            cp scripts/inject-smoke.py "$d/scripts/"
+            cp scripts/inject-smoke.py scripts/install-linux-rust-ui.sh "$d/scripts/"
             printf "%s\n" "$VERSION" > "$d/VERSION"
             cp "$2" "$d/requirements.txt"
             for f in $3; do cp "$f" "$d/"; done
             [ -f "$d/setup.sh" ] && chmod +x "$d/setup.sh"
+            [ -f "$d/scripts/install-linux-rust-ui.sh" ] && chmod +x "$d/scripts/install-linux-rust-ui.sh"
             zip -q -r "$1" "$d"; rm -rf "$d"
           }
+          install -m 0755 target/release/whisper-dictate whisper-dictate-linux-rust-ui-${VERSION}
           mkbundle "whisper-dictate-windows-nvidia-${VERSION}.zip" requirements-gpu.txt "setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs"
           mkbundle "whisper-dictate-windows-cpu-${VERSION}.zip"    requirements-cpu.txt "setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs"
           mkbundle "whisper-dictate-windows-amd-${VERSION}.zip"    requirements-cpu.txt "setup.ps1 setup.cmd settings-ui.ps1 settings-ui.vbs"
@@ -97,6 +116,7 @@ jobs:
             "whisper-dictate-windows-cpu-${VERSION}.zip"
             "whisper-dictate-windows-amd-${VERSION}.zip"
             "whisper-dictate-linux-cpu-${VERSION}.zip"
+            "whisper-dictate-linux-rust-ui-${VERSION}"
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \

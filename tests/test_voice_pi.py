@@ -3103,5 +3103,15 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertNotIn("setup.ps1 --settings-ui", readme)
 
 
+class RustReleaseWorkflowTests(unittest.TestCase):
+    def test_release_uploads_linux_rust_ui_binary(self):
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("cargo build --release -p whisper-dictate-app", workflow)
+        self.assertIn("whisper-dictate-linux-rust-ui-${VERSION}", workflow)
+        self.assertIn("scripts/install-linux-rust-ui.sh", workflow)
+        self.assertIn("bash -n scripts/install-linux-rust-ui.sh", workflow)
+
+
 if __name__ == "__main__":
     unittest.main()
