@@ -3151,6 +3151,16 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             self.assertNotIn("actions/checkout@v4", workflow, path.as_posix())
             self.assertIn("actions/checkout@v5", workflow, path.as_posix())
 
+    def test_workflows_use_node24_python_action(self):
+        for path in Path(".github/workflows").glob("*.yml"):
+            workflow = path.read_text(encoding="utf-8")
+            self.assertNotIn("actions/setup-python@v5", workflow, path.as_posix())
+        workflow_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in Path(".github/workflows").glob("*.yml")
+        )
+        self.assertIn("actions/setup-python@v6", workflow_text)
+
     def test_windows_workflows_pin_current_windows_runner(self):
         for path in Path(".github/workflows").glob("*.yml"):
             workflow = path.read_text(encoding="utf-8")
