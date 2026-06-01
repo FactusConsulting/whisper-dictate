@@ -7,7 +7,7 @@ use std::thread;
 use crate::config::{self, AppSettings};
 use crate::dictionary;
 use crate::runtime::{
-    default_worker_command, doctor_command, install_command, run_capture, RuntimeEvent,
+    self, default_worker_command, doctor_command, install_command, run_capture, RuntimeEvent,
     RuntimeState, RuntimeSupervisor, WorkerCommand,
 };
 
@@ -22,7 +22,7 @@ pub fn run() -> Result<()> {
     };
 
     eframe::run_native(
-        "whisper-dictate",
+        &format!("whisper-dictate {}", runtime::version()),
         options,
         Box::new(|_cc| Ok(Box::new(WhisperDictateApp::default()))),
     )
@@ -119,6 +119,8 @@ impl eframe::App for WhisperDictateApp {
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.label(format!("whisper-dictate {}", runtime::version()));
+                ui.separator();
                 for tab in Tab::ALL {
                     ui.selectable_value(&mut self.selected_tab, tab, tab.label());
                 }

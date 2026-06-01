@@ -11,6 +11,10 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+### Added
+- Ubuntu setup now creates a GNOME **Whisper Dictate** launcher/autostart entry and opens the Rust UI after setup.
+- Rust UI window title and top bar show the running whisper-dictate version.
+
 ## [0.3.0] - 2026-06-01
 
 ### Added

@@ -11,7 +11,8 @@
 #   4. Creates udev rule so /dev/uinput is accessible to the input group
 #   5. Installs ydotool (Wayland text injection via kernel uinput)
 #   6. Sets up ydotoold as a systemd user service (auto-starts with session)
-#   7. Creates an autostart .desktop entry (starts with GNOME login)
+#   7. Creates GNOME launcher/autostart entries for the Rust desktop UI
+#   8. Starts the Rust desktop UI
 set -euo pipefail
 
 STEP=0
@@ -143,22 +144,47 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "whisper-dictate: autostart ved login"
+step "whisper-dictate: GNOME app launcher"
 # ---------------------------------------------------------------------------
-# Injektion sker via wl-copy + ctrl+shift+v (terminal paste-genvej).
-# Til teksteditorer/browsere: sæt VOICEPI_PASTE_KEY=ctrl+v i autostart-linjen.
-mkdir -p "$HOME/.config/autostart"
-cat > "$HOME/.config/autostart/whisper-dictate.desktop" << 'EOF'
+mkdir -p "$HOME/.local/share/applications" "$HOME/.config/autostart"
+cat > "$HOME/.local/share/applications/whisper-dictate.desktop" << 'EOF'
 [Desktop Entry]
 Name=Whisper Dictate
-Exec=whisper-dictate --key shift_r+ctrl_r --lang da
+Comment=Push-to-talk dictation settings and runtime control
+Exec=whisper-dictate ui
 Icon=audio-input-microphone
 Terminal=false
 Type=Application
-Categories=Utility;
+Categories=Utility;AudioVideo;Audio;
+StartupNotify=true
+EOF
+chmod 0644 "$HOME/.local/share/applications/whisper-dictate.desktop"
+ok "~/.local/share/applications/whisper-dictate.desktop oprettet"
+
+if command -v update-desktop-database &>/dev/null; then
+    update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+fi
+
+cp "$HOME/.local/share/applications/whisper-dictate.desktop" \
+   "$HOME/.config/autostart/whisper-dictate.desktop"
+cat >> "$HOME/.config/autostart/whisper-dictate.desktop" << 'EOF'
 X-GNOME-Autostart-enabled=true
 EOF
-ok "~/.config/autostart/whisper-dictate.desktop oprettet"
+ok "~/.config/autostart/whisper-dictate.desktop oprettet (starter UI ved login)"
+
+# ---------------------------------------------------------------------------
+step "whisper-dictate: start UI"
+# ---------------------------------------------------------------------------
+if command -v gtk-launch &>/dev/null; then
+    gtk-launch whisper-dictate >/dev/null 2>&1 &
+    ok "Whisper Dictate UI startes via app launcher"
+elif command -v setsid &>/dev/null; then
+    setsid whisper-dictate ui >/dev/null 2>&1 &
+    ok "Whisper Dictate UI startes"
+else
+    whisper-dictate ui >/dev/null 2>&1 &
+    ok "Whisper Dictate UI startes"
+fi
 
 # ---------------------------------------------------------------------------
 echo
@@ -169,13 +195,14 @@ echo
 if ! groups | grep -q '\binput\b'; then
     echo "  NÆSTE SKRIDT: Log ud og ind igen (input-gruppe aktiveres)"
     echo
-    echo "  Kør derefter første gang for at downloade Whisper-modellen:"
-    echo "  whisper-dictate --key shift_r+ctrl_r --lang da"
+    echo "  Åbn derefter appen fra Ubuntu launcher: Whisper Dictate"
+    echo "  Eller kør: whisper-dictate ui"
 else
-    echo "  Test: hold højre Shift+Ctrl, tal, slip"
-    echo "  Teksten indsættes direkte i det vindue der havde fokus da du trykkede."
+    echo "  UI'et burde åbne nu. Tryk Start i Runtime-fanen."
+    echo "  Test: hold højre Shift+Ctrl, tal, slip."
+    echo "  Teksten indsættes i det vindue der havde fokus da du trykkede."
     echo
-    echo "  Kør manuelt (starter også ved næste login automatisk):"
-    echo "  whisper-dictate --key shift_r+ctrl_r --lang da"
+    echo "  Start manuelt: whisper-dictate ui"
+    echo "  Terminal-runtime: whisper-dictate run -- --key shift_r+ctrl_r --lang da"
 fi
 echo

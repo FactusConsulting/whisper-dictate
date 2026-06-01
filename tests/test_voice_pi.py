@@ -2046,6 +2046,12 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('ui.button("Clear").clicked()', script)
         self.assertIn("self.runtime_log.clear();", script)
 
+    def test_rust_ui_shows_version_in_title_and_top_bar(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
+        self.assertIn('ui.label(format!("whisper-dictate {}", runtime::version()))', script)
+
     def test_rust_ui_has_groq_cloud_stt_preset_and_key_link(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 
@@ -2056,6 +2062,18 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('ui.button("Groq API keys").clicked()', script)
         self.assertIn('open_url(GROQ_KEYS_URL)', script)
         self.assertIn('GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY', script)
+
+    def test_ubuntu_setup_creates_launcher_autostart_and_starts_rust_ui(self):
+        script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")
+
+        self.assertIn('Exec=whisper-dictate ui', script)
+        self.assertIn('Name=Whisper Dictate', script)
+        self.assertIn('~/.local/share/applications/whisper-dictate.desktop', script)
+        self.assertIn('~/.config/autostart/whisper-dictate.desktop', script)
+        self.assertIn('gtk-launch whisper-dictate', script)
+        self.assertIn('setsid whisper-dictate ui', script)
+        self.assertIn('Terminal-runtime: whisper-dictate run -- --key shift_r+ctrl_r --lang da', script)
+        self.assertNotIn('Exec=whisper-dictate --key shift_r+ctrl_r --lang da', script)
 
     def test_windows_docs_use_rust_terminal_entrypoint(self):
         readme = Path("README.md").read_text(encoding="utf-8")
@@ -2083,6 +2101,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             self.assertIn("GROQ_API_KEY", doc)
         self.assertIn("Use Groq cloud STT", config)
         self.assertIn("API keys are not saved in the Settings UI config file", readme)
+
+    def test_docs_describe_one_command_ubuntu_setup_and_launcher_start(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+        config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+
+        for doc in (readme, config):
+            self.assertIn('bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"', doc)
+            self.assertIn("Whisper Dictate", doc)
+            self.assertIn("whisper-dictate ui", doc)
+        self.assertIn("Then press **Start** in the Runtime tab", readme)
 
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
@@ -2966,7 +2994,9 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"', workflow)
         self.assertIn('INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-cpu-${VERSION}.zip"', workflow)
         self.assertIn("scripts/install-linux-rust-ui.sh", workflow)
+        self.assertIn('cp ubuntu26.04/setup.sh "$d/ubuntu26.04/"', workflow)
         self.assertIn("bash -n scripts/install-linux-rust-ui.sh", workflow)
+        self.assertIn("bash -n ubuntu26.04/setup.sh", workflow)
 
     def test_workflows_use_node24_checkout_action(self):
         for path in Path(".github/workflows").glob("*.yml"):

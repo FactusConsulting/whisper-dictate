@@ -43,6 +43,7 @@ jobs:
         run: |
           python3 -c "import ast; ast.parse(open('voice_pi.py').read())"
           bash -n scripts/install-linux-rust-ui.sh
+          bash -n ubuntu26.04/setup.sh
 
       - name: Install Linux Rust UI build deps
         run: |
@@ -73,6 +74,8 @@ jobs:
             [ -f requirements-parakeet.txt ] && cp requirements-parakeet.txt "$d/"
             mkdir -p "$d/scripts"
             cp scripts/inject-smoke.py scripts/install-linux-rust-ui.sh "$d/scripts/"
+            mkdir -p "$d/ubuntu26.04"
+            cp ubuntu26.04/setup.sh "$d/ubuntu26.04/"
             printf "%s\n" "$VERSION" > "$d/VERSION"
             cp "$requirements_file" "$d/requirements.txt"
             if [ "${INCLUDE_RUST_UI:-0}" = "1" ]; then

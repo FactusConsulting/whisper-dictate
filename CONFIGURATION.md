@@ -323,8 +323,20 @@ made.
 On Windows, the installer adds a Start-menu **whisper-dictate** shortcut which
 opens a unified control UI: it starts/stops dictation, shows the runtime log,
 saves settings and restarts dictation automatically when a restart-only setting
-changes. On Linux, install the Rust UI/controller and open the same kind of
-control surface:
+changes. On Ubuntu with Homebrew, run the bundled setup once; it creates a
+GNOME **Whisper Dictate** app launcher, login autostart entry, and opens the UI:
+
+```bash
+bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"
+```
+
+After that, open **Whisper Dictate** from the Ubuntu launcher or run:
+
+```bash
+whisper-dictate ui
+```
+
+For source or release-zip installs, install the Rust UI/controller manually:
 
 ```bash
 scripts/install-linux-rust-ui.sh

@@ -35,16 +35,28 @@ Requires [Homebrew](https://brew.sh):
 ```bash
 brew tap factusconsulting/tap
 brew install whisper-dictate
+bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"
 ```
 
 **First run** builds a machine-local venv (`~/.venv-whisper-dictate`) and
 downloads the Whisper model (~1.5 GB). Subsequent runs start instantly.
 
-### One-time system setup
+The setup script installs the Wayland input pieces, creates a GNOME
+**Whisper Dictate** launcher, adds login autostart, and opens the Rust UI.
+After that, start it from the Ubuntu launcher or run:
 
-Run once after installing — sets up evdev input group, udev rule for
+```bash
+whisper-dictate ui
+```
+
+Then press **Start** in the Runtime tab. Hold **right Shift + right Ctrl**,
+speak, release.
+
+### One-time system setup details
+
+The setup command above runs once after installing and sets up evdev input group, udev rule for
 `/dev/uinput`, ydotool, ydotoold daemon, GNOME keyboard layout, and a
-login autostart entry:
+desktop/login autostart entry:
 
 ```bash
 bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"
@@ -52,10 +64,10 @@ bash "$(brew --prefix whisper-dictate)/libexec/ubuntu26.04/setup.sh"
 
 Log out and back in after this runs (required for the `input` group to activate).
 
-### Start
+### Terminal start
 
 ```bash
-whisper-dictate --key shift_r+ctrl_r --lang da
+whisper-dictate run -- --key shift_r+ctrl_r --lang da
 ```
 
 Hold **right Shift + right Ctrl**, speak, release — text appears directly
@@ -70,7 +82,7 @@ whisper-dictate --doctor
 It checks `evdev`, `ydotool`, `ydotoold`, the socket, `input` group
 membership, session env vars, and readable `/dev/input/event*` devices.
 
-To start automatically at login, the setup script creates
+To start the UI automatically at login, the setup script creates
 `~/.config/autostart/whisper-dictate.desktop`. No manual step needed.
 
 ---
