@@ -209,6 +209,9 @@ impl WhisperDictateApp {
             if ui.button("Clear").clicked() {
                 self.runtime_log.clear();
             }
+            if ui.button("Copy").clicked() {
+                ui.ctx().copy_text(self.runtime_log.clone());
+            }
             ui.separator();
             ui.label(format!("Status: {}", self.runtime_state.label()));
             if let Some(label) = self.background_task_label {
@@ -225,13 +228,16 @@ impl WhisperDictateApp {
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 let height = (ui.available_height() - 8.0).max(240.0);
+                let mut runtime_log_view = self.runtime_log.clone();
                 ui.add(
-                    egui::TextEdit::multiline(&mut self.runtime_log)
+                    egui::TextEdit::multiline(&mut runtime_log_view)
                         .font(egui::TextStyle::Monospace)
                         .desired_width(ui.available_width())
                         .desired_rows(28)
                         .min_size(egui::vec2(ui.available_width(), height))
-                        .interactive(false),
+                        .id_salt("runtime_log_view")
+                        .code_editor()
+                        .desired_width(f32::INFINITY),
                 );
             });
     }
@@ -464,11 +470,12 @@ impl WhisperDictateApp {
                     "Minimum signal-to-noise ratio accepted before transcription.",
                 );
             });
-        label_with_help(
+        let show_initial_prompt_help = label_with_help(
             ui,
             "Initial prompt",
             "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately.",
         );
+        inline_help(ui, show_initial_prompt_help, "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately.");
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.initial_prompt)
                 .desired_rows(4)
@@ -653,9 +660,14 @@ impl WhisperDictateApp {
 
     fn profiles_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Profiles");
-        label_with_help(
+        let show_profiles_help = label_with_help(
             ui,
             "Profiles JSON",
+            "Advanced JSON profile definitions. Save persists valid JSON profiles into the config file.",
+        );
+        inline_help(
+            ui,
+            show_profiles_help,
             "Advanced JSON profile definitions. Save persists valid JSON profiles into the config file.",
         );
         ui.add(
@@ -941,27 +953,30 @@ impl WhisperDictateApp {
 }
 
 fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
-    label_with_help(ui, label, help);
+    let show_help = label_with_help(ui, label, help);
     ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
     ui.end_row();
+    grid_help_row(ui, show_help, help);
 }
 
 fn text_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut String, help: &str) {
-    label_with_help_enabled(ui, enabled, label, help);
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
         ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
     });
     ui.end_row();
+    grid_help_row(ui, show_help, help);
 }
 
 fn checkbox_help(ui: &mut egui::Ui, label: &str, value: &mut bool, help: &str) {
-    label_with_help(ui, label, help);
+    let show_help = label_with_help(ui, label, help);
     ui.checkbox(value, "");
     ui.end_row();
+    grid_help_row(ui, show_help, help);
 }
 
 fn combo_help(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str], help: &str) {
-    label_with_help(ui, label, help);
+    let show_help = label_with_help(ui, label, help);
     egui::ComboBox::from_id_salt(label)
         .selected_text(if value.is_empty() {
             "(empty)"
@@ -978,6 +993,7 @@ fn combo_help(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&st
             }
         });
     ui.end_row();
+    grid_help_row(ui, show_help, help);
 }
 
 fn combo_enabled(
@@ -988,7 +1004,7 @@ fn combo_enabled(
     options: &[&str],
     help: &str,
 ) {
-    label_with_help_enabled(ui, enabled, label, help);
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(label)
             .selected_text(if value.is_empty() {
@@ -1007,31 +1023,64 @@ fn combo_enabled(
             });
     });
     ui.end_row();
+    grid_help_row(ui, show_help, help);
 }
 
-fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) {
+fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
     ui.horizontal(|ui| {
         let response = ui.label(label);
         if !help.is_empty() {
             response.on_hover_text(help);
         }
-        help_badge(ui, help);
-    });
+        help_badge(ui, label, help)
+    })
+    .inner
 }
 
-fn label_with_help_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, help: &str) {
+fn label_with_help_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, help: &str) -> bool {
     ui.horizontal(|ui| {
         let response = ui.add_enabled(enabled, egui::Label::new(label));
         if !help.is_empty() {
             response.on_hover_text(help);
         }
-        help_badge(ui, help);
-    });
+        help_badge(ui, label, help)
+    })
+    .inner
 }
 
-fn help_badge(ui: &mut egui::Ui, help: &str) {
-    if !help.is_empty() {
-        let _ = ui.small_button("?").on_hover_text(help);
+fn help_badge(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
+    if help.is_empty() {
+        return false;
+    }
+
+    let id = ui.make_persistent_id(("settings_help", label));
+    let mut show_help = ui
+        .data_mut(|data| data.get_persisted::<bool>(id))
+        .unwrap_or(false);
+    let response = ui.small_button("?");
+    if response.clicked() {
+        show_help = !show_help;
+        ui.data_mut(|data| data.insert_persisted(id, show_help));
+    }
+    let _ = response.on_hover_text(help);
+    show_help
+}
+
+fn grid_help_row(ui: &mut egui::Ui, show_help: bool, help: &str) {
+    if show_help {
+        ui.label("");
+        inline_help(ui, true, help);
+        ui.end_row();
+    }
+}
+
+fn inline_help(ui: &mut egui::Ui, show_help: bool, help: &str) {
+    if show_help {
+        ui.label(
+            egui::RichText::new(help)
+                .small()
+                .color(ui.visuals().weak_text_color()),
+        );
     }
 }
 

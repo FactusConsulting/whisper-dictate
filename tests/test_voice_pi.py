@@ -2084,6 +2084,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".min_size(egui::vec2(ui.available_width(), height))", script)
         self.assertIn(".auto_shrink([false, false])", script)
 
+    def test_rust_runtime_log_can_be_copied(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn('ui.button("Copy").clicked()', script)
+        self.assertIn("ui.ctx().copy_text(self.runtime_log.clone())", script)
+        self.assertIn("let mut runtime_log_view = self.runtime_log.clone();", script)
+        self.assertIn('.id_salt("runtime_log_view")', script)
+        runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
+        self.assertNotIn(".interactive(false)", runtime_tab)
+
     def test_rust_runtime_tab_can_clear_log_without_stopping_runtime(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 
@@ -2148,6 +2158,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn checkbox_help(", script)
         self.assertIn("label_with_help(ui, label, help)", script)
         self.assertIn("label_with_help_enabled(ui, enabled, label, help)", script)
+        self.assertIn("fn grid_help_row(", script)
+        self.assertIn("fn inline_help(", script)
+        self.assertIn("data.insert_persisted(id, show_help)", script)
         self.assertIn("response.on_hover_text(help)", script)
         for label in (
             "STT backend",

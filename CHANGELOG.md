@@ -11,6 +11,12 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-06-02
+
+### Fixed
+- Settings help now opens inline when clicking `?`, so help works even when native tooltips do not appear.
+- Runtime log output can now be selected or copied with a dedicated Copy button.
+
 ## [0.3.5] - 2026-06-02
 
 ### Fixed
