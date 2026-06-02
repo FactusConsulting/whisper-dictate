@@ -56,6 +56,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "post_max_output_chars",
     "debug",
     "stt_debug",
+    "quit_key",
     "quit_count",
     "quit_window_ms",
 ];
@@ -71,6 +72,7 @@ const RESTART_KEYS: &[&str] = &[
     "device",
     "compute_type",
     "local_only",
+    "quit_key",
     "quit_count",
     "quit_window_ms",
 ];
@@ -209,6 +211,7 @@ pub struct AppSettings {
     pub post_max_output_chars: String,
     pub debug: bool,
     pub stt_debug: bool,
+    pub quit_key: String,
     pub quit_count: String,
     pub quit_window_ms: String,
     pub profiles_json: String,
@@ -260,6 +263,7 @@ impl Default for AppSettings {
             post_max_output_chars: "4000".to_owned(),
             debug: false,
             stt_debug: false,
+            quit_key: "esc".to_owned(),
             quit_count: "3".to_owned(),
             quit_window_ms: "1500".to_owned(),
             profiles_json: "[]".to_owned(),
@@ -351,6 +355,7 @@ impl AppSettings {
             );
             settings.debug = bool_value(object, "debug", defaults.debug);
             settings.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
+            settings.quit_key = string_value(object, "quit_key", &defaults.quit_key);
             settings.quit_count = string_value(object, "quit_count", &defaults.quit_count);
             settings.quit_window_ms =
                 string_value(object, "quit_window_ms", &defaults.quit_window_ms);
@@ -420,6 +425,7 @@ impl AppSettings {
         set_string(object, "post_max_output_chars", &self.post_max_output_chars);
         set_bool(object, "debug", self.debug);
         set_bool(object, "stt_debug", self.stt_debug);
+        set_string(object, "quit_key", &self.quit_key);
         set_string(object, "quit_count", &self.quit_count);
         set_string(object, "quit_window_ms", &self.quit_window_ms);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
@@ -443,6 +449,7 @@ impl AppSettings {
             "device" => Some(&self.device),
             "compute_type" => Some(&self.compute_type),
             "local_only" => Some(if self.local_only { "1" } else { "0" }),
+            "quit_key" => Some(&self.quit_key),
             "quit_count" => Some(&self.quit_count),
             "quit_window_ms" => Some(&self.quit_window_ms),
             _ => None,
@@ -583,6 +590,7 @@ mod tests {
         let value = serde_json::json!({
             "stt_backend": "openai",
             "lang": "da",
+            "quit_key": "f12",
             "dictionary_enabled": "0",
             "json_output": "1",
             "profiles": [{"name": "terminal"}]
@@ -592,6 +600,7 @@ mod tests {
 
         assert_eq!(settings.stt_backend, "openai");
         assert_eq!(settings.lang, "da");
+        assert_eq!(settings.quit_key, "f12");
         assert!(!settings.dictionary_enabled);
         assert!(settings.inject_json);
         assert!(settings.profiles_json.contains("terminal"));
@@ -611,6 +620,7 @@ mod tests {
         let settings = AppSettings {
             lang: "en".to_owned(),
             stt_model: String::new(),
+            quit_key: "f12".to_owned(),
             profiles_json: r#"[{"name":"new"}]"#.to_owned(),
             ..AppSettings::default()
         };
@@ -620,6 +630,7 @@ mod tests {
 
         assert_eq!(saved["unknown"], "keep");
         assert_eq!(saved["lang"], "en");
+        assert_eq!(saved["quit_key"], "f12");
         assert!(saved.get("stt_model").is_none());
         assert_eq!(saved["profiles"][0]["name"], "new");
     }
@@ -647,6 +658,13 @@ mod tests {
         };
 
         assert_eq!(restart_required_keys(&before, &after), vec!["key"]);
+
+        let after = AppSettings {
+            quit_key: "f12".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(restart_required_keys(&before, &after), vec!["quit_key"]);
     }
 
     #[test]

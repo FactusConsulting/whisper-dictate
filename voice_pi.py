@@ -33,7 +33,8 @@ On Wayland (Ubuntu 26.04), text is injected directly via ydotool:
 ASCII via ydotool type, æøå via evdev keycodes (compositor maps them
 through the DK XKB layout — no clipboard, no paste shortcut).
 Stop it by pressing Esc 3 times in a row (or Ctrl+C) — that frees
-the GPU VRAM. Configure with VOICEPI_QUIT_COUNT (0 disables; 1 = legacy).
+the GPU VRAM. Configure with VOICEPI_QUIT_KEY and VOICEPI_QUIT_COUNT
+(0 disables; 1 = legacy).
 """
 from __future__ import annotations
 
@@ -101,7 +102,8 @@ except Exception:  # noqa: BLE001 — never block startup on this
 # re-exported so existing imports (`from voice_pi import _resolve_device`,
 # tests' `voice_pi.build_arg_parser`, etc.) continue to work unchanged.
 from vp_cli import (  # noqa: E402
-    DEVICE, INJECT_MODE, KEY, LANG, MODEL_NAME, QUIT_COUNT, QUIT_WINDOW_MS,
+    DEVICE, INJECT_MODE, KEY, LANG, MODEL_NAME, QUIT_COUNT, QUIT_KEY,
+    QUIT_WINDOW_MS,
     VALID_INJECT_MODES,
     _print_effective_config, build_arg_parser,
 )
@@ -574,13 +576,19 @@ class Dictate(InjectMixin):
         esc_count = 0
         esc_last = 0.0
 
-        quit_hint = f"{QUIT_COUNT}× Esc or Ctrl+C" if QUIT_COUNT > 0 else "Ctrl+C"
+        quit_key = getattr(keyboard.Key, QUIT_KEY, None)
+        if quit_key is None and len(QUIT_KEY) == 1:
+            quit_key = QUIT_KEY
+        if quit_key is None:
+            sys.exit(f"unknown quit key '{QUIT_KEY}' (e.g. esc, f12, q)")
+
+        quit_hint = f"{QUIT_COUNT}× {QUIT_KEY} or Ctrl+C" if QUIT_COUNT > 0 else "Ctrl+C"
         print(f"whisper-dictate [lang={self.lang or 'auto'}] (pynput). Hold "
               f"[{self.key}] to talk. {quit_hint} to quit.", flush=True)
 
         def on_press(k):
             nonlocal recording, esc_count, esc_last
-            if k == keyboard.Key.esc:
+            if k == quit_key:
                 if QUIT_COUNT > 0:
                     now = time.monotonic()
                     if now - esc_last <= QUIT_WINDOW_MS / 1000.0:
@@ -590,7 +598,7 @@ class Dictate(InjectMixin):
                     esc_last = now
                     if esc_count >= QUIT_COUNT:
                         return False
-                return  # never add Esc to the PTT-key set
+                return  # never add the quit key to the PTT-key set
             esc_count = 0  # any other key resets the consecutive-Esc streak
             pressed.add(k)
             if targets.issubset(pressed) and not recording:

@@ -45,8 +45,9 @@ requiring restart/model reload.
 | **Push-to-talk key** | `VOICEPI_KEY` | `--key` | `ctrl_r` | pynput key name (`ctrl_r`, `alt_r`, `f9`, …) or `a+b` chord | hold-to-talk key |
 | **Inject mode** | `VOICEPI_INJECT_MODE` | `--type` / `--paste` / `--no-type` | `auto` | `auto` \| `type` \| `paste` \| `print` | auto-select injection strategy, force typing, force clipboard paste (X11/Win), or print-only |
 | **Format commands** | `VOICEPI_FORMAT_COMMANDS` | _none_ | `off` | `off` \| `en` \| `da` \| `both` | Optional deterministic spoken formatting commands. English supports `new line`, `comma`, `period`; Danish supports `ny linje`, `komma`, `punktum`. |
-| **Global quit count** | `VOICEPI_QUIT_COUNT` | _none_ | `3` | integer ≥ 0 (`0` disables) | N consecutive Esc to quit (Windows/X11) |
-| **Quit window** | `VOICEPI_QUIT_WINDOW_MS` | _none_ | `1500` | integer ms | time window for the consecutive Esc presses |
+| **Global quit key** | `VOICEPI_QUIT_KEY` | _none_ | `esc` | pynput key name or one character | key used for the global quit shortcut (Windows/X11) |
+| **Global quit count** | `VOICEPI_QUIT_COUNT` | _none_ | `3` | integer ≥ 0 (`0` disables) | N consecutive quit-key presses to quit (Windows/X11) |
+| **Quit window** | `VOICEPI_QUIT_WINDOW_MS` | _none_ | `1500` | integer ms | time window for the consecutive quit-key presses |
 | **Audio loudness target** | `VOICEPI_TARGET_DBFS` | _none_ | `-20` | float dBFS ≤ 0 | target for quiet-boost normalisation |
 | **Audio min input** | `VOICEPI_MIN_INPUT_DBFS` | _none_ | `-55` | float dBFS | reject input quieter than this |
 | **Audio min SNR** | `VOICEPI_MIN_SNR_DB` | _none_ | `6` | float dB | reject input below this speech-vs-noise contrast |
@@ -99,8 +100,9 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_FORMAT_COMMANDS` | `off` | `off` \| `en` \| `da` \| `both` | Opt-in deterministic spoken formatting pass after STT/dictionary/post-processing and before injection. Examples: `new line`, `comma`, `period`, `ny linje`, `komma`, `punktum`, `question mark`, `spørgsmålstegn`, `bullet list`, `punktliste`. Profile-safe and live-reloadable. |
 | `VOICEPI_COMMAND_HOOK` | *(unset)* | command string or JSON string array | Optional advanced automation command run after each accepted live utterance. The full utterance event is sent as JSON on stdin. The command is started directly with `shell=False`; transcript text is never shell-interpolated. Prefer JSON array form such as `["python","D:\\scripts\\hook.py"]`. |
 | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | `2000` | integer ms | Maximum wait for `VOICEPI_COMMAND_HOOK`. Timeout/failure is logged and included in metrics/history as `command_hook_*` fields, but text injection is not undone or blocked. |
-| `VOICEPI_QUIT_COUNT` | `3` | integer ≥ 0 | **Windows/X11 only** (pynput path). N consecutive Esc presses within `VOICEPI_QUIT_WINDOW_MS` quit the app. Default `3` avoids accidental shutdown since pynput catches Esc system-wide. Set `0` to disable global Esc-quit entirely (rely on Ctrl+C in the launcher console); set `1` for legacy single-Esc behaviour. |
-| `VOICEPI_QUIT_WINDOW_MS` | `1500` | integer ms | Time window within which the consecutive Esc presses count toward `VOICEPI_QUIT_COUNT`. Any non-Esc key press resets the counter. |
+| `VOICEPI_QUIT_KEY` | `esc` | pynput key name or one character | **Windows/X11 only** (pynput path). Key used for global quit. Examples: `esc`, `f12`, `q`. |
+| `VOICEPI_QUIT_COUNT` | `3` | integer ≥ 0 | **Windows/X11 only** (pynput path). N consecutive `VOICEPI_QUIT_KEY` presses within `VOICEPI_QUIT_WINDOW_MS` quit the app. Default `3` avoids accidental shutdown since pynput catches keys system-wide. Set `0` to disable global key quit entirely (rely on Ctrl+C in the launcher console); set `1` for single-key behaviour. |
+| `VOICEPI_QUIT_WINDOW_MS` | `1500` | integer ms | Time window within which the consecutive quit-key presses count toward `VOICEPI_QUIT_COUNT`. Any non-quit-key press resets the counter. |
 | `VOICEPI_TARGET_DBFS` | `-20` | float (dBFS, ≤ 0) | Loudness quiet input is normalised toward. Lower (e.g. `-16`) = boost quiet speech harder. |
 | `VOICEPI_MIN_INPUT_DBFS` | `-55` | float (dBFS) | Reject utterances quieter than this ("input too quiet"). |
 | `VOICEPI_MIN_SNR_DB` | `6` | float (dB) | Reject utterances with SNR below this ("no speech contrast"). |
@@ -182,7 +184,7 @@ setting + the env var that supplied it:
   beam_size          8  (env VOICEPI_BEAM_SIZE=8)
   initial_prompt     899 chars: "Factus Consulting, TwoDay, Hetzner, konsulent..."  (env VOICEPI_INITIAL_PROMPT)
   dictionary         14 terms, 5 replacements, path=C:\Users\me\AppData\Roaming\WhisperDictate\dictionary.json
-  quit               3x Esc within 1500ms  (env VOICEPI_QUIT_COUNT=3)
+  quit               3x esc within 1500ms  (env VOICEPI_QUIT_KEY=esc, VOICEPI_QUIT_COUNT=3)
   audio thresholds   target_dbfs=-20.0  min_input_dbfs=-55.0  min_snr_db=6.0
   XKB (Wayland)      VOICEPI_XKB_LAYOUT=(unset)  XKB_DEFAULT_LAYOUT=da
   inject mode        auto  (env VOICEPI_INJECT_MODE=(unset))

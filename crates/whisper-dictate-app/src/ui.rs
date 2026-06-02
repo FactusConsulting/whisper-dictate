@@ -14,6 +14,14 @@ use crate::runtime::{
 const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
 const GROQ_KEYS_URL: &str = "https://console.groq.com/keys";
+const WHISPER_MODELS: &[&str] = &[
+    "large-v3-turbo",
+    "large-v3",
+    "medium",
+    "small",
+    "base",
+    "tiny",
+];
 const EXTERNAL_STT_MODELS: &[&str] = &[
     "",
     "whisper-large-v3-turbo",
@@ -29,6 +37,23 @@ const PARAKEET_MODELS: &[&str] = &[
     "nvidia/parakeet-tdt-1.1b",
     "nvidia/parakeet-tdt-0.6b-v2",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SttBackendMode {
+    Whisper,
+    Parakeet,
+    Cloud,
+}
+
+impl SttBackendMode {
+    fn from_raw(raw: &str) -> Self {
+        match raw {
+            "parakeet" => Self::Parakeet,
+            "openai" => Self::Cloud,
+            _ => Self::Whisper,
+        }
+    }
+}
 
 pub fn run() -> Result<()> {
     runtime::cleanup_stale_desktop_processes();
@@ -230,51 +255,118 @@ impl WhisperDictateApp {
 
     fn core_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Core");
+        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         egui::Grid::new("core_settings")
             .num_columns(2)
             .show(ui, |ui| {
-                combo(
+                combo_help(
                     ui,
                     "STT backend",
                     &mut self.settings.stt_backend,
                     &["whisper", "parakeet", "openai"],
+                    "Choose the transcription engine: local Whisper, local NVIDIA Parakeet, or OpenAI-compatible cloud STT.",
                 );
-                text(ui, "Whisper model", &mut self.settings.model);
-                combo(
+                ui.end_row();
+                ui.strong("Local Whisper");
+                ui.label("Used only when STT backend is whisper.");
+                ui.end_row();
+                combo_enabled(
                     ui,
-                    "Cloud STT model (Groq/OpenAI)",
-                    &mut self.settings.stt_model,
-                    EXTERNAL_STT_MODELS,
+                    backend == SttBackendMode::Whisper,
+                    "Whisper model",
+                    &mut self.settings.model,
+                    WHISPER_MODELS,
+                    "Local faster-whisper model used only with STT backend = whisper.",
                 );
-                combo(
+                ui.end_row();
+                ui.strong("Local NVIDIA Parakeet");
+                ui.label("Used only when STT backend is parakeet.");
+                ui.end_row();
+                combo_enabled(
                     ui,
+                    backend == SttBackendMode::Parakeet,
                     "Parakeet model",
                     &mut self.settings.parakeet_model,
                     PARAKEET_MODELS,
+                    "Local NVIDIA NeMo Parakeet model used only with STT backend = parakeet.",
                 );
-                combo(
+                ui.end_row();
+                ui.strong("Cloud STT");
+                ui.label("Used only when STT backend is openai/Groq.");
+                ui.end_row();
+                combo_enabled(
                     ui,
+                    backend == SttBackendMode::Cloud,
+                    "Cloud STT model",
+                    &mut self.settings.stt_model,
+                    EXTERNAL_STT_MODELS,
+                    "Remote model name sent to the configured OpenAI-compatible STT API.",
+                );
+                text_enabled(
+                    ui,
+                    backend == SttBackendMode::Cloud,
+                    "Cloud STT API URL",
+                    &mut self.settings.stt_base_url,
+                    "Base URL for OpenAI-compatible transcription APIs, for example Groq.",
+                );
+                text_enabled(
+                    ui,
+                    backend == SttBackendMode::Cloud,
+                    "Cloud STT timeout ms",
+                    &mut self.settings.stt_timeout_ms,
+                    "Network timeout for cloud transcription requests.",
+                );
+                ui.end_row();
+                ui.strong("Runtime");
+                ui.label("Applies to local backends unless otherwise noted.");
+                ui.end_row();
+                combo_enabled(
+                    ui,
+                    backend != SttBackendMode::Cloud,
                     "Device",
                     &mut self.settings.device,
                     &["auto", "cuda", "cpu"],
+                    "Local inference device. auto chooses CUDA when available, otherwise CPU.",
                 );
-                combo(
+                combo_enabled(
                     ui,
+                    backend != SttBackendMode::Cloud,
                     "Compute type",
                     &mut self.settings.compute_type,
                     &["", "int8_float16", "float16", "bfloat16", "float32", "int8"],
+                    "Local model precision/performance mode. Leave empty for backend default.",
                 );
-                combo(
+                combo_help(
                     ui,
                     "Language",
                     &mut self.settings.lang,
                     &["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"],
+                    "Spoken language hint. Empty lets the backend autodetect when supported.",
                 );
-                text(ui, "STT API URL", &mut self.settings.stt_base_url);
-                text(ui, "STT timeout ms", &mut self.settings.stt_timeout_ms);
-                text(ui, "Hotkey", &mut self.settings.key);
-                text(ui, "Quit count", &mut self.settings.quit_count);
-                text(ui, "Quit window ms", &mut self.settings.quit_window_ms);
+                text_help(
+                    ui,
+                    "Hotkey",
+                    &mut self.settings.key,
+                    "Hold-to-talk key or chord, for example ctrl_r or shift_l+ctrl_l.",
+                );
+                text_help(
+                    ui,
+                    "Quit key",
+                    &mut self.settings.quit_key,
+                    "Global key used to quit the worker after Quit count presses. Examples: esc, f12, q.",
+                );
+                text_help(
+                    ui,
+                    "Quit count",
+                    &mut self.settings.quit_count,
+                    "Number of consecutive quit-key presses required to stop the worker. 0 disables it.",
+                );
+                text_help(
+                    ui,
+                    "Quit window ms",
+                    &mut self.settings.quit_window_ms,
+                    "Maximum time window for consecutive quit-key presses.",
+                );
             });
         ui.horizontal(|ui| {
             if ui.button("Use Groq cloud STT").clicked() {
@@ -738,6 +830,21 @@ fn text(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.end_row();
 }
 
+fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
+    ui.label(label).on_hover_text(help);
+    ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
+    ui.end_row();
+}
+
+fn text_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut String, help: &str) {
+    ui.add_enabled(enabled, egui::Label::new(label))
+        .on_hover_text(help);
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
+    });
+    ui.end_row();
+}
+
 fn checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool) {
     ui.label(label);
     ui.checkbox(value, "");
@@ -745,7 +852,14 @@ fn checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool) {
 }
 
 fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str]) {
-    ui.label(label);
+    combo_help(ui, label, value, options, "");
+}
+
+fn combo_help(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str], help: &str) {
+    let response = ui.label(label);
+    if !help.is_empty() {
+        response.on_hover_text(help);
+    }
     egui::ComboBox::from_id_salt(label)
         .selected_text(if value.is_empty() {
             "(empty)"
@@ -761,6 +875,36 @@ fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str]) {
                 );
             }
         });
+    ui.end_row();
+}
+
+fn combo_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[&str],
+    help: &str,
+) {
+    ui.add_enabled(enabled, egui::Label::new(label))
+        .on_hover_text(help);
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(if value.is_empty() {
+                "(empty)"
+            } else {
+                value.as_str()
+            })
+            .show_ui(ui, |ui| {
+                for option in options {
+                    ui.selectable_value(
+                        value,
+                        (*option).to_owned(),
+                        if option.is_empty() { "(empty)" } else { option },
+                    );
+                }
+            });
+    });
     ui.end_row();
 }
 
@@ -894,5 +1038,16 @@ mod tests {
     fn rounded_rect_rejects_empty_dimensions_without_panicking() {
         assert!(!inside_rounded_rect(0, 0, 0, 0, 0, 16, 8));
         assert!(!inside_rounded_rect(0, 0, 0, 0, 16, 0, 8));
+    }
+
+    #[test]
+    fn stt_backend_mode_maps_only_active_backend() {
+        assert_eq!(SttBackendMode::from_raw("whisper"), SttBackendMode::Whisper);
+        assert_eq!(
+            SttBackendMode::from_raw("parakeet"),
+            SttBackendMode::Parakeet
+        );
+        assert_eq!(SttBackendMode::from_raw("openai"), SttBackendMode::Cloud);
+        assert_eq!(SttBackendMode::from_raw(""), SttBackendMode::Whisper);
     }
 }

@@ -11,6 +11,12 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-02
+
+### Added
+- Rust Core settings now separates Whisper, Parakeet and cloud STT model controls with hover help and backend-specific disabled states.
+- `VOICEPI_QUIT_KEY` / `quit_key` lets the quit shortcut key be configured separately from the hold-to-talk hotkey.
+
 ## [0.3.3] - 2026-06-02
 
 ### Fixed

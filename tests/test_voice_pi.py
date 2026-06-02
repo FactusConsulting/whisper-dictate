@@ -353,7 +353,7 @@ class DebugConfigTests(unittest.TestCase):
         # Cache + clear env we mutate so the dump is deterministic
         self._cached = {k: os.environ.pop(k, None) for k in (
             "VOICEPI_COMPUTE_TYPE", "VOICEPI_INITIAL_PROMPT",
-            "VOICEPI_BEAM_SIZE", "VOICEPI_QUIT_COUNT",
+            "VOICEPI_BEAM_SIZE", "VOICEPI_QUIT_KEY", "VOICEPI_QUIT_COUNT",
             "VOICEPI_XKB_LAYOUT", "XKB_DEFAULT_LAYOUT",
             "VOICEPI_LANG", "VOICEPI_MODEL", "VOICEPI_DEVICE",
             "VOICEPI_KEY", "VOICEPI_INJECT_MODE",
@@ -393,6 +393,7 @@ class DebugConfigTests(unittest.TestCase):
         # env-sourced values are surfaced + annotated with the env var name
         self.assertIn("VOICEPI_COMPUTE_TYPE=float16", out)
         self.assertIn("VOICEPI_BEAM_SIZE=8", out)
+        self.assertIn("VOICEPI_QUIT_KEY=(unset)", out)
         self.assertIn("VOICEPI_KEY=(unset)", out)
         self.assertIn("VOICEPI_INJECT_MODE=(unset)", out)
         self.assertIn("large-v3", out)
@@ -411,6 +412,27 @@ class DebugConfigTests(unittest.TestCase):
         self.assertIn("...", out)  # truncated marker
         # full 200-char string is NOT in the output
         self.assertNotIn("x" * 200, out)
+
+    def test_quit_key_env_is_shown_in_debug_dump(self):
+        os.environ["VOICEPI_QUIT_KEY"] = "f12"
+        os.environ["VOICEPI_QUIT_COUNT"] = "2"
+        voice_pi = load_voice_pi(cuda_devices=1)
+        with _capture_stdout() as buf:
+            voice_pi._print_effective_config(self._args(), "cuda", "float16")
+        out = buf.getvalue()
+
+        self.assertIn("2x f12", out)
+        self.assertIn("VOICEPI_QUIT_KEY=f12", out)
+
+    def test_quit_key_is_not_hardcoded_to_escape(self):
+        cli = Path("vp_cli.py").read_text(encoding="utf-8")
+        runtime = Path("voice_pi.py").read_text(encoding="utf-8")
+        config = Path("vp_config.py").read_text(encoding="utf-8")
+
+        self.assertIn('Setting("VOICEPI_QUIT_KEY", "quit_key", "esc", live=False)', config)
+        self.assertIn('QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc")', cli)
+        self.assertIn("if k == quit_key:", runtime)
+        self.assertNotIn("if k == keyboard.Key.esc:", runtime)
 
     def test_unset_env_shows_unset(self):
         voice_pi = load_voice_pi(cuda_devices=1)
@@ -2082,9 +2104,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1"', script)
         self.assertIn('GROQ_STT_MODEL: &str = "whisper-large-v3-turbo"', script)
         self.assertIn("const EXTERNAL_STT_MODELS: &[&str]", script)
+        self.assertIn("const WHISPER_MODELS: &[&str]", script)
         self.assertIn('"distil-whisper-large-v3-en"', script)
         self.assertIn('"gpt-4o-mini-transcribe"', script)
-        self.assertIn('"Cloud STT model (Groq/OpenAI)",', script)
+        self.assertIn('"Cloud STT model",', script)
         self.assertIn("EXTERNAL_STT_MODELS", script)
         self.assertIn("const PARAKEET_MODELS: &[&str]", script)
         self.assertIn('"nvidia/parakeet-tdt-0.6b-v3"', script)
@@ -2097,6 +2120,20 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('ui.button("Groq API keys").clicked()', script)
         self.assertIn('open_url(GROQ_KEYS_URL)', script)
         self.assertIn('GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY', script)
+
+    def test_rust_core_ui_groups_backend_specific_models_and_help(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn("enum SttBackendMode", script)
+        self.assertIn("Local Whisper", script)
+        self.assertIn("Local NVIDIA Parakeet", script)
+        self.assertIn("Cloud STT", script)
+        self.assertIn("backend == SttBackendMode::Whisper", script)
+        self.assertIn("backend == SttBackendMode::Parakeet", script)
+        self.assertIn("backend == SttBackendMode::Cloud", script)
+        self.assertIn("backend != SttBackendMode::Cloud", script)
+        self.assertIn(".on_hover_text(help)", script)
+        self.assertIn('"Quit key"', script)
 
     def test_rust_cli_has_explicit_ubuntu_setup_command(self):
         cli = Path("crates/whisper-dictate-app/src/cli.rs").read_text(encoding="utf-8")

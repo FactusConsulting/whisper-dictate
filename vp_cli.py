@@ -28,9 +28,10 @@ if INJECT_MODE not in VALID_INJECT_MODES:
     INJECT_MODE = "auto"
 
 # Global quit shortcut for the pynput path (Windows/X11). N consecutive
-# Esc presses within QUIT_WINDOW_MS quit the app. Default 3 — avoids
+# QUIT_KEY presses within QUIT_WINDOW_MS quit the app. Default 3x Esc — avoids
 # accidental shutdown because pynput catches Esc system-wide. Set
 # VOICEPI_QUIT_COUNT=0 to disable; 1 = legacy single-Esc behaviour.
+QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc") or "esc").strip().lower()
 QUIT_COUNT = int(get_value("VOICEPI_QUIT_COUNT", "3") or "3")
 QUIT_WINDOW_MS = int(get_value("VOICEPI_QUIT_WINDOW_MS", "1500") or "1500")
 
@@ -208,8 +209,9 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("dictionary",       f"{len(DICTIONARY.terms)} terms, "
                              f"{len(DICTIONARY.replacements)} replacements, "
                              f"path={_env('VOICEPI_DICTIONARY') if _env('VOICEPI_DICTIONARY') != '(unset)' else _default_path()}"),
-        ("quit",             f"{QUIT_COUNT}x Esc within {QUIT_WINDOW_MS}ms  "
-                             f"(env VOICEPI_QUIT_COUNT={_env('VOICEPI_QUIT_COUNT')})"),
+        ("quit",             f"{QUIT_COUNT}x {QUIT_KEY} within {QUIT_WINDOW_MS}ms  "
+                             f"(env VOICEPI_QUIT_KEY={_env('VOICEPI_QUIT_KEY')}, "
+                             f"VOICEPI_QUIT_COUNT={_env('VOICEPI_QUIT_COUNT')})"),
         ("audio thresholds", f"target_dbfs={TARGET_DBFS}  "
                              f"min_input_dbfs={MIN_INPUT_DBFS}  "
                              f"min_snr_db={MIN_INPUT_SNR_DB}"),

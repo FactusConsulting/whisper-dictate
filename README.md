@@ -309,7 +309,7 @@ NVIDIA GPU is used automatically if present.
 2. Focus the window where you want text inserted.
 3. **Hold the hotkey, speak, release.**
 4. ~1–2 s later the text appears at the cursor.
-5. **Ctrl+C (or 3× Esc, configurable via `VOICEPI_QUIT_COUNT`) to quit** — frees GPU VRAM.
+5. **Ctrl+C (or 3× Esc by default) to quit** — frees GPU VRAM. Configure with `VOICEPI_QUIT_KEY` and `VOICEPI_QUIT_COUNT`.
 
 ## Flags
 

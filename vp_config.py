@@ -69,6 +69,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOICEPI_POST_MAX_OUTPUT_CHARS", "post_max_output_chars", "4000", live=True),
     Setting("VOICEPI_DEBUG", "debug", None, live=True),
     Setting("VOICEPI_STT_DEBUG", "stt_debug", None, live=True),
+    Setting("VOICEPI_QUIT_KEY", "quit_key", "esc", live=False),
     Setting("VOICEPI_QUIT_COUNT", "quit_count", "3", live=False),
     Setting("VOICEPI_QUIT_WINDOW_MS", "quit_window_ms", "1500", live=False),
 )
