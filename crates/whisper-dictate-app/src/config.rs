@@ -36,6 +36,8 @@ const SETTINGS_KEYS: &[&str] = &[
     "target_dbfs",
     "min_input_dbfs",
     "min_snr_db",
+    "audio_ducking",
+    "audio_ducking_level",
     "dictionary",
     "dictionary_enabled",
     "dictionary_max_terms",
@@ -54,6 +56,8 @@ const SETTINGS_KEYS: &[&str] = &[
     "post_timeout_ms",
     "post_max_input_chars",
     "post_max_output_chars",
+    "post_redact",
+    "post_redact_terms",
     "debug",
     "stt_debug",
     "quit_key",
@@ -192,6 +196,8 @@ pub struct AppSettings {
     pub target_dbfs: String,
     pub min_input_dbfs: String,
     pub min_snr_db: String,
+    pub audio_ducking: bool,
+    pub audio_ducking_level: String,
     pub dictionary: String,
     pub dictionary_enabled: bool,
     pub dictionary_max_terms: String,
@@ -210,6 +216,8 @@ pub struct AppSettings {
     pub post_timeout_ms: String,
     pub post_max_input_chars: String,
     pub post_max_output_chars: String,
+    pub post_redact: bool,
+    pub post_redact_terms: String,
     pub debug: bool,
     pub stt_debug: bool,
     pub quit_key: String,
@@ -245,6 +253,8 @@ impl Default for AppSettings {
             target_dbfs: "-20".to_owned(),
             min_input_dbfs: "-55".to_owned(),
             min_snr_db: "6".to_owned(),
+            audio_ducking: false,
+            audio_ducking_level: "0.25".to_owned(),
             dictionary: default_dictionary_path().display().to_string(),
             dictionary_enabled: true,
             dictionary_max_terms: "80".to_owned(),
@@ -263,6 +273,8 @@ impl Default for AppSettings {
             post_timeout_ms: "2000".to_owned(),
             post_max_input_chars: "4000".to_owned(),
             post_max_output_chars: "4000".to_owned(),
+            post_redact: false,
+            post_redact_terms: String::new(),
             debug: false,
             stt_debug: false,
             quit_key: "esc".to_owned(),
@@ -314,6 +326,9 @@ impl AppSettings {
             settings.min_input_dbfs =
                 string_value(object, "min_input_dbfs", &defaults.min_input_dbfs);
             settings.min_snr_db = string_value(object, "min_snr_db", &defaults.min_snr_db);
+            settings.audio_ducking = bool_value(object, "audio_ducking", defaults.audio_ducking);
+            settings.audio_ducking_level =
+                string_value(object, "audio_ducking_level", &defaults.audio_ducking_level);
             settings.dictionary = string_value(object, "dictionary", &defaults.dictionary);
             settings.dictionary_enabled =
                 bool_value(object, "dictionary_enabled", defaults.dictionary_enabled);
@@ -356,6 +371,8 @@ impl AppSettings {
                 "post_max_output_chars",
                 &defaults.post_max_output_chars,
             );
+            settings.post_redact = bool_value(object, "post_redact", defaults.post_redact);
+            settings.post_redact_terms = string_value(object, "post_redact_terms", "");
             settings.debug = bool_value(object, "debug", defaults.debug);
             settings.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
             settings.quit_key = string_value(object, "quit_key", &defaults.quit_key);
@@ -401,6 +418,8 @@ impl AppSettings {
         set_string(object, "target_dbfs", &self.target_dbfs);
         set_string(object, "min_input_dbfs", &self.min_input_dbfs);
         set_string(object, "min_snr_db", &self.min_snr_db);
+        set_bool(object, "audio_ducking", self.audio_ducking);
+        set_string(object, "audio_ducking_level", &self.audio_ducking_level);
         set_string(object, "dictionary", &self.dictionary);
         set_bool(object, "dictionary_enabled", self.dictionary_enabled);
         set_string(object, "dictionary_max_terms", &self.dictionary_max_terms);
@@ -427,6 +446,8 @@ impl AppSettings {
         set_string(object, "post_timeout_ms", &self.post_timeout_ms);
         set_string(object, "post_max_input_chars", &self.post_max_input_chars);
         set_string(object, "post_max_output_chars", &self.post_max_output_chars);
+        set_bool(object, "post_redact", self.post_redact);
+        set_string(object, "post_redact_terms", &self.post_redact_terms);
         set_bool(object, "debug", self.debug);
         set_bool(object, "stt_debug", self.stt_debug);
         set_string(object, "quit_key", &self.quit_key);
@@ -598,6 +619,9 @@ mod tests {
             "quit_key": "f12",
             "dictionary_enabled": "0",
             "json_output": "1",
+            "audio_ducking": "1",
+            "post_redact": "1",
+            "post_redact_terms": "Lars Andersen",
             "profiles": [{"name": "terminal"}]
         });
 
@@ -608,6 +632,9 @@ mod tests {
         assert_eq!(settings.quit_key, "f12");
         assert!(!settings.dictionary_enabled);
         assert!(settings.inject_json);
+        assert!(settings.audio_ducking);
+        assert!(settings.post_redact);
+        assert_eq!(settings.post_redact_terms, "Lars Andersen");
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
         assert_eq!(settings.ui_text_scale, "1.15");
@@ -627,6 +654,9 @@ mod tests {
             lang: "en".to_owned(),
             stt_model: String::new(),
             quit_key: "f12".to_owned(),
+            audio_ducking: true,
+            post_redact: true,
+            post_redact_terms: "Lars Andersen".to_owned(),
             ui_text_scale: "1.3".to_owned(),
             profiles_json: r#"[{"name":"new"}]"#.to_owned(),
             ..AppSettings::default()
@@ -638,6 +668,9 @@ mod tests {
         assert_eq!(saved["unknown"], "keep");
         assert_eq!(saved["lang"], "en");
         assert_eq!(saved["quit_key"], "f12");
+        assert_eq!(saved["audio_ducking"], "1");
+        assert_eq!(saved["post_redact"], "1");
+        assert_eq!(saved["post_redact_terms"], "Lars Andersen");
         assert_eq!(saved["ui_text_scale"], "1.3");
         assert!(saved.get("stt_model").is_none());
         assert_eq!(saved["profiles"][0]["name"], "new");

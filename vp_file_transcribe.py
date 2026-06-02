@@ -126,6 +126,8 @@ def transcribe_file_event(
         post_changed=post_result.changed,
         post_fallback=post_result.fallback,
         post_error=post_result.error or None,
+        post_redacted=post_result.redacted,
+        post_redactions=post_result.redactions or [],
     )
 
 

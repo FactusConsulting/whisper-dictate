@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from vp_config import apply_config_to_environ, get_value
 from vp_external_api import DEFAULT_OPENAI_BASE_URL, openai_chat_completion
 from vp_privacy import assert_local_processor, local_only_enabled
+from vp_redaction import RedactionResult, redact_text
 
 apply_config_to_environ()
 
@@ -34,6 +35,8 @@ class PostprocessSettings:
     max_input_chars: int = 4000
     max_output_chars: int = 4000
     api_key: str = ""
+    redact: bool = False
+    redact_terms: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,8 @@ class PostprocessResult:
     latency_ms: int = 0
     fallback: bool = False
     error: str = ""
+    redacted: bool = False
+    redactions: list[dict[str, object]] | None = None
 
 
 def _int_setting(name: str, default: int, minimum: int = 0) -> int:
@@ -76,6 +81,9 @@ def load_postprocess_settings() -> PostprocessSettings:
         api_key=(get_value("VOICEPI_POST_API_KEY")
                  or get_value("OPENAI_API_KEY")
                  or "").strip(),
+        redact=(get_value("VOICEPI_POST_REDACT") or "").strip().lower() not in (
+            "", "0", "false", "no", "off"),
+        redact_terms=get_value("VOICEPI_POST_REDACT_TERMS", "") or "",
     )
 
 
@@ -143,6 +151,16 @@ def build_prompt(text: str, mode: str) -> str:
     )
 
 
+def _redaction_terms(settings: PostprocessSettings) -> list[str]:
+    return [term.strip() for term in settings.redact_terms.split(",") if term.strip()]
+
+
+def _redact_for_cloud(text: str, settings: PostprocessSettings) -> RedactionResult:
+    if settings.processor != "openai" or not settings.redact:
+        return RedactionResult(text=text)
+    return redact_text(text, terms=_redaction_terms(settings))
+
+
 def _ollama_generate(settings: PostprocessSettings, text: str) -> str:
     mode = normalize_mode(settings.mode)
     payload = {
@@ -182,6 +200,9 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
 
     validate_postprocess_settings(settings)
     clipped = text[: settings.max_input_chars]
+    redaction = _redact_for_cloud(clipped, settings)
+    prompt_text = redaction.text
+    redaction_summary = redaction.public_summary()
     t0 = time.monotonic()
     try:
         if settings.processor == "ollama":
@@ -192,11 +213,13 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
                 base_url=settings.base_url,
                 api_key=settings.api_key,
                 model=settings.model,
-                prompt=build_prompt(clipped, mode),
+                prompt=build_prompt(prompt_text, mode),
                 timeout_ms=settings.timeout_ms,
             )
         else:
             raise ValueError(f"unsupported post processor: {settings.processor}")
+        if redaction.redactions:
+            out = redaction.restore(out)
         out = out[: settings.max_output_chars].strip() or text
         return PostprocessResult(
             text=out,
@@ -206,6 +229,8 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             mode=mode,
             model=settings.model,
             latency_ms=latency_ms,
+            redacted=bool(redaction.redactions),
+            redactions=redaction_summary,
         )
     except (OSError, TimeoutError, urllib.error.URLError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -219,4 +244,6 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             latency_ms=latency_ms,
             fallback=True,
             error=str(exc),
+            redacted=bool(redaction.redactions),
+            redactions=redaction_summary,
         )

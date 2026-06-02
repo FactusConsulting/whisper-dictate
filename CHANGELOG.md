@@ -11,6 +11,17 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-06-02
+
+### Added
+- Optional Windows audio ducking lowers other app audio while recording and restores it before transcription.
+- Optional local redaction protects emails, phone numbers, common API tokens and configured terms before cloud post-processing.
+
+## [0.3.7] - 2026-06-02
+
+### Added
+- Rust Settings UI text scaling can be configured for high-DPI displays.
+
 ## [0.3.6] - 2026-06-02
 
 ### Fixed

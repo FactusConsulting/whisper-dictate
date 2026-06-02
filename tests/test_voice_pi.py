@@ -707,6 +707,59 @@ class ExternalApiTests(unittest.TestCase):
         self.assertEqual(info.language, "en")
 
 
+class RedactionTests(unittest.TestCase):
+    def test_redacts_email_phone_tokens_and_custom_terms_without_public_values(self):
+        import vp_redaction
+
+        result = vp_redaction.redact_text(
+            "Mail lars@example.com or call +45 12 34 56 78 with sk-testtoken123456789",
+            terms=["Lars Andersen"],
+        )
+
+        self.assertNotIn("lars@example.com", result.text)
+        self.assertNotIn("+45 12 34 56 78", result.text)
+        self.assertIn("[[WD_EMAIL_1]]", result.text)
+        self.assertIn("[[WD_PHONE_", result.text)
+        restored = result.restore(result.text)
+        self.assertIn("lars@example.com", restored)
+        summary = result.public_summary()
+        self.assertTrue(all("value" not in item for item in summary))
+        self.assertTrue(any(item["kind"] == "email" for item in summary))
+
+
+class AudioDuckingTests(unittest.TestCase):
+    def test_audio_ducker_restore_resets_saved_session_volumes(self):
+        import vp_audio_ducking
+
+        class Volume:
+            def __init__(self):
+                self.values = []
+
+            def SetMasterVolume(self, value, _context):
+                self.values.append(value)
+
+        first = Volume()
+        second = Volume()
+        ducker = vp_audio_ducking.AudioDucker(enabled=True, target_volume=0.25)
+        ducker._sessions = [(first, 0.8), (second, 0.6)]
+
+        ducker.exit()
+
+        self.assertEqual(first.values, [0.8])
+        self.assertEqual(second.values, [0.6])
+        self.assertEqual(ducker._sessions, [])
+
+    def test_audio_ducker_config_is_disabled_by_default_and_clamps_level(self):
+        with _env(VOICEPI_AUDIO_DUCKING=None, VOICEPI_AUDIO_DUCKING_LEVEL="2.5"):
+            sys.modules.pop("vp_audio_ducking", None)
+            import vp_audio_ducking
+
+            ducker = vp_audio_ducking.AudioDucker.from_config()
+
+        self.assertFalse(ducker.enabled)
+        self.assertEqual(ducker.target_volume, 1.0)
+
+
 class InjectStrategyTests(unittest.TestCase):
     def setUp(self):
         for n in ("vp_inject", "vp_keymap"):
@@ -1717,6 +1770,61 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(calls["auth"], "Bearer test-key")
         self.assertIn("Clean punctuation", calls["payload"]["messages"][1]["content"])
 
+    def test_openai_postprocessor_redacts_before_cloud_and_restores_output(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        calls = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls["payload"] = json.loads(body.decode("utf-8"))
+                prompt = calls["payload"]["messages"][1]["content"]
+                data = json.dumps({
+                    "choices": [{
+                        "message": {"content": "Contact [[WD_TERM_2]] at [[WD_EMAIL_1]]."}
+                    }]
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                calls["prompt"] = prompt
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        import vp_postprocess
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            model="gpt-4o-mini",
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            api_key="test-key",
+            redact=True,
+            redact_terms="Lars Andersen",
+        )
+        result = vp_postprocess.postprocess_text(
+            "Contact Lars Andersen at lars@example.com.", settings)
+
+        self.assertNotIn("Lars Andersen", calls["prompt"])
+        self.assertNotIn("lars@example.com", calls["prompt"])
+        self.assertIn("[[WD_TERM_2]]", calls["prompt"])
+        self.assertIn("[[WD_EMAIL_1]]", calls["prompt"])
+        self.assertEqual(result.text, "Contact Lars Andersen at lars@example.com.")
+        self.assertTrue(result.redacted)
+        self.assertTrue(result.redactions)
+        self.assertTrue(all("value" not in item for item in result.redactions))
+
     def test_ollama_failure_falls_back_to_original_text(self):
         import vp_postprocess
 
@@ -2172,15 +2280,40 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Parakeet model",
             "Cloud STT model",
             "Beam size",
+            "Audio ducking",
+            "Audio ducking level",
             "Initial prompt",
             "Dictionary path",
             "Dictionary enabled",
             "Inject mode",
             "JSON stdout",
+            "Cloud redaction",
+            "Redaction terms",
             "UI text scale",
             "Profiles JSON",
         ):
             self.assertIn(label, script)
+
+    def test_config_maps_audio_ducking_and_cloud_redaction(self):
+        config = Path("vp_config.py").read_text(encoding="utf-8")
+        rust_config = Path("crates/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+        ui = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        for token in (
+            "VOICEPI_AUDIO_DUCKING",
+            "VOICEPI_AUDIO_DUCKING_LEVEL",
+            "VOICEPI_POST_REDACT",
+            "VOICEPI_POST_REDACT_TERMS",
+        ):
+            self.assertIn(token, config)
+        for key in (
+            "audio_ducking",
+            "audio_ducking_level",
+            "post_redact",
+            "post_redact_terms",
+        ):
+            self.assertIn(key, rust_config)
+            self.assertIn(key, ui)
 
     def test_rust_cli_has_explicit_ubuntu_setup_command(self):
         cli = Path("crates/whisper-dictate-app/src/cli.rs").read_text(encoding="utf-8")

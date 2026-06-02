@@ -472,6 +472,18 @@ impl WhisperDictateApp {
                     &mut self.settings.min_snr_db,
                     "Minimum signal-to-noise ratio accepted before transcription.",
                 );
+                checkbox_help(
+                    ui,
+                    "Audio ducking",
+                    &mut self.settings.audio_ducking,
+                    "Windows-only: temporarily lowers other app audio while recording, then restores it.",
+                );
+                text_help(
+                    ui,
+                    "Audio ducking level",
+                    &mut self.settings.audio_ducking_level,
+                    "Target volume for other apps while recording. 0.25 means 25%.",
+                );
             });
         let show_initial_prompt_help = label_with_help(
             ui,
@@ -627,6 +639,18 @@ impl WhisperDictateApp {
                     "Post max output chars",
                     &mut self.settings.post_max_output_chars,
                     "Maximum accepted length of post-processed output.",
+                );
+                checkbox_help(
+                    ui,
+                    "Cloud redaction",
+                    &mut self.settings.post_redact,
+                    "Before OpenAI-compatible post-processing, replace sensitive local text with placeholders and restore it afterward when possible.",
+                );
+                text_help(
+                    ui,
+                    "Redaction terms",
+                    &mut self.settings.post_redact_terms,
+                    "Comma-separated names or terms to redact before cloud post-processing. Emails, phone numbers and common tokens are detected automatically.",
                 );
                 checkbox_help(
                     ui,

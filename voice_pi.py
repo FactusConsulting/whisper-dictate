@@ -120,6 +120,7 @@ from vp_command_hook import annotate_event_with_hook, run_command_hook  # noqa: 
 from vp_privacy import apply_local_only_network_lock  # noqa: E402
 from vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402
 from vp_formatting import apply_format_commands  # noqa: E402
+from vp_audio_ducking import AudioDucker, register_active_ducker  # noqa: E402
 from vp_config import (  # noqa: E402
     apply_config_to_environ, config_mtime, effective_config, load_config,
 )
@@ -204,6 +205,7 @@ class Dictate(InjectMixin):
         self.release_tail_ms = int(float(
             self._effective_config.get("release_tail_ms", "200")))
         self.postprocess_settings = load_postprocess_settings()
+        self.audio_ducker = register_active_ducker(AudioDucker.from_config())
         self.model_load_s = model_load_s
         self._restart_required_reported = False
         self._active_profile_name: str | None = None
@@ -279,6 +281,7 @@ class Dictate(InjectMixin):
         import vp_dictionary
         import vp_postprocess
         import vp_transcribe
+        import vp_audio_ducking
 
         vp_audio.TARGET_DBFS = float(after.get("target_dbfs", "-20"))
         vp_audio.MIN_INPUT_DBFS = float(after.get("min_input_dbfs", "-55"))
@@ -296,6 +299,9 @@ class Dictate(InjectMixin):
             "", "0", "false", "no", "off")
         vp_dictionary.DICTIONARY = vp_dictionary.load_dictionary()
         self.postprocess_settings = vp_postprocess.load_postprocess_settings()
+        self.audio_ducker = vp_audio_ducking.register_active_ducker(
+            vp_audio_ducking.AudioDucker.from_config()
+        )
         self._effective_config = after
         print("[config] reloaded live settings", flush=True)
 
@@ -332,6 +338,7 @@ class Dictate(InjectMixin):
         self.frames = []
         self.recording = True
         self._record_started = time.monotonic()
+        self.audio_ducker.enter()
         if _ARECORD_DEVICE:
             import subprocess
             self._arecord_proc = subprocess.Popen(
@@ -354,18 +361,21 @@ class Dictate(InjectMixin):
         if not self.recording:
             return
         self._reload_live_config_if_changed()
-        tail_s = max(0, self.release_tail_ms) / 1000.0
-        if tail_s:
-            time.sleep(tail_s)
-        self.recording = False
-        if self._arecord_proc:
-            self._arecord_proc.terminate()
-            self._arecord_proc.wait()
-            self._arecord_proc = None
-        if self._stream:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        try:
+            tail_s = max(0, self.release_tail_ms) / 1000.0
+            if tail_s:
+                time.sleep(tail_s)
+            self.recording = False
+            if self._arecord_proc:
+                self._arecord_proc.terminate()
+                self._arecord_proc.wait()
+                self._arecord_proc = None
+            if self._stream:
+                self._stream.stop()
+                self._stream.close()
+                self._stream = None
+        finally:
+            self.audio_ducker.exit()
         if not self.frames:
             return
         pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
@@ -444,6 +454,8 @@ class Dictate(InjectMixin):
             post_changed=post_result.changed,
             post_fallback=post_result.fallback,
             post_error=post_result.error or None,
+            post_redacted=post_result.redacted,
+            post_redactions=post_result.redactions or [],
             format_commands_enabled=format_result.enabled,
             format_commands_set=format_result.command_set,
             format_commands_changed=format_result.changed,

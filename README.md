@@ -395,6 +395,10 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` / `https://api.openai.com/v1` | Ollama or OpenAI-compatible chat endpoint |
 | `VOICEPI_POST_API_KEY` | _(unset)_ | optional external post-processing key from env only; `OPENAI_API_KEY` also works |
 | `VOICEPI_POST_TIMEOUT_MS` | `2000` | fallback to dictionary-final text if local rewrite is too slow |
+| `VOICEPI_POST_REDACT` | _(unset)_ | opt-in local redaction before cloud post-processing |
+| `VOICEPI_POST_REDACT_TERMS` | _(unset)_ | comma-separated names/terms to redact before cloud post-processing |
+| `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Windows-only: temporarily lower other app audio while recording |
+| `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | target volume for other apps during audio ducking |
 | `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty value → keep interactive terminal status lines plain |
 | `VOICEPI_VAD_THRESHOLD` | `0.3` | Silero VAD speech threshold passed to faster-whisper |
@@ -427,6 +431,17 @@ for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY` or
 `VOICEPI_POST_PROCESSOR=openai`, `VOICEPI_POST_MODEL=<chat-model>` and
 `OPENAI_API_KEY` or `VOICEPI_POST_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
 external providers before requests are made.
+
+For cloud text cleanup, `VOICEPI_POST_REDACT=1` can redact emails, phone
+numbers, common API tokens and comma-separated `VOICEPI_POST_REDACT_TERMS`
+locally before the OpenAI-compatible post-processing request. Placeholders are
+restored in the returned text when possible, and metrics record only placeholder
+metadata, not the original sensitive values.
+
+On Windows, `VOICEPI_AUDIO_DUCKING=1` lowers other app audio while the
+push-to-talk key is held, then restores volumes before transcription continues.
+It is disabled by default and uses `VOICEPI_AUDIO_DUCKING_LEVEL=0.25` unless
+configured otherwise.
 
 Groq is available as an opt-in cloud STT preset in the Rust UI. It uses Groq's
 OpenAI-compatible transcription endpoint and `whisper-large-v3-turbo`:

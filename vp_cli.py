@@ -215,6 +215,8 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("audio thresholds", f"target_dbfs={TARGET_DBFS}  "
                              f"min_input_dbfs={MIN_INPUT_DBFS}  "
                              f"min_snr_db={MIN_INPUT_SNR_DB}"),
+        ("audio ducking",    f"enabled={get_value('VOICEPI_AUDIO_DUCKING', '(unset)')}  "
+                             f"level={get_value('VOICEPI_AUDIO_DUCKING_LEVEL', '0.25')}"),
         ("XKB (Wayland)",    f"VOICEPI_XKB_LAYOUT={_env('VOICEPI_XKB_LAYOUT')}  "
                              f"XKB_DEFAULT_LAYOUT={_env('XKB_DEFAULT_LAYOUT')}"),
         ("inject mode",      f"{args.mode}  (env VOICEPI_INJECT_MODE={_env('VOICEPI_INJECT_MODE')})"),
@@ -227,6 +229,8 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("local only",       f"{local_only_enabled()}  (env VOICEPI_LOCAL_ONLY={_env('VOICEPI_LOCAL_ONLY')})"),
         ("post process",     f"{post.processor}/{post.mode} model={post.model} "
                              f"url={post.base_url} timeout_ms={post.timeout_ms}"),
+        ("post redaction",   f"enabled={post.redact}  "
+                             f"terms={'set' if post.redact_terms else 'unset'}"),
         ("stt debug",        f"{_env('VOICEPI_STT_DEBUG')}  (env VOICEPI_STT_DEBUG)"),
     ]
     print("[debug] effective settings:", flush=True)
