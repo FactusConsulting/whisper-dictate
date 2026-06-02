@@ -155,7 +155,11 @@ fn cleanup_stale_desktop_processes_stops_worker_from_same_app_root() {
 
 fn test_python() -> Option<PathBuf> {
     for candidate in python_candidates() {
-        if Command::new(&candidate).arg("--version").output().is_ok() {
+        if Command::new(&candidate)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
             return Some(PathBuf::from(candidate));
         }
     }
@@ -203,7 +207,7 @@ impl Drop for EnvVarGuard {
 
 fn python_candidates() -> &'static [&'static str] {
     if cfg!(windows) {
-        &["python.exe", "python"]
+        &["py.exe", "py", "python.exe", "python"]
     } else {
         &["python3", "python"]
     }

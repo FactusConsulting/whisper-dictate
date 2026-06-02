@@ -1,5 +1,6 @@
 use anyhow::Result;
 use eframe::egui;
+use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -37,6 +38,7 @@ const PARAKEET_MODELS: &[&str] = &[
     "nvidia/parakeet-tdt-1.1b",
     "nvidia/parakeet-tdt-0.6b-v2",
 ];
+const DEFAULT_UI_TEXT_SCALE: f32 = 1.15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SttBackendMode {
@@ -59,7 +61,7 @@ pub fn run() -> Result<()> {
     runtime::cleanup_stale_desktop_processes();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([920.0, 680.0])
+            .with_inner_size([1080.0, 760.0])
             .with_icon(app_icon()),
         ..Default::default()
     };
@@ -158,6 +160,7 @@ impl eframe::App for WhisperDictateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_runtime();
         self.poll_background_task();
+        apply_ui_text_scale(ctx, &self.settings.ui_text_scale);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
@@ -655,6 +658,12 @@ impl WhisperDictateApp {
                     &mut self.settings.stt_debug,
                     "Enable extra backend transcription diagnostics.",
                 );
+                text_help(
+                    ui,
+                    "UI text scale",
+                    &mut self.settings.ui_text_scale,
+                    "Scale all text in this settings UI. Use 1.0 for default, 1.15 for larger text, or 1.3 for high-DPI displays.",
+                );
             });
     }
 
@@ -1076,11 +1085,42 @@ fn grid_help_row(ui: &mut egui::Ui, show_help: bool, help: &str) {
 
 fn inline_help(ui: &mut egui::Ui, show_help: bool, help: &str) {
     if show_help {
-        ui.label(
-            egui::RichText::new(help)
-                .small()
-                .color(ui.visuals().weak_text_color()),
-        );
+        ui.label(egui::RichText::new(help).color(ui.visuals().weak_text_color()));
+    }
+}
+
+fn apply_ui_text_scale(ctx: &egui::Context, raw_scale: &str) {
+    let scale = raw_scale
+        .trim()
+        .parse::<f32>()
+        .unwrap_or(DEFAULT_UI_TEXT_SCALE)
+        .clamp(0.85, 1.6);
+    let text_styles = BTreeMap::from([
+        (
+            egui::TextStyle::Heading,
+            egui::FontId::proportional(18.0 * scale),
+        ),
+        (
+            egui::TextStyle::Body,
+            egui::FontId::proportional(14.0 * scale),
+        ),
+        (
+            egui::TextStyle::Monospace,
+            egui::FontId::monospace(13.0 * scale),
+        ),
+        (
+            egui::TextStyle::Button,
+            egui::FontId::proportional(14.0 * scale),
+        ),
+        (
+            egui::TextStyle::Small,
+            egui::FontId::proportional(12.0 * scale),
+        ),
+    ]);
+    let mut style = (*ctx.style()).clone();
+    if style.text_styles != text_styles {
+        style.text_styles = text_styles;
+        ctx.set_style(style);
     }
 }
 

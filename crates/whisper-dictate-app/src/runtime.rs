@@ -1002,15 +1002,22 @@ mod tests {
     #[test]
     fn run_capture_returns_stdout_stderr_and_status() {
         let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("worker.py");
-        std::fs::write(
-            &script,
-            "import sys\nprint('out line')\nprint('err line', file=sys.stderr)\nsys.exit(7)\n",
-        )
-        .unwrap();
+        #[cfg(windows)]
         let command = WorkerCommand {
-            program: PathBuf::from(default_python_name()),
-            args: vec![script.display().to_string()],
+            program: PathBuf::from("cmd.exe"),
+            args: vec![
+                "/C".to_owned(),
+                "echo out line & echo err line 1>&2 & exit /B 7".to_owned(),
+            ],
+            working_dir: dir.path().to_path_buf(),
+        };
+        #[cfg(not(windows))]
+        let command = WorkerCommand {
+            program: PathBuf::from("sh"),
+            args: vec![
+                "-c".to_owned(),
+                "echo out line; echo err line >&2; exit 7".to_owned(),
+            ],
             working_dir: dir.path().to_path_buf(),
         };
 

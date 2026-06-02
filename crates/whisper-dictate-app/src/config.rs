@@ -59,6 +59,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "quit_key",
     "quit_count",
     "quit_window_ms",
+    "ui_text_scale",
 ];
 
 const RESTART_KEYS: &[&str] = &[
@@ -214,6 +215,7 @@ pub struct AppSettings {
     pub quit_key: String,
     pub quit_count: String,
     pub quit_window_ms: String,
+    pub ui_text_scale: String,
     pub profiles_json: String,
 }
 
@@ -266,6 +268,7 @@ impl Default for AppSettings {
             quit_key: "esc".to_owned(),
             quit_count: "3".to_owned(),
             quit_window_ms: "1500".to_owned(),
+            ui_text_scale: "1.15".to_owned(),
             profiles_json: "[]".to_owned(),
         }
     }
@@ -359,6 +362,7 @@ impl AppSettings {
             settings.quit_count = string_value(object, "quit_count", &defaults.quit_count);
             settings.quit_window_ms =
                 string_value(object, "quit_window_ms", &defaults.quit_window_ms);
+            settings.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
             settings.profiles_json = object
                 .get("profiles")
                 .map(|value| serde_json::to_string_pretty(value))
@@ -428,6 +432,7 @@ impl AppSettings {
         set_string(object, "quit_key", &self.quit_key);
         set_string(object, "quit_count", &self.quit_count);
         set_string(object, "quit_window_ms", &self.quit_window_ms);
+        set_string(object, "ui_text_scale", &self.ui_text_scale);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
                 object.insert("profiles".to_owned(), profiles);
@@ -605,6 +610,7 @@ mod tests {
         assert!(settings.inject_json);
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
+        assert_eq!(settings.ui_text_scale, "1.15");
     }
 
     #[test]
@@ -621,6 +627,7 @@ mod tests {
             lang: "en".to_owned(),
             stt_model: String::new(),
             quit_key: "f12".to_owned(),
+            ui_text_scale: "1.3".to_owned(),
             profiles_json: r#"[{"name":"new"}]"#.to_owned(),
             ..AppSettings::default()
         };
@@ -631,6 +638,7 @@ mod tests {
         assert_eq!(saved["unknown"], "keep");
         assert_eq!(saved["lang"], "en");
         assert_eq!(saved["quit_key"], "f12");
+        assert_eq!(saved["ui_text_scale"], "1.3");
         assert!(saved.get("stt_model").is_none());
         assert_eq!(saved["profiles"][0]["name"], "new");
     }

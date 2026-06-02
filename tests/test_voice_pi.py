@@ -2160,6 +2160,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("label_with_help_enabled(ui, enabled, label, help)", script)
         self.assertIn("fn grid_help_row(", script)
         self.assertIn("fn inline_help(", script)
+        self.assertIn("fn apply_ui_text_scale(", script)
+        self.assertIn("DEFAULT_UI_TEXT_SCALE", script)
+        self.assertIn("style.text_styles = text_styles", script)
+        self.assertNotIn(".small().color(ui.visuals().weak_text_color())", script)
         self.assertIn("data.insert_persisted(id, show_help)", script)
         self.assertIn("response.on_hover_text(help)", script)
         for label in (
@@ -2173,6 +2177,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Dictionary enabled",
             "Inject mode",
             "JSON stdout",
+            "UI text scale",
             "Profiles JSON",
         ):
             self.assertIn(label, script)
