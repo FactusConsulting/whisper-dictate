@@ -403,30 +403,72 @@ impl WhisperDictateApp {
         egui::Grid::new("quality_settings")
             .num_columns(2)
             .show(ui, |ui| {
-                text(ui, "Beam size", &mut self.settings.beam_size);
-                text(ui, "Temperature ladder", &mut self.settings.temperature);
-                text(
+                text_help(
+                    ui,
+                    "Beam size",
+                    &mut self.settings.beam_size,
+                    "Whisper beam search width. Higher can improve accuracy but costs more compute.",
+                );
+                text_help(
+                    ui,
+                    "Temperature ladder",
+                    &mut self.settings.temperature,
+                    "Comma-separated Whisper fallback temperatures, for example 0.0,0.2.",
+                );
+                text_help(
                     ui,
                     "Context min seconds",
                     &mut self.settings.context_min_seconds,
+                    "Minimum utterance length before passing previous context/prompt hints to Whisper.",
                 );
-                text(
+                text_help(
                     ui,
                     "Parakeet min seconds",
                     &mut self.settings.parakeet_min_seconds,
+                    "Minimum captured audio length before Parakeet transcription is attempted.",
                 );
-                text(ui, "Release tail ms", &mut self.settings.release_tail_ms);
-                text(ui, "VAD threshold", &mut self.settings.vad_threshold);
-                text(
+                text_help(
+                    ui,
+                    "Release tail ms",
+                    &mut self.settings.release_tail_ms,
+                    "Extra audio kept after releasing the hotkey so word endings are not clipped.",
+                );
+                text_help(
+                    ui,
+                    "VAD threshold",
+                    &mut self.settings.vad_threshold,
+                    "Voice activity detection sensitivity. Lower is more sensitive, higher rejects more noise.",
+                );
+                text_help(
                     ui,
                     "VAD min silence ms",
                     &mut self.settings.vad_min_silence_ms,
+                    "Silence duration used by VAD to split or end speech.",
                 );
-                text(ui, "Target dBFS", &mut self.settings.target_dbfs);
-                text(ui, "Min input dBFS", &mut self.settings.min_input_dbfs);
-                text(ui, "Min SNR dB", &mut self.settings.min_snr_db);
+                text_help(
+                    ui,
+                    "Target dBFS",
+                    &mut self.settings.target_dbfs,
+                    "Audio normalization target loudness before transcription.",
+                );
+                text_help(
+                    ui,
+                    "Min input dBFS",
+                    &mut self.settings.min_input_dbfs,
+                    "Minimum raw microphone loudness accepted as speech candidate.",
+                );
+                text_help(
+                    ui,
+                    "Min SNR dB",
+                    &mut self.settings.min_snr_db,
+                    "Minimum signal-to-noise ratio accepted before transcription.",
+                );
             });
-        ui.label("Initial prompt");
+        label_with_help(
+            ui,
+            "Initial prompt",
+            "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately.",
+        );
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.initial_prompt)
                 .desired_rows(4)
@@ -450,21 +492,29 @@ impl WhisperDictateApp {
         egui::Grid::new("dictionary_settings")
             .num_columns(2)
             .show(ui, |ui| {
-                text(ui, "Dictionary path", &mut self.settings.dictionary);
-                checkbox(
+                text_help(
+                    ui,
+                    "Dictionary path",
+                    &mut self.settings.dictionary,
+                    "JSON dictionary used for prompt terms and deterministic replacements.",
+                );
+                checkbox_help(
                     ui,
                     "Dictionary enabled",
                     &mut self.settings.dictionary_enabled,
+                    "Enable prompt-term injection and replacement cleanup from the dictionary.",
                 );
-                text(
+                text_help(
                     ui,
                     "Max prompt terms",
                     &mut self.settings.dictionary_max_terms,
+                    "Maximum number of dictionary terms included in the model prompt.",
                 );
-                text(
+                text_help(
                     ui,
                     "Prompt char cap",
                     &mut self.settings.dictionary_prompt_chars,
+                    "Maximum characters used by dictionary prompt terms to avoid over-steering the model.",
                 );
             });
         if !self.dictionary_preview.is_empty() {
@@ -484,64 +534,130 @@ impl WhisperDictateApp {
         egui::Grid::new("output_settings")
             .num_columns(2)
             .show(ui, |ui| {
-                combo(
+                combo_help(
                     ui,
                     "Inject mode",
                     &mut self.settings.inject_mode,
                     &["auto", "type", "paste", "print"],
+                    "How text is inserted into the focused app. auto chooses the safest available strategy.",
                 );
-                combo(
+                combo_help(
                     ui,
                     "Format commands",
                     &mut self.settings.format_commands,
                     &["off", "en", "da", "both"],
+                    "Enable spoken formatting commands such as punctuation and new lines.",
                 );
-                checkbox(ui, "JSON stdout", &mut self.settings.inject_json);
-                text(ui, "Metrics JSONL", &mut self.settings.metrics_jsonl);
-                text(ui, "Command hook", &mut self.settings.command_hook);
-                text(
+                checkbox_help(
+                    ui,
+                    "JSON stdout",
+                    &mut self.settings.inject_json,
+                    "Emit structured JSON events to stdout in addition to normal logs.",
+                );
+                text_help(
+                    ui,
+                    "Metrics JSONL",
+                    &mut self.settings.metrics_jsonl,
+                    "Optional path for appending transcription metrics as JSONL.",
+                );
+                text_help(
+                    ui,
+                    "Command hook",
+                    &mut self.settings.command_hook,
+                    "Optional command run after accepted utterances for advanced automation.",
+                );
+                text_help(
                     ui,
                     "Command hook timeout ms",
                     &mut self.settings.command_hook_timeout_ms,
+                    "Maximum time the command hook may run before it is treated as timed out.",
                 );
-                combo(
+                combo_help(
                     ui,
                     "Post processor",
                     &mut self.settings.post_processor,
                     &["none", "ollama", "openai"],
+                    "Optional second pass that rewrites text after transcription.",
                 );
-                combo(
+                combo_help(
                     ui,
                     "Post mode",
                     &mut self.settings.post_mode,
                     &[
                         "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
                     ],
+                    "Output style used by the post-processor.",
                 );
-                text(ui, "Post model", &mut self.settings.post_model);
-                text(ui, "Post base URL", &mut self.settings.post_base_url);
-                text(ui, "Post timeout ms", &mut self.settings.post_timeout_ms);
-                text(
+                text_help(
+                    ui,
+                    "Post model",
+                    &mut self.settings.post_model,
+                    "Model name for post-processing, for example an Ollama model.",
+                );
+                text_help(
+                    ui,
+                    "Post base URL",
+                    &mut self.settings.post_base_url,
+                    "Base URL for the post-processing provider.",
+                );
+                text_help(
+                    ui,
+                    "Post timeout ms",
+                    &mut self.settings.post_timeout_ms,
+                    "Maximum time allowed for post-processing.",
+                );
+                text_help(
                     ui,
                     "Post max input chars",
                     &mut self.settings.post_max_input_chars,
+                    "Maximum transcript length sent to the post-processor.",
                 );
-                text(
+                text_help(
                     ui,
                     "Post max output chars",
                     &mut self.settings.post_max_output_chars,
+                    "Maximum accepted length of post-processed output.",
                 );
-                checkbox(ui, "History enabled", &mut self.settings.history_enabled);
-                text(ui, "History JSONL", &mut self.settings.history_jsonl);
-                checkbox(ui, "Local only", &mut self.settings.local_only);
-                checkbox(ui, "VOICEPI_DEBUG", &mut self.settings.debug);
-                checkbox(ui, "VOICEPI_STT_DEBUG", &mut self.settings.stt_debug);
+                checkbox_help(
+                    ui,
+                    "History enabled",
+                    &mut self.settings.history_enabled,
+                    "Store local utterance history for review, copying and dictionary suggestions.",
+                );
+                text_help(
+                    ui,
+                    "History JSONL",
+                    &mut self.settings.history_jsonl,
+                    "Optional override path for local utterance history JSONL.",
+                );
+                checkbox_help(
+                    ui,
+                    "Local only",
+                    &mut self.settings.local_only,
+                    "Block network-backed STT/post-processing providers when enabled.",
+                );
+                checkbox_help(
+                    ui,
+                    "VOICEPI_DEBUG",
+                    &mut self.settings.debug,
+                    "Print the effective configuration at worker startup.",
+                );
+                checkbox_help(
+                    ui,
+                    "VOICEPI_STT_DEBUG",
+                    &mut self.settings.stt_debug,
+                    "Enable extra backend transcription diagnostics.",
+                );
             });
     }
 
     fn profiles_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Profiles");
-        ui.label("Profiles JSON");
+        label_with_help(
+            ui,
+            "Profiles JSON",
+            "Advanced JSON profile definitions. Save persists valid JSON profiles into the config file.",
+        );
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.profiles_json)
                 .font(egui::TextStyle::Monospace)
@@ -824,42 +940,28 @@ impl WhisperDictateApp {
     }
 }
 
-fn text(ui: &mut egui::Ui, label: &str, value: &mut String) {
-    ui.label(label);
-    ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
-    ui.end_row();
-}
-
 fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
-    ui.label(label).on_hover_text(help);
+    label_with_help(ui, label, help);
     ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
     ui.end_row();
 }
 
 fn text_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut String, help: &str) {
-    ui.add_enabled(enabled, egui::Label::new(label))
-        .on_hover_text(help);
+    label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
         ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
     });
     ui.end_row();
 }
 
-fn checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool) {
-    ui.label(label);
+fn checkbox_help(ui: &mut egui::Ui, label: &str, value: &mut bool, help: &str) {
+    label_with_help(ui, label, help);
     ui.checkbox(value, "");
     ui.end_row();
 }
 
-fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str]) {
-    combo_help(ui, label, value, options, "");
-}
-
 fn combo_help(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str], help: &str) {
-    let response = ui.label(label);
-    if !help.is_empty() {
-        response.on_hover_text(help);
-    }
+    label_with_help(ui, label, help);
     egui::ComboBox::from_id_salt(label)
         .selected_text(if value.is_empty() {
             "(empty)"
@@ -886,8 +988,7 @@ fn combo_enabled(
     options: &[&str],
     help: &str,
 ) {
-    ui.add_enabled(enabled, egui::Label::new(label))
-        .on_hover_text(help);
+    label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(label)
             .selected_text(if value.is_empty() {
@@ -906,6 +1007,32 @@ fn combo_enabled(
             });
     });
     ui.end_row();
+}
+
+fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) {
+    ui.horizontal(|ui| {
+        let response = ui.label(label);
+        if !help.is_empty() {
+            response.on_hover_text(help);
+        }
+        help_badge(ui, help);
+    });
+}
+
+fn label_with_help_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, help: &str) {
+    ui.horizontal(|ui| {
+        let response = ui.add_enabled(enabled, egui::Label::new(label));
+        if !help.is_empty() {
+            response.on_hover_text(help);
+        }
+        help_badge(ui, help);
+    });
+}
+
+fn help_badge(ui: &mut egui::Ui, help: &str) {
+    if !help.is_empty() {
+        let _ = ui.small_button("?").on_hover_text(help);
+    }
 }
 
 fn app_icon() -> egui::IconData {

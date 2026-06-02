@@ -2132,8 +2132,37 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("backend == SttBackendMode::Parakeet", script)
         self.assertIn("backend == SttBackendMode::Cloud", script)
         self.assertIn("backend != SttBackendMode::Cloud", script)
-        self.assertIn(".on_hover_text(help)", script)
+        self.assertIn("fn help_badge(", script)
+        self.assertIn('small_button("?")', script)
+        self.assertIn("label_with_help_enabled(", script)
+        self.assertIn("response.on_hover_text(help)", script)
         self.assertIn('"Quit key"', script)
+
+    def test_rust_settings_tabs_have_visible_help_badges(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn("fn help_badge(", script)
+        self.assertIn('small_button("?")', script)
+        self.assertIn("fn label_with_help(", script)
+        self.assertIn("fn label_with_help_enabled(", script)
+        self.assertIn("fn checkbox_help(", script)
+        self.assertIn("label_with_help(ui, label, help)", script)
+        self.assertIn("label_with_help_enabled(ui, enabled, label, help)", script)
+        self.assertIn("response.on_hover_text(help)", script)
+        for label in (
+            "STT backend",
+            "Whisper model",
+            "Parakeet model",
+            "Cloud STT model",
+            "Beam size",
+            "Initial prompt",
+            "Dictionary path",
+            "Dictionary enabled",
+            "Inject mode",
+            "JSON stdout",
+            "Profiles JSON",
+        ):
+            self.assertIn(label, script)
 
     def test_rust_cli_has_explicit_ubuntu_setup_command(self):
         cli = Path("crates/whisper-dictate-app/src/cli.rs").read_text(encoding="utf-8")

@@ -11,6 +11,11 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-06-02
+
+### Fixed
+- Settings tabs now show visible `?` help badges for config fields across Core, Quality, Dictionary, Output and Profiles.
+
 ## [0.3.4] - 2026-06-02
 
 ### Added
