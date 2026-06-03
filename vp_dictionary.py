@@ -13,6 +13,8 @@ from vp_config import apply_config_to_environ, get_value
 
 apply_config_to_environ()
 
+DICTIONARY_JSON_NAME = "dictionary.json"
+
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
@@ -32,8 +34,8 @@ def _int_env(name: str, default: int) -> int:
 def _default_path() -> Path:
     if os.name == "nt":
         base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-        return Path(base) / "WhisperDictate" / "dictionary.json"
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "whisper-dictate" / "dictionary.json"
+        return Path(base) / "WhisperDictate" / DICTIONARY_JSON_NAME
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "whisper-dictate" / DICTIONARY_JSON_NAME
 
 
 def _candidate_paths() -> list[Path]:
@@ -44,7 +46,7 @@ def _candidate_paths() -> list[Path]:
     here = Path(__file__).resolve().parent
     return [
         _default_path(),
-        here / "dictionary.json",
+        here / DICTIONARY_JSON_NAME,
         here / "dictionary.txt",
     ]
 

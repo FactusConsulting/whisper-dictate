@@ -31,6 +31,16 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("actions/setup-python@v6", workflow_text)
 
+    def test_write_permissions_are_job_scoped(self):
+        for path in (
+            Path(".github/workflows/release.yml"),
+            Path(".github/workflows/windows-installer.yml"),
+        ):
+            workflow = path.read_text(encoding="utf-8")
+            pre_jobs = workflow.split("\njobs:", 1)[0]
+            self.assertNotIn("contents: write", pre_jobs, path.as_posix())
+            self.assertIn("permissions:\n      contents: write", workflow, path.as_posix())
+
     def test_windows_workflows_pin_current_windows_runner(self):
         for path in Path(".github/workflows").glob("*.yml"):
             workflow = path.read_text(encoding="utf-8")

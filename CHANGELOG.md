@@ -11,6 +11,14 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-06-03
+
+### Fixed
+- Environment-loaded Groq/OpenAI API keys no longer make the Rust UI show Save settings as dirty immediately after startup.
+
+### Changed
+- Split Rust UI API-key and icon helpers into focused modules, keeping regression tests with the code they cover.
+
 ## [0.3.20] - 2026-06-03
 
 ### Added

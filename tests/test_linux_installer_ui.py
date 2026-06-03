@@ -1,5 +1,14 @@
 from tests.test_helpers import *
 
+def rust_ui_source():
+    paths = [
+        "crates/whisper-dictate-app/src/ui.rs",
+        "crates/whisper-dictate-app/src/ui/tabs.rs",
+        "crates/whisper-dictate-app/src/ui/api_keys.rs",
+        "crates/whisper-dictate-app/src/ui/icon.rs",
+    ]
+    return "\n".join(Path(path).read_text(encoding="utf-8") for path in paths)
+
 class RustUiInstallerTests(unittest.TestCase):
     def test_linux_rust_ui_installer_builds_release_binary_and_desktop_entry(self):
         path = Path("scripts/install-linux-rust-ui.sh")
@@ -35,7 +44,8 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn("scripts/build-windows-installer.ps1", technical)
 
     def test_groq_provider_is_persisted_and_key_is_not_plain_config(self):
-        ui = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        ui = rust_ui_source()
+        api_keys = Path("crates/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
         config = Path("crates/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
 
         self.assertIn('"Cloud STT provider"', ui)
@@ -44,5 +54,5 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('self.settings.stt_backend = "openai".to_owned();', ui)
         self.assertIn("self.settings.stt_model = provider.default_model().to_owned();", ui)
         self.assertIn("set_string(object, \"stt_provider\", &self.stt_provider);", config)
-        self.assertIn("keyring::Entry::new", ui)
+        self.assertIn("keyring::Entry::new", api_keys)
         self.assertNotIn("stt_api_key", config)

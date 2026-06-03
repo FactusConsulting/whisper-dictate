@@ -17,12 +17,11 @@ on:
         description: 'Existing tag to (re)release, e.g. v0.1.1'
         required: true
 
-permissions:
-  contents: write
-
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Resolve tag
         run: |
@@ -176,6 +175,8 @@ jobs:
   windows-installer:
     needs: release
     runs-on: windows-2025
+    permissions:
+      contents: write
     steps:
       - name: Resolve tag
         shell: bash

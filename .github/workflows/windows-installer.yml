@@ -11,12 +11,11 @@ on:
         description: 'Release tag to build installer for, e.g. v0.2.22'
         required: true
 
-permissions:
-  contents: write
-
 jobs:
   build-installer:
     runs-on: windows-2025
+    permissions:
+      contents: write
 
     steps:
       - name: Resolve tag

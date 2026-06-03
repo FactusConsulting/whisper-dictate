@@ -668,6 +668,12 @@ class DictionaryTests(unittest.TestCase):
                 os.environ[k] = self._old[k]
         sys.modules.pop("vp_dictionary", None)
 
+    def test_dictionary_json_filename_literal_is_centralized(self):
+        source = Path("vp_dictionary.py").read_text(encoding="utf-8")
+
+        self.assertIn('DICTIONARY_JSON_NAME = "dictionary.json"', source)
+        self.assertEqual(source.count('"dictionary.json"'), 1)
+
     def test_json_dictionary_builds_prompt_and_replacements(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
             f.write('{"terms":["Slack","Claude Code","Codex"],'

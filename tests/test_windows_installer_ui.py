@@ -1,5 +1,14 @@
 from tests.test_helpers import *
 
+def rust_ui_source():
+    paths = [
+        "crates/whisper-dictate-app/src/ui.rs",
+        "crates/whisper-dictate-app/src/ui/tabs.rs",
+        "crates/whisper-dictate-app/src/ui/api_keys.rs",
+        "crates/whisper-dictate-app/src/ui/icon.rs",
+    ]
+    return "\n".join(Path(path).read_text(encoding="utf-8") for path in paths)
+
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_installer_no_longer_packages_legacy_launchers(self):
         with open("installer/whisper-dictate.iss", encoding="utf-8") as f:
@@ -35,7 +44,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("configure_background_process(&mut process);", script)
 
     def test_rust_ui_cleans_stale_desktop_processes_before_starting_window(self):
-        ui_script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        ui_script = rust_ui_source()
         runtime_script = Path("crates/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
 
         self.assertLess(
@@ -57,7 +66,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("Stop-Process -Name python", runtime_without_tests)
 
     def test_rust_runtime_log_expands_to_available_width(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
         runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
 
         self.assertIn("egui::ScrollArea::both()", runtime_tab)
@@ -68,7 +77,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('.id_salt("runtime_log_view")', runtime_tab)
 
     def test_rust_runtime_log_can_be_copied(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
 
         self.assertIn('ui.button("Copy").clicked()', script)
         self.assertIn("ui.ctx().copy_text(self.runtime_log.clone())", script)
@@ -78,26 +87,28 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn(".interactive(false)", runtime_tab)
 
     def test_rust_runtime_tab_can_clear_log_without_stopping_runtime(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
 
         self.assertIn('ui.button("Clear").clicked()', script)
         self.assertIn("self.runtime_log.clear();", script)
 
     def test_rust_ui_shows_version_in_title_and_top_bar(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
+        icon = Path("crates/whisper-dictate-app/src/ui/icon.rs").read_text(encoding="utf-8")
 
         self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
         self.assertIn('ui.label(format!("whisper-dictate {}", runtime::version()))', script)
         self.assertIn(".with_icon(app_icon())", script)
-        self.assertIn("fn app_icon() -> egui::IconData", script)
+        self.assertIn("fn app_icon() -> egui::IconData", icon)
 
     def test_rust_ui_has_cloud_provider_dropdown_and_key_storage(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
+        api_keys = Path("crates/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
 
-        self.assertIn('GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1"', script)
-        self.assertIn('GROQ_STT_MODEL: &str = "whisper-large-v3-turbo"', script)
-        self.assertIn('OPENAI_STT_BASE_URL: &str = "https://api.openai.com/v1"', script)
-        self.assertIn("enum CloudProvider", script)
+        self.assertIn('GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1"', api_keys)
+        self.assertIn('GROQ_STT_MODEL: &str = "whisper-large-v3-turbo"', api_keys)
+        self.assertIn('OPENAI_STT_BASE_URL: &str = "https://api.openai.com/v1"', api_keys)
+        self.assertIn("enum CloudProvider", api_keys)
         self.assertIn("const GROQ_STT_MODELS: &[&str]", script)
         self.assertIn("const OPENAI_STT_MODELS: &[&str]", script)
         self.assertIn("const WHISPER_MODELS: &[&str]", script)
@@ -112,16 +123,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"nvidia/parakeet-tdt-0.6b-v2"', script)
         self.assertIn('"Parakeet model",', script)
         self.assertIn("PARAKEET_MODELS", script)
-        self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', script)
-        self.assertIn('OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys"', script)
+        self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', api_keys)
+        self.assertIn('OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys"', api_keys)
         self.assertIn('"Cloud STT API key"', script)
         self.assertIn('"Save API key"', script)
         self.assertIn("fn save_stt_api_key_now(&mut self)", script)
         self.assertIn("fn ensure_stt_api_key_loaded_for_runtime(&mut self)", script)
         self.assertIn("fn cloud_stt_missing_api_key(&self) -> bool", script)
         self.assertIn("fn save_stt_api_key_if_changed(", script)
-        self.assertIn("keyring::Entry::new", script)
-        self.assertIn("STT_API_KEY_ENV", script)
+        self.assertIn("keyring::Entry::new", api_keys)
+        self.assertIn("STT_API_KEY_ENV", api_keys)
         self.assertIn("fn has_unsaved_settings(&self) -> bool", script)
         self.assertIn('egui::RichText::new("Save settings *").strong()', script)
         self.assertIn(".add_enabled(is_dirty, save_button)", script)
@@ -130,7 +141,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn('ui.button("Clear API key").clicked()', script)
 
     def test_rust_ui_uses_same_api_key_loader_on_start_and_reload(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
+        api_keys = Path("crates/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
         default_impl = script.split("impl Default for WhisperDictateApp", 1)[1].split(
             "struct BackgroundTaskResult", 1
         )[0]
@@ -140,11 +152,14 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn("load_stt_api_key_state(provider)", default_impl)
         self.assertIn("load_stt_api_key_state(provider)", reload_impl)
-        self.assertIn("fn load_stt_api_key_state(provider: CloudProvider)", script)
-        self.assertIn("Loaded {} API key from environment. Save settings to store it.", script)
+        self.assertIn("fn load_stt_api_key_state(provider: CloudProvider)", api_keys)
+        self.assertIn("Loaded {} API key from environment. Use Save API key to store it.", api_keys)
+        ui_tests = Path("crates/whisper-dictate-app/src/ui/tests.rs").read_text(encoding="utf-8")
+        self.assertIn("environment_api_keys_do_not_make_settings_dirty_at_startup", ui_tests)
+        self.assertIn("edited_api_key_still_makes_settings_dirty", ui_tests)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
 
         self.assertIn("enum SttBackendMode", script)
         self.assertIn("Local Whisper", script)
@@ -159,16 +174,17 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("label_with_help_enabled(", script)
 
     def test_rust_output_ui_supports_groq_postprocess_models(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
+        api_keys = Path("crates/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
 
-        self.assertIn('const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY"', script)
-        self.assertIn("enum PostProvider", script)
+        self.assertIn('const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY"', api_keys)
+        self.assertIn("enum PostProvider", api_keys)
         self.assertIn('"Post API key"', script)
         self.assertIn('"Save post API key"', script)
         self.assertIn("fn save_post_api_key_now(&mut self)", script)
-        self.assertIn("fn load_post_api_key_state(", script)
-        self.assertIn("fn load_post_api_key_from_env(provider: PostProvider)", script)
-        self.assertIn("fn save_post_api_key(provider: PostProvider", script)
+        self.assertIn("fn load_post_api_key_state(", api_keys)
+        self.assertIn("fn load_post_api_key_from_env(provider: PostProvider)", api_keys)
+        self.assertIn("fn save_post_api_key(provider: PostProvider", api_keys)
         self.assertIn("self.reload_post_api_key();", script)
         self.assertIn("const GROQ_POST_MODELS: &[&str]", script)
         self.assertIn('"llama-3.1-8b-instant"', script)
@@ -188,7 +204,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"Quit key"', script)
 
     def test_rust_ui_has_cloud_api_test_and_local_viewers(self):
-        ui = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        ui = rust_ui_source()
         lib = Path("crates/whisper-dictate-app/src/lib.rs").read_text(encoding="utf-8")
         cargo = Path("crates/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
 
@@ -203,7 +219,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("telemetry::preview_jsonl", ui)
 
     def test_rust_settings_tabs_have_visible_help_badges(self):
-        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        script = rust_ui_source()
 
         self.assertIn("fn help_badge(", script)
         self.assertIn('small_button("?")', script)
@@ -243,7 +259,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_config_maps_audio_ducking_and_cloud_redaction(self):
         config = Path("vp_config.py").read_text(encoding="utf-8")
         rust_config = Path("crates/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
-        ui = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        ui = rust_ui_source()
 
         for token in (
             "VOICEPI_AUDIO_DUCKING",
