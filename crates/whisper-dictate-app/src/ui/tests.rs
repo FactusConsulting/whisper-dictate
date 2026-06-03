@@ -1,6 +1,8 @@
 use super::*;
 use std::env;
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
 
 static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -105,6 +107,55 @@ fn post_api_key_can_load_from_environment_fallback() {
     assert_eq!(
         load_post_api_key_from_env(PostProvider::Groq).as_deref(),
         Some("post-override-key")
+    );
+}
+
+#[test]
+fn file_api_key_store_round_trips_and_deletes_stt_keys() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("api-keys.json");
+    let store_env = store.to_string_lossy().to_string();
+    let _store_guard = EnvVarGuard::set(SECRET_STORE_ENV, &store_env);
+
+    save_file_secret(CloudProvider::Groq.credential_user(), " groq-secret ").unwrap();
+
+    assert_eq!(
+        load_file_secret(CloudProvider::Groq.credential_user()).unwrap(),
+        "groq-secret"
+    );
+    let raw = std::fs::read_to_string(&store).unwrap();
+    assert!(raw.contains("stt-api-key:groq"));
+    assert!(raw.contains("groq-secret"));
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::metadata(&store).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    save_file_secret(CloudProvider::Groq.credential_user(), "").unwrap();
+
+    assert!(!store.exists());
+}
+
+#[test]
+fn file_api_key_store_keeps_post_and_stt_keys_separate() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("api-keys.json");
+    let store_env = store.to_string_lossy().to_string();
+    let _store_guard = EnvVarGuard::set(SECRET_STORE_ENV, &store_env);
+
+    save_file_secret(CloudProvider::OpenAi.credential_user(), "stt-secret").unwrap();
+    save_file_secret(PostProvider::OpenAi.credential_user(), "post-secret").unwrap();
+
+    assert_eq!(
+        load_file_secret(CloudProvider::OpenAi.credential_user()).unwrap(),
+        "stt-secret"
+    );
+    assert_eq!(
+        load_file_secret(PostProvider::OpenAi.credential_user()).unwrap(),
+        "post-secret"
     );
 }
 

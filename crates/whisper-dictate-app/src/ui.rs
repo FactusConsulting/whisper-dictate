@@ -735,12 +735,16 @@ impl WhisperDictateApp {
         }
         let provider = self.current_cloud_provider();
         let message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
-            Ok(()) => {
+            Ok(location) => {
                 self.saved_stt_api_key_input = self.stt_api_key_input.clone();
                 if self.stt_api_key_input.trim().is_empty() {
                     format!("Cleared saved {} API key.", provider.label())
                 } else {
-                    format!("Saved {} API key in OS credential store.", provider.label())
+                    format!(
+                        "Saved {} API key in {}.",
+                        provider.label(),
+                        location.label()
+                    )
                 }
             }
             Err(err) => {
@@ -759,12 +763,16 @@ impl WhisperDictateApp {
         }
         let provider = self.current_cloud_provider();
         let message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
-            Ok(()) => {
+            Ok(location) => {
                 self.saved_stt_api_key_input = self.stt_api_key_input.clone();
                 if self.stt_api_key_input.trim().is_empty() {
                     format!("Cleared saved {} API key.", provider.label())
                 } else {
-                    format!("Saved {} API key in OS credential store.", provider.label())
+                    format!(
+                        "Saved {} API key in {}.",
+                        provider.label(),
+                        location.label()
+                    )
                 }
             }
             Err(err) => {
@@ -797,12 +805,16 @@ impl WhisperDictateApp {
             return "Post API keys are only used when Post processor is Groq or OpenAI.".to_owned();
         };
         match save_post_api_key(provider, self.post_api_key_input.trim()) {
-            Ok(()) => {
+            Ok(location) => {
                 self.saved_post_api_key_input = self.post_api_key_input.clone();
                 if self.post_api_key_input.trim().is_empty() {
                     format!("Cleared saved {} API key.", provider.label())
                 } else {
-                    format!("Saved {} API key in OS credential store.", provider.label())
+                    format!(
+                        "Saved {} API key in {}.",
+                        provider.label(),
+                        location.label()
+                    )
                 }
             }
             Err(err) => format!("Could not save {} API key: {err}", provider.label()),

@@ -1,5 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 
 use crate::config::AppSettings;
 
@@ -15,6 +17,23 @@ pub(super) const STT_API_KEY_ENV: &str = "VOICEPI_STT_API_KEY";
 pub(super) const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY";
 
 const CREDENTIAL_SERVICE: &str = "whisper-dictate";
+pub(super) const SECRET_STORE_ENV: &str = "VOICEPI_API_KEY_STORE";
+const SECRET_STORE_FILENAME: &str = "api-keys.json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SecretSaveLocation {
+    CredentialStore,
+    File,
+}
+
+impl SecretSaveLocation {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::CredentialStore => "OS credential store",
+            Self::File => "local fallback key file",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CloudProvider {
@@ -94,7 +113,7 @@ impl CloudProvider {
         }
     }
 
-    fn credential_user(self) -> &'static str {
+    pub(super) fn credential_user(self) -> &'static str {
         match self {
             Self::Groq => "stt-api-key:groq",
             Self::OpenAi => "stt-api-key:openai",
@@ -125,7 +144,7 @@ impl PostProvider {
         }
     }
 
-    fn credential_user(self) -> &'static str {
+    pub(super) fn credential_user(self) -> &'static str {
         match self {
             Self::Groq => "post-api-key:groq",
             Self::OpenAi => "post-api-key:openai",
@@ -227,46 +246,157 @@ pub(super) fn load_post_api_key_from_env(provider: PostProvider) -> Option<Strin
         .find(|value| !value.is_empty())
 }
 
-pub(super) fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<()> {
-    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
-    if secret.trim().is_empty() {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(err.into()),
+pub(super) fn save_stt_api_key(
+    provider: CloudProvider,
+    secret: &str,
+) -> Result<SecretSaveLocation> {
+    save_secret(provider.credential_user(), secret)
+}
+
+pub(super) fn save_post_api_key(
+    provider: PostProvider,
+    secret: &str,
+) -> Result<SecretSaveLocation> {
+    save_secret(provider.credential_user(), secret)
+}
+
+fn save_secret(user: &str, secret: &str) -> Result<SecretSaveLocation> {
+    let keyring_result = match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
+        Ok(entry) => {
+            if secret.trim().is_empty() {
+                match entry.delete_credential() {
+                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                    Err(err) => Err(err.into()),
+                }
+            } else {
+                entry
+                    .set_password(secret.trim())
+                    .map_err(anyhow::Error::from)
+            }
         }
-    } else {
-        entry.set_password(secret.trim())?;
-        Ok(())
+        Err(err) => Err(err.into()),
+    };
+    match keyring_result {
+        Ok(()) => {
+            let _ = save_file_secret(user, "");
+            Ok(SecretSaveLocation::CredentialStore)
+        }
+        Err(keyring_err) => {
+            save_file_secret(user, secret).with_context(|| {
+                format!("OS credential store failed ({keyring_err}); file fallback also failed")
+            })?;
+            Ok(SecretSaveLocation::File)
+        }
     }
 }
 
-pub(super) fn save_post_api_key(provider: PostProvider, secret: &str) -> Result<()> {
-    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
+pub(super) fn save_file_secret(user: &str, secret: &str) -> Result<()> {
+    let mut store = load_secret_store_file()?;
     if secret.trim().is_empty() {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
+        store.remove(user);
     } else {
-        entry.set_password(secret.trim())?;
-        Ok(())
+        store.insert(user.to_owned(), secret.trim().to_owned());
     }
+    write_secret_store_file(&store)
 }
 
 fn load_stt_api_key(provider: CloudProvider) -> Result<String> {
-    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
-    match entry.get_password() {
-        Ok(secret) => Ok(secret),
-        Err(keyring::Error::NoEntry) => Ok(String::new()),
-        Err(err) => Err(err.into()),
-    }
+    load_secret(provider.credential_user())
 }
 
 fn load_post_api_key(provider: PostProvider) -> Result<String> {
-    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
-    match entry.get_password() {
-        Ok(secret) => Ok(secret),
-        Err(keyring::Error::NoEntry) => Ok(String::new()),
-        Err(err) => Err(err.into()),
+    load_secret(provider.credential_user())
+}
+
+fn load_secret(user: &str) -> Result<String> {
+    match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
+        Ok(entry) => match entry.get_password() {
+            Ok(secret) => Ok(secret),
+            Err(keyring::Error::NoEntry) => load_file_secret(user),
+            Err(err) => load_file_secret(user).with_context(|| {
+                format!("OS credential store failed ({err}); file fallback failed")
+            }),
+        },
+        Err(err) => load_file_secret(user)
+            .with_context(|| format!("OS credential store failed ({err}); file fallback failed")),
+    }
+}
+
+pub(super) fn load_file_secret(user: &str) -> Result<String> {
+    Ok(load_secret_store_file()?.remove(user).unwrap_or_default())
+}
+
+fn load_secret_store_file() -> Result<std::collections::BTreeMap<String, String>> {
+    let path = secret_store_path();
+    if !path.exists() {
+        return Ok(Default::default());
+    }
+    let raw = fs::read_to_string(&path)?;
+    if raw.trim().is_empty() {
+        return Ok(Default::default());
+    }
+    serde_json::from_str(&raw).with_context(|| format!("invalid API key store {}", path.display()))
+}
+
+fn write_secret_store_file(store: &std::collections::BTreeMap<String, String>) -> Result<()> {
+    let path = secret_store_path();
+    if store.is_empty() {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_secret_store_contents(&path, &(serde_json::to_string_pretty(store)? + "\n"))
+}
+
+#[cfg(unix)]
+fn write_secret_store_contents(path: &std::path::Path, contents: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(contents.as_bytes())?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_secret_store_contents(path: &std::path::Path, contents: &str) -> Result<()> {
+    fs::write(path, contents)?;
+    Ok(())
+}
+
+fn secret_store_path() -> PathBuf {
+    if let Some(raw) = env::var_os(SECRET_STORE_ENV) {
+        return PathBuf::from(raw);
+    }
+    platform_config_dir().join(SECRET_STORE_FILENAME)
+}
+
+fn platform_config_dir() -> PathBuf {
+    if cfg!(windows) {
+        env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join("AppData/Roaming"))
+            })
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("whisper-dictate")
+    } else {
+        env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("whisper-dictate")
     }
 }
