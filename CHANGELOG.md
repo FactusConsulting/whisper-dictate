@@ -11,6 +11,15 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-06-03
+
+### Fixed
+- Removed the remaining SonarCloud reliability findings from the Ubuntu setup script by using Bash `[[ ... ]]` conditionals for file/string checks.
+- Replaced spoken-formatting cleanup regexes with linear helpers to avoid regex denial-of-service hotspots.
+
+### Changed
+- Pinned Rust toolchain GitHub Actions to a full commit SHA and split several Python helpers to reduce SonarCloud cognitive-complexity findings.
+
 ## [0.3.22] - 2026-06-03
 
 ### Fixed
