@@ -40,7 +40,31 @@ EOF
 
 chmod 0644 "${DESKTOP}"
 
+ensure_user_bin_first() {
+  local profile="$1"
+  if [[ -f "${profile}" ]] && grep -Fq 'export PATH="${HOME}/.local/bin:${PATH}"' "${profile}"; then
+    return
+  fi
+  {
+    echo
+    echo "# whisper-dictate user install"
+    echo 'export PATH="${HOME}/.local/bin:${PATH}"'
+  } >> "${profile}"
+}
+
+if [[ "$(command -v whisper-dictate 2>/dev/null || true)" != "${BIN}" ]]; then
+  ensure_user_bin_first "${HOME}/.profile"
+  if [[ "${SHELL:-}" = */zsh ]] || [[ -f "${HOME}/.zprofile" ]]; then
+    ensure_user_bin_first "${HOME}/.zprofile"
+  fi
+fi
+
 echo "Installed ${BIN}"
 echo "Installed ${REAL_BIN}"
 echo "Installed ${DESKTOP}"
-echo "Run: whisper-dictate ui"
+if [[ "$(command -v whisper-dictate 2>/dev/null || true)" = "${BIN}" ]]; then
+  echo "Run: whisper-dictate ui"
+else
+  echo "Run now: ${BIN} ui"
+  echo "Open a new shell to use: whisper-dictate ui"
+fi

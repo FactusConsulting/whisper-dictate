@@ -129,10 +129,23 @@ SVCEOF
 
 systemctl --user daemon-reload
 systemctl --user enable ydotoold.service 2>/dev/null || true
-# Dræb evt. kørende ydotoold-proces så en gammel daemon (uden dk-layout)
+# Stop service og dræb evt. kørende ydotoold-proces så en gammel daemon
 # ikke blokerer socketen og forhindrer systemd i at starte ny.
+systemctl --user stop ydotoold.service 2>/dev/null || true
+systemctl --user reset-failed ydotoold.service 2>/dev/null || true
 pkill -x ydotoold 2>/dev/null || true
-sleep 0.5
+for _ in 1 2 3 4 5; do
+    pgrep -x ydotoold >/dev/null 2>&1 || break
+    sleep 0.2
+done
+if pgrep -x ydotoold >/dev/null 2>&1; then
+    pkill -KILL -x ydotoold 2>/dev/null || true
+    sleep 0.2
+fi
+YDOTOOL_SOCKET_PATH="${YDOTOOL_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket}"
+if [[ -S "$YDOTOOL_SOCKET_PATH" ]] && ! pgrep -x ydotoold >/dev/null 2>&1; then
+    rm -f "$YDOTOOL_SOCKET_PATH"
+fi
 systemctl --user restart ydotoold.service 2>/dev/null || systemctl --user start ydotoold.service 2>/dev/null || true
 sleep 1
 if systemctl --user is-active ydotoold.service &>/dev/null; then

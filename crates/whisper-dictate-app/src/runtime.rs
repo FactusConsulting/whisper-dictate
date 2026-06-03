@@ -87,8 +87,9 @@ fn install_linux_desktop_entries() -> Result<()> {
     std::fs::create_dir_all(&applications)?;
     std::fs::create_dir_all(&autostart)?;
 
-    let desktop = linux_desktop_entry(false);
-    let autostart_desktop = linux_desktop_entry(true);
+    let exec = linux_desktop_exec_command();
+    let desktop = linux_desktop_entry(false, &exec);
+    let autostart_desktop = linux_desktop_entry(true, &exec);
     let app_path = applications.join("whisper-dictate.desktop");
     let autostart_path = autostart.join("whisper-dictate.desktop");
     std::fs::write(&app_path, desktop)?;
@@ -102,12 +103,29 @@ fn install_linux_desktop_entries() -> Result<()> {
     Ok(())
 }
 
-fn linux_desktop_entry(autostart: bool) -> String {
-    let mut entry = String::from(
+fn linux_desktop_exec_command() -> String {
+    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate"));
+    format!("{} ui", desktop_exec_token(&exe))
+}
+
+fn desktop_exec_token(path: &Path) -> String {
+    let raw = path.display().to_string();
+    if raw
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\'))
+    {
+        format!("\"{}\"", raw.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        raw
+    }
+}
+
+fn linux_desktop_entry(autostart: bool, exec: &str) -> String {
+    let mut entry = format!(
         "[Desktop Entry]\n\
 Name=Whisper Dictate\n\
 Comment=Push-to-talk dictation settings and runtime control\n\
-Exec=whisper-dictate ui\n\
+Exec={exec}\n\
 Icon=audio-input-microphone\n\
 Terminal=false\n\
 Type=Application\n\
@@ -124,16 +142,15 @@ fn start_linux_ui_detached() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
     }
+    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate"));
     if command_exists("gtk-launch") {
         Command::new("gtk-launch").arg("whisper-dictate").spawn()?;
         println!("Started Whisper Dictate UI via app launcher.");
     } else if command_exists("setsid") {
-        Command::new("setsid")
-            .args(["whisper-dictate", "ui"])
-            .spawn()?;
+        Command::new("setsid").arg(&exe).arg("ui").spawn()?;
         println!("Started Whisper Dictate UI.");
     } else {
-        Command::new("whisper-dictate").arg("ui").spawn()?;
+        Command::new(&exe).arg("ui").spawn()?;
         println!("Started Whisper Dictate UI.");
     }
     Ok(())

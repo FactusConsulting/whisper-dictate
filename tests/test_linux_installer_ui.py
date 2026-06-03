@@ -26,7 +26,20 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('exec "${REAL_BIN}" "\\$@"', script)
         self.assertIn("whisper-dictate.desktop", script)
         self.assertIn("Exec=${BIN} ui", script)
+        self.assertIn("ensure_user_bin_first", script)
+        self.assertIn('${HOME}/.zprofile', script)
+        self.assertIn('export PATH="${HOME}/.local/bin:${PATH}"', script)
+        self.assertIn('Run now: ${BIN} ui', script)
         self.assertNotIn("setup.ps1", script)
+
+    def test_ubuntu_setup_resets_stale_ydotoold_before_starting_service(self):
+        script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")
+
+        self.assertIn("systemctl --user stop ydotoold.service", script)
+        self.assertIn("systemctl --user reset-failed ydotoold.service", script)
+        self.assertIn("pkill -KILL -x ydotoold", script)
+        self.assertIn('rm -f "$YDOTOOL_SOCKET_PATH"', script)
+        self.assertIn("systemctl --user restart ydotoold.service", script)
 
     def test_linux_ui_docs_point_to_rust_ui_not_pyside_powershell(self):
         readme = Path("README.md").read_text(encoding="utf-8")

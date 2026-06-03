@@ -52,6 +52,19 @@ def _event_devices_readable() -> tuple[bool, str]:
     return False, f"0/{len(paths)} readable; add user to input group and log in again"
 
 
+def _ydotoold_process_detail(socket_ready: bool) -> tuple[bool, str]:
+    if socket_ready:
+        return True, "accepting connections"
+    try:
+        r = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True, timeout=1)
+    except Exception as e:
+        return False, str(e)
+    if r.returncode == 0:
+        pids = " ".join(r.stdout.split())
+        return False, f"process exists but socket is not accepting connections ({pids})"
+    return False, "not running"
+
+
 def _base_checks(on_linux: bool, on_wayland: bool) -> list[Check]:
     return [
         Check("platform", on_linux, sys.platform, required=False),
@@ -72,14 +85,11 @@ def _linux_checks() -> list[Check]:
     checks.append(Check("WAYLAND_DISPLAY", bool(os.environ.get("WAYLAND_DISPLAY")), os.environ.get("WAYLAND_DISPLAY", "unset"), required=False))
 
     sock = ydotool_socket_path()
+    socket_ready = ydotoold_ready(sock, timeout=0.6)
     checks.append(Check("ydotool socket", os.path.exists(sock), sock, required=False))
-    checks.append(Check("ydotool socket ready", ydotoold_ready(sock, timeout=0.6), sock))
-
-    try:
-        r = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, timeout=1)
-        checks.append(Check("ydotoold process", r.returncode == 0, "running" if r.returncode == 0 else "not running"))
-    except Exception as e:
-        checks.append(Check("ydotoold process", False, str(e)))
+    checks.append(Check("ydotool socket ready", socket_ready, sock))
+    process_ok, process_detail = _ydotoold_process_detail(socket_ready)
+    checks.append(Check("ydotoold process", process_ok, process_detail))
     return checks
 
 

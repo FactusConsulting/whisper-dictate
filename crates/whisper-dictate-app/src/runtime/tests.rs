@@ -216,6 +216,29 @@ fn install_command_runs_rust_cli_from_app_root() {
 }
 
 #[test]
+fn linux_desktop_entry_uses_supplied_absolute_exec_command() {
+    let entry = linux_desktop_entry(false, "/opt/whisper-dictate/whisper-dictate ui");
+
+    assert!(entry.contains("Exec=/opt/whisper-dictate/whisper-dictate ui\n"));
+    assert!(!entry.contains("Exec=whisper-dictate ui"));
+    assert!(!entry.contains("X-GNOME-Autostart-enabled=true"));
+}
+
+#[test]
+fn linux_autostart_entry_marks_gnome_autostart_enabled() {
+    let entry = linux_desktop_entry(true, "/opt/whisper-dictate/whisper-dictate ui");
+
+    assert!(entry.contains("X-GNOME-Autostart-enabled=true"));
+}
+
+#[test]
+fn desktop_exec_token_quotes_paths_with_spaces() {
+    let token = desktop_exec_token(Path::new("/tmp/Whisper Dictate/whisper-dictate"));
+
+    assert_eq!(token, "\"/tmp/Whisper Dictate/whisper-dictate\"");
+}
+
+#[test]
 fn run_capture_returns_stdout_stderr_and_status() {
     let dir = tempfile::tempdir().unwrap();
     #[cfg(windows)]

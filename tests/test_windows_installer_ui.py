@@ -309,7 +309,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('join("ubuntu26.04").join("setup.sh")', runtime)
         self.assertIn('env("VOICEPI_RUST_OWNS_DESKTOP", "1")', runtime)
         self.assertIn("fn install_linux_desktop_entries() -> Result<()>", runtime)
-        self.assertIn("fn linux_desktop_entry(autostart: bool) -> String", runtime)
+        self.assertIn("fn linux_desktop_entry(autostart: bool, exec: &str) -> String", runtime)
         self.assertIn("fn start_linux_ui_detached() -> Result<()>", runtime)
 
     def test_ubuntu_setup_creates_launcher_autostart_and_starts_rust_ui(self):
@@ -317,7 +317,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         runtime = Path("crates/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
 
         self.assertIn('VOICEPI_RUST_OWNS_DESKTOP', script)
-        self.assertIn('Exec=whisper-dictate ui', runtime)
+        self.assertIn("fn linux_desktop_exec_command() -> String", runtime)
+        self.assertIn('format!("{} ui", desktop_exec_token(&exe))', runtime)
         self.assertIn('Name=Whisper Dictate', runtime)
         self.assertIn('.local/share/applications', runtime)
         self.assertIn('.config/autostart', runtime)
