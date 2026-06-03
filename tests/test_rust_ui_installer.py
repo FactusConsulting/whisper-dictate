@@ -115,6 +115,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', script)
         self.assertIn('OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys"', script)
         self.assertIn('"Cloud STT API key"', script)
+        self.assertIn('"Save API key"', script)
+        self.assertIn("fn save_stt_api_key_now(&mut self)", script)
+        self.assertIn("fn ensure_stt_api_key_loaded_for_runtime(&mut self)", script)
+        self.assertIn("fn cloud_stt_missing_api_key(&self) -> bool", script)
         self.assertIn("fn save_stt_api_key_if_changed(", script)
         self.assertIn("keyring::Entry::new", script)
         self.assertIn("STT_API_KEY_ENV", script)
@@ -123,7 +127,6 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".add_enabled(is_dirty, save_button)", script)
         self.assertIn('"Unsaved changes"', script)
         self.assertIn('ui.button("Reload from disk").clicked()', script)
-        self.assertNotIn('ui.button("Save API key").clicked()', script)
         self.assertNotIn('ui.button("Clear API key").clicked()', script)
 
     def test_rust_ui_uses_same_api_key_loader_on_start_and_reload(self):

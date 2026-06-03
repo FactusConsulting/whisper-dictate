@@ -11,6 +11,12 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-06-03
+
+### Fixed
+- Cloud STT no longer starts the Python worker when no API key is loaded, avoiding the confusing startup exception from the external API adapter.
+- The Rust UI now has a direct Save API key action and retries loading credentials/environment keys immediately before starting or restarting cloud STT.
+
 ## [0.3.18] - 2026-06-03
 
 ### Fixed

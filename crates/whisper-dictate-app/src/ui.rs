@@ -550,6 +550,13 @@ impl WhisperDictateApp {
                     }
                 }
                 if ui
+                    .button("Save API key")
+                    .on_hover_text("Stores the current API key in the OS credential store without changing other settings.")
+                    .clicked()
+                {
+                    self.save_stt_api_key_now();
+                }
+                if ui
                     .add_enabled(
                         self.background_task.is_none(),
                         egui::Button::new("Test cloud API"),
@@ -562,7 +569,7 @@ impl WhisperDictateApp {
                 ui.label(&self.stt_api_key_status);
             });
             ui.label(
-                "Paste or edit the API key above, then click Save settings. Clear the field and save to remove the stored key.",
+                "Paste or edit the API key above, then click Save API key or Save settings. Clear the field and save to remove the stored key.",
             );
         }
         if self.settings.stt_backend == "openai" {
@@ -928,6 +935,10 @@ impl WhisperDictateApp {
     }
 
     fn start_runtime(&mut self) {
+        self.ensure_stt_api_key_loaded_for_runtime();
+        if self.cloud_stt_missing_api_key() {
+            return;
+        }
         let command = self.worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
         if let Err(err) = self.supervisor.start(command) {
@@ -945,6 +956,10 @@ impl WhisperDictateApp {
     }
 
     fn restart_runtime(&mut self) {
+        self.ensure_stt_api_key_loaded_for_runtime();
+        if self.cloud_stt_missing_api_key() {
+            return;
+        }
         let command = self.worker_command();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
         if let Err(err) = self.supervisor.restart(command) {
@@ -972,6 +987,26 @@ impl WhisperDictateApp {
             }
         }
         command
+    }
+
+    fn ensure_stt_api_key_loaded_for_runtime(&mut self) {
+        if self.settings.stt_backend != "openai" || !self.stt_api_key_input.trim().is_empty() {
+            return;
+        }
+        self.reload_stt_api_key();
+        if self.stt_api_key_input.trim().is_empty() {
+            let provider = self.current_cloud_provider();
+            let message = format!(
+                "No {} API key loaded. Paste one in Core and click Save API key before starting cloud STT.",
+                provider.label()
+            );
+            self.stt_api_key_status = message.clone();
+            self.append_runtime_log(format!("[ui] {message}"));
+        }
+    }
+
+    fn cloud_stt_missing_api_key(&self) -> bool {
+        self.settings.stt_backend == "openai" && self.stt_api_key_input.trim().is_empty()
     }
 
     fn run_doctor(&mut self) {
@@ -1319,6 +1354,29 @@ impl WhisperDictateApp {
         };
         self.stt_api_key_status = message.clone();
         Some(message)
+    }
+
+    fn save_stt_api_key_now(&mut self) {
+        if self.settings.stt_backend != "openai" {
+            self.stt_api_key_status =
+                "API keys are only used when STT backend is Cloud STT.".to_owned();
+            return;
+        }
+        let provider = self.current_cloud_provider();
+        let message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
+            Ok(()) => {
+                self.saved_stt_api_key_input = self.stt_api_key_input.clone();
+                if self.stt_api_key_input.trim().is_empty() {
+                    format!("Cleared saved {} API key.", provider.label())
+                } else {
+                    format!("Saved {} API key in OS credential store.", provider.label())
+                }
+            }
+            Err(err) => {
+                format!("Could not save {} API key: {err}", provider.label())
+            }
+        };
+        self.stt_api_key_status = message;
     }
 
     fn ensure_dictionary(&mut self) {
@@ -1850,6 +1908,40 @@ mod tests {
             load_stt_api_key_from_env(CloudProvider::Groq).as_deref(),
             Some("shared-test-key")
         );
+    }
+
+    #[test]
+    fn cloud_stt_runtime_requires_api_key_before_worker_start() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "groq".to_owned(),
+            stt_base_url: GROQ_STT_BASE_URL.to_owned(),
+            ..Default::default()
+        };
+        let mut app = WhisperDictateApp {
+            selected_tab: Tab::Runtime,
+            runtime_state: RuntimeState::Stopped,
+            runtime_log: String::new(),
+            config_path: String::new(),
+            saved_settings: settings.clone(),
+            settings,
+            settings_status: String::new(),
+            stt_api_key_input: String::new(),
+            saved_stt_api_key_input: String::new(),
+            stt_api_key_status: String::new(),
+            dictionary_preview: String::new(),
+            history_preview: String::new(),
+            metrics_preview: String::new(),
+            supervisor: RuntimeSupervisor::new(),
+            background_task: None,
+            background_task_label: None,
+        };
+
+        assert!(app.cloud_stt_missing_api_key());
+
+        app.stt_api_key_input = "test-key".to_owned();
+
+        assert!(!app.cloud_stt_missing_api_key());
     }
 
     struct EnvVarGuard {
