@@ -637,3 +637,15 @@ class CommandHookTests(unittest.TestCase):
         metrics_pos = script.index("append_jsonl(self.metrics_jsonl, event)")
         self.assertLess(event_pos, hook_pos)
         self.assertLess(hook_pos, metrics_pos)
+
+
+class DebugToolingTests(unittest.TestCase):
+    def test_probe_key_is_documented_and_ci_sanity_checked(self):
+        probe = Path("scripts/probe-key.py").read_text(encoding="utf-8")
+        config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+
+        self.assertIn("Probe a push-to-talk key/chord", probe)
+        self.assertIn("python scripts/probe-key.py", config)
+        self.assertIn("probe-key.py sanity", workflow)
+        self.assertIn("python scripts/probe-key.py bogus_key 1", workflow)

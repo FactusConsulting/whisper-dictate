@@ -11,8 +11,8 @@
 #   4. Creates udev rule so /dev/uinput is accessible to the input group
 #   5. Installs ydotool (Wayland text injection via kernel uinput)
 #   6. Sets up ydotoold as a systemd user service (auto-starts with session)
-#   7. Creates GNOME launcher/autostart entries for the Rust desktop UI
-#   8. Starts the Rust desktop UI
+#   7. When run directly, creates GNOME launcher/autostart entries and starts the UI
+#      (when run by `whisper-dictate setup-ubuntu`, Rust owns this final step)
 set -euo pipefail
 
 STEP=0
@@ -146,6 +146,20 @@ fi
 # ---------------------------------------------------------------------------
 step "whisper-dictate: GNOME app launcher"
 # ---------------------------------------------------------------------------
+if [ "${VOICEPI_RUST_OWNS_DESKTOP:-}" = "1" ]; then
+    ok "Rust CLI handles launcher/autostart creation and UI startup"
+    echo
+    echo "================================================================"
+    echo " whisper-dictate Ubuntu 26.04 system setup færdig"
+    echo "================================================================"
+    echo
+    if ! groups | grep -q '\binput\b'; then
+        echo "  NÆSTE SKRIDT: Log ud og ind igen (input-gruppe aktiveres)"
+        echo
+    fi
+    exit 0
+fi
+
 mkdir -p "$HOME/.local/share/applications" "$HOME/.config/autostart"
 cat > "$HOME/.local/share/applications/whisper-dictate.desktop" << 'EOF'
 [Desktop Entry]

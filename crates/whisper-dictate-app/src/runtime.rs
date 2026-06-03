@@ -58,8 +58,13 @@ pub fn setup_ubuntu() -> Result<()> {
             script.display()
         ));
     }
-    let status = Command::new("bash").arg(&script).status()?;
+    let status = Command::new("bash")
+        .arg(&script)
+        .env("VOICEPI_RUST_OWNS_DESKTOP", "1")
+        .status()?;
     if status.success() {
+        install_linux_desktop_entries()?;
+        start_linux_ui_detached()?;
         Ok(())
     } else {
         Err(anyhow!(
@@ -70,6 +75,74 @@ pub fn setup_ubuntu() -> Result<()> {
                 .unwrap_or_else(|| "unknown".to_owned())
         ))
     }
+}
+
+fn install_linux_desktop_entries() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+    let home = home_dir().ok_or_else(|| anyhow!("HOME is not set"))?;
+    let applications = home.join(".local/share/applications");
+    let autostart = home.join(".config/autostart");
+    std::fs::create_dir_all(&applications)?;
+    std::fs::create_dir_all(&autostart)?;
+
+    let desktop = linux_desktop_entry(false);
+    let autostart_desktop = linux_desktop_entry(true);
+    let app_path = applications.join("whisper-dictate.desktop");
+    let autostart_path = autostart.join("whisper-dictate.desktop");
+    std::fs::write(&app_path, desktop)?;
+    std::fs::write(&autostart_path, autostart_desktop)?;
+
+    let _ = Command::new("update-desktop-database")
+        .arg(&applications)
+        .status();
+    println!("Desktop launcher: {}", app_path.display());
+    println!("Autostart entry: {}", autostart_path.display());
+    Ok(())
+}
+
+fn linux_desktop_entry(autostart: bool) -> String {
+    let mut entry = String::from(
+        "[Desktop Entry]\n\
+Name=Whisper Dictate\n\
+Comment=Push-to-talk dictation settings and runtime control\n\
+Exec=whisper-dictate ui\n\
+Icon=audio-input-microphone\n\
+Terminal=false\n\
+Type=Application\n\
+Categories=Utility;AudioVideo;Audio;\n\
+StartupNotify=true\n",
+    );
+    if autostart {
+        entry.push_str("X-GNOME-Autostart-enabled=true\n");
+    }
+    entry
+}
+
+fn start_linux_ui_detached() -> Result<()> {
+    if cfg!(windows) {
+        return Ok(());
+    }
+    if command_exists("gtk-launch") {
+        Command::new("gtk-launch").arg("whisper-dictate").spawn()?;
+        println!("Started Whisper Dictate UI via app launcher.");
+    } else if command_exists("setsid") {
+        Command::new("setsid")
+            .args(["whisper-dictate", "ui"])
+            .spawn()?;
+        println!("Started Whisper Dictate UI.");
+    } else {
+        Command::new("whisper-dictate").arg("ui").spawn()?;
+        println!("Started Whisper Dictate UI.");
+    }
+    Ok(())
+}
+
+fn command_exists(program: &str) -> bool {
+    env::var_os("PATH")
+        .map(|path| env::split_paths(&path).any(|dir| dir.join(program).exists()))
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
