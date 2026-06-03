@@ -285,11 +285,8 @@ impl WhisperDictateApp {
 
     fn worker_command(&self) -> WorkerCommand {
         let mut command = default_worker_command();
-        let xkb_layout = self.settings.xkb_layout.trim();
-        if !xkb_layout.is_empty() {
-            command
-                .env
-                .push((XKB_LAYOUT_ENV.to_owned(), xkb_layout.to_owned()));
+        if let Some(xkb_layout) = effective_xkb_layout(&self.settings) {
+            command.env.push((XKB_LAYOUT_ENV.to_owned(), xkb_layout));
         }
         if self.settings.stt_backend == "openai" {
             let key = self.stt_api_key_input.trim();
@@ -1189,6 +1186,46 @@ fn apply_ui_text_scale(ctx: &egui::Context, raw_scale: &str) {
         style.text_styles = text_styles;
         ctx.set_style(style);
     }
+}
+
+fn effective_xkb_layout(settings: &AppSettings) -> Option<String> {
+    let configured = settings.xkb_layout.trim();
+    if !configured.is_empty() {
+        return Some(configured.to_owned());
+    }
+    detect_gnome_xkb_layout()
+}
+
+fn detect_gnome_xkb_layout() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let output = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.input-sources", "sources"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    parse_gnome_xkb_sources(&raw)
+}
+
+fn parse_gnome_xkb_sources(raw: &str) -> Option<String> {
+    for entry in raw.split('(').skip(1) {
+        let Some(entry) = entry.split(')').next() else {
+            continue;
+        };
+        let mut values = entry
+            .split(',')
+            .map(|part| part.trim().trim_matches('\'').trim_matches('"'));
+        let kind = values.next().unwrap_or_default();
+        let layout = values.next().unwrap_or_default();
+        if kind == "xkb" && !layout.is_empty() && layout != "us" {
+            return Some(layout.to_owned());
+        }
+    }
+    None
 }
 
 fn open_url(url: &str) -> Result<()> {

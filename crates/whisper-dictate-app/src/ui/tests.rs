@@ -304,6 +304,37 @@ fn worker_command_passes_wayland_keyboard_layout() {
 }
 
 #[test]
+fn configured_keyboard_layout_beats_gnome_detection() {
+    let settings = AppSettings {
+        xkb_layout: " no ".to_owned(),
+        ..Default::default()
+    };
+
+    assert_eq!(effective_xkb_layout(&settings).as_deref(), Some("no"));
+}
+
+#[test]
+fn parses_gnome_danish_keyboard_layout() {
+    assert_eq!(
+        parse_gnome_xkb_sources("[('xkb', 'dk')]").as_deref(),
+        Some("dk")
+    );
+    assert_eq!(
+        parse_gnome_xkb_sources("[('ibus', 'mozc-jp'), ('xkb', 'dk')]").as_deref(),
+        Some("dk")
+    );
+}
+
+#[test]
+fn gnome_keyboard_layout_parser_ignores_us_fallback() {
+    assert_eq!(parse_gnome_xkb_sources("[('xkb', 'us')]"), None);
+    assert_eq!(
+        parse_gnome_xkb_sources("[('xkb', 'us'), ('xkb', 'dk')]").as_deref(),
+        Some("dk")
+    );
+}
+
+#[test]
 fn effective_post_api_key_uses_post_key_then_stt_fallback() {
     let settings = AppSettings {
         post_processor: "groq".to_owned(),
