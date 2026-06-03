@@ -28,6 +28,7 @@ fn supervisor_captures_stdout_and_exit() {
                 "print('worker-ready', flush=True)".to_owned(),
             ],
             working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
         })
         .unwrap();
 
@@ -54,6 +55,7 @@ fn supervisor_stops_running_process() {
                 "import time; print('worker-ready', flush=True); time.sleep(30)".to_owned(),
             ],
             working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
         })
         .unwrap();
 
@@ -82,6 +84,7 @@ fn supervisor_stop_returns_without_waiting_for_process_exit_event() {
                 "import time; print('worker-ready', flush=True); time.sleep(30)".to_owned(),
             ],
             working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
         })
         .unwrap();
 
@@ -111,6 +114,7 @@ fn supervisor_parses_worker_events_from_stderr() {
                 "import os, sys; assert os.environ['VOICEPI_WORKER_EVENTS'] == '1'; print('[worker-event] {\"event\":\"status\",\"state\":\"ready\"}', file=sys.stderr, flush=True)".to_owned(),
             ],
             working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
         })
         .unwrap();
 
@@ -122,6 +126,36 @@ fn supervisor_parses_worker_events_from_stderr() {
     assert!(!events.iter().any(|event| matches!(
         event,
         RuntimeEvent::Stderr(line) if line.starts_with("[worker-event]")
+    )));
+}
+
+#[test]
+fn supervisor_passes_command_env_to_worker_without_logging_secret() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import os; print(len(os.environ.get('VOICEPI_TEST_SECRET', '')) == 12, flush=True)"
+                    .to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: vec![("VOICEPI_TEST_SECRET".to_owned(), "secret-value".to_owned())],
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "True") && has_exit(events)
+    });
+
+    assert!(has_stdout(&events, "True"));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::Started { command } if command.contains("secret-value")
     )));
 }
 

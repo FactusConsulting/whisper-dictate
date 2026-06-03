@@ -712,19 +712,10 @@ if __name__ == "__main__":
         xkb = _LANG_TO_XKB.get(lang, lang)
         os.environ["XKB_DEFAULT_LAYOUT"] = xkb
 
-    try:
-        dev, ctype = _resolve_device(a.device)
-    except ValueError as e:
-        ap.error(str(e))
-
     if apply_local_only_network_lock():
         print("[privacy] local-only mode enabled; cloud backends and model downloads are blocked", flush=True)
 
     _load_runtime_modules()
-
-    if (os.environ.get("VOICEPI_DEBUG") or "").strip().lower() not in (
-            "", "0", "false", "no", "off"):
-        _print_effective_config(a, dev, ctype)
 
     try:
         backend = STT_BACKEND
@@ -734,6 +725,18 @@ if __name__ == "__main__":
                 f"{backend!r}; expected one of {', '.join(VALID_STT_BACKENDS)}")
     except ValueError as e:
         ap.error(str(e))
+
+    if backend == "openai":
+        dev, ctype = "api", "remote"
+    else:
+        try:
+            dev, ctype = _resolve_device(a.device)
+        except ValueError as e:
+            ap.error(str(e))
+
+    if (os.environ.get("VOICEPI_DEBUG") or "").strip().lower() not in (
+            "", "0", "false", "no", "off"):
+        _print_effective_config(a, dev, ctype)
 
     label = (
         "NVIDIA Parakeet" if backend == "parakeet"
@@ -764,7 +767,7 @@ if __name__ == "__main__":
         print("  note: CPU mode — transcription is slower; large-v3-turbo "
               "(default) is the fastest model", flush=True)
     _t = time.monotonic()
-    _model = load_stt_model(a.model, dev, ctype)
+    _model = load_stt_model(loaded_model_name, dev, ctype)
     _model_load_s = time.monotonic() - _t
     emit_worker_event(
         "status",
@@ -775,7 +778,10 @@ if __name__ == "__main__":
         compute_type=ctype,
         model_load_s=round(_model_load_s, 3),
     )
-    print(f"model ready in {_model_load_s:.1f}s", flush=True)
+    if backend == "openai":
+        print(f"api ready in {_model_load_s:.1f}s", flush=True)
+    else:
+        print(f"model ready in {_model_load_s:.1f}s", flush=True)
     if a.transcribe_file:
         from vp_file_transcribe import (
             print_transcribe_file_result, transcribe_file_event,

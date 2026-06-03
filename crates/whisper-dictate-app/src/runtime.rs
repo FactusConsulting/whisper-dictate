@@ -237,6 +237,7 @@ impl RuntimeSupervisor {
             .args(&command.args)
             .current_dir(&command.working_dir)
             .env(WORKER_EVENTS_ENV, "1")
+            .envs(command.env.iter().map(|(key, value)| (key, value)))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         configure_background_process(&mut process);
@@ -333,6 +334,7 @@ pub struct WorkerCommand {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub working_dir: PathBuf,
+    pub env: Vec<(String, String)>,
 }
 
 impl WorkerCommand {
@@ -545,6 +547,7 @@ pub fn worker_command_with_args(
         program: python_program(),
         args,
         working_dir: app_root,
+        env: Vec::new(),
     }
 }
 
@@ -575,6 +578,7 @@ pub fn install_command_from_exe(
         program: exe.into(),
         args: vec!["install".to_owned()],
         working_dir: app_root.into(),
+        env: Vec::new(),
     }
 }
 
@@ -599,7 +603,8 @@ pub fn run_capture(command: &WorkerCommand) -> Result<WorkerOutput> {
     let mut process = Command::new(&command.program);
     process
         .args(&command.args)
-        .current_dir(&command.working_dir);
+        .current_dir(&command.working_dir)
+        .envs(command.env.iter().map(|(key, value)| (key, value)));
     configure_background_process(&mut process);
     let output = process.output()?;
 
@@ -614,6 +619,7 @@ pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
     let status = Command::new(&command.program)
         .args(&command.args)
         .current_dir(&command.working_dir)
+        .envs(command.env.iter().map(|(key, value)| (key, value)))
         .status()?;
     exit_status_to_result(status)
 }
@@ -1010,6 +1016,7 @@ mod tests {
                 "echo out line & echo err line 1>&2 & exit /B 7".to_owned(),
             ],
             working_dir: dir.path().to_path_buf(),
+            env: Vec::new(),
         };
         #[cfg(not(windows))]
         let command = WorkerCommand {
@@ -1019,6 +1026,7 @@ mod tests {
                 "echo out line; echo err line >&2; exit 7".to_owned(),
             ],
             working_dir: dir.path().to_path_buf(),
+            env: Vec::new(),
         };
 
         let output = run_capture(&command).unwrap();

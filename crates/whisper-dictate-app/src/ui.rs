@@ -15,6 +15,11 @@ use crate::runtime::{
 const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
 const GROQ_KEYS_URL: &str = "https://console.groq.com/keys";
+const OPENAI_STT_BASE_URL: &str = "https://api.openai.com/v1";
+const OPENAI_STT_MODEL: &str = "gpt-4o-mini-transcribe";
+const OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys";
+const STT_API_KEY_ENV: &str = "VOICEPI_STT_API_KEY";
+const CREDENTIAL_SERVICE: &str = "whisper-dictate";
 const WHISPER_MODELS: &[&str] = &[
     "large-v3-turbo",
     "large-v3",
@@ -23,15 +28,12 @@ const WHISPER_MODELS: &[&str] = &[
     "base",
     "tiny",
 ];
-const EXTERNAL_STT_MODELS: &[&str] = &[
-    "",
+const GROQ_STT_MODELS: &[&str] = &[
     "whisper-large-v3-turbo",
     "whisper-large-v3",
     "distil-whisper-large-v3-en",
-    "gpt-4o-mini-transcribe",
-    "gpt-4o-transcribe",
-    "whisper-1",
 ];
+const OPENAI_STT_MODELS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
 const PARAKEET_MODELS: &[&str] = &[
     "",
     "nvidia/parakeet-tdt-0.6b-v3",
@@ -45,6 +47,83 @@ enum SttBackendMode {
     Whisper,
     Parakeet,
     Cloud,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloudProvider {
+    Groq,
+    OpenAi,
+}
+
+impl CloudProvider {
+    fn from_raw(raw: &str) -> Option<Self> {
+        match raw {
+            "groq" => Some(Self::Groq),
+            "openai" => Some(Self::OpenAi),
+            _ => None,
+        }
+    }
+
+    fn from_settings(settings: &AppSettings) -> Self {
+        if settings
+            .stt_base_url
+            .to_ascii_lowercase()
+            .contains("api.groq.com")
+        {
+            Self::Groq
+        } else {
+            Self::OpenAi
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Groq => "groq",
+            Self::OpenAi => "openai",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Groq => "Groq",
+            Self::OpenAi => "OpenAI",
+        }
+    }
+
+    fn base_url(self) -> &'static str {
+        match self {
+            Self::Groq => GROQ_STT_BASE_URL,
+            Self::OpenAi => OPENAI_STT_BASE_URL,
+        }
+    }
+
+    fn default_model(self) -> &'static str {
+        match self {
+            Self::Groq => GROQ_STT_MODEL,
+            Self::OpenAi => OPENAI_STT_MODEL,
+        }
+    }
+
+    fn model_options(self) -> &'static [&'static str] {
+        match self {
+            Self::Groq => GROQ_STT_MODELS,
+            Self::OpenAi => OPENAI_STT_MODELS,
+        }
+    }
+
+    fn key_url(self) -> &'static str {
+        match self {
+            Self::Groq => GROQ_KEYS_URL,
+            Self::OpenAi => OPENAI_KEYS_URL,
+        }
+    }
+
+    fn credential_user(self) -> &'static str {
+        match self {
+            Self::Groq => "stt-api-key:groq",
+            Self::OpenAi => "stt-api-key:openai",
+        }
+    }
 }
 
 impl SttBackendMode {
@@ -82,6 +161,8 @@ struct WhisperDictateApp {
     settings: AppSettings,
     saved_settings: AppSettings,
     settings_status: String,
+    stt_api_key_input: String,
+    stt_api_key_status: String,
     dictionary_preview: String,
     supervisor: RuntimeSupervisor,
     background_task: Option<Receiver<BackgroundTaskResult>>,
@@ -97,6 +178,17 @@ impl Default for WhisperDictateApp {
                 format!("Could not load config, using defaults: {err}"),
             ),
         };
+        let provider = CloudProvider::from_settings(&settings);
+        let (stt_api_key_input, stt_api_key_status) = load_stt_api_key(provider)
+            .map(|key| {
+                let status = if key.is_empty() {
+                    format!("No {} API key saved.", provider.label())
+                } else {
+                    format!("Loaded saved {} API key.", provider.label())
+                };
+                (key, status)
+            })
+            .unwrap_or_else(|err| (String::new(), format!("Could not load API key: {err}")));
         Self {
             selected_tab: Tab::Runtime,
             runtime_state: RuntimeState::Stopped,
@@ -106,6 +198,8 @@ impl Default for WhisperDictateApp {
             saved_settings: settings.clone(),
             settings,
             settings_status,
+            stt_api_key_input,
+            stt_api_key_status,
             dictionary_preview: String::new(),
             supervisor: RuntimeSupervisor::new(),
             background_task: None,
@@ -265,6 +359,7 @@ impl WhisperDictateApp {
     fn core_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Core");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
+        let mut provider_id = self.current_cloud_provider().id().to_owned();
         egui::Grid::new("core_settings")
             .num_columns(2)
             .show(ui, |ui| {
@@ -306,10 +401,25 @@ impl WhisperDictateApp {
                 combo_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
+                    "Cloud STT provider",
+                    &mut provider_id,
+                    &["groq", "openai"],
+                    "OpenAI-compatible cloud provider. Groq uses Groq-hosted Whisper models; OpenAI uses OpenAI transcription models.",
+                );
+                if let Some(provider) = CloudProvider::from_raw(&provider_id) {
+                    if provider != self.current_cloud_provider() {
+                        self.set_cloud_provider(provider);
+                    }
+                }
+                ui.end_row();
+                let provider = self.current_cloud_provider();
+                combo_enabled(
+                    ui,
+                    backend == SttBackendMode::Cloud,
                     "Cloud STT model",
                     &mut self.settings.stt_model,
-                    EXTERNAL_STT_MODELS,
-                    "Remote model name sent to the configured OpenAI-compatible STT API.",
+                    provider.model_options(),
+                    "Remote transcription model for the selected cloud provider.",
                 );
                 text_enabled(
                     ui,
@@ -325,7 +435,13 @@ impl WhisperDictateApp {
                     &mut self.settings.stt_timeout_ms,
                     "Network timeout for cloud transcription requests.",
                 );
-                ui.end_row();
+                password_enabled(
+                    ui,
+                    backend == SttBackendMode::Cloud,
+                    "Cloud STT API key",
+                    &mut self.stt_api_key_input,
+                    "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
+                );
                 ui.strong("Runtime");
                 ui.label("Applies to local backends unless otherwise noted.");
                 ui.end_row();
@@ -377,32 +493,36 @@ impl WhisperDictateApp {
                     "Maximum time window for consecutive quit-key presses.",
                 );
             });
-        ui.horizontal(|ui| {
-            if ui.button("Use Groq cloud STT").clicked() {
-                self.settings.stt_backend = "openai".to_owned();
-                self.settings.stt_model = GROQ_STT_MODEL.to_owned();
-                self.settings.stt_base_url = GROQ_STT_BASE_URL.to_owned();
-                self.settings_status =
-                    "Groq preset applied. Set GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY before starting."
-                        .to_owned();
-            }
-            if ui.button("Groq API keys").clicked() {
-                match open_url(GROQ_KEYS_URL) {
-                    Ok(()) => {
-                        self.settings_status =
-                            "Opened Groq API keys. Store the key in GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY."
-                                .to_owned();
-                    }
-                    Err(err) => {
-                        self.settings_status =
-                            format!("Could not open Groq API keys page: {err}");
+        if backend == SttBackendMode::Cloud {
+            let provider = self.current_cloud_provider();
+            ui.horizontal(|ui| {
+                if ui.button("Save API key").clicked() {
+                    self.save_stt_api_key();
+                }
+                if ui.button("Clear API key").clicked() {
+                    self.clear_stt_api_key();
+                }
+                if ui
+                    .button(format!("{} API keys", provider.label()))
+                    .clicked()
+                {
+                    match open_url(provider.key_url()) {
+                        Ok(()) => {
+                            self.stt_api_key_status =
+                                format!("Opened {} API keys page.", provider.label());
+                        }
+                        Err(err) => {
+                            self.stt_api_key_status =
+                                format!("Could not open {} API keys page: {err}", provider.label());
+                        }
                     }
                 }
-            }
-        });
+                ui.label(&self.stt_api_key_status);
+            });
+        }
         if self.settings.stt_backend == "openai" {
             ui.label(
-                "Cloud STT sends recorded audio to the configured provider. API keys are read from environment variables only.",
+                "Cloud STT sends recorded audio to the configured provider. API keys are stored in the OS credential store when saved from this UI.",
             );
         }
     }
@@ -712,7 +832,7 @@ impl WhisperDictateApp {
     }
 
     fn start_runtime(&mut self) {
-        let command = default_worker_command();
+        let command = self.worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
         if let Err(err) = self.supervisor.start(command) {
             self.append_runtime_log(format!("[ui] start failed: {err}"));
@@ -729,12 +849,25 @@ impl WhisperDictateApp {
     }
 
     fn restart_runtime(&mut self) {
-        let command = default_worker_command();
+        let command = self.worker_command();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
         if let Err(err) = self.supervisor.restart(command) {
             self.append_runtime_log(format!("[ui] restart failed: {err}"));
         }
         self.runtime_state = self.supervisor.state();
+    }
+
+    fn worker_command(&self) -> WorkerCommand {
+        let mut command = default_worker_command();
+        if self.settings.stt_backend == "openai" {
+            let key = self.stt_api_key_input.trim();
+            if !key.is_empty() {
+                command
+                    .env
+                    .push((STT_API_KEY_ENV.to_owned(), key.to_owned()));
+            }
+        }
+        command
     }
 
     fn run_doctor(&mut self) {
@@ -921,12 +1054,71 @@ impl WhisperDictateApp {
             Ok(settings) => {
                 self.saved_settings = settings.clone();
                 self.settings = settings;
+                self.reload_stt_api_key();
                 self.settings_status = "Reloaded config".to_owned();
             }
             Err(err) => {
                 self.settings_status = format!("Reload failed: {err}");
             }
         }
+    }
+
+    fn current_cloud_provider(&self) -> CloudProvider {
+        CloudProvider::from_raw(&self.settings.stt_provider)
+            .unwrap_or_else(|| CloudProvider::from_settings(&self.settings))
+    }
+
+    fn set_cloud_provider(&mut self, provider: CloudProvider) {
+        self.settings.stt_backend = "openai".to_owned();
+        self.settings.stt_provider = provider.id().to_owned();
+        self.settings.stt_base_url = provider.base_url().to_owned();
+        if !provider
+            .model_options()
+            .contains(&self.settings.stt_model.as_str())
+        {
+            self.settings.stt_model = provider.default_model().to_owned();
+        }
+        self.reload_stt_api_key();
+    }
+
+    fn reload_stt_api_key(&mut self) {
+        let provider = self.current_cloud_provider();
+        match load_stt_api_key(provider) {
+            Ok(key) => {
+                self.stt_api_key_input = key;
+                self.stt_api_key_status = if self.stt_api_key_input.is_empty() {
+                    format!("No {} API key saved.", provider.label())
+                } else {
+                    format!("Loaded saved {} API key.", provider.label())
+                };
+            }
+            Err(err) => {
+                self.stt_api_key_input.clear();
+                self.stt_api_key_status = format!("Could not load API key: {err}");
+            }
+        }
+    }
+
+    fn save_stt_api_key(&mut self) {
+        let provider = self.current_cloud_provider();
+        match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
+            Ok(()) => {
+                self.stt_api_key_status = if self.stt_api_key_input.trim().is_empty() {
+                    format!("Cleared saved {} API key.", provider.label())
+                } else {
+                    format!("Saved {} API key in OS credential store.", provider.label())
+                };
+            }
+            Err(err) => {
+                self.stt_api_key_status =
+                    format!("Could not save {} API key: {err}", provider.label());
+            }
+        }
+    }
+
+    fn clear_stt_api_key(&mut self) {
+        self.stt_api_key_input.clear();
+        self.save_stt_api_key();
     }
 
     fn ensure_dictionary(&mut self) {
@@ -996,6 +1188,19 @@ fn text_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut Strin
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
         ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+fn password_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut String, help: &str) {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .password(true)
+                .desired_width(360.0),
+        );
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
@@ -1248,6 +1453,28 @@ fn open_url(url: &str) -> Result<()> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         Command::new("xdg-open").arg(url).spawn()?;
+        Ok(())
+    }
+}
+
+fn load_stt_api_key(provider: CloudProvider) -> Result<String> {
+    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
+    match entry.get_password() {
+        Ok(secret) => Ok(secret),
+        Err(keyring::Error::NoEntry) => Ok(String::new()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<()> {
+    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
+    if secret.trim().is_empty() {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    } else {
+        entry.set_password(secret.trim())?;
         Ok(())
     }
 }

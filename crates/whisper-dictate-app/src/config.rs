@@ -16,6 +16,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "key",
     "model",
     "stt_backend",
+    "stt_provider",
     "stt_model",
     "stt_base_url",
     "stt_timeout_ms",
@@ -70,6 +71,7 @@ const RESTART_KEYS: &[&str] = &[
     "key",
     "model",
     "stt_backend",
+    "stt_provider",
     "stt_model",
     "stt_base_url",
     "stt_timeout_ms",
@@ -176,6 +178,7 @@ pub struct AppSettings {
     pub key: String,
     pub model: String,
     pub stt_backend: String,
+    pub stt_provider: String,
     pub stt_model: String,
     pub stt_base_url: String,
     pub stt_timeout_ms: String,
@@ -233,6 +236,7 @@ impl Default for AppSettings {
             key: "ctrl_r".to_owned(),
             model: "large-v3-turbo".to_owned(),
             stt_backend: "whisper".to_owned(),
+            stt_provider: "openai".to_owned(),
             stt_model: String::new(),
             stt_base_url: "https://api.openai.com/v1".to_owned(),
             stt_timeout_ms: "30000".to_owned(),
@@ -295,8 +299,20 @@ impl AppSettings {
             settings.key = string_value(object, "key", &defaults.key);
             settings.model = string_value(object, "model", &defaults.model);
             settings.stt_backend = string_value(object, "stt_backend", &defaults.stt_backend);
+            settings.stt_provider = string_value(object, "stt_provider", "");
             settings.stt_model = string_value(object, "stt_model", "");
             settings.stt_base_url = string_value(object, "stt_base_url", &defaults.stt_base_url);
+            if settings.stt_provider.trim().is_empty() {
+                settings.stt_provider = if settings
+                    .stt_base_url
+                    .to_ascii_lowercase()
+                    .contains("api.groq.com")
+                {
+                    "groq".to_owned()
+                } else {
+                    defaults.stt_provider.clone()
+                };
+            }
             settings.stt_timeout_ms =
                 string_value(object, "stt_timeout_ms", &defaults.stt_timeout_ms);
             settings.parakeet_model =
@@ -396,6 +412,7 @@ impl AppSettings {
         set_string(object, "key", &self.key);
         set_string(object, "model", &self.model);
         set_string(object, "stt_backend", &self.stt_backend);
+        set_string(object, "stt_provider", &self.stt_provider);
         set_string(object, "stt_model", &self.stt_model);
         set_string(object, "stt_base_url", &self.stt_base_url);
         set_string(object, "stt_timeout_ms", &self.stt_timeout_ms);
@@ -468,6 +485,7 @@ impl AppSettings {
             "key" => Some(&self.key),
             "model" => Some(&self.model),
             "stt_backend" => Some(&self.stt_backend),
+            "stt_provider" => Some(&self.stt_provider),
             "stt_model" => Some(&self.stt_model),
             "stt_base_url" => Some(&self.stt_base_url),
             "stt_timeout_ms" => Some(&self.stt_timeout_ms),
@@ -615,6 +633,7 @@ mod tests {
     fn settings_load_defaults_and_existing_values() {
         let value = serde_json::json!({
             "stt_backend": "openai",
+            "stt_provider": "groq",
             "lang": "da",
             "quit_key": "f12",
             "dictionary_enabled": "0",
@@ -628,6 +647,7 @@ mod tests {
         let settings = AppSettings::from_value(value).unwrap();
 
         assert_eq!(settings.stt_backend, "openai");
+        assert_eq!(settings.stt_provider, "groq");
         assert_eq!(settings.lang, "da");
         assert_eq!(settings.quit_key, "f12");
         assert!(!settings.dictionary_enabled);
@@ -638,6 +658,20 @@ mod tests {
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
         assert_eq!(settings.ui_text_scale, "1.15");
+    }
+
+    #[test]
+    fn settings_infers_groq_provider_from_existing_base_url() {
+        let value = serde_json::json!({
+            "stt_backend": "openai",
+            "stt_base_url": "https://api.groq.com/openai/v1",
+            "stt_model": "whisper-large-v3-turbo"
+        });
+
+        let settings = AppSettings::from_value(value).unwrap();
+
+        assert_eq!(settings.stt_provider, "groq");
+        assert_eq!(settings.stt_base_url, "https://api.groq.com/openai/v1");
     }
 
     #[test]
@@ -652,6 +686,7 @@ mod tests {
 
         let settings = AppSettings {
             lang: "en".to_owned(),
+            stt_provider: "groq".to_owned(),
             stt_model: String::new(),
             quit_key: "f12".to_owned(),
             audio_ducking: true,
@@ -667,6 +702,7 @@ mod tests {
 
         assert_eq!(saved["unknown"], "keep");
         assert_eq!(saved["lang"], "en");
+        assert_eq!(saved["stt_provider"], "groq");
         assert_eq!(saved["quit_key"], "f12");
         assert_eq!(saved["audio_ducking"], "1");
         assert_eq!(saved["post_redact"], "1");

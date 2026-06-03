@@ -424,10 +424,14 @@ practical Parakeet models: 0.6B v3 for Danish/mixed Danish-English, TDT 1.1B
 for pure English quality experiments, and 0.6B v2 as a fast English-only
 baseline.
 
-Optional external API backends are explicit opt-in. Set `VOICEPI_STT_BACKEND=openai`
-for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY` or
-`VOICEPI_STT_API_KEY`. Use `VOICEPI_STT_MODEL=gpt-4o-mini-transcribe` or
-`gpt-4o-transcribe`. For external text cleanup, set
+Optional external API backends are explicit opt-in. In the Rust UI, choose
+`STT backend = openai`, then choose `Cloud STT provider = Groq` or `OpenAI`.
+The UI can save the selected provider in `config.json` and save the STT API key
+in the OS credential store. From a terminal, set `VOICEPI_STT_BACKEND=openai`
+for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY`,
+`GROQ_API_KEY`, or `VOICEPI_STT_API_KEY`. Use
+`VOICEPI_STT_MODEL=gpt-4o-mini-transcribe`/`gpt-4o-transcribe` for OpenAI, or
+`whisper-large-v3-turbo`/`whisper-large-v3` for Groq. For external text cleanup, set
 `VOICEPI_POST_PROCESSOR=openai`, `VOICEPI_POST_MODEL=<chat-model>` and
 `OPENAI_API_KEY` or `VOICEPI_POST_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
 external providers before requests are made.
@@ -443,8 +447,8 @@ push-to-talk key is held, then restores volumes before transcription continues.
 It is disabled by default and uses `VOICEPI_AUDIO_DUCKING_LEVEL=0.25` unless
 configured otherwise.
 
-Groq is available as an opt-in cloud STT preset in the Rust UI. It uses Groq's
-OpenAI-compatible transcription endpoint and `whisper-large-v3-turbo`:
+Groq is available as an opt-in cloud STT provider in the Rust UI. It uses
+Groq's OpenAI-compatible transcription endpoint and `whisper-large-v3-turbo`:
 
 ```powershell
 setx GROQ_API_KEY "gsk_..."
@@ -453,9 +457,13 @@ setx VOICEPI_STT_BASE_URL https://api.groq.com/openai/v1
 setx VOICEPI_STT_MODEL whisper-large-v3-turbo
 ```
 
-API keys are not saved in the Settings UI config file. whisper-dictate reads
-them only from the process/user environment (`OPENAI_API_KEY`,
-`GROQ_API_KEY`, `VOICEPI_STT_API_KEY`, `VOICEPI_POST_API_KEY`).
+STT API keys saved from the Rust UI are stored in the OS credential store and
+passed only to the managed Python worker process as `VOICEPI_STT_API_KEY`.
+They are not written to `config.json` or shown in runtime command logs.
+Terminal runs can still read keys from the process/user environment
+(`OPENAI_API_KEY`, `GROQ_API_KEY`, `VOICEPI_STT_API_KEY`). Post-processing
+cloud keys are still environment-only (`VOICEPI_POST_API_KEY` or
+`OPENAI_API_KEY`).
 
 File transcription for benchmarks/debugging uses the same backend, dictionary
 and replacement pipeline as live dictation:

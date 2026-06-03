@@ -11,6 +11,12 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-06-03
+
+### Fixed
+- Cloud STT startup now uses API/remote runtime metadata instead of resolving a local CUDA/CPU model path.
+- The Rust UI now persists Groq/OpenAI cloud provider selection and stores STT API keys in the OS credential store.
+
 ## [0.3.8] - 2026-06-02
 
 ### Added

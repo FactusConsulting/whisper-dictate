@@ -358,7 +358,8 @@ class DebugConfigTests(unittest.TestCase):
             "VOICEPI_LANG", "VOICEPI_MODEL", "VOICEPI_DEVICE",
             "VOICEPI_KEY", "VOICEPI_INJECT_MODE",
             "VOICEPI_DICTIONARY", "VOICEPI_DICTIONARY_ENABLED",
-            "VOICEPI_STT_BACKEND",
+            "VOICEPI_STT_BACKEND", "VOICEPI_STT_API_KEY",
+            "GROQ_API_KEY", "OPENAI_API_KEY",
         )}
 
     def tearDown(self):
@@ -433,6 +434,17 @@ class DebugConfigTests(unittest.TestCase):
         self.assertIn('QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc")', cli)
         self.assertIn("if k == quit_key:", runtime)
         self.assertNotIn("if k == keyboard.Key.esc:", runtime)
+
+    def test_debug_dump_treats_groq_key_as_cloud_api_key(self):
+        os.environ["GROQ_API_KEY"] = "test-groq-key"
+        voice_pi = load_voice_pi(cuda_devices=1)
+
+        with _capture_stdout() as buf:
+            voice_pi._print_effective_config(self._args(), "api", "remote")
+
+        out = buf.getvalue()
+        self.assertIn("stt api", out)
+        self.assertIn("key=set", out)
 
     def test_unset_env_shows_unset(self):
         voice_pi = load_voice_pi(cuda_devices=1)
@@ -2216,17 +2228,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".with_icon(app_icon())", script)
         self.assertIn("fn app_icon() -> egui::IconData", script)
 
-    def test_rust_ui_has_groq_cloud_stt_preset_and_key_link(self):
+    def test_rust_ui_has_cloud_provider_dropdown_and_key_storage(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 
         self.assertIn('GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1"', script)
         self.assertIn('GROQ_STT_MODEL: &str = "whisper-large-v3-turbo"', script)
-        self.assertIn("const EXTERNAL_STT_MODELS: &[&str]", script)
+        self.assertIn('OPENAI_STT_BASE_URL: &str = "https://api.openai.com/v1"', script)
+        self.assertIn("enum CloudProvider", script)
+        self.assertIn("const GROQ_STT_MODELS: &[&str]", script)
+        self.assertIn("const OPENAI_STT_MODELS: &[&str]", script)
         self.assertIn("const WHISPER_MODELS: &[&str]", script)
         self.assertIn('"distil-whisper-large-v3-en"', script)
         self.assertIn('"gpt-4o-mini-transcribe"', script)
+        self.assertIn('"Cloud STT provider",', script)
         self.assertIn('"Cloud STT model",', script)
-        self.assertIn("EXTERNAL_STT_MODELS", script)
+        self.assertIn("provider.model_options()", script)
         self.assertIn("const PARAKEET_MODELS: &[&str]", script)
         self.assertIn('"nvidia/parakeet-tdt-0.6b-v3"', script)
         self.assertIn('"nvidia/parakeet-tdt-1.1b"', script)
@@ -2234,10 +2250,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"Parakeet model",', script)
         self.assertIn("PARAKEET_MODELS", script)
         self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', script)
-        self.assertIn('ui.button("Use Groq cloud STT").clicked()', script)
-        self.assertIn('ui.button("Groq API keys").clicked()', script)
-        self.assertIn('open_url(GROQ_KEYS_URL)', script)
-        self.assertIn('GROQ_API_KEY, VOICEPI_STT_API_KEY or OPENAI_API_KEY', script)
+        self.assertIn('OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys"', script)
+        self.assertIn('"Cloud STT API key"', script)
+        self.assertIn("fn save_stt_api_key(", script)
+        self.assertIn("keyring::Entry::new", script)
+        self.assertIn("STT_API_KEY_ENV", script)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
@@ -2363,8 +2380,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             self.assertIn("https://api.groq.com/openai/v1", doc)
             self.assertIn("whisper-large-v3-turbo", doc)
             self.assertIn("GROQ_API_KEY", doc)
-        self.assertIn("Use Groq cloud STT", config)
-        self.assertIn("API keys are not saved in the Settings UI config file", readme)
+        self.assertIn("Cloud STT provider", config)
+        self.assertIn("OS credential store", readme)
 
     def test_docs_describe_one_command_ubuntu_setup_and_launcher_start(self):
         readme = Path("README.md").read_text(encoding="utf-8")
@@ -2915,6 +2932,20 @@ class CalibrationTests(unittest.TestCase):
         model_load = script.index("_model = load_stt_model")
         self.assertLess(calibration, model_load)
 
+    def test_cloud_backend_uses_api_device_and_no_local_model_ready_log(self):
+        script = Path("voice_pi.py").read_text(encoding="utf-8")
+
+        backend_lookup = script.index("backend = STT_BACKEND")
+        cloud_device = script.index('if backend == "openai":\n        dev, ctype = "api", "remote"')
+        device_resolve = script.index("dev, ctype = _resolve_device(a.device)")
+        model_load = script.index("_model = load_stt_model(loaded_model_name, dev, ctype)")
+        api_ready = script.index('print(f"api ready in {_model_load_s:.1f}s"')
+
+        self.assertLess(backend_lookup, cloud_device)
+        self.assertLess(cloud_device, device_resolve)
+        self.assertLess(model_load, api_ready)
+        self.assertIn("using {label} {loaded_model_name} via configured API", script)
+
 
 class HistoryTests(unittest.TestCase):
     def test_append_and_read_history_keeps_core_fields(self):
@@ -3247,6 +3278,19 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn("whisper-dictate run -- ...", technical)
         self.assertIn("scripts/install-linux-rust-ui.sh", technical)
         self.assertIn("scripts/build-windows-installer.ps1", technical)
+
+    def test_groq_provider_is_persisted_and_key_is_not_plain_config(self):
+        ui = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        config = Path("crates/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+
+        self.assertIn('"Cloud STT provider"', ui)
+        self.assertIn("fn set_cloud_provider(&mut self, provider: CloudProvider)", ui)
+        self.assertIn('self.settings.stt_provider = provider.id().to_owned();', ui)
+        self.assertIn('self.settings.stt_backend = "openai".to_owned();', ui)
+        self.assertIn("self.settings.stt_model = provider.default_model().to_owned();", ui)
+        self.assertIn("set_string(object, \"stt_provider\", &self.stt_provider);", config)
+        self.assertIn("keyring::Entry::new", ui)
+        self.assertNotIn("stt_api_key", config)
 
 
 class RustReleaseWorkflowTests(unittest.TestCase):

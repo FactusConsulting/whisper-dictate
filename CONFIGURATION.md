@@ -81,10 +81,11 @@ the **GPU VRAM sizing** table further down.
 |---|---|---|---|
 | `VOICEPI_MODEL` | `large-v3-turbo` | any faster-whisper model: `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3` … | Whisper model. `large-v3-turbo` = fastest (default); `large-v3` = best accuracy, slower. Also `--model`. |
 | `VOICEPI_STT_BACKEND` | `whisper` | `whisper` \| `parakeet` \| `openai` | Selects the STT engine. `whisper` is recommended for Danish accuracy. `parakeet` loads NVIDIA NeMo lazily, is experimental on Windows, is very fast on NVIDIA CUDA, and uses `nvidia/parakeet-tdt-0.6b-v3` when the normal Whisper default model is unchanged. `openai` sends recorded audio to an OpenAI-compatible transcription API and is blocked by `VOICEPI_LOCAL_ONLY=1`. |
+| `stt_provider` in `config.json` | `openai` | `openai` \| `groq` | Rust UI provider selector for cloud STT. It sets `VOICEPI_STT_BASE_URL` and provider-specific model choices for the managed worker. Existing configs with a Groq URL are migrated to `groq`. |
 | `VOICEPI_STT_MODEL` | *(unset → `gpt-4o-mini-transcribe` for local Whisper names)* | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`, or compatible model name | External transcription model used only when `VOICEPI_STT_BACKEND=openai`. If you leave `VOICEPI_MODEL=large-v3-turbo`/`large-v3`, the adapter maps it to `gpt-4o-mini-transcribe` unless this is set. |
 | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | URL | OpenAI-compatible transcription API base URL used only when `VOICEPI_STT_BACKEND=openai`. |
 | `VOICEPI_STT_TIMEOUT_MS` | `30000` | integer ms | Maximum wait for an external transcription request. |
-| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for `VOICEPI_STT_BACKEND=openai`. `VOICEPI_STT_API_KEY` takes precedence; `GROQ_API_KEY` is used when `VOICEPI_STT_BASE_URL` points at Groq; `OPENAI_API_KEY` is the generic fallback. API keys are read from env only and are not saved by the Settings UI. |
+| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for `VOICEPI_STT_BACKEND=openai`. `VOICEPI_STT_API_KEY` takes precedence; `GROQ_API_KEY` is used when `VOICEPI_STT_BASE_URL` points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI can store provider-specific STT keys in the OS credential store and passes them to the managed worker as `VOICEPI_STT_API_KEY`; env vars remain supported for terminal runs. |
 | `VOICEPI_PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | NeMo ASR model name | Optional Parakeet-specific model override. Takes precedence over `VOICEPI_MODEL` when `VOICEPI_STT_BACKEND=parakeet`. |
 | `VOICEPI_DEVICE` | `auto` | `auto` \| `cuda` \| `cpu` | Compute device. `auto` = NVIDIA GPU if present, else CPU. Invalid value → error. Also `--device`. |
 | `VOICEPI_COMPUTE_TYPE` | *(unset → `int8_float16` on GPU, `int8` on CPU)* | `int8` \| `int8_float16` \| `float16` \| `bfloat16` \| `float32` … (any ctranslate2-supported type) | Whisper-only precision override for faster-whisper/CTranslate2. Big-GPU users gain accuracy with `float16` (or `bfloat16` on Ampere/Ada+); `int8_float16` defaults trade a little accuracy for VRAM/speed. Parakeet uses PyTorch/NeMo and currently ignores this setting, so the UI disables it when Parakeet is selected. |
@@ -299,9 +300,10 @@ setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_MODEL gpt-4o-mini-transcribe
 ```
 
-For Groq cloud transcription, use the Rust UI **Use Groq cloud STT** preset or
-set the equivalent values manually. The UI can open Groq's API key page, but it
-does not create or store keys for you:
+For Groq cloud transcription, use the Rust UI Core tab: set
+`STT backend = openai`, set `Cloud STT provider = groq`, enter the API key, and
+click **Save API key**. The key is stored in the OS credential store, not in
+`config.json`. Equivalent terminal setup:
 
 ```powershell
 setx GROQ_API_KEY "gsk_..."

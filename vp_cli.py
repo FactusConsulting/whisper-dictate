@@ -194,7 +194,7 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
         ("--device",         f"{args.device}  ->  resolved: {dev} / {ctype}"),
         ("stt backend",      f"{STT_BACKEND}  (env VOICEPI_STT_BACKEND={_env('VOICEPI_STT_BACKEND')})"),
         ("stt api",          f"url={get_value('VOICEPI_STT_BASE_URL', '(unset)')} "
-                             f"key={'set' if (os.environ.get('VOICEPI_STT_API_KEY') or os.environ.get('OPENAI_API_KEY')) else 'unset'}"),
+                             f"key={'set' if (os.environ.get('VOICEPI_STT_API_KEY') or os.environ.get('GROQ_API_KEY') or os.environ.get('OPENAI_API_KEY')) else 'unset'}"),
         ("compute_type",     f"{ctype}  (env VOICEPI_COMPUTE_TYPE={_env('VOICEPI_COMPUTE_TYPE')})"),
         ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env('VOICEPI_BEAM_SIZE')})"),
         ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env('VOICEPI_TEMPERATURE')})"),
