@@ -652,6 +652,24 @@ class ExternalApiTests(unittest.TestCase):
         self.assertEqual(settings.model, "whisper-large-v3-turbo")
         self.assertEqual(settings.api_key, "groq-key")
 
+    def test_external_api_adds_default_user_agent_for_groq_gateway(self):
+        sys.modules.pop("vp_external_api", None)
+        import vp_external_api
+
+        headers = vp_external_api.default_headers({"Authorization": "Bearer test"})
+
+        self.assertIn("User-Agent", headers)
+        self.assertIn("whisper-dictate", headers["User-Agent"])
+        self.assertEqual(headers["Authorization"], "Bearer test")
+
+    def test_external_api_preserves_explicit_user_agent(self):
+        sys.modules.pop("vp_external_api", None)
+        import vp_external_api
+
+        headers = vp_external_api.default_headers({"User-Agent": "custom-client"})
+
+        self.assertEqual(headers["User-Agent"], "custom-client")
+
     def test_non_groq_base_url_does_not_use_groq_api_key_alias(self):
         with _env(
             VOICEPI_STT_API_KEY=None,
@@ -683,6 +701,7 @@ class ExternalApiTests(unittest.TestCase):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 calls["path"] = self.path
                 calls["auth"] = self.headers.get("Authorization")
+                calls["user_agent"] = self.headers.get("User-Agent")
                 calls["content_type"] = self.headers.get("Content-Type")
                 calls["body"] = body
                 data = json.dumps({"text": "Hello Codex", "language": "en"}).encode("utf-8")
@@ -712,6 +731,7 @@ class ExternalApiTests(unittest.TestCase):
 
         self.assertEqual(calls["path"], "/v1/audio/transcriptions")
         self.assertEqual(calls["auth"], "Bearer test-key")
+        self.assertIn("whisper-dictate", calls["user_agent"])
         self.assertIn("multipart/form-data", calls["content_type"])
         self.assertIn(b'gpt-4o-mini-transcribe', calls["body"])
         self.assertIn(b"audio.wav", calls["body"])

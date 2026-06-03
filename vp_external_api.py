@@ -20,6 +20,7 @@ SR = 16000
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+DEFAULT_USER_AGENT = "whisper-dictate/0.3 (+https://github.com/FactusConsulting/whisper-dictate)"
 LOCAL_WHISPER_MODEL_NAMES = {
     "tiny", "base", "small", "medium", "large-v3", "large-v3-turbo",
     "distil-large-v3",
@@ -88,6 +89,13 @@ def _require_api_key(settings: ExternalApiSettings) -> None:
             "or VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY")
 
 
+def default_headers(headers: dict[str, str] | None = None) -> dict[str, str]:
+    out = dict(headers or {})
+    if not any(key.lower() == "user-agent" for key in out):
+        out["User-Agent"] = DEFAULT_USER_AGENT
+    return out
+
+
 def _request_json(
     url: str,
     *,
@@ -97,7 +105,7 @@ def _request_json(
     timeout_ms: int,
 ) -> dict[str, Any]:
     body = data if data is not None else json.dumps(payload or {}).encode("utf-8")
-    req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
+    req = urllib.request.Request(url, data=body, headers=default_headers(headers), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout_ms / 1000.0) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
