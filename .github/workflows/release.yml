@@ -186,6 +186,46 @@ jobs:
               SH
             end
 
+            def post_install
+              return unless OS.linux?
+
+              home = ENV["HOME"]
+              return if home.nil? || home.empty?
+
+              exe = bin/"whisper-dictate"
+              repair_linux_desktop_entry(
+                Pathname.new(home)/".local/share/applications/whisper-dictate.desktop",
+                exe,
+                false,
+              )
+              repair_linux_desktop_entry(
+                Pathname.new(home)/".config/autostart/whisper-dictate.desktop",
+                exe,
+                true,
+              )
+            end
+
+            def repair_linux_desktop_entry(path, exe, autostart)
+              return unless path.exist?
+
+              raw = path.read
+              return unless raw.include?("whisper-dictate")
+
+              path.dirname.mkpath
+              path.write <<~DESKTOP
+                [Desktop Entry]
+                Name=Whisper Dictate
+                Comment=Push-to-talk dictation settings and runtime control
+                Exec=#{exe} ui
+                Icon=audio-input-microphone
+                Terminal=false
+                Type=Application
+                Categories=Utility;AudioVideo;Audio;
+                StartupNotify=true
+                #{autostart ? "X-GNOME-Autostart-enabled=true" : ""}
+              DESKTOP
+            end
+
             def caveats
               <<~EOS
                 whisper-dictate builds a machine-local Python venv on first run
