@@ -101,6 +101,50 @@ fn supervisor_stop_returns_without_waiting_for_process_exit_event() {
 }
 
 #[test]
+fn supervisor_restart_returns_without_waiting_for_process_exit_event() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python.clone(),
+            args: vec![
+                "-c".to_owned(),
+                "import time; print('worker-ready', flush=True); time.sleep(30)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| has_stdout(events, "worker-ready"));
+    assert!(has_stdout(&events, "worker-ready"));
+
+    let started = Instant::now();
+    supervisor
+        .restart(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "print('worker-restarted', flush=True)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "restart should return immediately instead of waiting for process teardown"
+    );
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "worker-restarted")
+    });
+    assert!(has_stdout(&events, "worker-restarted"));
+}
+
+#[test]
 fn supervisor_parses_worker_events_from_stderr() {
     let Some(python) = test_python() else {
         return;

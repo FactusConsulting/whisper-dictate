@@ -281,7 +281,7 @@ impl RuntimeSupervisor {
     }
 
     pub fn restart(&mut self, command: WorkerCommand) -> Result<()> {
-        self.stop_and_wait()?;
+        self.stop()?;
         self.start(command)
     }
 
@@ -305,21 +305,6 @@ impl RuntimeSupervisor {
         }
 
         self.rx.try_iter().collect()
-    }
-
-    fn stop_and_wait(&mut self) -> Result<()> {
-        let Some(mut child) = self.child.take() else {
-            self.state = RuntimeState::Stopped;
-            return Ok(());
-        };
-
-        kill_child(&mut child)?;
-        let status = child.wait()?;
-        self.state = RuntimeState::Stopped;
-        let _ = self.tx.send(RuntimeEvent::Exited {
-            code: status.code(),
-        });
-        Ok(())
     }
 }
 

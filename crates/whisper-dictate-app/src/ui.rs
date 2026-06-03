@@ -324,15 +324,22 @@ impl WhisperDictateApp {
         ui.label("Runtime log");
         let height = (ui.available_height() - 8.0).max(240.0);
         let mut runtime_log_view = self.runtime_log.clone();
-        ui.add_sized(
-            [ui.available_width(), height],
-            egui::TextEdit::multiline(&mut runtime_log_view)
-                .font(egui::TextStyle::Monospace)
-                .desired_rows(28)
-                .id_salt("runtime_log_view")
-                .code_editor()
-                .desired_width(f32::INFINITY),
-        );
+        let row_count = self.runtime_log.lines().count().max(28);
+        egui::ScrollArea::both()
+            .id_salt("runtime_log_scroll")
+            .auto_shrink([false, false])
+            .max_height(height)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut runtime_log_view)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(row_count)
+                        .id_salt("runtime_log_view")
+                        .code_editor()
+                        .desired_width(ui.available_width()),
+                );
+            });
     }
 
     fn settings_panel(&mut self, ui: &mut egui::Ui, body: fn(&mut Self, &mut egui::Ui)) {

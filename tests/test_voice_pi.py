@@ -2226,10 +2226,12 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
         runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
 
-        self.assertIn("ui.add_sized(", runtime_tab)
-        self.assertIn("[ui.available_width(), height]", runtime_tab)
+        self.assertIn("egui::ScrollArea::both()", runtime_tab)
+        self.assertIn('.id_salt("runtime_log_scroll")', runtime_tab)
+        self.assertIn(".max_height(height)", runtime_tab)
+        self.assertIn(".stick_to_bottom(true)", runtime_tab)
+        self.assertIn(".desired_width(ui.available_width())", runtime_tab)
         self.assertIn('.id_salt("runtime_log_view")', runtime_tab)
-        self.assertNotIn("egui::ScrollArea::vertical()", runtime_tab)
 
     def test_rust_runtime_log_can_be_copied(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")

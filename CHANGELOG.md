@@ -11,6 +11,12 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-06-03
+
+### Fixed
+- Runtime restart no longer blocks the Rust UI while the previous worker process is being torn down.
+- Runtime log output is scrollable again while remaining selectable and copyable.
+
 ## [0.3.12] - 2026-06-03
 
 ### Changed
