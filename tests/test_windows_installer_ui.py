@@ -309,6 +309,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('Terminal-runtime: whisper-dictate run -- --key shift_r+ctrl_r --lang da', script)
         self.assertNotIn('Exec=whisper-dictate --key shift_r+ctrl_r --lang da', script)
 
+    def test_ubuntu_setup_uses_bash_conditionals_for_reliability(self):
+        script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")
+
+        self.assertIn("[[ ! -f /usr/local/bin/gcc-12 ]]", script)
+        self.assertIn('[[ -n "$GCC" ]]', script)
+        self.assertIn('[[ -f "$UDEV_FILE" ]]', script)
+        self.assertIn('[[ "${VOICEPI_RUST_OWNS_DESKTOP:-}" = "1" ]]', script)
+        self.assertNotRegex(script, r"(?m)^\s*if\s+\[\s+!?-")
+        self.assertNotRegex(script, r"(?m)^\s*if\s+\[\s+-n")
+
     def test_windows_docs_use_rust_terminal_entrypoint(self):
         readme = Path("README.md").read_text(encoding="utf-8")
         config = Path("CONFIGURATION.md").read_text(encoding="utf-8")

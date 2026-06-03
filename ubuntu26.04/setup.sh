@@ -45,9 +45,9 @@ fi
 step "evdev: gcc-12 symlink (kræves for at bygge evdev Python-pakken)"
 # ---------------------------------------------------------------------------
 # evdev kompileres med gcc-12, men Ubuntu 26.04 leverer gcc-15.
-if [ ! -f /usr/local/bin/gcc-12 ]; then
+if [[ ! -f /usr/local/bin/gcc-12 ]]; then
     GCC=$(command -v gcc-15 || command -v gcc-14 || command -v gcc-13 || true)
-    if [ -n "$GCC" ]; then
+    if [[ -n "$GCC" ]]; then
         sudo ln -sf "$GCC" /usr/local/bin/gcc-12
         ok "gcc-12 → $GCC"
     else
@@ -88,7 +88,7 @@ fi
 step "ydotool: udev-regel for /dev/uinput"
 # ---------------------------------------------------------------------------
 UDEV_FILE="/etc/udev/rules.d/60-uinput.rules"
-if [ -f "$UDEV_FILE" ] && grep -q 'GROUP="input"' "$UDEV_FILE" 2>/dev/null; then
+if [[ -f "$UDEV_FILE" ]] && grep -q 'GROUP="input"' "$UDEV_FILE" 2>/dev/null; then
     ok "udev-regel eksisterer allerede"
 else
     echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee "$UDEV_FILE" > /dev/null
@@ -146,7 +146,7 @@ fi
 # ---------------------------------------------------------------------------
 step "whisper-dictate: GNOME app launcher"
 # ---------------------------------------------------------------------------
-if [ "${VOICEPI_RUST_OWNS_DESKTOP:-}" = "1" ]; then
+if [[ "${VOICEPI_RUST_OWNS_DESKTOP:-}" = "1" ]]; then
     ok "Rust CLI handles launcher/autostart creation and UI startup"
     echo
     echo "================================================================"

@@ -154,25 +154,37 @@ def _read_jsonl(path: str | Path) -> list[dict[str, Any]]:
 
 
 def _known_targets(rows: Iterable[dict[str, Any]]) -> list[str]:
-    targets: list[str] = []
     seen: set[str] = set()
-    for term in DICTIONARY.terms:
-        key = _normalize(term)
-        if key and key not in seen:
-            seen.add(key)
+    targets: list[str] = []
+    for term in _dictionary_terms() + _row_reference_terms(rows):
+        norm = _normalize(term)
+        if norm and norm not in seen:
+            seen.add(norm)
             targets.append(term)
-    for row in rows:
-        for key in ("reference_terms", "term_misses", "term_hits"):
-            values = row.get(key) or []
-            if isinstance(values, str):
-                values = [values]
-            for value in values:
-                term = str(value).strip()
-                norm = _normalize(term)
-                if norm and norm not in seen:
-                    seen.add(norm)
-                    targets.append(term)
     return targets
+
+
+def _dictionary_terms() -> list[str]:
+    return [str(term) for term in DICTIONARY.terms]
+
+
+def _row_reference_terms(rows: Iterable[dict[str, Any]]) -> list[str]:
+    terms: list[str] = []
+    for row in rows:
+        for value in _row_term_values(row):
+            term = str(value).strip()
+            if term:
+                terms.append(term)
+    return terms
+
+
+def _row_term_values(row: dict[str, Any]) -> Iterable[Any]:
+    for key in ("reference_terms", "term_misses", "term_hits"):
+        values = row.get(key) or []
+        if isinstance(values, str):
+            yield values
+        else:
+            yield from values
 
 
 def _existing_replacement_pairs() -> set[tuple[str, str]]:
@@ -248,22 +260,43 @@ def _add_fuzzy_matches(
         target_norm = _normalize(target)
         if not target_norm or target_norm in text_norm:
             continue
-        for size in _candidate_ngram_sizes(target):
-            for source in _ngrams(words, size) or []:
-                source_norm = _normalize(source)
-                if source_norm == target_norm or (source_norm, target_norm) in state.existing:
-                    continue
-                confidence = _similarity(source, target)
-                if confidence < min_confidence:
-                    continue
-                _add_suggestion(
-                    source,
-                    target,
-                    confidence=confidence,
-                    reason="term_miss_fuzzy_match" if target in missed_terms else "dictionary_fuzzy_match",
-                    sample=sample,
-                    state=state,
-                )
+        for source, confidence in _fuzzy_candidates(words, target, target_norm, min_confidence, state):
+            _add_suggestion(
+                source,
+                target,
+                confidence=confidence,
+                reason="term_miss_fuzzy_match" if target in missed_terms else "dictionary_fuzzy_match",
+                sample=sample,
+                state=state,
+            )
+
+
+def _fuzzy_candidates(
+    words: list[str],
+    target: str,
+    target_norm: str,
+    min_confidence: float,
+    state: _SuggestionState,
+) -> Iterable[tuple[str, float]]:
+    for size in _candidate_ngram_sizes(target):
+        for source in _ngrams(words, size) or []:
+            confidence = _candidate_confidence(source, target, target_norm, min_confidence, state)
+            if confidence is not None:
+                yield source, confidence
+
+
+def _candidate_confidence(
+    source: str,
+    target: str,
+    target_norm: str,
+    min_confidence: float,
+    state: _SuggestionState,
+) -> float | None:
+    source_norm = _normalize(source)
+    if source_norm == target_norm or (source_norm, target_norm) in state.existing:
+        return None
+    confidence = _similarity(source, target)
+    return confidence if confidence >= min_confidence else None
 
 
 def _suggestions_from_state(state: _SuggestionState) -> list[ReplacementSuggestion]:
