@@ -221,6 +221,60 @@ jobs:
             SH
           end
 
+            def post_install
+              return unless OS.linux?
+
+              linux_desktop_homes.each do |home|
+                repair_linux_desktop_entry(
+                  Pathname.new(home)/".local/share/applications/whisper-dictate.desktop",
+                  bin/"whisper-dictate",
+                  false,
+                )
+                repair_linux_desktop_entry(
+                  Pathname.new(home)/".config/autostart/whisper-dictate.desktop",
+                  bin/"whisper-dictate",
+                  true,
+                )
+              end
+            end
+
+            def linux_desktop_homes
+              homes = [ENV["HOME"], *Dir["/home/*"]]
+              homes.compact.uniq.select { |home| File.directory?(home) }
+            end
+
+            def repair_linux_desktop_entry(path, exe, autostart)
+              return unless path.exist?
+
+              raw = path.read
+              return unless raw.include?("whisper-dictate")
+              return if raw.include?("Exec=#{exe} ui")
+
+              path.dirname.mkpath
+              path.write <<~DESKTOP
+                [Desktop Entry]
+                Name=Whisper Dictate
+                Comment=Push-to-talk dictation settings and runtime control
+                Exec=#{exe} ui
+                Icon=audio-input-microphone
+                Terminal=false
+                Type=Application
+                Categories=Utility;AudioVideo;Audio;
+                StartupNotify=true
+                #{autostart ? autostart_enabled_line(raw) : ""}
+              DESKTOP
+            rescue Errno::EACCES, Errno::EPERM
+              nil
+            end
+
+            def autostart_enabled_line(raw)
+              if raw.include?("X-GNOME-Autostart-enabled=false")
+                "X-GNOME-Autostart-enabled=false"
+              else
+                "X-GNOME-Autostart-enabled=true"
+              end
+            end
+
             def caveats
               <<~EOS
                 whisper-dictate builds a machine-local Python venv on first run
