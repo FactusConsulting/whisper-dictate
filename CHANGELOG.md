@@ -11,6 +11,11 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-06-03
+
+### Fixed
+- The Windows Rust executable now embeds the whisper-dictate application icon, so Windows 11 Start Menu search can show the app icon instead of a blank generic executable icon.
+
 ## [0.3.17] - 2026-06-03
 
 ### Added

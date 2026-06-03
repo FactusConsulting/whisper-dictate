@@ -334,6 +334,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("linearGradient", svg)
         self.assertIn("fill=\"#FFFFFF\"", svg)
 
+    def test_rust_windows_binary_embeds_application_icon_resource(self):
+        cargo = Path("crates/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
+        build = Path("crates/whisper-dictate-app/build.rs").read_text(encoding="utf-8")
+
+        self.assertIn("winresource", cargo)
+        self.assertIn("CARGO_CFG_TARGET_OS", build)
+        self.assertIn('"windows"', build)
+        self.assertIn("../../assets/whisper-dictate.ico", build)
+        self.assertIn("resource.compile()", build)
+
     def test_github_docs_show_logo(self):
         readme = Path("README.md").read_text(encoding="utf-8")
         release_notes = Path("RELEASE_NOTES.md").read_text(encoding="utf-8")
