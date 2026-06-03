@@ -182,7 +182,7 @@ jobs:
               repair_linux_desktop_entry() {
                 local path="\$1"
                 local autostart="\$2"
-                local exec_path="#{bin}/whisper-dictate"
+                local exec_path="#{opt_bin}/whisper-dictate"
                 [ -n "\${HOME:-}" ] || return 0
                 [ -f "\$path" ] || return 0
                 grep -Fq "whisper-dictate" "\$path" || return 0
@@ -227,12 +227,12 @@ jobs:
               linux_desktop_homes.each do |home|
                 repair_linux_desktop_entry(
                   Pathname.new(home)/".local/share/applications/whisper-dictate.desktop",
-                  bin/"whisper-dictate",
+                  opt_bin/"whisper-dictate",
                   false,
                 )
                 repair_linux_desktop_entry(
                   Pathname.new(home)/".config/autostart/whisper-dictate.desktop",
-                  bin/"whisper-dictate",
+                  opt_bin/"whisper-dictate",
                   true,
                 )
               end
