@@ -646,10 +646,13 @@ class CommandHookTests(unittest.TestCase):
         with open("voice_pi.py", encoding="utf-8") as f:
             script = f.read()
 
-        event_pos = script.index("event = base_event(")
-        hook_pos = script.index("hook_result = run_command_hook(event)")
-        metrics_pos = script.index("append_jsonl(self.metrics_jsonl, event)")
-        self.assertLess(event_pos, hook_pos)
+        stop_body = script[script.index("def _stop_and_transcribe"):]
+        event_pos = stop_body.index("event = self._utterance_event(")
+        record_pos = stop_body.index("self._record_utterance_event(event)")
+        record_body = script[script.index("def _record_utterance_event"):]
+        hook_pos = record_body.index("hook_result = run_command_hook(event)")
+        metrics_pos = record_body.index("append_jsonl(self.metrics_jsonl, event)")
+        self.assertLess(event_pos, record_pos)
         self.assertLess(hook_pos, metrics_pos)
 
 

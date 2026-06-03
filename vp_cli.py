@@ -156,24 +156,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def _print_effective_config(args, dev: str, ctype: str) -> None:
-    """Dump every setting whisper-dictate honours + the env-var source
-    annotation. Triggered by VOICEPI_DEBUG. Useful for "is my setx
-    actually arriving?" debugging — print is unconditional and runs
-    BEFORE the model loads, so it shows even if the model load hangs."""
-    def _env(name: str) -> str:
-        v = os.environ.get(name)
-        if v is None:
-            return "(unset)"
-        return v if len(v) <= 60 else f"{v[:57]}..."
+def _env_preview(name: str) -> str:
+    v = os.environ.get(name)
+    if v is None:
+        return "(unset)"
+    return v if len(v) <= 60 else f"{v[:57]}..."
 
+
+def _initial_prompt_preview() -> str:
     prompt_raw = os.environ.get("VOICEPI_INITIAL_PROMPT") or ""
-    if prompt_raw:
-        prompt_body = (f"{len(prompt_raw)} chars: \"{prompt_raw[:60]}"
-                       f"{'...' if len(prompt_raw) > 60 else ''}\"")
-    else:
-        prompt_body = "(unset)"
-    prompt_preview = f"{prompt_body}  (env VOICEPI_INITIAL_PROMPT)"
+    if not prompt_raw:
+        return "(unset)  (env VOICEPI_INITIAL_PROMPT)"
+    suffix = "..." if len(prompt_raw) > 60 else ""
+    return f"{len(prompt_raw)} chars: \"{prompt_raw[:60]}{suffix}\"  (env VOICEPI_INITIAL_PROMPT)"
+
+
+def _api_key_state() -> str:
+    return "set" if (
+        os.environ.get("VOICEPI_STT_API_KEY")
+        or os.environ.get("GROQ_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+    ) else "unset"
+
+
+def _debug_rows(args, dev: str, ctype: str) -> list[tuple[str, str]]:
+    """Return effective settings rows printed before model load."""
 
     from vp_audio import MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
     from vp_transcribe import (
@@ -183,56 +190,60 @@ def _print_effective_config(args, dev: str, ctype: str) -> None:
     from vp_dictionary import DICTIONARY, _default_path
     post = load_postprocess_settings()
 
-    rows = [
-        ("--key",            f"{args.key}  (env VOICEPI_KEY={_env('VOICEPI_KEY')})"),
-        ("--model",          f"{args.model}  (env VOICEPI_MODEL={_env('VOICEPI_MODEL')})"),
+    return [
+        ("--key",            f"{args.key}  (env VOICEPI_KEY={_env_preview('VOICEPI_KEY')})"),
+        ("--model",          f"{args.model}  (env VOICEPI_MODEL={_env_preview('VOICEPI_MODEL')})"),
         ("stt model",        f"{get_value('VOICEPI_STT_MODEL', '(unset)')}  "
-                             f"(env VOICEPI_STT_MODEL={_env('VOICEPI_STT_MODEL')})"),
+                             f"(env VOICEPI_STT_MODEL={_env_preview('VOICEPI_STT_MODEL')})"),
         ("--lang",           f"{(None if (args.autodetect or not args.lang) else args.lang) or 'auto'}  "
-                             f"(env VOICEPI_LANG={_env('VOICEPI_LANG')}, "
+                             f"(env VOICEPI_LANG={_env_preview('VOICEPI_LANG')}, "
                              f"--autodetect={args.autodetect})"),
         ("--device",         f"{args.device}  ->  resolved: {dev} / {ctype}"),
-        ("stt backend",      f"{STT_BACKEND}  (env VOICEPI_STT_BACKEND={_env('VOICEPI_STT_BACKEND')})"),
+        ("stt backend",      f"{STT_BACKEND}  (env VOICEPI_STT_BACKEND={_env_preview('VOICEPI_STT_BACKEND')})"),
         ("stt api",          f"url={get_value('VOICEPI_STT_BASE_URL', '(unset)')} "
-                             f"key={'set' if (os.environ.get('VOICEPI_STT_API_KEY') or os.environ.get('GROQ_API_KEY') or os.environ.get('OPENAI_API_KEY')) else 'unset'}"),
-        ("compute_type",     f"{ctype}  (env VOICEPI_COMPUTE_TYPE={_env('VOICEPI_COMPUTE_TYPE')})"),
-        ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env('VOICEPI_BEAM_SIZE')})"),
-        ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env('VOICEPI_TEMPERATURE')})"),
-        ("context_min_s",    f"{CONTEXT_MIN_SECONDS}  (env VOICEPI_CONTEXT_MIN_SECONDS={_env('VOICEPI_CONTEXT_MIN_SECONDS')})"),
+                             f"key={_api_key_state()}"),
+        ("compute_type",     f"{ctype}  (env VOICEPI_COMPUTE_TYPE={_env_preview('VOICEPI_COMPUTE_TYPE')})"),
+        ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env_preview('VOICEPI_BEAM_SIZE')})"),
+        ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env_preview('VOICEPI_TEMPERATURE')})"),
+        ("context_min_s",    f"{CONTEXT_MIN_SECONDS}  (env VOICEPI_CONTEXT_MIN_SECONDS={_env_preview('VOICEPI_CONTEXT_MIN_SECONDS')})"),
         ("parakeet_min_s",   f"{get_value('VOICEPI_PARAKEET_MIN_SECONDS', '1.5')}  "
-                             f"(env VOICEPI_PARAKEET_MIN_SECONDS={_env('VOICEPI_PARAKEET_MIN_SECONDS')})"),
+                             f"(env VOICEPI_PARAKEET_MIN_SECONDS={_env_preview('VOICEPI_PARAKEET_MIN_SECONDS')})"),
         ("release_tail_ms",  f"{get_value('VOICEPI_RELEASE_TAIL_MS', '200')}  "
-                             f"(env VOICEPI_RELEASE_TAIL_MS={_env('VOICEPI_RELEASE_TAIL_MS')})"),
+                             f"(env VOICEPI_RELEASE_TAIL_MS={_env_preview('VOICEPI_RELEASE_TAIL_MS')})"),
         ("vad",              f"threshold={VAD_THRESHOLD}  "
                              f"min_silence_ms={VAD_MIN_SILENCE_MS}"),
-        ("initial_prompt",   prompt_preview),
+        ("initial_prompt",   _initial_prompt_preview()),
         ("dictionary",       f"{len(DICTIONARY.terms)} terms, "
                              f"{len(DICTIONARY.replacements)} replacements, "
-                             f"path={_env('VOICEPI_DICTIONARY') if _env('VOICEPI_DICTIONARY') != '(unset)' else _default_path()}"),
+                             f"path={_env_preview('VOICEPI_DICTIONARY') if _env_preview('VOICEPI_DICTIONARY') != '(unset)' else _default_path()}"),
         ("quit",             f"{QUIT_COUNT}x {QUIT_KEY} within {QUIT_WINDOW_MS}ms  "
-                             f"(env VOICEPI_QUIT_KEY={_env('VOICEPI_QUIT_KEY')}, "
-                             f"VOICEPI_QUIT_COUNT={_env('VOICEPI_QUIT_COUNT')})"),
+                             f"(env VOICEPI_QUIT_KEY={_env_preview('VOICEPI_QUIT_KEY')}, "
+                             f"VOICEPI_QUIT_COUNT={_env_preview('VOICEPI_QUIT_COUNT')})"),
         ("audio thresholds", f"target_dbfs={TARGET_DBFS}  "
                              f"min_input_dbfs={MIN_INPUT_DBFS}  "
                              f"min_snr_db={MIN_INPUT_SNR_DB}"),
         ("audio ducking",    f"enabled={get_value('VOICEPI_AUDIO_DUCKING', '(unset)')}  "
                              f"level={get_value('VOICEPI_AUDIO_DUCKING_LEVEL', '0.25')}"),
-        ("XKB (Wayland)",    f"VOICEPI_XKB_LAYOUT={_env('VOICEPI_XKB_LAYOUT')}  "
-                             f"XKB_DEFAULT_LAYOUT={_env('XKB_DEFAULT_LAYOUT')}"),
-        ("inject mode",      f"{args.mode}  (env VOICEPI_INJECT_MODE={_env('VOICEPI_INJECT_MODE')})"),
+        ("XKB (Wayland)",    f"VOICEPI_XKB_LAYOUT={_env_preview('VOICEPI_XKB_LAYOUT')}  "
+                             f"XKB_DEFAULT_LAYOUT={_env_preview('XKB_DEFAULT_LAYOUT')}"),
+        ("inject mode",      f"{args.mode}  (env VOICEPI_INJECT_MODE={_env_preview('VOICEPI_INJECT_MODE')})"),
         ("format commands",  f"{get_value('VOICEPI_FORMAT_COMMANDS', 'off')}  "
-                             f"(env VOICEPI_FORMAT_COMMANDS={_env('VOICEPI_FORMAT_COMMANDS')})"),
-        ("json output",      f"{getattr(args, 'json', False)}  (env VOICEPI_JSON={_env('VOICEPI_JSON')})"),
-        ("metrics jsonl",    f"{_env('VOICEPI_METRICS_JSONL')}  (env VOICEPI_METRICS_JSONL)"),
-        ("command hook",     f"{_env('VOICEPI_COMMAND_HOOK')}  "
-                             f"(timeout_ms={_env('VOICEPI_COMMAND_HOOK_TIMEOUT_MS')})"),
-        ("local only",       f"{local_only_enabled()}  (env VOICEPI_LOCAL_ONLY={_env('VOICEPI_LOCAL_ONLY')})"),
+                             f"(env VOICEPI_FORMAT_COMMANDS={_env_preview('VOICEPI_FORMAT_COMMANDS')})"),
+        ("json output",      f"{getattr(args, 'json', False)}  (env VOICEPI_JSON={_env_preview('VOICEPI_JSON')})"),
+        ("metrics jsonl",    f"{_env_preview('VOICEPI_METRICS_JSONL')}  (env VOICEPI_METRICS_JSONL)"),
+        ("command hook",     f"{_env_preview('VOICEPI_COMMAND_HOOK')}  "
+                             f"(timeout_ms={_env_preview('VOICEPI_COMMAND_HOOK_TIMEOUT_MS')})"),
+        ("local only",       f"{local_only_enabled()}  (env VOICEPI_LOCAL_ONLY={_env_preview('VOICEPI_LOCAL_ONLY')})"),
         ("post process",     f"{post.processor}/{post.mode} model={post.model} "
                              f"url={post.base_url} timeout_ms={post.timeout_ms}"),
         ("post redaction",   f"enabled={post.redact}  "
                              f"terms={'set' if post.redact_terms else 'unset'}"),
-        ("stt debug",        f"{_env('VOICEPI_STT_DEBUG')}  (env VOICEPI_STT_DEBUG)"),
+        ("stt debug",        f"{_env_preview('VOICEPI_STT_DEBUG')}  (env VOICEPI_STT_DEBUG)"),
     ]
+
+
+def _print_effective_config(args, dev: str, ctype: str) -> None:
+    """Dump every setting whisper-dictate honours before the model loads."""
     print("[debug] effective settings:", flush=True)
-    for k, v in rows:
+    for k, v in _debug_rows(args, dev, ctype):
         print(f"  {k:<18} {v}", flush=True)

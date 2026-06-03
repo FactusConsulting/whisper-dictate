@@ -327,84 +327,68 @@ class Dictate(InjectMixin):
             arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 1)
             self.frames.append(arr)
 
-    def _start(self):
-        if self.recording:
-            return
-        self._reload_live_config_if_changed()
-        self._capture_target_window()
-        after = self._profiled_config(effective_config())
-        if after != self._effective_config:
-            self._apply_effective_config(after)
-        self.frames = []
-        self.recording = True
-        self._record_started = time.monotonic()
-        self.audio_ducker.enter()
-        if _ARECORD_DEVICE:
-            import subprocess
-            self._arecord_proc = subprocess.Popen(
-                ["arecord", "-D", _ARECORD_DEVICE, "-f", "S16_LE",
-                 "-r", str(SR), "-c", "1", "-"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-            )
-            threading.Thread(target=self._arecord_reader,
-                             args=(self._arecord_proc,), daemon=True).start()
-        else:
-            import sounddevice as sd
-            self._stream = sd.InputStream(
-                samplerate=SR, channels=1, dtype="int16", callback=self._cb
-            )
-            self._stream.start()
-        emit_worker_event("status", state="listening")
-        print("● listening…", flush=True)
-
-    def _stop_and_transcribe(self):
-        if not self.recording:
-            return
-        self._reload_live_config_if_changed()
-        try:
-            tail_s = max(0, self.release_tail_ms) / 1000.0
-            if tail_s:
-                time.sleep(tail_s)
-            self.recording = False
-            if self._arecord_proc:
-                self._arecord_proc.terminate()
-                self._arecord_proc.wait()
-                self._arecord_proc = None
-            if self._stream:
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
-        finally:
-            self.audio_ducker.exit()
-        if not self.frames:
-            return
-        pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
-        recording_s = (
-            time.monotonic() - self._record_started
-            if self._record_started else len(pcm) / SR
+    def _start_arecord(self) -> None:
+        import subprocess
+        self._arecord_proc = subprocess.Popen(
+            ["arecord", "-D", _ARECORD_DEVICE, "-f", "S16_LE",
+             "-r", str(SR), "-c", "1", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
+        threading.Thread(
+            target=self._arecord_reader,
+            args=(self._arecord_proc,),
+            daemon=True,
+        ).start()
+
+    def _start_sounddevice(self) -> None:
+        import sounddevice as sd
+        self._stream = sd.InputStream(
+            samplerate=SR, channels=1, dtype="int16", callback=self._cb
+        )
+        self._stream.start()
+
+    def _stop_capture_streams(self) -> None:
+        if self._arecord_proc:
+            self._arecord_proc.terminate()
+            self._arecord_proc.wait()
+            self._arecord_proc = None
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+    def _recording_seconds(self, pcm: np.ndarray) -> float:
+        if self._record_started:
+            return time.monotonic() - self._record_started
+        return len(pcm) / SR
+
+    def _should_skip_pcm(self, pcm: np.ndarray, recording_s: float) -> bool:
         if len(pcm) < SR * 0.3:  # <0.3 s — almost certainly a misfire
             print("  (too short — hold the key while you speak)", flush=True)
-            return
+            return True
         if self.stt_backend == "parakeet" and recording_s < self.parakeet_min_seconds:
             print(
                 f"  (too short for Parakeet — speak at least {self.parakeet_min_seconds:.1f}s)",
                 flush=True,
             )
-            return
+            return True
+        return False
+
+    def _transcribe_pcm(self, pcm: np.ndarray):
         try:
             result = _transcribe_detail(self.model, pcm, self.lang)
-            text = result.text
         except Exception as e:  # noqa: BLE001 — surface any failure
             print(f"  ✗ transcribe error: {e}", flush=True)
-            return
-        if not text:
-            print("  (heard nothing — speak a touch louder / mic closer)",
-                  flush=True)
-            return
-        if is_hallucination(text):
-            print(f"  (hallucination filtreret: {text!r})", flush=True)
-            return
+            return None
+        if not result.text:
+            print("  (heard nothing — speak a touch louder / mic closer)", flush=True)
+            return None
+        if is_hallucination(result.text):
+            print(f"  (hallucination filtreret: {result.text!r})", flush=True)
+            return None
+        return result
+
+    def _postprocess_and_format(self, text: str):
         post_result = postprocess_text(text, self.postprocess_settings)
         if post_result.fallback and post_result.error:
             print(f"[post] fallback after {post_result.latency_ms}ms: {post_result.error}", flush=True)
@@ -414,15 +398,24 @@ class Dictate(InjectMixin):
         format_result = apply_format_commands(post_result.text)
         if format_result.changed:
             print(f"[format] {format_result.command_set} commands={format_result.applied}", flush=True)
-        final_text = format_result.text
-        inject_t0 = time.monotonic()
-        self._inject(final_text)
-        inject_elapsed_ms = int((time.monotonic() - inject_t0) * 1000)
-        event = base_event(
+        return post_result, format_result
+
+    def _utterance_event(
+        self,
+        *,
+        result,
+        source_text: str,
+        final_text: str,
+        recording_s: float,
+        inject_elapsed_ms: int,
+        post_result,
+        format_result,
+    ) -> dict:
+        return base_event(
             event="utterance",
             text=final_text,
-            dictionary_text=text,
-            raw_text=result.raw_text or text,
+            dictionary_text=source_text,
+            raw_text=result.raw_text or source_text,
             text_preview=compact_text(final_text),
             text_chars=len(final_text),
             recording_s=recording_s,
@@ -461,6 +454,8 @@ class Dictate(InjectMixin):
             format_commands_changed=format_result.changed,
             format_commands_applied=format_result.applied,
         )
+
+    def _record_utterance_event(self, event: dict) -> None:
         hook_result = run_command_hook(event)
         annotate_event_with_hook(event, hook_result)
         if hook_result.error:
@@ -472,6 +467,63 @@ class Dictate(InjectMixin):
             print(f"[history] could not write history: {e}", file=sys.stderr, flush=True)
         if self.json_output:
             emit_json(event)
+
+    def _start(self):
+        if self.recording:
+            return
+        self._reload_live_config_if_changed()
+        self._capture_target_window()
+        after = self._profiled_config(effective_config())
+        if after != self._effective_config:
+            self._apply_effective_config(after)
+        self.frames = []
+        self.recording = True
+        self._record_started = time.monotonic()
+        self.audio_ducker.enter()
+        if _ARECORD_DEVICE:
+            self._start_arecord()
+        else:
+            self._start_sounddevice()
+        emit_worker_event("status", state="listening")
+        print("● listening…", flush=True)
+
+    def _stop_and_transcribe(self):
+        if not self.recording:
+            return
+        self._reload_live_config_if_changed()
+        try:
+            tail_s = max(0, self.release_tail_ms) / 1000.0
+            if tail_s:
+                time.sleep(tail_s)
+            self.recording = False
+            self._stop_capture_streams()
+        finally:
+            self.audio_ducker.exit()
+        if not self.frames:
+            return
+        pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
+        recording_s = self._recording_seconds(pcm)
+        if self._should_skip_pcm(pcm, recording_s):
+            return
+        result = self._transcribe_pcm(pcm)
+        if result is None:
+            return
+        text = result.text
+        post_result, format_result = self._postprocess_and_format(text)
+        final_text = format_result.text
+        inject_t0 = time.monotonic()
+        self._inject(final_text)
+        inject_elapsed_ms = int((time.monotonic() - inject_t0) * 1000)
+        event = self._utterance_event(
+            result=result,
+            source_text=text,
+            final_text=final_text,
+            recording_s=recording_s,
+            inject_elapsed_ms=inject_elapsed_ms,
+            post_result=post_result,
+            format_result=format_result,
+        )
+        self._record_utterance_event(event)
 
     # pynput key name → evdev key code mapping for common PTT keys
     _EVDEV_MAP = {
@@ -553,46 +605,40 @@ class Dictate(InjectMixin):
                     pass
         print("\nbye", flush=True)
 
-    def run(self):
-        # Support chord keys: 'shift_r+ctrl_r' means hold both simultaneously.
-        # On Wayland: use evdev (reads /dev/input/event* — global, layout-agnostic).
-        # On X11: fall back to pynput's xorg backend.
-        key_names = [n.strip() for n in self.key.split('+')]
-
-        on_wayland = bool(os.environ.get('WAYLAND_DISPLAY'))
+    def _have_evdev(self) -> bool:
         try:
             import evdev  # noqa: F401
-            have_evdev = True
+            return True
         except ImportError:
-            have_evdev = False
+            return False
 
-        if on_wayland and have_evdev:
-            self._run_evdev(key_names)
-            return
-        if on_wayland and not have_evdev:
-            sys.exit("Wayland requires evdev for global hotkeys. "
-                     "Run whisper-dictate install again or install requirements-cpu.txt; "
-                     "use --doctor for a full health check.")
-
-        # --- pynput fallback (X11 / Windows / macOS) ---
-        from pynput import keyboard
+    def _pynput_targets(self, keyboard, key_names: list[str]) -> set:
         targets = set()
         for kn in key_names:
             k = getattr(keyboard.Key, kn, None)
             if k is None:
                 sys.exit(f"unknown key '{kn}' (e.g. ctrl_r, shift_r, alt_r, f9)")
             targets.add(k)
+        return targets
 
-        pressed: set = set()
-        recording = False
-        esc_count = 0
-        esc_last = 0.0
-
+    def _pynput_quit_key(self, keyboard):
         quit_key = getattr(keyboard.Key, QUIT_KEY, None)
         if quit_key is None and len(QUIT_KEY) == 1:
             quit_key = QUIT_KEY
         if quit_key is None:
             sys.exit(f"unknown quit key '{QUIT_KEY}' (e.g. esc, f12, q)")
+        return quit_key
+
+    def _run_pynput(self, key_names: list[str]) -> None:
+        # X11 / Windows / macOS fallback.
+        from pynput import keyboard
+
+        targets = self._pynput_targets(keyboard, key_names)
+        quit_key = self._pynput_quit_key(keyboard)
+        pressed: set = set()
+        recording = False
+        esc_count = 0
+        esc_last = 0.0
 
         quit_hint = f"{QUIT_COUNT}× {QUIT_KEY} or Ctrl+C" if QUIT_COUNT > 0 else "Ctrl+C"
         print(f"whisper-dictate [lang={self.lang or 'auto'}] (pynput). Hold "
@@ -635,6 +681,23 @@ class Dictate(InjectMixin):
         finally:
             ln.stop()
         print("\nbye", flush=True)
+
+    def run(self):
+        # Support chord keys: 'shift_r+ctrl_r' means hold both simultaneously.
+        # On Wayland: use evdev (reads /dev/input/event* — global, layout-agnostic).
+        # On X11: fall back to pynput's xorg backend.
+        key_names = [n.strip() for n in self.key.split('+')]
+        on_wayland = bool(os.environ.get('WAYLAND_DISPLAY'))
+
+        if on_wayland and self._have_evdev():
+            self._run_evdev(key_names)
+            return
+        if on_wayland:
+            sys.exit("Wayland requires evdev for global hotkeys. "
+                     "Run whisper-dictate install again or install requirements-cpu.txt; "
+                     "use --doctor for a full health check.")
+
+        self._run_pynput(key_names)
 
 
 if __name__ == "__main__":

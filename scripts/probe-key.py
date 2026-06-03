@@ -81,23 +81,22 @@ def _fmt(k) -> str:
     return repr(k)
 
 
-def main(argv: list[str]) -> int:
+def _parse_args(argv: list[str]) -> tuple[str, float] | None:
     duration = 15.0
-    chord_spec = ""
+    chord_spec = argv[1] if len(argv) >= 2 else ""
     if len(argv) >= 2:
         chord_spec = argv[1]
-    if len(argv) >= 3:
-        try:
+    try:
+        if len(argv) >= 3:
             duration = float(argv[2])
-        except ValueError:
-            print(f"invalid duration '{argv[2]}' (expected seconds)",
-                  file=sys.stderr)
-            return 3
+    except ValueError:
+        print(f"invalid duration '{argv[2]}' (expected seconds)", file=sys.stderr)
+        return None
+    return chord_spec, duration
 
-    # Keys that "work" at the pynput layer but fail in voice_pi.py for
-    # reasons the probe can't physically test (console signal handling,
-    # stateful toggles). Hard-warn so the user doesn't get a false OK.
-    HARD_FAIL = {
+
+def _hard_fail_reasons() -> dict[str, str]:
+    return {
         "pause": ("Windows console interprets Pause as CTRL_BREAK_EVENT "
                   "and aborts the foreground process. pynput sees the "
                   "press, but voice_pi.py crashes mid-utterance with "
@@ -105,27 +104,70 @@ def main(argv: list[str]) -> int:
         "caps_lock": ("Stateful toggle - on Windows the press fires once "
                       "but the release-on-hold is unreliable. Breaks the "
                       "hold-to-talk model. Use f9 / shift_r+ctrl_r."),
-        "num_lock": ("Stateful toggle - same problem as caps_lock."),
-        "scroll_lock": ("Stateful toggle - same problem as caps_lock."),
+        "num_lock": "Stateful toggle - same problem as caps_lock.",
+        "scroll_lock": "Stateful toggle - same problem as caps_lock.",
     }
 
-    targets = None
-    if chord_spec:
-        names = _parse(chord_spec)
-        # Pre-warn before the listener starts so the user can abort
-        for n in names:
-            if n in HARD_FAIL:
-                print(f"!! WARNING: '{n}' is a known-bad VOICEPI_KEY:")
-                print(f"   {HARD_FAIL[n]}")
-                print(f"   This probe may still report 'OK', but the "
-                      f"real app will fail.\n")
-        targets = {_resolve(n) for n in names}
+
+def _warn_known_bad_keys(names: list[str]) -> None:
+    hard_fail = _hard_fail_reasons()
+    for name in names:
+        if name not in hard_fail:
+            continue
+        print(f"!! WARNING: '{name}' is a known-bad VOICEPI_KEY:")
+        print(f"   {hard_fail[name]}")
+        print("   This probe may still report 'OK', but the real app will fail.\n")
+
+
+def _targets_for_chord(chord_spec: str):
+    if not chord_spec:
+        return None
+    names = _parse(chord_spec)
+    _warn_known_bad_keys(names)
+    return {_resolve(n) for n in names}
+
+
+def _print_probe_intro(chord_spec: str, targets, duration: float) -> None:
+    if targets is not None:
         print(f"probing chord [{chord_spec}] for {duration:.0f}s - "
               f"hold all {len(targets)} key(s) together")
     else:
         print(f"passive probe for {duration:.0f}s - press any key, "
               f"every event is logged")
     print("(Ctrl+C to exit early)\n", flush=True)
+
+
+def _probe_verdict(chord_spec: str, targets, events: int, chord_was_complete: bool) -> int:
+    print(f"\n--- summary: {events} key event(s) captured ---")
+    if targets is None:
+        return 0  # passive mode, no verdict to render
+
+    if events == 0:
+        print(f"X  NO events from chord [{chord_spec}] - "
+              "your OS isn't delivering these keys to pynput.")
+        print("   Try a function key (e.g. f9) which is delivered reliably:")
+        print("     setx VOICEPI_KEY f9")
+        return 1
+
+    if not chord_was_complete:
+        print(f"!  events arrived but the full chord [{chord_spec}] was "
+              "never held simultaneously.")
+        print("   Either some keys weren't pressed together, or one of "
+              "them isn't reaching pynput (e.g. Fn-layer keys).")
+        return 2
+
+    print(f"OK chord [{chord_spec}] works - safe to use:")
+    print(f"   setx VOICEPI_KEY {chord_spec}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parsed = _parse_args(argv)
+    if parsed is None:
+        return 3
+    chord_spec, duration = parsed
+    targets = _targets_for_chord(chord_spec)
+    _print_probe_intro(chord_spec, targets, duration)
 
     pressed: set = set()
     chord_was_complete = False
@@ -164,27 +206,7 @@ def main(argv: list[str]) -> int:
     finally:
         ln.stop()
 
-    print(f"\n--- summary: {events} key event(s) captured ---")
-    if targets is None:
-        return 0  # passive mode, no verdict to render
-
-    if events == 0:
-        print(f"X  NO events from chord [{chord_spec}] - "
-              "your OS isn't delivering these keys to pynput.")
-        print("   Try a function key (e.g. f9) which is delivered reliably:")
-        print("     setx VOICEPI_KEY f9")
-        return 1
-
-    if not chord_was_complete:
-        print(f"!  events arrived but the full chord [{chord_spec}] was "
-              "never held simultaneously.")
-        print("   Either some keys weren't pressed together, or one of "
-              "them isn't reaching pynput (e.g. Fn-layer keys).")
-        return 2
-
-    print(f"OK chord [{chord_spec}] works - safe to use:")
-    print(f"   setx VOICEPI_KEY {chord_spec}")
-    return 0
+    return _probe_verdict(chord_spec, targets, events, chord_was_complete)
 
 
 if __name__ == "__main__":

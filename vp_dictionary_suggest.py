@@ -56,6 +56,15 @@ class ReplacementSuggestion:
         }
 
 
+@dataclass
+class _SuggestionState:
+    existing: set[tuple[str, str]]
+    counts: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int))
+    best: dict[tuple[str, str], float] = field(default_factory=lambda: defaultdict(float))
+    samples: dict[tuple[str, str], list[str]] = field(default_factory=lambda: defaultdict(list))
+    reasons: dict[tuple[str, str], str] = field(default_factory=dict)
+
+
 def _words(text: str) -> list[str]:
     return re.findall(r"[\wæøåÆØÅ.-]+", text, flags=re.UNICODE)
 
@@ -102,11 +111,7 @@ def _add_suggestion(
     confidence: float,
     reason: str,
     sample: str,
-    existing: set[tuple[str, str]],
-    counts: dict[tuple[str, str], int],
-    best: dict[tuple[str, str], float],
-    samples: dict[tuple[str, str], list[str]],
-    reasons: dict[tuple[str, str], str],
+    state: _SuggestionState,
 ) -> None:
     source = source.strip()
     target = target.strip()
@@ -118,14 +123,14 @@ def _add_suggestion(
         return
     if source_norm in _known_source_terms():
         return
-    if (source_norm, target_norm) in existing:
+    if (source_norm, target_norm) in state.existing:
         return
     key = (source, target)
-    counts[key] += 1
-    best[key] = max(best[key], confidence)
-    reasons[key] = reason
-    if sample and sample not in samples[key]:
-        samples[key].append(sample)
+    state.counts[key] += 1
+    state.best[key] = max(state.best[key], confidence)
+    state.reasons[key] = reason
+    if sample and sample not in state.samples[key]:
+        state.samples[key].append(sample)
 
 
 def _similarity(left: str, right: str) -> float:
@@ -174,102 +179,142 @@ def _existing_replacement_pairs() -> set[tuple[str, str]]:
     return {(_normalize(src), _normalize(dst)) for src, dst in DICTIONARY.replacements.items()}
 
 
+def _missed_terms(row: dict[str, Any]) -> list[str]:
+    return [
+        str(term).strip()
+        for term in (row.get("term_misses") or [])
+        if isinstance(term, str) and str(term).strip()
+    ]
+
+
+def _has_reference_context(row: dict[str, Any]) -> bool:
+    return any(row.get(key) for key in (
+        "reference_text", "reference_terms", "term_misses", "term_hits", "wer", "cer",
+    ))
+
+
+def _row_targets(row: dict[str, Any], targets: list[str], missed_terms: list[str]) -> list[str]:
+    if missed_terms:
+        return list(missed_terms)
+    return [] if _has_reference_context(row) else list(targets)
+
+
+def _add_position_matches(
+    *,
+    words: list[str],
+    reference_words: list[str],
+    missed_terms: list[str],
+    sample: str,
+    state: _SuggestionState,
+) -> None:
+    for term in missed_terms:
+        term_words = _words(term)
+        if not term_words:
+            continue
+        size = len(term_words)
+        for i in range(0, len(reference_words) - size + 1):
+            if _normalize(" ".join(reference_words[i:i + size])) != _normalize(term):
+                continue
+            for candidate_size in sorted({size, size + 1}):
+                if i + candidate_size > len(words):
+                    continue
+                source = " ".join(words[i:i + candidate_size])
+                _add_suggestion(
+                    source,
+                    term,
+                    confidence=max(0.70, _similarity(source, term)),
+                    reason="term_miss_position_match",
+                    sample=sample,
+                    state=state,
+                )
+
+
+def _candidate_ngram_sizes(target: str) -> list[int]:
+    target_len = max(1, len(_words(target)))
+    return [size for size in sorted({target_len - 1, target_len, target_len + 1}) if size > 0]
+
+
+def _add_fuzzy_matches(
+    *,
+    words: list[str],
+    text_norm: str,
+    row_targets: list[str],
+    missed_terms: list[str],
+    min_confidence: float,
+    sample: str,
+    state: _SuggestionState,
+) -> None:
+    for target in row_targets:
+        target_norm = _normalize(target)
+        if not target_norm or target_norm in text_norm:
+            continue
+        for size in _candidate_ngram_sizes(target):
+            for source in _ngrams(words, size) or []:
+                source_norm = _normalize(source)
+                if source_norm == target_norm or (source_norm, target_norm) in state.existing:
+                    continue
+                confidence = _similarity(source, target)
+                if confidence < min_confidence:
+                    continue
+                _add_suggestion(
+                    source,
+                    target,
+                    confidence=confidence,
+                    reason="term_miss_fuzzy_match" if target in missed_terms else "dictionary_fuzzy_match",
+                    sample=sample,
+                    state=state,
+                )
+
+
+def _suggestions_from_state(state: _SuggestionState) -> list[ReplacementSuggestion]:
+    grouped = [
+        ReplacementSuggestion(
+            source=source,
+            target=target,
+            count=count,
+            confidence=state.best[(source, target)],
+            reason=state.reasons[(source, target)],
+            samples=state.samples[(source, target)][:5],
+        )
+        for (source, target), count in state.counts.items()
+    ]
+    return sorted(grouped, key=lambda s: (-s.count, -s.confidence, s.target.casefold()))
+
+
 def suggest_replacements_from_rows(
     rows: list[dict[str, Any]],
     *,
     min_confidence: float = 0.62,
 ) -> list[ReplacementSuggestion]:
     targets = _known_targets(rows)
-    existing = _existing_replacement_pairs()
-    grouped: dict[tuple[str, str], ReplacementSuggestion] = {}
-    counts: dict[tuple[str, str], int] = defaultdict(int)
-    best: dict[tuple[str, str], float] = defaultdict(float)
-    samples: dict[tuple[str, str], list[str]] = defaultdict(list)
-    reasons: dict[tuple[str, str], str] = {}
+    state = _SuggestionState(existing=_existing_replacement_pairs())
 
     for row in rows:
         text = str(row.get("text") or row.get("dictionary_text") or row.get("raw_text") or "")
         if not text:
             continue
         sample = str(row.get("corpus_id") or row.get("target_title") or row.get("source_file") or "")
-        missed_terms = [str(term).strip() for term in (row.get("term_misses") or [])
-                        if isinstance(term, str) and str(term).strip()]
-        has_reference_context = any(row.get(key) for key in (
-            "reference_text", "reference_terms", "term_misses", "term_hits",
-            "wer", "cer",
-        ))
-        row_targets = []
-        row_targets.extend(missed_terms)
-        if not row_targets and not has_reference_context:
-            row_targets.extend(targets)
+        missed_terms = _missed_terms(row)
+        row_targets = _row_targets(row, targets, missed_terms)
         words = _words(text)
         reference_words = _words(str(row.get("reference_text") or ""))
-        for term in missed_terms:
-            term_words = _words(term)
-            if not term_words:
-                continue
-            size = len(term_words)
-            for i in range(0, len(reference_words) - size + 1):
-                if _normalize(" ".join(reference_words[i:i + size])) != _normalize(term):
-                    continue
-                for candidate_size in sorted({size, size + 1}):
-                    if i + candidate_size <= len(words):
-                        source = " ".join(words[i:i + candidate_size])
-                        _add_suggestion(
-                            source,
-                            term,
-                            confidence=max(0.70, _similarity(source, term)),
-                            reason="term_miss_position_match",
-                            sample=sample,
-                            existing=existing,
-                            counts=counts,
-                            best=best,
-                            samples=samples,
-                            reasons=reasons,
-                        )
-        for target in row_targets:
-            if not target:
-                continue
-            target_norm = _normalize(target)
-            if not target_norm or target_norm in _normalize(text):
-                continue
-            target_len = max(1, len(_words(target)))
-            candidate_sizes = sorted({target_len - 1, target_len, target_len + 1})
-            for size in candidate_sizes:
-                if size <= 0:
-                    continue
-                for source in _ngrams(words, size) or []:
-                    source_norm = _normalize(source)
-                    if source_norm == target_norm:
-                        continue
-                    if (source_norm, target_norm) in existing:
-                        continue
-                    confidence = _similarity(source, target)
-                    if confidence < min_confidence:
-                        continue
-                    _add_suggestion(
-                        source,
-                        target,
-                        confidence=confidence,
-                        reason="term_miss_fuzzy_match" if target in missed_terms else "dictionary_fuzzy_match",
-                        sample=sample,
-                        existing=existing,
-                        counts=counts,
-                        best=best,
-                        samples=samples,
-                        reasons=reasons,
-                    )
-
-    for (source, target), count in counts.items():
-        grouped[(source, target)] = ReplacementSuggestion(
-            source=source,
-            target=target,
-            count=count,
-            confidence=best[(source, target)],
-            reason=reasons[(source, target)],
-            samples=samples[(source, target)][:5],
+        _add_position_matches(
+            words=words,
+            reference_words=reference_words,
+            missed_terms=missed_terms,
+            sample=sample,
+            state=state,
         )
-    return sorted(grouped.values(), key=lambda s: (-s.count, -s.confidence, s.target.casefold()))
+        _add_fuzzy_matches(
+            words=words,
+            text_norm=_normalize(text),
+            row_targets=row_targets,
+            missed_terms=missed_terms,
+            min_confidence=min_confidence,
+            sample=sample,
+            state=state,
+        )
+    return _suggestions_from_state(state)
 
 
 def suggest_replacements(path: str | Path, *, min_confidence: float = 0.62) -> list[ReplacementSuggestion]:

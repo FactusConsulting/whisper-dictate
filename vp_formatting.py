@@ -77,15 +77,64 @@ def _pattern(phrase: str) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w){body}(?!\w)[ \t,.!?;:]*", re.IGNORECASE)
 
 
+def _strip_horizontal_space_around_newlines(text: str) -> str:
+    return "\n".join(part.strip(" \t") for part in text.split("\n"))
+
+
+def _normalize_punctuation_spacing(text: str) -> str:
+    punctuation = set(",.;:!?")
+    out: list[str] = []
+    for idx, char in enumerate(text):
+        if char in punctuation:
+            while out and out[-1] in (" ", "\t"):
+                out.pop()
+            out.append(char)
+            next_char = text[idx + 1] if idx + 1 < len(text) else ""
+            if next_char and not next_char.isspace():
+                out.append(" ")
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def _normalize_dash_spacing(text: str) -> str:
+    out: list[str] = []
+    idx = 0
+    while idx < len(text):
+        char = text[idx]
+        if char != "-":
+            out.append(char)
+            idx += 1
+            continue
+
+        while out and out[-1] in (" ", "\t"):
+            out.pop()
+        out.append(" - ")
+        idx += 1
+        while idx < len(text) and text[idx] in (" ", "\t"):
+            idx += 1
+    return "".join(out).replace("\n - ", "\n- ")
+
+
+def _collapse_extra_newlines(text: str) -> str:
+    out: list[str] = []
+    newline_count = 0
+    for char in text:
+        if char == "\n":
+            newline_count += 1
+            if newline_count <= 2:
+                out.append(char)
+            continue
+        newline_count = 0
+        out.append(char)
+    return "".join(out)
+
+
 def _tidy(text: str) -> str:
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n[ \t]+", "\n", text)
-    text = re.sub(r" *([,.;:!?])", r"\1", text)
-    text = re.sub(r"([,.;:!?])(?=\S)", r"\1 ", text)
-    text = re.sub(r" *- *", " - ", text)
-    text = text.replace("\n - ", "\n- ")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    text = _strip_horizontal_space_around_newlines(text)
+    text = _normalize_punctuation_spacing(text)
+    text = _normalize_dash_spacing(text)
+    return _collapse_extra_newlines(text).strip()
 
 
 def apply_format_commands(text: str, command_set: str | None = None) -> FormatCommandResult:

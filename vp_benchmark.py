@@ -184,6 +184,53 @@ def _run_loaded_model(audio_file: str | Path, item: Any | None, spec: BackendSpe
     return event
 
 
+def _benchmark_work(
+    audio_files: Iterable[str | Path] | None,
+    corpus_items: list[Any],
+) -> list[tuple[str | Path, Any | None]]:
+    if corpus_items:
+        return [(item.audio, item) for item in corpus_items]
+    return [(path, None) for path in (audio_files or [])]
+
+
+def _open_jsonl_sink(output_jsonl: str | Path | None):
+    if not output_jsonl:
+        return None
+    out_path = Path(output_jsonl)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    return out_path.open("a", encoding="utf-8")
+
+
+def _run_benchmark_item(
+    audio_file: str | Path,
+    item: Any | None,
+    spec: BackendSpec,
+    loaded: tuple[Any, str, str, str] | None,
+) -> dict[str, Any]:
+    if item is not None and not Path(audio_file).exists():
+        event = skipped_event(item, "audio file missing")
+    elif item is not None:
+        event = _run_loaded_model(audio_file, item, spec, loaded)
+        annotate_event(event, item)
+    else:
+        event = run_one(audio_file, spec)
+    event.update({
+        "benchmark_backend_spec": spec.raw,
+        "benchmark_backend": spec.backend,
+        "benchmark_model": spec.model,
+    })
+    return event
+
+
+def _write_benchmark_event(sink, event: dict[str, Any]) -> None:
+    line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+    if sink:
+        sink.write(line + "\n")
+        sink.flush()
+        return
+    print(line, flush=True)
+
+
 def run_benchmark(
     audio_files: Iterable[str | Path] | None,
     backend_specs: str | Iterable[str] | None = None,
@@ -194,44 +241,19 @@ def run_benchmark(
     specs = parse_backend_specs(backend_specs)
     results: list[dict[str, Any]] = []
     corpus_items = load_corpus(corpus_manifest) if corpus_manifest else []
-    if corpus_items:
-        work: list[tuple[str | Path, Any | None]] = [
-            (item.audio, item) for item in corpus_items
-        ]
-    else:
-        work = [(path, None) for path in (audio_files or [])]
+    work = _benchmark_work(audio_files, corpus_items)
     if not work:
         raise ValueError("at least one benchmark file or corpus item is required")
-    sink = None
+    sink = _open_jsonl_sink(output_jsonl)
     try:
-        if output_jsonl:
-            out_path = Path(output_jsonl)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            sink = out_path.open("a", encoding="utf-8")
         for spec in specs:
             loaded = None
             if corpus_items and any(Path(audio_file).exists() for audio_file, _ in work):
                 loaded = _load_model_for_spec(spec)
             for audio_file, item in work:
-                if item is not None and not Path(audio_file).exists():
-                    event = skipped_event(item, "audio file missing")
-                elif item is not None:
-                    event = _run_loaded_model(audio_file, item, spec, loaded)
-                    annotate_event(event, item)
-                else:
-                    event = run_one(audio_file, spec)
-                event.update({
-                    "benchmark_backend_spec": spec.raw,
-                    "benchmark_backend": spec.backend,
-                    "benchmark_model": spec.model,
-                })
+                event = _run_benchmark_item(audio_file, item, spec, loaded)
                 results.append(event)
-                line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-                if sink:
-                    sink.write(line + "\n")
-                    sink.flush()
-                else:
-                    print(line, flush=True)
+                _write_benchmark_event(sink, event)
     finally:
         if sink:
             sink.close()

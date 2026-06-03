@@ -52,20 +52,16 @@ def _event_devices_readable() -> tuple[bool, str]:
     return False, f"0/{len(paths)} readable; add user to input group and log in again"
 
 
-def run_doctor() -> int:
+def _base_checks(on_linux: bool, on_wayland: bool) -> list[Check]:
+    return [
+        Check("platform", on_linux, sys.platform, required=False),
+        Check("session", on_wayland, "Wayland detected" if on_wayland else "not a Wayland session", required=False),
+        Check("python", sys.version_info[:2] >= (3, 10), sys.version.split()[0]),
+    ]
+
+
+def _linux_checks() -> list[Check]:
     checks: list[Check] = []
-    on_linux = sys.platform.startswith("linux")
-    on_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE") == "wayland"
-
-    checks.append(Check("platform", on_linux, sys.platform, required=False))
-    checks.append(Check("session", on_wayland, "Wayland detected" if on_wayland else "not a Wayland session", required=False))
-    checks.append(Check("python", sys.version_info[:2] >= (3, 10), sys.version.split()[0]))
-
-    if not on_linux:
-        for c in checks:
-            print(f"[doctor] {'OK' if c.ok else 'WARN'} {c.name}: {c.detail}", flush=True)
-        return 0
-
     checks.append(Check("evdev", _can_import("evdev"), "import evdev"))
     checks.append(Check("ydotool", which("ydotool") is not None, which("ydotool") or "not found"))
     checks.append(Check("ydotoold", which("ydotoold") is not None, which("ydotoold") or "not found"))
@@ -84,16 +80,36 @@ def run_doctor() -> int:
         checks.append(Check("ydotoold process", r.returncode == 0, "running" if r.returncode == 0 else "not running"))
     except Exception as e:
         checks.append(Check("ydotoold process", False, str(e)))
+    return checks
 
+
+def _print_checks(checks: list[Check]) -> bool:
     failed = False
+
     for c in checks:
         level = "OK" if c.ok else ("FAIL" if c.required else "WARN")
         print(f"[doctor] {level:<4} {c.name}: {c.detail}", flush=True)
         failed = failed or (c.required and not c.ok)
+    return failed
 
+
+def _print_fix_hints() -> None:
+    print("[doctor] Fix hints:", flush=True)
+    print("  sudo usermod -aG input $USER  # then log out and back in", flush=True)
+    print("  sudo apt install ydotool", flush=True)
+    print("  python -m pip install -r requirements-cpu.txt", flush=True)
+
+
+def run_doctor() -> int:
+    on_linux = sys.platform.startswith("linux")
+    on_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+    checks = _base_checks(on_linux, on_wayland)
+
+    if not on_linux:
+        _print_checks(checks)
+        return 0
+
+    failed = _print_checks(checks + _linux_checks())
     if failed:
-        print("[doctor] Fix hints:", flush=True)
-        print("  sudo usermod -aG input $USER  # then log out and back in", flush=True)
-        print("  sudo apt install ydotool", flush=True)
-        print("  python -m pip install -r requirements-cpu.txt", flush=True)
+        _print_fix_hints()
     return 1 if failed else 0

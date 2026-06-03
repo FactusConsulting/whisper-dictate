@@ -699,7 +699,7 @@ class PostprocessTests(unittest.TestCase):
             script = f.read()
 
         self.assertIn("postprocess_text(text", script)
-        self.assertIn("dictionary_text=text", script)
+        self.assertIn("dictionary_text=source_text", script)
         self.assertIn("post_processor=post_result.provider", script)
         self.assertIn("post_fallback=post_result.fallback", script)
 
@@ -740,14 +740,22 @@ class FormatCommandTests(unittest.TestCase):
         self.assertFalse(result.changed)
         self.assertEqual(result.text, "Common words and kommandolinje stay literal")
 
+    def test_format_tidy_normalizes_spacing_without_regex_backtracking(self):
+        import vp_formatting
+
+        cleaned = vp_formatting._tidy(
+            "first      ,second\n   third      -      fourth\n\n\n\nfifth")
+
+        self.assertEqual(cleaned, "first, second\nthird - fourth\n\nfifth")
+
     def test_voice_pi_applies_formatting_before_injection_and_metrics(self):
         with open("voice_pi.py", encoding="utf-8") as f:
             script = f.read()
 
-        post_pos = script.index("post_result = postprocess_text")
+        post_pos = script.index("def _postprocess_and_format")
         format_pos = script.index("format_result = apply_format_commands")
         inject_pos = script.index("self._inject(final_text)")
-        metrics_pos = script.index("format_commands_applied=format_result.applied")
+        metrics_pos = script.index("event = self._utterance_event(")
         self.assertLess(post_pos, format_pos)
         self.assertLess(format_pos, inject_pos)
         self.assertLess(inject_pos, metrics_pos)

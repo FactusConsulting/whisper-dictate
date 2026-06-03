@@ -18,44 +18,55 @@ class CorpusItem:
     terms: tuple[str, ...] = field(default_factory=tuple)
 
 
-def load_corpus(path: str | Path) -> list[CorpusItem]:
+def _load_manifest(path: str | Path) -> tuple[dict[str, Any], Path]:
     manifest = Path(path)
     data = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("corpus manifest root must be an object")
-    base = manifest.parent
+    return data, manifest.parent
+
+
+def _item_audio(raw: dict[str, Any], item_id: str, audio_dir: Path, base: Path) -> Path:
+    audio_raw = str(raw.get("audio") or (audio_dir / f"{item_id}.wav"))
+    audio = Path(audio_raw)
+    return audio if audio.is_absolute() else base / audio
+
+
+def _parse_terms(raw: dict[str, Any], item_id: str) -> tuple[str, ...]:
+    terms = raw.get("terms") or []
+    if not isinstance(terms, list):
+        raise ValueError(f"corpus item {item_id}: terms must be an array")
+    return tuple(str(t).strip() for t in terms if str(t).strip())
+
+
+def _parse_item(raw: Any, *, audio_dir: Path, base: Path, seen: set[str]) -> CorpusItem:
+    if not isinstance(raw, dict):
+        raise ValueError("corpus item must be an object")
+    item_id = str(raw.get("id", "")).strip()
+    text = str(raw.get("text", "")).strip()
+    if not item_id or not text:
+        raise ValueError("corpus item requires id and text")
+    if item_id in seen:
+        raise ValueError(f"duplicate corpus id: {item_id}")
+    seen.add(item_id)
+    return CorpusItem(
+        id=item_id,
+        text=text,
+        audio=_item_audio(raw, item_id, audio_dir, base),
+        language=str(raw.get("language", "")).strip(),
+        category=str(raw.get("category", "")).strip(),
+        terms=_parse_terms(raw, item_id),
+    )
+
+
+def load_corpus(path: str | Path) -> list[CorpusItem]:
+    data, base = _load_manifest(path)
     audio_dir = Path(str(data.get("audio_dir", "")))
     items = data.get("items")
     if not isinstance(items, list):
         raise ValueError("corpus manifest must contain an items array")
-    out: list[CorpusItem] = []
     seen: set[str] = set()
-    for raw in items:
-        if not isinstance(raw, dict):
-            raise ValueError("corpus item must be an object")
-        item_id = str(raw.get("id", "")).strip()
-        text = str(raw.get("text", "")).strip()
-        if not item_id or not text:
-            raise ValueError("corpus item requires id and text")
-        if item_id in seen:
-            raise ValueError(f"duplicate corpus id: {item_id}")
-        seen.add(item_id)
-        audio_raw = str(raw.get("audio") or (audio_dir / f"{item_id}.wav"))
-        audio = Path(audio_raw)
-        if not audio.is_absolute():
-            audio = base / audio
-        terms = raw.get("terms") or []
-        if not isinstance(terms, list):
-            raise ValueError(f"corpus item {item_id}: terms must be an array")
-        out.append(CorpusItem(
-            id=item_id,
-            text=text,
-            audio=audio,
-            language=str(raw.get("language", "")).strip(),
-            category=str(raw.get("category", "")).strip(),
-            terms=tuple(str(t).strip() for t in terms if str(t).strip()),
-        ))
-    return out
+    return [_parse_item(raw, audio_dir=audio_dir, base=base, seen=seen) for raw in items]
 
 
 def _normalize_words(text: str) -> list[str]:
