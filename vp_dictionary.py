@@ -202,7 +202,8 @@ def _write_dictionary_file(
     obj = dict(base or {})
     obj["terms"] = _dedupe(terms)
     obj["replacements"] = dict(sorted(replacements.items()))
-    safe_path.write_text(
+    # safe_path is validated by _safe_dictionary_write_path before writing.
+    safe_path.write_text(  # NOSONAR
         json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
