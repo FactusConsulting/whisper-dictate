@@ -17,6 +17,7 @@ apply_config_to_environ()
 
 VALID_PROCESSORS = ("none", "ollama", "openai", "groq")
 VALID_MODES = ("raw", "clean", "prompt", "terminal", "slack", "email", "bullets")
+DEFAULT_OLLAMA_POST_MODEL = "qwen2.5:3b"
 MODE_ALIASES = {
     "bullet-list": "bullets",
     "bullet_list": "bullets",
@@ -29,7 +30,7 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 class PostprocessSettings:
     processor: str = "none"
     mode: str = "raw"
-    model: str = "qwen2.5:3b"
+    model: str = DEFAULT_OLLAMA_POST_MODEL
     base_url: str = "http://localhost:11434"
     timeout_ms: int = 2000
     max_input_chars: int = 4000
@@ -79,7 +80,7 @@ def load_postprocess_settings() -> PostprocessSettings:
     raw_base_url = (get_value("VOICEPI_POST_BASE_URL", default_base_url)
                     or default_base_url).rstrip("/")
     if processor == "groq":
-        if raw_model in ("", "qwen2.5:3b"):
+        if raw_model in ("", DEFAULT_OLLAMA_POST_MODEL):
             raw_model = "llama-3.1-8b-instant"
         if raw_base_url in ("", ollama_base_url, DEFAULT_OPENAI_BASE_URL):
             raw_base_url = GROQ_BASE_URL
@@ -98,7 +99,7 @@ def load_postprocess_settings() -> PostprocessSettings:
     return PostprocessSettings(
         processor=processor,
         mode=mode,
-        model=raw_model or "qwen2.5:3b",
+        model=raw_model or DEFAULT_OLLAMA_POST_MODEL,
         base_url=raw_base_url,
         timeout_ms=_int_setting("VOICEPI_POST_TIMEOUT_MS", 2000, 100),
         max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100),

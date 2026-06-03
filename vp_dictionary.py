@@ -14,6 +14,8 @@ from vp_config import apply_config_to_environ, get_value
 apply_config_to_environ()
 
 DICTIONARY_JSON_NAME = "dictionary.json"
+DICTIONARY_JSON_SUFFIX = ".json"
+DICTIONARY_TEXT_SUFFIX = ".txt"
 
 
 def _truthy(value: str | None) -> bool:
@@ -108,26 +110,44 @@ def _parse_text_config(text: str) -> tuple[list[str], dict[str, str]]:
 
 
 def _load_path(path: Path) -> tuple[list[str], dict[str, str]]:
-    data = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".json":
+    safe_path = _safe_dictionary_read_path(path)
+    data = safe_path.read_text(encoding="utf-8")
+    if safe_path.suffix.lower() == DICTIONARY_JSON_SUFFIX:
         obj = json.loads(data)
-        terms_raw = obj.get("terms", [])
-        terms: list[str] = []
-        for item in terms_raw:
-            if isinstance(item, str):
-                terms.append(item)
-            elif isinstance(item, dict) and item.get("term"):
-                terms.append(str(item["term"]))
-        repl_raw = obj.get("replacements", {})
-        replacements: dict[str, str] = {}
-        if isinstance(repl_raw, dict):
-            replacements = {str(k): str(v) for k, v in repl_raw.items()}
-        elif isinstance(repl_raw, list):
-            for item in repl_raw:
-                if isinstance(item, dict) and item.get("from") and item.get("to"):
-                    replacements[str(item["from"])] = str(item["to"])
-        return terms, replacements
+        return _parse_json_config(obj)
     return _parse_text_config(data)
+
+
+def _parse_json_config(obj: object) -> tuple[list[str], dict[str, str]]:
+    if not isinstance(obj, dict):
+        raise ValueError("dictionary JSON root must be an object")
+    return _parse_json_terms(obj.get("terms", [])), _parse_json_replacements(
+        obj.get("replacements", {})
+    )
+
+
+def _parse_json_terms(items: object) -> list[str]:
+    terms: list[str] = []
+    if not isinstance(items, list):
+        return terms
+    for item in items:
+        if isinstance(item, str):
+            terms.append(item)
+        elif isinstance(item, dict) and item.get("term"):
+            terms.append(str(item["term"]))
+    return terms
+
+
+def _parse_json_replacements(items: object) -> dict[str, str]:
+    if isinstance(items, dict):
+        return {str(k): str(v) for k, v in items.items()}
+    replacements: dict[str, str] = {}
+    if not isinstance(items, list):
+        return replacements
+    for item in items:
+        if isinstance(item, dict) and item.get("from") and item.get("to"):
+            replacements[str(item["from"])] = str(item["to"])
+    return replacements
 
 
 def dictionary_target_path() -> Path:
@@ -139,16 +159,36 @@ def dictionary_target_path() -> Path:
 def _read_dictionary_file(
     path: Path,
 ) -> tuple[dict[str, object], list[str], dict[str, str]]:
-    if not path.exists():
+    safe_path = _safe_dictionary_read_path(path)
+    if not safe_path.exists():
         return {}, [], {}
-    if path.suffix.lower() == ".json":
-        obj = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(obj, dict):
-            raise ValueError("dictionary JSON root must be an object")
-        terms, replacements = _load_path(path)
+    if safe_path.suffix.lower() == DICTIONARY_JSON_SUFFIX:
+        obj = json.loads(safe_path.read_text(encoding="utf-8"))
+        terms, replacements = _parse_json_config(obj)
         return obj, terms, replacements
-    terms, replacements = _load_path(path)
+    terms, replacements = _load_path(safe_path)
     return {}, terms, replacements
+
+
+def _safe_dictionary_path(path: Path, allowed_suffixes: set[str]) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("dictionary path must be absolute")
+    safe_path = candidate.resolve(strict=False)
+    if safe_path.name in ("", ".", ".."):
+        raise ValueError("dictionary path must include a file name")
+    if safe_path.suffix.lower() not in allowed_suffixes:
+        allowed = ", ".join(sorted(allowed_suffixes))
+        raise ValueError(f"dictionary path must use one of: {allowed}")
+    return safe_path
+
+
+def _safe_dictionary_read_path(path: Path) -> Path:
+    return _safe_dictionary_path(path, {DICTIONARY_JSON_SUFFIX, DICTIONARY_TEXT_SUFFIX})
+
+
+def _safe_dictionary_write_path(path: Path) -> Path:
+    return _safe_dictionary_path(path, {DICTIONARY_JSON_SUFFIX})
 
 
 def _write_dictionary_file(
@@ -157,19 +197,21 @@ def _write_dictionary_file(
     replacements: dict[str, str],
     base: dict[str, object] | None = None,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    safe_path = _safe_dictionary_write_path(path)
+    safe_path.parent.mkdir(parents=True, exist_ok=True)
     obj = dict(base or {})
     obj["terms"] = _dedupe(terms)
     obj["replacements"] = dict(sorted(replacements.items()))
-    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+    safe_path.write_text(
+        json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
 
 
 def ensure_dictionary_file(path: Path | None = None) -> Path:
-    path = path or dictionary_target_path()
-    if not path.exists():
-        _write_dictionary_file(path, [], {})
-    return path
+    safe_path = _safe_dictionary_write_path(path or dictionary_target_path())
+    if not safe_path.exists():
+        _write_dictionary_file(safe_path, [], {})
+    return safe_path
 
 
 def add_dictionary_term(term: str, path: Path | None = None) -> tuple[Path, bool]:

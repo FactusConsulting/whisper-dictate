@@ -83,7 +83,7 @@ def _tidy(text: str) -> str:
     text = re.sub(r" *([,.;:!?])", r"\1", text)
     text = re.sub(r"([,.;:!?])(?=\S)", r"\1 ", text)
     text = re.sub(r" *- *", " - ", text)
-    text = re.sub(r"\n - ", "\n- ", text)
+    text = text.replace("\n - ", "\n- ")
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 

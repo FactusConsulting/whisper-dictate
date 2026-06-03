@@ -1,4 +1,15 @@
-from tests.test_helpers import *
+from tests.test_helpers import (
+    _capture_stdout,
+    json,
+    os,
+    patch,
+    Path,
+    real_numpy,
+    sys,
+    tempfile,
+    types,
+    unittest,
+)
 
 class HallucinationFilterTests(unittest.TestCase):
     """is_hallucination filters Whisper's known output when fed near-silence."""
@@ -363,6 +374,12 @@ class PostprocessTests(unittest.TestCase):
         for n in ("vp_postprocess", "vp_config", "vp_privacy", "vp_external_api"):
             sys.modules.pop(n, None)
 
+    def test_default_ollama_model_literal_is_centralized(self):
+        source = Path("vp_postprocess.py").read_text(encoding="utf-8")
+
+        self.assertIn('DEFAULT_OLLAMA_POST_MODEL = "qwen2.5:3b"', source)
+        self.assertEqual(source.count('"qwen2.5:3b"'), 1)
+
     def test_raw_mode_returns_text_unchanged(self):
         import vp_postprocess
 
@@ -427,6 +444,7 @@ class PostprocessTests(unittest.TestCase):
                 self.wfile.write(data)
 
             def log_message(self, *args):
+                # Silence the in-process HTTP server during this test.
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -476,6 +494,7 @@ class PostprocessTests(unittest.TestCase):
                 self.wfile.write(data)
 
             def log_message(self, *args):
+                # Silence the in-process HTTP server during this test.
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -539,6 +558,7 @@ class PostprocessTests(unittest.TestCase):
                 self.wfile.write(data)
 
             def log_message(self, *args):
+                # Silence the in-process HTTP server during this test.
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -588,6 +608,7 @@ class PostprocessTests(unittest.TestCase):
                 calls["prompt"] = prompt
 
             def log_message(self, *args):
+                # Silence the in-process HTTP server during this test.
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), Handler)

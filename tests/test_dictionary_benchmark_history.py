@@ -1,4 +1,16 @@
-from tests.test_helpers import *
+from tests.test_helpers import (
+    _capture_stdout,
+    json,
+    os,
+    patch,
+    Path,
+    real_numpy,
+    sys,
+    tempfile,
+    types,
+    unittest,
+    wave,
+)
 
 class DictionarySuggestTests(unittest.TestCase):
     def test_suggests_replacements_from_benchmark_term_misses(self):
@@ -735,6 +747,16 @@ class DictionaryTests(unittest.TestCase):
         self.assertFalse(added_again)
         self.assertEqual(data["terms"], ["Claude Code"])
         self.assertEqual(data["replacements"], {})
+
+    def test_dictionary_writes_reject_unsafe_targets(self):
+        import vp_dictionary
+
+        with self.assertRaises(ValueError):
+            vp_dictionary.ensure_dictionary_file(Path("relative-dictionary.json"))
+
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                vp_dictionary.ensure_dictionary_file(Path(d) / "dictionary.txt")
 
     def test_dictionary_add_replacement_preserves_terms(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:

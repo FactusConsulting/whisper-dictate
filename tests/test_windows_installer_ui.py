@@ -1,4 +1,7 @@
-from tests.test_helpers import *
+from tests.test_helpers import (
+    Path,
+    unittest,
+)
 
 def rust_ui_source():
     paths = [
@@ -360,14 +363,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         icon = Path("assets/whisper-dictate.ico").read_bytes()
         svg = Path("assets/whisper-dictate-logo.svg").read_text(encoding="utf-8")
 
-        self.assertGreater(len(icon), 90_000)
+        self.assertGreater(len(icon), 10_000)
         self.assertEqual(int.from_bytes(icon[0:2], "little"), 0)
         self.assertEqual(int.from_bytes(icon[2:4], "little"), 1)
         self.assertEqual(int.from_bytes(icon[4:6], "little"), 7)
-        sizes = {
-            256 if icon[6 + i * 16] == 0 else icon[6 + i * 16]
-            for i in range(7)
-        }
+        sizes = set()
+        for i in range(7):
+            entry = 6 + i * 16
+            sizes.add(256 if icon[entry] == 0 else icon[entry])
+            image_offset = int.from_bytes(icon[entry + 12:entry + 16], "little")
+            self.assertEqual(icon[image_offset:image_offset + 8], b"\x89PNG\r\n\x1a\n")
         self.assertEqual(sizes, {16, 24, 32, 48, 64, 128, 256})
         self.assertIn("viewBox=\"0 0 256 256\"", svg)
         self.assertIn("linearGradient", svg)

@@ -11,6 +11,17 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-06-03
+
+### Fixed
+- Regenerated the Windows icon as a valid PNG-backed multi-resolution ICO so GitHub's Windows resource compiler can embed it in release builds.
+- Hardened dictionary file reads and writes to validated absolute dictionary files and reduced dictionary JSON parsing complexity.
+- Removed broad test helper star imports and documented intentionally quiet HTTP test handlers for SonarCloud.
+- Added a crate-local Cargo lockfile copy for SonarCloud's standalone crate scan, with a regression test that keeps it in sync with the workspace lockfile.
+
+### Changed
+- Centralized the default Ollama post-processing model literal and simplified one formatting cleanup regex.
+
 ## [0.3.21] - 2026-06-03
 
 ### Fixed

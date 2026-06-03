@@ -1,4 +1,7 @@
-from tests.test_helpers import *
+from tests.test_helpers import (
+    Path,
+    unittest,
+)
 
 class RustReleaseWorkflowTests(unittest.TestCase):
     def test_release_uploads_linux_rust_ui_binary(self):
@@ -14,6 +17,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('cp ubuntu26.04/setup.sh "$d/ubuntu26.04/"', workflow)
         self.assertIn("bash -n scripts/install-linux-rust-ui.sh", workflow)
         self.assertIn("bash -n ubuntu26.04/setup.sh", workflow)
+
+    def test_crate_lockfile_stays_in_sync_with_workspace_lockfile(self):
+        root_lock = Path("Cargo.lock").read_text(encoding="utf-8")
+        crate_lock = Path("crates/whisper-dictate-app/Cargo.lock").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(crate_lock, root_lock)
 
     def test_workflows_use_node24_checkout_action(self):
         for path in Path(".github/workflows").glob("*.yml"):

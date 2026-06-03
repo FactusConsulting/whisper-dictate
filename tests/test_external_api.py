@@ -1,4 +1,15 @@
-from tests.test_helpers import *
+from tests.test_helpers import (
+    _env,
+    dataclasses,
+    io,
+    json,
+    os,
+    patch,
+    real_numpy,
+    subprocess,
+    sys,
+    unittest,
+)
 
 class ExternalApiTests(unittest.TestCase):
     def test_external_api_import_path_does_not_require_numpy_until_transcription(self):
@@ -135,6 +146,7 @@ class ExternalApiTests(unittest.TestCase):
                 self.wfile.write(data)
 
             def log_message(self, *args):
+                # Silence the in-process HTTP server during this test.
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -184,6 +196,7 @@ class ExternalApiTests(unittest.TestCase):
                 self.wfile.write(data)
 
             def log_message(self, *args):
+                # Silence the in-process HTTP server during this test.
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
