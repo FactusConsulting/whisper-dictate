@@ -50,10 +50,11 @@ impl CloudApiCheck {
         if api_key.is_empty() {
             return Err(anyhow!("cloud API key is empty"));
         }
-        let provider = if settings
-            .stt_base_url
-            .to_ascii_lowercase()
-            .contains("api.groq.com")
+        let provider = if settings.stt_provider.trim().eq_ignore_ascii_case("groq")
+            || settings
+                .stt_base_url
+                .to_ascii_lowercase()
+                .contains("api.groq.com")
         {
             "Groq"
         } else {
@@ -143,6 +144,21 @@ mod tests {
         let err = CloudApiCheck::from_settings(&settings, " ").unwrap_err();
 
         assert!(err.to_string().contains("API key is empty"));
+    }
+
+    #[test]
+    fn cloud_check_uses_saved_provider_when_url_is_stale() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "groq".to_owned(),
+            stt_base_url: "https://api.openai.com/v1".to_owned(),
+            stt_model: "whisper-large-v3-turbo".to_owned(),
+            ..AppSettings::default()
+        };
+
+        let check = CloudApiCheck::from_settings(&settings, "test-key").unwrap();
+
+        assert_eq!(check.provider, "Groq");
     }
 
     #[test]

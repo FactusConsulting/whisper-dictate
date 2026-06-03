@@ -88,6 +88,20 @@ fn post_api_key_can_load_from_environment_fallback() {
 }
 
 #[test]
+fn cloud_provider_prefers_saved_provider_over_stale_url() {
+    let settings = AppSettings {
+        stt_provider: "groq".to_owned(),
+        stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
+        ..Default::default()
+    };
+
+    assert_eq!(CloudProvider::from_settings(&settings), CloudProvider::Groq);
+
+    let app = test_app(settings);
+    assert_eq!(app.current_cloud_provider(), CloudProvider::Groq);
+}
+
+#[test]
 fn environment_api_keys_do_not_make_settings_dirty_at_startup() {
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),

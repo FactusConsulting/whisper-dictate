@@ -38,6 +38,9 @@ impl CloudProvider {
     }
 
     pub(super) fn from_settings(settings: &AppSettings) -> Self {
+        if let Some(provider) = Self::from_raw(settings.stt_provider.trim()) {
+            return provider;
+        }
         if settings
             .stt_base_url
             .to_ascii_lowercase()
