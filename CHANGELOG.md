@@ -11,6 +11,11 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-06-03
+
+### Fixed
+- Loaded cloud STT API keys from the saved provider on first startup, so Groq credentials are available before the first worker launch even if older config still has stale OpenAI URL fields.
+
 ## [0.3.23] - 2026-06-03
 
 ### Fixed
