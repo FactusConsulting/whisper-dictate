@@ -41,6 +41,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('homes = [ENV["HOME"], *Dir["/home/*"]]', bump_step)
         self.assertIn("File.write(path.to_s", bump_step)
         self.assertNotIn("path.write <<~DESKTOP", bump_step)
+        self.assertNotIn("DESKTOP\n              )", bump_step)
         self.assertIn("def autostart_enabled_line(raw)", bump_step)
         self.assertIn('assert_path_exists libexec/"ubuntu26.04/setup.sh"', bump_step)
         self.assertNotIn("archive/refs/tags", bump_step)

@@ -263,7 +263,6 @@ jobs:
                 StartupNotify=true
                 #{autostart ? autostart_enabled_line(raw) : ""}
               DESKTOP
-              )
             rescue Errno::EACCES, Errno::EPERM
               nil
             end
