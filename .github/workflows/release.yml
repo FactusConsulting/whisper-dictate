@@ -296,7 +296,7 @@ jobs:
               icon_dir = Pathname.new(home)/".local/share/icons/hicolor/scalable/apps"
               icon_dir.mkpath
               cp icon_src, icon_dir/"whisper-dictate.svg"
-              system "gtk-update-icon-cache", "-q", (Pathname.new(home)/".local/share/icons/hicolor").to_s
+              quiet_system "gtk-update-icon-cache", "-q", (Pathname.new(home)/".local/share/icons/hicolor").to_s
             rescue Errno::EACCES, Errno::EPERM
               nil
             end

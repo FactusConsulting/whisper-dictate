@@ -53,6 +53,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('raw.include?("Icon=whisper-dictate")', bump_step)
         self.assertIn('raw.include?("StartupWMClass=whisper-dictate")', bump_step)
         self.assertIn("def install_linux_app_icon(home)", bump_step)
+        self.assertIn('quiet_system "gtk-update-icon-cache"', bump_step)
+        self.assertNotIn('\n              system "gtk-update-icon-cache"', bump_step)
         self.assertNotIn("path.write <<~DESKTOP", bump_step)
         self.assertNotIn("DESKTOP\n              )", bump_step)
         self.assertIn("def autostart_enabled_line(raw)", bump_step)
