@@ -1,21 +1,9 @@
 ; whisper-dictate — Inno Setup installer script
-; Build:  iscc /DVERSION=0.2.21 /DVARIANT=cpu whisper-dictate.iss
-; Output: whisper-dictate-windows-{VARIANT}-setup.exe
+; Build:  iscc /DVERSION=0.3.10 whisper-dictate.iss
+; Output: whisper-dictate-windows-setup-{VERSION}.exe
 
 #ifndef VERSION
   #define VERSION "0.0.0"
-#endif
-#ifndef VARIANT
-  #define VARIANT "cpu"
-#endif
-
-; Map installer variant names to actual requirements files:
-;   nvidia  → requirements-gpu.txt  (CUDA wheels)
-;   cpu/amd → requirements-cpu.txt  (CPU-only, AMD has no CUDA path)
-#if VARIANT == "nvidia"
-  #define REQFILE "requirements-gpu.txt"
-#else
-  #define REQFILE "requirements-cpu.txt"
 #endif
 
 [Setup]
@@ -31,7 +19,7 @@ DefaultDirName={localappdata}\Programs\WhisperDictate
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename=whisper-dictate-windows-{#VARIANT}-setup-{#VERSION}
+OutputBaseFilename=whisper-dictate-windows-setup-{#VERSION}
 Compression=lzma2/ultra64
 SolidCompression=yes
 SetupIconFile=..\assets\whisper-dictate.ico
@@ -51,9 +39,11 @@ Source: "..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\TECHNICAL.md";       DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dictionary.example.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\requirements-parakeet.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\requirements-cpu.txt";      DestDir: "{app}"; Flags: ignoreversion
+Source: "..\requirements-gpu.txt";      DestDir: "{app}"; Flags: ignoreversion
 Source: "..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\scripts\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
-Source: "..\{#REQFILE}";               DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
+Source: "..\requirements-cpu.txt";      DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"

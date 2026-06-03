@@ -94,7 +94,7 @@ To start the UI automatically at login, the setup script creates
 From a release zip, use the bundled Rust controller:
 
 ```bash
-unzip whisper-dictate-linux-cpu-<version>.zip
+unzip whisper-dictate-linux-<version>.zip
 cd whisper-dictate
 ./whisper-dictate install
 ./whisper-dictate ui
@@ -198,23 +198,23 @@ in after the first activation (required for the `input` group to take effect).
 Download the `.exe` installer from
 [GitHub Releases](https://github.com/FactusConsulting/whisper-dictate/releases/latest):
 
-- **`whisper-dictate-windows-cpu-setup-<version>.exe`** — works on all machines
-- **`whisper-dictate-windows-nvidia-setup-<version>.exe`** — NVIDIA GPU acceleration
+- **`whisper-dictate-windows-setup-<version>.exe`** — one Windows installer for CPU, NVIDIA GPU, Parakeet and cloud STT
 
 Double-click the installer. It installs to `%LOCALAPPDATA%\Programs\WhisperDictate`
 (no admin required), adds the directory to your user PATH, and creates a
 Start-menu **whisper-dictate** shortcut. On Windows that shortcut opens the
 unified control UI: runtime start/stop/restart, settings, dictionary access and
-logs in one window.
+logs in one window. First-time Install/Repair uses CPU dependencies by default;
+when you set Device to `cuda` and run Install/Repair, the same install can add
+NVIDIA CUDA dependencies on demand.
 
 ### Verify the download
 
-Every release publishes **`sha256sums.txt`** (covering all installer
-variants) as a release asset. After downloading, confirm the binary is
+Every release publishes **`sha256sums.txt`** as a release asset. After downloading, confirm the binary is
 exactly what CI built:
 
 ```powershell
-(Get-FileHash .\whisper-dictate-windows-nvidia-setup-<version>.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\whisper-dictate-windows-setup-<version>.exe -Algorithm SHA256).Hash.ToLower()
 ```
 
 Each line of `sha256sums.txt` is `filename=<sha256>`. A match means the
@@ -572,14 +572,14 @@ git tag v0.2.1 && git push origin v0.2.1
 ```
 
 This triggers **`release.yml`**: it publishes the Linux bundle and Rust UI
-binary, then builds Windows installers and portable Windows ZIP bundles on a
+binary, then builds the unified Windows installer and portable Windows ZIP bundle on a
 Windows runner. It also publishes the GitHub Release and (when the
 `HOMEBREW_TAP_TOKEN` repo secret is set)
 auto-bumps `url`/`sha256` in
 [`FactusConsulting/homebrew-tap`](https://github.com/FactusConsulting/homebrew-tap)
 `Formula/whisper-dictate.rb`.
 
-The Windows `.exe` installers and Windows ZIP bundles are built by the release
+The Windows `.exe` installer and Windows ZIP bundle are built by the release
 workflow itself. After the tag is pushed, CI uploads them to the Release and
 regenerates the local winget manifests in this repo (used for the
 `winget install --manifest` install path).
@@ -587,7 +587,7 @@ regenerates the local winget manifests in this repo (used for the
 For a faster local Windows test loop without creating a release:
 
 ```powershell
-.\scripts\build-windows-installer.ps1 -Variant nvidia -Version 0.0.0.1
+.\scripts\build-windows-installer.ps1 -Version 0.0.0.1
 ```
 
 The local installer and portable ZIP are written to `Output\`. The script uses

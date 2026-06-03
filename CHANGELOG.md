@@ -11,6 +11,13 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-06-03
+
+### Changed
+- Windows releases now use one unified installer and portable ZIP instead of separate CPU/NVIDIA/AMD variants.
+- Linux release ZIP naming now reflects a unified Rust controller bundle rather than a CPU-only edition.
+- Install/Repair can install CUDA requirements on demand when the configured device is `cuda`.
+
 ## [0.3.9] - 2026-06-03
 
 ### Fixed

@@ -450,6 +450,16 @@ impl InstallPlan {
     }
 
     fn add_optional_requirements(&mut self) {
+        if wants_cuda_runtime() {
+            let requirements = self.app_root.join("requirements-gpu.txt");
+            if requirements.exists() {
+                self.install_commands.push(pip_install_command(
+                    &self.venv_python,
+                    &requirements,
+                    &self.app_root,
+                ));
+            }
+        }
         if wants_parakeet_backend() {
             let requirements = self.app_root.join("requirements-parakeet.txt");
             if requirements.exists() {
@@ -512,6 +522,15 @@ fn wants_parakeet_backend() -> bool {
     }
     config::load_settings()
         .map(|settings| settings.stt_backend.eq_ignore_ascii_case("parakeet"))
+        .unwrap_or(false)
+}
+
+fn wants_cuda_runtime() -> bool {
+    if env::var("VOICEPI_DEVICE").is_ok_and(|value| value.eq_ignore_ascii_case("cuda")) {
+        return true;
+    }
+    config::load_settings()
+        .map(|settings| settings.device.eq_ignore_ascii_case("cuda"))
         .unwrap_or(false)
 }
 
@@ -1078,6 +1097,27 @@ mod tests {
             plan.install_commands[2].args[4],
             dir.path()
                 .join("requirements-parakeet.txt")
+                .display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn install_plan_includes_gpu_requirements_when_cuda_device_requests_it() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+        std::fs::write(dir.path().join("requirements-gpu.txt"), "").unwrap();
+
+        let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
+        let _device_guard = EnvVarGuard::set("VOICEPI_DEVICE", "cuda");
+        let plan = InstallPlan::for_current_environment(dir.path().to_path_buf()).unwrap();
+
+        assert_eq!(plan.install_commands.len(), 3);
+        assert_eq!(
+            plan.install_commands[2].args[4],
+            dir.path()
+                .join("requirements-gpu.txt")
                 .display()
                 .to_string()
         );

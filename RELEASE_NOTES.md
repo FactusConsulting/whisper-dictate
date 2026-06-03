@@ -9,13 +9,10 @@ keeping the Python audio/ML worker behind that controller.
 
 | Asset | Use on |
 |---|---|
-| **whisper-dictate-windows-cpu-setup-<version>.exe** | Windows CPU / AMD |
-| **whisper-dictate-windows-nvidia-setup-<version>.exe** | Windows with NVIDIA CUDA |
-| **whisper-dictate-windows-cpu-<version>.zip** | Portable Windows CPU / AMD bundle |
-| **whisper-dictate-windows-nvidia-<version>.zip** | Portable Windows NVIDIA CUDA bundle |
-| **whisper-dictate-windows-amd-<version>.zip** | Portable Windows AMD/CPU bundle |
+| **whisper-dictate-windows-setup-<version>.exe** | Windows unified installer: CPU by default, NVIDIA CUDA/Parakeet on demand |
+| **whisper-dictate-windows-<version>.zip** | Portable Windows unified bundle |
 | **whisper-dictate-linux-rust-ui-<version>** | Linux Rust UI/controller binary |
-| **whisper-dictate-linux-cpu-<version>.zip** | Linux portable bundle with Rust controller |
+| **whisper-dictate-linux-<version>.zip** | Linux portable bundle with Rust controller |
 
 ## Highlights
 

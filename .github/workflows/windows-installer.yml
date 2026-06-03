@@ -83,10 +83,8 @@ jobs:
           $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $outDir  = "$PWD\Output"
           New-Item -ItemType Directory -Force $outDir | Out-Null
-          foreach ($variant in @("cpu","nvidia","amd")) {
-            & $iscc /DVERSION=$version /DVARIANT=$variant /O"$outDir" installer\whisper-dictate.iss
-            if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $variant" }
-          }
+          & $iscc /DVERSION=$version /O"$outDir" installer\whisper-dictate.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
       - name: Build Windows ZIP packages
         if: steps.win-check.outputs.changed == 'true'
@@ -94,30 +92,24 @@ jobs:
         run: |
           $version = "${{ env.TAG }}" -replace '^v',''
           $outDir = "$PWD\Output"
-          $variants = @{
-            cpu = "requirements-cpu.txt"
-            nvidia = "requirements-gpu.txt"
-            amd = "requirements-cpu.txt"
-          }
-          foreach ($variant in $variants.Keys) {
-            $bundle = Join-Path $outDir "zip-$variant\whisper-dictate"
-            Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force $bundle | Out-Null
-            Copy-Item voice_pi.py $bundle
-            Copy-Item vp_*.py $bundle
-            Copy-Item README.md,TECHNICAL.md,LICENSE,VERSION $bundle
-            Copy-Item dictionary.example.json $bundle -ErrorAction SilentlyContinue
-            Copy-Item requirements-parakeet.txt $bundle -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
-            Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
-            Copy-Item $variants[$variant] (Join-Path $bundle "requirements.txt")
-            Copy-Item target\release\whisper-dictate.exe $bundle
-            New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
-            Copy-Item scripts\inject-smoke.py (Join-Path $bundle "scripts")
-            $zip = Join-Path $outDir "whisper-dictate-windows-$variant-$version.zip"
-            Remove-Item $zip -Force -ErrorAction SilentlyContinue
-            Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
-          }
+          $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
+          Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $bundle | Out-Null
+          Copy-Item voice_pi.py $bundle
+          Copy-Item vp_*.py $bundle
+          Copy-Item README.md,TECHNICAL.md,LICENSE,VERSION $bundle
+          Copy-Item dictionary.example.json $bundle -ErrorAction SilentlyContinue
+          Copy-Item requirements-parakeet.txt $bundle -ErrorAction SilentlyContinue
+          Copy-Item requirements-cpu.txt,requirements-gpu.txt $bundle
+          New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
+          Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
+          Copy-Item requirements-cpu.txt (Join-Path $bundle "requirements.txt")
+          Copy-Item target\release\whisper-dictate.exe $bundle
+          New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
+          Copy-Item scripts\inject-smoke.py (Join-Path $bundle "scripts")
+          $zip = Join-Path $outDir "whisper-dictate-windows-$version.zip"
+          Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
 
       - name: Compute SHA256 hashes
         if: steps.win-check.outputs.changed == 'true'
@@ -149,7 +141,7 @@ jobs:
           $tag     = "${{ env.TAG }}"
           $hashes  = Get-Content sha256sums.json | ConvertFrom-Json
 
-          $cpuHash = ($hashes | Where-Object File -like "*-cpu-*").SHA256
+          $installerHash = ($hashes | Where-Object File -eq "whisper-dictate-windows-setup-$version.exe").SHA256
 
           $baseUrl = "https://github.com/$repo/releases/download/$tag"
           $date    = Get-Date -Format 'yyyy-MM-dd'
@@ -200,8 +192,8 @@ jobs:
             "  - Architecture: x64",
             "    Scope: user",
             "    InstallerType: inno",
-            "    InstallerUrl: $baseUrl/whisper-dictate-windows-cpu-setup-$version.exe",
-            "    InstallerSha256: $cpuHash",
+            "    InstallerUrl: $baseUrl/whisper-dictate-windows-setup-$version.exe",
+            "    InstallerSha256: $installerHash",
             "    ProductCode: '$productCode'",
             "    InstallerSwitches:",
             "      Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",

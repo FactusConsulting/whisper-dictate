@@ -1,7 +1,5 @@
 # Build Windows installers locally without creating a GitHub release.
 param(
-  [ValidateSet('nvidia', 'cpu', 'amd', 'all')]
-  [string]$Variant = 'nvidia',
   [string]$Version = ''
 )
 
@@ -71,35 +69,33 @@ $outDir = Join-Path $root 'Output'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
 try {
-  $variants = if ($Variant -eq 'all') { @('cpu', 'nvidia', 'amd') } else { @($Variant) }
-  foreach ($v in $variants) {
-    Write-Host "Building $v installer version $Version..." -ForegroundColor Cyan
-    & $iscc /DVERSION=$Version /DVARIANT=$v /O"$outDir" installer\whisper-dictate.iss
-    if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $v" }
+  Write-Host "Building unified Windows installer version $Version..." -ForegroundColor Cyan
+  & $iscc /DVERSION=$Version /O"$outDir" installer\whisper-dictate.iss
+  if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
-    Write-Host "Building $v portable ZIP version $Version..." -ForegroundColor Cyan
-    $requirements = if ($v -eq 'nvidia') { 'requirements-gpu.txt' } else { 'requirements-cpu.txt' }
-    $zipRoot = Join-Path $outDir "zip-$v"
-    $bundle = Join-Path $zipRoot 'whisper-dictate'
-    Remove-Item -LiteralPath $zipRoot -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force $bundle | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'voice_pi.py') -Destination $bundle
-    Copy-Item -Path (Join-Path $root 'vp_*.py') -Destination $bundle
-    Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'TECHNICAL.md'), (Join-Path $root 'LICENSE'), $versionFile -Destination $bundle
-    Copy-Item -LiteralPath (Join-Path $root 'dictionary.example.json') -Destination $bundle -ErrorAction SilentlyContinue
-    Copy-Item -LiteralPath (Join-Path $root 'requirements-parakeet.txt') -Destination $bundle -ErrorAction SilentlyContinue
-    $assetDir = Join-Path $bundle 'assets'
-    New-Item -ItemType Directory -Force $assetDir | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'assets\whisper-dictate.ico') -Destination $assetDir
-    Copy-Item -LiteralPath (Join-Path $root $requirements) -Destination (Join-Path $bundle 'requirements.txt')
-    Copy-Item -LiteralPath (Join-Path $root 'target\release\whisper-dictate.exe') -Destination $bundle
-    $scriptDir = Join-Path $bundle 'scripts'
-    New-Item -ItemType Directory -Force $scriptDir | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'scripts\inject-smoke.py') -Destination $scriptDir
-    $zipPath = Join-Path $outDir "whisper-dictate-windows-$v-$Version.zip"
-    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
-    Compress-Archive -Path $bundle -DestinationPath $zipPath -CompressionLevel Optimal
-  }
+  Write-Host "Building unified Windows portable ZIP version $Version..." -ForegroundColor Cyan
+  $zipRoot = Join-Path $outDir "zip-windows"
+  $bundle = Join-Path $zipRoot 'whisper-dictate'
+  Remove-Item -LiteralPath $zipRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force $bundle | Out-Null
+  Copy-Item -LiteralPath (Join-Path $root 'voice_pi.py') -Destination $bundle
+  Copy-Item -Path (Join-Path $root 'vp_*.py') -Destination $bundle
+  Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'TECHNICAL.md'), (Join-Path $root 'LICENSE'), $versionFile -Destination $bundle
+  Copy-Item -LiteralPath (Join-Path $root 'dictionary.example.json') -Destination $bundle -ErrorAction SilentlyContinue
+  Copy-Item -LiteralPath (Join-Path $root 'requirements-parakeet.txt') -Destination $bundle -ErrorAction SilentlyContinue
+  Copy-Item -LiteralPath (Join-Path $root 'requirements-cpu.txt') -Destination $bundle
+  Copy-Item -LiteralPath (Join-Path $root 'requirements-gpu.txt') -Destination $bundle
+  $assetDir = Join-Path $bundle 'assets'
+  New-Item -ItemType Directory -Force $assetDir | Out-Null
+  Copy-Item -LiteralPath (Join-Path $root 'assets\whisper-dictate.ico') -Destination $assetDir
+  Copy-Item -LiteralPath (Join-Path $root 'requirements-cpu.txt') -Destination (Join-Path $bundle 'requirements.txt')
+  Copy-Item -LiteralPath (Join-Path $root 'target\release\whisper-dictate.exe') -Destination $bundle
+  $scriptDir = Join-Path $bundle 'scripts'
+  New-Item -ItemType Directory -Force $scriptDir | Out-Null
+  Copy-Item -LiteralPath (Join-Path $root 'scripts\inject-smoke.py') -Destination $scriptDir
+  $zipPath = Join-Path $outDir "whisper-dictate-windows-$Version.zip"
+  Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+  Compress-Archive -Path $bundle -DestinationPath $zipPath -CompressionLevel Optimal
 } finally {
   if ($hadVersion) {
     Set-Content $versionFile $oldVersion -Encoding ascii
@@ -108,7 +104,7 @@ try {
   }
 }
 
-Get-ChildItem $outDir -Filter "whisper-dictate-windows-*-setup-$Version.exe" |
+Get-ChildItem $outDir -Filter "whisper-dictate-windows-setup-$Version.exe" |
   Select-Object FullName, Length
-Get-ChildItem $outDir -Filter "whisper-dictate-windows-*-$Version.zip" |
+Get-ChildItem $outDir -Filter "whisper-dictate-windows-$Version.zip" |
   Select-Object FullName, Length
