@@ -98,8 +98,22 @@ def _request_json(
 ) -> dict[str, Any]:
     body = data if data is not None else json.dumps(payload or {}).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout_ms / 1000.0) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_ms / 1000.0) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        try:
+            obj = json.loads(detail) if detail else {}
+            error = obj.get("error") if isinstance(obj, dict) else None
+            if isinstance(error, dict):
+                detail = str(error.get("message") or detail)
+            elif isinstance(error, str):
+                detail = error
+        except json.JSONDecodeError:
+            pass
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"HTTP {exc.code} {exc.reason} from {url}{suffix}") from exc
 
 
 def _wav_bytes(audio) -> bytes:

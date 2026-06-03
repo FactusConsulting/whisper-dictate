@@ -320,23 +320,17 @@ impl WhisperDictateApp {
         ui.label(format!("Config: {}", self.config_path));
         ui.add_space(8.0);
         ui.label("Runtime log");
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                let height = (ui.available_height() - 8.0).max(240.0);
-                let mut runtime_log_view = self.runtime_log.clone();
-                ui.add(
-                    egui::TextEdit::multiline(&mut runtime_log_view)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(ui.available_width())
-                        .desired_rows(28)
-                        .min_size(egui::vec2(ui.available_width(), height))
-                        .id_salt("runtime_log_view")
-                        .code_editor()
-                        .desired_width(f32::INFINITY),
-                );
-            });
+        let height = (ui.available_height() - 8.0).max(240.0);
+        let mut runtime_log_view = self.runtime_log.clone();
+        ui.add_sized(
+            [ui.available_width(), height],
+            egui::TextEdit::multiline(&mut runtime_log_view)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(28)
+                .id_salt("runtime_log_view")
+                .code_editor()
+                .desired_width(f32::INFINITY),
+        );
     }
 
     fn settings_panel(&mut self, ui: &mut egui::Ui, body: fn(&mut Self, &mut egui::Ui)) {
@@ -1025,6 +1019,7 @@ impl WhisperDictateApp {
     }
 
     fn save_settings(&mut self) {
+        self.normalize_cloud_provider_settings();
         if let Err(err) = serde_json::from_str::<serde_json::Value>(&self.settings.profiles_json) {
             self.settings_status = format!("Profiles JSON is invalid: {err}");
             return;
@@ -1070,6 +1065,18 @@ impl WhisperDictateApp {
 
     fn set_cloud_provider(&mut self, provider: CloudProvider) {
         self.settings.stt_backend = "openai".to_owned();
+        self.apply_cloud_provider_defaults(provider);
+        self.reload_stt_api_key();
+    }
+
+    fn normalize_cloud_provider_settings(&mut self) {
+        if self.settings.stt_backend == "openai" {
+            let provider = self.current_cloud_provider();
+            self.apply_cloud_provider_defaults(provider);
+        }
+    }
+
+    fn apply_cloud_provider_defaults(&mut self, provider: CloudProvider) {
         self.settings.stt_provider = provider.id().to_owned();
         self.settings.stt_base_url = provider.base_url().to_owned();
         if !provider
@@ -1078,7 +1085,6 @@ impl WhisperDictateApp {
         {
             self.settings.stt_model = provider.default_model().to_owned();
         }
-        self.reload_stt_api_key();
     }
 
     fn reload_stt_api_key(&mut self) {

@@ -11,6 +11,13 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-06-03
+
+### Fixed
+- External STT HTTP errors now include provider response details, making Groq permission/model errors diagnosable.
+- The Rust runtime log uses an internal text editor scroll area so text selection can scroll beyond the visible output.
+- Saving cloud STT settings normalizes the selected provider URL/model before persisting.
+
 ## [0.3.10] - 2026-06-03
 
 ### Changed

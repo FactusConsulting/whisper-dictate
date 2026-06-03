@@ -718,6 +718,31 @@ class ExternalApiTests(unittest.TestCase):
         self.assertEqual(segments[0].text.strip(), "Hello Codex")
         self.assertEqual(info.language, "en")
 
+    def test_external_api_http_error_includes_provider_message(self):
+        import urllib.error
+        sys.modules.pop("vp_external_api", None)
+        import vp_external_api
+
+        body = io.BytesIO(json.dumps({
+            "error": {"message": "model access denied for this API key"}
+        }).encode("utf-8"))
+        error = urllib.error.HTTPError(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            403,
+            "Forbidden",
+            hdrs=None,
+            fp=body,
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "model access denied"):
+                vp_external_api._request_json(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    data=b"body",
+                    headers={},
+                    timeout_ms=1000,
+                )
+
 
 class RedactionTests(unittest.TestCase):
     def test_redacts_email_phone_tokens_and_custom_terms_without_public_values(self):
@@ -2199,10 +2224,12 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_runtime_log_expands_to_available_width(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
 
-        self.assertIn(".desired_width(ui.available_width())", script)
-        self.assertIn(".min_size(egui::vec2(ui.available_width(), height))", script)
-        self.assertIn(".auto_shrink([false, false])", script)
+        self.assertIn("ui.add_sized(", runtime_tab)
+        self.assertIn("[ui.available_width(), height]", runtime_tab)
+        self.assertIn('.id_salt("runtime_log_view")', runtime_tab)
+        self.assertNotIn("egui::ScrollArea::vertical()", runtime_tab)
 
     def test_rust_runtime_log_can_be_copied(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
