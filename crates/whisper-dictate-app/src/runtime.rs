@@ -593,7 +593,11 @@ fn wants_cuda_runtime() -> bool {
 }
 
 fn requirements_path(app_root: &Path) -> Result<PathBuf> {
-    for filename in ["requirements-cpu.txt", "requirements-gpu.txt"] {
+    for filename in [
+        "requirements-cpu.txt",
+        "requirements-gpu.txt",
+        "requirements.txt",
+    ] {
         let path = app_root.join(filename);
         if path.exists() {
             return Ok(path);

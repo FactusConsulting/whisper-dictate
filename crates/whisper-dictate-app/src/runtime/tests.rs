@@ -272,6 +272,17 @@ fn install_plan_uses_named_cpu_requirements_file() {
 }
 
 #[test]
+fn install_plan_accepts_legacy_requirements_file_from_old_linux_bundles() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+
+    assert_eq!(
+        requirements_path(dir.path()).unwrap(),
+        dir.path().join("requirements.txt")
+    );
+}
+
+#[test]
 fn install_plan_includes_parakeet_requirements_when_backend_requests_it() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

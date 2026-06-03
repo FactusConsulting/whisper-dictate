@@ -10,6 +10,7 @@ fn test_app(settings: AppSettings) -> WhisperDictateApp {
         selected_tab: Tab::Runtime,
         runtime_state: RuntimeState::Stopped,
         runtime_log: String::new(),
+        runtime_log_scroll_to_bottom: false,
         config_path: String::new(),
         saved_settings: settings.clone(),
         settings,

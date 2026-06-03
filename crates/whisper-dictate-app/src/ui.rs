@@ -104,6 +104,7 @@ struct WhisperDictateApp {
     selected_tab: Tab,
     runtime_state: RuntimeState,
     runtime_log: String,
+    runtime_log_scroll_to_bottom: bool,
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
@@ -153,6 +154,7 @@ impl Default for WhisperDictateApp {
             runtime_state: RuntimeState::Stopped,
             runtime_log: "Rust UI ready. Start launches the Python dictation worker directly."
                 .to_owned(),
+            runtime_log_scroll_to_bottom: true,
             config_path: config::config_path().display().to_string(),
             saved_settings: settings.clone(),
             settings,
@@ -570,6 +572,7 @@ impl WhisperDictateApp {
             self.runtime_log.push('\n');
         }
         self.runtime_log.push_str(line.as_ref());
+        self.runtime_log_scroll_to_bottom = true;
     }
 
     fn append_runtime_output(&mut self, output: &str) {

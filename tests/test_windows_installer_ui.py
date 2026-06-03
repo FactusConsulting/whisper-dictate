@@ -72,21 +72,22 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         script = rust_ui_source()
         runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
 
-        self.assertIn("egui::ScrollArea::both()", runtime_tab)
+        self.assertIn("egui::ScrollArea::vertical()", runtime_tab)
         self.assertIn('.id_salt("runtime_log_scroll")', runtime_tab)
         self.assertIn(".max_height(height)", runtime_tab)
-        self.assertNotIn(".stick_to_bottom(true)", runtime_tab)
-        self.assertIn(".desired_width(ui.available_width())", runtime_tab)
-        self.assertIn('.id_salt("runtime_log_view")', runtime_tab)
+        self.assertIn(".stick_to_bottom(true)", runtime_tab)
+        self.assertIn("ui.set_min_size(egui::vec2(ui.available_width(), height));", runtime_tab)
+        self.assertIn("bottom.scroll_to_me(Some(egui::Align::BOTTOM));", runtime_tab)
 
     def test_rust_runtime_log_can_be_copied(self):
         script = rust_ui_source()
 
         self.assertIn('ui.button("Copy").clicked()', script)
         self.assertIn("ui.ctx().copy_text(self.runtime_log.clone())", script)
-        self.assertIn("let mut runtime_log_view = self.runtime_log.clone();", script)
-        self.assertIn('.id_salt("runtime_log_view")', script)
         runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
+        self.assertIn("egui::Label::new(egui::RichText::new(&self.runtime_log).monospace())", runtime_tab)
+        self.assertIn(".selectable(true)", runtime_tab)
+        self.assertNotIn("TextEdit::multiline", runtime_tab)
         self.assertNotIn(".interactive(false)", runtime_tab)
 
     def test_rust_runtime_tab_can_clear_log_without_stopping_runtime(self):
@@ -94,6 +95,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn('ui.button("Clear").clicked()', script)
         self.assertIn("self.runtime_log.clear();", script)
+        self.assertIn("self.runtime_log_scroll_to_bottom = true;", script)
 
     def test_rust_ui_shows_version_in_title_and_top_bar(self):
         script = rust_ui_source()
@@ -321,7 +323,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('.config/autostart', runtime)
         self.assertIn('gtk-launch', runtime)
         self.assertIn('setsid', runtime)
-        self.assertIn('Terminal-runtime: whisper-dictate run -- --key shift_r+ctrl_r --lang da', script)
+        self.assertIn('Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang da', script)
         self.assertNotIn('Exec=whisper-dictate --key shift_r+ctrl_r --lang da', script)
 
     def test_ubuntu_setup_uses_bash_conditionals_for_reliability(self):

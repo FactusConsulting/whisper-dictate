@@ -469,13 +469,13 @@ The `whisper-dictate` command is on PATH. Persist env in `~/.profile` /
 echo 'export VOICEPI_LANG=da'        >> ~/.profile
 echo 'export VOICEPI_BEAM_SIZE=5'    >> ~/.profile
 # new shell, then:
-whisper-dictate --key shift_r+ctrl_r --lang da
+whisper-dictate run --key shift_r+ctrl_r --lang da
 ```
 
 Or inline for one run:
 
 ```bash
-VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 whisper-dictate --key shift_r+ctrl_r
+VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 whisper-dictate run --key shift_r+ctrl_r
 ```
 
 ### Linux — manual Rust controller
@@ -493,7 +493,7 @@ VOICEPI_LANG=da whisper-dictate run --key ctrl_r --lang da
 
 ```bash
 VOICEPI_LANG=da VOICEPI_BEAM_SIZE=5 \
-  nix run github:FactusConsulting/whisper-dictate -- --key shift_r+ctrl_r --lang da
+  nix run github:FactusConsulting/whisper-dictate -- run --key shift_r+ctrl_r --lang da
 ```
 
 NixOS module — set env in the service/user environment (e.g.

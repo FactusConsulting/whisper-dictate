@@ -67,7 +67,7 @@ Log out and back in after this runs (required for the `input` group to activate)
 ### Terminal start
 
 ```bash
-whisper-dictate run -- --key shift_r+ctrl_r --lang da
+whisper-dictate run --key shift_r+ctrl_r --lang da
 ```
 
 Hold **right Shift + right Ctrl**, speak, release — text appears directly
@@ -76,7 +76,7 @@ at the cursor. No clipboard, no paste shortcut.
 If Wayland hotkeys or injection fail, run:
 
 ```bash
-whisper-dictate --doctor
+whisper-dictate doctor
 ```
 
 It checks `evdev`, `ydotool`, `ydotoold`, the socket, `input` group
@@ -140,13 +140,13 @@ adds `~/.local/share/applications/whisper-dictate.desktop`.
 ### Start
 
 ```bash
-./whisper-dictate run -- --key ctrl_r --lang en
+./whisper-dictate run --key ctrl_r --lang en
 ```
 
 Or from a source checkout after the venv is built:
 
 ```bash
-cargo run --release -p whisper-dictate-app -- run -- --key ctrl_r --lang en
+cargo run --release -p whisper-dictate-app -- run --key ctrl_r --lang en
 ```
 
 ---
@@ -156,14 +156,14 @@ cargo run --release -p whisper-dictate-app -- run -- --key ctrl_r --lang en
 ### Run without installing
 
 ```bash
-nix run github:FactusConsulting/whisper-dictate -- --key shift_r+ctrl_r --lang da
+nix run github:FactusConsulting/whisper-dictate -- run --key shift_r+ctrl_r --lang da
 ```
 
 ### Install into a profile
 
 ```bash
 nix profile install github:FactusConsulting/whisper-dictate
-whisper-dictate --key shift_r+ctrl_r --lang da
+whisper-dictate run --key shift_r+ctrl_r --lang da
 ```
 
 ### NixOS module (recommended for NixOS users)

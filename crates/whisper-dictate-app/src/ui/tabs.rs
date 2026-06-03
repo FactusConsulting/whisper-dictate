@@ -27,6 +27,7 @@ impl WhisperDictateApp {
             }
             if ui.button("Clear").clicked() {
                 self.runtime_log.clear();
+                self.runtime_log_scroll_to_bottom = true;
             }
             if ui.button("Copy").clicked() {
                 ui.ctx().copy_text(self.runtime_log.clone());
@@ -43,21 +44,23 @@ impl WhisperDictateApp {
         ui.add_space(8.0);
         ui.label("Runtime log");
         let height = (ui.available_height() - 8.0).max(240.0);
-        let mut runtime_log_view = self.runtime_log.clone();
-        let row_count = self.runtime_log.lines().count().max(28);
-        egui::ScrollArea::both()
+        egui::ScrollArea::vertical()
             .id_salt("runtime_log_scroll")
             .auto_shrink([false, false])
+            .stick_to_bottom(true)
             .max_height(height)
             .show(ui, |ui| {
+                ui.set_min_size(egui::vec2(ui.available_width(), height));
                 ui.add(
-                    egui::TextEdit::multiline(&mut runtime_log_view)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_rows(row_count)
-                        .id_salt("runtime_log_view")
-                        .code_editor()
-                        .desired_width(ui.available_width()),
+                    egui::Label::new(egui::RichText::new(&self.runtime_log).monospace())
+                        .selectable(true)
+                        .wrap(),
                 );
+                let bottom = ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+                if self.runtime_log_scroll_to_bottom {
+                    bottom.scroll_to_me(Some(egui::Align::BOTTOM));
+                    self.runtime_log_scroll_to_bottom = false;
+                }
             });
     }
 

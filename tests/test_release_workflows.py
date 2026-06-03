@@ -18,6 +18,20 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("bash -n scripts/install-linux-rust-ui.sh", workflow)
         self.assertIn("bash -n ubuntu26.04/setup.sh", workflow)
 
+    def test_homebrew_formula_installs_linux_release_bundle(self):
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        bump_step = workflow.split("- name: Bump Homebrew tap", 1)[1].split("windows-installer:", 1)[0]
+
+        self.assertIn('asset="whisper-dictate-linux-${VERSION}.zip"', bump_step)
+        self.assertIn("releases/download/${TAG}/${asset}", bump_step)
+        self.assertIn('url "${src}"', bump_step)
+        self.assertIn('libexec.install Dir["whisper-dictate/*"]', bump_step)
+        self.assertIn('export VOICEPI_APP_ROOT="#{libexec}"', bump_step)
+        self.assertIn('exec "#{libexec}/whisper-dictate" "\\$@"', bump_step)
+        self.assertIn('assert_path_exists libexec/"ubuntu26.04/setup.sh"', bump_step)
+        self.assertNotIn("archive/refs/tags", bump_step)
+        self.assertNotIn('exec "#{libexec}/setup.sh"', bump_step)
+
     def test_crate_lockfile_stays_in_sync_with_workspace_lockfile(self):
         root_lock = Path("Cargo.lock").read_text(encoding="utf-8")
         crate_lock = Path("crates/whisper-dictate-app/Cargo.lock").read_text(

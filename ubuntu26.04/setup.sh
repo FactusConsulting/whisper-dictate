@@ -217,6 +217,6 @@ else
     echo "  Teksten indsættes i det vindue der havde fokus da du trykkede."
     echo
     echo "  Start manuelt: whisper-dictate ui"
-    echo "  Terminal-runtime: whisper-dictate run -- --key shift_r+ctrl_r --lang da"
+    echo "  Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang da"
 fi
 echo
