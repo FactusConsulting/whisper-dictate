@@ -11,6 +11,12 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-06-03
+
+### Changed
+- Simplified cloud STT settings: the main Save settings action now also saves or clears the provider API key when changed.
+- Removed separate Save API key and Clear API key buttons from the Core tab.
+
 ## [0.3.11] - 2026-06-03
 
 ### Fixed

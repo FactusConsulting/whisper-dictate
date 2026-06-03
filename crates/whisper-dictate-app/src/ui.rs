@@ -162,6 +162,7 @@ struct WhisperDictateApp {
     saved_settings: AppSettings,
     settings_status: String,
     stt_api_key_input: String,
+    saved_stt_api_key_input: String,
     stt_api_key_status: String,
     dictionary_preview: String,
     supervisor: RuntimeSupervisor,
@@ -198,6 +199,7 @@ impl Default for WhisperDictateApp {
             saved_settings: settings.clone(),
             settings,
             settings_status,
+            saved_stt_api_key_input: stt_api_key_input.clone(),
             stt_api_key_input,
             stt_api_key_status,
             dictionary_preview: String::new(),
@@ -336,12 +338,28 @@ impl WhisperDictateApp {
     fn settings_panel(&mut self, ui: &mut egui::Ui, body: fn(&mut Self, &mut egui::Ui)) {
         body(self, ui);
         ui.separator();
+        let is_dirty = self.has_unsaved_settings();
         ui.horizontal(|ui| {
-            if ui.button("Save").clicked() {
+            let mut save_button = egui::Button::new(if is_dirty {
+                egui::RichText::new("Save settings *").strong()
+            } else {
+                egui::RichText::new("Save settings")
+            });
+            if is_dirty {
+                save_button = save_button.fill(ui.visuals().selection.bg_fill);
+            }
+            if ui
+                .add_enabled(is_dirty, save_button)
+                .on_hover_text("Save changed settings and any edited cloud API key.")
+                .clicked()
+            {
                 self.save_settings();
             }
-            if ui.button("Reload").clicked() {
+            if ui.button("Reload from disk").clicked() {
                 self.reload_settings();
+            }
+            if is_dirty {
+                ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
             }
             ui.label(format!("Config: {}", self.config_path));
         });
@@ -490,12 +508,6 @@ impl WhisperDictateApp {
         if backend == SttBackendMode::Cloud {
             let provider = self.current_cloud_provider();
             ui.horizontal(|ui| {
-                if ui.button("Save API key").clicked() {
-                    self.save_stt_api_key();
-                }
-                if ui.button("Clear API key").clicked() {
-                    self.clear_stt_api_key();
-                }
                 if ui
                     .button(format!("{} API keys", provider.label()))
                     .clicked()
@@ -513,6 +525,9 @@ impl WhisperDictateApp {
                 }
                 ui.label(&self.stt_api_key_status);
             });
+            ui.label(
+                "Paste or edit the API key above, then click Save settings. Clear the field and save to remove the stored key.",
+            );
         }
         if self.settings.stt_backend == "openai" {
             ui.label(
@@ -1028,8 +1043,13 @@ impl WhisperDictateApp {
             Ok(path) => {
                 let restart_keys =
                     config::restart_required_keys(&self.saved_settings, &self.settings);
+                let key_message = self.save_stt_api_key_if_changed();
                 self.saved_settings = self.settings.clone();
-                self.settings_status = format!("Saved: {}", path.display());
+                self.settings_status = format!("Saved settings: {}", path.display());
+                if let Some(message) = key_message {
+                    self.settings_status.push_str(" | ");
+                    self.settings_status.push_str(&message);
+                }
                 if self.supervisor.is_running() && !restart_keys.is_empty() {
                     self.append_runtime_log(format!(
                         "[ui] restart required after settings change: {}",
@@ -1042,6 +1062,11 @@ impl WhisperDictateApp {
                 self.settings_status = format!("Save failed: {err}");
             }
         }
+    }
+
+    fn has_unsaved_settings(&self) -> bool {
+        self.settings != self.saved_settings
+            || self.stt_api_key_input != self.saved_stt_api_key_input
     }
 
     fn reload_settings(&mut self) {
@@ -1092,6 +1117,7 @@ impl WhisperDictateApp {
         match load_stt_api_key(provider) {
             Ok(key) => {
                 self.stt_api_key_input = key;
+                self.saved_stt_api_key_input = self.stt_api_key_input.clone();
                 self.stt_api_key_status = if self.stt_api_key_input.is_empty() {
                     format!("No {} API key saved.", provider.label())
                 } else {
@@ -1100,31 +1126,35 @@ impl WhisperDictateApp {
             }
             Err(err) => {
                 self.stt_api_key_input.clear();
+                self.saved_stt_api_key_input.clear();
                 self.stt_api_key_status = format!("Could not load API key: {err}");
             }
         }
     }
 
-    fn save_stt_api_key(&mut self) {
+    fn save_stt_api_key_if_changed(&mut self) -> Option<String> {
+        if self.settings.stt_backend != "openai" {
+            return None;
+        }
+        if self.stt_api_key_input == self.saved_stt_api_key_input {
+            return None;
+        }
         let provider = self.current_cloud_provider();
-        match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
+        let message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
             Ok(()) => {
-                self.stt_api_key_status = if self.stt_api_key_input.trim().is_empty() {
+                self.saved_stt_api_key_input = self.stt_api_key_input.clone();
+                if self.stt_api_key_input.trim().is_empty() {
                     format!("Cleared saved {} API key.", provider.label())
                 } else {
                     format!("Saved {} API key in OS credential store.", provider.label())
-                };
+                }
             }
             Err(err) => {
-                self.stt_api_key_status =
-                    format!("Could not save {} API key: {err}", provider.label());
+                format!("Could not save {} API key: {err}", provider.label())
             }
-        }
-    }
-
-    fn clear_stt_api_key(&mut self) {
-        self.stt_api_key_input.clear();
-        self.save_stt_api_key();
+        };
+        self.stt_api_key_status = message.clone();
+        Some(message)
     }
 
     fn ensure_dictionary(&mut self) {

@@ -2279,9 +2279,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', script)
         self.assertIn('OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys"', script)
         self.assertIn('"Cloud STT API key"', script)
-        self.assertIn("fn save_stt_api_key(", script)
+        self.assertIn("fn save_stt_api_key_if_changed(", script)
         self.assertIn("keyring::Entry::new", script)
         self.assertIn("STT_API_KEY_ENV", script)
+        self.assertIn("fn has_unsaved_settings(&self) -> bool", script)
+        self.assertIn('egui::RichText::new("Save settings *").strong()', script)
+        self.assertIn(".add_enabled(is_dirty, save_button)", script)
+        self.assertIn('"Unsaved changes"', script)
+        self.assertIn('ui.button("Reload from disk").clicked()', script)
+        self.assertNotIn('ui.button("Save API key").clicked()', script)
+        self.assertNotIn('ui.button("Clear API key").clicked()', script)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
