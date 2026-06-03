@@ -179,11 +179,12 @@ cat > "$HOME/.local/share/applications/whisper-dictate.desktop" << 'EOF'
 Name=Whisper Dictate
 Comment=Push-to-talk dictation settings and runtime control
 Exec=whisper-dictate ui
-Icon=audio-input-microphone
+Icon=whisper-dictate
 Terminal=false
 Type=Application
 Categories=Utility;AudioVideo;Audio;
 StartupNotify=true
+StartupWMClass=whisper-dictate
 EOF
 chmod 0644 "$HOME/.local/share/applications/whisper-dictate.desktop"
 ok "~/.local/share/applications/whisper-dictate.desktop oprettet"

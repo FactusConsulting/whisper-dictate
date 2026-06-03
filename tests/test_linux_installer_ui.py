@@ -22,15 +22,23 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
         self.assertIn('REAL_BIN="${LIB_DIR}/whisper-dictate-app"', script)
         self.assertIn('install -m 0755 "${HERE}/target/release/whisper-dictate" "${REAL_BIN}"', script)
+        self.assertIn('install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"', script)
         self.assertIn('export VOICEPI_APP_ROOT="${HERE}"', script)
         self.assertIn('exec "${REAL_BIN}" "\\$@"', script)
         self.assertIn("whisper-dictate.desktop", script)
         self.assertIn("Exec=${BIN} ui", script)
+        self.assertIn("Icon=whisper-dictate", script)
+        self.assertIn("StartupWMClass=whisper-dictate", script)
         self.assertIn("ensure_user_bin_first", script)
         self.assertIn('${HOME}/.zprofile', script)
         self.assertIn('export PATH="${HOME}/.local/bin:${PATH}"', script)
         self.assertIn('Run now: ${BIN} ui', script)
         self.assertNotIn("setup.ps1", script)
+
+    def test_rust_ui_sets_linux_app_id_for_desktop_shells(self):
+        ui = rust_ui_source()
+
+        self.assertIn('.with_app_id("whisper-dictate")', ui)
 
     def test_ubuntu_setup_resets_stale_ydotoold_before_starting_service(self):
         script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")

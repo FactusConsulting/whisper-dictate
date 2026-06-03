@@ -220,6 +220,8 @@ fn linux_desktop_entry_uses_supplied_absolute_exec_command() {
     let entry = linux_desktop_entry(false, "/opt/whisper-dictate/whisper-dictate ui");
 
     assert!(entry.contains("Exec=/opt/whisper-dictate/whisper-dictate ui\n"));
+    assert!(entry.contains("Icon=whisper-dictate\n"));
+    assert!(entry.contains("StartupWMClass=whisper-dictate\n"));
     assert!(!entry.contains("Exec=whisper-dictate ui"));
     assert!(!entry.contains("X-GNOME-Autostart-enabled=true"));
 }

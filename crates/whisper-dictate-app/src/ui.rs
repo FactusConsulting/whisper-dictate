@@ -90,6 +90,7 @@ pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1080.0, 760.0])
+            .with_app_id("whisper-dictate")
             .with_icon(app_icon()),
         ..Default::default()
     };

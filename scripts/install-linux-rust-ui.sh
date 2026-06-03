@@ -6,9 +6,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 LIB_DIR="${HOME}/.local/lib/whisper-dictate"
 APP_DIR="${HOME}/.local/share/applications"
+ICON_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
 BIN="${BIN_DIR}/whisper-dictate"
 REAL_BIN="${LIB_DIR}/whisper-dictate-app"
 DESKTOP="${APP_DIR}/whisper-dictate.desktop"
+ICON="${ICON_DIR}/whisper-dictate.svg"
 
 command -v cargo >/dev/null 2>&1 || {
   echo "cargo is required. Install Rust from https://rustup.rs/ and re-run this script." >&2
@@ -17,8 +19,9 @@ command -v cargo >/dev/null 2>&1 || {
 
 cargo build --release -p whisper-dictate-app --manifest-path "${HERE}/Cargo.toml"
 
-mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}" "${ICON_DIR}"
 install -m 0755 "${HERE}/target/release/whisper-dictate" "${REAL_BIN}"
+install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"
 
 cat > "${BIN}" <<EOF
 #!/usr/bin/env bash
@@ -30,15 +33,18 @@ chmod 0755 "${BIN}"
 cat > "${DESKTOP}" <<EOF
 [Desktop Entry]
 Type=Application
-Name=whisper-dictate
+Name=Whisper Dictate
 Comment=Push-to-talk dictation settings and runtime control
 Exec=${BIN} ui
+Icon=whisper-dictate
 Terminal=false
 Categories=Utility;AudioVideo;Audio;
 StartupNotify=true
+StartupWMClass=whisper-dictate
 EOF
 
 chmod 0644 "${DESKTOP}"
+gtk-update-icon-cache -q "${HOME}/.local/share/icons/hicolor" 2>/dev/null || true
 
 ensure_user_bin_first() {
   local profile="$1"
@@ -62,6 +68,7 @@ fi
 echo "Installed ${BIN}"
 echo "Installed ${REAL_BIN}"
 echo "Installed ${DESKTOP}"
+echo "Installed ${ICON}"
 if [[ "$(command -v whisper-dictate 2>/dev/null || true)" = "${BIN}" ]]; then
   echo "Run: whisper-dictate ui"
 else
