@@ -22,6 +22,32 @@ class InjectStrategyTests(unittest.TestCase):
             _inject_target_process=process,
         )
 
+    def _injector(self, mode="auto", paste_ok=True, wayland_ok=True):
+        mixin = self.inject.InjectMixin
+
+        class Dummy(mixin):
+            def __init__(self):
+                self.mode = mode
+                self._kb = types.SimpleNamespace(type=lambda text: None)
+                self._inject_target_xwin = None
+                self._inject_target_title = None
+                self._inject_target_process = None
+                self.pasted = []
+                self.typed_wayland = []
+
+            def _restore_target_focus(self):
+                return False
+
+            def _paste(self, text):
+                self.pasted.append(text)
+                return paste_ok
+
+            def _wayland_type(self, text):
+                self.typed_wayland.append(text)
+                return wayland_ok
+
+        return Dummy()
+
     def test_windows_terminal_targets_prefer_paste(self):
         target = self._dummy("Administrator: Windows PowerShell", "WindowsTerminal.exe")
 
@@ -60,6 +86,46 @@ class InjectStrategyTests(unittest.TestCase):
         with patch.object(self.inject.os, "name", "posix"):
             self.assertFalse(
                 self.inject.InjectMixin._target_prefers_paste(target))
+
+    def test_wayland_auto_pastes_non_ascii_text(self):
+        target = self._injector(mode="auto")
+
+        with _env(WAYLAND_DISPLAY="wayland-0"):
+            target._inject("Æbler, ører og øjne")
+
+        self.assertEqual(target._last_inject_strategy, "paste")
+        self.assertEqual(target.pasted, ["Æbler, ører og øjne"])
+        self.assertEqual(target.typed_wayland, [])
+
+    def test_wayland_auto_uses_ydotool_for_ascii_text(self):
+        target = self._injector(mode="auto")
+
+        with _env(WAYLAND_DISPLAY="wayland-0"):
+            target._inject("plain ascii")
+
+        self.assertEqual(target._last_inject_strategy, "ydotool")
+        self.assertEqual(target.pasted, [])
+        self.assertEqual(target.typed_wayland, ["plain ascii"])
+
+    def test_wayland_auto_falls_back_to_ydotool_when_paste_fails(self):
+        target = self._injector(mode="auto", paste_ok=False)
+
+        with _env(WAYLAND_DISPLAY="wayland-0"):
+            target._inject("øjne")
+
+        self.assertEqual(target._last_inject_strategy, "ydotool")
+        self.assertEqual(target.pasted, ["øjne"])
+        self.assertEqual(target.typed_wayland, ["øjne"])
+
+    def test_wayland_explicit_type_keeps_direct_injection_for_non_ascii(self):
+        target = self._injector(mode="type")
+
+        with _env(WAYLAND_DISPLAY="wayland-0"):
+            target._inject("øjne")
+
+        self.assertEqual(target._last_inject_strategy, "ydotool")
+        self.assertEqual(target.pasted, [])
+        self.assertEqual(target.typed_wayland, ["øjne"])
 
 
 @contextmanager

@@ -18,9 +18,8 @@ Hold RIGHT CTRL, speak, release → text appears at your cursor.
   --key f9        use a different hold-to-talk key (ctrl_r, alt_r, f9…;
                   env VOICEPI_KEY)
   --key a+b       chord: hold BOTH keys simultaneously (e.g. shift_r+ctrl_r)
-  --type          force direct keyboard typing on X11/Windows
-  --paste         force clipboard + Ctrl+V on X11/Windows
-                  (on Wayland direct evdev keycodes are always used instead)
+  --type          force direct keyboard typing on X11/Windows/Wayland
+  --paste         force clipboard + Ctrl+V
   --no-type       just print what was heard (don't inject — testing)
   --model NAME    Whisper model (default large-v3-turbo, the fastest;
                   env VOICEPI_MODEL)
@@ -29,9 +28,9 @@ Hold RIGHT CTRL, speak, release → text appears at your cursor.
                   omit to let Whisper auto-detect (less reliable on short speech)
   --autodetect    alias for omitting --lang
 
-On Wayland (Ubuntu 26.04), text is injected directly via ydotool:
-ASCII via ydotool type, æøå via evdev keycodes (compositor maps them
-through the DK XKB layout — no clipboard, no paste shortcut).
+On Wayland (Ubuntu 26.04), auto mode uses clipboard + Ctrl+V for
+non-ASCII text and direct ydotool injection for plain ASCII. Use --type
+to force direct ydotool key injection.
 Stop it by pressing Esc 3 times in a row (or Ctrl+C) — that frees
 the GPU VRAM. Configure with VOICEPI_QUIT_KEY and VOICEPI_QUIT_COUNT
 (0 disables; 1 = legacy).

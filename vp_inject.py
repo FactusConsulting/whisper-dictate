@@ -207,15 +207,23 @@ class InjectMixin:
             return False
         return any(ch in _WINDOWS_LAYOUT_SENSITIVE_CHARS for ch in text)
 
-    def _paste(self, text: str) -> None:
-        import pyperclip
-        from pynput import keyboard
+    def _wayland_text_prefers_paste(self, text: str) -> bool:
+        return any(ord(ch) > 127 for ch in text)
 
-        pyperclip.copy(text)
-        self._kb.press(keyboard.Key.ctrl)
-        self._kb.press("v")
-        self._kb.release("v")
-        self._kb.release(keyboard.Key.ctrl)
+    def _paste(self, text: str) -> bool:
+        try:
+            import pyperclip
+            from pynput import keyboard
+
+            pyperclip.copy(text)
+            self._kb.press(keyboard.Key.ctrl)
+            self._kb.press("v")
+            self._kb.release("v")
+            self._kb.release(keyboard.Key.ctrl)
+            return True
+        except Exception as e:
+            print(f"[inject] paste fejlede: {e}", flush=True)
+            return False
 
     def _inject(self, text: str):
         self._last_inject_strategy = None
@@ -245,11 +253,19 @@ class InjectMixin:
             print(f'[inject] → "{preview}"', flush=True)
 
         if on_wayland:
-            # ASCII via ydotool type, æøå via direkte evdev-keycodes (ydotool key).
-            # ydotool type v1.0.4 mangler libxkbcommon og dropper non-ASCII stille;
-            # men compositor fortolker KEY_LEFTBRACE→å, KEY_SEMICOLON→ø osv. via
-            # XKB dk-layout på ydotoold's uinput-enhed — ingen clipboard nødvendig.
-            print(f"[inject] ydotool (direkte)", flush=True)
+            mode = self.mode
+            if mode == "auto":
+                mode = "paste" if self._wayland_text_prefers_paste(text) else "ydotool"
+                print(f"[inject] strategy: {mode}", flush=True)
+            if mode == "paste":
+                self._last_inject_strategy = "paste"
+                if self._paste(text):
+                    return
+                print("[inject] paste fejlede — fallback ydotool", flush=True)
+
+            # ASCII via ydotool type. Explicit type also keeps direct key injection
+            # available for users who do not want clipboard-based insertion.
+            print("[inject] ydotool (direkte)", flush=True)
             self._last_inject_strategy = "ydotool"
             if not self._wayland_type(text):
                 print("[inject] ydotool fejlede — fallback pynput", flush=True)
@@ -267,7 +283,9 @@ class InjectMixin:
             print(f"[inject] strategy: {mode}", flush=True)
         if mode == "paste":
             self._last_inject_strategy = "paste"
-            self._paste(text)
+            if not self._paste(text):
+                self._last_inject_strategy = "type-fallback"
+                self._kb.type(text)
             return
         self._last_inject_strategy = "type"
         self._kb.type(text)
