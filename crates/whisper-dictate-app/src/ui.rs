@@ -6,12 +6,14 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
+use crate::cloud_api::{check_cloud_api, CloudApiCheck};
 use crate::config::{self, AppSettings};
 use crate::dictionary;
 use crate::runtime::{
     self, default_worker_command, doctor_command, install_command, run_capture, RuntimeEvent,
     RuntimeState, RuntimeSupervisor, WorkerCommand,
 };
+use crate::telemetry;
 
 const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
@@ -180,6 +182,8 @@ struct WhisperDictateApp {
     saved_stt_api_key_input: String,
     stt_api_key_status: String,
     dictionary_preview: String,
+    history_preview: String,
+    metrics_preview: String,
     supervisor: RuntimeSupervisor,
     background_task: Option<Receiver<BackgroundTaskResult>>,
     background_task_label: Option<&'static str>,
@@ -195,16 +199,14 @@ impl Default for WhisperDictateApp {
             ),
         };
         let provider = CloudProvider::from_settings(&settings);
-        let (stt_api_key_input, stt_api_key_status) = load_stt_api_key(provider)
-            .map(|key| {
-                let status = if key.is_empty() {
-                    format!("No {} API key saved.", provider.label())
-                } else {
-                    format!("Loaded saved {} API key.", provider.label())
-                };
-                (key, status)
-            })
-            .unwrap_or_else(|err| (String::new(), format!("Could not load API key: {err}")));
+        let (stt_api_key_input, saved_stt_api_key_input, stt_api_key_status) =
+            load_stt_api_key_state(provider).unwrap_or_else(|err| {
+                (
+                    String::new(),
+                    String::new(),
+                    format!("Could not load API key: {err}"),
+                )
+            });
         Self {
             selected_tab: Tab::Runtime,
             runtime_state: RuntimeState::Stopped,
@@ -214,10 +216,12 @@ impl Default for WhisperDictateApp {
             saved_settings: settings.clone(),
             settings,
             settings_status,
-            saved_stt_api_key_input: stt_api_key_input.clone(),
+            saved_stt_api_key_input,
             stt_api_key_input,
             stt_api_key_status,
             dictionary_preview: String::new(),
+            history_preview: String::new(),
+            metrics_preview: String::new(),
             supervisor: RuntimeSupervisor::new(),
             background_task: None,
             background_task_label: None,
@@ -545,6 +549,16 @@ impl WhisperDictateApp {
                         }
                     }
                 }
+                if ui
+                    .add_enabled(
+                        self.background_task.is_none(),
+                        egui::Button::new("Test cloud API"),
+                    )
+                    .on_hover_text("Checks the selected provider key and model from Rust without starting the Python worker.")
+                    .clicked()
+                {
+                    self.run_cloud_api_check();
+                }
                 ui.label(&self.stt_api_key_status);
             });
             ui.label(
@@ -856,6 +870,41 @@ impl WhisperDictateApp {
                     "Scale all text in this settings UI. Use 1.0 for default, 1.15 for larger text, or 1.3 for high-DPI displays.",
                 );
             });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Preview history").clicked() {
+                self.preview_history();
+            }
+            if ui.button("Open history").clicked() {
+                self.open_history();
+            }
+            if ui.button("Preview metrics").clicked() {
+                self.preview_metrics();
+            }
+            if ui.button("Open metrics").clicked() {
+                self.open_metrics();
+            }
+        });
+        if !self.history_preview.is_empty() {
+            ui.label("History preview");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.history_preview)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(8)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+        }
+        if !self.metrics_preview.is_empty() {
+            ui.label("Metrics preview");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.metrics_preview)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(8)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+        }
     }
 
     fn profiles_tab(&mut self, ui: &mut egui::Ui) {
@@ -949,6 +998,52 @@ impl WhisperDictateApp {
 
     fn run_install(&mut self) {
         self.run_background_command("install/repair", install_command());
+    }
+
+    fn run_cloud_api_check(&mut self) {
+        if self.background_task.is_some() {
+            self.append_runtime_log("[ui] cloud API check skipped: another task is running");
+            return;
+        }
+
+        let check = match CloudApiCheck::from_settings(&self.settings, &self.stt_api_key_input) {
+            Ok(check) => check,
+            Err(err) => {
+                self.stt_api_key_status = format!("Cloud API check failed: {err}");
+                self.append_runtime_log(format!("[ui] cloud API check failed: {err}"));
+                return;
+            }
+        };
+        self.append_runtime_log(format!(
+            "[ui] cloud API check: {} {}",
+            check.provider, check.model
+        ));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = match check_cloud_api(&check) {
+                Ok(result) => BackgroundTaskResult {
+                    label: "cloud API check",
+                    command: format!("{} /models", check.provider),
+                    stdout: result.summary(),
+                    stderr: String::new(),
+                    success: result.model_available,
+                    code: None,
+                    error: None,
+                },
+                Err(err) => BackgroundTaskResult {
+                    label: "cloud API check",
+                    command: format!("{} /models", check.provider),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                    code: None,
+                    error: Some(err.to_string()),
+                },
+            };
+            let _ = tx.send(result);
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some("cloud API check");
     }
 
     fn run_background_command(&mut self, label: &'static str, command: WorkerCommand) {
@@ -1187,30 +1282,11 @@ impl WhisperDictateApp {
 
     fn reload_stt_api_key(&mut self) {
         let provider = self.current_cloud_provider();
-        match load_stt_api_key(provider) {
-            Ok(key) => {
-                let (key, source, saved_key) = if key.is_empty() {
-                    match load_stt_api_key_from_env(provider) {
-                        Some(env_key) => (env_key, "environment", String::new()),
-                        None => (key, "credential store", String::new()),
-                    }
-                } else {
-                    let saved_key = key.clone();
-                    (key, "credential store", saved_key)
-                };
-                let has_key = !key.is_empty();
+        match load_stt_api_key_state(provider) {
+            Ok((key, saved_key, status)) => {
                 self.stt_api_key_input = key;
                 self.saved_stt_api_key_input = saved_key;
-                self.stt_api_key_status = if has_key && source == "environment" {
-                    format!(
-                        "Loaded {} API key from environment. Save settings to store it.",
-                        provider.label()
-                    )
-                } else if has_key {
-                    format!("Loaded saved {} API key from {source}.", provider.label())
-                } else {
-                    format!("No {} API key saved.", provider.label())
-                };
+                self.stt_api_key_status = status;
             }
             Err(err) => {
                 self.stt_api_key_input.clear();
@@ -1264,6 +1340,80 @@ impl WhisperDictateApp {
             Err(err) => {
                 self.settings_status = format!("Open dictionary failed: {err}");
             }
+        }
+    }
+
+    fn history_path(&self) -> std::path::PathBuf {
+        if self.settings.history_jsonl.trim().is_empty() {
+            config::default_history_path()
+        } else {
+            std::path::PathBuf::from(self.settings.history_jsonl.trim())
+        }
+    }
+
+    fn preview_history(&mut self) {
+        let path = self.history_path();
+        match telemetry::preview_jsonl(&path, 20) {
+            Ok(preview) => {
+                self.history_preview = format!(
+                    "{}\nrows: showing {} of {}\n{}",
+                    preview.path.display(),
+                    preview.shown_rows,
+                    preview.total_rows,
+                    preview.text
+                );
+                self.settings_status = format!("Loaded history preview: {}", path.display());
+            }
+            Err(err) => {
+                self.history_preview.clear();
+                self.settings_status = format!("History preview failed: {err}");
+            }
+        }
+    }
+
+    fn open_history(&mut self) {
+        let path = self.history_path();
+        match config::open_existing_path(&path) {
+            Ok(path) => self.settings_status = format!("Opened history: {}", path.display()),
+            Err(err) => self.settings_status = format!("Open history failed: {err}"),
+        }
+    }
+
+    fn preview_metrics(&mut self) {
+        let raw = self.settings.metrics_jsonl.trim();
+        if raw.is_empty() {
+            self.metrics_preview.clear();
+            self.settings_status = "Metrics JSONL path is unset.".to_owned();
+            return;
+        }
+        let path = std::path::PathBuf::from(raw);
+        match telemetry::preview_jsonl(&path, 20) {
+            Ok(preview) => {
+                self.metrics_preview = format!(
+                    "{}\nrows: showing {} of {}\n{}",
+                    preview.path.display(),
+                    preview.shown_rows,
+                    preview.total_rows,
+                    preview.text
+                );
+                self.settings_status = format!("Loaded metrics preview: {}", path.display());
+            }
+            Err(err) => {
+                self.metrics_preview.clear();
+                self.settings_status = format!("Metrics preview failed: {err}");
+            }
+        }
+    }
+
+    fn open_metrics(&mut self) {
+        let raw = self.settings.metrics_jsonl.trim();
+        if raw.is_empty() {
+            self.settings_status = "Metrics JSONL path is unset.".to_owned();
+            return;
+        }
+        match config::open_existing_path(raw) {
+            Ok(path) => self.settings_status = format!("Opened metrics: {}", path.display()),
+            Err(err) => self.settings_status = format!("Open metrics failed: {err}"),
         }
     }
 
@@ -1588,6 +1738,31 @@ fn load_stt_api_key(provider: CloudProvider) -> Result<String> {
         Err(keyring::Error::NoEntry) => Ok(String::new()),
         Err(err) => Err(err.into()),
     }
+}
+
+fn load_stt_api_key_state(provider: CloudProvider) -> Result<(String, String, String)> {
+    let key = load_stt_api_key(provider)?;
+    if !key.is_empty() {
+        let status = format!(
+            "Loaded saved {} API key from credential store.",
+            provider.label()
+        );
+        return Ok((key.clone(), key, status));
+    }
+
+    if let Some(env_key) = load_stt_api_key_from_env(provider) {
+        let status = format!(
+            "Loaded {} API key from environment. Save settings to store it.",
+            provider.label()
+        );
+        return Ok((env_key, String::new(), status));
+    }
+
+    Ok((
+        String::new(),
+        String::new(),
+        format!("No {} API key saved.", provider.label()),
+    ))
 }
 
 fn load_stt_api_key_from_env(provider: CloudProvider) -> Option<String> {

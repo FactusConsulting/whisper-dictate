@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -126,6 +126,7 @@ pub fn save_settings(settings: &AppSettings) -> Result<PathBuf> {
 }
 
 pub fn save_settings_to_path(settings: &AppSettings, path: impl AsRef<Path>) -> Result<PathBuf> {
+    settings.validate()?;
     let path = path.as_ref();
     let raw = if path.exists() {
         fs::read_to_string(path)?
@@ -163,6 +164,30 @@ pub fn open_dictionary(path: impl AsRef<Path>) -> Result<PathBuf> {
     let path = ensure_dictionary_file(path)?;
     open_path(&path)?;
     Ok(path)
+}
+
+pub fn default_history_path() -> PathBuf {
+    if cfg!(windows) {
+        platform_config_dir().join("history.jsonl")
+    } else {
+        env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("state"))
+            })
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("whisper-dictate")
+            .join("history.jsonl")
+    }
+}
+
+pub fn open_existing_path(path: impl AsRef<Path>) -> Result<PathBuf> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Err(anyhow!("file does not exist: {}", path.display()));
+    }
+    open_path(path)?;
+    Ok(path.to_path_buf())
 }
 
 pub fn restart_required_keys(before: &AppSettings, after: &AppSettings) -> Vec<&'static str> {
@@ -291,6 +316,69 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    pub fn validate(&self) -> Result<()> {
+        validate_choice(
+            "stt_backend",
+            &self.stt_backend,
+            &["whisper", "parakeet", "openai"],
+        )?;
+        validate_choice("stt_provider", &self.stt_provider, &["groq", "openai"])?;
+        validate_choice("device", &self.device, &["auto", "cuda", "cpu"])?;
+        validate_choice(
+            "inject_mode",
+            &self.inject_mode,
+            &["auto", "type", "paste", "print"],
+        )?;
+        validate_choice(
+            "post_processor",
+            &self.post_processor,
+            &["none", "ollama", "openai", "groq"],
+        )?;
+        validate_choice(
+            "post_mode",
+            &self.post_mode,
+            &[
+                "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
+            ],
+        )?;
+
+        if self.stt_backend == "openai" {
+            validate_http_url("stt_base_url", &self.stt_base_url)?;
+            if self.stt_model.trim().is_empty() {
+                return Err(anyhow!("stt_model is required when stt_backend is openai"));
+            }
+        }
+        if matches!(self.post_processor.as_str(), "ollama" | "openai" | "groq") {
+            validate_http_url("post_base_url", &self.post_base_url)?;
+            if self.post_model.trim().is_empty() {
+                return Err(anyhow!(
+                    "post_model is required when post_processor is active"
+                ));
+            }
+        }
+
+        validate_u32("stt_timeout_ms", &self.stt_timeout_ms, 100)?;
+        validate_u32("beam_size", &self.beam_size, 1)?;
+        validate_u32("vad_min_silence_ms", &self.vad_min_silence_ms, 0)?;
+        validate_u32("dictionary_max_terms", &self.dictionary_max_terms, 1)?;
+        validate_u32("dictionary_prompt_chars", &self.dictionary_prompt_chars, 1)?;
+        validate_u32("post_timeout_ms", &self.post_timeout_ms, 100)?;
+        validate_u32("post_max_input_chars", &self.post_max_input_chars, 100)?;
+        validate_u32("post_max_output_chars", &self.post_max_output_chars, 100)?;
+        validate_u32("quit_count", &self.quit_count, 0)?;
+        validate_u32("quit_window_ms", &self.quit_window_ms, 1)?;
+        validate_f32("vad_threshold", &self.vad_threshold)?;
+        validate_f32("target_dbfs", &self.target_dbfs)?;
+        validate_f32("min_input_dbfs", &self.min_input_dbfs)?;
+        validate_f32("min_snr_db", &self.min_snr_db)?;
+        validate_f32("release_tail_ms", &self.release_tail_ms)?;
+        validate_f32("context_min_seconds", &self.context_min_seconds)?;
+        validate_f32("parakeet_min_seconds", &self.parakeet_min_seconds)?;
+        validate_f32("audio_ducking_level", &self.audio_ducking_level)?;
+        validate_f32("ui_text_scale", &self.ui_text_scale)?;
+        Ok(())
+    }
+
     pub fn from_value(value: Value) -> Result<Self> {
         let object = value.as_object();
         let defaults = Self::default();
@@ -565,6 +653,46 @@ fn set_bool(object: &mut Map<String, Value>, key: &str, value: bool) {
     );
 }
 
+fn validate_choice(name: &str, value: &str, allowed: &[&str]) -> Result<()> {
+    if allowed.contains(&value) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "{name} must be one of {}; got {value:?}",
+            allowed.join(", ")
+        ))
+    }
+}
+
+fn validate_http_url(name: &str, value: &str) -> Result<()> {
+    let value = value.trim();
+    if value.starts_with("http://") || value.starts_with("https://") {
+        Ok(())
+    } else {
+        Err(anyhow!("{name} must start with http:// or https://"))
+    }
+}
+
+fn validate_u32(name: &str, value: &str, minimum: u32) -> Result<()> {
+    let parsed = value
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| anyhow!("{name} must be an integer"))?;
+    if parsed >= minimum {
+        Ok(())
+    } else {
+        Err(anyhow!("{name} must be at least {minimum}"))
+    }
+}
+
+fn validate_f32(name: &str, value: &str) -> Result<()> {
+    value
+        .trim()
+        .parse::<f32>()
+        .map(|_| ())
+        .map_err(|_| anyhow!("{name} must be a number"))
+}
+
 fn open_path(path: &Path) -> Result<()> {
     #[cfg(windows)]
     {
@@ -672,6 +800,50 @@ mod tests {
 
         assert_eq!(settings.stt_provider, "groq");
         assert_eq!(settings.stt_base_url, "https://api.groq.com/openai/v1");
+    }
+
+    #[test]
+    fn settings_validation_rejects_invalid_backend() {
+        let settings = AppSettings {
+            stt_backend: "cloud".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("stt_backend"));
+    }
+
+    #[test]
+    fn settings_validation_rejects_cloud_without_http_url() {
+        let settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_model: "whisper-large-v3-turbo".to_owned(),
+            stt_base_url: "api.groq.com/openai/v1".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("stt_base_url"));
+    }
+
+    #[test]
+    fn settings_validation_rejects_invalid_numeric_values() {
+        let settings = AppSettings {
+            beam_size: "fast".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("beam_size"));
     }
 
     #[test]

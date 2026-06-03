@@ -11,6 +11,16 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-06-03
+
+### Added
+- Rust UI can test the selected cloud STT provider/model/API key directly through `/models` without starting the Python worker.
+- Rust config saving now validates core schema fields, provider URLs, modes, and numeric settings before writing `config.json`.
+- Output tab can preview/open local history and metrics JSONL files from the Rust UI.
+
+### Fixed
+- App startup and Reload from disk now use the same API key loading path, including environment fallback when the credential store is empty.
+
 ## [0.3.16] - 2026-06-03
 
 ### Fixed

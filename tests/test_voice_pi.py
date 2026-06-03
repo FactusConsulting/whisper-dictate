@@ -2449,6 +2449,20 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn('ui.button("Save API key").clicked()', script)
         self.assertNotIn('ui.button("Clear API key").clicked()', script)
 
+    def test_rust_ui_uses_same_api_key_loader_on_start_and_reload(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        default_impl = script.split("impl Default for WhisperDictateApp", 1)[1].split(
+            "struct BackgroundTaskResult", 1
+        )[0]
+        reload_impl = script.split("fn reload_stt_api_key", 1)[1].split(
+            "fn save_stt_api_key_if_changed", 1
+        )[0]
+
+        self.assertIn("load_stt_api_key_state(provider)", default_impl)
+        self.assertIn("load_stt_api_key_state(provider)", reload_impl)
+        self.assertIn("fn load_stt_api_key_state(provider: CloudProvider)", script)
+        self.assertIn("Loaded {} API key from environment. Save settings to store it.", script)
+
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 
@@ -2480,6 +2494,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("GROQ_STT_BASE_URL.to_owned()", script)
         self.assertIn("response.on_hover_text(help)", script)
         self.assertIn('"Quit key"', script)
+
+    def test_rust_ui_has_cloud_api_test_and_local_viewers(self):
+        ui = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+        lib = Path("crates/whisper-dictate-app/src/lib.rs").read_text(encoding="utf-8")
+        cargo = Path("crates/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
+
+        self.assertIn("pub mod cloud_api;", lib)
+        self.assertIn("pub mod telemetry;", lib)
+        self.assertIn('ureq = { version = "2.12"', cargo)
+        self.assertIn('"Test cloud API"', ui)
+        self.assertIn("fn run_cloud_api_check(&mut self)", ui)
+        self.assertIn("check_cloud_api(&check)", ui)
+        self.assertIn('"Preview history"', ui)
+        self.assertIn('"Preview metrics"', ui)
+        self.assertIn("telemetry::preview_jsonl", ui)
 
     def test_rust_settings_tabs_have_visible_help_badges(self):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
