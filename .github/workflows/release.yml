@@ -170,7 +170,9 @@ jobs:
             depends_on "python@3.12"
 
             def install
-              libexec.install Dir["whisper-dictate/*"]
+              payload = Dir["whisper-dictate/*"]
+              payload = Dir["*"] if payload.empty?
+              libexec.install payload
               chmod 0755, libexec/"whisper-dictate"
               chmod 0755, libexec/"ubuntu26.04/setup.sh"
 
