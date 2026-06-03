@@ -1,6 +1,7 @@
 use anyhow::Result;
 use eframe::egui;
 use std::collections::BTreeMap;
+use std::env;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -1188,12 +1189,27 @@ impl WhisperDictateApp {
         let provider = self.current_cloud_provider();
         match load_stt_api_key(provider) {
             Ok(key) => {
-                self.stt_api_key_input = key;
-                self.saved_stt_api_key_input = self.stt_api_key_input.clone();
-                self.stt_api_key_status = if self.stt_api_key_input.is_empty() {
-                    format!("No {} API key saved.", provider.label())
+                let (key, source, saved_key) = if key.is_empty() {
+                    match load_stt_api_key_from_env(provider) {
+                        Some(env_key) => (env_key, "environment", String::new()),
+                        None => (key, "credential store", String::new()),
+                    }
                 } else {
-                    format!("Loaded saved {} API key.", provider.label())
+                    let saved_key = key.clone();
+                    (key, "credential store", saved_key)
+                };
+                let has_key = !key.is_empty();
+                self.stt_api_key_input = key;
+                self.saved_stt_api_key_input = saved_key;
+                self.stt_api_key_status = if has_key && source == "environment" {
+                    format!(
+                        "Loaded {} API key from environment. Save settings to store it.",
+                        provider.label()
+                    )
+                } else if has_key {
+                    format!("Loaded saved {} API key from {source}.", provider.label())
+                } else {
+                    format!("No {} API key saved.", provider.label())
                 };
             }
             Err(err) => {
@@ -1574,6 +1590,18 @@ fn load_stt_api_key(provider: CloudProvider) -> Result<String> {
     }
 }
 
+fn load_stt_api_key_from_env(provider: CloudProvider) -> Option<String> {
+    let candidates: &[&str] = match provider {
+        CloudProvider::Groq => &["VOICEPI_STT_API_KEY", "GROQ_API_KEY"],
+        CloudProvider::OpenAi => &["VOICEPI_STT_API_KEY", "OPENAI_API_KEY"],
+    };
+    candidates
+        .iter()
+        .filter_map(|name| env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
+}
+
 fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<()> {
     let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
     if secret.trim().is_empty() {
@@ -1590,6 +1618,7 @@ fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
     fn app_icon_builds_valid_rgba_buffer() {
@@ -1624,5 +1653,61 @@ mod tests {
         );
         assert_eq!(SttBackendMode::from_raw("openai"), SttBackendMode::Cloud);
         assert_eq!(SttBackendMode::from_raw(""), SttBackendMode::Whisper);
+    }
+
+    #[test]
+    fn provider_api_key_can_load_from_environment_fallback() {
+        let _stt = EnvVarGuard::remove("VOICEPI_STT_API_KEY");
+        let _openai = EnvVarGuard::remove("OPENAI_API_KEY");
+        let _groq = EnvVarGuard::set("GROQ_API_KEY", "groq-test-key");
+
+        assert_eq!(
+            load_stt_api_key_from_env(CloudProvider::Groq).as_deref(),
+            Some("groq-test-key")
+        );
+        assert_eq!(load_stt_api_key_from_env(CloudProvider::OpenAi), None);
+
+        unsafe {
+            env::set_var("VOICEPI_STT_API_KEY", "shared-test-key");
+        }
+
+        assert_eq!(
+            load_stt_api_key_from_env(CloudProvider::Groq).as_deref(),
+            Some("shared-test-key")
+        );
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var_os(key);
+            unsafe {
+                env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = env::var_os(key);
+            unsafe {
+                env::remove_var(key);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.original {
+                    Some(value) => env::set_var(self.key, value),
+                    None => env::remove_var(self.key),
+                }
+            }
+        }
     }
 }

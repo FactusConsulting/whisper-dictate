@@ -767,7 +767,13 @@ if __name__ == "__main__":
         print("  note: CPU mode — transcription is slower; large-v3-turbo "
               "(default) is the fastest model", flush=True)
     _t = time.monotonic()
-    _model = load_stt_model(loaded_model_name, dev, ctype)
+    try:
+        _model = load_stt_model(loaded_model_name, dev, ctype)
+    except RuntimeError as e:
+        message = str(e)
+        emit_worker_event("error", state="failed", backend=backend, model=loaded_model_name, message=message)
+        print(f"  x startup error: {message}", flush=True)
+        raise SystemExit(1)
     _model_load_s = time.monotonic() - _t
     emit_worker_event(
         "status",

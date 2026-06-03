@@ -21,6 +21,7 @@ SR = 16000
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_USER_AGENT = "whisper-dictate/0.3 (+https://github.com/FactusConsulting/whisper-dictate)"
+GROQ_TRANSCRIPTION_PROMPT_LIMIT = 896
 LOCAL_WHISPER_MODEL_NAMES = {
     "tiny", "base", "small", "medium", "large-v3", "large-v3-turbo",
     "distil-large-v3",
@@ -96,6 +97,22 @@ def default_headers(headers: dict[str, str] | None = None) -> dict[str, str]:
     return out
 
 
+def _transcription_prompt_limit(base_url: str) -> int | None:
+    if "api.groq.com" in (base_url or "").lower():
+        return GROQ_TRANSCRIPTION_PROMPT_LIMIT
+    return None
+
+
+def _cap_transcription_prompt(prompt: str, *, base_url: str) -> str:
+    limit = _transcription_prompt_limit(base_url)
+    if limit is None or len(prompt) <= limit:
+        return prompt
+    trimmed = prompt[:limit].rstrip()
+    if not trimmed:
+        return prompt[:limit]
+    return trimmed
+
+
 def _request_json(
     url: str,
     *,
@@ -169,7 +186,10 @@ class ExternalTranscriptionModel:
         if language:
             fields["language"] = str(language)
         if prompt:
-            fields["prompt"] = str(prompt)
+            fields["prompt"] = _cap_transcription_prompt(
+                str(prompt),
+                base_url=self.settings.base_url,
+            )
         body, boundary = _multipart_form(
             fields,
             {"file": ("audio.wav", _wav_bytes(audio), "audio/wav")},

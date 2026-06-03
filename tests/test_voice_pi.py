@@ -10,6 +10,7 @@ import tempfile
 import types
 import unittest
 import wave
+import dataclasses
 from contextlib import redirect_stderr, contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -670,6 +671,30 @@ class ExternalApiTests(unittest.TestCase):
 
         self.assertEqual(headers["User-Agent"], "custom-client")
 
+    def test_groq_transcription_prompt_is_capped_to_provider_limit(self):
+        sys.modules.pop("vp_external_api", None)
+        import vp_external_api
+
+        prompt = "x" * 911
+        capped = vp_external_api._cap_transcription_prompt(
+            prompt,
+            base_url="https://api.groq.com/openai/v1",
+        )
+
+        self.assertEqual(len(capped), 896)
+
+    def test_non_groq_transcription_prompt_is_not_capped(self):
+        sys.modules.pop("vp_external_api", None)
+        import vp_external_api
+
+        prompt = "x" * 911
+        capped = vp_external_api._cap_transcription_prompt(
+            prompt,
+            base_url="https://api.openai.com/v1",
+        )
+
+        self.assertEqual(capped, prompt)
+
     def test_non_groq_base_url_does_not_use_groq_api_key_alias(self):
         with _env(
             VOICEPI_STT_API_KEY=None,
@@ -737,6 +762,54 @@ class ExternalApiTests(unittest.TestCase):
         self.assertIn(b"audio.wav", calls["body"])
         self.assertEqual(segments[0].text.strip(), "Hello Codex")
         self.assertEqual(info.language, "en")
+
+    def test_external_transcription_caps_groq_prompt_in_multipart_audio(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        sys.modules.pop("vp_external_api", None)
+        np = getattr(AudioDspTests, "np", None)
+        if np is None:
+            import numpy as np
+        sys.modules["numpy"] = np
+
+        calls = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                calls["body"] = self.rfile.read(int(self.headers["Content-Length"]))
+                data = json.dumps({"text": "ok"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        with _env(
+            VOICEPI_STT_API_KEY="test-key",
+            VOICEPI_STT_BASE_URL=f"http://127.0.0.1:{server.server_port}/openai/v1",
+        ):
+            import vp_external_api
+
+            model = vp_external_api.ExternalTranscriptionModel("whisper-large-v3-turbo")
+            model.settings = dataclasses.replace(
+                model.settings,
+                base_url="https://api.groq.com/openai/v1",
+            )
+            with patch.object(vp_external_api, "_request_json", return_value={"text": "ok"}) as request:
+                model.transcribe(np.zeros(1600, dtype=np.float32), initial_prompt="x" * 911)
+
+        body = request.call_args.kwargs["data"]
+        self.assertIn(b"x" * 896, body)
+        self.assertNotIn(b"x" * 897, body)
 
     def test_external_api_http_error_includes_provider_message(self):
         import urllib.error
@@ -3084,6 +3157,18 @@ class CalibrationTests(unittest.TestCase):
         self.assertLess(cloud_device, device_resolve)
         self.assertLess(model_load, api_ready)
         self.assertIn("using {label} {loaded_model_name} via configured API", script)
+
+    def test_cloud_model_load_runtime_error_is_reported_without_traceback(self):
+        script = Path("voice_pi.py").read_text(encoding="utf-8")
+
+        model_load = script.index("_model = load_stt_model(loaded_model_name, dev, ctype)")
+        before = script.rfind("try:", 0, model_load)
+        after = script.index("except RuntimeError as e:", model_load)
+
+        self.assertLess(before, model_load)
+        self.assertIn('emit_worker_event("error"', script[model_load:after + 300])
+        self.assertIn("startup error", script[model_load:after + 300])
+        self.assertIn("raise SystemExit(1)", script[model_load:after + 300])
 
 
 class HistoryTests(unittest.TestCase):

@@ -11,6 +11,13 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-06-03
+
+### Fixed
+- Groq STT prompts are capped to the provider's 896 character transcription prompt limit.
+- Cloud STT startup failures such as missing API keys are reported as a concise runtime error instead of a Python traceback.
+- The Rust UI can load Groq/OpenAI API keys from environment variables when the OS credential store is empty.
+
 ## [0.3.15] - 2026-06-03
 
 ### Fixed
