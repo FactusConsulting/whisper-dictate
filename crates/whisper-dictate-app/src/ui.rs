@@ -72,6 +72,12 @@ enum CloudProvider {
     OpenAi,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostProvider {
+    Groq,
+    OpenAi,
+}
+
 impl CloudProvider {
     fn from_raw(raw: &str) -> Option<Self> {
         match raw {
@@ -143,6 +149,37 @@ impl CloudProvider {
     }
 }
 
+impl PostProvider {
+    fn from_settings(settings: &AppSettings) -> Option<Self> {
+        match settings.post_processor.as_str() {
+            "groq" => Some(Self::Groq),
+            "openai" => Some(Self::OpenAi),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Groq => "Groq post-processing",
+            Self::OpenAi => "OpenAI post-processing",
+        }
+    }
+
+    fn key_url(self) -> &'static str {
+        match self {
+            Self::Groq => GROQ_KEYS_URL,
+            Self::OpenAi => OPENAI_KEYS_URL,
+        }
+    }
+
+    fn credential_user(self) -> &'static str {
+        match self {
+            Self::Groq => "post-api-key:groq",
+            Self::OpenAi => "post-api-key:openai",
+        }
+    }
+}
+
 impl SttBackendMode {
     fn from_raw(raw: &str) -> Self {
         match raw {
@@ -181,6 +218,9 @@ struct WhisperDictateApp {
     stt_api_key_input: String,
     saved_stt_api_key_input: String,
     stt_api_key_status: String,
+    post_api_key_input: String,
+    saved_post_api_key_input: String,
+    post_api_key_status: String,
     dictionary_preview: String,
     history_preview: String,
     metrics_preview: String,
@@ -207,6 +247,14 @@ impl Default for WhisperDictateApp {
                     format!("Could not load API key: {err}"),
                 )
             });
+        let (post_api_key_input, saved_post_api_key_input, post_api_key_status) =
+            load_post_api_key_state(PostProvider::from_settings(&settings)).unwrap_or_else(|err| {
+                (
+                    String::new(),
+                    String::new(),
+                    format!("Could not load post-processing API key: {err}"),
+                )
+            });
         Self {
             selected_tab: Tab::Runtime,
             runtime_state: RuntimeState::Stopped,
@@ -219,6 +267,9 @@ impl Default for WhisperDictateApp {
             saved_stt_api_key_input,
             stt_api_key_input,
             stt_api_key_status,
+            saved_post_api_key_input,
+            post_api_key_input,
+            post_api_key_status,
             dictionary_preview: String::new(),
             history_preview: String::new(),
             metrics_preview: String::new(),
@@ -725,6 +776,7 @@ impl WhisperDictateApp {
 
     fn output_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Output");
+        let previous_post_provider = PostProvider::from_settings(&self.settings);
         egui::Grid::new("output_settings")
             .num_columns(2)
             .show(ui, |ui| {
@@ -771,7 +823,7 @@ impl WhisperDictateApp {
                     "Post processor",
                     &mut self.settings.post_processor,
                     &["none", "ollama", "openai", "groq"],
-                    "Optional second pass that rewrites text after transcription. Groq/OpenAI use cloud chat models; Ollama stays local.",
+                    "Optional second text pass after speech recognition, dictionary replacements and before final injection. none disables it; ollama uses a local chat model; groq/openai send the dictated text to a cloud chat model for cleanup or rewriting.",
                 );
                 combo_help(
                     ui,
@@ -780,7 +832,7 @@ impl WhisperDictateApp {
                     &[
                         "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
                     ],
-                    "Output style used by the post-processor.",
+                    "Controls what the post processor is allowed to do. raw leaves text unchanged; clean fixes punctuation/casing; prompt rewrites for coding agents; terminal preserves commands and paths; slack/email/bullets format for those destinations.",
                 );
                 match self.settings.post_processor.as_str() {
                     "groq" => combo_help(
@@ -808,7 +860,7 @@ impl WhisperDictateApp {
                     ui,
                     "Post base URL",
                     &mut self.settings.post_base_url,
-                    "Base URL for the post-processing provider.",
+                    "Base URL for the post-processing provider. Ollama normally uses http://localhost:11434; Groq/OpenAI use OpenAI-compatible HTTPS endpoints.",
                 );
                 text_help(
                     ui,
@@ -828,6 +880,45 @@ impl WhisperDictateApp {
                     &mut self.settings.post_max_output_chars,
                     "Maximum accepted length of post-processed output.",
                 );
+                if let Some(provider) = PostProvider::from_settings(&self.settings) {
+                    password_enabled(
+                        ui,
+                        true,
+                        "Post API key",
+                        &mut self.post_api_key_input,
+                        "Optional separate API key for cloud post-processing. Stored in the OS credential store as VOICEPI_POST_API_KEY. If empty, the worker falls back to the Cloud STT API key when available.",
+                    );
+                    ui.label("");
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Save post API key")
+                            .on_hover_text("Stores only the post-processing API key in the OS credential store.")
+                            .clicked()
+                        {
+                            self.save_post_api_key_now();
+                        }
+                        if ui
+                            .button(format!("{} API keys", provider.label()))
+                            .on_hover_text("Open the provider API key page.")
+                            .clicked()
+                        {
+                            match open_url(provider.key_url()) {
+                                Ok(()) => {
+                                    self.post_api_key_status =
+                                        format!("Opened {} API keys page.", provider.label());
+                                }
+                                Err(err) => {
+                                    self.post_api_key_status = format!(
+                                        "Could not open {} API keys page: {err}",
+                                        provider.label()
+                                    );
+                                }
+                            }
+                        }
+                        ui.label(&self.post_api_key_status);
+                    });
+                    ui.end_row();
+                }
                 checkbox_help(
                     ui,
                     "Cloud redaction",
@@ -877,6 +968,9 @@ impl WhisperDictateApp {
                     "Scale all text in this settings UI. Use 1.0 for default, 1.15 for larger text, or 1.3 for high-DPI displays.",
                 );
             });
+        if PostProvider::from_settings(&self.settings) != previous_post_provider {
+            self.reload_post_api_key();
+        }
         ui.separator();
         ui.horizontal(|ui| {
             if ui.button("Preview history").clicked() {
@@ -979,7 +1073,12 @@ impl WhisperDictateApp {
             }
         }
         if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
-            let key = self.stt_api_key_input.trim();
+            let post_key = self.post_api_key_input.trim();
+            let key = if post_key.is_empty() {
+                self.stt_api_key_input.trim()
+            } else {
+                post_key
+            };
             if !key.is_empty() {
                 command
                     .env
@@ -1221,9 +1320,14 @@ impl WhisperDictateApp {
                 let restart_keys =
                     config::restart_required_keys(&self.saved_settings, &self.settings);
                 let key_message = self.save_stt_api_key_if_changed();
+                let post_key_message = self.save_post_api_key_if_changed();
                 self.saved_settings = self.settings.clone();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 if let Some(message) = key_message {
+                    self.settings_status.push_str(" | ");
+                    self.settings_status.push_str(&message);
+                }
+                if let Some(message) = post_key_message {
                     self.settings_status.push_str(" | ");
                     self.settings_status.push_str(&message);
                 }
@@ -1244,6 +1348,7 @@ impl WhisperDictateApp {
     fn has_unsaved_settings(&self) -> bool {
         self.settings != self.saved_settings
             || self.stt_api_key_input != self.saved_stt_api_key_input
+            || self.post_api_key_input != self.saved_post_api_key_input
     }
 
     fn reload_settings(&mut self) {
@@ -1252,6 +1357,7 @@ impl WhisperDictateApp {
                 self.saved_settings = settings.clone();
                 self.settings = settings;
                 self.reload_stt_api_key();
+                self.reload_post_api_key();
                 self.settings_status = "Reloaded config".to_owned();
             }
             Err(err) => {
@@ -1331,6 +1437,21 @@ impl WhisperDictateApp {
         }
     }
 
+    fn reload_post_api_key(&mut self) {
+        match load_post_api_key_state(PostProvider::from_settings(&self.settings)) {
+            Ok((key, saved_key, status)) => {
+                self.post_api_key_input = key;
+                self.saved_post_api_key_input = saved_key;
+                self.post_api_key_status = status;
+            }
+            Err(err) => {
+                self.post_api_key_input.clear();
+                self.saved_post_api_key_input.clear();
+                self.post_api_key_status = format!("Could not load post-processing API key: {err}");
+            }
+        }
+    }
+
     fn save_stt_api_key_if_changed(&mut self) -> Option<String> {
         if self.settings.stt_backend != "openai" {
             return None;
@@ -1377,6 +1498,41 @@ impl WhisperDictateApp {
             }
         };
         self.stt_api_key_status = message;
+    }
+
+    fn save_post_api_key_if_changed(&mut self) -> Option<String> {
+        if self.post_api_key_input == self.saved_post_api_key_input {
+            return None;
+        }
+        if PostProvider::from_settings(&self.settings).is_none()
+            && self.post_api_key_input.is_empty()
+        {
+            return None;
+        }
+        let message = self.save_post_api_key_message();
+        self.post_api_key_status = message.clone();
+        Some(message)
+    }
+
+    fn save_post_api_key_now(&mut self) {
+        self.post_api_key_status = self.save_post_api_key_message();
+    }
+
+    fn save_post_api_key_message(&mut self) -> String {
+        let Some(provider) = PostProvider::from_settings(&self.settings) else {
+            return "Post API keys are only used when Post processor is Groq or OpenAI.".to_owned();
+        };
+        match save_post_api_key(provider, self.post_api_key_input.trim()) {
+            Ok(()) => {
+                self.saved_post_api_key_input = self.post_api_key_input.clone();
+                if self.post_api_key_input.trim().is_empty() {
+                    format!("Cleared saved {} API key.", provider.label())
+                } else {
+                    format!("Saved {} API key in OS credential store.", provider.label())
+                }
+            }
+            Err(err) => format!("Could not save {} API key: {err}", provider.label()),
+        }
     }
 
     fn ensure_dictionary(&mut self) {
@@ -1823,10 +1979,74 @@ fn load_stt_api_key_state(provider: CloudProvider) -> Result<(String, String, St
     ))
 }
 
+fn load_post_api_key(provider: PostProvider) -> Result<String> {
+    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
+    match entry.get_password() {
+        Ok(secret) => Ok(secret),
+        Err(keyring::Error::NoEntry) => Ok(String::new()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn load_post_api_key_state(provider: Option<PostProvider>) -> Result<(String, String, String)> {
+    let Some(provider) = provider else {
+        return Ok((
+            String::new(),
+            String::new(),
+            "Post processor is local or disabled; no post API key needed.".to_owned(),
+        ));
+    };
+    let key = load_post_api_key(provider)?;
+    if !key.is_empty() {
+        let status = format!(
+            "Loaded saved {} API key from credential store.",
+            provider.label()
+        );
+        return Ok((key.clone(), key, status));
+    }
+
+    if let Some(env_key) = load_post_api_key_from_env(provider) {
+        let status = format!(
+            "Loaded {} API key from environment. Save post API key to store it.",
+            provider.label()
+        );
+        return Ok((env_key, String::new(), status));
+    }
+
+    Ok((
+        String::new(),
+        String::new(),
+        format!(
+            "No {} API key saved. The worker can fall back to the Cloud STT key if one is loaded.",
+            provider.label()
+        ),
+    ))
+}
+
 fn load_stt_api_key_from_env(provider: CloudProvider) -> Option<String> {
     let candidates: &[&str] = match provider {
         CloudProvider::Groq => &["VOICEPI_STT_API_KEY", "GROQ_API_KEY"],
         CloudProvider::OpenAi => &["VOICEPI_STT_API_KEY", "OPENAI_API_KEY"],
+    };
+    candidates
+        .iter()
+        .filter_map(|name| env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
+}
+
+fn load_post_api_key_from_env(provider: PostProvider) -> Option<String> {
+    let candidates: &[&str] = match provider {
+        PostProvider::Groq => &[
+            "VOICEPI_POST_API_KEY",
+            "VOICEPI_STT_API_KEY",
+            "GROQ_API_KEY",
+        ],
+        PostProvider::OpenAi => &[
+            "VOICEPI_POST_API_KEY",
+            "VOICEPI_STT_API_KEY",
+            "OPENAI_API_KEY",
+        ],
     };
     candidates
         .iter()
@@ -1848,10 +2068,26 @@ fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<()> {
     }
 }
 
+fn save_post_api_key(provider: PostProvider, secret: &str) -> Result<()> {
+    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, provider.credential_user())?;
+    if secret.trim().is_empty() {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    } else {
+        entry.set_password(secret.trim())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::OsString;
+    use std::sync::Mutex;
+
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn app_icon_builds_valid_rgba_buffer() {
@@ -1890,6 +2126,7 @@ mod tests {
 
     #[test]
     fn provider_api_key_can_load_from_environment_fallback() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _stt = EnvVarGuard::remove("VOICEPI_STT_API_KEY");
         let _openai = EnvVarGuard::remove("OPENAI_API_KEY");
         let _groq = EnvVarGuard::set("GROQ_API_KEY", "groq-test-key");
@@ -1907,6 +2144,80 @@ mod tests {
         assert_eq!(
             load_stt_api_key_from_env(CloudProvider::Groq).as_deref(),
             Some("shared-test-key")
+        );
+    }
+
+    #[test]
+    fn post_api_key_can_load_from_environment_fallback() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _post = EnvVarGuard::remove("VOICEPI_POST_API_KEY");
+        let _stt = EnvVarGuard::remove("VOICEPI_STT_API_KEY");
+        let _openai = EnvVarGuard::remove("OPENAI_API_KEY");
+        let _groq = EnvVarGuard::set("GROQ_API_KEY", "groq-post-key");
+
+        assert_eq!(
+            load_post_api_key_from_env(PostProvider::Groq).as_deref(),
+            Some("groq-post-key")
+        );
+        assert_eq!(load_post_api_key_from_env(PostProvider::OpenAi), None);
+
+        unsafe {
+            env::set_var("VOICEPI_POST_API_KEY", "post-override-key");
+        }
+
+        assert_eq!(
+            load_post_api_key_from_env(PostProvider::Groq).as_deref(),
+            Some("post-override-key")
+        );
+    }
+
+    #[test]
+    fn worker_command_uses_post_key_with_stt_key_fallback() {
+        let settings = AppSettings {
+            post_processor: "groq".to_owned(),
+            ..Default::default()
+        };
+        let mut app = WhisperDictateApp {
+            selected_tab: Tab::Runtime,
+            runtime_state: RuntimeState::Stopped,
+            runtime_log: String::new(),
+            config_path: String::new(),
+            saved_settings: settings.clone(),
+            settings,
+            settings_status: String::new(),
+            stt_api_key_input: "stt-key".to_owned(),
+            saved_stt_api_key_input: String::new(),
+            stt_api_key_status: String::new(),
+            post_api_key_input: String::new(),
+            saved_post_api_key_input: String::new(),
+            post_api_key_status: String::new(),
+            dictionary_preview: String::new(),
+            history_preview: String::new(),
+            metrics_preview: String::new(),
+            supervisor: RuntimeSupervisor::new(),
+            background_task: None,
+            background_task_label: None,
+        };
+
+        let command = app.worker_command();
+        assert_eq!(
+            command
+                .env
+                .iter()
+                .find(|(key, _)| key == POST_API_KEY_ENV)
+                .map(|(_, value)| value.as_str()),
+            Some("stt-key")
+        );
+
+        app.post_api_key_input = "post-key".to_owned();
+        let command = app.worker_command();
+        assert_eq!(
+            command
+                .env
+                .iter()
+                .find(|(key, _)| key == POST_API_KEY_ENV)
+                .map(|(_, value)| value.as_str()),
+            Some("post-key")
         );
     }
 
@@ -1929,6 +2240,9 @@ mod tests {
             stt_api_key_input: String::new(),
             saved_stt_api_key_input: String::new(),
             stt_api_key_status: String::new(),
+            post_api_key_input: String::new(),
+            saved_post_api_key_input: String::new(),
+            post_api_key_status: String::new(),
             dictionary_preview: String::new(),
             history_preview: String::new(),
             metrics_preview: String::new(),

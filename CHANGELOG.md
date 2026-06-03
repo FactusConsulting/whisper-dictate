@@ -11,6 +11,14 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-06-03
+
+### Added
+- Output settings now expose a separate cloud post-processing API key field, save action, provider key-page link, and credential-store loading path for Groq/OpenAI post processors.
+
+### Changed
+- Post-processing tooltips now explain what the processor and mode settings do, and cloud post-processing can use a saved post key with the Cloud STT key as fallback.
+
 ## [0.3.19] - 2026-06-03
 
 ### Fixed

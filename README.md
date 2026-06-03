@@ -389,11 +389,11 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_HISTORY_ENABLED` | `1` | store accepted live dictations in local history |
 | `VOICEPI_HISTORY_JSONL` | user state path | override the local history JSONL path |
 | `VOICEPI_LOCAL_ONLY` | _(unset)_ | `1` → block cloud/BYOK backends and force model libraries offline; local models must already be downloaded |
-| `VOICEPI_POST_PROCESSOR` | `none` | `ollama` or `openai` → run optional second text pass after STT/dictionary |
+| `VOICEPI_POST_PROCESSOR` | `none` | `ollama`, `openai`, or `groq` → run optional second text pass after STT/dictionary |
 | `VOICEPI_POST_MODE` | `raw` | `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets`; `bullet-list` is accepted as an alias; `raw` keeps current behavior |
 | `VOICEPI_POST_MODEL` | `qwen2.5:3b` | local Ollama model or OpenAI-compatible chat model |
 | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` / `https://api.openai.com/v1` | Ollama or OpenAI-compatible chat endpoint |
-| `VOICEPI_POST_API_KEY` | _(unset)_ | optional external post-processing key from env only; `OPENAI_API_KEY` also works |
+| `VOICEPI_POST_API_KEY` | _(unset)_ | optional external post-processing key; the Rust UI can store it in the OS credential store |
 | `VOICEPI_POST_TIMEOUT_MS` | `2000` | fallback to dictionary-final text if local rewrite is too slow |
 | `VOICEPI_POST_REDACT` | _(unset)_ | opt-in local redaction before cloud post-processing |
 | `VOICEPI_POST_REDACT_TERMS` | _(unset)_ | comma-separated names/terms to redact before cloud post-processing |
@@ -431,9 +431,11 @@ in the OS credential store. From a terminal, set `VOICEPI_STT_BACKEND=openai`
 for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY`,
 `GROQ_API_KEY`, or `VOICEPI_STT_API_KEY`. Use
 `VOICEPI_STT_MODEL=gpt-4o-mini-transcribe`/`gpt-4o-transcribe` for OpenAI, or
-`whisper-large-v3-turbo`/`whisper-large-v3` for Groq. For external text cleanup, set
-`VOICEPI_POST_PROCESSOR=openai`, `VOICEPI_POST_MODEL=<chat-model>` and
-`OPENAI_API_KEY` or `VOICEPI_POST_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
+`whisper-large-v3-turbo`/`whisper-large-v3` for Groq. For external text cleanup, choose
+`Post processor = Groq` or `OpenAI` in the Rust UI Output tab, choose a chat
+model, and save a separate Post API key if needed. Terminal runs can set
+`VOICEPI_POST_PROCESSOR=groq` or `openai`, `VOICEPI_POST_MODEL=<chat-model>` and
+`VOICEPI_POST_API_KEY`, `GROQ_API_KEY`, or `OPENAI_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
 external providers before requests are made.
 
 For cloud text cleanup, `VOICEPI_POST_REDACT=1` can redact emails, phone
@@ -462,8 +464,9 @@ passed only to the managed Python worker process as `VOICEPI_STT_API_KEY`.
 They are not written to `config.json` or shown in runtime command logs.
 Terminal runs can still read keys from the process/user environment
 (`OPENAI_API_KEY`, `GROQ_API_KEY`, `VOICEPI_STT_API_KEY`). Post-processing
-cloud keys are still environment-only (`VOICEPI_POST_API_KEY` or
-`OPENAI_API_KEY`).
+cloud keys can also be saved from the Rust UI Output tab and are passed to the
+worker as `VOICEPI_POST_API_KEY`; if no post key is saved, the worker can fall
+back to the loaded STT key.
 
 File transcription for benchmarks/debugging uses the same backend, dictionary
 and replacement pipeline as live dictation:

@@ -162,6 +162,14 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
 
         self.assertIn('const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY"', script)
+        self.assertIn("enum PostProvider", script)
+        self.assertIn('"Post API key"', script)
+        self.assertIn('"Save post API key"', script)
+        self.assertIn("fn save_post_api_key_now(&mut self)", script)
+        self.assertIn("fn load_post_api_key_state(", script)
+        self.assertIn("fn load_post_api_key_from_env(provider: PostProvider)", script)
+        self.assertIn("fn save_post_api_key(provider: PostProvider", script)
+        self.assertIn("self.reload_post_api_key();", script)
         self.assertIn("const GROQ_POST_MODELS: &[&str]", script)
         self.assertIn('"llama-3.1-8b-instant"', script)
         self.assertIn('"llama-3.3-70b-versatile"', script)
@@ -170,8 +178,12 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"groq/compound-mini"', script)
         self.assertIn('&["none", "ollama", "openai", "groq"]', script)
         self.assertIn('matches!(self.settings.post_processor.as_str(), "openai" | "groq")', script)
+        self.assertIn("let post_key = self.post_api_key_input.trim();", script)
+        self.assertIn("self.stt_api_key_input.trim()", script)
         self.assertIn("fn normalize_postprocessor_settings(&mut self)", script)
         self.assertIn("GROQ_STT_BASE_URL.to_owned()", script)
+        self.assertIn("Optional second text pass after speech recognition", script)
+        self.assertIn("Controls what the post processor is allowed to do", script)
         self.assertIn("response.on_hover_text(help)", script)
         self.assertIn('"Quit key"', script)
 
@@ -302,7 +314,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             self.assertIn("https://api.groq.com/openai/v1", doc)
             self.assertIn("whisper-large-v3-turbo", doc)
             self.assertIn("GROQ_API_KEY", doc)
+            self.assertIn("VOICEPI_POST_API_KEY", doc)
         self.assertIn("Cloud STT provider", config)
+        self.assertIn("Post processor", readme)
+        self.assertIn("Post API key", readme)
         self.assertIn("OS credential store", readme)
 
     def test_docs_describe_one_command_ubuntu_setup_and_launcher_start(self):
