@@ -174,6 +174,18 @@ _LAYOUT_KEYCODES: dict[str, dict[str, list[str]]] = {
 # Norsk layout er identisk med dansk for æ, ø, å
 _LAYOUT_KEYCODES['no'] = _LAYOUT_KEYCODES['dk']
 
+_SUPPORTED_XKB_LAYOUTS = set(_LAYOUT_KEYCODES) | {"us"}
+
+
+def _normalize_xkb_layout(layout: str | None) -> str | None:
+    raw = (layout or "").strip()
+    if not raw:
+        return None
+    mapped = _LANG_TO_XKB.get(raw, raw)
+    if mapped in _SUPPORTED_XKB_LAYOUTS:
+        return mapped
+    return None
+
 
 def _build_ydotool_ops(
     text: str,
@@ -203,20 +215,21 @@ def _build_ydotool_ops(
 def _detect_xkb_layout(lang: str | None = None) -> str | None:
     # Priority: VOICEPI_XKB_LAYOUT > XKB_DEFAULT_LAYOUT > /etc/default/keyboard > lang hint
     for var in ("VOICEPI_XKB_LAYOUT", "XKB_DEFAULT_LAYOUT"):
-        v = os.environ.get(var, "").strip()
-        if v:
-            return v
+        layout = _normalize_xkb_layout(os.environ.get(var, ""))
+        if layout:
+            return layout
     try:
         with open("/etc/default/keyboard") as f:
             for line in f:
                 m = re.match(r'XKBLAYOUT="?([^"\s]+)"?', line)
                 if m:
-                    layout = m.group(1)
+                    layout = _normalize_xkb_layout(m.group(1))
                     if layout != "us":  # "us" is often wrong on non-US systems
                         return layout
     except FileNotFoundError:
         pass
     # Fall back: derive layout from spoken-language hint (da→dk, de→de, sv→se…)
-    if lang and lang in _LANG_TO_XKB:
-        return _LANG_TO_XKB[lang]
+    layout = _normalize_xkb_layout(lang)
+    if layout:
+        return layout
     return None

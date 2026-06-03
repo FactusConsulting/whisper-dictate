@@ -22,6 +22,9 @@ use self::api_keys::*;
 use self::icon::app_icon;
 
 const XKB_LAYOUT_ENV: &str = "VOICEPI_XKB_LAYOUT";
+const SUPPORTED_XKB_LAYOUTS: &[&str] = &[
+    "dk", "no", "se", "de", "fi", "es", "pt", "br", "pl", "ua", "us",
+];
 
 const WHISPER_MODELS: &[&str] = &[
     "large-v3-turbo",
@@ -1189,11 +1192,25 @@ fn apply_ui_text_scale(ctx: &egui::Context, raw_scale: &str) {
 }
 
 fn effective_xkb_layout(settings: &AppSettings) -> Option<String> {
-    let configured = settings.xkb_layout.trim();
-    if !configured.is_empty() {
-        return Some(configured.to_owned());
+    if let Some(configured) = normalize_xkb_layout(&settings.xkb_layout) {
+        return Some(configured);
     }
     detect_gnome_xkb_layout()
+}
+
+fn normalize_xkb_layout(raw: &str) -> Option<String> {
+    let layout = match raw.trim() {
+        "da" => "dk",
+        "sv" => "se",
+        "nb" | "nn" => "no",
+        "uk" => "ua",
+        value => value,
+    };
+    if SUPPORTED_XKB_LAYOUTS.contains(&layout) {
+        Some(layout.to_owned())
+    } else {
+        None
+    }
 }
 
 fn detect_gnome_xkb_layout() -> Option<String> {
@@ -1221,8 +1238,9 @@ fn parse_gnome_xkb_sources(raw: &str) -> Option<String> {
             .map(|part| part.trim().trim_matches('\'').trim_matches('"'));
         let kind = values.next().unwrap_or_default();
         let layout = values.next().unwrap_or_default();
-        if kind == "xkb" && !layout.is_empty() && layout != "us" {
-            return Some(layout.to_owned());
+        let layout = normalize_xkb_layout(layout);
+        if kind == "xkb" && layout.as_deref().is_some_and(|value| value != "us") {
+            return layout;
         }
     }
     None

@@ -314,6 +314,14 @@ fn configured_keyboard_layout_beats_gnome_detection() {
 }
 
 #[test]
+fn keyboard_layout_accepts_language_aliases_but_not_en() {
+    assert_eq!(normalize_xkb_layout("da").as_deref(), Some("dk"));
+    assert_eq!(normalize_xkb_layout("nb").as_deref(), Some("no"));
+    assert_eq!(normalize_xkb_layout("uk").as_deref(), Some("ua"));
+    assert_eq!(normalize_xkb_layout("en"), None);
+}
+
+#[test]
 fn parses_gnome_danish_keyboard_layout() {
     assert_eq!(
         parse_gnome_xkb_sources("[('xkb', 'dk')]").as_deref(),

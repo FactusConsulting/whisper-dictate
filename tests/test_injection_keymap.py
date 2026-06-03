@@ -238,6 +238,17 @@ class DetectXkbLayoutTests(unittest.TestCase):
             result = self.vp._detect_xkb_layout('da')
         self.assertEqual(result, 'se')
 
+    def test_voicepi_env_lang_code_da_maps_to_dk(self):
+        with _env(VOICEPI_XKB_LAYOUT='da', XKB_DEFAULT_LAYOUT='de'):
+            result = self.vp._detect_xkb_layout(None)
+        self.assertEqual(result, 'dk')
+
+    def test_voicepi_env_invalid_en_does_not_block_lang_fallback(self):
+        with _env(VOICEPI_XKB_LAYOUT='en'):
+            with patch('builtins.open', side_effect=FileNotFoundError):
+                result = self.vp._detect_xkb_layout('da')
+        self.assertEqual(result, 'dk')
+
     def test_xkb_default_layout_beats_keyboard_file(self):
         with _env(XKB_DEFAULT_LAYOUT='de'):
             with patch('builtins.open', side_effect=FileNotFoundError):
