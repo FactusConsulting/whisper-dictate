@@ -87,9 +87,10 @@ fn install_linux_desktop_entries() -> Result<()> {
     std::fs::create_dir_all(&applications)?;
     std::fs::create_dir_all(&autostart)?;
 
+    let icon = linux_app_icon_path(&home);
     let exec = linux_desktop_exec_command();
-    let desktop = linux_desktop_entry(false, &exec);
-    let autostart_desktop = linux_desktop_entry(true, &exec);
+    let desktop = linux_desktop_entry(false, &exec, &icon);
+    let autostart_desktop = linux_desktop_entry(true, &exec, &icon);
     let app_path = applications.join("whisper-dictate.desktop");
     let autostart_path = autostart.join("whisper-dictate.desktop");
     std::fs::write(&app_path, desktop)?;
@@ -105,13 +106,20 @@ fn install_linux_desktop_entries() -> Result<()> {
 }
 
 fn install_linux_app_icon(home: &Path) -> Result<()> {
-    let icon_dir = home.join(".local/share/icons/hicolor/scalable/apps");
+    let icon_dir = linux_app_icon_path(home)
+        .parent()
+        .ok_or_else(|| anyhow!("invalid Linux app icon path"))?
+        .to_path_buf();
     std::fs::create_dir_all(&icon_dir)?;
     std::fs::write(
-        icon_dir.join("whisper-dictate.svg"),
+        linux_app_icon_path(home),
         include_str!("../../../assets/whisper-dictate-logo.svg"),
     )?;
     Ok(())
+}
+
+fn linux_app_icon_path(home: &Path) -> PathBuf {
+    home.join(".local/share/icons/hicolor/scalable/apps/whisper-dictate.svg")
 }
 
 fn linux_desktop_exec_command() -> String {
@@ -131,13 +139,14 @@ fn desktop_exec_token(path: &Path) -> String {
     }
 }
 
-fn linux_desktop_entry(autostart: bool, exec: &str) -> String {
+fn linux_desktop_entry(autostart: bool, exec: &str, icon: &Path) -> String {
+    let icon = icon.display();
     let mut entry = format!(
         "[Desktop Entry]\n\
 Name=Whisper Dictate\n\
 Comment=Push-to-talk dictation settings and runtime control\n\
 Exec={exec}\n\
-Icon=whisper-dictate\n\
+Icon={icon}\n\
 Terminal=false\n\
 Type=Application\n\
 Categories=Utility;AudioVideo;Audio;\n\

@@ -284,7 +284,7 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveLocation> {
     };
     match keyring_result {
         Ok(()) => {
-            let _ = save_file_secret(user, "");
+            save_file_fallback_after_keyring_success(user, secret)?;
             Ok(SecretSaveLocation::CredentialStore)
         }
         Err(keyring_err) => {
@@ -293,6 +293,15 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveLocation> {
             })?;
             Ok(SecretSaveLocation::File)
         }
+    }
+}
+
+pub(super) fn save_file_fallback_after_keyring_success(user: &str, secret: &str) -> Result<()> {
+    if cfg!(unix) {
+        save_file_secret(user, secret)
+    } else {
+        let _ = save_file_secret(user, "");
+        Ok(())
     }
 }
 

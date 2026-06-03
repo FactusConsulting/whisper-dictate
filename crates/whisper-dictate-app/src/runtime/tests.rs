@@ -217,10 +217,16 @@ fn install_command_runs_rust_cli_from_app_root() {
 
 #[test]
 fn linux_desktop_entry_uses_supplied_absolute_exec_command() {
-    let entry = linux_desktop_entry(false, "/opt/whisper-dictate/whisper-dictate ui");
+    let entry = linux_desktop_entry(
+        false,
+        "/opt/whisper-dictate/whisper-dictate ui",
+        Path::new("/home/test/.local/share/icons/hicolor/scalable/apps/whisper-dictate.svg"),
+    );
 
     assert!(entry.contains("Exec=/opt/whisper-dictate/whisper-dictate ui\n"));
-    assert!(entry.contains("Icon=whisper-dictate\n"));
+    assert!(entry.contains(
+        "Icon=/home/test/.local/share/icons/hicolor/scalable/apps/whisper-dictate.svg\n"
+    ));
     assert!(entry.contains("StartupWMClass=whisper-dictate\n"));
     assert!(!entry.contains("Exec=whisper-dictate ui"));
     assert!(!entry.contains("X-GNOME-Autostart-enabled=true"));
@@ -228,7 +234,11 @@ fn linux_desktop_entry_uses_supplied_absolute_exec_command() {
 
 #[test]
 fn linux_autostart_entry_marks_gnome_autostart_enabled() {
-    let entry = linux_desktop_entry(true, "/opt/whisper-dictate/whisper-dictate ui");
+    let entry = linux_desktop_entry(
+        true,
+        "/opt/whisper-dictate/whisper-dictate ui",
+        Path::new("/home/test/.local/share/icons/hicolor/scalable/apps/whisper-dictate.svg"),
+    );
 
     assert!(entry.contains("X-GNOME-Autostart-enabled=true"));
 }

@@ -27,7 +27,7 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('exec "${REAL_BIN}" "\\$@"', script)
         self.assertIn("whisper-dictate.desktop", script)
         self.assertIn("Exec=${BIN} ui", script)
-        self.assertIn("Icon=whisper-dictate", script)
+        self.assertIn("Icon=${ICON}", script)
         self.assertIn("StartupWMClass=whisper-dictate", script)
         self.assertIn("ensure_user_bin_first", script)
         self.assertIn('${HOME}/.zprofile', script)

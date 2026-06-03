@@ -312,7 +312,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('join("ubuntu26.04").join("setup.sh")', runtime)
         self.assertIn('env("VOICEPI_RUST_OWNS_DESKTOP", "1")', runtime)
         self.assertIn("fn install_linux_desktop_entries() -> Result<()>", runtime)
-        self.assertIn("fn linux_desktop_entry(autostart: bool, exec: &str) -> String", runtime)
+        self.assertIn(
+            "fn linux_desktop_entry(autostart: bool, exec: &str, icon: &Path) -> String",
+            runtime,
+        )
         self.assertIn("fn start_linux_ui_detached() -> Result<()>", runtime)
 
     def test_ubuntu_setup_creates_launcher_autostart_and_starts_rust_ui(self):

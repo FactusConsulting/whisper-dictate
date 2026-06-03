@@ -183,6 +183,30 @@ fn disabled_os_keyring_uses_file_store_through_ui_secret_api() {
 }
 
 #[test]
+fn successful_keyring_save_keeps_unix_file_fallback() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("api-keys.json");
+    let store_env = store.to_string_lossy().to_string();
+    let _store_guard = EnvVarGuard::set(SECRET_STORE_ENV, &store_env);
+
+    save_file_fallback_after_keyring_success(
+        CloudProvider::Groq.credential_user(),
+        " groq-secret ",
+    )
+    .unwrap();
+
+    if cfg!(unix) {
+        assert_eq!(
+            load_file_secret(CloudProvider::Groq.credential_user()).unwrap(),
+            "groq-secret"
+        );
+    } else {
+        assert!(!store.exists());
+    }
+}
+
+#[test]
 fn cloud_provider_prefers_saved_provider_over_stale_url() {
     let settings = AppSettings {
         stt_provider: "groq".to_owned(),
