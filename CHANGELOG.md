@@ -11,6 +11,14 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.26] - 2026-06-03
+
+### Fixed
+- Made the Core cloud STT controls use clear Groq/OpenAI provider labels and readable speech-engine labels instead of exposing the internal `openai` backend value.
+
+### Changed
+- Local Windows installer builds now default to the latest release version plus unique semver build metadata with timestamp, git SHA and dirty-state markers.
+
 ## [0.3.25] - 2026-06-03
 
 ### Added

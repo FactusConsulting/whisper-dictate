@@ -41,6 +41,26 @@ fn stt_backend_mode_maps_only_active_backend() {
 }
 
 #[test]
+fn combo_labels_keep_cloud_backend_distinct_from_openai_provider() {
+    assert_eq!(
+        selected_option_label("openai", STT_BACKEND_OPTIONS),
+        "Cloud STT (Groq/OpenAI)"
+    );
+    assert_eq!(
+        selected_option_label("openai", CLOUD_PROVIDER_OPTIONS),
+        "OpenAI"
+    );
+    assert_eq!(
+        selected_option_label("groq", CLOUD_PROVIDER_OPTIONS),
+        "Groq"
+    );
+    assert_eq!(
+        selected_option_label("custom", CLOUD_PROVIDER_OPTIONS),
+        "custom"
+    );
+}
+
+#[test]
 fn provider_api_key_can_load_from_environment_fallback() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let _stt = EnvVarGuard::remove("VOICEPI_STT_API_KEY");

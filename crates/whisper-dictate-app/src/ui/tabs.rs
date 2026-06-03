@@ -95,18 +95,18 @@ impl WhisperDictateApp {
     }
 
     pub(super) fn core_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Core");
+        ui.heading("Speech recognition");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         let mut provider_id = self.current_cloud_provider().id().to_owned();
         egui::Grid::new("core_settings")
             .num_columns(2)
             .show(ui, |ui| {
-                combo_help(
+                combo_help_labeled(
                     ui,
-                    "STT backend",
+                    "Speech engine",
                     &mut self.settings.stt_backend,
-                    &["whisper", "parakeet", "openai"],
-                    "Choose the transcription engine: local Whisper, local NVIDIA Parakeet, or OpenAI-compatible cloud STT.",
+                    STT_BACKEND_OPTIONS,
+                    "Choose the transcription engine. Cloud STT can use either Groq or OpenAI; the saved config value is still openai for compatibility with OpenAI-compatible APIs.",
                 );
                 ui.end_row();
                 ui.strong("Local Whisper");
@@ -134,15 +134,15 @@ impl WhisperDictateApp {
                 );
                 ui.end_row();
                 ui.strong("Cloud STT");
-                ui.label("Used only when STT backend is openai/Groq.");
+                ui.label("Used only when Speech engine is Cloud STT.");
                 ui.end_row();
-                combo_enabled(
+                combo_enabled_labeled(
                     ui,
                     backend == SttBackendMode::Cloud,
                     "Cloud STT provider",
                     &mut provider_id,
-                    &["groq", "openai"],
-                    "OpenAI-compatible cloud provider. Groq uses Groq-hosted Whisper models; OpenAI uses OpenAI transcription models.",
+                    CLOUD_PROVIDER_OPTIONS,
+                    "Cloud transcription provider. Groq and OpenAI both use OpenAI-compatible API shapes, but each has its own URL, API key and model list.",
                 );
                 if let Some(provider) = CloudProvider::from_raw(&provider_id) {
                     if provider != self.current_cloud_provider() {
@@ -157,14 +157,14 @@ impl WhisperDictateApp {
                     "Cloud STT model",
                     &mut self.settings.stt_model,
                     provider.model_options(),
-                    "Remote transcription model for the selected cloud provider.",
+                    "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
                 );
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
                     "Cloud STT API URL",
                     &mut self.settings.stt_base_url,
-                    "Base URL for OpenAI-compatible transcription APIs, for example Groq.",
+                    "Base URL for the selected cloud transcription provider.",
                 );
                 text_enabled(
                     ui,
@@ -467,11 +467,11 @@ impl WhisperDictateApp {
                     &mut self.settings.command_hook_timeout_ms,
                     "Maximum time the command hook may run before it is treated as timed out.",
                 );
-                combo_help(
+                combo_help_labeled(
                     ui,
                     "Post processor",
                     &mut self.settings.post_processor,
-                    &["none", "ollama", "openai", "groq"],
+                    POST_PROCESSOR_OPTIONS,
                     "Optional second text pass after speech recognition, dictionary replacements and before final injection. none disables it; ollama uses a local chat model; groq/openai send the dictated text to a cloud chat model for cleanup or rewriting.",
                 );
                 combo_help(

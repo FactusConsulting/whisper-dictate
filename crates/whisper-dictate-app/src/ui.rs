@@ -35,6 +35,18 @@ const GROQ_STT_MODELS: &[&str] = &[
     "distil-whisper-large-v3-en",
 ];
 const OPENAI_STT_MODELS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
+const STT_BACKEND_OPTIONS: &[(&str, &str)] = &[
+    ("whisper", "Local Whisper"),
+    ("parakeet", "Local NVIDIA Parakeet"),
+    ("openai", "Cloud STT (Groq/OpenAI)"),
+];
+const CLOUD_PROVIDER_OPTIONS: &[(&str, &str)] = &[("groq", "Groq"), ("openai", "OpenAI")];
+const POST_PROCESSOR_OPTIONS: &[(&str, &str)] = &[
+    ("none", "Disabled"),
+    ("ollama", "Local Ollama"),
+    ("openai", "OpenAI"),
+    ("groq", "Groq"),
+];
 const GROQ_POST_MODELS: &[&str] = &[
     "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",
@@ -981,6 +993,25 @@ fn combo_help(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&st
     grid_help_row(ui, show_help, help);
 }
 
+fn combo_help_labeled(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+) {
+    let show_help = label_with_help(ui, label, help);
+    egui::ComboBox::from_id_salt(label)
+        .selected_text(selected_option_label(value, options))
+        .show_ui(ui, |ui| {
+            for (option, display) in options {
+                ui.selectable_value(value, (*option).to_owned(), *display);
+            }
+        });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
 fn combo_enabled(
     ui: &mut egui::Ui,
     enabled: bool,
@@ -1009,6 +1040,42 @@ fn combo_enabled(
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
+}
+
+fn combo_enabled_labeled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+) {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(selected_option_label(value, options))
+            .show_ui(ui, |ui| {
+                for (option, display) in options {
+                    ui.selectable_value(value, (*option).to_owned(), *display);
+                }
+            });
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+fn selected_option_label(value: &str, options: &[(&str, &str)]) -> String {
+    options
+        .iter()
+        .find(|(option, _)| *option == value)
+        .map(|(_, display)| (*display).to_owned())
+        .unwrap_or_else(|| {
+            if value.is_empty() {
+                "(empty)".to_owned()
+            } else {
+                value.to_owned()
+            }
+        })
 }
 
 fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) -> bool {

@@ -595,8 +595,9 @@ For a faster local Windows test loop without creating a release:
 
 The local installer and portable ZIP are written to `Output\`. The script uses
 Inno Setup 6 and installs it via winget, or Chocolatey as a fallback, when it is
-missing. Local builds default to semver build metadata such as
-`0.3.25+local.1` so they are easy to distinguish from online releases. The
+missing. Local builds default to the latest release version plus unique semver
+build metadata, for example `0.3.25+local.20260603073512.g24b702e.dirty`, so
+they are easy to distinguish from online releases and from each other. The
 installer keeps a numeric Windows file version internally, for example
 `0.3.25.1`.
 

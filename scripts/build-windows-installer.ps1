@@ -17,21 +17,48 @@ function Get-CrateVersion {
   return $match.Matches[0].Groups[1].Value
 }
 
+function Get-LatestReleaseVersion {
+  if (Get-Command git -ErrorAction SilentlyContinue) {
+    $tag = (& git -C $root tag --list 'v[0-9]*' --sort=-v:refname 2>$null | Select-Object -First 1)
+    if (-not [string]::IsNullOrWhiteSpace($tag)) {
+      return $tag.Trim().TrimStart('v')
+    }
+  }
+  return Get-CrateVersion
+}
+
+function Get-LocalBuildMetadata {
+  $stamp = Get-Date -Format 'yyyyMMddHHmmss'
+  $sha = ''
+  $dirty = ''
+  if (Get-Command git -ErrorAction SilentlyContinue) {
+    $sha = (& git -C $root rev-parse --short HEAD 2>$null)
+    if (-not [string]::IsNullOrWhiteSpace($sha)) {
+      $sha = ".g$($sha.Trim())"
+    }
+    $status = (& git -C $root status --porcelain 2>$null)
+    if ($status) {
+      $dirty = ".dirty"
+    }
+  }
+  return "local.$stamp$sha$dirty"
+}
+
 function Get-VersionInfoVersion([string]$DisplayVersion) {
   if ($DisplayVersion -match '^(\d+\.\d+\.\d+)\.(\d+)$') {
     return $DisplayVersion
   }
-  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)\+local\.(\d+)$') {
-    return "$($Matches[1]).$($Matches[2])"
+  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)\+') {
+    return "$($Matches[1]).1"
   }
   if ($DisplayVersion -match '^(\d+\.\d+\.\d+)$') {
     return $DisplayVersion
   }
-  throw "Version must be numeric or semver local build metadata, e.g. 0.3.25, 0.3.25.1, or 0.3.25+local.1. Got: $DisplayVersion"
+  throw "Version must be numeric or semver build metadata, e.g. 0.3.25, 0.3.25.1, or 0.3.25+local.20260603073512.gabc1234. Got: $DisplayVersion"
 }
 
 if (-not $Version) {
-  $Version = "$(Get-CrateVersion)+local.1"
+  $Version = "$(Get-LatestReleaseVersion)+$(Get-LocalBuildMetadata)"
 }
 $versionInfo = Get-VersionInfoVersion $Version
 
