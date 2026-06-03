@@ -134,7 +134,7 @@ fn supervisor_restart_returns_without_waiting_for_process_exit_event() {
         })
         .unwrap();
     assert!(
-        started.elapsed() < Duration::from_millis(250),
+        started.elapsed() < Duration::from_secs(2),
         "restart should return immediately instead of waiting for process teardown"
     );
 

@@ -1655,7 +1655,8 @@ class PostprocessTests(unittest.TestCase):
             "VOICEPI_POST_PROCESSOR", "VOICEPI_POST_MODE", "VOICEPI_POST_MODEL",
             "VOICEPI_POST_BASE_URL", "VOICEPI_POST_TIMEOUT_MS",
             "VOICEPI_POST_MAX_INPUT_CHARS", "VOICEPI_POST_MAX_OUTPUT_CHARS",
-            "VOICEPI_POST_API_KEY", "OPENAI_API_KEY", "VOICEPI_LOCAL_ONLY",
+            "VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY", "OPENAI_API_KEY",
+            "GROQ_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
         for n in ("vp_postprocess", "vp_config", "vp_privacy", "vp_external_api"):
             sys.modules.pop(n, None)
@@ -1806,6 +1807,69 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(calls["path"], "/v1/chat/completions")
         self.assertEqual(calls["auth"], "Bearer test-key")
         self.assertIn("Clean punctuation", calls["payload"]["messages"][1]["content"])
+
+    def test_groq_postprocessor_defaults_to_groq_chat_model_and_key(self):
+        os.environ["VOICEPI_POST_PROCESSOR"] = "groq"
+        os.environ["VOICEPI_POST_BASE_URL"] = "http://localhost:11434"
+        os.environ["VOICEPI_POST_MODEL"] = "qwen2.5:3b"
+        os.environ["GROQ_API_KEY"] = "groq-test-key"
+        import vp_postprocess
+
+        settings = vp_postprocess.load_postprocess_settings()
+
+        self.assertEqual(settings.processor, "groq")
+        self.assertEqual(settings.base_url, "https://api.groq.com/openai/v1")
+        self.assertEqual(settings.model, "llama-3.1-8b-instant")
+        self.assertEqual(settings.api_key, "groq-test-key")
+
+    def test_groq_postprocessor_uses_openai_compatible_chat_server(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        calls = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls["path"] = self.path
+                calls["auth"] = self.headers.get("Authorization")
+                calls["payload"] = json.loads(body.decode("utf-8"))
+                data = json.dumps({
+                    "choices": [{
+                        "message": {"content": "Final pass text."}
+                    }]
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        import vp_postprocess
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="groq",
+            mode="clean",
+            model="llama-3.1-8b-instant",
+            base_url=f"http://127.0.0.1:{server.server_port}/openai/v1",
+            api_key="groq-test-key",
+        )
+        result = vp_postprocess.postprocess_text("final pass text", settings)
+
+        self.assertEqual(result.text, "Final pass text.")
+        self.assertEqual(result.provider, "groq")
+        self.assertEqual(calls["path"], "/openai/v1/chat/completions")
+        self.assertEqual(calls["auth"], "Bearer groq-test-key")
+        self.assertEqual(calls["payload"]["model"], "llama-3.1-8b-instant")
 
     def test_openai_postprocessor_redacts_before_cloud_and_restores_output(self):
         import threading
@@ -2306,6 +2370,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn help_badge(", script)
         self.assertIn('small_button("?")', script)
         self.assertIn("label_with_help_enabled(", script)
+
+    def test_rust_output_ui_supports_groq_postprocess_models(self):
+        script = Path("crates/whisper-dictate-app/src/ui.rs").read_text(encoding="utf-8")
+
+        self.assertIn('const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY"', script)
+        self.assertIn("const GROQ_POST_MODELS: &[&str]", script)
+        self.assertIn('"llama-3.1-8b-instant"', script)
+        self.assertIn('"llama-3.3-70b-versatile"', script)
+        self.assertIn('"qwen/qwen3-32b"', script)
+        self.assertIn('"openai/gpt-oss-20b"', script)
+        self.assertIn('"groq/compound-mini"', script)
+        self.assertIn('&["none", "ollama", "openai", "groq"]', script)
+        self.assertIn('matches!(self.settings.post_processor.as_str(), "openai" | "groq")', script)
+        self.assertIn("fn normalize_postprocessor_settings(&mut self)", script)
+        self.assertIn("GROQ_STT_BASE_URL.to_owned()", script)
         self.assertIn("response.on_hover_text(help)", script)
         self.assertIn('"Quit key"', script)
 

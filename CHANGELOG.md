@@ -11,6 +11,12 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-06-03
+
+### Added
+- Groq is now a first-class post-processing provider for the optional final text cleanup pass, with a dropdown of chat models suitable for rewriting dictated text.
+- Groq post-processing can reuse the configured API key through `VOICEPI_POST_API_KEY`, `VOICEPI_STT_API_KEY`, or `GROQ_API_KEY`.
+
 ## [0.3.13] - 2026-06-03
 
 ### Fixed

@@ -9,13 +9,13 @@ import urllib.request
 from dataclasses import dataclass
 
 from vp_config import apply_config_to_environ, get_value
-from vp_external_api import DEFAULT_OPENAI_BASE_URL, openai_chat_completion
+from vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
 from vp_privacy import assert_local_processor, local_only_enabled
 from vp_redaction import RedactionResult, redact_text
 
 apply_config_to_environ()
 
-VALID_PROCESSORS = ("none", "ollama", "openai")
+VALID_PROCESSORS = ("none", "ollama", "openai", "groq")
 VALID_MODES = ("raw", "clean", "prompt", "terminal", "slack", "email", "bullets")
 MODE_ALIASES = {
     "bullet-list": "bullets",
@@ -68,19 +68,42 @@ def load_postprocess_settings() -> PostprocessSettings:
         processor = "none"
     if mode not in VALID_MODES:
         mode = "raw"
-    default_base_url = DEFAULT_OPENAI_BASE_URL if processor == "openai" else "http://localhost:11434"
+    ollama_base_url = "http://localhost:11434"
+    if processor == "groq":
+        default_base_url = GROQ_BASE_URL
+    elif processor == "openai":
+        default_base_url = DEFAULT_OPENAI_BASE_URL
+    else:
+        default_base_url = ollama_base_url
+    raw_model = get_value("VOICEPI_POST_MODEL") or ""
+    raw_base_url = (get_value("VOICEPI_POST_BASE_URL", default_base_url)
+                    or default_base_url).rstrip("/")
+    if processor == "groq":
+        if raw_model in ("", "qwen2.5:3b"):
+            raw_model = "llama-3.1-8b-instant"
+        if raw_base_url in ("", ollama_base_url, DEFAULT_OPENAI_BASE_URL):
+            raw_base_url = GROQ_BASE_URL
+    elif processor == "openai":
+        if raw_base_url in ("", ollama_base_url, GROQ_BASE_URL):
+            raw_base_url = DEFAULT_OPENAI_BASE_URL
+    elif processor == "ollama" and raw_base_url in ("", DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL):
+        raw_base_url = ollama_base_url
+    api_key = (
+        get_value("VOICEPI_POST_API_KEY")
+        or get_value("VOICEPI_STT_API_KEY")
+        or get_value("GROQ_API_KEY")
+        or get_value("OPENAI_API_KEY")
+        or ""
+    ).strip()
     return PostprocessSettings(
         processor=processor,
         mode=mode,
-        model=get_value("VOICEPI_POST_MODEL", "qwen2.5:3b") or "qwen2.5:3b",
-        base_url=(get_value("VOICEPI_POST_BASE_URL", default_base_url)
-                  or default_base_url).rstrip("/"),
+        model=raw_model or "qwen2.5:3b",
+        base_url=raw_base_url,
         timeout_ms=_int_setting("VOICEPI_POST_TIMEOUT_MS", 2000, 100),
         max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100),
         max_output_chars=_int_setting("VOICEPI_POST_MAX_OUTPUT_CHARS", 4000, 100),
-        api_key=(get_value("VOICEPI_POST_API_KEY")
-                 or get_value("OPENAI_API_KEY")
-                 or "").strip(),
+        api_key=api_key,
         redact=(get_value("VOICEPI_POST_REDACT") or "").strip().lower() not in (
             "", "0", "false", "no", "off"),
         redact_terms=get_value("VOICEPI_POST_REDACT_TERMS", "") or "",
@@ -156,7 +179,7 @@ def _redaction_terms(settings: PostprocessSettings) -> list[str]:
 
 
 def _redact_for_cloud(text: str, settings: PostprocessSettings) -> RedactionResult:
-    if settings.processor != "openai" or not settings.redact:
+    if settings.processor not in ("openai", "groq") or not settings.redact:
         return RedactionResult(text=text)
     return redact_text(text, terms=_redaction_terms(settings))
 
@@ -208,7 +231,7 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
         if settings.processor == "ollama":
             out = _ollama_generate(settings, clipped)
             latency_ms = int((time.monotonic() - t0) * 1000)
-        elif settings.processor == "openai":
+        elif settings.processor in ("openai", "groq"):
             out, latency_ms = openai_chat_completion(
                 base_url=settings.base_url,
                 api_key=settings.api_key,

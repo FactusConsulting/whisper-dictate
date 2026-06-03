@@ -14,11 +14,14 @@ use crate::runtime::{
 
 const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
+const GROQ_POST_MODEL: &str = "llama-3.1-8b-instant";
 const GROQ_KEYS_URL: &str = "https://console.groq.com/keys";
 const OPENAI_STT_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENAI_STT_MODEL: &str = "gpt-4o-mini-transcribe";
+const OPENAI_POST_MODEL: &str = "gpt-4o-mini";
 const OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys";
 const STT_API_KEY_ENV: &str = "VOICEPI_STT_API_KEY";
+const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY";
 const CREDENTIAL_SERVICE: &str = "whisper-dictate";
 const WHISPER_MODELS: &[&str] = &[
     "large-v3-turbo",
@@ -34,6 +37,17 @@ const GROQ_STT_MODELS: &[&str] = &[
     "distil-whisper-large-v3-en",
 ];
 const OPENAI_STT_MODELS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
+const GROQ_POST_MODELS: &[&str] = &[
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "qwen/qwen3-32b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "groq/compound-mini",
+    "groq/compound",
+];
+const OPENAI_POST_MODELS: &[&str] = &["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"];
 const PARAKEET_MODELS: &[&str] = &[
     "",
     "nvidia/parakeet-tdt-0.6b-v3",
@@ -734,8 +748,8 @@ impl WhisperDictateApp {
                     ui,
                     "Post processor",
                     &mut self.settings.post_processor,
-                    &["none", "ollama", "openai"],
-                    "Optional second pass that rewrites text after transcription.",
+                    &["none", "ollama", "openai", "groq"],
+                    "Optional second pass that rewrites text after transcription. Groq/OpenAI use cloud chat models; Ollama stays local.",
                 );
                 combo_help(
                     ui,
@@ -746,12 +760,28 @@ impl WhisperDictateApp {
                     ],
                     "Output style used by the post-processor.",
                 );
-                text_help(
-                    ui,
-                    "Post model",
-                    &mut self.settings.post_model,
-                    "Model name for post-processing, for example an Ollama model.",
-                );
+                match self.settings.post_processor.as_str() {
+                    "groq" => combo_help(
+                        ui,
+                        "Post model",
+                        &mut self.settings.post_model,
+                        GROQ_POST_MODELS,
+                        "Groq chat model used for the optional final text cleanup pass. STT Whisper models are not listed here because they transcribe audio, not text.",
+                    ),
+                    "openai" => combo_help(
+                        ui,
+                        "Post model",
+                        &mut self.settings.post_model,
+                        OPENAI_POST_MODELS,
+                        "OpenAI chat model used for the optional final text cleanup pass.",
+                    ),
+                    _ => text_help(
+                        ui,
+                        "Post model",
+                        &mut self.settings.post_model,
+                        "Model name for post-processing, for example an Ollama model.",
+                    ),
+                }
                 text_help(
                     ui,
                     "Post base URL",
@@ -881,6 +911,14 @@ impl WhisperDictateApp {
                 command
                     .env
                     .push((STT_API_KEY_ENV.to_owned(), key.to_owned()));
+            }
+        }
+        if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
+            let key = self.stt_api_key_input.trim();
+            if !key.is_empty() {
+                command
+                    .env
+                    .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
             }
         }
         command
@@ -1042,6 +1080,7 @@ impl WhisperDictateApp {
 
     fn save_settings(&mut self) {
         self.normalize_cloud_provider_settings();
+        self.normalize_postprocessor_settings();
         if let Err(err) = serde_json::from_str::<serde_json::Value>(&self.settings.profiles_json) {
             self.settings_status = format!("Profiles JSON is invalid: {err}");
             return;
@@ -1116,6 +1155,32 @@ impl WhisperDictateApp {
             .contains(&self.settings.stt_model.as_str())
         {
             self.settings.stt_model = provider.default_model().to_owned();
+        }
+    }
+
+    fn normalize_postprocessor_settings(&mut self) {
+        match self.settings.post_processor.as_str() {
+            "groq" => {
+                self.settings.post_base_url = GROQ_STT_BASE_URL.to_owned();
+                if !GROQ_POST_MODELS.contains(&self.settings.post_model.as_str()) {
+                    self.settings.post_model = GROQ_POST_MODEL.to_owned();
+                }
+            }
+            "openai" => {
+                self.settings.post_base_url = OPENAI_STT_BASE_URL.to_owned();
+                if !OPENAI_POST_MODELS.contains(&self.settings.post_model.as_str()) {
+                    self.settings.post_model = OPENAI_POST_MODEL.to_owned();
+                }
+            }
+            "ollama" => {
+                if self.settings.post_base_url.trim().is_empty()
+                    || self.settings.post_base_url == GROQ_STT_BASE_URL
+                    || self.settings.post_base_url == OPENAI_STT_BASE_URL
+                {
+                    self.settings.post_base_url = "http://localhost:11434".to_owned();
+                }
+            }
+            _ => {}
         }
     }
 
