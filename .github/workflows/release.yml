@@ -179,7 +179,7 @@ jobs:
               py = Formula["python@3.12"].opt_bin/"python3.12"
               (bin/"whisper-dictate").write <<~SH
                 #!/bin/bash
-                export VOICEPI_PYTHON="#{py}"
+                export VOICEPI_BOOTSTRAP_PYTHON="#{py}"
                 export VOICEPI_APP_ROOT="#{libexec}"
                 export VOICEPI_SKIP_SYSCHECK=1
                 exec "#{libexec}/whisper-dictate" "\$@"
