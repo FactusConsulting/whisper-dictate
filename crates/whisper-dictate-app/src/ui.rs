@@ -21,6 +21,8 @@ mod tabs;
 use self::api_keys::*;
 use self::icon::app_icon;
 
+const XKB_LAYOUT_ENV: &str = "VOICEPI_XKB_LAYOUT";
+
 const WHISPER_MODELS: &[&str] = &[
     "large-v3-turbo",
     "large-v3",
@@ -282,6 +284,12 @@ impl WhisperDictateApp {
 
     fn worker_command(&self) -> WorkerCommand {
         let mut command = default_worker_command();
+        let xkb_layout = self.settings.xkb_layout.trim();
+        if !xkb_layout.is_empty() {
+            command
+                .env
+                .push((XKB_LAYOUT_ENV.to_owned(), xkb_layout.to_owned()));
+        }
         if self.settings.stt_backend == "openai" {
             let key = self.stt_api_key_input.trim();
             if !key.is_empty() {

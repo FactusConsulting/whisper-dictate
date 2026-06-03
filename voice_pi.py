@@ -218,6 +218,8 @@ class Dictate(InjectMixin):
         self._kb = keyboard.Controller()
         self._inject_target_xwin: str | None = None   # XID captured at record start
         self._inject_target_title: str | None = None  # window title for debug log
+        if self._effective_config.get("xkb_layout"):
+            os.environ["VOICEPI_XKB_LAYOUT"] = self._effective_config["xkb_layout"]
         xkb = _detect_xkb_layout(lang) or ''
         self._xkb_layout = xkb
         self._keycode_map = _LAYOUT_KEYCODES.get(xkb, {})
@@ -269,7 +271,12 @@ class Dictate(InjectMixin):
         self.metrics_jsonl = after.get("metrics_jsonl") or None
 
         new_lang = after.get("lang") or None
-        if new_lang != self.lang:
+        new_xkb = after.get("xkb_layout") or None
+        if new_xkb:
+            os.environ["VOICEPI_XKB_LAYOUT"] = new_xkb
+        else:
+            os.environ.pop("VOICEPI_XKB_LAYOUT", None)
+        if new_lang != self.lang or new_xkb != self._effective_config.get("xkb_layout"):
             self.lang = new_lang
             xkb = _detect_xkb_layout(self.lang) or ''
             self._xkb_layout = xkb
@@ -710,6 +717,7 @@ if __name__ == "__main__":
         print(f"whisper-dictate {VERSION}", flush=True)
     ap = build_arg_parser()
     a = ap.parse_args()
+    apply_config_to_environ()
     if a.doctor:
         from vp_doctor import run_doctor
         raise SystemExit(run_doctor())

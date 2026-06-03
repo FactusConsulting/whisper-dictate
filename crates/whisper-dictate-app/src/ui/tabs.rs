@@ -209,6 +209,13 @@ impl WhisperDictateApp {
                     &["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"],
                     "Spoken language hint. Empty lets the backend autodetect when supported.",
                 );
+                combo_help(
+                    ui,
+                    "Keyboard layout",
+                    &mut self.settings.xkb_layout,
+                    &["", "dk", "no", "se", "de", "pt", "br", "us"],
+                    "Wayland ydotool/XKB layout used for direct text injection. Use dk for Danish ae/oe/aa letters.",
+                );
                 text_help(
                     ui,
                     "Hotkey",

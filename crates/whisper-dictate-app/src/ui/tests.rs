@@ -261,6 +261,25 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
 }
 
 #[test]
+fn worker_command_passes_wayland_keyboard_layout() {
+    let settings = AppSettings {
+        xkb_layout: "dk".to_owned(),
+        ..Default::default()
+    };
+    let app = test_app(settings);
+
+    let command = app.worker_command();
+    assert_eq!(
+        command
+            .env
+            .iter()
+            .find(|(key, _)| key == XKB_LAYOUT_ENV)
+            .map(|(_, value)| value.as_str()),
+        Some("dk")
+    );
+}
+
+#[test]
 fn effective_post_api_key_uses_post_key_then_stt_fallback() {
     let settings = AppSettings {
         post_processor: "groq".to_owned(),

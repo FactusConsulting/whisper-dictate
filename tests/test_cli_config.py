@@ -497,6 +497,7 @@ class ConfigTests(unittest.TestCase):
     def setUp(self):
         self._old = {k: os.environ.pop(k, None) for k in (
             "VOICEPI_CONFIG", "VOICEPI_MODEL", "VOICEPI_LANG",
+            "VOICEPI_XKB_LAYOUT",
         )}
         for n in ("vp_config",):
             sys.modules.pop(n, None)
@@ -515,11 +516,16 @@ class ConfigTests(unittest.TestCase):
             os.environ["VOICEPI_LANG"] = "en"
             import vp_config
 
-            vp_config.save_config({"lang": "da", "model": "large-v3"})
+            vp_config.save_config({"lang": "da", "model": "large-v3", "xkb_layout": "dk"})
             self.assertEqual(vp_config.get_value("VOICEPI_LANG"), "da")
             self.assertEqual(vp_config.get_value("VOICEPI_MODEL"), "large-v3")
-            self.assertEqual(vp_config.apply_config_to_environ(), {"VOICEPI_LANG", "VOICEPI_MODEL"})
+            self.assertEqual(vp_config.get_value("VOICEPI_XKB_LAYOUT"), "dk")
+            self.assertEqual(
+                vp_config.apply_config_to_environ(),
+                {"VOICEPI_LANG", "VOICEPI_MODEL", "VOICEPI_XKB_LAYOUT"},
+            )
             self.assertEqual(os.environ["VOICEPI_LANG"], "da")
+            self.assertEqual(os.environ["VOICEPI_XKB_LAYOUT"], "dk")
 
 class PrivacyModeTests(unittest.TestCase):
     def setUp(self):

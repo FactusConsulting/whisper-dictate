@@ -36,6 +36,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOICEPI_DEVICE", "device", "auto", live=False),
     Setting("VOICEPI_COMPUTE_TYPE", "compute_type", None, live=False),
     Setting("VOICEPI_LANG", "lang", None, live=True),
+    Setting("VOICEPI_XKB_LAYOUT", "xkb_layout", None, live=True),
     Setting("VOICEPI_INITIAL_PROMPT", "initial_prompt", None, live=True),
     Setting("VOICEPI_INJECT_MODE", "inject_mode", "auto", live=True),
     Setting("VOICEPI_FORMAT_COMMANDS", "format_commands", "off", live=True),

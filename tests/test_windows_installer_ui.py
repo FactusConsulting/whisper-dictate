@@ -263,6 +263,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Whisper model",
             "Parakeet model",
             "Cloud STT model",
+            "Keyboard layout",
             "Beam size",
             "Audio ducking",
             "Audio ducking level",

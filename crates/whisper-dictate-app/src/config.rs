@@ -24,6 +24,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "device",
     "compute_type",
     "lang",
+    "xkb_layout",
     "initial_prompt",
     "inject_mode",
     "format_commands",
@@ -211,6 +212,7 @@ pub struct AppSettings {
     pub device: String,
     pub compute_type: String,
     pub lang: String,
+    pub xkb_layout: String,
     pub initial_prompt: String,
     pub inject_mode: String,
     pub format_commands: String,
@@ -269,6 +271,7 @@ impl Default for AppSettings {
             device: "auto".to_owned(),
             compute_type: String::new(),
             lang: String::new(),
+            xkb_layout: String::new(),
             initial_prompt: String::new(),
             inject_mode: "auto".to_owned(),
             format_commands: "off".to_owned(),
@@ -408,6 +411,7 @@ impl AppSettings {
             settings.device = string_value(object, "device", &defaults.device);
             settings.compute_type = string_value(object, "compute_type", "");
             settings.lang = string_value(object, "lang", "");
+            settings.xkb_layout = string_value(object, "xkb_layout", "");
             settings.initial_prompt = string_value(object, "initial_prompt", "");
             settings.inject_mode = string_value(object, "inject_mode", &defaults.inject_mode);
             settings.format_commands =
@@ -510,6 +514,7 @@ impl AppSettings {
         set_string(object, "device", &self.device);
         set_string(object, "compute_type", &self.compute_type);
         set_string(object, "lang", &self.lang);
+        set_string(object, "xkb_layout", &self.xkb_layout);
         set_string(object, "initial_prompt", &self.initial_prompt);
         set_string(object, "inject_mode", &self.inject_mode);
         set_string(object, "format_commands", &self.format_commands);
@@ -763,6 +768,7 @@ mod tests {
             "stt_backend": "openai",
             "stt_provider": "groq",
             "lang": "da",
+            "xkb_layout": "dk",
             "quit_key": "f12",
             "dictionary_enabled": "0",
             "json_output": "1",
@@ -777,6 +783,7 @@ mod tests {
         assert_eq!(settings.stt_backend, "openai");
         assert_eq!(settings.stt_provider, "groq");
         assert_eq!(settings.lang, "da");
+        assert_eq!(settings.xkb_layout, "dk");
         assert_eq!(settings.quit_key, "f12");
         assert!(!settings.dictionary_enabled);
         assert!(settings.inject_json);
@@ -858,6 +865,7 @@ mod tests {
 
         let settings = AppSettings {
             lang: "en".to_owned(),
+            xkb_layout: "dk".to_owned(),
             stt_provider: "groq".to_owned(),
             stt_model: String::new(),
             quit_key: "f12".to_owned(),
@@ -874,6 +882,7 @@ mod tests {
 
         assert_eq!(saved["unknown"], "keep");
         assert_eq!(saved["lang"], "en");
+        assert_eq!(saved["xkb_layout"], "dk");
         assert_eq!(saved["stt_provider"], "groq");
         assert_eq!(saved["quit_key"], "f12");
         assert_eq!(saved["audio_ducking"], "1");
