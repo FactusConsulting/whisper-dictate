@@ -703,6 +703,15 @@ class PostprocessTests(unittest.TestCase):
         self.assertIn("post_processor=post_result.provider", script)
         self.assertIn("post_fallback=post_result.fallback", script)
 
+    def test_voice_pi_logs_postprocess_status_for_every_utterance(self):
+        with open("voice_pi.py", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("[post] skipped", script)
+        self.assertIn("[post] fallback after", script)
+        self.assertIn("unchanged", script)
+        self.assertIn("post_result.changed", script)
+
 class FormatCommandTests(unittest.TestCase):
     def test_format_commands_are_off_by_default(self):
         import vp_formatting

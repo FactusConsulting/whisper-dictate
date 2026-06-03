@@ -22,6 +22,9 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_USER_AGENT = "whisper-dictate/0.3 (+https://github.com/FactusConsulting/whisper-dictate)"
 GROQ_TRANSCRIPTION_PROMPT_LIMIT = 896
+RATE_LIMIT_HINT = (
+    "rate limited by {provider}; wait before retrying or lower request frequency"
+)
 LOCAL_WHISPER_MODEL_NAMES = {
     "tiny", "base", "small", "medium", "large-v3", "large-v3-turbo",
     "distil-large-v3",
@@ -137,8 +140,26 @@ def _request_json(
                 detail = error
         except json.JSONDecodeError:
             pass
+        if exc.code == 429:
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            provider = _provider_name(url)
+            hint = RATE_LIMIT_HINT.format(provider=provider)
+            if retry_after:
+                hint += f" (retry after {retry_after}s)"
+            if detail:
+                hint += f": {detail}"
+            raise RuntimeError(f"HTTP 429 Too Many Requests from {url}: {hint}") from exc
         suffix = f": {detail}" if detail else ""
         raise RuntimeError(f"HTTP {exc.code} {exc.reason} from {url}{suffix}") from exc
+
+
+def _provider_name(url: str) -> str:
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if "groq.com" in host:
+        return "Groq"
+    if "openai.com" in host:
+        return "OpenAI"
+    return "external API"
 
 
 def _wav_bytes(audio) -> bytes:

@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use crate::cloud_api::{check_cloud_api, CloudApiCheck};
+use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
 use crate::config::{self, AppSettings};
 use crate::dictionary;
 use crate::runtime::{
@@ -382,6 +382,61 @@ impl WhisperDictateApp {
         });
         self.background_task = Some(rx);
         self.background_task_label = Some("cloud API check");
+    }
+
+    fn run_post_api_check(&mut self) {
+        if self.background_task.is_some() {
+            self.append_runtime_log("[ui] post API check skipped: another task is running");
+            return;
+        }
+
+        let key = self.effective_post_api_key();
+        let check = match PostApiCheck::from_settings(&self.settings, &key) {
+            Ok(check) => check,
+            Err(err) => {
+                self.post_api_key_status = format!("Post API check failed: {err}");
+                self.append_runtime_log(format!("[ui] post API check failed: {err}"));
+                return;
+            }
+        };
+        self.append_runtime_log(format!(
+            "[ui] post API check: {} {}",
+            check.provider, check.model
+        ));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = match check_post_api(&check) {
+                Ok(result) => BackgroundTaskResult {
+                    label: "post API check",
+                    command: format!("{} /chat/completions", check.provider),
+                    stdout: result.summary(),
+                    stderr: String::new(),
+                    success: true,
+                    code: None,
+                    error: None,
+                },
+                Err(err) => BackgroundTaskResult {
+                    label: "post API check",
+                    command: format!("{} /chat/completions", check.provider),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                    code: None,
+                    error: Some(err.to_string()),
+                },
+            };
+            let _ = tx.send(result);
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some("post API check");
+    }
+
+    fn effective_post_api_key(&self) -> String {
+        let post_key = self.post_api_key_input.trim();
+        if !post_key.is_empty() {
+            return post_key.to_owned();
+        }
+        self.stt_api_key_input.trim().to_owned()
     }
 
     fn run_background_command(&mut self, label: &'static str, command: WorkerCommand) {

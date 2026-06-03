@@ -11,6 +11,17 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-06-03
+
+### Added
+- Added a Rust UI post-processing API test button for Groq/OpenAI chat models.
+- Added local Windows build metadata defaults such as `0.3.25+local.1` while preserving numeric Windows file versions.
+
+### Fixed
+- Made post-processing status visible for every utterance with `[post] skipped/unchanged/changed/fallback` log lines.
+- Handled HTTP 429 rate limits with clearer provider-specific messages for external STT and chat post-processing calls.
+- Fixed runtime log scrolling by removing forced stick-to-bottom behavior that interfered with manual scroll and selection.
+
 ### Changed
 - Moved dictionary status/open/add/replace, history list/last, and model-capacity helpers to Rust top-level commands.
 - Stopped packaging the deprecated `requirements.txt` alias in new installer and ZIP bundles; named CPU/GPU/Parakeet requirements files remain.

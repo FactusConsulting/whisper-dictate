@@ -166,6 +166,21 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
 }
 
 #[test]
+fn effective_post_api_key_uses_post_key_then_stt_fallback() {
+    let settings = AppSettings {
+        post_processor: "groq".to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+
+    app.stt_api_key_input = "stt-key".to_owned();
+    assert_eq!(app.effective_post_api_key(), "stt-key");
+
+    app.post_api_key_input = "post-key".to_owned();
+    assert_eq!(app.effective_post_api_key(), "post-key");
+}
+
+#[test]
 fn cloud_stt_runtime_requires_api_key_before_worker_start() {
     let settings = AppSettings {
         stt_backend: "openai".to_owned(),

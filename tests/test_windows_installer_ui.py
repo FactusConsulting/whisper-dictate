@@ -75,7 +75,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("egui::ScrollArea::both()", runtime_tab)
         self.assertIn('.id_salt("runtime_log_scroll")', runtime_tab)
         self.assertIn(".max_height(height)", runtime_tab)
-        self.assertIn(".stick_to_bottom(true)", runtime_tab)
+        self.assertNotIn(".stick_to_bottom(true)", runtime_tab)
         self.assertIn(".desired_width(ui.available_width())", runtime_tab)
         self.assertIn('.id_salt("runtime_log_view")', runtime_tab)
 
@@ -203,6 +203,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("GROQ_STT_BASE_URL.to_owned()", script)
         self.assertIn("Optional second text pass after speech recognition", script)
         self.assertIn("Controls what the post processor is allowed to do", script)
+        self.assertIn("raw bypasses post-processing", script)
+        self.assertIn('"Test post API"', script)
+        self.assertIn("fn run_post_api_check(&mut self)", script)
         self.assertIn("response.on_hover_text(help)", script)
         self.assertIn('"Quit key"', script)
 
@@ -217,6 +220,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"Test cloud API"', ui)
         self.assertIn("fn run_cloud_api_check(&mut self)", ui)
         self.assertIn("check_cloud_api(&check)", ui)
+        self.assertIn('"Test post API"', ui)
+        self.assertIn("check_post_api(&check)", ui)
         self.assertIn('"Preview history"', ui)
         self.assertIn('"Preview metrics"', ui)
         self.assertIn("telemetry::preview_jsonl", ui)
@@ -436,6 +441,18 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         script = Path("scripts/build-windows-installer.ps1").read_text(encoding="utf-8")
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
         self.assertIn("cargo build failed", script)
+
+    def test_local_windows_installer_defaults_to_semver_build_metadata(self):
+        script = Path("scripts/build-windows-installer.ps1").read_text(encoding="utf-8")
+        installer = Path("installer/whisper-dictate.iss").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn('Version = "$(Get-CrateVersion)+local.1"', script)
+        self.assertIn("function Get-VersionInfoVersion", script)
+        self.assertIn('/DVERSION_INFO=$versionInfo', script)
+        self.assertIn("#ifndef VERSION_INFO", installer)
+        self.assertIn("VersionInfoVersion={#VERSION_INFO}", installer)
+        self.assertIn("0.3.25+local.1", readme)
 
     def test_windows_zip_packages_are_built_on_windows_with_rust_exe(self):
         for path in (".github/workflows/release.yml", ".github/workflows/windows-installer.yml"):

@@ -49,7 +49,6 @@ impl WhisperDictateApp {
             .id_salt("runtime_log_scroll")
             .auto_shrink([false, false])
             .max_height(height)
-            .stick_to_bottom(true)
             .show(ui, |ui| {
                 ui.add(
                     egui::TextEdit::multiline(&mut runtime_log_view)
@@ -482,7 +481,7 @@ impl WhisperDictateApp {
                     &[
                         "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
                     ],
-                    "Controls what the post processor is allowed to do. raw leaves text unchanged; clean fixes punctuation/casing; prompt rewrites for coding agents; terminal preserves commands and paths; slack/email/bullets format for those destinations.",
+                    "Controls what the post processor is allowed to do. raw bypasses post-processing and does not call the model; clean fixes punctuation/casing and obvious transcription artifacts; prompt rewrites for coding agents; terminal preserves commands and paths; slack/email/bullets format for those destinations.",
                 );
                 match self.settings.post_processor.as_str() {
                     "groq" => combo_help(
@@ -546,6 +545,13 @@ impl WhisperDictateApp {
                             .clicked()
                         {
                             self.save_post_api_key_now();
+                        }
+                        if ui
+                            .button("Test post API")
+                            .on_hover_text("Sends a tiny chat-completions request to the selected post-processing provider and model.")
+                            .clicked()
+                        {
+                            self.run_post_api_check();
                         }
                         if ui
                             .button(format!("{} API keys", provider.label()))

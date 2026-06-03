@@ -8,17 +8,32 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-if (-not $Version) {
-  $desc = ''
-  if (Get-Command git -ErrorAction SilentlyContinue) {
-    $desc = (& git -C $root describe --tags --always --dirty 2>$null)
+function Get-CrateVersion {
+  $cargoToml = Join-Path $root 'crates\whisper-dictate-app\Cargo.toml'
+  $match = Select-String -LiteralPath $cargoToml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1
+  if (-not $match) {
+    throw "Could not read package version from $cargoToml"
   }
-  $Version = if ([string]::IsNullOrWhiteSpace($desc)) { '0.0.0.0' } else { $desc.TrimStart('v') }
-  $Version = ($Version -replace '[^0-9A-Za-z.-]', '-')
+  return $match.Matches[0].Groups[1].Value
 }
-if ($Version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
-  throw "Inno Setup VersionInfoVersion must be numeric, e.g. 0.2.51.1. Got: $Version"
+
+function Get-VersionInfoVersion([string]$DisplayVersion) {
+  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)\.(\d+)$') {
+    return $DisplayVersion
+  }
+  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)\+local\.(\d+)$') {
+    return "$($Matches[1]).$($Matches[2])"
+  }
+  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)$') {
+    return $DisplayVersion
+  }
+  throw "Version must be numeric or semver local build metadata, e.g. 0.3.25, 0.3.25.1, or 0.3.25+local.1. Got: $DisplayVersion"
 }
+
+if (-not $Version) {
+  $Version = "$(Get-CrateVersion)+local.1"
+}
+$versionInfo = Get-VersionInfoVersion $Version
 
 function Find-Iscc {
   $candidates = @(
@@ -69,8 +84,8 @@ $outDir = Join-Path $root 'Output'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
 try {
-  Write-Host "Building unified Windows installer version $Version..." -ForegroundColor Cyan
-  & $iscc /DVERSION=$Version /O"$outDir" installer\whisper-dictate.iss
+  Write-Host "Building unified Windows installer version $Version (file version $versionInfo)..." -ForegroundColor Cyan
+  & $iscc /DVERSION=$Version /DVERSION_INFO=$versionInfo /O"$outDir" installer\whisper-dictate.iss
   if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
   Write-Host "Building unified Windows portable ZIP version $Version..." -ForegroundColor Cyan

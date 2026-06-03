@@ -5,6 +5,9 @@
 #ifndef VERSION
   #define VERSION "0.0.0"
 #endif
+#ifndef VERSION_INFO
+  #define VERSION_INFO VERSION
+#endif
 
 [Setup]
 AppId={{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}
@@ -14,7 +17,7 @@ AppPublisher=FactusConsulting
 AppPublisherURL=https://github.com/FactusConsulting/whisper-dictate
 AppSupportURL=https://github.com/FactusConsulting/whisper-dictate/issues
 AppUpdatesURL=https://github.com/FactusConsulting/whisper-dictate/releases
-VersionInfoVersion={#VERSION}
+VersionInfoVersion={#VERSION_INFO}
 DefaultDirName={localappdata}\Programs\WhisperDictate
 DisableDirPage=yes
 DisableProgramGroupPage=yes

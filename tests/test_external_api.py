@@ -248,6 +248,60 @@ class ExternalApiTests(unittest.TestCase):
                     timeout_ms=1000,
                 )
 
+    def test_external_api_429_includes_rate_limit_hint_and_retry_after(self):
+        import urllib.error
+        from email.message import Message
+        sys.modules.pop("vp_external_api", None)
+        import vp_external_api
+
+        headers = Message()
+        headers["Retry-After"] = "12"
+        body = io.BytesIO(json.dumps({
+            "error": {"message": "rate limit exceeded"}
+        }).encode("utf-8"))
+        error = urllib.error.HTTPError(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            429,
+            "Too Many Requests",
+            hdrs=headers,
+            fp=body,
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "rate limited by Groq.*retry after 12s.*rate limit exceeded",
+            ):
+                vp_external_api._request_json(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    data=b"body",
+                    headers={},
+                    timeout_ms=1000,
+                )
+
+    def test_external_api_429_post_processing_names_openai_provider(self):
+        import urllib.error
+        sys.modules.pop("vp_external_api", None)
+        import vp_external_api
+
+        error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/chat/completions",
+            429,
+            "Too Many Requests",
+            hdrs=None,
+            fp=io.BytesIO(b""),
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "rate limited by OpenAI"):
+                vp_external_api.openai_chat_completion(
+                    base_url="https://api.openai.com/v1",
+                    api_key="test-key",
+                    model="gpt-4o-mini",
+                    prompt="clean this",
+                    timeout_ms=1000,
+                )
+
 class RedactionTests(unittest.TestCase):
     def test_redacts_email_phone_tokens_and_custom_terms_without_public_values(self):
         import vp_redaction

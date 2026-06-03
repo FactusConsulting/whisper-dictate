@@ -390,11 +390,16 @@ class Dictate(InjectMixin):
 
     def _postprocess_and_format(self, text: str):
         post_result = postprocess_text(text, self.postprocess_settings)
-        if post_result.fallback and post_result.error:
+        if post_result.provider == "none" or post_result.mode == "raw":
+            print(f"[post] skipped {post_result.mode}/{post_result.provider}", flush=True)
+        elif post_result.fallback and post_result.error:
             print(f"[post] fallback after {post_result.latency_ms}ms: {post_result.error}", flush=True)
         elif post_result.changed:
             print(f"[post] {post_result.mode}/{post_result.provider} "
                   f"{post_result.latency_ms}ms text={post_result.text!r}", flush=True)
+        else:
+            print(f"[post] {post_result.mode}/{post_result.provider} "
+                  f"{post_result.latency_ms}ms unchanged", flush=True)
         format_result = apply_format_commands(post_result.text)
         if format_result.changed:
             print(f"[format] {format_result.command_set} commands={format_result.applied}", flush=True)

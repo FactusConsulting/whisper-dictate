@@ -590,13 +590,15 @@ regenerates the local winget manifests in this repo (used for the
 For a faster local Windows test loop without creating a release:
 
 ```powershell
-.\scripts\build-windows-installer.ps1 -Version 0.0.0.1
+.\scripts\build-windows-installer.ps1
 ```
 
 The local installer and portable ZIP are written to `Output\`. The script uses
 Inno Setup 6 and installs it via winget, or Chocolatey as a fallback, when it is
-missing. Use a numeric four-part version for local builds because the Windows
-installer metadata rejects labels such as `-local`.
+missing. Local builds default to semver build metadata such as
+`0.3.25+local.1` so they are easy to distinguish from online releases. The
+installer keeps a numeric Windows file version internally, for example
+`0.3.25.1`.
 
 ## Wayland keyboard-layout testing status
 
