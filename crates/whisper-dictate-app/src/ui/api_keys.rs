@@ -18,6 +18,7 @@ pub(super) const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY";
 
 const CREDENTIAL_SERVICE: &str = "whisper-dictate";
 pub(super) const SECRET_STORE_ENV: &str = "VOICEPI_API_KEY_STORE";
+pub(super) const DISABLE_OS_KEYRING_ENV: &str = "VOICEPI_DISABLE_OS_KEYRING";
 const SECRET_STORE_FILENAME: &str = "api-keys.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +262,11 @@ pub(super) fn save_post_api_key(
 }
 
 fn save_secret(user: &str, secret: &str) -> Result<SecretSaveLocation> {
+    if os_keyring_disabled() {
+        save_file_secret(user, secret)?;
+        return Ok(SecretSaveLocation::File);
+    }
+
     let keyring_result = match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
         Ok(entry) => {
             if secret.trim().is_empty() {
@@ -309,6 +315,10 @@ fn load_post_api_key(provider: PostProvider) -> Result<String> {
 }
 
 fn load_secret(user: &str) -> Result<String> {
+    if os_keyring_disabled() {
+        return load_file_secret(user);
+    }
+
     match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
         Ok(entry) => match entry.get_password() {
             Ok(secret) => Ok(secret),
@@ -320,6 +330,15 @@ fn load_secret(user: &str) -> Result<String> {
         Err(err) => load_file_secret(user)
             .with_context(|| format!("OS credential store failed ({err}); file fallback failed")),
     }
+}
+
+fn os_keyring_disabled() -> bool {
+    env::var(DISABLE_OS_KEYRING_ENV)
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
 }
 
 pub(super) fn load_file_secret(user: &str) -> Result<String> {

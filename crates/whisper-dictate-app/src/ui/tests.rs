@@ -160,6 +160,29 @@ fn file_api_key_store_keeps_post_and_stt_keys_separate() {
 }
 
 #[test]
+fn disabled_os_keyring_uses_file_store_through_ui_secret_api() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("api-keys.json");
+    let store_env = store.to_string_lossy().to_string();
+    let _store_guard = EnvVarGuard::set(SECRET_STORE_ENV, &store_env);
+    let _disable_guard = EnvVarGuard::set(DISABLE_OS_KEYRING_ENV, "1");
+
+    assert_eq!(
+        save_stt_api_key(CloudProvider::Groq, " groq-secret ").unwrap(),
+        SecretSaveLocation::File
+    );
+    assert_eq!(
+        load_stt_api_key_state(CloudProvider::Groq).unwrap().0,
+        "groq-secret"
+    );
+
+    save_stt_api_key(CloudProvider::Groq, "").unwrap();
+
+    assert!(!store.exists());
+}
+
+#[test]
 fn cloud_provider_prefers_saved_provider_over_stale_url() {
     let settings = AppSettings {
         stt_provider: "groq".to_owned(),
