@@ -446,7 +446,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             self.assertIn("whisper-dictate-windows-setup-$version.exe", workflow)
             self.assertIn("Copy-Item target\\release\\whisper-dictate.exe", workflow)
             self.assertIn("Copy-Item assets\\whisper-dictate.ico", workflow)
-            self.assertIn('Copy-Item requirements-cpu.txt (Join-Path $bundle "requirements.txt")', workflow)
+            self.assertNotIn('Copy-Item requirements-cpu.txt (Join-Path $bundle "requirements.txt")', workflow)
+            self.assertNotIn('"requirements.txt"', workflow)
             self.assertIn("Copy-Item requirements-cpu.txt,requirements-gpu.txt", workflow)
             self.assertIn("Output/*.exe Output/*.zip sha256sums.txt", workflow)
 
@@ -456,6 +457,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("whisper-dictate-windows-setup-$Version.exe", script)
         self.assertIn("target\\release\\whisper-dictate.exe", script)
         self.assertIn("assets\\whisper-dictate.ico", script)
+        self.assertNotIn("requirements.txt", script)
         self.assertIn("Compress-Archive", script)
 
     def test_docs_describe_windows_zip_and_installer_outputs(self):

@@ -1,9 +1,13 @@
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use regex::RegexBuilder;
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+use crate::cli::DictionaryCommand;
+use crate::config;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Dictionary {
@@ -169,6 +173,102 @@ pub fn load_dictionary(path: impl AsRef<Path>) -> Result<Dictionary> {
     parse_dictionary(&raw)
 }
 
+pub fn handle_command(command: DictionaryCommand) -> Result<()> {
+    let settings = config::load_settings()?;
+    let path = PathBuf::from(&settings.dictionary);
+    match command {
+        DictionaryCommand::Status => {
+            let preview = preview_dictionary(
+                &path,
+                Some(&settings.initial_prompt),
+                settings.dictionary_max_terms.parse().unwrap_or(80),
+                settings.dictionary_prompt_chars.parse().unwrap_or(1200),
+            )?;
+            println!("path: {}", preview.path.display());
+            println!("terms: {}", preview.term_count);
+            println!("replacements: {}", preview.replacement_count);
+            if let Some(prompt) = preview.prompt {
+                println!("prompt:\n{prompt}");
+            }
+        }
+        DictionaryCommand::Open => {
+            let path = config::open_dictionary(path)?;
+            println!("opened: {}", path.display());
+        }
+        DictionaryCommand::Add { term } => {
+            let added = add_term(&path, &term)?;
+            println!(
+                "{}: {}",
+                if added { "added" } else { "already present" },
+                path.display()
+            );
+        }
+        DictionaryCommand::Replace { mapping } => {
+            let (from, to, changed) = add_replacement(&path, &mapping)?;
+            println!(
+                "{}: {from} => {to} ({})",
+                if changed { "saved" } else { "unchanged" },
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn ensure_json_dictionary(path: impl AsRef<Path>) -> Result<PathBuf> {
+    let path = path.as_ref();
+    if !path.exists() {
+        path.parent().map(fs::create_dir_all).transpose()?;
+        write_json_dictionary(path, &Dictionary::default(), None)?;
+    }
+    Ok(path.to_path_buf())
+}
+
+pub fn add_term(path: impl AsRef<Path>, term: &str) -> Result<bool> {
+    let term = term.trim();
+    if term.is_empty() {
+        return Err(anyhow!("dictionary term cannot be empty"));
+    }
+    let path = path.as_ref();
+    let (mut dictionary, base) = load_json_dictionary_for_write(path)?;
+    let before = dictionary.terms.len();
+    dictionary.terms = dedupe_terms(
+        dictionary
+            .terms
+            .into_iter()
+            .chain(std::iter::once(term.to_owned()))
+            .collect(),
+    );
+    let added = dictionary.terms.len() != before;
+    if added {
+        write_json_dictionary(path, &dictionary, Some(base))?;
+    }
+    Ok(added)
+}
+
+pub fn add_replacement(path: impl AsRef<Path>, mapping: &str) -> Result<(String, String, bool)> {
+    let (from, to) =
+        parse_mapping_line(mapping).ok_or_else(|| anyhow!("replacement must be FROM=TO"))?;
+    let path = path.as_ref();
+    let (mut dictionary, base) = load_json_dictionary_for_write(path)?;
+    let changed = dictionary
+        .replacements
+        .iter()
+        .find(|replacement| replacement.from == from)
+        .is_none_or(|replacement| replacement.to != to);
+    if changed {
+        dictionary
+            .replacements
+            .retain(|replacement| replacement.from != from);
+        dictionary.replacements.push(Replacement {
+            from: from.clone(),
+            to: to.clone(),
+        });
+        write_json_dictionary(path, &dictionary, Some(base))?;
+    }
+    Ok((from, to, changed))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictionaryPreview {
     pub path: PathBuf,
@@ -191,6 +291,55 @@ pub fn preview_dictionary(
         replacement_count: dictionary.replacements.len(),
         prompt: dictionary.build_prompt(base_prompt, max_terms, max_chars),
     })
+}
+
+fn load_json_dictionary_for_write(path: &Path) -> Result<(Dictionary, Map<String, Value>)> {
+    ensure_json_dictionary(path)?;
+    let raw = fs::read_to_string(path)?;
+    let value: Value = serde_json::from_str(&raw)?;
+    let base = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow!("dictionary JSON root must be an object"))?;
+    let dictionary = parse_json_dictionary(&raw)?;
+    Ok((dictionary, base))
+}
+
+fn write_json_dictionary(
+    path: &Path,
+    dictionary: &Dictionary,
+    base: Option<Map<String, Value>>,
+) -> Result<()> {
+    path.parent().map(fs::create_dir_all).transpose()?;
+    let mut object = base.unwrap_or_default();
+    object.insert(
+        "terms".to_owned(),
+        Value::Array(
+            dedupe_terms(dictionary.terms.clone())
+                .into_iter()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    let mut replacements = Map::new();
+    for replacement in sorted_replacements(&dictionary.replacements) {
+        replacements.insert(
+            replacement.from.clone(),
+            Value::String(replacement.to.clone()),
+        );
+    }
+    object.insert("replacements".to_owned(), Value::Object(replacements));
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&Value::Object(object))? + "\n",
+    )?;
+    Ok(())
+}
+
+fn sorted_replacements(replacements: &[Replacement]) -> Vec<Replacement> {
+    let mut out = replacements.to_vec();
+    out.sort_by(|a, b| a.from.cmp(&b.from));
+    out
 }
 
 pub fn parse_text_dictionary(raw: &str) -> Dictionary {
@@ -390,6 +539,42 @@ mod tests {
             preview.prompt.as_deref(),
             Some("Base prompt\nVocabulary: Codex, Claude Code")
         );
+    }
+
+    #[test]
+    fn add_term_creates_json_dictionary_and_dedupes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dictionary.json");
+
+        assert!(add_term(&path, "Codex").unwrap());
+        assert!(!add_term(&path, "codex").unwrap());
+
+        let dictionary = load_dictionary(&path).unwrap();
+        assert_eq!(dictionary.terms, vec!["Codex"]);
+    }
+
+    #[test]
+    fn add_replacement_preserves_unknown_json_fields_and_sorts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dictionary.json");
+        std::fs::write(
+            &path,
+            r#"{"terms":["Codex"],"notes":"keep","replacements":{"z":"Z"}}"#,
+        )
+        .unwrap();
+
+        let (from, to, changed) = add_replacement(&path, "a=A").unwrap();
+
+        assert_eq!((from.as_str(), to.as_str(), changed), ("a", "A", true));
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["notes"], "keep");
+        let keys = value["replacements"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["a", "z"]);
     }
 
     #[test]

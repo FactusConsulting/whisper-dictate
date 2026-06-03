@@ -88,7 +88,6 @@ try {
   $assetDir = Join-Path $bundle 'assets'
   New-Item -ItemType Directory -Force $assetDir | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'assets\whisper-dictate.ico') -Destination $assetDir
-  Copy-Item -LiteralPath (Join-Path $root 'requirements-cpu.txt') -Destination (Join-Path $bundle 'requirements.txt')
   Copy-Item -LiteralPath (Join-Path $root 'target\release\whisper-dictate.exe') -Destination $bundle
   $scriptDir = Join-Path $bundle 'scripts'
   New-Item -ItemType Directory -Force $scriptDir | Out-Null

@@ -26,4 +26,4 @@ keeping the Python audio/ML worker behind that controller.
 ## Notes
 
 - Python remains the worker boundary for audio capture, Whisper/Parakeet/OpenAI STT, hotkeys, text injection, history, and metrics.
-- Legacy PySide/PowerShell UI files are no longer shipped; Rust UI owns the installed Windows experience.
+- Legacy Python/PowerShell UI files are no longer shipped; Rust UI owns the installed Windows experience.

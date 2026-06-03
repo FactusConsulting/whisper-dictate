@@ -324,7 +324,7 @@ NVIDIA GPU is used automatically if present.
 | `--no-type` | print transcription only, don't inject (env `VOICEPI_INJECT_MODE=print`; useful for testing) |
 | `--json` | also emit one structured JSON event per utterance (env `VOICEPI_JSON=1`) |
 | `--doctor` | run Linux/Wayland health checks and exit |
-| `--model-capacity` | show local GPU VRAM and which local models can fit |
+| `model-capacity` | show local GPU VRAM and which local models can fit |
 | `--model NAME` | Whisper model (default `large-v3-turbo`; env `VOICEPI_MODEL`) |
 | `--device D` | `auto`/`cuda`/`cpu` (default `auto`; env `VOICEPI_DEVICE`; invalid values are rejected) |
 
@@ -406,11 +406,11 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | ignore very short Parakeet captures where language detection is weak |
 | `VOICEPI_RELEASE_TAIL_MS` | `200` | keep capturing briefly after hotkey release to avoid clipping final words |
 
-Dictionary helper commands run before Whisper loads, for example
-`whisper-dictate run --dictionary-status`,
-`whisper-dictate run --dictionary-open`,
-`whisper-dictate run --dictionary-add "Claude Code"`, and
-`whisper-dictate run --dictionary-replace "Cloud Code=Claude Code"`. Use
+Dictionary helper commands are handled by the Rust controller before Python or
+Whisper loads, for example `whisper-dictate dictionary status`,
+`whisper-dictate dictionary open`,
+`whisper-dictate dictionary add "Claude Code"`, and
+`whisper-dictate dictionary replace "Cloud Code=Claude Code"`. Use
 `whisper-dictate run --dictionary-suggest benchmark\results.jsonl` to inspect benchmark
 or history JSONL and print suggested smart replacements without mutating the
 dictionary. In the Windows Settings UI, open the Dictionary tab and use
@@ -482,8 +482,8 @@ python voice_pi.py --benchmark-corpus benchmark\corpus.json `
   --benchmark-jsonl benchmark\results.jsonl
 python voice_pi.py --calibrate-mic 5
 python voice_pi.py --calibrate-file sample.wav --json
-python voice_pi.py --history-last
-python voice_pi.py --history-copy-last
+whisper-dictate history last
+whisper-dictate run --history-copy-last
 python voice_pi.py --dictionary-suggest benchmark\results.jsonl --json
 ```
 
@@ -495,7 +495,7 @@ expected technical-term hits/misses. Record missing local corpus audio with
 `py -3.12 scripts\record-corpus.py --manifest benchmark\corpus.json --seconds 7`.
 Calibration prints raw dBFS, noise floor, SNR, peak and recommended audio
 threshold settings without loading an STT model.
-`python voice_pi.py --model-capacity` prints NVIDIA GPU free/total VRAM and
+`whisper-dictate model-capacity` prints NVIDIA GPU free/total VRAM and
 which Whisper, Parakeet and local Ollama post-processing models can fit now or
 after freeing VRAM. The Windows Settings UI exposes the same check on the Core
 tab as **Model fit**.

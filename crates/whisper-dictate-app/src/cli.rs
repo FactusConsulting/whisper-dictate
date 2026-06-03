@@ -31,10 +31,22 @@ pub enum Command {
     Install,
     /// Run the Ubuntu Wayland desktop setup helper.
     SetupUbuntu,
+    /// Show local GPU VRAM and model-fit guidance.
+    ModelCapacity,
     /// Inspect configuration paths and values.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    /// Manage the custom dictionary without starting Python.
+    Dictionary {
+        #[command(subcommand)]
+        command: DictionaryCommand,
+    },
+    /// Inspect local dictation history without starting Python.
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
     },
 }
 
@@ -44,6 +56,36 @@ pub enum ConfigCommand {
     Path,
     /// Print the raw JSON config, or an empty object if no config exists.
     Show,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum DictionaryCommand {
+    /// Print dictionary path, term count, replacement count and prompt preview.
+    Status,
+    /// Create the dictionary if needed and open it in the platform editor.
+    Open,
+    /// Add a prompt vocabulary term.
+    Add {
+        /// Term to add.
+        term: String,
+    },
+    /// Add or update a deterministic replacement in FROM=TO form.
+    Replace {
+        /// Replacement mapping, for example "lead death=lead dev".
+        mapping: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum HistoryCommand {
+    /// List recent history rows.
+    List {
+        /// Number of rows to show.
+        #[arg(default_value_t = 10)]
+        limit: usize,
+    },
+    /// Print the most recent history text.
+    Last,
 }
 
 #[cfg(test)]
@@ -106,12 +148,42 @@ mod tests {
     }
 
     #[test]
+    fn parses_model_capacity_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "model-capacity"]);
+        assert_eq!(cli.command, Some(Command::ModelCapacity));
+    }
+
+    #[test]
     fn parses_config_path_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "config", "path"]);
         assert_eq!(
             cli.command,
             Some(Command::Config {
                 command: ConfigCommand::Path,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_dictionary_add_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "dictionary", "add", "Codex"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Dictionary {
+                command: DictionaryCommand::Add {
+                    term: "Codex".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_history_list_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "history", "list", "25"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::History {
+                command: HistoryCommand::List { limit: 25 },
             })
         );
     }

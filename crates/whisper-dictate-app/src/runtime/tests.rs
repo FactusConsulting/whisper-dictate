@@ -248,10 +248,9 @@ fn run_capture_returns_stdout_stderr_and_status() {
 }
 
 #[test]
-fn install_plan_prefers_bundle_requirements_file() {
+fn install_plan_uses_named_cpu_requirements_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("requirements-cpu.txt"), "").unwrap();
-    std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
     let plan = InstallPlan::from_parts(
         dir.path().to_path_buf(),
         requirements_path(dir.path()).unwrap(),
@@ -259,7 +258,7 @@ fn install_plan_prefers_bundle_requirements_file() {
         None,
     );
 
-    assert_eq!(plan.requirements, dir.path().join("requirements.txt"));
+    assert_eq!(plan.requirements, dir.path().join("requirements-cpu.txt"));
     assert_eq!(
         plan.install_commands[1].args,
         vec![
@@ -276,7 +275,7 @@ fn install_plan_prefers_bundle_requirements_file() {
 fn install_plan_includes_parakeet_requirements_when_backend_requests_it() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+    std::fs::write(dir.path().join("requirements-cpu.txt"), "").unwrap();
     std::fs::write(dir.path().join("requirements-parakeet.txt"), "").unwrap();
 
     let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
@@ -297,7 +296,7 @@ fn install_plan_includes_parakeet_requirements_when_backend_requests_it() {
 fn install_plan_includes_gpu_requirements_when_cuda_device_requests_it() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+    std::fs::write(dir.path().join("requirements-cpu.txt"), "").unwrap();
     std::fs::write(dir.path().join("requirements-gpu.txt"), "").unwrap();
 
     let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
@@ -318,7 +317,7 @@ fn install_plan_includes_gpu_requirements_when_cuda_device_requests_it() {
 fn install_plan_skips_missing_parakeet_requirements() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+    std::fs::write(dir.path().join("requirements-cpu.txt"), "").unwrap();
 
     let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
     let _backend_guard = EnvVarGuard::set(STT_BACKEND_ENV, "parakeet");

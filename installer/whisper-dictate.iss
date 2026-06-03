@@ -43,7 +43,6 @@ Source: "..\requirements-cpu.txt";      DestDir: "{app}"; Flags: ignoreversion
 Source: "..\requirements-gpu.txt";      DestDir: "{app}"; Flags: ignoreversion
 Source: "..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\scripts\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
-Source: "..\requirements-cpu.txt";      DestDir: "{app}"; DestName: "requirements.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"

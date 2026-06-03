@@ -10,6 +10,9 @@ __pycache__/
 # Rust build output
 target/
 
+# Local installer/ZIP build output
+Output/
+
 # Model cache (fetched at runtime into the HF cache, never vendored)
 .cache/
 

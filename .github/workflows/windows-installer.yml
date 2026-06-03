@@ -102,7 +102,6 @@ jobs:
           Copy-Item requirements-cpu.txt,requirements-gpu.txt $bundle
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
-          Copy-Item requirements-cpu.txt (Join-Path $bundle "requirements.txt")
           Copy-Item target\release\whisper-dictate.exe $bundle
           New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
           Copy-Item scripts\inject-smoke.py (Join-Path $bundle "scripts")

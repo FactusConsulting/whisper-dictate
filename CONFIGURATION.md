@@ -125,7 +125,7 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_POST_REDACT` | *(unset)* | truthy / falsey | Opt-in local redaction before `VOICEPI_POST_PROCESSOR=openai`. Emails, phone numbers and common API tokens are replaced with placeholders before the cloud request and restored afterward when possible. |
 | `VOICEPI_POST_REDACT_TERMS` | *(unset)* | comma-separated terms | Extra local names/terms to redact before cloud post-processing. Original values are not written to metrics; only placeholder/type/count metadata is recorded. |
 | `VOICEPI_STT_DEBUG` | *(unset)* | `1` / `true` / any truthy | Print per-segment Whisper metadata when available. Useful for diagnosing hallucinations and low-confidence output. |
-| `VOICEPI_NO_COLOR` / `NO_COLOR` | *(unset)* | any non-empty value | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON, and the Qt UI stay plain automatically. |
+| `VOICEPI_NO_COLOR` / `NO_COLOR` | *(unset)* | any non-empty value | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON, and the Rust UI stay plain automatically. |
 | `VOICEPI_VAD_THRESHOLD` | `0.3` | float | Silero VAD speech threshold passed to faster-whisper. Higher rejects more non-speech but can clip quiet speech. |
 | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | integer ms | Minimum silence gap used by VAD segmentation. Lower can reduce latency on clipped phrases; higher keeps phrases together. |
 | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | float seconds (`0` disables) | Parakeet-only minimum recording length. Shorter clips are ignored to avoid poor language autodetection and low-context mistakes. |
@@ -217,7 +217,7 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `--doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
-| `--model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table before loading Whisper. |
+| `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading Python or Whisper. |
 | `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
 | `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |
 | `--benchmark-corpus PATH` | off | manifest path | Run a benchmark corpus manifest and annotate results with reference text, WER/CER and technical-term hits/misses. |
@@ -226,8 +226,8 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--calibrate-mic [SECONDS]` | off | seconds, default `5` | Record a short mic sample, print pass/warn/fail audio diagnostics and recommended threshold settings, then exit. |
 | `--calibrate-file PATH` | off | audio path | Analyze an existing audio file with the same calibration logic. Combine with `--json` for structured output. |
 | `--post-process-text TEXT` | off | text | Run the configured post-processor on text and exit. Useful for testing Ollama/OpenAI text cleanup without recording audio. |
-| `--history-list [N]` | off | count, default `10` | Print recent local dictation history entries and exit. |
-| `--history-last` | off | — | Print the last local dictation transcript and exit. |
+| `whisper-dictate history list [N]` | off | count, default `10` | Print recent local dictation history entries from the Rust controller and exit. |
+| `whisper-dictate history last` | off | — | Print the last local dictation transcript from the Rust controller and exit. |
 | `--history-copy-last` | off | — | Copy the last local dictation transcript to the clipboard and exit. |
 | `--history-reinject-last` | off | — | Paste the last local dictation transcript into the active window and exit. |
 
@@ -393,10 +393,10 @@ along with the raw text.
 Manage the default dictionary without loading Whisper:
 
 ```powershell
-whisper-dictate run --dictionary-status
-whisper-dictate run --dictionary-open
-whisper-dictate run --dictionary-add "Claude Code"
-whisper-dictate run --dictionary-replace "Cloud Code=Claude Code"
+whisper-dictate dictionary status
+whisper-dictate dictionary open
+whisper-dictate dictionary add "Claude Code"
+whisper-dictate dictionary replace "Cloud Code=Claude Code"
 whisper-dictate run --dictionary-suggest benchmark\results.jsonl
 ```
 
@@ -503,7 +503,7 @@ module already wires up ydotool/uinput for Wayland.
 
 ## GPU VRAM sizing — what to set per card
 
-Run `python voice_pi.py --model-capacity` to inspect local NVIDIA GPU free/total
+Run `whisper-dictate model-capacity` to inspect local NVIDIA GPU free/total
 VRAM and get a model-fit table for Whisper, Parakeet and local Ollama
 post-processing models. On Windows, the Settings UI exposes the same check on
 the Core tab as **Model fit**.

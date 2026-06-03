@@ -36,7 +36,7 @@ summary and include the manual verification that covers the bug.
   start, stop, restart, and required restarts explicit.
 - Keep terminal and subprocess output Windows-safe. New console output should
   be ASCII-safe or UTF-8-safe with a tested fallback, especially for PowerShell,
-  cmd.exe, hidden launchers, and Qt subprocess logs.
+  cmd.exe, hidden launchers, and Rust UI subprocess logs.
 - Keep Whisper and Parakeet configuration separate. Parakeet must use its own
   model defaults, dependency checks, and CUDA readiness checks rather than
   inheriting Whisper model names such as `large-v3`.

@@ -3,7 +3,7 @@
 use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command};
-use whisper_dictate_app::{config, runtime, ui};
+use whisper_dictate_app::{config, dictionary, model_capacity, runtime, telemetry, ui};
 
 fn main() {
     if let Err(err) = run() {
@@ -25,6 +25,9 @@ fn run() -> anyhow::Result<()> {
         Command::Doctor => runtime::doctor(),
         Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
+        Command::ModelCapacity => model_capacity::handle_command(),
         Command::Config { command } => config::handle_command(command),
+        Command::Dictionary { command } => dictionary::handle_command(command),
+        Command::History { command } => telemetry::handle_history_command(command),
     }
 }

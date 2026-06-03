@@ -11,6 +11,11 @@ release because `release.yml` bumps in-place after the tag is pushed.
 
 ## [Unreleased]
 
+### Changed
+- Moved dictionary status/open/add/replace, history list/last, and model-capacity helpers to Rust top-level commands.
+- Stopped packaging the deprecated `requirements.txt` alias in new installer and ZIP bundles; named CPU/GPU/Parakeet requirements files remain.
+- Ignored local `Output/` build artifacts and refreshed documentation wording around the Rust UI.
+
 ## [0.3.24] - 2026-06-03
 
 ### Fixed
