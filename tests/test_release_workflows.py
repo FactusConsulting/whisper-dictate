@@ -39,6 +39,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('repair_linux_desktop_entry "\\${HOME:-}/.config/autostart/whisper-dictate.desktop" 1', bump_step)
         self.assertIn("def post_install", bump_step)
         self.assertIn('homes = [ENV["HOME"], *Dir["/home/*"]]', bump_step)
+        self.assertIn("File.write(path.to_s", bump_step)
+        self.assertNotIn("path.write <<~DESKTOP", bump_step)
         self.assertIn("def autostart_enabled_line(raw)", bump_step)
         self.assertIn('assert_path_exists libexec/"ubuntu26.04/setup.sh"', bump_step)
         self.assertNotIn("archive/refs/tags", bump_step)

@@ -251,7 +251,7 @@ jobs:
               return if raw.include?("Exec=#{exe} ui")
 
               path.dirname.mkpath
-              path.write <<~DESKTOP
+              File.write(path.to_s, <<~DESKTOP)
                 [Desktop Entry]
                 Name=Whisper Dictate
                 Comment=Push-to-talk dictation settings and runtime control
@@ -263,6 +263,7 @@ jobs:
                 StartupNotify=true
                 #{autostart ? autostart_enabled_line(raw) : ""}
               DESKTOP
+              )
             rescue Errno::EACCES, Errno::EPERM
               nil
             end
