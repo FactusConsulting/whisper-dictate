@@ -114,6 +114,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         ):
             workflow = path.read_text(encoding="utf-8")
             self.assertIn("for attempt in 1 2 3; do", workflow, path.as_posix())
+            self.assertIn('echo "push attempt $attempt"', workflow, path.as_posix())
             self.assertIn("git rebase origin/main", workflow, path.as_posix())
 
     def test_windows_workflows_pin_current_windows_runner(self):
