@@ -238,25 +238,30 @@ workflow from this source — it has not been tampered with.
 > build from source and run the Rust controller directly — identical software,
 > no installer stub.
 
-### Install via Chocolatey private source
+### Install via public Chocolatey source
 
-Releases publish a Chocolatey package asset:
+Releases publish a Chocolatey package asset and update a public GitHub Pages
+NuGet v3 feed:
 
 - **`whisper-dictate.<version>.nupkg`**
 
-The release workflow publishes that package to GitHub Packages NuGet:
+Add the source once, then install or upgrade from any PowerShell terminal:
+
+```powershell
+choco source add -n=whisper-dictate -s="https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json"
+choco install whisper-dictate --source=whisper-dictate -y
+choco upgrade whisper-dictate --source=whisper-dictate -y
+```
+
+This source is public and does not require a GitHub account or token. It uses
+Chocolatey CLI 2.x NuGet v3 feed support.
+
+The release workflow also publishes the package to GitHub Packages NuGet. That
+feed normally requires GitHub credentials:
 
 ```powershell
 choco source add -n=whisper-dictate-github -s="https://nuget.pkg.github.com/FactusConsulting/index.json" -u="<github-user>" -p="<token>"
 choco install whisper-dictate --source=whisper-dictate-github -y
-```
-
-If we configure a Chocolatey-compatible private NuGet feed such as ProGet,
-Nexus, Artifactory or Azure Artifacts, add that source instead:
-
-```powershell
-choco source add -n=whisper-dictate -s="<private-nuget-feed-url>" -u="<user>" -p="<token>"
-choco install whisper-dictate --source=whisper-dictate -y
 ```
 
 The Chocolatey package downloads the matching
@@ -613,7 +618,9 @@ The Windows `.exe` installer, Windows ZIP bundle and Chocolatey package are
 built by the release workflow itself. After the tag is pushed, CI uploads them
 to the Release and regenerates the local winget manifests in this repo (used
 for the `winget install --manifest` install path). CI publishes the `.nupkg` to
-GitHub Packages NuGet. If the `CHOCOLATEY_NUGET_SOURCE` and
+the public GitHub Pages Chocolatey feed at
+`https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json` and
+to GitHub Packages NuGet. If the `CHOCOLATEY_NUGET_SOURCE` and
 `CHOCOLATEY_NUGET_API_KEY` repo secrets are also set, CI pushes the same package
 to that additional private Chocolatey/NuGet feed.
 

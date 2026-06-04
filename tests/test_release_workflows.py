@@ -98,18 +98,42 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("Publish Chocolatey package to GitHub Packages NuGet", workflow, path.as_posix())
             self.assertIn("nuget.pkg.github.com/${{ github.repository_owner }}", workflow, path.as_posix())
             self.assertIn("dotnet nuget push", workflow, path.as_posix())
+            self.assertIn("Publish public Chocolatey feed to GitHub Pages", workflow, path.as_posix())
+            self.assertIn(".\\scripts\\publish-chocolatey-feed.ps1 -PackagePath", workflow, path.as_posix())
             self.assertIn("CHOCOLATEY_NUGET_SOURCE", workflow, path.as_posix())
             self.assertIn("CHOCOLATEY_NUGET_API_KEY", workflow, path.as_posix())
             self.assertIn("choco push", workflow, path.as_posix())
             self.assertIn("packaging/chocolatey/", workflow, path.as_posix())
 
-    def test_readme_documents_private_chocolatey_source(self):
+    def test_public_chocolatey_feed_script_publishes_static_github_pages_feed(self):
+        script = Path("scripts/publish-chocolatey-feed.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("dotnet tool install --tool-path $toolPath Sleet", script)
+        self.assertIn("--version \"7.*\"", script)
+        self.assertIn("$FeedBranch = \"gh-pages\"", script)
+        self.assertIn("$FeedPath = \"chocolatey\"", script)
+        self.assertIn("github.io", script)
+        self.assertIn("sleet init --config $configPath --source githubPages", script)
+        self.assertIn("sleet push --config $configPath --source githubPages --force", script)
+        self.assertIn("sleet validate --config $configPath --source githubPages", script)
+        self.assertIn("git -C $feedRoot push origin \"HEAD:$FeedBranch\"", script)
+
+    def test_readme_documents_public_chocolatey_source(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 
-        self.assertIn("Install via Chocolatey private source", readme)
-        self.assertIn("nuget.pkg.github.com/FactusConsulting/index.json", readme)
+        self.assertIn("Install via public Chocolatey source", readme)
+        self.assertIn(
+            "https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json",
+            readme,
+        )
+        self.assertIn("public and does not require a GitHub account or token", readme)
+        self.assertIn("Chocolatey CLI 2.x NuGet v3 feed support", readme)
         self.assertIn("choco source add -n=whisper-dictate", readme)
-        self.assertIn("choco install whisper-dictate", readme)
+        self.assertIn("choco install whisper-dictate --source=whisper-dictate -y", readme)
+        self.assertIn("choco upgrade whisper-dictate --source=whisper-dictate -y", readme)
+        self.assertIn("nuget.pkg.github.com/FactusConsulting/index.json", readme)
         self.assertIn("CHOCOLATEY_NUGET_SOURCE", readme)
         self.assertIn("CHOCOLATEY_NUGET_API_KEY", readme)
 
