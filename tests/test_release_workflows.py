@@ -115,6 +115,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("$FeedBranch = \"gh-pages\"", script)
         self.assertIn("$FeedPath = \"chocolatey\"", script)
         self.assertIn("github.io", script)
+        self.assertIn("Join-Path $feedRoot \".nojekyll\"", script)
+        self.assertIn("git -C $feedRoot add .nojekyll", script)
         self.assertIn("sleet init --config $configPath --source githubPages", script)
         self.assertIn("sleet push --config $configPath --source githubPages --force", script)
         self.assertIn("sleet validate --config $configPath --source githubPages", script)

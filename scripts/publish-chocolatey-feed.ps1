@@ -69,6 +69,7 @@ try {
     }
 
     New-Item -ItemType Directory -Force $feedDir | Out-Null
+    New-Item -ItemType File -Force (Join-Path $feedRoot ".nojekyll") | Out-Null
 
     @{
         username = "github-actions[bot]"
@@ -96,6 +97,7 @@ try {
 
     git -C $feedRoot config user.name "github-actions[bot]"
     git -C $feedRoot config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+    git -C $feedRoot add .nojekyll
     git -C $feedRoot add $FeedPath
     git -C $feedRoot diff --cached --quiet
     if ($LASTEXITCODE -eq 0) {
