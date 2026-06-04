@@ -297,12 +297,7 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveLocation> {
 }
 
 pub(super) fn save_file_fallback_after_keyring_success(user: &str, secret: &str) -> Result<()> {
-    if cfg!(unix) {
-        save_file_secret(user, secret)
-    } else {
-        let _ = save_file_secret(user, "");
-        Ok(())
-    }
+    save_file_secret(user, secret)
 }
 
 pub(super) fn save_file_secret(user: &str, secret: &str) -> Result<()> {
@@ -408,6 +403,10 @@ fn secret_store_path() -> PathBuf {
     if let Some(raw) = env::var_os(SECRET_STORE_ENV) {
         return PathBuf::from(raw);
     }
+    default_secret_store_path()
+}
+
+fn default_secret_store_path() -> PathBuf {
     platform_config_dir().join(SECRET_STORE_FILENAME)
 }
 
@@ -419,7 +418,7 @@ fn platform_config_dir() -> PathBuf {
                 env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join("AppData/Roaming"))
             })
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("whisper-dictate")
+            .join("WhisperDictate")
     } else {
         env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)

@@ -262,7 +262,10 @@ pub fn cloud_transcribe(
     let url = format!("{base_url}/audio/transcriptions");
     let response = ureq::post(&url)
         .set("Authorization", &format!("Bearer {api_key}"))
-        .set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+        .set(
+            "Content-Type",
+            &format!("multipart/form-data; boundary={boundary}"),
+        )
         .set("User-Agent", USER_AGENT)
         .timeout(Duration::from_millis(timeout_ms.max(1000)))
         .send_bytes(&body)

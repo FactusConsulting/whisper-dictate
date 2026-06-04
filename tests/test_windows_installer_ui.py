@@ -141,6 +141,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"Cloud STT API key"', script)
         self.assertIn('"Save API key"', script)
         self.assertIn("fn save_stt_api_key_now(&mut self)", script)
+        self.assertIn("fn persist_cloud_provider_selection(&mut self)", script)
         self.assertIn("fn ensure_stt_api_key_loaded_for_runtime(&mut self)", script)
         self.assertIn("fn cloud_stt_missing_api_key(&self) -> bool", script)
         self.assertIn("fn save_stt_api_key_if_changed(", script)
@@ -170,6 +171,22 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         ui_tests = Path("crates/whisper-dictate-app/src/ui/tests.rs").read_text(encoding="utf-8")
         self.assertIn("environment_api_keys_do_not_make_settings_dirty_at_startup", ui_tests)
         self.assertIn("edited_api_key_still_makes_settings_dirty", ui_tests)
+        self.assertIn("successful_keyring_save_keeps_file_fallback", ui_tests)
+        self.assertIn("saving_api_key_persists_selected_cloud_provider_settings", ui_tests)
+
+    def test_api_check_results_are_visible_next_to_buttons_and_in_runtime_log(self):
+        script = rust_ui_source()
+
+        self.assertIn("fn set_api_check_status(&mut self, label: &str, message: &str)", script)
+        self.assertIn('self.stt_api_key_status = message.to_owned()', script)
+        self.assertIn('self.post_api_key_status = message.to_owned()', script)
+        self.assertIn('format!("[OK] {} passed: {detail}", result.label)', script)
+        self.assertIn('format!("[ERROR] {} failed to run: {error}", result.label)', script)
+        self.assertIn("fn status_label(ui: &mut egui::Ui, text: &str)", script)
+        self.assertIn('text.starts_with("[OK]")', script)
+        self.assertIn('text.starts_with("[ERROR]")', script)
+        self.assertIn("status_label(ui, &self.stt_api_key_status);", script)
+        self.assertIn("status_label(ui, &self.post_api_key_status);", script)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
         script = rust_ui_source()

@@ -261,7 +261,7 @@ impl WhisperDictateApp {
                 }
                 if ui
                     .button("Save API key")
-                    .on_hover_text("Stores the current API key in the OS credential store without changing other settings.")
+                    .on_hover_text("Stores the current API key and remembers the selected cloud provider.")
                     .clicked()
                 {
                     self.save_stt_api_key_now();
@@ -276,7 +276,7 @@ impl WhisperDictateApp {
                 {
                     self.run_cloud_api_check();
                 }
-                ui.label(&self.stt_api_key_status);
+                status_label(ui, &self.stt_api_key_status);
             });
             ui.label(
                 "Paste or edit the API key above, then click Save API key or Save settings. Clear the field and save to remove the stored key.",
@@ -581,7 +581,7 @@ impl WhisperDictateApp {
                                 }
                             }
                         }
-                        ui.label(&self.post_api_key_status);
+                        status_label(ui, &self.post_api_key_status);
                     });
                     ui.end_row();
                 }
@@ -692,5 +692,15 @@ impl WhisperDictateApp {
                 .desired_rows(22)
                 .desired_width(f32::INFINITY),
         );
+    }
+}
+
+fn status_label(ui: &mut egui::Ui, text: &str) {
+    if text.starts_with("[OK]") {
+        ui.colored_label(egui::Color32::from_rgb(20, 140, 70), text);
+    } else if text.starts_with("[ERROR]") {
+        ui.colored_label(ui.visuals().error_fg_color, text);
+    } else {
+        ui.label(text);
     }
 }

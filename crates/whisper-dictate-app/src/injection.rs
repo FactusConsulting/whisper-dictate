@@ -114,7 +114,11 @@ fn run_ydotool<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<()> {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(anyhow!("ydotool {} failed: {}", args.join(" "), stderr.trim()))
+    Err(anyhow!(
+        "ydotool {} failed: {}",
+        args.join(" "),
+        stderr.trim()
+    ))
 }
 
 fn keycodes_for(layout: &str, ch: char) -> Option<Vec<&'static str>> {
@@ -217,19 +221,28 @@ mod tests {
 
     #[test]
     fn unknown_layout_keeps_unicode_in_type_chunk_for_fallback_behavior() {
-        assert_eq!(build_ydotool_ops("høre", "us"), vec![YdotoolOp::Type("høre".to_owned())]);
+        assert_eq!(
+            build_ydotool_ops("høre", "us"),
+            vec![YdotoolOp::Type("høre".to_owned())]
+        );
     }
 
     #[test]
     fn terminal_or_unknown_target_uses_ctrl_shift_v() {
         assert!(target_prefers_terminal_paste("", ""));
-        assert!(target_prefers_terminal_paste("whisper-dictate - Terminal", ""));
+        assert!(target_prefers_terminal_paste(
+            "whisper-dictate - Terminal",
+            ""
+        ));
         assert!(paste_shortcut_args("", "").ends_with(WAYLAND_CTRL_SHIFT_V));
     }
 
     #[test]
     fn known_text_editor_target_uses_ctrl_v() {
-        assert!(!target_prefers_terminal_paste("Text Editor", "gnome-text-editor"));
+        assert!(!target_prefers_terminal_paste(
+            "Text Editor",
+            "gnome-text-editor"
+        ));
         assert!(paste_shortcut_args("Text Editor", "gnome-text-editor").ends_with(WAYLAND_CTRL_V));
     }
 }

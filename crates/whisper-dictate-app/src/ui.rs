@@ -155,13 +155,16 @@ impl Default for WhisperDictateApp {
                     format!("Could not load post-processing API key: {err}"),
                 )
             });
+        let config_path = config::config_path().display().to_string();
+        let runtime_log = format!(
+            "Rust UI ready. Start launches the Python dictation worker directly.\n[ui] config: {config_path}\n[ui] cloud API key load: {stt_api_key_status}\n[ui] post API key load: {post_api_key_status}"
+        );
         Self {
             selected_tab: Tab::Runtime,
             runtime_state: RuntimeState::Stopped,
-            runtime_log: "Rust UI ready. Start launches the Python dictation worker directly."
-                .to_owned(),
+            runtime_log,
             runtime_log_scroll_to_bottom: true,
-            config_path: config::config_path().display().to_string(),
+            config_path,
             saved_settings: settings.clone(),
             settings,
             settings_status,
@@ -370,8 +373,8 @@ impl WhisperDictateApp {
         let check = match CloudApiCheck::from_settings(&self.settings, &self.stt_api_key_input) {
             Ok(check) => check,
             Err(err) => {
-                self.stt_api_key_status = format!("Cloud API check failed: {err}");
-                self.append_runtime_log(format!("[ui] cloud API check failed: {err}"));
+                self.stt_api_key_status = format!("[ERROR] Cloud API check failed: {err}");
+                self.append_runtime_log(format!("[ERROR] cloud API check failed: {err}"));
                 return;
             }
         };
@@ -417,8 +420,8 @@ impl WhisperDictateApp {
         let check = match PostApiCheck::from_settings(&self.settings, &key) {
             Ok(check) => check,
             Err(err) => {
-                self.post_api_key_status = format!("Post API check failed: {err}");
-                self.append_runtime_log(format!("[ui] post API check failed: {err}"));
+                self.post_api_key_status = format!("[ERROR] Post API check failed: {err}");
+                self.append_runtime_log(format!("[ERROR] post API check failed: {err}"));
                 return;
             }
         };
@@ -531,18 +534,42 @@ impl WhisperDictateApp {
             self.append_runtime_output(result.stdout.trim_end());
             self.append_runtime_output(result.stderr.trim_end());
             if let Some(error) = result.error {
-                self.append_runtime_log(format!("[ui] {} failed to run: {error}", result.label));
+                let message = format!("[ERROR] {} failed to run: {error}", result.label);
+                self.set_api_check_status(result.label, &message);
+                self.append_runtime_log(message);
             } else if result.success {
-                self.append_runtime_log(format!("[ui] {} passed", result.label));
+                let detail = result.stdout.trim();
+                let message = if detail.is_empty() {
+                    format!("[OK] {} passed", result.label)
+                } else {
+                    format!("[OK] {} passed: {detail}", result.label)
+                };
+                self.set_api_check_status(result.label, &message);
+                self.append_runtime_log(message);
             } else {
-                self.append_runtime_log(format!(
-                    "[ui] {} failed with code {}",
+                let detail = result.stdout.trim();
+                let mut message = format!(
+                    "[ERROR] {} failed with code {}",
                     result.label,
                     result
                         .code
                         .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
-                ));
+                );
+                if !detail.is_empty() {
+                    message.push_str(": ");
+                    message.push_str(detail);
+                }
+                self.set_api_check_status(result.label, &message);
+                self.append_runtime_log(message);
             }
+        }
+    }
+
+    fn set_api_check_status(&mut self, label: &str, message: &str) {
+        match label {
+            "cloud API check" => self.stt_api_key_status = message.to_owned(),
+            "post API check" => self.post_api_key_status = message.to_owned(),
+            _ => {}
         }
     }
 
@@ -606,13 +633,16 @@ impl WhisperDictateApp {
                 let post_key_message = self.save_post_api_key_if_changed();
                 self.saved_settings = self.settings.clone();
                 self.settings_status = format!("Saved settings: {}", path.display());
+                self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
                 if let Some(message) = key_message {
                     self.settings_status.push_str(" | ");
                     self.settings_status.push_str(&message);
+                    self.append_runtime_log(format!("[ui] cloud API key save: {message}"));
                 }
                 if let Some(message) = post_key_message {
                     self.settings_status.push_str(" | ");
                     self.settings_status.push_str(&message);
+                    self.append_runtime_log(format!("[ui] post API key save: {message}"));
                 }
                 if self.supervisor.is_running() && !restart_keys.is_empty() {
                     self.append_runtime_log(format!(
@@ -642,6 +672,7 @@ impl WhisperDictateApp {
                 self.reload_stt_api_key();
                 self.reload_post_api_key();
                 self.settings_status = "Reloaded config".to_owned();
+                self.append_runtime_log(format!("[ui] settings loaded: {}", self.config_path));
             }
             Err(err) => {
                 self.settings_status = format!("Reload failed: {err}");
@@ -771,7 +802,8 @@ impl WhisperDictateApp {
             return;
         }
         let provider = self.current_cloud_provider();
-        let message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
+        self.apply_cloud_provider_defaults(provider);
+        let key_message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
             Ok(location) => {
                 self.saved_stt_api_key_input = self.stt_api_key_input.clone();
                 if self.stt_api_key_input.trim().is_empty() {
@@ -788,7 +820,51 @@ impl WhisperDictateApp {
                 format!("Could not save {} API key: {err}", provider.label())
             }
         };
-        self.stt_api_key_status = message;
+        match self.persist_cloud_provider_selection() {
+            Ok(Some(path)) => {
+                self.stt_api_key_status =
+                    format!("{key_message} Saved provider settings: {}", path.display());
+                self.append_runtime_log(format!(
+                    "[ui] cloud API key save: {key_message}; provider settings saved: {}",
+                    path.display()
+                ));
+            }
+            Ok(None) => {
+                self.stt_api_key_status = key_message;
+                self.append_runtime_log(format!(
+                    "[ui] cloud API key save: {}",
+                    self.stt_api_key_status
+                ));
+            }
+            Err(err) => {
+                self.stt_api_key_status =
+                    format!("{key_message} Provider settings save failed: {err}");
+                self.append_runtime_log(format!(
+                    "[ERROR] cloud API key save: {}; provider settings save failed: {err}",
+                    key_message
+                ));
+            }
+        }
+    }
+
+    fn persist_cloud_provider_selection(&mut self) -> Result<Option<std::path::PathBuf>> {
+        let provider = self.current_cloud_provider();
+        let mut saved = self.saved_settings.clone();
+        saved.stt_backend = "openai".to_owned();
+        saved.stt_provider = provider.id().to_owned();
+        saved.stt_base_url = provider.base_url().to_owned();
+        saved.stt_model = self.settings.stt_model.clone();
+
+        if saved == self.saved_settings {
+            return Ok(None);
+        }
+
+        let path = config::save_settings(&saved)?;
+        self.saved_settings.stt_backend = saved.stt_backend;
+        self.saved_settings.stt_provider = saved.stt_provider;
+        self.saved_settings.stt_base_url = saved.stt_base_url;
+        self.saved_settings.stt_model = saved.stt_model;
+        Ok(Some(path))
     }
 
     fn save_post_api_key_if_changed(&mut self) -> Option<String> {

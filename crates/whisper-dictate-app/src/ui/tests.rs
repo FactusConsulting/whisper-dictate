@@ -183,7 +183,7 @@ fn disabled_os_keyring_uses_file_store_through_ui_secret_api() {
 }
 
 #[test]
-fn successful_keyring_save_keeps_unix_file_fallback() {
+fn successful_keyring_save_keeps_file_fallback() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("api-keys.json");
@@ -196,14 +196,10 @@ fn successful_keyring_save_keeps_unix_file_fallback() {
     )
     .unwrap();
 
-    if cfg!(unix) {
-        assert_eq!(
-            load_file_secret(CloudProvider::Groq.credential_user()).unwrap(),
-            "groq-secret"
-        );
-    } else {
-        assert!(!store.exists());
-    }
+    assert_eq!(
+        load_file_secret(CloudProvider::Groq.credential_user()).unwrap(),
+        "groq-secret"
+    );
 }
 
 #[test]
@@ -218,6 +214,41 @@ fn cloud_provider_prefers_saved_provider_over_stale_url() {
 
     let app = test_app(settings);
     assert_eq!(app.current_cloud_provider(), CloudProvider::Groq);
+}
+
+#[test]
+fn saving_api_key_persists_selected_cloud_provider_settings() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let config_env = config.to_string_lossy().to_string();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+
+    let saved_settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "openai".to_owned(),
+        stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
+        stt_model: OPENAI_STT_MODEL.to_owned(),
+        ..Default::default()
+    };
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "groq".to_owned(),
+        stt_base_url: GROQ_STT_BASE_URL.to_owned(),
+        stt_model: GROQ_STT_MODEL.to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    app.saved_settings = saved_settings;
+
+    let path = app.persist_cloud_provider_selection().unwrap().unwrap();
+    let saved = config::load_settings().unwrap();
+
+    assert_eq!(path, config);
+    assert_eq!(saved.stt_backend, "openai");
+    assert_eq!(saved.stt_provider, "groq");
+    assert_eq!(saved.stt_base_url, GROQ_STT_BASE_URL);
+    assert_eq!(saved.stt_model, GROQ_STT_MODEL);
 }
 
 #[test]

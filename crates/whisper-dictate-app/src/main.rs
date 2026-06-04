@@ -37,13 +37,9 @@ fn run() -> anyhow::Result<()> {
             xkb_layout,
             target_title,
             target_process,
-        } => injection::handle_inject_text(
-            &mode,
-            &text,
-            &xkb_layout,
-            &target_title,
-            &target_process,
-        ),
+        } => {
+            injection::handle_inject_text(&mode, &text, &xkb_layout, &target_title, &target_process)
+        }
         Command::FormatText { text, command_set } => {
             formatting::handle_format_text(&text, &command_set)
         }
