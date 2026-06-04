@@ -23,6 +23,17 @@ _WINDOWS_PASTE_TARGETS = (
     "codex",
 )
 _WINDOWS_LAYOUT_SENSITIVE_CHARS = frozenset("'`´^~\"")
+_WAYLAND_MODIFIER_RELEASES = (
+    "29:0",   # KEY_LEFTCTRL
+    "97:0",   # KEY_RIGHTCTRL
+    "42:0",   # KEY_LEFTSHIFT
+    "54:0",   # KEY_RIGHTSHIFT
+    "56:0",   # KEY_LEFTALT
+    "100:0",  # KEY_RIGHTALT
+    "125:0",  # KEY_LEFTMETA
+    "126:0",  # KEY_RIGHTMETA
+)
+_WAYLAND_CTRL_V = ("29:1", "47:1", "47:0", "29:0")
 
 
 class InjectMixin:
@@ -210,12 +221,35 @@ class InjectMixin:
     def _wayland_text_prefers_paste(self, text: str) -> bool:
         return any(ord(ch) > 127 for ch in text)
 
+    def _wayland_paste_shortcut(self) -> bool:
+        # Avoid pynput's keyboard abstraction on Wayland for paste. Sending a
+        # deterministic evdev Ctrl+V keeps stale physical modifiers from a PTT
+        # chord out of the paste shortcut as much as the compositor allows.
+        if not self._try_ydotool("key", *_WAYLAND_MODIFIER_RELEASES):
+            return False
+        return self._try_ydotool("key", *_WAYLAND_CTRL_V)
+
     def _paste(self, text: str) -> bool:
         try:
             import pyperclip
-            from pynput import keyboard
 
             pyperclip.copy(text)
+            if os.environ.get("WAYLAND_DISPLAY") and self._wayland_paste_shortcut():
+                return True
+
+            from pynput import keyboard
+
+            for name in (
+                    "shift", "shift_l", "shift_r",
+                    "alt", "alt_l", "alt_r",
+                    "ctrl", "ctrl_l", "ctrl_r",
+                    "cmd", "cmd_l", "cmd_r"):
+                modifier = getattr(keyboard.Key, name, None)
+                if modifier is not None:
+                    try:
+                        self._kb.release(modifier)
+                    except Exception:
+                        pass
             self._kb.press(keyboard.Key.ctrl)
             self._kb.press("v")
             self._kb.release("v")

@@ -34,6 +34,7 @@ class InjectStrategyTests(unittest.TestCase):
                 self._inject_target_process = None
                 self.pasted = []
                 self.typed_wayland = []
+                self.ydotool = []
 
             def _restore_target_focus(self):
                 return False
@@ -45,6 +46,10 @@ class InjectStrategyTests(unittest.TestCase):
             def _wayland_type(self, text):
                 self.typed_wayland.append(text)
                 return wayland_ok
+
+            def _try_ydotool(self, *args):
+                self.ydotool.append(args)
+                return True
 
         return Dummy()
 
@@ -126,6 +131,17 @@ class InjectStrategyTests(unittest.TestCase):
         self.assertEqual(target._last_inject_strategy, "ydotool")
         self.assertEqual(target.pasted, [])
         self.assertEqual(target.typed_wayland, ["øjne"])
+
+    def test_wayland_paste_shortcut_releases_modifiers_before_ctrl_v(self):
+        target = self._injector()
+
+        self.assertTrue(target._wayland_paste_shortcut())
+
+        self.assertEqual(len(target.ydotool), 2)
+        self.assertEqual(target.ydotool[0][0], "key")
+        self.assertIn("29:0", target.ydotool[0])
+        self.assertIn("42:0", target.ydotool[0])
+        self.assertEqual(target.ydotool[1], ("key", "29:1", "47:1", "47:0", "29:0"))
 
 
 @contextmanager
