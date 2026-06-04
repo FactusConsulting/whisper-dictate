@@ -268,6 +268,32 @@ The Chocolatey package downloads the matching
 `whisper-dictate-windows-setup-<version>.exe` release asset, verifies its
 SHA256, and runs the same silent per-user installer as the direct `.exe` path.
 
+Common package commands:
+
+```powershell
+# Show configured sources
+choco source list
+
+# Install the latest release from our public feed
+choco install whisper-dictate --source=whisper-dictate -y
+
+# Upgrade to the latest release from our public feed
+choco upgrade whisper-dictate --source=whisper-dictate -y
+
+# Pin the current version if you do not want automatic upgrades
+choco pin add -n=whisper-dictate
+
+# Remove the package and run the bundled uninstaller
+choco uninstall whisper-dictate -y
+```
+
+If Chocolatey reports that it cannot load the service index, verify that you
+are on Chocolatey CLI 2.x or newer:
+
+```powershell
+choco --version
+```
+
 You can also test a downloaded package directly:
 
 ```powershell
