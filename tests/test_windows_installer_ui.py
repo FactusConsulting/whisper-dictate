@@ -616,7 +616,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             self.assertNotIn('Copy-Item requirements-cpu.txt (Join-Path $bundle "requirements.txt")', workflow)
             self.assertNotIn('"requirements.txt"', workflow)
             self.assertIn("Copy-Item requirements-cpu.txt,requirements-gpu.txt", workflow)
-            self.assertIn("Output/*.exe Output/*.zip sha256sums.txt", workflow)
+            self.assertIn("Output/*.exe Output/*.zip Output/*.nupkg sha256sums.txt", workflow)
 
         script = Path("scripts/build-windows-installer.ps1").read_text(encoding="utf-8")
         self.assertIn("Building unified Windows portable ZIP version $Version", script)
