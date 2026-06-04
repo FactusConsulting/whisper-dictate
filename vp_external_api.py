@@ -4,6 +4,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import tempfile
 import time
 import uuid
 import wave
@@ -203,6 +205,13 @@ class ExternalTranscriptionModel:
     def transcribe(self, audio, **kwargs):
         language = kwargs.get("language")
         prompt = kwargs.get("initial_prompt")
+        rust_result = self._try_rust_transcribe(audio, language=language, prompt=prompt)
+        if rust_result is not None:
+            text = str(rust_result.get("text", "")).strip()
+            result_language = rust_result.get("language")
+            return [ExternalSegment(text=(" " + text) if text else "")], ExternalInfo(
+                language=result_language if isinstance(result_language, str) else language,
+            )
         fields = {"model": self.settings.model}
         if language:
             fields["language"] = str(language)
@@ -228,6 +237,54 @@ class ExternalTranscriptionModel:
         return [ExternalSegment(text=(" " + text) if text else "")], ExternalInfo(
             language=obj.get("language") if isinstance(obj.get("language"), str) else language,
         )
+
+    def _try_rust_transcribe(self, audio, *, language, prompt) -> dict[str, Any] | None:
+        helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+        if not helper:
+            return None
+        wav = _wav_bytes(audio)
+        temp_name = ""
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp.write(wav)
+                temp_name = tmp.name
+            args = [
+                helper,
+                "cloud-transcribe",
+                "--base-url",
+                self.settings.base_url,
+                "--api-key",
+                self.settings.api_key,
+                "--model",
+                self.settings.model,
+                "--audio-wav-path",
+                temp_name,
+                "--timeout-ms",
+                str(self.settings.timeout_ms),
+            ]
+            if language:
+                args.extend(["--language", str(language)])
+            if prompt:
+                args.extend(["--prompt", _cap_transcription_prompt(
+                    str(prompt),
+                    base_url=self.settings.base_url,
+                )])
+            r = subprocess.run(args, capture_output=True, timeout=self.settings.timeout_ms / 1000.0 + 2, text=True)
+            if r.returncode != 0:
+                err = (r.stderr or "").strip()
+                if err:
+                    print(f"[stt] rust cloud transcription failed: {err}", flush=True)
+                return None
+            return json.loads(r.stdout)
+        except Exception as e:
+            print(f"[stt] rust cloud transcription error: {e}", flush=True)
+            return None
+        finally:
+            if temp_name:
+                try:
+                    os.remove(temp_name)
+                except OSError:
+                    pass
 
 
 def openai_chat_completion(

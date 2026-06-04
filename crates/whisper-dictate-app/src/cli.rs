@@ -77,6 +77,31 @@ pub enum Command {
         #[arg(long, default_value = "off")]
         command_set: String,
     },
+    /// Internal helper used by the Python worker for cloud STT.
+    #[command(hide = true)]
+    CloudTranscribe {
+        /// OpenAI-compatible API base URL.
+        #[arg(long)]
+        base_url: String,
+        /// API key.
+        #[arg(long)]
+        api_key: String,
+        /// Transcription model.
+        #[arg(long)]
+        model: String,
+        /// WAV audio file path.
+        #[arg(long)]
+        audio_wav_path: String,
+        /// Optional spoken language hint.
+        #[arg(long, default_value = "")]
+        language: String,
+        /// Optional transcription prompt.
+        #[arg(long, default_value = "")]
+        prompt: String,
+        /// Request timeout in milliseconds.
+        #[arg(long, default_value_t = 30000)]
+        timeout_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -256,6 +281,34 @@ mod tests {
             Some(Command::FormatText {
                 text: "første komma".to_owned(),
                 command_set: "da".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_hidden_cloud_transcribe_subcommand() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "cloud-transcribe",
+            "--base-url",
+            "https://api.openai.com/v1",
+            "--api-key",
+            "key",
+            "--model",
+            "gpt-4o-mini-transcribe",
+            "--audio-wav-path",
+            "audio.wav",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::CloudTranscribe {
+                base_url: "https://api.openai.com/v1".to_owned(),
+                api_key: "key".to_owned(),
+                model: "gpt-4o-mini-transcribe".to_owned(),
+                audio_wav_path: "audio.wav".to_owned(),
+                language: String::new(),
+                prompt: String::new(),
+                timeout_ms: 30000,
             })
         );
     }

@@ -173,6 +173,67 @@ class ExternalApiTests(unittest.TestCase):
         self.assertEqual(segments[0].text.strip(), "Hello Codex")
         self.assertEqual(info.language, "en")
 
+    def test_external_transcription_delegates_to_rust_helper_when_available(self):
+        sys.modules.pop("vp_external_api", None)
+        try:
+            np = real_numpy()
+        except ImportError:
+            self.skipTest("real numpy unavailable")
+        sys.modules["numpy"] = np
+
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"],
+            0,
+            stdout=json.dumps({"text": "Hello from Rust", "language": "en"}),
+            stderr="",
+        )
+
+        with _env(
+            VOICEPI_RUST_INJECTOR="whisper-dictate",
+            VOICEPI_STT_API_KEY="test-key",
+            VOICEPI_STT_BASE_URL="https://api.openai.com/v1",
+        ):
+            import vp_external_api
+
+            model = vp_external_api.ExternalTranscriptionModel("gpt-4o-mini-transcribe")
+            with patch("vp_external_api.subprocess.run", return_value=completed) as run:
+                segments, info = model.transcribe(np.zeros(1600, dtype=np.float32), language="en")
+
+        args = run.call_args.args[0]
+        self.assertEqual(args[:2], ["whisper-dictate", "cloud-transcribe"])
+        self.assertIn("--audio-wav-path", args)
+        self.assertEqual(segments[0].text.strip(), "Hello from Rust")
+        self.assertEqual(info.language, "en")
+
+    def test_external_transcription_falls_back_when_rust_helper_fails(self):
+        sys.modules.pop("vp_external_api", None)
+        try:
+            np = real_numpy()
+        except ImportError:
+            self.skipTest("real numpy unavailable")
+        sys.modules["numpy"] = np
+
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"],
+            1,
+            stdout="",
+            stderr="boom",
+        )
+
+        with _env(
+            VOICEPI_RUST_INJECTOR="whisper-dictate",
+            VOICEPI_STT_API_KEY="test-key",
+            VOICEPI_STT_BASE_URL="https://api.openai.com/v1",
+        ):
+            import vp_external_api
+
+            model = vp_external_api.ExternalTranscriptionModel("gpt-4o-mini-transcribe")
+            with patch("vp_external_api.subprocess.run", return_value=completed), \
+                    patch.object(vp_external_api, "_request_json", return_value={"text": "fallback"}):
+                segments, _ = model.transcribe(np.zeros(1600, dtype=np.float32), language="en")
+
+        self.assertEqual(segments[0].text.strip(), "fallback")
+
     def test_external_transcription_caps_groq_prompt_in_multipart_audio(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer

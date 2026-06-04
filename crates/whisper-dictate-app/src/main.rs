@@ -4,7 +4,7 @@ use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command};
 use whisper_dictate_app::{
-    config, dictionary, formatting, injection, model_capacity, runtime, telemetry, ui,
+    cloud_api, config, dictionary, formatting, injection, model_capacity, runtime, telemetry, ui,
 };
 
 fn main() {
@@ -47,5 +47,22 @@ fn run() -> anyhow::Result<()> {
         Command::FormatText { text, command_set } => {
             formatting::handle_format_text(&text, &command_set)
         }
+        Command::CloudTranscribe {
+            base_url,
+            api_key,
+            model,
+            audio_wav_path,
+            language,
+            prompt,
+            timeout_ms,
+        } => cloud_api::handle_cloud_transcribe(
+            &base_url,
+            &api_key,
+            &model,
+            audio_wav_path.as_ref(),
+            (!language.trim().is_empty()).then_some(language.as_str()),
+            (!prompt.trim().is_empty()).then_some(prompt.as_str()),
+            timeout_ms,
+        ),
     }
 }
