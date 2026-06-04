@@ -22,7 +22,13 @@ class InjectStrategyTests(unittest.TestCase):
             _inject_target_process=process,
         )
 
-    def _injector(self, mode="auto", paste_ok=True, wayland_ok=True):
+    def _injector(
+            self,
+            mode="auto",
+            paste_ok=True,
+            wayland_ok=True,
+            title=None,
+            process=None):
         mixin = self.inject.InjectMixin
 
         class Dummy(mixin):
@@ -30,8 +36,8 @@ class InjectStrategyTests(unittest.TestCase):
                 self.mode = mode
                 self._kb = types.SimpleNamespace(type=lambda text: None)
                 self._inject_target_xwin = None
-                self._inject_target_title = None
-                self._inject_target_process = None
+                self._inject_target_title = title
+                self._inject_target_process = process
                 self.pasted = []
                 self.typed_wayland = []
                 self.ydotool = []
@@ -132,7 +138,7 @@ class InjectStrategyTests(unittest.TestCase):
         self.assertEqual(target.pasted, [])
         self.assertEqual(target.typed_wayland, ["øjne"])
 
-    def test_wayland_paste_shortcut_releases_modifiers_before_ctrl_v(self):
+    def test_wayland_unknown_target_uses_terminal_paste_shortcut(self):
         target = self._injector()
 
         self.assertTrue(target._wayland_paste_shortcut())
@@ -141,6 +147,26 @@ class InjectStrategyTests(unittest.TestCase):
         self.assertEqual(target.ydotool[0][0], "key")
         self.assertIn("29:0", target.ydotool[0])
         self.assertIn("42:0", target.ydotool[0])
+        self.assertEqual(
+            target.ydotool[1],
+            ("key", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"),
+        )
+
+    def test_wayland_terminal_target_uses_ctrl_shift_v(self):
+        target = self._injector(title="whisper-dictate - Terminal")
+
+        self.assertTrue(target._wayland_paste_shortcut())
+
+        self.assertEqual(
+            target.ydotool[1],
+            ("key", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"),
+        )
+
+    def test_wayland_known_non_terminal_target_uses_ctrl_v(self):
+        target = self._injector(title="Text Editor", process="gnome-text-editor")
+
+        self.assertTrue(target._wayland_paste_shortcut())
+
         self.assertEqual(target.ydotool[1], ("key", "29:1", "47:1", "47:0", "29:0"))
 
 

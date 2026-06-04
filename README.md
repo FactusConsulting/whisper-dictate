@@ -70,8 +70,9 @@ Log out and back in after this runs (required for the `input` group to activate)
 whisper-dictate run --key shift_r+ctrl_r --lang da
 ```
 
-Hold **right Shift + right Ctrl**, speak, release — text appears directly
-at the cursor. No clipboard, no paste shortcut.
+Hold **right Shift + right Ctrl**, speak, release — text appears at the
+cursor. On Wayland, plain ASCII is typed directly; Unicode text such as
+`æøå` is inserted via the clipboard so it works across keyboard layouts.
 
 If Wayland hotkeys or injection fail, run:
 
@@ -319,8 +320,8 @@ NVIDIA GPU is used automatically if present.
 | `--key a+b` | chord: hold **both** keys simultaneously, e.g. `shift_r+ctrl_r` |
 | `--lang CODE` | spoken-language hint — see [Languages](#languages) |
 | `--autodetect` | let Whisper guess the language (less reliable on short speech) |
-| `--type` | force direct keyboard typing on X11/Windows (env `VOICEPI_INJECT_MODE=type`; Wayland always uses direct evdev keycodes) |
-| `--paste` | force clipboard + Ctrl+V on X11/Windows (env `VOICEPI_INJECT_MODE=paste`; Wayland always uses direct evdev keycodes) |
+| `--type` | force direct keyboard typing (env `VOICEPI_INJECT_MODE=type`; on Wayland this uses evdev keycodes and depends on the configured XKB layout for non-ASCII) |
+| `--paste` | force clipboard paste (env `VOICEPI_INJECT_MODE=paste`; on Wayland terminal/unknown targets use Ctrl+Shift+V, other known targets use Ctrl+V) |
 | `--no-type` | print transcription only, don't inject (env `VOICEPI_INJECT_MODE=print`; useful for testing) |
 | `--json` | also emit one structured JSON event per utterance (env `VOICEPI_JSON=1`) |
 | `--doctor` | run Linux/Wayland health checks and exit |
@@ -375,7 +376,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_DEVICE` | `auto` | `cuda`/`cpu` to force; `auto` = NVIDIA if present |
 | `VOICEPI_LANG` | _(auto-detect)_ | spoken-language hint (`da`, `en`, `de`, `fr`…) |
 | `VOICEPI_KEY` | `ctrl_r` | hold-to-talk key or chord, e.g. `f9`, `alt_r`, `ctrl_l+space` |
-| `VOICEPI_INJECT_MODE` | `auto` | `auto`, `type`, `paste`, or `print`; `auto` types directly except for known fragile Windows terminal targets, where it uses paste |
+| `VOICEPI_INJECT_MODE` | `auto` | `auto`, `type`, `paste`, or `print`; `auto` types directly where safe and uses paste for layout-sensitive text, including Unicode on Wayland |
 | `VOICEPI_FORMAT_COMMANDS` | `off` | optional spoken formatting commands: `off`, `en`, `da`, or `both` |
 | `VOICEPI_BEAM_SIZE` | `1` | raise to `5` for better accuracy — 3-4× slower on CPU |
 | `VOICEPI_INITIAL_PROMPT` | _(none)_ | context hint for domain-specific terms, e.g. `"Winget, whisper-dictate"` |
@@ -550,8 +551,8 @@ like, and how to compare two microphones: see
 
 To test text injection without recording or loading Whisper, focus a target
 input field and run `python scripts/inject-smoke.py --mode auto`. Try the same
-target with `--mode type` and `--mode paste` when diagnosing app-specific input
-behaviour.
+target with `--mode type` and `--mode paste`; on Wayland, test both a normal
+text editor and a terminal because terminals use a different paste shortcut.
 
 ## Technical documentation
 

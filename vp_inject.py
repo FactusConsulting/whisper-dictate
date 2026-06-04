@@ -34,6 +34,21 @@ _WAYLAND_MODIFIER_RELEASES = (
     "126:0",  # KEY_RIGHTMETA
 )
 _WAYLAND_CTRL_V = ("29:1", "47:1", "47:0", "29:0")
+_WAYLAND_CTRL_SHIFT_V = ("29:1", "42:1", "47:1", "47:0", "42:0", "29:0")
+_LINUX_TERMINAL_TARGETS = (
+    "terminal",
+    "ptyxis",
+    "kgx",
+    "konsole",
+    "xterm",
+    "alacritty",
+    "wezterm",
+    "ghostty",
+    "kitty",
+    "tilix",
+    "gnome-console",
+    "gnome-terminal",
+)
 
 
 class InjectMixin:
@@ -221,13 +236,29 @@ class InjectMixin:
     def _wayland_text_prefers_paste(self, text: str) -> bool:
         return any(ord(ch) > 127 for ch in text)
 
+    def _wayland_target_prefers_terminal_paste(self) -> bool:
+        target = " ".join(filter(None, (
+            getattr(self, "_inject_target_title", None),
+            getattr(self, "_inject_target_process", None),
+        ))).lower()
+        if not target:
+            # Native Wayland windows often cannot be identified without a
+            # compositor extension. Ctrl+Shift+V avoids literal ^V in Linux
+            # terminals and is accepted as paste/plain-text paste by common
+            # GTK/Electron text widgets.
+            return True
+        return any(term in target for term in _LINUX_TERMINAL_TARGETS)
+
     def _wayland_paste_shortcut(self) -> bool:
         # Avoid pynput's keyboard abstraction on Wayland for paste. Sending a
-        # deterministic evdev Ctrl+V keeps stale physical modifiers from a PTT
+        # deterministic evdev shortcut keeps stale physical modifiers from a PTT
         # chord out of the paste shortcut as much as the compositor allows.
         if not self._try_ydotool("key", *_WAYLAND_MODIFIER_RELEASES):
             return False
-        return self._try_ydotool("key", *_WAYLAND_CTRL_V)
+        shortcut = (_WAYLAND_CTRL_SHIFT_V
+                    if self._wayland_target_prefers_terminal_paste()
+                    else _WAYLAND_CTRL_V)
+        return self._try_ydotool("key", *shortcut)
 
     def _paste(self, text: str) -> bool:
         try:
