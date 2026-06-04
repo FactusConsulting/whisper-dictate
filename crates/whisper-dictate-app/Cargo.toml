@@ -17,7 +17,12 @@ regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-keyring = "3.6"
+keyring = { version = "3.6", features = [
+  "apple-native",
+  "windows-native",
+  "linux-native-sync-persistent",
+  "crypto-rust",
+] }
 ureq = { version = "2.12", features = ["json"] }
 
 [build-dependencies]
