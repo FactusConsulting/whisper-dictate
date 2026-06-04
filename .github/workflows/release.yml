@@ -48,6 +48,8 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
+            pkg-config \
+            libdbus-1-dev \
             libwayland-dev \
             libx11-dev \
             libxcb-render0-dev \
