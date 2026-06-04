@@ -124,7 +124,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
 
     def test_readme_documents_public_chocolatey_source(self):
         readme = Path("README.md").read_text(encoding="utf-8")
+        front_page = readme.split("## Ubuntu 24.04 / 26.04", 1)[0]
 
+        self.assertIn("Windows 10 / 11 | Chocolatey or Rust UI installer", front_page)
+        self.assertIn("Windows quick install with Chocolatey CLI 2.x", front_page)
+        self.assertIn(
+            "https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json",
+            front_page,
+        )
         self.assertIn("Install via public Chocolatey source", readme)
         self.assertIn(
             "https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json",

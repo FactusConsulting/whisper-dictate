@@ -22,7 +22,14 @@ already in. Switching target = just focus a different window.
 | Ubuntu 24.04 / 26.04 — Wayland | Homebrew | Recommended |
 | Linux — X11 | Manual | Any distro |
 | NixOS / nix-env | Nix flake | `nix run` or NixOS module |
-| Windows 10 / 11 | Rust UI installer | CPU or NVIDIA GPU |
+| Windows 10 / 11 | Chocolatey or Rust UI installer | CPU or NVIDIA GPU |
+
+Windows quick install with Chocolatey CLI 2.x:
+
+```powershell
+choco source add -n=whisper-dictate -s="https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json"
+choco install whisper-dictate --source=whisper-dictate -y
+```
 
 ---
 
