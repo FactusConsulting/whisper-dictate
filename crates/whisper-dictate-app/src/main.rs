@@ -3,7 +3,9 @@
 use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command};
-use whisper_dictate_app::{config, dictionary, injection, model_capacity, runtime, telemetry, ui};
+use whisper_dictate_app::{
+    config, dictionary, formatting, injection, model_capacity, runtime, telemetry, ui,
+};
 
 fn main() {
     if let Err(err) = run() {
@@ -42,5 +44,8 @@ fn run() -> anyhow::Result<()> {
             &target_title,
             &target_process,
         ),
+        Command::FormatText { text, command_set } => {
+            formatting::handle_format_text(&text, &command_set)
+        }
     }
 }

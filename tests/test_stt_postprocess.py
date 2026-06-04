@@ -713,6 +713,9 @@ class PostprocessTests(unittest.TestCase):
         self.assertIn("post_result.changed", script)
 
 class FormatCommandTests(unittest.TestCase):
+    def setUp(self):
+        sys.modules.pop("vp_formatting", None)
+
     def test_format_commands_are_off_by_default(self):
         import vp_formatting
 
@@ -756,6 +759,48 @@ class FormatCommandTests(unittest.TestCase):
             "first      ,second\n   third      -      fourth\n\n\n\nfifth")
 
         self.assertEqual(cleaned, "first, second\nthird - fourth\n\nfifth")
+
+    def test_python_formatting_delegates_to_rust_helper_when_available(self):
+        import subprocess
+        import vp_formatting
+
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"],
+            0,
+            stdout=json.dumps({
+                "text": "første,\nandet.",
+                "enabled": True,
+                "changed": True,
+                "command_set": "da",
+                "applied": [{"command": "komma", "replacement": ",", "count": 1}],
+            }),
+            stderr="",
+        )
+
+        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
+                patch("vp_formatting.subprocess.run", return_value=completed) as run:
+            result = vp_formatting.apply_format_commands("første komma ny linje andet punktum", "da")
+
+        self.assertEqual(result.text, "første,\nandet.")
+        self.assertEqual(result.applied[0]["count"], "1")
+        self.assertEqual(run.call_args.args[0][:2], ["whisper-dictate", "format-text"])
+
+    def test_python_formatting_falls_back_when_rust_helper_fails(self):
+        import subprocess
+        import vp_formatting
+
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"],
+            1,
+            stdout="",
+            stderr="boom",
+        )
+
+        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
+                patch("vp_formatting.subprocess.run", return_value=completed):
+            result = vp_formatting.apply_format_commands("first comma", "en")
+
+        self.assertEqual(result.text, "first,")
 
     def test_voice_pi_applies_formatting_before_injection_and_metrics(self):
         with open("voice_pi.py", encoding="utf-8") as f:

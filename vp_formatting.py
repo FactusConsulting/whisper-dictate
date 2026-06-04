@@ -1,7 +1,10 @@
 """Deterministic spoken formatting commands."""
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -138,6 +141,10 @@ def _tidy(text: str) -> str:
 
 
 def apply_format_commands(text: str, command_set: str | None = None) -> FormatCommandResult:
+    rust_result = _try_rust_format_commands(text, command_set)
+    if rust_result is not None:
+        return rust_result
+
     selected = (command_set or _command_set()).strip().lower()
     if selected in ("0", "false", "no", "off", ""):
         return FormatCommandResult(text=text, enabled=False, command_set="off")
@@ -161,3 +168,50 @@ def apply_format_commands(text: str, command_set: str | None = None) -> FormatCo
         command_set=selected,
         applied=applied,
     )
+
+
+def _try_rust_format_commands(
+        text: str,
+        command_set: str | None = None) -> FormatCommandResult | None:
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    if not helper:
+        return None
+    selected = command_set or _command_set()
+    try:
+        r = subprocess.run(
+            [
+                helper,
+                "format-text",
+                "--text",
+                text,
+                "--command-set",
+                selected,
+            ],
+            capture_output=True,
+            timeout=5,
+            text=True,
+        )
+        if r.returncode != 0:
+            err = (r.stderr or "").strip()
+            if err:
+                print(f"[format] rust formatter failed: {err}", flush=True)
+            return None
+        payload = json.loads(r.stdout)
+        return FormatCommandResult(
+            text=str(payload.get("text", text)),
+            enabled=bool(payload.get("enabled", False)),
+            changed=bool(payload.get("changed", False)),
+            command_set=str(payload.get("command_set", "off")),
+            applied=[
+                {
+                    "command": str(item.get("command", "")),
+                    "replacement": str(item.get("replacement", "")),
+                    "count": str(item.get("count", "0")),
+                }
+                for item in payload.get("applied", [])
+                if isinstance(item, dict)
+            ],
+        )
+    except Exception as e:
+        print(f"[format] rust formatter error: {e}", flush=True)
+        return None

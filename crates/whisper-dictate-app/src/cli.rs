@@ -67,6 +67,16 @@ pub enum Command {
         #[arg(long, default_value = "")]
         target_process: String,
     },
+    /// Internal helper used by the Python worker for post-STT formatting.
+    #[command(hide = true)]
+    FormatText {
+        /// Text to format.
+        #[arg(long)]
+        text: String,
+        /// Spoken formatting command set: off, en, da, or both.
+        #[arg(long, default_value = "off")]
+        command_set: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -227,6 +237,25 @@ mod tests {
                 xkb_layout: "dk".to_owned(),
                 target_title: String::new(),
                 target_process: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_hidden_format_text_subcommand() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "format-text",
+            "--text",
+            "første komma",
+            "--command-set",
+            "da",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::FormatText {
+                text: "første komma".to_owned(),
+                command_set: "da".to_owned(),
             })
         );
     }

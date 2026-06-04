@@ -1,6 +1,7 @@
 use regex::RegexBuilder;
+use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FormatCommandResult {
     pub text: String,
     pub enabled: bool,
@@ -9,11 +10,17 @@ pub struct FormatCommandResult {
     pub applied: Vec<AppliedFormatCommand>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppliedFormatCommand {
     pub command: &'static str,
     pub replacement: &'static str,
     pub count: usize,
+}
+
+pub fn handle_format_text(text: &str, command_set: &str) -> anyhow::Result<()> {
+    let result = apply_format_commands(text, Some(command_set));
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
 }
 
 const EN_COMMANDS: &[(&str, &str)] = &[
