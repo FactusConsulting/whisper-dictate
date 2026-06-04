@@ -218,4 +218,10 @@ jobs:
           git add manifests/
           git diff --cached --quiet && echo "no manifest changes" && exit 0
           git commit -m "chore: update winget manifests for $TAG"
-          git push origin main
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            git push origin main && exit 0
+            sleep 2
+          done
+          exit 1

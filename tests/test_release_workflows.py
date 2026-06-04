@@ -107,6 +107,15 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             self.assertNotIn("contents: write", pre_jobs, path.as_posix())
             self.assertIn("permissions:\n      contents: write", workflow, path.as_posix())
 
+    def test_workflow_main_pushes_retry_after_rebase(self):
+        for path in (
+            Path(".github/workflows/release.yml"),
+            Path(".github/workflows/windows-installer.yml"),
+        ):
+            workflow = path.read_text(encoding="utf-8")
+            self.assertIn("for attempt in 1 2 3; do", workflow, path.as_posix())
+            self.assertIn("git rebase origin/main", workflow, path.as_posix())
+
     def test_windows_workflows_pin_current_windows_runner(self):
         for path in Path(".github/workflows").glob("*.yml"):
             workflow = path.read_text(encoding="utf-8")
