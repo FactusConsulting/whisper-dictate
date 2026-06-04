@@ -168,10 +168,11 @@ fn disabled_os_keyring_uses_file_store_through_ui_secret_api() {
     let _store_guard = EnvVarGuard::set(SECRET_STORE_ENV, &store_env);
     let _disable_guard = EnvVarGuard::set(DISABLE_OS_KEYRING_ENV, "1");
 
-    assert_eq!(
-        save_stt_api_key(CloudProvider::Groq, " groq-secret ").unwrap(),
-        SecretSaveLocation::File
-    );
+    let report = save_stt_api_key(CloudProvider::Groq, " groq-secret ").unwrap();
+    assert_eq!(report.location, SecretSaveLocation::File);
+    assert_eq!(report.fallback_path, store);
+    assert!(report.fallback_reason.contains(DISABLE_OS_KEYRING_ENV));
+    assert!(report.status_label().contains("local fallback key file"));
     assert_eq!(
         load_stt_api_key_state(CloudProvider::Groq).unwrap().0,
         "groq-secret"

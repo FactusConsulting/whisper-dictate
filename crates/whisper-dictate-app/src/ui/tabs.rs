@@ -261,11 +261,15 @@ impl WhisperDictateApp {
                 }
                 if ui
                     .button("Save API key")
-                    .on_hover_text("Stores the current API key and remembers the selected cloud provider.")
+                    .on_hover_text(
+                        "Stores the current API key and remembers the selected cloud provider.",
+                    )
                     .clicked()
                 {
                     self.save_stt_api_key_now();
                 }
+            });
+            ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
                         self.background_task.is_none(),
@@ -276,6 +280,8 @@ impl WhisperDictateApp {
                 {
                     self.run_cloud_api_check();
                 }
+            });
+            ui.horizontal_wrapped(|ui| {
                 status_label(ui, &self.stt_api_key_status);
             });
             ui.label(
@@ -563,6 +569,8 @@ impl WhisperDictateApp {
                         {
                             self.run_post_api_check();
                         }
+                    });
+                    ui.horizontal(|ui| {
                         if ui
                             .button(format!("{} API keys", provider.label()))
                             .on_hover_text("Open the provider API key page.")
@@ -581,6 +589,8 @@ impl WhisperDictateApp {
                                 }
                             }
                         }
+                    });
+                    ui.horizontal_wrapped(|ui| {
                         status_label(ui, &self.post_api_key_status);
                     });
                     ui.end_row();

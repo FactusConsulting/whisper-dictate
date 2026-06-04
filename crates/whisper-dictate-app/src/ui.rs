@@ -775,7 +775,7 @@ impl WhisperDictateApp {
         }
         let provider = self.current_cloud_provider();
         let message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
-            Ok(location) => {
+            Ok(report) => {
                 self.saved_stt_api_key_input = self.stt_api_key_input.clone();
                 if self.stt_api_key_input.trim().is_empty() {
                     format!("Cleared saved {} API key.", provider.label())
@@ -783,7 +783,7 @@ impl WhisperDictateApp {
                     format!(
                         "Saved {} API key in {}.",
                         provider.label(),
-                        location.label()
+                        report.status_label()
                     )
                 }
             }
@@ -803,16 +803,22 @@ impl WhisperDictateApp {
         }
         let provider = self.current_cloud_provider();
         self.apply_cloud_provider_defaults(provider);
+        let mut key_log_details = None;
         let key_message = match save_stt_api_key(provider, self.stt_api_key_input.trim()) {
-            Ok(location) => {
+            Ok(report) => {
+                key_log_details = Some(report.log_details());
                 self.saved_stt_api_key_input = self.stt_api_key_input.clone();
                 if self.stt_api_key_input.trim().is_empty() {
-                    format!("Cleared saved {} API key.", provider.label())
+                    format!(
+                        "Cleared saved {} API key. {}",
+                        provider.label(),
+                        report.status_label()
+                    )
                 } else {
                     format!(
                         "Saved {} API key in {}.",
                         provider.label(),
-                        location.label()
+                        report.status_label()
                     )
                 }
             }
@@ -825,15 +831,21 @@ impl WhisperDictateApp {
                 self.stt_api_key_status =
                     format!("{key_message} Saved provider settings: {}", path.display());
                 self.append_runtime_log(format!(
-                    "[ui] cloud API key save: {key_message}; provider settings saved: {}",
+                    "[ui] cloud API key save: {key_message}; {}; provider_settings={}",
+                    key_log_details
+                        .as_deref()
+                        .unwrap_or("no secret save details"),
                     path.display()
                 ));
             }
             Ok(None) => {
                 self.stt_api_key_status = key_message;
                 self.append_runtime_log(format!(
-                    "[ui] cloud API key save: {}",
-                    self.stt_api_key_status
+                    "[ui] cloud API key save: {}; {}",
+                    self.stt_api_key_status,
+                    key_log_details
+                        .as_deref()
+                        .unwrap_or("no secret save details")
                 ));
             }
             Err(err) => {
@@ -890,17 +902,23 @@ impl WhisperDictateApp {
             return "Post API keys are only used when Post processor is Groq or OpenAI.".to_owned();
         };
         match save_post_api_key(provider, self.post_api_key_input.trim()) {
-            Ok(location) => {
+            Ok(report) => {
+                let log_details = report.log_details();
                 self.saved_post_api_key_input = self.post_api_key_input.clone();
-                if self.post_api_key_input.trim().is_empty() {
+                let message = if self.post_api_key_input.trim().is_empty() {
                     format!("Cleared saved {} API key.", provider.label())
                 } else {
                     format!(
                         "Saved {} API key in {}.",
                         provider.label(),
-                        location.label()
+                        report.status_label()
                     )
-                }
+                };
+                self.append_runtime_log(format!(
+                    "[ui] post API key save: {}; {}",
+                    message, log_details
+                ));
+                message
             }
             Err(err) => format!("Could not save {} API key: {err}", provider.label()),
         }

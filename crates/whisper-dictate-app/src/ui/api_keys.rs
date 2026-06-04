@@ -36,6 +36,44 @@ impl SecretSaveLocation {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SecretSaveReport {
+    pub(super) location: SecretSaveLocation,
+    pub(super) credential_service: &'static str,
+    pub(super) credential_user: String,
+    pub(super) fallback_path: PathBuf,
+    pub(super) fallback_reason: String,
+}
+
+impl SecretSaveReport {
+    pub(super) fn status_label(&self) -> String {
+        match self.location {
+            SecretSaveLocation::CredentialStore => {
+                format!(
+                    "OS credential store + fallback file: {}",
+                    self.fallback_path.display()
+                )
+            }
+            SecretSaveLocation::File => format!(
+                "local fallback key file: {} ({})",
+                self.fallback_path.display(),
+                self.fallback_reason
+            ),
+        }
+    }
+
+    pub(super) fn log_details(&self) -> String {
+        format!(
+            "location={}; credential_service={}; credential_user={}; fallback_file={}; reason={}",
+            self.location.label(),
+            self.credential_service,
+            self.credential_user,
+            self.fallback_path.display(),
+            self.fallback_reason
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CloudProvider {
     Groq,
@@ -247,24 +285,25 @@ pub(super) fn load_post_api_key_from_env(provider: PostProvider) -> Option<Strin
         .find(|value| !value.is_empty())
 }
 
-pub(super) fn save_stt_api_key(
-    provider: CloudProvider,
-    secret: &str,
-) -> Result<SecretSaveLocation> {
+pub(super) fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<SecretSaveReport> {
     save_secret(provider.credential_user(), secret)
 }
 
-pub(super) fn save_post_api_key(
-    provider: PostProvider,
-    secret: &str,
-) -> Result<SecretSaveLocation> {
+pub(super) fn save_post_api_key(provider: PostProvider, secret: &str) -> Result<SecretSaveReport> {
     save_secret(provider.credential_user(), secret)
 }
 
-fn save_secret(user: &str, secret: &str) -> Result<SecretSaveLocation> {
+fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
+    let fallback_path = secret_store_path();
     if os_keyring_disabled() {
         save_file_secret(user, secret)?;
-        return Ok(SecretSaveLocation::File);
+        return Ok(SecretSaveReport {
+            location: SecretSaveLocation::File,
+            credential_service: CREDENTIAL_SERVICE,
+            credential_user: user.to_owned(),
+            fallback_path,
+            fallback_reason: format!("{DISABLE_OS_KEYRING_ENV} disables OS credential storage"),
+        });
     }
 
     let keyring_result = match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
@@ -285,13 +324,28 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveLocation> {
     match keyring_result {
         Ok(()) => {
             save_file_fallback_after_keyring_success(user, secret)?;
-            Ok(SecretSaveLocation::CredentialStore)
+            Ok(SecretSaveReport {
+                location: SecretSaveLocation::CredentialStore,
+                credential_service: CREDENTIAL_SERVICE,
+                credential_user: user.to_owned(),
+                fallback_path,
+                fallback_reason:
+                    "kept intentionally so startup still works if the OS credential store cannot read back the key"
+                        .to_owned(),
+            })
         }
         Err(keyring_err) => {
+            let fallback_reason = format!("OS credential store failed: {keyring_err}");
             save_file_secret(user, secret).with_context(|| {
                 format!("OS credential store failed ({keyring_err}); file fallback also failed")
             })?;
-            Ok(SecretSaveLocation::File)
+            Ok(SecretSaveReport {
+                location: SecretSaveLocation::File,
+                credential_service: CREDENTIAL_SERVICE,
+                credential_user: user.to_owned(),
+                fallback_path,
+                fallback_reason,
+            })
         }
     }
 }
