@@ -75,6 +75,12 @@ class RustReleaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(crate_lock, root_lock)
 
+    def test_sonar_uses_supported_python_version(self):
+        sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
+
+        self.assertIn("sonar.projectKey=FactusConsulting_whisper-dictate", sonar)
+        self.assertIn("sonar.python.version=3.12", sonar)
+
     def test_workflows_use_node24_checkout_action(self):
         for path in Path(".github/workflows").glob("*.yml"):
             workflow = path.read_text(encoding="utf-8")
