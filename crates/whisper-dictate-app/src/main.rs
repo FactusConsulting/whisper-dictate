@@ -3,7 +3,7 @@
 use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command};
-use whisper_dictate_app::{config, dictionary, model_capacity, runtime, telemetry, ui};
+use whisper_dictate_app::{config, dictionary, injection, model_capacity, runtime, telemetry, ui};
 
 fn main() {
     if let Err(err) = run() {
@@ -29,5 +29,18 @@ fn run() -> anyhow::Result<()> {
         Command::Config { command } => config::handle_command(command),
         Command::Dictionary { command } => dictionary::handle_command(command),
         Command::History { command } => telemetry::handle_history_command(command),
+        Command::InjectText {
+            mode,
+            text,
+            xkb_layout,
+            target_title,
+            target_process,
+        } => injection::handle_inject_text(
+            &mode,
+            &text,
+            &xkb_layout,
+            &target_title,
+            &target_process,
+        ),
     }
 }

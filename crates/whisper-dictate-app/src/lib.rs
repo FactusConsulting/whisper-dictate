@@ -3,6 +3,7 @@ pub mod cloud_api;
 pub mod config;
 pub mod dictionary;
 pub mod formatting;
+pub mod injection;
 pub mod model_capacity;
 pub mod runtime;
 pub mod telemetry;

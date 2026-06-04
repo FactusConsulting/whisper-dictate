@@ -14,6 +14,7 @@ const PYTHON_ENV: &str = "VOICEPI_PYTHON";
 const BOOTSTRAP_PYTHON_ENV: &str = "VOICEPI_BOOTSTRAP_PYTHON";
 const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
+const RUST_INJECTOR_ENV: &str = "VOICEPI_RUST_INJECTOR";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 #[cfg(windows)]
@@ -658,11 +659,15 @@ pub fn worker_command_with_args(
     let app_root = app_root.as_ref().to_path_buf();
     let mut args = vec![app_root.join("voice_pi.py").display().to_string()];
     args.extend(passthrough_args);
+    let mut env = Vec::new();
+    if let Ok(exe) = env::current_exe() {
+        env.push((RUST_INJECTOR_ENV.to_owned(), exe.display().to_string()));
+    }
     WorkerCommand {
         program: python_program(),
         args,
         working_dir: app_root,
-        env: Vec::new(),
+        env,
     }
 }
 

@@ -48,6 +48,25 @@ pub enum Command {
         #[command(subcommand)]
         command: HistoryCommand,
     },
+    /// Internal helper used by the Python worker for keyboard injection.
+    #[command(hide = true)]
+    InjectText {
+        /// Injection mode to execute.
+        #[arg(long, value_parser = ["type", "paste"])]
+        mode: String,
+        /// Text to inject for type mode.
+        #[arg(long, default_value = "")]
+        text: String,
+        /// XKB layout used for Wayland direct keycode typing.
+        #[arg(long, default_value = "")]
+        xkb_layout: String,
+        /// Captured target window title, when available.
+        #[arg(long, default_value = "")]
+        target_title: String,
+        /// Captured target process name, when available.
+        #[arg(long, default_value = "")]
+        target_process: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -184,6 +203,30 @@ mod tests {
             cli.command,
             Some(Command::History {
                 command: HistoryCommand::List { limit: 25 },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_hidden_inject_text_subcommand() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "inject-text",
+            "--mode",
+            "type",
+            "--text",
+            "høre",
+            "--xkb-layout",
+            "dk",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::InjectText {
+                mode: "type".to_owned(),
+                text: "høre".to_owned(),
+                xkb_layout: "dk".to_owned(),
+                target_title: String::new(),
+                target_process: String::new(),
             })
         );
     }

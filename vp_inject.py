@@ -142,6 +142,8 @@ class InjectMixin:
             return False
 
     def _wayland_type(self, text: str) -> bool:
+        if self._try_rust_inject("type", text):
+            return True
         # ydotool type (v1.0.4, no libxkbcommon) silently DROPS non-ASCII
         # that is not covered by the layout keycode map. Surface exactly
         # which characters are lost instead of failing silently.
@@ -219,6 +221,38 @@ class InjectMixin:
             print(f"[ydotool] error: {e}", flush=True)
             return False
 
+    def _try_rust_inject(self, mode: str, text: str = "") -> bool:
+        import subprocess
+
+        helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+        if not helper:
+            return False
+        args = [
+            helper,
+            "inject-text",
+            "--mode",
+            mode,
+            "--xkb-layout",
+            self._xkb_layout or "",
+            "--target-title",
+            getattr(self, "_inject_target_title", None) or "",
+            "--target-process",
+            getattr(self, "_inject_target_process", None) or "",
+        ]
+        if text:
+            args.extend(["--text", text])
+        try:
+            r = subprocess.run(args, capture_output=True, timeout=10)
+            if r.returncode == 0:
+                return True
+            err = r.stderr.decode(errors="replace").strip()
+            if err:
+                print(f"[inject] rust injector failed: {err}", flush=True)
+            return False
+        except Exception as e:
+            print(f"[inject] rust injector error: {e}", flush=True)
+            return False
+
     def _target_prefers_paste(self) -> bool:
         if os.name != "nt":
             return False
@@ -250,6 +284,8 @@ class InjectMixin:
         return any(term in target for term in _LINUX_TERMINAL_TARGETS)
 
     def _wayland_paste_shortcut(self) -> bool:
+        if self._try_rust_inject("paste"):
+            return True
         # Avoid pynput's keyboard abstraction on Wayland for paste. Sending a
         # deterministic evdev shortcut keeps stale physical modifiers from a PTT
         # chord out of the paste shortcut as much as the compositor allows.

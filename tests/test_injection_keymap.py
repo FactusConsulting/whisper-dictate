@@ -41,6 +41,7 @@ class InjectStrategyTests(unittest.TestCase):
                 self.pasted = []
                 self.typed_wayland = []
                 self.ydotool = []
+                self.rust_inject = []
 
             def _restore_target_focus(self):
                 return False
@@ -56,6 +57,10 @@ class InjectStrategyTests(unittest.TestCase):
             def _try_ydotool(self, *args):
                 self.ydotool.append(args)
                 return True
+
+            def _try_rust_inject(self, mode, text=""):
+                self.rust_inject.append((mode, text))
+                return False
 
         return Dummy()
 
@@ -168,6 +173,24 @@ class InjectStrategyTests(unittest.TestCase):
         self.assertTrue(target._wayland_paste_shortcut())
 
         self.assertEqual(target.ydotool[1], ("key", "29:1", "47:1", "47:0", "29:0"))
+
+    def test_wayland_type_uses_rust_injector_before_python_ydotool(self):
+        target = self._injector()
+        target._xkb_layout = "dk"
+        target._keycode_map = {}
+        target._try_rust_inject = lambda mode, text="": True
+
+        self.assertTrue(target._wayland_type("høre"))
+
+        self.assertEqual(target.ydotool, [])
+
+    def test_wayland_paste_uses_rust_injector_before_python_ydotool(self):
+        target = self._injector()
+        target._try_rust_inject = lambda mode, text="": True
+
+        self.assertTrue(target._wayland_paste_shortcut())
+
+        self.assertEqual(target.ydotool, [])
 
 
 @contextmanager
