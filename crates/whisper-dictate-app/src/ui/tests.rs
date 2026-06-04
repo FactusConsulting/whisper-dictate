@@ -172,7 +172,7 @@ fn disabled_os_keyring_uses_file_store_through_ui_secret_api() {
     assert_eq!(report.location, SecretSaveLocation::File);
     assert_eq!(report.fallback_path, store);
     assert!(report.fallback_reason.contains(DISABLE_OS_KEYRING_ENV));
-    assert!(report.status_label().contains("local fallback key file"));
+    assert!(report.status_label().contains("fallback key file"));
     assert_eq!(
         load_stt_api_key_state(CloudProvider::Groq).unwrap().0,
         "groq-secret"
@@ -215,10 +215,34 @@ fn credential_store_report_status_does_not_claim_fallback_file() {
     };
 
     let status = report.status_label();
+    let log_details = report.log_details();
 
-    assert!(status.contains("OS credential store"));
-    assert!(status.contains("stt-api-key:groq.whisper-dictate"));
+    assert!(status.contains("Credential") || status.contains("credential"));
     assert!(!status.contains("fallback file"));
+    assert!(log_details.contains("stored=credential_store"));
+    assert!(log_details.contains("credential_target=stt-api-key:groq.whisper-dictate"));
+    assert!(!log_details.contains("fallback_file="));
+}
+
+#[test]
+fn fallback_report_names_credential_failure_and_fallback_path() {
+    let report = SecretSaveReport {
+        location: SecretSaveLocation::File,
+        credential_service: "whisper-dictate",
+        credential_user: "stt-api-key:groq".to_owned(),
+        credential_target: "stt-api-key:groq.whisper-dictate".to_owned(),
+        fallback_path: std::path::PathBuf::from("api-keys.json"),
+        fallback_reason: "OS credential store failed: unavailable".to_owned(),
+    };
+
+    let status = report.status_label();
+    let log_details = report.log_details();
+
+    assert!(status.contains("fallback key file"));
+    assert!(status.contains("OS credential store failed"));
+    assert!(log_details.contains("stored=fallback_file"));
+    assert!(log_details.contains("fallback_file=api-keys.json"));
+    assert!(log_details.contains("reason=OS credential store failed"));
 }
 
 #[test]

@@ -28,16 +28,6 @@ pub(super) enum SecretSaveLocation {
     File,
 }
 
-impl SecretSaveLocation {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::CredentialStore => "OS credential store",
-            Self::CredentialStoreAndFile => "OS credential store + local fallback key file",
-            Self::File => "local fallback key file",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SecretStorePolicy {
     WindowsCredentialManagerFirst,
@@ -57,17 +47,13 @@ pub(super) struct SecretSaveReport {
 impl SecretSaveReport {
     pub(super) fn status_label(&self) -> String {
         match self.location {
-            SecretSaveLocation::CredentialStore => {
-                format!("OS credential store: {}", self.credential_target)
-            }
-            SecretSaveLocation::CredentialStoreAndFile => {
-                format!(
-                    "OS credential store + fallback file: {}",
-                    self.fallback_path.display()
-                )
-            }
+            SecretSaveLocation::CredentialStore => platform_credential_store_label().to_owned(),
+            SecretSaveLocation::CredentialStoreAndFile => format!(
+                "{} and fallback key file",
+                platform_credential_store_label()
+            ),
             SecretSaveLocation::File => format!(
-                "local fallback key file: {} ({})",
+                "fallback key file: {} ({})",
                 self.fallback_path.display(),
                 self.fallback_reason
             ),
@@ -75,15 +61,32 @@ impl SecretSaveReport {
     }
 
     pub(super) fn log_details(&self) -> String {
-        format!(
-            "location={}; credential_service={}; credential_user={}; credential_target={}; fallback_file={}; reason={}",
-            self.location.label(),
-            self.credential_service,
-            self.credential_user,
-            self.credential_target,
-            self.fallback_path.display(),
-            self.fallback_reason
-        )
+        match self.location {
+            SecretSaveLocation::CredentialStore => format!(
+                "stored=credential_store; credential_store={}; credential_service={}; credential_user={}; credential_target={}; verification={}",
+                platform_credential_store_label(),
+                self.credential_service,
+                self.credential_user,
+                self.credential_target,
+                self.fallback_reason
+            ),
+            SecretSaveLocation::CredentialStoreAndFile => format!(
+                "stored=credential_store_and_fallback_file; credential_store={}; credential_service={}; credential_user={}; credential_target={}; fallback_file={}; reason={}",
+                platform_credential_store_label(),
+                self.credential_service,
+                self.credential_user,
+                self.credential_target,
+                self.fallback_path.display(),
+                self.fallback_reason
+            ),
+            SecretSaveLocation::File => format!(
+                "stored=fallback_file; fallback_file={}; credential_store={}; credential_target={}; reason={}",
+                self.fallback_path.display(),
+                platform_credential_store_label(),
+                self.credential_target,
+                self.fallback_reason
+            ),
+        }
     }
 }
 
@@ -451,6 +454,16 @@ fn platform_secret_policy() -> SecretStorePolicy {
         SecretStorePolicy::WindowsCredentialManagerFirst
     } else {
         SecretStorePolicy::OsKeyringWithFallback
+    }
+}
+
+fn platform_credential_store_label() -> &'static str {
+    if cfg!(windows) {
+        "Windows Credential Manager"
+    } else if cfg!(target_os = "macos") {
+        "macOS Keychain"
+    } else {
+        "OS credential store"
     }
 }
 
