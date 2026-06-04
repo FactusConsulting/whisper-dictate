@@ -30,6 +30,54 @@ fn version_flag_prints_public_version_line() {
 }
 
 #[test]
+fn rust_application_startup_smoke_commands_do_not_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let dictionary = dir.path().join("dictionary.json");
+    fs::write(&dictionary, r#"{"terms":["Codex"],"replacements":{}}"#).unwrap();
+    fs::write(
+        &config,
+        serde_json::json!({
+            "dictionary": dictionary,
+            "format_commands": "da"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let cases: &[(&[&str], &str)] = &[
+        (&["--version"], "version"),
+        (&["--help"], "help"),
+        (&["config", "show"], "config show"),
+        (&["dictionary", "status"], "dictionary status"),
+        (
+            &[
+                "format-text",
+                "--text",
+                "første komma",
+                "--command-set",
+                "da",
+            ],
+            "format helper",
+        ),
+    ];
+
+    for (args, label) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+            .args(*args)
+            .env("VOICEPI_CONFIG", &config)
+            .output()
+            .unwrap_or_else(|err| panic!("{label} failed to launch: {err}"));
+        assert!(
+            output.status.success(),
+            "{label} crashed or exited unsuccessfully\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn worker_failure_does_not_print_rust_backtrace() {
     let Some(python) = test_python() else {
         eprintln!("skipping: no Python launcher found on PATH");
