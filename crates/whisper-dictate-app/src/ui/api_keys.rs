@@ -24,6 +24,7 @@ const SECRET_STORE_FILENAME: &str = "api-keys.json";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SecretSaveLocation {
     CredentialStore,
+    CredentialStoreAndFile,
     File,
 }
 
@@ -31,9 +32,16 @@ impl SecretSaveLocation {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::CredentialStore => "OS credential store",
+            Self::CredentialStoreAndFile => "OS credential store + local fallback key file",
             Self::File => "local fallback key file",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecretStorePolicy {
+    WindowsCredentialManagerFirst,
+    OsKeyringWithFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +49,7 @@ pub(super) struct SecretSaveReport {
     pub(super) location: SecretSaveLocation,
     pub(super) credential_service: &'static str,
     pub(super) credential_user: String,
+    pub(super) credential_target: String,
     pub(super) fallback_path: PathBuf,
     pub(super) fallback_reason: String,
 }
@@ -49,6 +58,9 @@ impl SecretSaveReport {
     pub(super) fn status_label(&self) -> String {
         match self.location {
             SecretSaveLocation::CredentialStore => {
+                format!("OS credential store: {}", self.credential_target)
+            }
+            SecretSaveLocation::CredentialStoreAndFile => {
                 format!(
                     "OS credential store + fallback file: {}",
                     self.fallback_path.display()
@@ -64,10 +76,11 @@ impl SecretSaveReport {
 
     pub(super) fn log_details(&self) -> String {
         format!(
-            "location={}; credential_service={}; credential_user={}; fallback_file={}; reason={}",
+            "location={}; credential_service={}; credential_user={}; credential_target={}; fallback_file={}; reason={}",
             self.location.label(),
             self.credential_service,
             self.credential_user,
+            self.credential_target,
             self.fallback_path.display(),
             self.fallback_reason
         )
@@ -295,44 +308,117 @@ pub(super) fn save_post_api_key(provider: PostProvider, secret: &str) -> Result<
 
 fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
     let fallback_path = secret_store_path();
+    let credential_target = credential_target_name(user);
     if os_keyring_disabled() {
         save_file_secret(user, secret)?;
         return Ok(SecretSaveReport {
             location: SecretSaveLocation::File,
             credential_service: CREDENTIAL_SERVICE,
             credential_user: user.to_owned(),
+            credential_target,
             fallback_path,
             fallback_reason: format!("{DISABLE_OS_KEYRING_ENV} disables OS credential storage"),
         });
     }
 
-    let keyring_result = match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
-        Ok(entry) => {
-            if secret.trim().is_empty() {
-                match entry.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                    Err(err) => Err(err.into()),
-                }
-            } else {
-                entry
-                    .set_password(secret.trim())
-                    .map_err(anyhow::Error::from)
-            }
-        }
-        Err(err) => Err(err.into()),
-    };
-    match keyring_result {
-        Ok(()) => {
-            save_file_fallback_after_keyring_success(user, secret)?;
-            Ok(SecretSaveReport {
-                location: SecretSaveLocation::CredentialStore,
+    let entry = match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
+        Ok(entry) => entry,
+        Err(err) => {
+            let fallback_reason = format!("OS credential store could not be opened: {err}");
+            save_file_secret(user, secret).with_context(|| {
+                format!(
+                    "OS credential store could not be opened ({err}); file fallback also failed"
+                )
+            })?;
+            return Ok(SecretSaveReport {
+                location: SecretSaveLocation::File,
                 credential_service: CREDENTIAL_SERVICE,
                 credential_user: user.to_owned(),
+                credential_target,
                 fallback_path,
-                fallback_reason:
-                    "kept intentionally so startup still works if the OS credential store cannot read back the key"
-                        .to_owned(),
-            })
+                fallback_reason,
+            });
+        }
+    };
+
+    let keyring_result = {
+        let entry = &entry;
+        match secret.trim().is_empty() {
+            true => match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(err) => Err(err.into()),
+            },
+            false => entry
+                .set_password(secret.trim())
+                .map_err(anyhow::Error::from),
+        }
+    };
+
+    match keyring_result {
+        Ok(()) => {
+            if secret.trim().is_empty() {
+                save_file_secret(user, secret)?;
+                return Ok(SecretSaveReport {
+                    location: SecretSaveLocation::CredentialStore,
+                    credential_service: CREDENTIAL_SERVICE,
+                    credential_user: user.to_owned(),
+                    credential_target,
+                    fallback_path,
+                    fallback_reason:
+                        "cleared OS credential store entry and removed fallback key file entry"
+                            .to_owned(),
+                });
+            }
+
+            match verify_keyring_readback(&entry, secret.trim()) {
+                Ok(())
+                    if platform_secret_policy()
+                        == SecretStorePolicy::WindowsCredentialManagerFirst =>
+                {
+                    save_file_secret(user, "")?;
+                    Ok(SecretSaveReport {
+                        location: SecretSaveLocation::CredentialStore,
+                        credential_service: CREDENTIAL_SERVICE,
+                        credential_user: user.to_owned(),
+                        credential_target,
+                        fallback_path,
+                        fallback_reason:
+                            "Windows Credential Manager read-back verified; fallback file entry removed"
+                                .to_owned(),
+                    })
+                }
+                Ok(()) => {
+                    save_file_fallback_after_keyring_success(user, secret)?;
+                    Ok(SecretSaveReport {
+                        location: SecretSaveLocation::CredentialStoreAndFile,
+                        credential_service: CREDENTIAL_SERVICE,
+                        credential_user: user.to_owned(),
+                        credential_target,
+                        fallback_path,
+                        fallback_reason:
+                            "kept intentionally so startup still works if the OS credential store cannot read back the key"
+                                .to_owned(),
+                    })
+                }
+                Err(readback_err) => {
+                    let fallback_reason = format!(
+                        "OS credential store write reported success, but read-back verification failed: {readback_err}"
+                    );
+                    save_file_secret(user, secret).with_context(|| {
+                        format!(
+                            "OS credential store read-back failed ({readback_err}); file fallback also failed"
+                        )
+                    })?;
+                    Ok(SecretSaveReport {
+                        location: SecretSaveLocation::File,
+                        credential_service: CREDENTIAL_SERVICE,
+                        credential_user: user.to_owned(),
+                        credential_target,
+                        fallback_path,
+                        fallback_reason,
+                    })
+                }
+            }
         }
         Err(keyring_err) => {
             let fallback_reason = format!("OS credential store failed: {keyring_err}");
@@ -343,10 +429,36 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
                 location: SecretSaveLocation::File,
                 credential_service: CREDENTIAL_SERVICE,
                 credential_user: user.to_owned(),
+                credential_target,
                 fallback_path,
                 fallback_reason,
             })
         }
+    }
+}
+
+fn verify_keyring_readback(entry: &keyring::Entry, expected: &str) -> Result<()> {
+    let actual = entry.get_password()?;
+    if actual == expected {
+        Ok(())
+    } else {
+        anyhow::bail!("read-back value did not match the saved key")
+    }
+}
+
+fn platform_secret_policy() -> SecretStorePolicy {
+    if cfg!(windows) {
+        SecretStorePolicy::WindowsCredentialManagerFirst
+    } else {
+        SecretStorePolicy::OsKeyringWithFallback
+    }
+}
+
+fn credential_target_name(user: &str) -> String {
+    if cfg!(windows) {
+        format!("{user}.{CREDENTIAL_SERVICE}")
+    } else {
+        format!("service={CREDENTIAL_SERVICE}; user={user}")
     }
 }
 

@@ -204,6 +204,24 @@ fn successful_keyring_save_keeps_file_fallback() {
 }
 
 #[test]
+fn credential_store_report_status_does_not_claim_fallback_file() {
+    let report = SecretSaveReport {
+        location: SecretSaveLocation::CredentialStore,
+        credential_service: "whisper-dictate",
+        credential_user: "stt-api-key:groq".to_owned(),
+        credential_target: "stt-api-key:groq.whisper-dictate".to_owned(),
+        fallback_path: std::path::PathBuf::from("api-keys.json"),
+        fallback_reason: "Windows Credential Manager read-back verified".to_owned(),
+    };
+
+    let status = report.status_label();
+
+    assert!(status.contains("OS credential store"));
+    assert!(status.contains("stt-api-key:groq.whisper-dictate"));
+    assert!(!status.contains("fallback file"));
+}
+
+#[test]
 fn cloud_provider_prefers_saved_provider_over_stale_url() {
     let settings = AppSettings {
         stt_provider: "groq".to_owned(),
