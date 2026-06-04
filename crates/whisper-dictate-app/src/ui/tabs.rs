@@ -3,20 +3,34 @@ use super::*;
 impl WhisperDictateApp {
     pub(super) fn global_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Start").clicked() {
+            let is_stopped = self.runtime_state == RuntimeState::Stopped;
+            let is_running = self.runtime_state == RuntimeState::Running;
+            let is_active = !is_stopped;
+
+            if ui
+                .add_enabled(is_stopped, egui::Button::new("Start"))
+                .clicked()
+            {
                 self.start_runtime();
             }
-            if ui.button("Stop").clicked() {
+            if ui
+                .add_enabled(is_active, egui::Button::new("Stop"))
+                .clicked()
+            {
                 self.stop_runtime();
             }
             if ui
-                .button("Reload")
+                .add_enabled(is_running, egui::Button::new("Restart runtime"))
                 .on_hover_text("Restart the dictation runtime with the current settings.")
                 .clicked()
             {
                 self.restart_runtime();
             }
-            if ui.button("Reload settings").clicked() {
+            if ui
+                .button("Reload config")
+                .on_hover_text("Reload the config file from disk.")
+                .clicked()
+            {
                 self.reload_settings();
             }
             if ui.button("Doctor").clicked() {
@@ -119,7 +133,11 @@ impl WhisperDictateApp {
             {
                 self.save_settings();
             }
-            if ui.button("Reload from disk").clicked() {
+            if ui
+                .button("Reload config")
+                .on_hover_text("Reload the config file from disk.")
+                .clicked()
+            {
                 self.reload_settings();
             }
             if is_dirty {

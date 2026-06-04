@@ -180,13 +180,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             update_impl.index("self.global_controls(ui);"),
             update_impl.index("egui::CentralPanel::default()"),
         )
-        self.assertNotIn(".exact_height(", update_impl)
-        self.assertIn('ui.button("Start").clicked()', controls)
-        self.assertIn('ui.button("Stop").clicked()', controls)
-        self.assertIn('.button("Reload")', controls)
+        self.assertIn("let header_height = runtime_controls_header_height", update_impl)
+        self.assertIn(".exact_height(header_height)", update_impl)
+        self.assertNotIn(".exact_height(76.0)", update_impl)
+        self.assertNotIn("ui.horizontal_centered", update_impl)
+        self.assertIn("let is_stopped = self.runtime_state == RuntimeState::Stopped;", controls)
+        self.assertIn("let is_running = self.runtime_state == RuntimeState::Running;", controls)
+        self.assertIn("let is_active = !is_stopped;", controls)
+        self.assertIn('add_enabled(is_stopped, egui::Button::new("Start"))', controls)
+        self.assertIn('add_enabled(is_active, egui::Button::new("Stop"))', controls)
+        self.assertIn('add_enabled(is_running, egui::Button::new("Restart runtime"))', controls)
         self.assertIn("self.restart_runtime();", controls)
-        self.assertIn('ui.button("Reload settings").clicked()', controls)
+        self.assertIn('.button("Reload config")', controls)
+        self.assertNotIn("Reload settings", controls)
         self.assertIn('egui::Button::new("Install/Repair")', controls)
+        self.assertIn("fn runtime_controls_header_height(raw_scale: &str) -> f32", script)
 
     def test_rust_ui_has_cloud_provider_dropdown_and_key_storage(self):
         script = rust_ui_source()
@@ -238,7 +246,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('egui::RichText::new("Save settings *").strong()', script)
         self.assertIn(".add_enabled(is_dirty, save_button)", script)
         self.assertIn('"Unsaved changes"', script)
-        self.assertIn('ui.button("Reload from disk").clicked()', script)
+        self.assertIn('.button("Reload config")', script)
         self.assertNotIn('ui.button("Clear API key").clicked()', script)
 
     def test_rust_ui_uses_same_api_key_loader_on_start_and_reload(self):

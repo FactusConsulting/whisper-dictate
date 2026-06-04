@@ -242,11 +242,13 @@ impl eframe::App for WhisperDictateApp {
         apply_ui_text_scale(ctx, &self.settings.ui_text_scale);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
 
+        let header_height = runtime_controls_header_height(&self.settings.ui_text_scale);
         egui::TopBottomPanel::top("tabs")
             .resizable(false)
+            .exact_height(header_height)
             .show(ctx, |ui| {
                 ui.add_space(4.0);
-                ui.horizontal_centered(|ui| {
+                ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
                     ui.spacing_mut().button_padding = egui::vec2(10.0, 5.0);
                     ui.label(
@@ -1394,6 +1396,11 @@ fn apply_ui_text_scale(ctx: &egui::Context, raw_scale: &str) {
         style.spacing.item_spacing = item_spacing;
         ctx.set_style(style);
     }
+}
+
+fn runtime_controls_header_height(raw_scale: &str) -> f32 {
+    let scale = raw_scale.parse::<f32>().unwrap_or(1.0).clamp(0.85, 1.6);
+    96.0 * scale
 }
 
 fn effective_xkb_layout(settings: &AppSettings) -> Option<String> {
