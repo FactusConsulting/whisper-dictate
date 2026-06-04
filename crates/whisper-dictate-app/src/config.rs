@@ -701,9 +701,12 @@ fn validate_f32(name: &str, value: &str) -> Result<()> {
 fn open_path(path: &Path) -> Result<()> {
     #[cfg(windows)]
     {
-        Command::new("cmd")
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("cmd");
+        command
             .args(["/C", "start", "", &path.display().to_string()])
-            .spawn()?;
+            .creation_flags(0x08000000);
+        command.spawn()?;
         return Ok(());
     }
 

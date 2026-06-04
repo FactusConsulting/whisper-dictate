@@ -1,9 +1,8 @@
 use super::*;
 
 impl WhisperDictateApp {
-    pub(super) fn runtime_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Runtime");
-        ui.horizontal(|ui| {
+    pub(super) fn global_controls(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Start").clicked() {
                 self.start_runtime();
             }
@@ -12,6 +11,9 @@ impl WhisperDictateApp {
             }
             if ui.button("Restart").clicked() {
                 self.restart_runtime();
+            }
+            if ui.button("Reload settings").clicked() {
+                self.reload_settings();
             }
             if ui.button("Doctor").clicked() {
                 self.run_doctor();
@@ -25,17 +27,23 @@ impl WhisperDictateApp {
             {
                 self.run_install();
             }
+            ui.separator();
+            ui.label(format!("Status: {}", self.runtime_state.label()));
+            if let Some(label) = self.background_task_label {
+                ui.label(format!("Task: {label} running"));
+            }
+        });
+    }
+
+    pub(super) fn runtime_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Log");
+        ui.horizontal(|ui| {
             if ui.button("Clear").clicked() {
                 self.runtime_log.clear();
                 self.runtime_log_scroll_to_bottom = true;
             }
             if ui.button("Copy").clicked() {
                 ui.ctx().copy_text(self.runtime_log.clone());
-            }
-            ui.separator();
-            ui.label(format!("Status: {}", self.runtime_state.label()));
-            if let Some(label) = self.background_task_label {
-                ui.label(format!("Task: {label} running"));
             }
         });
 
@@ -65,10 +73,33 @@ impl WhisperDictateApp {
     }
 
     pub(super) fn settings_panel(&mut self, ui: &mut egui::Ui, body: fn(&mut Self, &mut egui::Ui)) {
-        body(self, ui);
+        let footer_height = 148.0;
+        let body_height = (ui.available_height() - footer_height).max(0.0);
+
+        egui::ScrollArea::vertical()
+            .id_salt(format!("settings_body_{:?}", self.selected_tab))
+            .auto_shrink([false, false])
+            .max_height(body_height)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                body(self, ui);
+            });
+
         ui.separator();
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), footer_height),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| {
+                self.settings_actions(ui);
+                ui.add_space(8.0);
+                self.settings_messages(ui);
+            },
+        );
+    }
+
+    fn settings_actions(&mut self, ui: &mut egui::Ui) {
         let is_dirty = self.has_unsaved_settings();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut save_button = egui::Button::new(if is_dirty {
                 egui::RichText::new("Save settings *").strong()
             } else {
@@ -92,9 +123,39 @@ impl WhisperDictateApp {
             }
             ui.label(format!("Config: {}", self.config_path));
         });
-        if !self.settings_status.is_empty() {
-            ui.label(&self.settings_status);
+    }
+
+    fn settings_messages(&self, ui: &mut egui::Ui) {
+        let mut messages = Vec::new();
+        if !self.settings_status.trim().is_empty() {
+            messages.push(self.settings_status.as_str());
         }
+        match self.selected_tab {
+            Tab::Speech if !self.stt_api_key_status.trim().is_empty() => {
+                messages.push(self.stt_api_key_status.as_str());
+            }
+            Tab::Post if !self.post_api_key_status.trim().is_empty() => {
+                messages.push(self.post_api_key_status.as_str());
+            }
+            _ => {}
+        }
+
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(14.0, 12.0))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.set_min_height(72.0);
+                ui.strong("Messages");
+                ui.add_space(6.0);
+                if messages.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No messages").color(ui.visuals().weak_text_color()),
+                    );
+                }
+                for message in messages {
+                    status_label(ui, message);
+                }
+            });
     }
 
     pub(super) fn core_tab(&mut self, ui: &mut egui::Ui) {
@@ -226,11 +287,6 @@ impl WhisperDictateApp {
                     });
                     ui.end_row();
                     ui.label("");
-                    ui.horizontal_wrapped(|ui| {
-                        status_label(ui, &self.stt_api_key_status);
-                    });
-                    ui.end_row();
-                    ui.label("");
                     let key_help = if self.saved_stt_api_key_input.trim().is_empty() {
                         "Paste an API key, then save it. Cloud STT sends recorded audio to the configured provider."
                     } else {
@@ -241,8 +297,8 @@ impl WhisperDictateApp {
                     );
                     ui.end_row();
                 }
-                ui.strong("Runtime");
-                ui.label("Applies to local backends unless otherwise noted.");
+                ui.strong("Local runtime");
+                ui.label("Used only by local Whisper and Parakeet.");
                 ui.end_row();
                 combo_enabled(
                     ui,
@@ -260,20 +316,45 @@ impl WhisperDictateApp {
                     &["", "int8_float16", "float16", "bfloat16", "float32", "int8"],
                     "Local model precision/performance mode. Leave empty for backend default.",
                 );
-                combo_help(
+                ui.strong("Dictation controls");
+                ui.label("Applies to local and cloud speech engines.");
+                ui.end_row();
+                combo_help_labeled(
                     ui,
                     "Language",
                     &mut self.settings.lang,
-                    &["", "da", "en", "de", "fr", "sv", "nb", "nl", "es", "it"],
-                    "Spoken language hint. Empty lets the backend autodetect when supported.",
+                    &[
+                        ("", "Auto"),
+                        ("da", "Danish"),
+                        ("en", "English"),
+                        ("de", "German"),
+                        ("fr", "French"),
+                        ("sv", "Swedish"),
+                        ("nb", "Norwegian"),
+                        ("nl", "Dutch"),
+                        ("es", "Spanish"),
+                        ("it", "Italian"),
+                    ],
+                    "Spoken language hint. Auto lets the backend autodetect when supported.",
                 );
-                combo_help(
-                    ui,
-                    "Keyboard layout",
-                    &mut self.settings.xkb_layout,
-                    &["", "dk", "no", "se", "de", "pt", "br", "us"],
-                    "Wayland ydotool/XKB layout used for direct text injection. Use dk for Danish ae/oe/aa letters.",
-                );
+                if !cfg!(windows) {
+                    combo_help_labeled(
+                        ui,
+                        "Linux keyboard layout",
+                        &mut self.settings.xkb_layout,
+                        &[
+                            ("", "Auto"),
+                            ("dk", "Danish"),
+                            ("no", "Norwegian"),
+                            ("se", "Swedish"),
+                            ("de", "German"),
+                            ("pt", "Portuguese"),
+                            ("br", "Brazilian"),
+                            ("us", "US English"),
+                        ],
+                        "Wayland ydotool/XKB layout used for direct text injection on Linux. Auto detects GNOME layout when possible.",
+                    );
+                }
                 text_help(
                     ui,
                     "Hotkey",
@@ -447,7 +528,6 @@ impl WhisperDictateApp {
 
     pub(super) fn output_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Output");
-        let previous_post_provider = PostProvider::from_settings(&self.settings);
         egui::Grid::new("output_settings")
             .num_columns(2)
             .show(ui, |ui| {
@@ -489,6 +569,86 @@ impl WhisperDictateApp {
                     &mut self.settings.command_hook_timeout_ms,
                     "Maximum time the command hook may run before it is treated as timed out.",
                 );
+                checkbox_help(
+                    ui,
+                    "History enabled",
+                    &mut self.settings.history_enabled,
+                    "Store local utterance history for review, copying and dictionary suggestions.",
+                );
+                text_help(
+                    ui,
+                    "History JSONL",
+                    &mut self.settings.history_jsonl,
+                    "Optional override path for local utterance history JSONL.",
+                );
+                checkbox_help(
+                    ui,
+                    "Local only",
+                    &mut self.settings.local_only,
+                    "Block network-backed STT/post-processing providers when enabled.",
+                );
+                checkbox_help(
+                    ui,
+                    "VOICEPI_DEBUG",
+                    &mut self.settings.debug,
+                    "Print the effective configuration at worker startup.",
+                );
+                checkbox_help(
+                    ui,
+                    "VOICEPI_STT_DEBUG",
+                    &mut self.settings.stt_debug,
+                    "Enable extra backend transcription diagnostics.",
+                );
+                text_help(
+                    ui,
+                    "UI text scale",
+                    &mut self.settings.ui_text_scale,
+                    "Scale all text in this settings UI. Use 1.0 for default, 1.15 for larger text, or 1.3 for high-DPI displays.",
+                );
+            });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Preview history").clicked() {
+                self.preview_history();
+            }
+            if ui.button("Open history").clicked() {
+                self.open_history();
+            }
+            if ui.button("Preview metrics").clicked() {
+                self.preview_metrics();
+            }
+            if ui.button("Open metrics").clicked() {
+                self.open_metrics();
+            }
+        });
+        if !self.history_preview.is_empty() {
+            ui.label("History preview");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.history_preview)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(8)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+        }
+        if !self.metrics_preview.is_empty() {
+            ui.label("Metrics preview");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.metrics_preview)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(8)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+        }
+    }
+
+    pub(super) fn post_processing_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Post-processing");
+        let previous_post_provider = PostProvider::from_settings(&self.settings);
+        egui::Grid::new("post_processing_settings")
+            .num_columns(2)
+            .show(ui, |ui| {
                 combo_help_labeled(
                     ui,
                     "Post processor",
@@ -594,9 +754,16 @@ impl WhisperDictateApp {
                             }
                         }
                     });
-                    ui.horizontal_wrapped(|ui| {
-                        status_label(ui, &self.post_api_key_status);
-                    });
+                    ui.end_row();
+                    ui.label("");
+                    let key_help = if self.saved_post_api_key_input.trim().is_empty() {
+                        "Optional separate post-processing key. Leave empty to reuse the Cloud STT key when available."
+                    } else {
+                        "Saved post-processing key loaded. Edit and save to replace it, or clear the field and save to remove it."
+                    };
+                    ui.label(key_help).on_hover_text(
+                        "Post-processing API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
+                    );
                     ui.end_row();
                 }
                 checkbox_help(
@@ -611,80 +778,9 @@ impl WhisperDictateApp {
                     &mut self.settings.post_redact_terms,
                     "Comma-separated names or terms to redact before cloud post-processing. Emails, phone numbers and common tokens are detected automatically.",
                 );
-                checkbox_help(
-                    ui,
-                    "History enabled",
-                    &mut self.settings.history_enabled,
-                    "Store local utterance history for review, copying and dictionary suggestions.",
-                );
-                text_help(
-                    ui,
-                    "History JSONL",
-                    &mut self.settings.history_jsonl,
-                    "Optional override path for local utterance history JSONL.",
-                );
-                checkbox_help(
-                    ui,
-                    "Local only",
-                    &mut self.settings.local_only,
-                    "Block network-backed STT/post-processing providers when enabled.",
-                );
-                checkbox_help(
-                    ui,
-                    "VOICEPI_DEBUG",
-                    &mut self.settings.debug,
-                    "Print the effective configuration at worker startup.",
-                );
-                checkbox_help(
-                    ui,
-                    "VOICEPI_STT_DEBUG",
-                    &mut self.settings.stt_debug,
-                    "Enable extra backend transcription diagnostics.",
-                );
-                text_help(
-                    ui,
-                    "UI text scale",
-                    &mut self.settings.ui_text_scale,
-                    "Scale all text in this settings UI. Use 1.0 for default, 1.15 for larger text, or 1.3 for high-DPI displays.",
-                );
             });
         if PostProvider::from_settings(&self.settings) != previous_post_provider {
             self.reload_post_api_key();
-        }
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("Preview history").clicked() {
-                self.preview_history();
-            }
-            if ui.button("Open history").clicked() {
-                self.open_history();
-            }
-            if ui.button("Preview metrics").clicked() {
-                self.preview_metrics();
-            }
-            if ui.button("Open metrics").clicked() {
-                self.open_metrics();
-            }
-        });
-        if !self.history_preview.is_empty() {
-            ui.label("History preview");
-            ui.add(
-                egui::TextEdit::multiline(&mut self.history_preview)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_rows(8)
-                    .desired_width(f32::INFINITY)
-                    .interactive(false),
-            );
-        }
-        if !self.metrics_preview.is_empty() {
-            ui.label("Metrics preview");
-            ui.add(
-                egui::TextEdit::multiline(&mut self.metrics_preview)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_rows(8)
-                    .desired_width(f32::INFINITY)
-                    .interactive(false),
-            );
         }
     }
 

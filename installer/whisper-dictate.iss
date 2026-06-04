@@ -28,7 +28,8 @@ SolidCompression=yes
 SetupIconFile=..\assets\whisper-dictate.ico
 WizardStyle=modern
 UninstallDisplayName=whisper-dictate
-CloseApplications=no
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -73,6 +74,107 @@ begin
   Result := S;
 end;
 
+function PowerShellQuote(S: String): String;
+var
+  Quoted: String;
+begin
+  Quoted := S;
+  StringChangeEx(Quoted, '''', '''''', True);
+  Result := '''' + Quoted + '''';
+end;
+
+function CommandLineQuote(S: String): String;
+var
+  Quoted: String;
+begin
+  Quoted := S;
+  StringChangeEx(Quoted, '"', '\"', True);
+  Result := '"' + Quoted + '"';
+end;
+
+function RunPowerShellScript(Script: String; var ResultCode: Integer): Boolean;
+var
+  ScriptPath: String;
+begin
+  ScriptPath := ExpandConstant('{tmp}\whisper-dictate-installer.ps1');
+  SaveStringToFile(ScriptPath, Script, False);
+  Result := Exec(
+    'powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File ' + CommandLineQuote(ScriptPath),
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode);
+end;
+
+function IsWhisperDictateRunning(): Boolean;
+var
+  Script, AppExe: String;
+  ResultCode: Integer;
+begin
+  AppExe := ExpandConstant('{app}\whisper-dictate.exe');
+  Script :=
+    '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
+    '$appExe = ' + PowerShellQuote(AppExe) + #13#10 +
+    '$running = Get-CimInstance Win32_Process -Filter "name = ''whisper-dictate.exe''" | Where-Object { $_.ExecutablePath -eq $appExe }' + #13#10 +
+    'if ($running) { exit 1 }' + #13#10 +
+    'exit 0' + #13#10;
+
+  if not RunPowerShellScript(Script, ResultCode) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := ResultCode <> 0;
+end;
+
+function StopRunningWhisperDictate(): String;
+var
+  Script, AppExe, AppRoot: String;
+  ResultCode: Integer;
+begin
+  AppExe := ExpandConstant('{app}\whisper-dictate.exe');
+  AppRoot := ExpandConstant('{app}');
+  Script :=
+    '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
+    '$appExe = ' + PowerShellQuote(AppExe) + #13#10 +
+    '$appRoot = ' + PowerShellQuote(AppRoot) + #13#10 +
+    '$currentPid = $PID' + #13#10 +
+    '$desktop = Get-CimInstance Win32_Process -Filter "name = ''whisper-dictate.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $_.ExecutablePath -eq $appExe }' + #13#10 +
+    'foreach ($process in $desktop) {' + #13#10 +
+    '  $p = Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue' + #13#10 +
+    '  if ($p -and $p.MainWindowHandle -ne 0) { [void]$p.CloseMainWindow() }' + #13#10 +
+    '}' + #13#10 +
+    '$deadline = (Get-Date).AddSeconds(8)' + #13#10 +
+    'do {' + #13#10 +
+    '  Start-Sleep -Milliseconds 250' + #13#10 +
+    '  $desktop = Get-CimInstance Win32_Process -Filter "name = ''whisper-dictate.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $_.ExecutablePath -eq $appExe }' + #13#10 +
+    '} while ($desktop -and (Get-Date) -lt $deadline)' + #13#10 +
+    '$desktop | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
+    '$workers = Get-CimInstance Win32_Process | Where-Object { ($_.Name -like ''python*.exe'' -or $_.Name -eq ''py.exe'') -and $_.CommandLine -like ''*voice_pi.py*'' -and $_.CommandLine -like (''*'' + $appRoot + ''*'') }' + #13#10 +
+    '$workers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
+    '$deadline = (Get-Date).AddSeconds(10)' + #13#10 +
+    'do {' + #13#10 +
+    '  Start-Sleep -Milliseconds 250' + #13#10 +
+    '  $remaining = Get-CimInstance Win32_Process -Filter "name = ''whisper-dictate.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $_.ExecutablePath -eq $appExe }' + #13#10 +
+    '} while ($remaining -and (Get-Date) -lt $deadline)' + #13#10 +
+    '$remaining = Get-CimInstance Win32_Process -Filter "name = ''whisper-dictate.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $_.ExecutablePath -eq $appExe }' + #13#10 +
+    'if ($remaining) { exit 2 }' + #13#10 +
+    'exit 0' + #13#10;
+
+  if not RunPowerShellScript(Script, ResultCode) then
+  begin
+    Result := 'Could not run PowerShell to close the running whisper-dictate app.';
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    Result := 'Close whisper-dictate and run the installer again.';
+    Exit;
+  end;
+  Result := '';
+end;
+
 procedure UninstallPrevious();
 var
   UnStr: String;
@@ -97,7 +199,39 @@ begin
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  StopError: String;
 begin
+  if IsWhisperDictateRunning() then
+  begin
+    if MsgBox(
+      'whisper-dictate is currently running.' + #13#10#13#10 +
+        'Close it now so setup can continue?',
+      mbConfirmation,
+      MB_YESNO) <> IDYES then
+    begin
+      Result := 'Installation cancelled because whisper-dictate is still running.';
+      Exit;
+    end;
+  end;
+
+  while True do
+  begin
+    StopError := StopRunningWhisperDictate();
+    if StopError = '' then
+      Break;
+
+    if MsgBox(
+      StopError + #13#10#13#10 +
+        'Close whisper-dictate, then click Retry to continue.',
+      mbError,
+      MB_RETRYCANCEL) <> IDRETRY then
+    begin
+      Result := 'Installation cancelled because whisper-dictate is still running.';
+      Exit;
+    end;
+  end;
+
   // On upgrade, fully remove the previous version first so no orphaned
   // files survive. The venv (%USERPROFILE%\voice-pi-venv) and the model
   // cache live outside {app}, so they are preserved across upgrades.

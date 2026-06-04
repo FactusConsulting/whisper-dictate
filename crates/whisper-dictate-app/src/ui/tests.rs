@@ -9,7 +9,8 @@ static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn test_app(settings: AppSettings) -> WhisperDictateApp {
     WhisperDictateApp {
-        selected_tab: Tab::Runtime,
+        app_version: "test".to_owned(),
+        selected_tab: Tab::Log,
         runtime_state: RuntimeState::Stopped,
         runtime_log: String::new(),
         runtime_log_scroll_to_bottom: false,

@@ -30,6 +30,41 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(r'Source: "..\target\release\whisper-dictate.exe"', script)
         self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"', script)
 
+    def test_installer_closes_running_windows_app_before_upgrade(self):
+        script = Path("installer/whisper-dictate.iss").read_text(encoding="utf-8")
+
+        self.assertIn("CloseApplications=yes", script)
+        self.assertIn("RestartApplications=no", script)
+        self.assertIn("function IsWhisperDictateRunning(): Boolean", script)
+        self.assertIn("function StopRunningWhisperDictate(): String", script)
+        self.assertIn("function CommandLineQuote(S: String): String", script)
+        self.assertIn("'-NoProfile -ExecutionPolicy Bypass -File ' + CommandLineQuote(ScriptPath)", script)
+        prepare = script.split("function PrepareToInstall", 1)[1].split(
+            "procedure CurStepChanged", 1
+        )[0]
+        self.assertLess(
+            prepare.index("if IsWhisperDictateRunning() then"),
+            prepare.index("StopError := StopRunningWhisperDictate();"),
+        )
+        self.assertIn("Close it now so setup can continue?", prepare)
+        self.assertIn("MB_YESNO", prepare)
+        self.assertIn("IDYES", prepare)
+        self.assertLess(
+            prepare.index("StopError := StopRunningWhisperDictate();"),
+            prepare.index("UninstallPrevious();"),
+        )
+        self.assertIn("MB_RETRYCANCEL", prepare)
+        self.assertIn("IDRETRY", prepare)
+        self.assertIn("Close whisper-dictate, then click Retry to continue.", prepare)
+        self.assertIn("$_.ExecutablePath -eq $appExe", script)
+        self.assertIn("CloseMainWindow()", script)
+        self.assertIn("Stop-Process -Id $_.ProcessId -Force", script)
+        self.assertIn("$deadline = (Get-Date).AddSeconds(10)", script)
+        self.assertIn("voice_pi.py", script)
+        self.assertIn("$_.CommandLine -like (''*'' + $appRoot + ''*'')", script)
+        self.assertNotIn("Stop-Process -Name python", script)
+        self.assertIn("Close whisper-dictate and run the installer again.", script)
+
     def test_rust_windows_ui_uses_gui_subsystem(self):
         script = Path("crates/whisper-dictate-app/src/main.rs").read_text(encoding="utf-8")
 
@@ -45,15 +80,32 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn configure_background_process(", script)
         self.assertIn(".creation_flags(CREATE_NO_WINDOW);", script)
         self.assertIn("configure_background_process(&mut process);", script)
+        self.assertIn("fn run_install_command(command: &PlannedCommand)", script)
+        install_command = script.split("fn run_install_command", 1)[1].split(
+            "fn wants_parakeet_backend", 1
+        )[0]
+        self.assertIn("configure_background_process(&mut process);", install_command)
 
-    def test_rust_ui_cleans_stale_desktop_processes_before_starting_window(self):
+    def test_windows_shell_open_helpers_do_not_show_console_windows(self):
+        ui = rust_ui_source()
+        config = Path("crates/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+
+        ui_open_url = ui.split("fn open_url", 1)[1].split("#[cfg(test)]", 1)[0]
+        config_open_path = config.split("fn open_path", 1)[1].split("#[cfg(test)]", 1)[0]
+        for helper in (ui_open_url, config_open_path):
+            self.assertIn('Command::new("cmd")', helper)
+            self.assertIn('.args(["/C", "start", ""', helper)
+            self.assertIn(".creation_flags(0x08000000)", helper)
+
+    def test_rust_ui_does_not_spawn_shell_cleanup_before_starting_window(self):
         ui_script = rust_ui_source()
         runtime_script = Path("crates/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
 
-        self.assertLess(
-            ui_script.index("runtime::cleanup_stale_desktop_processes();"),
-            ui_script.index("eframe::run_native("),
-        )
+        ui_run = ui_script.split("pub fn run() -> Result<()>", 1)[1].split(
+            "impl Default for WhisperDictateApp", 1
+        )[0]
+        self.assertNotIn("cleanup_stale_desktop_processes", ui_run)
+        self.assertIn("eframe::run_native(", ui_run)
         self.assertIn("#[cfg(windows)]\npub fn cleanup_stale_desktop_processes()", runtime_script)
         self.assertIn("#[cfg(not(windows))]\npub fn cleanup_stale_desktop_processes() {}", runtime_script)
         self.assertIn("fn cleanup_stale_desktop_processes_windows() -> Result<()>", runtime_script)
@@ -102,7 +154,19 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         icon = Path("crates/whisper-dictate-app/src/ui/icon.rs").read_text(encoding="utf-8")
 
         self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
-        self.assertIn('ui.label(format!("whisper-dictate {}", runtime::version()))', script)
+        self.assertIn("app_version: runtime::version()", script)
+        self.assertIn('egui::RichText::new(format!("whisper-dictate {}", self.app_version))', script)
+        update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
+            "impl WhisperDictateApp", 1
+        )[0]
+        self.assertNotIn("runtime::version()", update_impl)
+        self.assertIn(".strong()", script)
+        self.assertIn('.resizable(false)', script)
+        self.assertIn('.exact_height(76.0)', script)
+        self.assertIn("egui::vec2(88.0, 28.0)", script)
+        self.assertIn("pub(super) fn global_controls(&mut self, ui: &mut egui::Ui)", script)
+        self.assertIn('egui::Button::new("Install/Repair")', script)
+        self.assertIn('ui.button("Reload settings").clicked()', script)
         self.assertIn(".with_icon(app_icon())", script)
         self.assertIn("fn app_icon() -> egui::IconData", icon)
 
@@ -140,6 +204,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys"', api_keys)
         self.assertIn('"Cloud STT API key"', script)
         self.assertIn('"Save API key"', script)
+        self.assertIn("const PASSWORD_CONTROL_WIDTH: f32 = 360.0;", script)
+        self.assertIn("const EYE_BUTTON_WIDTH: f32 = 26.0;", script)
+        self.assertIn("ui.set_width(PASSWORD_CONTROL_WIDTH);", script)
+        self.assertIn("ui.add_sized(", script)
+        self.assertIn("egui::vec2(input_width, 22.0)", script)
         self.assertIn("fn save_stt_api_key_now(&mut self)", script)
         self.assertIn("fn persist_cloud_provider_selection(&mut self)", script)
         self.assertIn("fn ensure_stt_api_key_loaded_for_runtime(&mut self)", script)
@@ -185,8 +254,28 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn status_label(ui: &mut egui::Ui, text: &str)", script)
         self.assertIn('text.starts_with("[OK]")', script)
         self.assertIn('text.starts_with("[ERROR]")', script)
-        self.assertIn("status_label(ui, &self.stt_api_key_status);", script)
-        self.assertIn("status_label(ui, &self.post_api_key_status);", script)
+        self.assertIn("fn settings_messages(&self, ui: &mut egui::Ui)", script)
+        self.assertIn('ui.strong("Messages")', script)
+        self.assertIn("Tab::Speech if !self.stt_api_key_status.trim().is_empty()", script)
+        self.assertIn("Tab::Post if !self.post_api_key_status.trim().is_empty()", script)
+        self.assertIn("status_label(ui, message);", script)
+
+    def test_rust_settings_pages_scroll_above_fixed_footer(self):
+        script = rust_ui_source()
+        settings_panel = script.split("fn settings_panel", 1)[1].split("fn settings_messages", 1)[0]
+
+        self.assertIn("let footer_height = 148.0;", settings_panel)
+        self.assertIn("egui::Layout::top_down(egui::Align::LEFT)", settings_panel)
+        self.assertIn("self.settings_messages(ui);", settings_panel)
+        self.assertIn("self.settings_actions(ui);", settings_panel)
+        self.assertIn("egui::ScrollArea::vertical()", settings_panel)
+        self.assertIn('.id_salt(format!("settings_body_{:?}", self.selected_tab))', settings_panel)
+        self.assertIn(".max_height(body_height)", settings_panel)
+        self.assertIn("body(self, ui);", settings_panel)
+        self.assertIn("fn settings_actions(&mut self, ui: &mut egui::Ui)", script)
+        self.assertIn("ui.horizontal_wrapped(|ui|", script)
+        self.assertIn("ui.set_min_height(72.0);", script)
+        self.assertIn("egui::Margin::symmetric(14.0, 12.0)", script)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
         script = rust_ui_source()
@@ -210,6 +299,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY"', api_keys)
         self.assertIn("enum PostProvider", api_keys)
         self.assertIn('"Post API key"', script)
+        self.assertIn("Tab::Post => self.settings_panel(ui, Self::post_processing_tab)", script)
+        self.assertIn("pub(super) fn post_processing_tab(&mut self, ui: &mut egui::Ui)", script)
+        self.assertIn('egui::Grid::new("post_processing_settings")', script)
         self.assertIn('"Save post API key"', script)
         self.assertIn("fn save_post_api_key_now(&mut self)", script)
         self.assertIn("fn load_post_api_key_state(", api_keys)
@@ -289,7 +381,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Whisper model",
             "Parakeet model",
             "Cloud STT model",
-            "Keyboard layout",
+            "Linux keyboard layout",
             "Beam size",
             "Audio ducking",
             "Audio ducking level",
@@ -304,6 +396,14 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Profiles JSON",
         ):
             self.assertIn(label, script)
+        self.assertIn('("", "Auto")', script)
+        self.assertIn('("da", "Danish")', script)
+        self.assertIn('if !cfg!(windows) {', script)
+        self.assertIn('"Linux keyboard layout"', script)
+        self.assertIn("Local runtime", script)
+        self.assertIn("Dictation controls", script)
+        self.assertIn("Applies to local and cloud speech engines.", script)
+        self.assertIn('"Wayland ydotool/XKB layout used for direct text injection on Linux.', script)
 
     def test_config_maps_audio_ducking_and_cloud_redaction(self):
         config = Path("vp_config.py").read_text(encoding="utf-8")

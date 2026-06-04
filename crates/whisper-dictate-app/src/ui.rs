@@ -90,7 +90,6 @@ impl SttBackendMode {
 }
 
 pub fn run() -> Result<()> {
-    runtime::cleanup_stale_desktop_processes();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1080.0, 760.0])
@@ -108,6 +107,7 @@ pub fn run() -> Result<()> {
 }
 
 struct WhisperDictateApp {
+    app_version: String,
     selected_tab: Tab,
     runtime_state: RuntimeState,
     runtime_log: String,
@@ -163,7 +163,8 @@ impl Default for WhisperDictateApp {
             "Rust UI ready. Start launches the Python dictation worker directly.\n[ui] config: {config_path}\n[ui] cloud API key load: {stt_api_key_status}\n[ui] post API key load: {post_api_key_status}"
         );
         Self {
-            selected_tab: Tab::Runtime,
+            app_version: runtime::version(),
+            selected_tab: Tab::Log,
             runtime_state: RuntimeState::Stopped,
             runtime_log,
             runtime_log_scroll_to_bottom: true,
@@ -201,31 +202,34 @@ struct BackgroundTaskResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
-    Runtime,
-    Core,
+    Log,
+    Speech,
     Quality,
     Dictionary,
     Output,
+    Post,
     Profiles,
 }
 
 impl Tab {
-    const ALL: [Tab; 6] = [
-        Tab::Runtime,
-        Tab::Core,
+    const ALL: [Tab; 7] = [
+        Tab::Log,
+        Tab::Speech,
         Tab::Quality,
         Tab::Dictionary,
         Tab::Output,
+        Tab::Post,
         Tab::Profiles,
     ];
 
     fn label(self) -> &'static str {
         match self {
-            Tab::Runtime => "Runtime",
-            Tab::Core => "Core",
+            Tab::Log => "Log",
+            Tab::Speech => "Speech",
             Tab::Quality => "Quality",
             Tab::Dictionary => "Dictionary",
             Tab::Output => "Output",
+            Tab::Post => "Post",
             Tab::Profiles => "Profiles",
         }
     }
@@ -238,22 +242,46 @@ impl eframe::App for WhisperDictateApp {
         apply_ui_text_scale(ctx, &self.settings.ui_text_scale);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
 
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("whisper-dictate {}", runtime::version()));
-                ui.separator();
-                for tab in Tab::ALL {
-                    ui.selectable_value(&mut self.selected_tab, tab, tab.label());
-                }
+        egui::TopBottomPanel::top("tabs")
+            .resizable(false)
+            .exact_height(76.0)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    ui.spacing_mut().button_padding = egui::vec2(10.0, 5.0);
+                    ui.label(
+                        egui::RichText::new(format!("whisper-dictate {}", self.app_version))
+                            .strong(),
+                    );
+                    ui.separator();
+                    for tab in Tab::ALL {
+                        let selected = self.selected_tab == tab;
+                        if ui
+                            .add_sized(
+                                egui::vec2(88.0, 28.0),
+                                egui::SelectableLabel::new(
+                                    selected,
+                                    egui::RichText::new(tab.label()).size(15.0),
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.selected_tab = tab;
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+                self.global_controls(ui);
             });
-        });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.selected_tab {
-            Tab::Runtime => self.runtime_tab(ui),
-            Tab::Core => self.settings_panel(ui, Self::core_tab),
+            Tab::Log => self.runtime_tab(ui),
+            Tab::Speech => self.settings_panel(ui, Self::core_tab),
             Tab::Quality => self.settings_panel(ui, Self::quality_tab),
             Tab::Dictionary => self.settings_panel(ui, Self::dictionary_tab),
             Tab::Output => self.settings_panel(ui, Self::output_tab),
+            Tab::Post => self.settings_panel(ui, Self::post_processing_tab),
             Tab::Profiles => self.settings_panel(ui, Self::profiles_tab),
         });
     }
@@ -331,7 +359,7 @@ impl WhisperDictateApp {
         if self.stt_api_key_input.trim().is_empty() {
             let provider = self.current_cloud_provider();
             let message = format!(
-                "No {} API key loaded. Paste one in Core and click Save API key before starting cloud STT.",
+                "No {} API key loaded. Paste one in Speech and click Save API key before starting cloud STT.",
                 provider.label()
             );
             self.stt_api_key_status = message.clone();
@@ -1094,12 +1122,18 @@ fn password_enabled(
             .request_repaint_after(until.saturating_duration_since(now));
     }
     ui.add_enabled_ui(enabled, |ui| {
+        const PASSWORD_CONTROL_WIDTH: f32 = 360.0;
+        const EYE_BUTTON_WIDTH: f32 = 26.0;
+        const EYE_BUTTON_GAP: f32 = 4.0;
+        let input_width = PASSWORD_CONTROL_WIDTH - EYE_BUTTON_WIDTH - EYE_BUTTON_GAP;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.add(
+            ui.spacing_mut().item_spacing.x = EYE_BUTTON_GAP;
+            ui.set_width(PASSWORD_CONTROL_WIDTH);
+            ui.add_sized(
+                egui::vec2(input_width, 22.0),
                 egui::TextEdit::singleline(value)
                     .password(!is_revealed)
-                    .desired_width(332.0),
+                    .desired_width(input_width),
             );
             let response = eye_icon_button(ui, is_revealed).on_hover_text(if is_revealed {
                 "Hide API key."
@@ -1349,8 +1383,15 @@ fn apply_ui_text_scale(ctx: &egui::Context, raw_scale: &str) {
         ),
     ]);
     let mut style = (*ctx.style()).clone();
-    if style.text_styles != text_styles {
+    let button_padding = egui::vec2(8.0 * scale, 4.0 * scale);
+    let item_spacing = egui::vec2(7.0 * scale, 5.0 * scale);
+    let changed = style.text_styles != text_styles
+        || style.spacing.button_padding != button_padding
+        || style.spacing.item_spacing != item_spacing;
+    if changed {
         style.text_styles = text_styles;
+        style.spacing.button_padding = button_padding;
+        style.spacing.item_spacing = item_spacing;
         ctx.set_style(style);
     }
 }
@@ -1413,7 +1454,12 @@ fn parse_gnome_xkb_sources(raw: &str) -> Option<String> {
 fn open_url(url: &str) -> Result<()> {
     #[cfg(windows)]
     {
-        Command::new("cmd").args(["/C", "start", "", url]).spawn()?;
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("cmd");
+        command
+            .args(["/C", "start", "", url])
+            .creation_flags(0x08000000);
+        command.spawn()?;
         return Ok(());
     }
 

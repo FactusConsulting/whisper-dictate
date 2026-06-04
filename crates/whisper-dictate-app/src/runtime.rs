@@ -602,10 +602,12 @@ fn pip_install_command(venv_python: &Path, requirements: &Path, app_root: &Path)
 
 fn run_install_command(command: &PlannedCommand) -> Result<()> {
     println!("> {}", command.display());
-    let status = Command::new(&command.program)
+    let mut process = Command::new(&command.program);
+    process
         .args(&command.args)
-        .current_dir(&command.working_dir)
-        .status()?;
+        .current_dir(&command.working_dir);
+    configure_background_process(&mut process);
+    let status = process.status()?;
     if status.success() {
         Ok(())
     } else {

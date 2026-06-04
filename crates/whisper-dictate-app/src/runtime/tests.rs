@@ -283,6 +283,21 @@ fn run_capture_returns_stdout_stderr_and_status() {
 }
 
 #[test]
+fn install_commands_use_background_process_flags() {
+    let runtime = include_str!("../runtime.rs");
+    let run_install_command = runtime
+        .split_once("fn run_install_command")
+        .unwrap()
+        .1
+        .split_once("fn wants_parakeet_backend")
+        .unwrap()
+        .0;
+
+    assert!(run_install_command.contains("configure_background_process(&mut process);"));
+    assert!(!run_install_command.contains("Command::new(&command.program)\n        .args"));
+}
+
+#[test]
 fn install_plan_uses_named_cpu_requirements_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("requirements-cpu.txt"), "").unwrap();
