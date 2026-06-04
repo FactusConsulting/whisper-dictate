@@ -238,16 +238,42 @@ workflow from this source — it has not been tampered with.
 > build from source and run the Rust controller directly — identical software,
 > no installer stub.
 
-### Install via winget
+### Install via Chocolatey private source
 
-Once the [pending PR](https://github.com/microsoft/winget-pkgs/pulls?q=is%3Apr+FactusConsulting.WhisperDictate)
-to the official winget package index merges:
+Releases publish a Chocolatey package asset:
+
+- **`whisper-dictate.<version>.nupkg`**
+
+The release workflow publishes that package to GitHub Packages NuGet:
 
 ```powershell
-winget install FactusConsulting.WhisperDictate
+choco source add -n=whisper-dictate-github -s="https://nuget.pkg.github.com/FactusConsulting/index.json" -u="<github-user>" -p="<token>"
+choco install whisper-dictate --source=whisper-dictate-github -y
 ```
 
-**Until then**, install from this repo's manifests directly:
+If we configure a Chocolatey-compatible private NuGet feed such as ProGet,
+Nexus, Artifactory or Azure Artifacts, add that source instead:
+
+```powershell
+choco source add -n=whisper-dictate -s="<private-nuget-feed-url>" -u="<user>" -p="<token>"
+choco install whisper-dictate --source=whisper-dictate -y
+```
+
+The Chocolatey package downloads the matching
+`whisper-dictate-windows-setup-<version>.exe` release asset, verifies its
+SHA256, and runs the same silent per-user installer as the direct `.exe` path.
+
+You can also test a downloaded package directly:
+
+```powershell
+choco install whisper-dictate --source="C:\path\to\nupkg-folder" -y
+```
+
+### Install via local winget manifests
+
+The official `winget-pkgs` path is not currently active; the package was
+rejected while the project is still new. Until that can be revisited, use the
+repo-local manifests:
 
 ```powershell
 # One-time, in an elevated (admin) PowerShell:
@@ -576,17 +602,20 @@ git tag v0.2.1 && git push origin v0.2.1
 ```
 
 This triggers **`release.yml`**: it publishes the Linux bundle and Rust UI
-binary, then builds the unified Windows installer and portable Windows ZIP bundle on a
-Windows runner. It also publishes the GitHub Release and (when the
+binary, then builds the unified Windows installer, portable Windows ZIP bundle
+and Chocolatey `.nupkg` on a Windows runner. It also publishes the GitHub Release and (when the
 `HOMEBREW_TAP_TOKEN` repo secret is set)
 auto-bumps `url`/`sha256` in
 [`FactusConsulting/homebrew-tap`](https://github.com/FactusConsulting/homebrew-tap)
 `Formula/whisper-dictate.rb`.
 
-The Windows `.exe` installer and Windows ZIP bundle are built by the release
-workflow itself. After the tag is pushed, CI uploads them to the Release and
-regenerates the local winget manifests in this repo (used for the
-`winget install --manifest` install path).
+The Windows `.exe` installer, Windows ZIP bundle and Chocolatey package are
+built by the release workflow itself. After the tag is pushed, CI uploads them
+to the Release and regenerates the local winget manifests in this repo (used
+for the `winget install --manifest` install path). CI publishes the `.nupkg` to
+GitHub Packages NuGet. If the `CHOCOLATEY_NUGET_SOURCE` and
+`CHOCOLATEY_NUGET_API_KEY` repo secrets are also set, CI pushes the same package
+to that additional private Chocolatey/NuGet feed.
 
 For a faster local Windows test loop without creating a release:
 

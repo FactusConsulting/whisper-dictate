@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>whisper-dictate</id>
+    <version>__VERSION__</version>
+    <title>whisper-dictate</title>
+    <authors>FactusConsulting</authors>
+    <owners>FactusConsulting</owners>
+    <projectUrl>https://github.com/FactusConsulting/whisper-dictate</projectUrl>
+    <licenseUrl>https://github.com/FactusConsulting/whisper-dictate/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>Local push-to-talk dictation with a Rust desktop UI and terminal workflow.</description>
+    <summary>Local push-to-talk dictation.</summary>
+    <tags>dictation speech-to-text whisper voice ai rust</tags>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

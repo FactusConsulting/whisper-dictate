@@ -368,6 +368,7 @@ jobs:
     runs-on: windows-2025
     permissions:
       contents: write
+      packages: write
     steps:
       - name: Resolve tag
         shell: bash
@@ -397,7 +398,8 @@ jobs:
             voice_pi.py 'vp_*.py' \
             requirements-cpu.txt requirements-gpu.txt \
             scripts/ \
-            installer/)
+            installer/ \
+            packaging/chocolatey/)
           if [ -n "$changed" ]; then
             echo "changed=true"  >> "$GITHUB_OUTPUT"
             echo "Windows files changed since $prev:"
@@ -469,13 +471,75 @@ jobs:
           $out | ConvertTo-Json | Set-Content sha256sums.json -Encoding utf8
           Get-Content sha256sums.txt
 
+      - name: Build Chocolatey package
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ env.TAG }}" -replace '^v',''
+          $repo    = "${{ github.repository }}"
+          $tag     = "${{ env.TAG }}"
+          $hashes  = Get-Content sha256sums.json | ConvertFrom-Json
+          $installerName = "whisper-dictate-windows-setup-$version.exe"
+          $installerHash = ($hashes | Where-Object File -eq $installerName).SHA256
+          if (-not $installerHash) { throw "Missing SHA256 for $installerName" }
+
+          $baseUrl = "https://github.com/$repo/releases/download/$tag"
+          $installerUrl = "$baseUrl/$installerName"
+          $packageDir = "Output\chocolatey\whisper-dictate"
+          Remove-Item $packageDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$packageDir\tools" | Out-Null
+          Copy-Item packaging\chocolatey\tools\*.ps1 "$packageDir\tools\"
+
+          $nuspec = Get-Content packaging\chocolatey\whisper-dictate.nuspec -Raw
+          $nuspec = $nuspec.Replace('__VERSION__', $version)
+          Set-Content "$packageDir\whisper-dictate.nuspec" $nuspec -Encoding utf8
+
+          $install = Get-Content "$packageDir\tools\chocolateyinstall.ps1" -Raw
+          $install = $install.Replace('__INSTALLER_URL__', $installerUrl)
+          $install = $install.Replace('__INSTALLER_SHA256__', $installerHash)
+          Set-Content "$packageDir\tools\chocolateyinstall.ps1" $install -Encoding utf8
+
+          choco pack "$packageDir\whisper-dictate.nuspec" --outputdirectory Output
+          if ($LASTEXITCODE -ne 0) { throw "choco pack failed" }
+
       - name: Upload installers + checksums to release
         if: steps.win-check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release upload "$TAG" Output/*.exe Output/*.zip sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" Output/*.exe Output/*.zip Output/*.nupkg sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Publish Chocolatey package to GitHub Packages NuGet
+        if: steps.win-check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
+          if (-not $package) { throw "Chocolatey package was not built" }
+          $source = "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          dotnet nuget push $package.FullName --api-key "$env:GH_TOKEN" --source "$source" --skip-duplicate
+
+      - name: Publish Chocolatey package to private NuGet feed
+        if: steps.win-check.outputs.changed == 'true'
+        env:
+          CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
+          CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
+        shell: pwsh
+        run: |
+          if (-not $env:CHOCOLATEY_NUGET_SOURCE) {
+            Write-Host "CHOCOLATEY_NUGET_SOURCE not set - skipping private Chocolatey/NuGet push."
+            exit 0
+          }
+          if (-not $env:CHOCOLATEY_NUGET_API_KEY) {
+            Write-Host "CHOCOLATEY_NUGET_API_KEY not set - skipping private Chocolatey/NuGet push."
+            exit 0
+          }
+          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
+          if (-not $package) { throw "Chocolatey package was not built" }
+          choco push $package.FullName --source "$env:CHOCOLATEY_NUGET_SOURCE" --api-key "$env:CHOCOLATEY_NUGET_API_KEY" --force
+          if ($LASTEXITCODE -ne 0) { throw "choco push failed" }
 
       - name: Generate winget manifests
         if: steps.win-check.outputs.changed == 'true'

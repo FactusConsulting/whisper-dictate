@@ -67,6 +67,52 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("archive/refs/tags", bump_step)
         self.assertNotIn('exec "#{libexec}/setup.sh"', bump_step)
 
+    def test_chocolatey_package_template_installs_release_asset(self):
+        nuspec = Path("packaging/chocolatey/whisper-dictate.nuspec").read_text(
+            encoding="utf-8"
+        )
+        install = Path(
+            "packaging/chocolatey/tools/chocolateyinstall.ps1"
+        ).read_text(encoding="utf-8")
+        uninstall = Path(
+            "packaging/chocolatey/tools/chocolateyuninstall.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("<id>whisper-dictate</id>", nuspec)
+        self.assertIn("<version>__VERSION__</version>", nuspec)
+        self.assertIn("__INSTALLER_URL__", install)
+        self.assertIn("__INSTALLER_SHA256__", install)
+        self.assertIn("Install-ChocolateyPackage @packageArgs", install)
+        self.assertIn("Uninstall-ChocolateyPackage @packageArgs", uninstall)
+
+    def test_release_builds_and_optionally_pushes_chocolatey_package(self):
+        for path in (
+            Path(".github/workflows/release.yml"),
+            Path(".github/workflows/windows-installer.yml"),
+        ):
+            workflow = path.read_text(encoding="utf-8")
+            self.assertIn("- name: Build Chocolatey package", workflow, path.as_posix())
+            self.assertIn("choco pack", workflow, path.as_posix())
+            self.assertIn("Output/*.nupkg", workflow, path.as_posix())
+            self.assertIn("packages: write", workflow, path.as_posix())
+            self.assertIn("Publish Chocolatey package to GitHub Packages NuGet", workflow, path.as_posix())
+            self.assertIn("nuget.pkg.github.com/${{ github.repository_owner }}", workflow, path.as_posix())
+            self.assertIn("dotnet nuget push", workflow, path.as_posix())
+            self.assertIn("CHOCOLATEY_NUGET_SOURCE", workflow, path.as_posix())
+            self.assertIn("CHOCOLATEY_NUGET_API_KEY", workflow, path.as_posix())
+            self.assertIn("choco push", workflow, path.as_posix())
+            self.assertIn("packaging/chocolatey/", workflow, path.as_posix())
+
+    def test_readme_documents_private_chocolatey_source(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("Install via Chocolatey private source", readme)
+        self.assertIn("nuget.pkg.github.com/FactusConsulting/index.json", readme)
+        self.assertIn("choco source add -n=whisper-dictate", readme)
+        self.assertIn("choco install whisper-dictate", readme)
+        self.assertIn("CHOCOLATEY_NUGET_SOURCE", readme)
+        self.assertIn("CHOCOLATEY_NUGET_API_KEY", readme)
+
     def test_crate_lockfile_stays_in_sync_with_workspace_lockfile(self):
         root_lock = Path("Cargo.lock").read_text(encoding="utf-8")
         crate_lock = Path("crates/whisper-dictate-app/Cargo.lock").read_text(
