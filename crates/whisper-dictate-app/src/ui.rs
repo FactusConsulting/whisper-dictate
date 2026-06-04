@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
 use crate::config::{self, AppSettings};
@@ -117,11 +118,11 @@ struct WhisperDictateApp {
     settings_status: String,
     stt_api_key_input: String,
     saved_stt_api_key_input: String,
-    show_stt_api_key: bool,
+    stt_api_key_reveal_until: Option<Instant>,
     stt_api_key_status: String,
     post_api_key_input: String,
     saved_post_api_key_input: String,
-    show_post_api_key: bool,
+    post_api_key_reveal_until: Option<Instant>,
     post_api_key_status: String,
     dictionary_preview: String,
     history_preview: String,
@@ -172,11 +173,11 @@ impl Default for WhisperDictateApp {
             settings_status,
             saved_stt_api_key_input,
             stt_api_key_input,
-            show_stt_api_key: false,
+            stt_api_key_reveal_until: None,
             stt_api_key_status,
             saved_post_api_key_input,
             post_api_key_input,
-            show_post_api_key: false,
+            post_api_key_reveal_until: None,
             post_api_key_status,
             dictionary_preview: String::new(),
             history_preview: String::new(),
@@ -1079,29 +1080,77 @@ fn password_enabled(
     enabled: bool,
     label: &str,
     value: &mut String,
-    show_value: &mut bool,
+    reveal_until: &mut Option<Instant>,
     help: &str,
 ) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
+    let now = Instant::now();
+    if reveal_until.is_some_and(|until| until <= now) {
+        *reveal_until = None;
+    }
+    let is_revealed = reveal_until.is_some_and(|until| until > now);
+    if let Some(until) = *reveal_until {
+        ui.ctx()
+            .request_repaint_after(until.saturating_duration_since(now));
+    }
     ui.add_enabled_ui(enabled, |ui| {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
             ui.add(
                 egui::TextEdit::singleline(value)
-                    .password(!*show_value)
-                    .desired_width(300.0),
+                    .password(!is_revealed)
+                    .desired_width(332.0),
             );
-            let label = if *show_value { "Hide" } else { "Show" };
-            if ui
-                .button(label)
-                .on_hover_text("Show or hide the API key in this field.")
-                .clicked()
-            {
-                *show_value = !*show_value;
+            let response = eye_icon_button(ui, is_revealed).on_hover_text(if is_revealed {
+                "Hide API key."
+            } else {
+                "Show API key for 3 seconds."
+            });
+            if response.clicked() {
+                *reveal_until = if is_revealed {
+                    None
+                } else {
+                    Some(Instant::now() + Duration::from_secs(3))
+                };
             }
         });
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
+}
+
+fn eye_icon_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
+    let size = egui::vec2(26.0, 22.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect(rect, 2.0, visuals.bg_fill, visuals.bg_stroke);
+
+        let stroke = egui::Stroke::new(
+            1.3,
+            if active {
+                ui.visuals().selection.stroke.color
+            } else {
+                visuals.fg_stroke.color
+            },
+        );
+        let center = rect.center();
+        let left = egui::pos2(rect.left() + 5.0, center.y);
+        let right = egui::pos2(rect.right() - 5.0, center.y);
+        let top = egui::pos2(center.x, rect.top() + 6.0);
+        let bottom = egui::pos2(center.x, rect.bottom() - 6.0);
+        ui.painter().line_segment([left, top], stroke);
+        ui.painter().line_segment([top, right], stroke);
+        ui.painter().line_segment([right, bottom], stroke);
+        ui.painter().line_segment([bottom, left], stroke);
+        ui.painter().circle_stroke(center, 2.4, stroke);
+        if active {
+            ui.painter()
+                .circle_filled(center, 1.4, ui.visuals().selection.stroke.color);
+        }
+    }
+    response
 }
 
 fn checkbox_help(ui: &mut egui::Ui, label: &str, value: &mut bool, help: &str) {
