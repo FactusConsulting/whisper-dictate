@@ -181,6 +181,7 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Cloud,
                     "Cloud STT API key",
                     &mut self.stt_api_key_input,
+                    &mut self.show_stt_api_key,
                     "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
                 );
                 ui.strong("Runtime");
@@ -244,25 +245,27 @@ impl WhisperDictateApp {
         if backend == SttBackendMode::Cloud {
             let provider = self.current_cloud_provider();
             ui.horizontal(|ui| {
-                if ui
-                    .button(format!("{} API keys", provider.label()))
-                    .clicked()
-                {
-                    match open_url(provider.key_url()) {
-                        Ok(()) => {
-                            self.stt_api_key_status =
-                                format!("Opened {} API keys page.", provider.label());
-                        }
-                        Err(err) => {
-                            self.stt_api_key_status =
-                                format!("Could not open {} API keys page: {err}", provider.label());
+                if provider == CloudProvider::Groq {
+                    if ui
+                        .link("Open Groq API keys")
+                        .on_hover_text("Open the Groq API key page.")
+                        .clicked()
+                    {
+                        match open_url(provider.key_url()) {
+                            Ok(()) => {
+                                self.stt_api_key_status = "Opened Groq API keys page.".to_owned();
+                            }
+                            Err(err) => {
+                                self.stt_api_key_status =
+                                    format!("Could not open Groq API keys page: {err}");
+                            }
                         }
                     }
                 }
                 if ui
                     .button("Save API key")
                     .on_hover_text(
-                        "Stores the current API key and remembers the selected cloud provider.",
+                        "Stores the current API key in the platform credential store and remembers the selected cloud provider. Clear the field and save to remove it.",
                     )
                     .clicked()
                 {
@@ -284,13 +287,13 @@ impl WhisperDictateApp {
             ui.horizontal_wrapped(|ui| {
                 status_label(ui, &self.stt_api_key_status);
             });
-            ui.label(
-                "Paste or edit the API key above, then click Save API key or Save settings. Clear the field and save to remove the stored key.",
-            );
-        }
-        if self.settings.stt_backend == "openai" {
-            ui.label(
-                "Cloud STT sends recorded audio to the configured provider. API keys are stored in the OS credential store when saved from this UI.",
+            let key_help = if self.saved_stt_api_key_input.trim().is_empty() {
+                "Paste an API key, then click Save API key. Cloud STT sends recorded audio to the configured provider."
+            } else {
+                "Saved key loaded. Edit and save to replace it, or clear the field and save to remove it."
+            };
+            ui.label(key_help).on_hover_text(
+                "API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
             );
         }
     }
@@ -551,6 +554,7 @@ impl WhisperDictateApp {
                         true,
                         "Post API key",
                         &mut self.post_api_key_input,
+                        &mut self.show_post_api_key,
                         "Optional separate API key for cloud post-processing. Stored in the OS credential store as VOICEPI_POST_API_KEY. If empty, the worker falls back to the Cloud STT API key when available.",
                     );
                     ui.label("");
@@ -570,26 +574,26 @@ impl WhisperDictateApp {
                             self.run_post_api_check();
                         }
                     });
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button(format!("{} API keys", provider.label()))
-                            .on_hover_text("Open the provider API key page.")
-                            .clicked()
-                        {
-                            match open_url(provider.key_url()) {
-                                Ok(()) => {
-                                    self.post_api_key_status =
-                                        format!("Opened {} API keys page.", provider.label());
-                                }
-                                Err(err) => {
-                                    self.post_api_key_status = format!(
-                                        "Could not open {} API keys page: {err}",
-                                        provider.label()
-                                    );
+                    if provider == PostProvider::Groq {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .link("Open Groq API keys")
+                                .on_hover_text("Open the Groq API key page.")
+                                .clicked()
+                            {
+                                match open_url(provider.key_url()) {
+                                    Ok(()) => {
+                                        self.post_api_key_status =
+                                            "Opened Groq API keys page.".to_owned();
+                                    }
+                                    Err(err) => {
+                                        self.post_api_key_status =
+                                            format!("Could not open Groq API keys page: {err}");
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    }
                     ui.horizontal_wrapped(|ui| {
                         status_label(ui, &self.post_api_key_status);
                     });

@@ -216,7 +216,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn load_post_api_key_from_env(provider: PostProvider)", api_keys)
         self.assertIn("fn save_post_api_key(", api_keys)
         self.assertIn("provider: PostProvider,", api_keys)
-        self.assertIn("Result<SecretSaveLocation>", api_keys)
+        self.assertIn("Result<SecretSaveReport>", api_keys)
         self.assertIn("self.reload_post_api_key();", script)
         self.assertIn("const GROQ_POST_MODELS: &[&str]", script)
         self.assertIn('"llama-3.1-8b-instant"', script)
@@ -239,6 +239,15 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn run_post_api_check(&mut self)", script)
         self.assertIn("response.on_hover_text(help)", script)
         self.assertIn('"Quit key"', script)
+
+    def test_rust_ui_keyring_uses_native_platform_backends(self):
+        cargo = Path("crates/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
+
+        self.assertIn('keyring = { version = "3.6"', cargo)
+        self.assertIn('"windows-native"', cargo)
+        self.assertIn('"apple-native"', cargo)
+        self.assertIn('"linux-native-sync-persistent"', cargo)
+        self.assertIn('"crypto-rust"', cargo)
 
     def test_rust_ui_has_cloud_api_test_and_local_viewers(self):
         ui = rust_ui_source()

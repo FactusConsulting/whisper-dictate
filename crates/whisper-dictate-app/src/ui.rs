@@ -117,9 +117,11 @@ struct WhisperDictateApp {
     settings_status: String,
     stt_api_key_input: String,
     saved_stt_api_key_input: String,
+    show_stt_api_key: bool,
     stt_api_key_status: String,
     post_api_key_input: String,
     saved_post_api_key_input: String,
+    show_post_api_key: bool,
     post_api_key_status: String,
     dictionary_preview: String,
     history_preview: String,
@@ -170,9 +172,11 @@ impl Default for WhisperDictateApp {
             settings_status,
             saved_stt_api_key_input,
             stt_api_key_input,
+            show_stt_api_key: false,
             stt_api_key_status,
             saved_post_api_key_input,
             post_api_key_input,
+            show_post_api_key: false,
             post_api_key_status,
             dictionary_preview: String::new(),
             history_preview: String::new(),
@@ -1070,14 +1074,31 @@ fn text_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut Strin
     grid_help_row(ui, show_help, help);
 }
 
-fn password_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut String, help: &str) {
+fn password_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    show_value: &mut bool,
+    help: &str,
+) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
-        ui.add(
-            egui::TextEdit::singleline(value)
-                .password(true)
-                .desired_width(360.0),
-        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .password(!*show_value)
+                    .desired_width(300.0),
+            );
+            let label = if *show_value { "Hide" } else { "Show" };
+            if ui
+                .button(label)
+                .on_hover_text("Show or hide the API key in this field.")
+                .clicked()
+            {
+                *show_value = !*show_value;
+            }
+        });
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
