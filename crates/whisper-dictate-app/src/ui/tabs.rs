@@ -9,7 +9,11 @@ impl WhisperDictateApp {
             if ui.button("Stop").clicked() {
                 self.stop_runtime();
             }
-            if ui.button("Restart").clicked() {
+            if ui
+                .button("Reload")
+                .on_hover_text("Restart the dictation runtime with the current settings.")
+                .clicked()
+            {
                 self.restart_runtime();
             }
             if ui.button("Reload settings").clicked() {

@@ -162,13 +162,31 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("runtime::version()", update_impl)
         self.assertIn(".strong()", script)
         self.assertIn('.resizable(false)', script)
-        self.assertIn('.exact_height(76.0)', script)
         self.assertIn("egui::vec2(88.0, 28.0)", script)
-        self.assertIn("pub(super) fn global_controls(&mut self, ui: &mut egui::Ui)", script)
-        self.assertIn('egui::Button::new("Install/Repair")', script)
-        self.assertIn('ui.button("Reload settings").clicked()', script)
         self.assertIn(".with_icon(app_icon())", script)
         self.assertIn("fn app_icon() -> egui::IconData", icon)
+
+    def test_rust_runtime_controls_are_global_and_not_clipped_by_fixed_topbar(self):
+        script = rust_ui_source()
+        update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
+            "impl WhisperDictateApp", 1
+        )[0]
+        controls = script.split("pub(super) fn global_controls", 1)[1].split(
+            "pub(super) fn runtime_tab", 1
+        )[0]
+
+        self.assertIn("self.global_controls(ui);", update_impl)
+        self.assertLess(
+            update_impl.index("self.global_controls(ui);"),
+            update_impl.index("egui::CentralPanel::default()"),
+        )
+        self.assertNotIn(".exact_height(", update_impl)
+        self.assertIn('ui.button("Start").clicked()', controls)
+        self.assertIn('ui.button("Stop").clicked()', controls)
+        self.assertIn('.button("Reload")', controls)
+        self.assertIn("self.restart_runtime();", controls)
+        self.assertIn('ui.button("Reload settings").clicked()', controls)
+        self.assertIn('egui::Button::new("Install/Repair")', controls)
 
     def test_rust_ui_has_cloud_provider_dropdown_and_key_storage(self):
         script = rust_ui_source()

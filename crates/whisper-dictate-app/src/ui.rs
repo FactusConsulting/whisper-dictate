@@ -244,7 +244,6 @@ impl eframe::App for WhisperDictateApp {
 
         egui::TopBottomPanel::top("tabs")
             .resizable(false)
-            .exact_height(76.0)
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 ui.horizontal_centered(|ui| {
@@ -271,8 +270,9 @@ impl eframe::App for WhisperDictateApp {
                         }
                     }
                 });
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 self.global_controls(ui);
+                ui.add_space(4.0);
             });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.selected_tab {
