@@ -4,7 +4,7 @@
 # Install: pip install -r requirements/cpu.txt
 faster-whisper==1.1.1
 requests>=2.31            # faster-whisper 1.1.1 utils.py imports it for model download
-numpy<2.2                 # ctranslate2 / onnxruntime ABI constraint
+numpy<2.5                 # ctranslate2 / onnxruntime ABI constraint
 
 # Mic capture + hotkey + injection. On Linux: sounddevice needs the
 # system PortAudio lib (libportaudio2); pyperclip needs a clipboard
