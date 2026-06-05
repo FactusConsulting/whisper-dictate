@@ -206,6 +206,26 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("actions/setup-python@v6", workflow_text)
 
+    def test_smoke_workflow_sets_pythonpath_with_cross_shell_env(self):
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+
+        self.assertNotIn("PYTHONPATH=src/python python", workflow)
+        self.assertIn(
+            "env:\n          PYTHONPATH: src/python\n        run: python -m whisper_dictate.runtime --help",
+            workflow,
+        )
+        self.assertIn(
+            "env:\n          PYTHONPATH: src/python\n        run: python -m whisper_dictate.runtime --doctor",
+            workflow,
+        )
+
+    def test_dependabot_scans_only_requirements_directory_for_pip(self):
+        config = Path(".github/dependabot.yml").read_text(encoding="utf-8")
+
+        self.assertIn('package-ecosystem: "pip"', config)
+        self.assertIn('directory: "/requirements"', config)
+        self.assertNotIn('directory: "/"', config)
+
     def test_write_permissions_are_job_scoped(self):
         for path in (
             Path(".github/workflows/release.yml"),

@@ -1,6 +1,7 @@
 from tests.test_helpers import (
     os,
     Path,
+    subprocess,
     unittest,
 )
 
@@ -19,6 +20,11 @@ class RustUiInstallerTests(unittest.TestCase):
         script = path.read_text(encoding="utf-8")
 
         self.assertTrue(os.access(path, os.X_OK))
+        mode = subprocess.check_output(
+            ["git", "ls-files", "--stage", path.as_posix()],
+            text=True,
+        ).split()[0]
+        self.assertEqual("100755", mode)
         self.assertIn('SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"', script)
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/../.." && pwd)"', script)
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"', script)

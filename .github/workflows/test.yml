@@ -60,9 +60,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: runtime --help
-        run: PYTHONPATH=src/python python -m whisper_dictate.runtime --help
+        env:
+          PYTHONPATH: src/python
+        run: python -m whisper_dictate.runtime --help
       - name: runtime --doctor smoke
-        run: PYTHONPATH=src/python python -m whisper_dictate.runtime --doctor
+        env:
+          PYTHONPATH: src/python
+        run: python -m whisper_dictate.runtime --doctor
         continue-on-error: true
       - name: Install pynput (Windows only)
         if: runner.os == 'Windows'
