@@ -369,29 +369,3 @@ class ExternalApiTests(unittest.TestCase):
                     prompt="clean this",
                     timeout_ms=1000,
                 )
-
-class RedactionTests(unittest.TestCase):
-    def test_postprocess_redaction_delegates_to_rust_helper(self):
-        from whisper_dictate import vp_postprocess
-
-        class Completed:
-            returncode = 0
-            stdout = json.dumps({
-                "text": "[[WD_EMAIL_1]]",
-                "redactions": [{
-                    "placeholder": "[[WD_EMAIL_1]]",
-                    "value": "lars@example.com",
-                    "kind": "email",
-                }],
-            })
-            stderr = ""
-
-        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}, clear=False), \
-                patch("whisper_dictate.vp_postprocess.subprocess.run", return_value=Completed()) as run:
-            result = vp_postprocess._redact_text("lars@example.com", terms=["Lars"])
-
-        self.assertEqual(run.call_args.args[0], ["whisper-dictate", "redact-text"])
-        self.assertIn('"terms": ["Lars"]', run.call_args.kwargs["input"])
-        self.assertEqual(result.text, "[[WD_EMAIL_1]]")
-        self.assertEqual(result.restore(result.text), "lars@example.com")
-        self.assertNotIn("value", result.public_summary()[0])

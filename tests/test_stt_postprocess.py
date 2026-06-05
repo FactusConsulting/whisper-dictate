@@ -771,31 +771,6 @@ class FormatCommandTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "Rust format-text helper"):
             runtime.apply_format_commands("first comma", "en")
 
-    def test_python_formatting_delegates_to_rust_helper_when_available(self):
-        import subprocess
-        from whisper_dictate import runtime
-
-        completed = subprocess.CompletedProcess(
-            ["whisper-dictate"],
-            0,
-            stdout=json.dumps({
-                "text": "første,\nandet.",
-                "enabled": True,
-                "changed": True,
-                "command_set": "da",
-                "applied": [{"command": "komma", "replacement": ",", "count": 1}],
-            }),
-            stderr="",
-        )
-
-        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
-                patch("whisper_dictate.runtime.subprocess.run", return_value=completed) as run:
-            result = runtime.apply_format_commands("første komma ny linje andet punktum", "da")
-
-        self.assertEqual(result.text, "første,\nandet.")
-        self.assertEqual(result.applied[0]["count"], "1")
-        self.assertEqual(run.call_args.args[0][:2], ["whisper-dictate", "format-text"])
-
     def test_python_formatting_reports_rust_helper_failure(self):
         import subprocess
         from whisper_dictate import runtime

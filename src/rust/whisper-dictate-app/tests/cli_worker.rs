@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[test]
 fn help_uses_public_binary_name_even_when_binary_path_differs() {
@@ -78,6 +79,91 @@ fn rust_application_startup_smoke_commands_do_not_crash() {
 }
 
 #[test]
+fn format_text_helper_returns_structured_json() {
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .args([
+            "format-text",
+            "--text",
+            "første komma ny linje andet punktum",
+            "--command-set",
+            "da",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "format-text failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["enabled"], true);
+    assert_eq!(value["changed"], true);
+    assert_eq!(value["command_set"], "da");
+    assert_eq!(value["text"], "første,\nandet.");
+    let applied = value["applied"].as_array().unwrap();
+    assert!(applied
+        .iter()
+        .any(|item| item["command"] == "komma" && item["count"] == 1));
+}
+
+#[test]
+fn redact_text_helper_reads_json_stdin_and_omits_values_from_text() {
+    let output = command_with_stdin(
+        &["redact-text"],
+        &serde_json::json!({
+            "text": "Kontakt Lars på lars@example.com.",
+            "terms": ["Lars"],
+        })
+        .to_string(),
+    );
+
+    assert!(
+        output.status.success(),
+        "redact-text failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["text"], "Kontakt [[WD_TERM_2]] på [[WD_EMAIL_1]].");
+    assert_eq!(value["redactions"][0]["kind"], "email");
+    assert_eq!(value["redactions"][0]["value"], "lars@example.com");
+    assert_eq!(value["redactions"][1]["kind"], "term");
+    assert_eq!(value["redactions"][1]["value"], "Lars");
+}
+
+#[test]
+fn privacy_helper_reports_local_only_backend_blocks_as_json() {
+    let output = command_with_stdin(
+        &["privacy"],
+        &serde_json::json!({
+            "action": "assert_backend",
+            "local_only": true,
+            "backend": "openai:gpt-4o-transcribe",
+            "feature": "STT",
+        })
+        .to_string(),
+    );
+
+    assert!(
+        output.status.success(),
+        "privacy failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], false);
+    assert!(value["error"]
+        .as_str()
+        .unwrap()
+        .contains("VOICEPI_LOCAL_ONLY=1 blocks STT backend"));
+}
+
+#[test]
 fn worker_failure_does_not_print_rust_backtrace() {
     let Some(python) = test_python() else {
         eprintln!("skipping: no Python launcher found on PATH");
@@ -113,6 +199,25 @@ fn worker_failure_does_not_print_rust_backtrace() {
     assert!(stdout.contains("fake doctor failed"));
     assert!(stderr.contains("worker exited with status"));
     assert!(!stderr.contains("Stack backtrace"));
+}
+
+fn command_with_stdin(args: &[&str], stdin: &str) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+
+    child.wait_with_output().unwrap()
 }
 
 fn test_python() -> Option<PathBuf> {
