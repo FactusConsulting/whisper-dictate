@@ -17,7 +17,6 @@ import numpy as np
 
 from whisper_dictate.vp_audio import _boost_quiet, _looks_like_speech
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
-from whisper_dictate.vp_dictionary import DICTIONARY
 
 apply_config_to_environ()
 
@@ -147,6 +146,88 @@ class TranscribeResult:
     dictionary_terms: list[str] = field(default_factory=list)
     dictionary_replacements: list[dict[str, object]] = field(default_factory=list)
 
+
+@dataclass
+class DictionaryRuntimeResult:
+    text: str = ""
+    prompt: str | None = None
+    terms: list[str] = field(default_factory=list)
+    changes: list[dict[str, object]] = field(default_factory=list)
+    term_count: int = 0
+    replacement_count: int = 0
+    path: str | None = None
+    error: str | None = None
+    enabled: bool = False
+
+
+def _base_prompt_only(base_prompt: str | None) -> str | None:
+    prompt = (base_prompt or "").strip()
+    return prompt or None
+
+
+def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> DictionaryRuntimeResult:
+    fallback = DictionaryRuntimeResult(text=text, prompt=_base_prompt_only(base_prompt))
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    if not helper:
+        return fallback
+    try:
+        r = subprocess.run(
+            [helper, "dictionary-runtime"],
+            input=json.dumps({
+                "base_prompt": base_prompt,
+                "text": text,
+            }, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=5,
+            shell=False,
+        )
+    except Exception as e:  # noqa: BLE001 - dictation must survive helper trouble
+        if STT_DEBUG:
+            print(f"[dictionary] Rust helper error: {e}", flush=True)
+        return fallback
+    if r.returncode != 0:
+        if STT_DEBUG:
+            err = (r.stderr or "").strip()
+            print(f"[dictionary] Rust helper failed: {err}", flush=True)
+        return fallback
+    try:
+        payload = json.loads(r.stdout or "{}")
+    except json.JSONDecodeError as e:
+        if STT_DEBUG:
+            print(f"[dictionary] Rust helper returned invalid JSON: {e}", flush=True)
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+
+    changes = []
+    for item in payload.get("changes") or []:
+        if not isinstance(item, dict):
+            continue
+        changes.append({
+            "from": str(item.get("from") or ""),
+            "to": str(item.get("to") or ""),
+            "count": int(item.get("count") or 0),
+        })
+
+    error = payload.get("error")
+    if error and STT_DEBUG:
+        print(f"[dictionary] {error}", flush=True)
+
+    return DictionaryRuntimeResult(
+        text=str(payload.get("text", text)),
+        prompt=payload.get("prompt") if isinstance(payload.get("prompt"), str) else None,
+        terms=[str(term) for term in (payload.get("terms") or [])],
+        changes=changes,
+        term_count=int(payload.get("term_count") or 0),
+        replacement_count=int(payload.get("replacement_count") or 0),
+        path=str(payload["path"]) if payload.get("path") else None,
+        error=str(error) if error else None,
+        enabled=bool(payload.get("enabled", False)),
+    )
+
 # Whisper hallucinerer disse sætninger på kort/stille lyd — ignorer dem.
 HALLUCINATIONS: frozenset[str] = frozenset({
     "tak",
@@ -207,7 +288,8 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     in_dbfs = 20 * np.log10(float(np.sqrt(np.mean(audio**2)) or 1e-9))
     use_context = CONTEXT_MIN_SECONDS > 0 and dur >= CONTEXT_MIN_SECONDS
     t0 = time.monotonic()
-    prompt = DICTIONARY.build_prompt(INITIAL_PROMPT)
+    dictionary_prompt = _dictionary_runtime("", INITIAL_PROMPT)
+    prompt = dictionary_prompt.prompt
     segments, info = model.transcribe(
         audio,
         language=lang,
@@ -227,7 +309,9 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     # " ".join() drops that at segment joins -> "hørerdig". Join raw,
     # then collapse whitespace runs to one space.
     raw_text = re.sub(r"\s+", " ", "".join(s.text for s in segment_list)).strip()
-    text, replacements = DICTIONARY.apply_replacements(raw_text)
+    dictionary_text = _dictionary_runtime(raw_text, INITIAL_PROMPT)
+    text = dictionary_text.text
+    replacements = dictionary_text.changes
     compute_s = time.monotonic() - t0
     rtf = compute_s / dur if dur > 0 else None
     seg_metrics = [_segment_metric(s) for s in segment_list]
@@ -249,7 +333,7 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         language_probability=getattr(info, "language_probability", None),
         segments=seg_metrics,
         gate=gate,
-        dictionary_terms=DICTIONARY.prompt_terms(),
+        dictionary_terms=dictionary_prompt.terms,
         dictionary_replacements=replacements,
     )
 

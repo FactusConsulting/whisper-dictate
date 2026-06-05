@@ -110,6 +110,75 @@ fn format_text_helper_returns_structured_json() {
 }
 
 #[test]
+fn dictionary_runtime_helper_returns_prompt_terms_and_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let dictionary = dir.path().join("dictionary.json");
+    fs::write(
+        &dictionary,
+        r#"{"terms":["Codex","Claude Code"],"replacements":{"Cloud Code":"Claude Code"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        &config,
+        serde_json::json!({
+            "dictionary": dictionary,
+            "dictionary_max_terms": "1",
+            "dictionary_prompt_chars": "1200"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("dictionary-runtime")
+        .env("VOICEPI_CONFIG", &config)
+        .env("VOICEPI_DICTIONARY", &dictionary)
+        .env("VOICEPI_DICTIONARY_ENABLED", "1")
+        .env("VOICEPI_DICTIONARY_MAX_TERMS", "1")
+        .env("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(
+            serde_json::json!({
+                "base_prompt": "Base prompt",
+                "text": "Open Cloud Code"
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "dictionary-runtime failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["enabled"], true);
+    assert_eq!(value["term_count"], 2);
+    assert_eq!(value["replacement_count"], 1);
+    assert_eq!(value["terms"], serde_json::json!(["Codex"]));
+    assert_eq!(
+        value["all_terms"],
+        serde_json::json!(["Codex", "Claude Code"])
+    );
+    assert_eq!(value["prompt"], "Base prompt\nVocabulary: Codex");
+    assert_eq!(value["text"], "Open Claude Code");
+    assert_eq!(value["changes"][0]["from"], "Cloud Code");
+    assert_eq!(value["changes"][0]["count"], 1);
+}
+
+#[test]
 fn redact_text_helper_reads_json_stdin_and_omits_values_from_text() {
     let output = command_with_stdin(
         &["redact-text"],

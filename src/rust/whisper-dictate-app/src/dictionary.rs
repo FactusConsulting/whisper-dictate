@@ -1,9 +1,12 @@
 use std::collections::HashSet;
+use std::env;
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use regex::RegexBuilder;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::cli::DictionaryCommand;
@@ -15,17 +18,82 @@ pub struct Dictionary {
     pub replacements: Vec<Replacement>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Replacement {
     pub from: String,
     pub to: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReplacementChange {
     pub from: String,
     pub to: String,
     pub count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeRequest {
+    #[serde(default)]
+    base_prompt: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeDictionarySettings {
+    pub enabled: bool,
+    pub paths: Vec<PathBuf>,
+    pub max_terms: usize,
+    pub max_chars: usize,
+}
+
+impl RuntimeDictionarySettings {
+    pub fn new(enabled: bool, paths: Vec<PathBuf>, max_terms: usize, max_chars: usize) -> Self {
+        Self {
+            enabled,
+            paths,
+            max_terms,
+            max_chars,
+        }
+    }
+
+    fn from_env_and_config() -> Self {
+        let configured = config::load_settings().unwrap_or_default();
+        let enabled =
+            env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled);
+        let paths = env_paths("VOICEPI_DICTIONARY").unwrap_or_else(|| {
+            let path = configured.dictionary.trim();
+            if path.is_empty() {
+                Vec::new()
+            } else {
+                vec![PathBuf::from(path)]
+            }
+        });
+        let max_terms = env_usize("VOICEPI_DICTIONARY_MAX_TERMS")
+            .or_else(|| configured.dictionary_max_terms.parse::<usize>().ok())
+            .unwrap_or(80);
+        let max_chars = env_usize("VOICEPI_DICTIONARY_PROMPT_CHARS")
+            .or_else(|| configured.dictionary_prompt_chars.parse::<usize>().ok())
+            .unwrap_or(1200);
+
+        Self::new(enabled, paths, max_terms, max_chars)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeDictionaryResult {
+    pub enabled: bool,
+    pub path: Option<String>,
+    pub loaded_paths: Vec<String>,
+    pub term_count: usize,
+    pub replacement_count: usize,
+    pub terms: Vec<String>,
+    pub all_terms: Vec<String>,
+    pub replacements: Vec<Replacement>,
+    pub prompt: Option<String>,
+    pub text: String,
+    pub changes: Vec<ReplacementChange>,
+    pub error: Option<String>,
 }
 
 impl Dictionary {
@@ -174,16 +242,30 @@ pub fn load_dictionary(path: impl AsRef<Path>) -> Result<Dictionary> {
 }
 
 pub fn handle_command(command: DictionaryCommand) -> Result<()> {
-    let settings = config::load_settings()?;
+    let settings = dictionary_command_settings()?;
     let path = PathBuf::from(&settings.dictionary);
     match command {
         DictionaryCommand::Status => {
-            let preview = preview_dictionary(
-                &path,
-                Some(&settings.initial_prompt),
-                settings.dictionary_max_terms.parse().unwrap_or(80),
-                settings.dictionary_prompt_chars.parse().unwrap_or(1200),
-            )?;
+            let preview = if path.exists() {
+                preview_dictionary(
+                    &path,
+                    Some(&settings.initial_prompt),
+                    settings.dictionary_max_terms.parse().unwrap_or(80),
+                    settings.dictionary_prompt_chars.parse().unwrap_or(1200),
+                )?
+            } else {
+                let dictionary = Dictionary::default();
+                DictionaryPreview {
+                    path: path.clone(),
+                    term_count: 0,
+                    replacement_count: 0,
+                    prompt: dictionary.build_prompt(
+                        Some(&settings.initial_prompt),
+                        settings.dictionary_max_terms.parse().unwrap_or(80),
+                        settings.dictionary_prompt_chars.parse().unwrap_or(1200),
+                    ),
+                }
+            };
             println!("path: {}", preview.path.display());
             println!("terms: {}", preview.term_count);
             println!("replacements: {}", preview.replacement_count);
@@ -213,6 +295,93 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn dictionary_command_settings() -> Result<config::AppSettings> {
+    let mut settings = config::load_settings()?;
+    if let Some(paths) = env_paths("VOICEPI_DICTIONARY") {
+        if let Some(path) = paths.first() {
+            settings.dictionary = path.display().to_string();
+        }
+    }
+    if let Some(enabled) = env_bool("VOICEPI_DICTIONARY_ENABLED") {
+        settings.dictionary_enabled = enabled;
+    }
+    if let Some(value) = env_usize("VOICEPI_DICTIONARY_MAX_TERMS") {
+        settings.dictionary_max_terms = value.to_string();
+    }
+    if let Some(value) = env_usize("VOICEPI_DICTIONARY_PROMPT_CHARS") {
+        settings.dictionary_prompt_chars = value.to_string();
+    }
+    Ok(settings)
+}
+
+pub fn handle_runtime() -> Result<()> {
+    let request = read_runtime_request()?;
+    let settings = RuntimeDictionarySettings::from_env_and_config();
+    let result =
+        runtime_dictionary_result(&settings, request.base_prompt.as_deref(), &request.text);
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
+pub fn runtime_dictionary_result(
+    settings: &RuntimeDictionarySettings,
+    base_prompt: Option<&str>,
+    text: &str,
+) -> RuntimeDictionaryResult {
+    let path = settings
+        .paths
+        .first()
+        .map(|path| path.display().to_string());
+    if !settings.enabled {
+        let dictionary = Dictionary::default();
+        return RuntimeDictionaryResult {
+            enabled: false,
+            path,
+            loaded_paths: Vec::new(),
+            term_count: 0,
+            replacement_count: 0,
+            terms: Vec::new(),
+            all_terms: Vec::new(),
+            replacements: Vec::new(),
+            prompt: dictionary.build_prompt(base_prompt, settings.max_terms, settings.max_chars),
+            text: text.to_owned(),
+            changes: Vec::new(),
+            error: None,
+        };
+    }
+
+    let (dictionary, loaded_paths, mut error) = load_runtime_dictionary(&settings.paths);
+    let terms = dictionary.prompt_terms(settings.max_terms, settings.max_chars);
+    let prompt = dictionary.build_prompt(base_prompt, settings.max_terms, settings.max_chars);
+    let all_terms = dictionary.terms.clone();
+    let replacements = dictionary.replacements.clone();
+    let (text, changes) = match dictionary.apply_replacements(text) {
+        Ok(result) => result,
+        Err(err) => {
+            append_error(&mut error, err.to_string());
+            (text.to_owned(), Vec::new())
+        }
+    };
+
+    RuntimeDictionaryResult {
+        enabled: true,
+        path,
+        loaded_paths: loaded_paths
+            .into_iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        term_count: dictionary.terms.len(),
+        replacement_count: dictionary.replacements.len(),
+        terms,
+        all_terms,
+        replacements,
+        prompt,
+        text,
+        changes,
+        error,
+    }
 }
 
 pub fn ensure_json_dictionary(path: impl AsRef<Path>) -> Result<PathBuf> {
@@ -291,6 +460,84 @@ pub fn preview_dictionary(
         replacement_count: dictionary.replacements.len(),
         prompt: dictionary.build_prompt(base_prompt, max_terms, max_chars),
     })
+}
+
+fn load_runtime_dictionary(paths: &[PathBuf]) -> (Dictionary, Vec<PathBuf>, Option<String>) {
+    let mut dictionary = Dictionary::default();
+    let mut loaded_paths = Vec::new();
+    let mut error = None;
+
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        match load_dictionary(path) {
+            Ok(next) => {
+                merge_dictionary(&mut dictionary, next);
+                loaded_paths.push(path.clone());
+            }
+            Err(err) => append_error(&mut error, format!("{}: {err}", path.display())),
+        }
+    }
+
+    dictionary.terms = dedupe_terms(dictionary.terms);
+    (dictionary, loaded_paths, error)
+}
+
+fn merge_dictionary(into: &mut Dictionary, next: Dictionary) {
+    into.terms.extend(next.terms);
+    for replacement in next.replacements {
+        if let Some(existing) = into
+            .replacements
+            .iter_mut()
+            .find(|existing| existing.from == replacement.from)
+        {
+            existing.to = replacement.to;
+        } else {
+            into.replacements.push(replacement);
+        }
+    }
+}
+
+fn append_error(target: &mut Option<String>, message: String) {
+    if message.trim().is_empty() {
+        return;
+    }
+    match target {
+        Some(existing) => {
+            existing.push_str("; ");
+            existing.push_str(&message);
+        }
+        None => *target = Some(message),
+    }
+}
+
+fn env_bool(name: &str) -> Option<bool> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "no" | "off"))
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+}
+
+fn env_paths(name: &str) -> Option<Vec<PathBuf>> {
+    let value = env::var_os(name)?;
+    let paths = env::split_paths(&value)
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect::<Vec<_>>();
+    (!paths.is_empty()).then_some(paths)
+}
+
+fn read_runtime_request() -> Result<RuntimeRequest> {
+    let mut raw = String::new();
+    io::stdin().read_to_string(&mut raw)?;
+    Ok(serde_json::from_str(&raw)?)
 }
 
 fn load_json_dictionary_for_write(path: &Path) -> Result<(Dictionary, Map<String, Value>)> {
@@ -538,6 +785,129 @@ mod tests {
         assert_eq!(
             preview.prompt.as_deref(),
             Some("Base prompt\nVocabulary: Codex, Claude Code")
+        );
+    }
+
+    #[test]
+    fn runtime_dictionary_applies_prompt_terms_and_replacements() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dictionary.json");
+        std::fs::write(
+            &path,
+            r#"{"terms":["Slack","Claude Code","Codex"],"replacements":{"Cloud Code":"Claude Code","code X":"Codex"}}"#,
+        )
+        .unwrap();
+        let settings = RuntimeDictionarySettings::new(true, vec![path.clone()], 10, 1200);
+
+        let result = runtime_dictionary_result(
+            &settings,
+            Some("Base prompt"),
+            "Open Cloud Code and code X.",
+        );
+
+        assert!(result.enabled);
+        let expected_path = path.display().to_string();
+        assert_eq!(result.path.as_deref(), Some(expected_path.as_str()));
+        assert_eq!(result.loaded_paths, vec![path.display().to_string()]);
+        assert_eq!(result.term_count, 3);
+        assert_eq!(result.replacement_count, 2);
+        assert_eq!(result.terms, vec!["Slack", "Claude Code", "Codex"]);
+        assert_eq!(result.all_terms, vec!["Slack", "Claude Code", "Codex"]);
+        assert_eq!(
+            result.prompt.as_deref(),
+            Some("Base prompt\nVocabulary: Slack, Claude Code, Codex")
+        );
+        assert_eq!(result.text, "Open Claude Code and Codex.");
+        assert_eq!(
+            result.changes,
+            vec![
+                ReplacementChange {
+                    from: "Cloud Code".to_owned(),
+                    to: "Claude Code".to_owned(),
+                    count: 1,
+                },
+                ReplacementChange {
+                    from: "code X".to_owned(),
+                    to: "Codex".to_owned(),
+                    count: 1,
+                },
+            ]
+        );
+        assert_eq!(result.error, None);
+    }
+
+    #[test]
+    fn runtime_dictionary_disabled_preserves_base_prompt_and_text() {
+        let settings =
+            RuntimeDictionarySettings::new(false, vec![PathBuf::from("dictionary.json")], 10, 1200);
+
+        let result = runtime_dictionary_result(&settings, Some("Base prompt"), "Cloud Code");
+
+        assert!(!result.enabled);
+        assert_eq!(result.prompt.as_deref(), Some("Base prompt"));
+        assert_eq!(result.text, "Cloud Code");
+        assert!(result.terms.is_empty());
+        assert!(result.all_terms.is_empty());
+        assert!(result.changes.is_empty());
+    }
+
+    #[test]
+    fn runtime_dictionary_missing_file_is_empty_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.json");
+        let settings = RuntimeDictionarySettings::new(true, vec![missing.clone()], 10, 1200);
+
+        let result = runtime_dictionary_result(&settings, Some("Base prompt"), "Cloud Code");
+
+        let expected_path = missing.display().to_string();
+        assert_eq!(result.path.as_deref(), Some(expected_path.as_str()));
+        assert!(result.loaded_paths.is_empty());
+        assert_eq!(result.prompt.as_deref(), Some("Base prompt"));
+        assert_eq!(result.text, "Cloud Code");
+        assert_eq!(result.error, None);
+    }
+
+    #[test]
+    fn runtime_dictionary_reports_parse_errors_without_rewriting_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dictionary.json");
+        std::fs::write(&path, "{not json").unwrap();
+        let settings = RuntimeDictionarySettings::new(true, vec![path], 10, 1200);
+
+        let result = runtime_dictionary_result(&settings, Some("Base prompt"), "Cloud Code");
+
+        assert_eq!(result.prompt.as_deref(), Some("Base prompt"));
+        assert_eq!(result.text, "Cloud Code");
+        assert!(result.error.unwrap().contains("dictionary.json"));
+    }
+
+    #[test]
+    fn runtime_dictionary_merges_paths_and_later_replacements_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.json");
+        let second = dir.path().join("second.txt");
+        std::fs::write(
+            &first,
+            r#"{"terms":["Codex"],"replacements":{"code X":"wrong"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &second,
+            "terms:\n- Claude Code\nreplacements:\ncode X => Codex\n",
+        )
+        .unwrap();
+        let settings = RuntimeDictionarySettings::new(true, vec![first, second], 10, 1200);
+
+        let result = runtime_dictionary_result(&settings, None, "try code X");
+
+        assert_eq!(result.terms, vec!["Codex", "Claude Code"]);
+        assert_eq!(result.text, "try Codex");
+        assert_eq!(
+            result.replacements,
+            vec![Replacement {
+                from: "code X".to_owned(),
+                to: "Codex".to_owned(),
+            }]
         );
     }
 

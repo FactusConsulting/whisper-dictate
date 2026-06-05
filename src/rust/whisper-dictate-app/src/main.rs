@@ -31,6 +31,7 @@ fn run() -> anyhow::Result<()> {
         Command::ModelCapacity { json } => model_capacity::handle_command(json),
         Command::Config { command } => config::handle_command(command),
         Command::Dictionary { command } => dictionary::handle_command(command),
+        Command::DictionaryRuntime => dictionary::handle_runtime(),
         Command::History { command } => telemetry::handle_history_command(command),
         Command::InjectText {
             mode,

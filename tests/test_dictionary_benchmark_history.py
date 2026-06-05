@@ -203,21 +203,27 @@ class TranscribeFileTests(unittest.TestCase):
             def transcribe(self, *_args, **_kwargs):
                 return [Segment()], Info()
 
-        class Dict:
-            def build_prompt(self, prompt):
-                return prompt
+        def dictionary_runtime(text="", base_prompt=None):
+            if text:
+                return vp_transcribe.DictionaryRuntimeResult(
+                    text=text.replace("lead death", "lead dev"),
+                    prompt=base_prompt,
+                    terms=["lead dev"],
+                    changes=[{"from": "lead death", "to": "lead dev", "count": 1}],
+                    term_count=1,
+                    replacement_count=1,
+                )
+            return vp_transcribe.DictionaryRuntimeResult(
+                text=text,
+                prompt=base_prompt,
+                terms=["lead dev"],
+                term_count=1,
+                replacement_count=1,
+            )
 
-            def apply_replacements(self, text):
-                return text.replace("lead death", "lead dev"), [
-                    {"from": "lead death", "to": "lead dev", "count": 1}
-                ]
-
-            def prompt_terms(self):
-                return ["lead dev"]
-
-        old_dict = vp_transcribe.DICTIONARY
+        old_dictionary_runtime = vp_transcribe._dictionary_runtime
         old_gate = vp_transcribe._looks_like_speech
-        vp_transcribe.DICTIONARY = Dict()
+        vp_transcribe._dictionary_runtime = dictionary_runtime
         vp_transcribe._looks_like_speech = lambda _audio: (True, "test gate")
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             path = f.name
@@ -229,7 +235,7 @@ class TranscribeFileTests(unittest.TestCase):
                 device="cpu", compute_type="int8",
             )
         finally:
-            vp_transcribe.DICTIONARY = old_dict
+            vp_transcribe._dictionary_runtime = old_dictionary_runtime
             vp_transcribe._looks_like_speech = old_gate
             os.remove(path)
 
@@ -613,148 +619,3 @@ class ProfileTests(unittest.TestCase):
         stored = runtime._history_event(event)
 
         self.assertEqual(stored["profile"], "Claude terminal")
-
-class DictionaryTests(unittest.TestCase):
-    def _drop_package_module(self, name):
-        sys.modules.pop(name, None)
-        package = sys.modules.get("whisper_dictate")
-        attr = name.rsplit(".", 1)[-1]
-        if package is not None and hasattr(package, attr):
-            delattr(package, attr)
-
-    def setUp(self):
-        self._old = {k: os.environ.pop(k, None) for k in (
-            "VOICEPI_DICTIONARY", "VOICEPI_DICTIONARY_ENABLED",
-            "VOICEPI_DICTIONARY_MAX_TERMS", "VOICEPI_DICTIONARY_PROMPT_CHARS",
-        )}
-        sys.modules.pop("vp_dictionary", None)
-        self._drop_package_module("whisper_dictate.vp_dictionary")
-
-    def tearDown(self):
-        for k in list(self._old):
-            os.environ.pop(k, None)
-            if self._old[k] is not None:
-                os.environ[k] = self._old[k]
-        sys.modules.pop("vp_dictionary", None)
-        self._drop_package_module("whisper_dictate.vp_dictionary")
-
-    def test_dictionary_json_filename_literal_is_centralized(self):
-        source = Path("src/python/whisper_dictate/vp_dictionary.py").read_text(encoding="utf-8")
-
-        self.assertIn('DICTIONARY_JSON_NAME = "dictionary.json"', source)
-        self.assertEqual(source.count('"dictionary.json"'), 1)
-
-    def test_json_dictionary_builds_prompt_and_replacements(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
-            f.write('{"terms":["Slack","Claude Code","Codex"],'
-                    '"replacements":{"Cloud Code":"Claude Code","code X":"Codex"}}')
-            path = f.name
-        try:
-            os.environ["VOICEPI_DICTIONARY"] = path
-            from whisper_dictate import vp_dictionary
-
-            d = vp_dictionary.DICTIONARY
-            self.assertEqual(d.prompt_terms(), ["Slack", "Claude Code", "Codex"])
-            self.assertIn("Vocabulary: Slack, Claude Code, Codex",
-                          d.build_prompt("Base prompt"))
-            text, changes = d.apply_replacements("Open Cloud Code and code X.")
-            self.assertEqual(text, "Open Claude Code and Codex.")
-            self.assertEqual(len(changes), 2)
-        finally:
-            os.remove(path)
-
-    def test_text_dictionary_supports_simple_sections(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
-            f.write("terms:\n- OpenClaw\n- GitHub Actions\n\n"
-                    "replacements:\nopen claw => OpenClaw\n")
-            path = f.name
-        try:
-            os.environ["VOICEPI_DICTIONARY"] = path
-            from whisper_dictate import vp_dictionary
-
-            d = vp_dictionary.DICTIONARY
-            self.assertIn("OpenClaw", d.terms)
-            text, _ = d.apply_replacements("start open claw")
-            self.assertEqual(text, "start OpenClaw")
-        finally:
-            os.remove(path)
-
-    def test_invalid_prompt_limits_fall_back_to_defaults(self):
-        from whisper_dictate import vp_dictionary
-
-        os.environ["VOICEPI_DICTIONARY_MAX_TERMS"] = "bogus"
-        os.environ["VOICEPI_DICTIONARY_PROMPT_CHARS"] = "bogus"
-        d = vp_dictionary.Dictionary(["Slack", "Claude Code"], {})
-        with _capture_stdout() as buf:
-            self.assertEqual(d.prompt_terms(), ["Slack", "Claude Code"])
-        self.assertIn("ignoring invalid VOICEPI_DICTIONARY_MAX_TERMS", buf.getvalue())
-
-    def test_dictionary_add_term_creates_json_file(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "dictionary.json")
-            os.environ["VOICEPI_DICTIONARY"] = path
-            from whisper_dictate import vp_dictionary
-
-            written, added = vp_dictionary.add_dictionary_term("Claude Code")
-            _, added_again = vp_dictionary.add_dictionary_term("claude code")
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-
-        self.assertEqual(str(written), path)
-        self.assertTrue(added)
-        self.assertFalse(added_again)
-        self.assertEqual(data["terms"], ["Claude Code"])
-        self.assertEqual(data["replacements"], {})
-
-    def test_dictionary_writes_reject_unsafe_targets(self):
-        from whisper_dictate import vp_dictionary
-
-        with self.assertRaises(ValueError):
-            vp_dictionary.ensure_dictionary_file(Path("relative-dictionary.json"))
-
-        with tempfile.TemporaryDirectory() as d:
-            with self.assertRaises(ValueError):
-                vp_dictionary.ensure_dictionary_file(Path(d) / "dictionary.txt")
-
-    def test_dictionary_add_replacement_preserves_terms(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
-            f.write('{"terms":["Codex"],"replacements":{}}')
-            path = f.name
-        try:
-            os.environ["VOICEPI_DICTIONARY"] = path
-            from whisper_dictate import vp_dictionary
-
-            written, src, dst, changed = vp_dictionary.add_dictionary_replacement(
-                "code X=Codex")
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        finally:
-            os.remove(path)
-
-        self.assertEqual(str(written), path)
-        self.assertEqual((src, dst, changed), ("code X", "Codex", True))
-        self.assertEqual(data["terms"], ["Codex"])
-        self.assertEqual(data["replacements"], {"code X": "Codex"})
-
-    def test_dictionary_add_replacements_preserves_terms_and_counts_changes(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
-            f.write('{"terms":["Codex"],"replacements":{"old":"Old"}}')
-            path = f.name
-        try:
-            os.environ["VOICEPI_DICTIONARY"] = path
-            from whisper_dictate import vp_dictionary
-
-            written, changed = vp_dictionary.add_dictionary_replacements({
-                "code X": "Codex",
-                "old": "Old",
-                "": "ignored",
-            })
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        finally:
-            os.remove(path)
-
-        self.assertEqual(str(written), path)
-        self.assertEqual(changed, 1)
-        self.assertEqual(data["terms"], ["Codex"])
-        self.assertEqual(data["replacements"], {"code X": "Codex", "old": "Old"})

@@ -1152,7 +1152,6 @@ class Dictate(InjectMixin):
                 print(f"[inject] Rust keymap layout: {xkb}", flush=True)
 
         from whisper_dictate import vp_audio
-        from whisper_dictate import vp_dictionary
         from whisper_dictate import vp_postprocess
         from whisper_dictate import vp_transcribe
 
@@ -1170,7 +1169,6 @@ class Dictate(InjectMixin):
         vp_transcribe.INITIAL_PROMPT = after.get("initial_prompt") or None
         vp_transcribe.STT_DEBUG = (after.get("stt_debug") or "").lower() not in (
             "", "0", "false", "no", "off")
-        vp_dictionary.DICTIONARY = vp_dictionary.load_dictionary()
         self.postprocess_settings = vp_postprocess.load_postprocess_settings()
         self.audio_ducker = register_active_ducker(AudioDucker.from_config())
         self._effective_config = after

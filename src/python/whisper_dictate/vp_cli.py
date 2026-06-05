@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import subprocess
+from pathlib import Path
 
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 from whisper_dictate.vp_postprocess import load_postprocess_settings
@@ -113,29 +114,59 @@ def _resolve_device(want: str) -> tuple[str, str]:
     return "cpu", _ct("int8")
 
 
+def _default_dictionary_path() -> str:
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return str(Path(base) / "WhisperDictate" / "dictionary.json")
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return str(Path(base) / "whisper-dictate" / "dictionary.json")
+
+
+def _dictionary_path_preview(path: str | None = None) -> str:
+    if path:
+        return path
+    env_path = _env_preview("VOICEPI_DICTIONARY")
+    if env_path != "(unset)":
+        return env_path
+    return _default_dictionary_path()
+
+
+def _run_rust_dictionary_command(parser: argparse.ArgumentParser, *args: str) -> None:
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    if not helper:
+        parser.error(
+            "dictionary commands are handled by the Rust CLI; "
+            "run `whisper-dictate dictionary ...` or start through the Rust launcher"
+        )
+    try:
+        r = subprocess.run(
+            [helper, "dictionary", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            shell=False,
+        )
+    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        parser.error(str(e))
+    if r.returncode != 0:
+        parser.error((r.stderr or "").strip() or "Rust dictionary command failed")
+    stdout = r.stdout or ""
+    if stdout:
+        print(stdout, end="" if stdout.endswith("\n") else "\n", flush=True)
+
+
 class _DictionaryAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        from whisper_dictate.vp_dictionary import (
-            add_dictionary_replacement, add_dictionary_term,
-            dictionary_status, open_dictionary,
-        )
-
-        try:
-            if option_string == "--dictionary-status":
-                print(dictionary_status(), flush=True)
-            elif option_string == "--dictionary-open":
-                path = open_dictionary()
-                print(f"opened dictionary: {path}", flush=True)
-            elif option_string == "--dictionary-add":
-                path, added = add_dictionary_term(values)
-                verb = "added" if added else "already present"
-                print(f"{verb}: {values} ({path})", flush=True)
-            elif option_string == "--dictionary-replace":
-                path, src, dst, changed = add_dictionary_replacement(values)
-                verb = "saved" if changed else "already present"
-                print(f"{verb}: {src} -> {dst} ({path})", flush=True)
-        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-            parser.error(str(e))
+        if option_string == "--dictionary-status":
+            _run_rust_dictionary_command(parser, "status")
+        elif option_string == "--dictionary-open":
+            _run_rust_dictionary_command(parser, "open")
+        elif option_string == "--dictionary-add":
+            _run_rust_dictionary_command(parser, "add", str(values))
+        elif option_string == "--dictionary-replace":
+            _run_rust_dictionary_command(parser, "replace", str(values))
         raise SystemExit(0)
 
 
@@ -257,10 +288,10 @@ def _debug_rows(args, dev: str, ctype: str) -> list[tuple[str, str]]:
 
     from whisper_dictate.vp_audio import MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
     from whisper_dictate.vp_transcribe import (
-        BEAM_SIZE, CONTEXT_MIN_SECONDS, STT_BACKEND, TEMPERATURES,
+        BEAM_SIZE, CONTEXT_MIN_SECONDS, STT_BACKEND, TEMPERATURES, _dictionary_runtime,
         VAD_MIN_SILENCE_MS, VAD_THRESHOLD,
     )
-    from whisper_dictate.vp_dictionary import DICTIONARY, _default_path
+    dictionary = _dictionary_runtime("", None)
     post = load_postprocess_settings()
 
     return [
@@ -286,9 +317,9 @@ def _debug_rows(args, dev: str, ctype: str) -> list[tuple[str, str]]:
         ("vad",              f"threshold={VAD_THRESHOLD}  "
                              f"min_silence_ms={VAD_MIN_SILENCE_MS}"),
         ("initial_prompt",   _initial_prompt_preview()),
-        ("dictionary",       f"{len(DICTIONARY.terms)} terms, "
-                             f"{len(DICTIONARY.replacements)} replacements, "
-                             f"path={_env_preview('VOICEPI_DICTIONARY') if _env_preview('VOICEPI_DICTIONARY') != '(unset)' else _default_path()}"),
+        ("dictionary",       f"{dictionary.term_count} terms, "
+                             f"{dictionary.replacement_count} replacements, "
+                             f"path={_dictionary_path_preview(dictionary.path)}"),
         ("quit",             f"{QUIT_COUNT}x {QUIT_KEY} within {QUIT_WINDOW_MS}ms  "
                              f"(env VOICEPI_QUIT_KEY={_env_preview('VOICEPI_QUIT_KEY')}, "
                              f"VOICEPI_QUIT_COUNT={_env_preview('VOICEPI_QUIT_COUNT')})"),

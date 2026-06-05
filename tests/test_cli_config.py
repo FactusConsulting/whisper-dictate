@@ -287,37 +287,6 @@ class ArgumentParserTests(unittest.TestCase):
         self.assertTrue(ns.doctor)
         self.assertTrue(ns.model_capacity)
 
-    def test_dictionary_status_exits_from_parser(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "dictionary.json")
-            with _env(VOICEPI_DICTIONARY=path):
-                voice_pi = load_voice_pi()
-                parser = voice_pi.build_arg_parser()
-
-                with _capture_stdout() as buf:
-                    with self.assertRaises(SystemExit) as cm:
-                        parser.parse_args(["--dictionary-status"])
-
-        self.assertEqual(cm.exception.code, 0)
-        self.assertIn("managed path:", buf.getvalue())
-
-    def test_dictionary_add_exits_from_parser_and_writes_file(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "dictionary.json")
-            with _env(VOICEPI_DICTIONARY=path):
-                voice_pi = load_voice_pi()
-                parser = voice_pi.build_arg_parser()
-
-                with _capture_stdout():
-                    with self.assertRaises(SystemExit) as cm:
-                        parser.parse_args(["--dictionary-add", "OpenClaw"])
-
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
-
-        self.assertEqual(cm.exception.code, 0)
-        self.assertEqual(data["terms"], ["OpenClaw"])
-
 class ModuleSurfaceTests(unittest.TestCase):
     """runtime.py exposes names that were moved into focused package modules."""
 
@@ -368,7 +337,6 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_benchmark.py",
             "vp_cli.py",
             "vp_config.py",
-            "vp_dictionary.py",
             "vp_dictionary_suggest.py",
             "vp_external_api.py",
             "vp_inject.py",

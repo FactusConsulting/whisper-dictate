@@ -47,6 +47,9 @@ pub enum Command {
         #[command(subcommand)]
         command: DictionaryCommand,
     },
+    /// Internal helper used by the Python worker for dictionary prompt and replacements.
+    #[command(hide = true)]
+    DictionaryRuntime,
     /// Inspect local dictation history without starting Python.
     History {
         #[command(subcommand)]
@@ -265,6 +268,12 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn parses_hidden_dictionary_runtime_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "dictionary-runtime"]);
+        assert_eq!(cli.command, Some(Command::DictionaryRuntime));
     }
 
     #[test]

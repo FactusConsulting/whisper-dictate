@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import re
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
-
-from whisper_dictate.vp_dictionary import DICTIONARY
 
 _COMMON_SOURCE_WORDS = {
     "a", "an", "and", "as", "at", "be", "but", "by", "for", "from", "i",
@@ -34,6 +34,50 @@ _SHORT_SOURCE_ALLOWLIST = {
     "2d", "dbfs", "qn", "rac", "rag", "snr", "stt", "ui", "vad", "vlm",
     "xkb",
 }
+
+
+@dataclass
+class DictionarySnapshot:
+    terms: list[str] = field(default_factory=list)
+    replacements: dict[str, str] = field(default_factory=dict)
+
+
+def _load_dictionary_snapshot() -> DictionarySnapshot:
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    if not helper:
+        return DictionarySnapshot()
+    try:
+        r = subprocess.run(
+            [helper, "dictionary-runtime"],
+            input=json.dumps({"base_prompt": None, "text": ""}, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=5,
+            shell=False,
+        )
+        if r.returncode != 0:
+            return DictionarySnapshot()
+        payload = json.loads(r.stdout or "{}")
+    except Exception:  # noqa: BLE001 - suggestions can run without live dictionary
+        return DictionarySnapshot()
+    if not isinstance(payload, dict):
+        return DictionarySnapshot()
+    replacements = {}
+    for item in payload.get("replacements") or []:
+        if isinstance(item, dict):
+            source = str(item.get("from") or "").strip()
+            target = str(item.get("to") or "").strip()
+            if source and target:
+                replacements[source] = target
+    return DictionarySnapshot(
+        terms=[str(term) for term in (payload.get("all_terms") or payload.get("terms") or [])],
+        replacements=replacements,
+    )
+
+
+DICTIONARY = _load_dictionary_snapshot()
 
 
 @dataclass
