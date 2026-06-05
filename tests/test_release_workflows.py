@@ -184,9 +184,18 @@ class RustReleaseWorkflowTests(unittest.TestCase):
 
     def test_sonar_uses_supported_python_version(self):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
+        workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
+        test_workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
         self.assertIn("sonar.projectKey=FactusConsulting_whisper-dictate", sonar)
         self.assertIn("sonar.python.version=3.12", sonar)
+        self.assertIn("sonar.rust.cargo.manifestPaths=src/rust/Cargo.toml", sonar)
+        self.assertIn("components: clippy", workflow)
+        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings", workflow)
+        self.assertIn("SonarSource/sonarqube-scan-action@v6", workflow)
+        self.assertIn("SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}", workflow)
+        self.assertIn("components: clippy", test_workflow)
+        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings", test_workflow)
 
     def test_root_flake_delegates_to_nix_flake_logic(self):
         root_flake = Path("flake.nix").read_text(encoding="utf-8")
