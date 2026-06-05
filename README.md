@@ -113,8 +113,8 @@ From a source checkout:
 ```bash
 git clone https://github.com/FactusConsulting/whisper-dictate.git
 cd whisper-dictate
-cargo run --release -p whisper-dictate-app -- install
-cargo run --release -p whisper-dictate-app -- ui
+cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- install
+cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- ui
 ```
 
 Requires: `python3` ≥ 3.10, `libportaudio2`, `alsa-utils`, `xclip`:
@@ -154,7 +154,7 @@ adds `~/.local/share/applications/whisper-dictate.desktop`.
 Or from a source checkout after the venv is built:
 
 ```bash
-cargo run --release -p whisper-dictate-app -- run --key ctrl_r --lang en
+cargo run --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app -- run --key ctrl_r --lang en
 ```
 
 ---
@@ -637,7 +637,7 @@ python -m pytest tests -q
 Push a version tag:
 
 ```bash
-git tag v0.2.1 && git push origin v0.2.1
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
 This triggers **`release.yml`**: it publishes the Linux bundle and Rust UI
@@ -667,10 +667,10 @@ For a faster local Windows test loop without creating a release:
 The local installer and portable ZIP are written to `Output\`. The script uses
 Inno Setup 6 and installs it via winget, or Chocolatey as a fallback, when it is
 missing. Local builds default to the latest release version plus unique semver
-build metadata, for example `0.3.25+local.20260603073512.g24b702e.dirty`, so
+build metadata, for example `<version>+local.<timestamp>.g<sha>.dirty`, so
 they are easy to distinguish from online releases and from each other. The
 installer keeps a numeric Windows file version internally, for example
-`0.3.25.1`.
+`<major>.<minor>.<patch>.1`.
 
 ## Wayland keyboard-layout testing status
 

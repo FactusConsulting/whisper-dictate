@@ -100,7 +100,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
   throw "cargo was not found. Install Rust, then rerun this script."
 }
 Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
-cargo build --release -p whisper-dictate-app
+cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
 $versionFile = Join-Path $root 'VERSION'

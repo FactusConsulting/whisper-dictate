@@ -3,11 +3,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/../../Cargo.toml" && -d "${SCRIPT_DIR}/../../src/rust" ]]; then
+if [[ -f "${SCRIPT_DIR}/../../src/rust/Cargo.toml" && -d "${SCRIPT_DIR}/../../src/rust/whisper-dictate-app" ]]; then
   HERE="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 else
   HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"
 fi
+CARGO_MANIFEST="${HERE}/src/rust/Cargo.toml"
 BIN_DIR="${HOME}/.local/bin"
 LIB_DIR="${HOME}/.local/lib/whisper-dictate"
 APP_DIR="${HOME}/.local/share/applications"
@@ -24,7 +25,7 @@ else
     echo "cargo is required. Install Rust from https://rustup.rs/ and re-run this script." >&2
     exit 1
   }
-  cargo build --release -p whisper-dictate-app --manifest-path "${HERE}/Cargo.toml"
+  cargo build --release -p whisper-dictate-app --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
   SOURCE_BIN="${HERE}/target/release/whisper-dictate"
 fi
 

@@ -112,10 +112,10 @@ jobs:
             libxkbcommon-dev
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
       - name: Rust format
-        run: cargo fmt --all -- --check
+        run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
       - name: Rust tests
-        run: cargo test -p whisper-dictate-app
+        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
       - name: Rust CLI smoke
         run: |
-          cargo run -q -p whisper-dictate-app -- --help
-          cargo run -q -p whisper-dictate-app -- config path
+          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help
+          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- config path

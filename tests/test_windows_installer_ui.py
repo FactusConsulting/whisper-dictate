@@ -577,11 +577,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_github_docs_show_logo(self):
         readme = Path("README.md").read_text(encoding="utf-8")
-        release_notes = Path("docs/RELEASE_NOTES.md").read_text(encoding="utf-8")
 
         self.assertIn('src="assets/whisper-dictate-logo.svg"', readme)
         self.assertIn("<h1 align=\"center\">whisper-dictate</h1>", readme)
-        self.assertIn('src="../assets/whisper-dictate-logo.svg"', release_notes)
 
     def test_installer_creates_desktop_ui_shortcut(self):
         with open("packaging/windows/inno/whisper-dictate.iss", encoding="utf-8") as f:
@@ -605,13 +603,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_windows_installer_workflows_build_rust_ui_before_inno(self):
         for path in (".github/workflows/release.yml", ".github/workflows/windows-installer.yml"):
             workflow = Path(path).read_text(encoding="utf-8")
-            rust_build = workflow.index("cargo build --release -p whisper-dictate-app")
+            rust_build = workflow.index("cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app")
             installer_build = workflow.index("Build installers")
             self.assertLess(rust_build, installer_build)
-            self.assertIn("Cargo.toml Cargo.lock src/rust/", workflow)
+            self.assertIn("src/rust/Cargo.toml src/rust/Cargo.lock src/rust/", workflow)
 
         script = Path("scripts/windows/build-installer.ps1").read_text(encoding="utf-8")
-        self.assertIn("cargo build --release -p whisper-dictate-app", script)
+        self.assertIn("cargo build --manifest-path (Join-Path $root 'src\\rust\\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app", script)
         self.assertIn("cargo build failed", script)
 
     def test_local_windows_installer_defaults_to_semver_build_metadata(self):
@@ -629,7 +627,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('/DVERSION_INFO=$versionInfo', script)
         self.assertIn("#ifndef VERSION_INFO", installer)
         self.assertIn("VersionInfoVersion={#VERSION_INFO}", installer)
-        self.assertIn("0.3.25+local.20260603073512.g24b702e.dirty", readme)
+        self.assertIn("<version>+local.<timestamp>.g<sha>.dirty", readme)
+        self.assertIn("<major>.<minor>.<patch>.1", readme)
 
     def test_windows_zip_packages_are_built_on_windows_with_rust_exe(self):
         for path in (".github/workflows/release.yml", ".github/workflows/windows-installer.yml"):
@@ -657,16 +656,21 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_docs_describe_windows_zip_and_installer_outputs(self):
         readme = Path("README.md").read_text(encoding="utf-8")
-        release_notes = Path("docs/RELEASE_NOTES.md").read_text(encoding="utf-8")
         agents = Path("AGENTS.md").read_text(encoding="utf-8")
         technical = Path("docs/TECHNICAL.md").read_text(encoding="utf-8")
 
         self.assertIn("portable Windows ZIP bundle", readme)
         self.assertIn("installer and portable ZIP are written to `Output\\`", readme)
-        self.assertIn("whisper-dictate-windows-<version>.zip", release_notes)
-        self.assertIn("whisper-dictate-linux-<version>.zip", release_notes)
         self.assertIn("Output\\*.exe` and `Output\\*.zip", agents)
         self.assertIn("Output\\*.exe` and `Output\\*.zip", technical)
+
+    def test_project_history_is_not_maintained_as_docs(self):
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+        self.assertFalse(Path("docs/CHANGELOG.md").exists())
+        self.assertFalse(Path("docs/RELEASE_NOTES.md").exists())
+        self.assertIn("git log --no-merges", workflow)
+        self.assertNotIn("docs/RELEASE_NOTES.md", workflow)
 
     def test_runtime_reconfigures_windows_streams_to_utf8(self):
         with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:

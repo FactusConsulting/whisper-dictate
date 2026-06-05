@@ -47,7 +47,7 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "$prev" HEAD -- \
-            Cargo.toml Cargo.lock src/rust/ \
+            src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
             src/ \
             requirements/ \
             scripts/ \
@@ -72,7 +72,7 @@ jobs:
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
-        run: cargo build --release -p whisper-dictate-app
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app
 
       - name: Build installers
         if: steps.win-check.outputs.changed == 'true'

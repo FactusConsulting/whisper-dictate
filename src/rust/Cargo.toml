@@ -1,5 +1,5 @@
 [workspace]
-members = ["src/rust/whisper-dictate-app"]
+members = ["whisper-dictate-app"]
 resolver = "2"
 
 [workspace.package]

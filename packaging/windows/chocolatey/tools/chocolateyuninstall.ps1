@@ -45,3 +45,9 @@ $packageArgs = @{
 }
 
 Uninstall-ChocolateyPackage @packageArgs
+
+try {
+  Uninstall-BinFile -Name $packageName
+} catch {
+  Write-Verbose "No Chocolatey shim to remove for $packageName."
+}

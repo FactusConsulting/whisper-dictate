@@ -26,10 +26,13 @@ class RustUiInstallerTests(unittest.TestCase):
         ).split()[0]
         self.assertEqual("100755", mode)
         self.assertIn('SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"', script)
+        self.assertIn('if [[ -f "${SCRIPT_DIR}/../../src/rust/Cargo.toml" && -d "${SCRIPT_DIR}/../../src/rust/whisper-dictate-app" ]]; then', script)
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/../.." && pwd)"', script)
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"', script)
+        self.assertIn('CARGO_MANIFEST="${HERE}/src/rust/Cargo.toml"', script)
         self.assertIn('if [[ -x "${HERE}/whisper-dictate" ]]; then', script)
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
+        self.assertIn('--manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"', script)
         self.assertIn('REAL_BIN="${LIB_DIR}/whisper-dictate-app"', script)
         self.assertIn('SOURCE_BIN="${HERE}/target/release/whisper-dictate"', script)
         self.assertIn('install -m 0755 "${SOURCE_BIN}" "${REAL_BIN}"', script)

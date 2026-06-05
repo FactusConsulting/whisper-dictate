@@ -15,3 +15,17 @@ $packageArgs = @{
 }
 
 Install-ChocolateyPackage @packageArgs
+
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\WhisperDictate'
+$exePath = Join-Path $installDir 'whisper-dictate.exe'
+
+if (Test-Path $exePath) {
+  try {
+    Uninstall-BinFile -Name $packageName
+  } catch {
+    Write-Verbose "No existing Chocolatey shim to remove for $packageName."
+  }
+  Install-BinFile -Name $packageName -Path $exePath
+} else {
+  Write-Warning "Expected whisper-dictate executable was not found at $exePath. The Start menu shortcut may still work, but the Chocolatey command shim was not created."
+}

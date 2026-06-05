@@ -140,7 +140,7 @@ streams logs, and keeps the terminal workflow available through
 | Hotkeys | Python `pynput` path remains authoritative | Python `evdev` path remains authoritative because Wayland global hotkeys require input permissions | Python `pynput` path remains authoritative |
 | Text injection | Python direct type or clipboard paste remains authoritative, with paste fallback for fragile terminals | Python `ydotool`/`ydotoold` path remains authoritative | Python `pynput`/clipboard path remains authoritative |
 | Active-window profiles | Python target detection remains authoritative | Limited by compositor behavior; keep Python fallback and profile metadata when available | Python X11 target detection remains authoritative |
-| Tray and autostart | Installer shortcuts launch Rust UI | No Rust tray requirement for first Linux release; desktop entry launches the control window | No Rust tray requirement for first Linux release |
+| Tray and autostart | Installer shortcuts launch Rust UI | Desktop entry launches the control window | Desktop entry launches the control window |
 
 Graceful fallback rule: the Rust UI should expose controls for the managed
 runtime and config, but platform integrations that are not yet native Rust
@@ -150,7 +150,7 @@ two implementations during the migration.
 
 Manual smoke procedures before tagging a Rust UI release:
 
-1. `cargo test -p whisper-dictate-app`
+1. `cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app`
 2. `python -m pytest tests -q`
 3. Linux: `scripts/linux/install-rust-ui.sh`, then
    `~/.local/bin/whisper-dictate doctor` and

@@ -7,7 +7,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
     def test_release_uploads_linux_rust_ui_binary(self):
         workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("cargo build --release -p whisper-dictate-app", workflow)
+        self.assertIn("cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app", workflow)
         self.assertIn("whisper-dictate-linux-rust-ui-${VERSION}", workflow)
         self.assertIn('install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"', workflow)
         self.assertIn('INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-${VERSION}.zip"', workflow)
@@ -82,7 +82,11 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("__INSTALLER_URL__", install)
         self.assertIn("__INSTALLER_SHA256__", install)
         self.assertIn("Install-ChocolateyPackage @packageArgs", install)
+        self.assertIn("Join-Path $env:LOCALAPPDATA 'Programs\\WhisperDictate'", install)
+        self.assertIn("Uninstall-BinFile -Name $packageName", install)
+        self.assertIn("Install-BinFile -Name $packageName -Path $exePath", install)
         self.assertIn("Uninstall-ChocolateyPackage @packageArgs", uninstall)
+        self.assertIn("Uninstall-BinFile -Name $packageName", uninstall)
 
     def test_release_builds_and_optionally_pushes_chocolatey_package(self):
         for path in (
@@ -170,7 +174,12 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertFalse(Path("manifests").exists())
 
     def test_rust_workspace_uses_single_root_lockfile(self):
-        self.assertTrue(Path("Cargo.lock").is_file())
+        root_workspace = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
+
+        self.assertTrue(Path("src/rust/Cargo.lock").is_file())
+        self.assertFalse(Path("Cargo.toml").exists())
+        self.assertFalse(Path("Cargo.lock").exists())
+        self.assertIn('members = ["whisper-dictate-app"]', root_workspace)
         self.assertFalse(Path("src/rust/whisper-dictate-app/Cargo.lock").exists())
 
     def test_sonar_uses_supported_python_version(self):
