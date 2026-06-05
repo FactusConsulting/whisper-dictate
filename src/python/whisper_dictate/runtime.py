@@ -41,6 +41,7 @@ import contextlib
 import glob
 import json
 import os
+import re
 import site
 import subprocess
 import sys
@@ -123,9 +124,6 @@ from whisper_dictate.vp_cli import (  # noqa: E402
     _apply_local_only_network_lock, _print_effective_config, build_arg_parser,
 )
 from whisper_dictate.vp_inject import InjectMixin, ydotool_socket_path, ydotoold_ready  # noqa: E402
-from whisper_dictate.vp_keymap import (  # noqa: E402
-    _LANG_TO_XKB, _LAYOUT_KEYCODES, _build_ydotool_ops, _detect_xkb_layout,
-)
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402
 from whisper_dictate.vp_config import (  # noqa: E402
     apply_config_to_environ, config_mtime, effective_config, get_value, load_config,
@@ -133,6 +131,41 @@ from whisper_dictate.vp_config import (  # noqa: E402
 
 
 _ARECORD_DEVICE: str | None = None  # set once at startup
+
+_LANG_TO_XKB = {
+    "da": "dk", "de": "de", "fr": "fr", "fi": "fi", "sv": "se",
+    "nb": "no", "nn": "no", "nl": "nl", "pl": "pl", "pt": "pt",
+    "es": "es", "it": "it", "uk": "ua",
+}
+_SUPPORTED_XKB_LAYOUTS = {"br", "de", "dk", "es", "fi", "no", "pl", "pt", "se", "ua", "us"}
+
+
+def _normalize_xkb_layout(layout: str | None) -> str | None:
+    raw = (layout or "").strip()
+    if not raw:
+        return None
+    mapped = _LANG_TO_XKB.get(raw, raw)
+    if mapped in _SUPPORTED_XKB_LAYOUTS:
+        return mapped
+    return None
+
+
+def _detect_xkb_layout(lang: str | None = None) -> str | None:
+    for var in ("VOICEPI_XKB_LAYOUT", "XKB_DEFAULT_LAYOUT"):
+        layout = _normalize_xkb_layout(os.environ.get(var, ""))
+        if layout:
+            return layout
+    try:
+        with open("/etc/default/keyboard", encoding="utf-8") as f:
+            for line in f:
+                match = re.match(r'XKBLAYOUT="?([^"\s]+)"?', line)
+                if match:
+                    layout = _normalize_xkb_layout(match.group(1))
+                    if layout != "us":
+                        return layout
+    except FileNotFoundError:
+        pass
+    return _normalize_xkb_layout(lang)
 
 
 def _truthy(value: str | None) -> bool:
@@ -1062,11 +1095,8 @@ class Dictate(InjectMixin):
             os.environ["VOICEPI_XKB_LAYOUT"] = self._effective_config["xkb_layout"]
         xkb = _detect_xkb_layout(lang) or ''
         self._xkb_layout = xkb
-        self._keycode_map = _LAYOUT_KEYCODES.get(xkb, {})
-        if self._keycode_map:
-            print(f"[inject] keycode map: {xkb} ({len(self._keycode_map)} tegn)", flush=True)
-        elif bool(os.environ.get('WAYLAND_DISPLAY')):
-            print(f"[inject] ingen keycode map for layout '{xkb}' — kun ASCII via ydotool type", flush=True)
+        if bool(os.environ.get('WAYLAND_DISPLAY')) and xkb:
+            print(f"[inject] Rust keymap layout: {xkb}", flush=True)
         if bool(os.environ.get('WAYLAND_DISPLAY')):
             self._ensure_ydotoold()
         if _ARECORD_DEVICE is None:
@@ -1118,9 +1148,8 @@ class Dictate(InjectMixin):
             self.lang = new_lang
             xkb = _detect_xkb_layout(self.lang) or ''
             self._xkb_layout = xkb
-            self._keycode_map = _LAYOUT_KEYCODES.get(xkb, {})
-            if self._keycode_map:
-                print(f"[inject] keycode map: {xkb} ({len(self._keycode_map)} tegn)", flush=True)
+            if bool(os.environ.get('WAYLAND_DISPLAY')) and xkb:
+                print(f"[inject] Rust keymap layout: {xkb}", flush=True)
 
         from whisper_dictate import vp_audio
         from whisper_dictate import vp_dictionary

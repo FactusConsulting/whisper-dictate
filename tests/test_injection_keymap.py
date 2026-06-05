@@ -15,7 +15,7 @@ from tests.test_helpers import (
 
 class InjectStrategyTests(unittest.TestCase):
     def setUp(self):
-        for n in ("vp_inject", "vp_keymap"):
+        for n in ("vp_inject",):
             sys.modules.pop(n, None)
         from whisper_dictate import vp_inject
         self.inject = vp_inject
@@ -181,7 +181,6 @@ class InjectStrategyTests(unittest.TestCase):
     def test_wayland_type_uses_rust_injector_before_python_ydotool(self):
         target = self._injector()
         target._xkb_layout = "dk"
-        target._keycode_map = {}
         target._try_rust_inject = lambda mode, text="": True
 
         self.assertTrue(target._wayland_type("høre"))
@@ -193,6 +192,23 @@ class InjectStrategyTests(unittest.TestCase):
         target._try_rust_inject = lambda mode, text="": True
 
         self.assertTrue(target._wayland_paste_shortcut())
+
+        self.assertEqual(target.ydotool, [])
+
+
+    def test_wayland_type_without_rust_injector_keeps_ascii_ydotool_fallback(self):
+        target = self._injector()
+        target._xkb_layout = "dk"
+
+        self.assertTrue(self.inject.InjectMixin._wayland_type(target, "plain ascii"))
+
+        self.assertEqual(target.ydotool, [("type", "--", "plain ascii")])
+
+    def test_wayland_type_without_rust_injector_rejects_non_ascii_direct_typing(self):
+        target = self._injector()
+        target._xkb_layout = "dk"
+
+        self.assertFalse(self.inject.InjectMixin._wayland_type(target, "høre"))
 
         self.assertEqual(target.ydotool, [])
 
@@ -242,142 +258,6 @@ def _env(**kwargs):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-
-class BuildYdotoolOpsTests(unittest.TestCase):
-    """_build_ydotool_ops: tekst → liste af (subkommando, *args) tupler."""
-
-    def setUp(self):
-        self.vp = load_voice_pi()
-        self.dk = self.vp._LAYOUT_KEYCODES['dk']
-
-    def test_ascii_only_is_single_type_op(self):
-        ops = self.vp._build_ydotool_ops("hello", {})
-        self.assertEqual(ops, [('type', '--', 'hello')])
-
-    def test_empty_string_gives_no_ops(self):
-        ops = self.vp._build_ydotool_ops("", {})
-        self.assertEqual(ops, [])
-
-    def test_oe_splits_into_key_op(self):
-        ops = self.vp._build_ydotool_ops("ø", self.dk)
-        self.assertEqual(ops, [('key', '40:1', '40:0')])
-
-    def test_mixed_flushes_ascii_buffer_before_special(self):
-        # "høre" → type "h", key ø, type "re"
-        ops = self.vp._build_ydotool_ops("høre", self.dk)
-        self.assertEqual(ops, [
-            ('type', '--', 'h'),
-            ('key', '40:1', '40:0'),
-            ('type', '--', 're'),
-        ])
-
-    def test_question_mark_uses_nordic_keycode(self):
-        # '?' er shift+KEY_MINUS i nordiske layouts, ikke shift+KEY_SLASH
-        ops = self.vp._build_ydotool_ops("hvad?", self.dk)
-        self.assertEqual(ops, [
-            ('type', '--', 'hvad'),
-            ('key', '42:1', '12:1', '12:0', '42:0'),
-        ])
-
-    def test_consecutive_special_chars_each_get_key_op(self):
-        ops = self.vp._build_ydotool_ops("æøå", self.dk)
-        self.assertEqual(ops, [
-            ('key', '39:1', '39:0'),  # æ
-            ('key', '40:1', '40:0'),  # ø
-            ('key', '26:1', '26:0'),  # å
-        ])
-
-    def test_uppercase_special_char(self):
-        ops = self.vp._build_ydotool_ops("Ø", self.dk)
-        self.assertEqual(ops, [('key', '42:1', '40:1', '40:0', '42:0')])
-
-    def test_ascii_after_special_is_flushed(self):
-        ops = self.vp._build_ydotool_ops("åben", self.dk)
-        self.assertEqual(ops, [
-            ('key', '26:1', '26:0'),  # å
-            ('type', '--', 'ben'),
-        ])
-
-    def test_no_map_passthrough(self):
-        # Uden keycode_map (f.eks. us-layout) → alt sendes som type
-        ops = self.vp._build_ydotool_ops("høre", {})
-        self.assertEqual(ops, [('type', '--', 'høre')])
-
-class LayoutKeycodeMapTests(unittest.TestCase):
-    """Mapningens indhold: hvert layout har de forventede specialtegn."""
-
-    def setUp(self):
-        self.vp = load_voice_pi()
-
-    def _assert_has_chars(self, layout: str, chars: str):
-        m = self.vp._LAYOUT_KEYCODES[layout]
-        for ch in chars:
-            with self.subTest(layout=layout, char=ch):
-                self.assertIn(ch, m)
-
-    def test_dk_has_ae_oe_aa(self):
-        self._assert_has_chars('dk', 'æøåÆØÅ')
-
-    def test_no_aliases_dk(self):
-        self.assertIs(
-            self.vp._LAYOUT_KEYCODES['no'],
-            self.vp._LAYOUT_KEYCODES['dk'],
-        )
-
-    def test_se_has_ae_oe_aa(self):
-        self._assert_has_chars('se', 'äöåÄÖÅ')
-
-    def test_de_has_umlauts(self):
-        self._assert_has_chars('de', 'äöüÄÖÜ')
-
-    def test_fi_has_ae_oe(self):
-        self._assert_has_chars('fi', 'äöÄÖ')
-
-    def test_all_layouts_have_nordic_punct(self):
-        punct = '?-_:;/"'
-        for layout in ('dk', 'no', 'se', 'de', 'fi'):
-            self._assert_has_chars(layout, punct)
-
-    def test_es_has_n_tilde_and_accented_vowels(self):
-        self._assert_has_chars('es', 'ñÑáéíóúÁÉÍÓÚüÜ')
-
-    def test_pt_has_cedilla_and_accented_vowels(self):
-        self._assert_has_chars('pt', 'çÇáéíóúÁÉÍÓÚàÀãõÃÕâêôÂÊÔ')
-
-    def test_br_has_cedilla_tilde_circumflex(self):
-        self._assert_has_chars('br', 'çÇãõÃÕâêôÂÊÔáéíóúÁÉÍÓÚ')
-
-    def test_pl_has_polish_chars(self):
-        self._assert_has_chars('pl', 'ąęóśźżćńłĄĘÓŚŹŻĆŃŁ')
-
-    def test_ua_has_full_cyrillic_alphabet(self):
-        self._assert_has_chars('ua', 'йцукенгшщзхїфівапролджєґячсмитьбюЙЦУКЕНГШЩЗХЇФІВАПРОЛДЖЄҐЯЧСМИТЬБЮ')
-
-    def test_ru_not_in_lang_to_xkb(self):
-        self.assertNotIn('ru', self.vp._LANG_TO_XKB)
-
-    def test_uk_maps_to_ua(self):
-        self.assertEqual(self.vp._LANG_TO_XKB.get('uk'), 'ua')
-
-    def test_keycodes_are_balanced_per_key(self):
-        # Stærkere end "lige antal codes": hvert keycode skal have lige
-        # mange press (N:1) og release (N:0) i en sekvens — ellers hænger
-        # fx Shift(42)/AltGr(100) og korrumperer efterfølgende input.
-        import collections
-        for layout, m in self.vp._LAYOUT_KEYCODES.items():
-            for ch, codes in m.items():
-                with self.subTest(layout=layout, char=ch):
-                    bal: "collections.Counter[str]" = collections.Counter()
-                    for tok in codes:
-                        key, sep, state = tok.partition(":")
-                        self.assertTrue(sep and state in ("0", "1"),
-                                        f"Ugyldig token {tok!r} for '{ch}'")
-                        bal[key] += 1 if state == "1" else -1
-                    for key, net in bal.items():
-                        self.assertEqual(
-                            net, 0,
-                            f"Keycode {key} ubalanceret for '{ch}' i "
-                            f"layout '{layout}' (net={net} press-release)")
 
 class DetectXkbLayoutTests(unittest.TestCase):
     """_detect_xkb_layout: prioritetsrækkefølge og fallback."""

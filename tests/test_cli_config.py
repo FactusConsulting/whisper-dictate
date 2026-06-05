@@ -345,8 +345,7 @@ class ModuleSurfaceTests(unittest.TestCase):
         for name in ("_resolve_device", "VALID_DEVICES",
                      "_noise_snr", "_boost_quiet", "_looks_like_speech",
                      "TARGET_DBFS",
-                     "_LAYOUT_KEYCODES", "_LANG_TO_XKB",
-                     "_detect_xkb_layout", "_build_ydotool_ops"):
+                     "_LANG_TO_XKB", "_detect_xkb_layout"):
             self.assertTrue(hasattr(vp, name),
                             f"runtime.{name} missing - re-export broken")
 
@@ -373,7 +372,6 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_dictionary_suggest.py",
             "vp_external_api.py",
             "vp_inject.py",
-            "vp_keymap.py",
             "vp_parakeet.py",
             "vp_postprocess.py",
             "vp_transcribe.py",

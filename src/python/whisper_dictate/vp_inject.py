@@ -14,9 +14,6 @@ import socket
 import subprocess
 import time
 
-from whisper_dictate.vp_keymap import _build_ydotool_ops
-
-
 _WINDOWS_PASTE_TARGETS = (
     "windows terminal",
     "powershell",
@@ -193,19 +190,11 @@ class InjectMixin:
     def _wayland_type(self, text: str) -> bool:
         if self._try_rust_inject("type", text):
             return True
-        # ydotool type (v1.0.4, no libxkbcommon) silently DROPS non-ASCII
-        # that is not covered by the layout keycode map. Surface exactly
-        # which characters are lost instead of failing silently.
-        dropped = sorted({ch for ch in text
-                          if ord(ch) > 127 and ch not in self._keycode_map})
-        if dropped:
-            print(f"[inject] advarsel: {len(dropped)} tegn uden keycode-map "
-                  f"for layout '{self._xkb_layout or '?'}' droppes af "
-                  f"ydotool type: {''.join(dropped)}", flush=True)
-        for op in _build_ydotool_ops(text, self._keycode_map):
-            if not self._try_ydotool(*op):
-                return False
-        return True
+        if any(ord(ch) > 127 for ch in text):
+            print("[inject] Rust injector required for layout-correct non-ASCII ydotool typing",
+                  flush=True)
+            return False
+        return self._try_ydotool("type", "--", text)
 
     def _ensure_ydotoold(self) -> None:
         if not shutil.which("ydotoold"):
