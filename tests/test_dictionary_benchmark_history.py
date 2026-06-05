@@ -14,7 +14,7 @@ from tests.test_helpers import (
 
 class DictionarySuggestTests(unittest.TestCase):
     def test_suggests_replacements_from_benchmark_term_misses(self):
-        import vp_dictionary_suggest
+        from whisper_dictate import vp_dictionary_suggest
 
         old_terms = vp_dictionary_suggest.DICTIONARY.terms
         old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
@@ -40,7 +40,7 @@ class DictionarySuggestTests(unittest.TestCase):
         self.assertNotIn(("de", "deploy"), pairs)
 
     def test_suggest_filters_common_word_sources(self):
-        import vp_dictionary_suggest
+        from whisper_dictate import vp_dictionary_suggest
 
         old_terms = vp_dictionary_suggest.DICTIONARY.terms
         old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
@@ -70,7 +70,7 @@ class DictionarySuggestTests(unittest.TestCase):
         })
 
     def test_suggests_dictionary_term_near_misses(self):
-        import vp_dictionary_suggest
+        from whisper_dictate import vp_dictionary_suggest
 
         old_terms = vp_dictionary_suggest.DICTIONARY.terms
         old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
@@ -88,7 +88,7 @@ class DictionarySuggestTests(unittest.TestCase):
         self.assertTrue(any(s.target == "Claude Code" for s in suggestions))
 
     def test_benchmark_rows_without_misses_do_not_scan_whole_dictionary(self):
-        import vp_dictionary_suggest
+        from whisper_dictate import vp_dictionary_suggest
 
         old_terms = vp_dictionary_suggest.DICTIONARY.terms
         old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
@@ -111,7 +111,7 @@ class DictionarySuggestTests(unittest.TestCase):
         self.assertEqual(suggestions, [])
 
     def test_suggest_does_not_duplicate_existing_replacements(self):
-        import vp_dictionary_suggest
+        from whisper_dictate import vp_dictionary_suggest
 
         old_terms = vp_dictionary_suggest.DICTIONARY.terms
         old_replacements = vp_dictionary_suggest.DICTIONARY.replacements
@@ -131,7 +131,7 @@ class DictionarySuggestTests(unittest.TestCase):
 
     def test_parser_accepts_dictionary_suggest(self):
         sys.modules.pop("vp_cli", None)
-        import vp_cli
+        from whisper_dictate import vp_cli
 
         args = vp_cli.build_arg_parser().parse_args([
             "--dictionary-suggest", "benchmark/results.jsonl",
@@ -159,7 +159,7 @@ class TranscribeFileTests(unittest.TestCase):
 
     def test_parser_accepts_transcribe_file(self):
         sys.modules.pop("vp_cli", None)
-        import vp_cli
+        from whisper_dictate import vp_cli
 
         args = vp_cli.build_arg_parser().parse_args(
             ["--transcribe-file", "sample.wav"])
@@ -168,7 +168,7 @@ class TranscribeFileTests(unittest.TestCase):
     def test_load_audio_file_decodes_wav_as_16khz_int16_mono(self):
         sys.modules["numpy"] = real_numpy()
         sys.modules.pop("vp_file_transcribe", None)
-        import vp_file_transcribe
+        from whisper_dictate import vp_file_transcribe
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             path = f.name
@@ -187,8 +187,8 @@ class TranscribeFileTests(unittest.TestCase):
         sys.modules["numpy"] = real_numpy()
         for name in ("vp_audio", "vp_transcribe", "vp_file_transcribe"):
             sys.modules.pop(name, None)
-        import vp_file_transcribe
-        import vp_transcribe
+        from whisper_dictate import vp_file_transcribe
+        from whisper_dictate import vp_transcribe
 
         class Segment:
             text = " lead death"
@@ -241,7 +241,7 @@ class TranscribeFileTests(unittest.TestCase):
         self.assertEqual(event["dictionary_replacements"][0]["from"], "lead death")
 
     def test_transcribe_file_json_output_is_single_json_object(self):
-        import vp_file_transcribe
+        from whisper_dictate import vp_file_transcribe
 
         event = {"event": "file_transcription", "text": "hello"}
         with _capture_stdout() as buf:
@@ -251,7 +251,7 @@ class TranscribeFileTests(unittest.TestCase):
 
 class BenchmarkTests(unittest.TestCase):
     def test_corpus_manifest_loads_and_scores_terms(self):
-        import vp_corpus
+        from whisper_dictate import vp_corpus
 
         item = vp_corpus.load_corpus("benchmark/corpus.json")[0]
 
@@ -264,7 +264,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(report["misses"], ["Codex"])
 
     def test_corpus_annotates_benchmark_event(self):
-        import vp_corpus
+        from whisper_dictate import vp_corpus
 
         item = vp_corpus.CorpusItem(
             id="x",
@@ -283,7 +283,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(event["term_misses"], ["Codex"])
 
     def test_parse_backend_specs_supports_models(self):
-        import vp_benchmark
+        from whisper_dictate import vp_benchmark
 
         specs = vp_benchmark.parse_backend_specs(
             "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3,openai:gpt-4o-mini-transcribe")
@@ -296,55 +296,54 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(specs[2].model, "gpt-4o-mini-transcribe")
 
     def test_parse_backend_specs_rejects_unknown_backend(self):
-        import vp_benchmark
+        from whisper_dictate import vp_benchmark
 
         with self.assertRaisesRegex(ValueError, "unsupported benchmark backend"):
             vp_benchmark.parse_backend_specs("cloud:gpt-4o-transcribe")
 
     def test_benchmark_run_one_invokes_transcribe_file_json(self):
-        import vp_benchmark
+        from whisper_dictate import vp_benchmark
 
         completed = types.SimpleNamespace(
             returncode=0,
             stdout='{"event":"file_transcription","text":"hello"}\n',
             stderr="",
         )
-        with patch("vp_benchmark.subprocess.run", return_value=completed) as run:
+        with patch("whisper_dictate.vp_benchmark.subprocess.run", return_value=completed) as run:
             event = vp_benchmark.run_one(
                 "sample.wav",
                 vp_benchmark.BackendSpec(
                     raw="whisper:large-v3", backend="whisper", model="large-v3"),
                 python_exe="python",
-                app_path="voice_pi.py",
                 base_env={},
             )
 
         cmd = run.call_args.args[0]
         env = run.call_args.kwargs["env"]
         self.assertEqual(cmd, [
-            "python", "voice_pi.py", "--transcribe-file", "sample.wav", "--json"
+            "python", "-m", "whisper_dictate.runtime", "--transcribe-file", "sample.wav", "--json"
         ])
+        self.assertIn("src", env["PYTHONPATH"])
         self.assertEqual(env["VOICEPI_STT_BACKEND"], "whisper")
         self.assertEqual(env["VOICEPI_MODEL"], "large-v3")
         self.assertTrue(event["benchmark_success"])
         self.assertEqual(event["benchmark_backend_spec"], "whisper:large-v3")
 
     def test_benchmark_parakeet_model_uses_parakeet_env(self):
-        import vp_benchmark
+        from whisper_dictate import vp_benchmark
 
         completed = types.SimpleNamespace(
             returncode=1,
             stdout="",
             stderr="missing nemo",
         )
-        with patch("vp_benchmark.subprocess.run", return_value=completed) as run:
+        with patch("whisper_dictate.vp_benchmark.subprocess.run", return_value=completed) as run:
             event = vp_benchmark.run_one(
                 "sample.wav",
                 vp_benchmark.BackendSpec(
                     raw="parakeet:nvidia/model", backend="parakeet",
                     model="nvidia/model"),
                 python_exe="python",
-                app_path="voice_pi.py",
                 base_env={},
             )
 
@@ -355,7 +354,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("missing nemo", event["benchmark_error"])
 
     def test_benchmark_jsonl_writes_one_line_per_file_backend(self):
-        import vp_benchmark
+        from whisper_dictate import vp_benchmark
 
         events = []
 
@@ -372,7 +371,7 @@ class BenchmarkTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             path = f.name
         try:
-            with patch("vp_benchmark.run_one", side_effect=fake_run_one):
+            with patch("whisper_dictate.vp_benchmark.run_one", side_effect=fake_run_one):
                 results = vp_benchmark.run_benchmark(
                     ["a.wav", "b.wav"], "whisper,parakeet", output_jsonl=path)
             with open(path, encoding="utf-8") as f:
@@ -385,7 +384,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(lines[0]["benchmark_backend_spec"], "whisper")
 
     def test_benchmark_corpus_writes_skipped_rows_for_missing_audio(self):
-        import vp_benchmark
+        from whisper_dictate import vp_benchmark
 
         manifest = {
             "items": [{
@@ -421,7 +420,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(rows[0]["term_misses"], ["Codex"])
 
     def test_benchmark_corpus_reuses_loaded_model_per_backend(self):
-        import vp_benchmark
+        from whisper_dictate import vp_benchmark
 
         manifest = {
             "audio_dir": "audio",
@@ -446,8 +445,8 @@ class BenchmarkTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             try:
-                with patch("vp_benchmark._load_model_for_spec", return_value=("model", "m", "cpu", "int8")) as load:
-                    with patch("vp_file_transcribe.transcribe_file_event", side_effect=fake_transcribe):
+                with patch("whisper_dictate.vp_benchmark._load_model_for_spec", return_value=("model", "m", "cpu", "int8")) as load:
+                    with patch("whisper_dictate.vp_file_transcribe.transcribe_file_event", side_effect=fake_transcribe):
                         results = vp_benchmark.run_benchmark(
                             None,
                             "whisper:tiny",
@@ -464,7 +463,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(results[1]["term_hits"], ["Claude Code"])
 
     def test_record_corpus_imports_sounddevice_lazily_with_help(self):
-        with open("scripts/record-corpus.py", encoding="utf-8") as f:
+        with open("scripts/benchmark/record-corpus.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("def load_sounddevice", script)
@@ -476,7 +475,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_parser_accepts_benchmark_options(self):
         sys.modules.pop("vp_cli", None)
-        import vp_cli
+        from whisper_dictate import vp_cli
 
         args = vp_cli.build_arg_parser().parse_args([
             "--benchmark-files", "a.wav", "b.wav",
@@ -492,7 +491,7 @@ class BenchmarkTests(unittest.TestCase):
 
 class HistoryTests(unittest.TestCase):
     def test_append_and_read_history_keeps_core_fields(self):
-        import vp_history
+        from whisper_dictate import vp_history
 
         event = {
             "ts": 1,
@@ -521,7 +520,7 @@ class HistoryTests(unittest.TestCase):
         self.assertNotIn("large_unused_blob", rows[0])
 
     def test_history_last_returns_latest_item(self):
-        import vp_history
+        from whisper_dictate import vp_history
 
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
             path = f.name
@@ -538,7 +537,7 @@ class HistoryTests(unittest.TestCase):
         old = os.environ.get("VOICEPI_HISTORY_ENABLED")
         os.environ["VOICEPI_HISTORY_ENABLED"] = "0"
         sys.modules.pop("vp_history", None)
-        import vp_history
+        from whisper_dictate import vp_history
 
         with tempfile.NamedTemporaryFile(delete=False) as f:
             path = f.name
@@ -555,7 +554,7 @@ class HistoryTests(unittest.TestCase):
             sys.modules.pop("vp_history", None)
 
     def test_history_copy_last_uses_clipboard(self):
-        import vp_history
+        from whisper_dictate import vp_history
 
         copied = {}
 
@@ -576,7 +575,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_parser_accepts_history_options(self):
         sys.modules.pop("vp_cli", None)
-        import vp_cli
+        from whisper_dictate import vp_cli
 
         args = vp_cli.build_arg_parser().parse_args(["--history-list"])
         self.assertEqual(args.history_list, 10)
@@ -589,18 +588,18 @@ class HistoryTests(unittest.TestCase):
         args = vp_cli.build_arg_parser().parse_args(["--history-reinject-last"])
         self.assertTrue(args.history_reinject_last)
 
-    def test_voice_pi_appends_history_after_metrics(self):
-        with open("voice_pi.py", encoding="utf-8") as f:
+    def test_runtime_appends_history_after_metrics(self):
+        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
-        self.assertIn("from vp_history import append_history", script)
+        self.assertIn("from whisper_dictate.vp_history import append_history", script)
         self.assertIn("append_history(event)", script)
         self.assertLess(script.index("append_jsonl(self.metrics_jsonl, event)"),
                         script.index("append_history(event)"))
 
 class ProfileTests(unittest.TestCase):
     def test_profile_match_by_title_and_process_applies_settings(self):
-        import vp_profiles
+        from whisper_dictate import vp_profiles
 
         profiles = [{
             "name": "Claude terminal",
@@ -620,7 +619,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(config["lang"], "en")
 
     def test_profile_match_returns_default_when_no_match(self):
-        import vp_profiles
+        from whisper_dictate import vp_profiles
 
         config, name = vp_profiles.apply_profile_settings(
             {"inject_mode": "auto"},
@@ -633,7 +632,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(config, {"inject_mode": "auto"})
 
     def test_profile_match_supports_lists(self):
-        import vp_profiles
+        from whisper_dictate import vp_profiles
 
         name, settings = vp_profiles.match_profile(
             [{
@@ -648,8 +647,8 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(name, "AI terminals")
         self.assertEqual(settings["inject_mode"], "paste")
 
-    def test_voice_pi_records_active_profile_in_metrics(self):
-        with open("voice_pi.py", encoding="utf-8") as f:
+    def test_runtime_records_active_profile_in_metrics(self):
+        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("def _profiled_config", script)
@@ -658,7 +657,7 @@ class ProfileTests(unittest.TestCase):
         self.assertIn('profile=getattr(self, "_active_profile_name", None)', script)
 
     def test_history_keeps_profile_field(self):
-        import vp_history
+        from whisper_dictate import vp_history
 
         event = {"text": "hello", "profile": "Claude terminal"}
         stored = vp_history._history_event(event)
@@ -666,12 +665,20 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(stored["profile"], "Claude terminal")
 
 class DictionaryTests(unittest.TestCase):
+    def _drop_package_module(self, name):
+        sys.modules.pop(name, None)
+        package = sys.modules.get("whisper_dictate")
+        attr = name.rsplit(".", 1)[-1]
+        if package is not None and hasattr(package, attr):
+            delattr(package, attr)
+
     def setUp(self):
         self._old = {k: os.environ.pop(k, None) for k in (
             "VOICEPI_DICTIONARY", "VOICEPI_DICTIONARY_ENABLED",
             "VOICEPI_DICTIONARY_MAX_TERMS", "VOICEPI_DICTIONARY_PROMPT_CHARS",
         )}
         sys.modules.pop("vp_dictionary", None)
+        self._drop_package_module("whisper_dictate.vp_dictionary")
 
     def tearDown(self):
         for k in list(self._old):
@@ -679,9 +686,10 @@ class DictionaryTests(unittest.TestCase):
             if self._old[k] is not None:
                 os.environ[k] = self._old[k]
         sys.modules.pop("vp_dictionary", None)
+        self._drop_package_module("whisper_dictate.vp_dictionary")
 
     def test_dictionary_json_filename_literal_is_centralized(self):
-        source = Path("vp_dictionary.py").read_text(encoding="utf-8")
+        source = Path("src/python/whisper_dictate/vp_dictionary.py").read_text(encoding="utf-8")
 
         self.assertIn('DICTIONARY_JSON_NAME = "dictionary.json"', source)
         self.assertEqual(source.count('"dictionary.json"'), 1)
@@ -693,7 +701,7 @@ class DictionaryTests(unittest.TestCase):
             path = f.name
         try:
             os.environ["VOICEPI_DICTIONARY"] = path
-            import vp_dictionary
+            from whisper_dictate import vp_dictionary
 
             d = vp_dictionary.DICTIONARY
             self.assertEqual(d.prompt_terms(), ["Slack", "Claude Code", "Codex"])
@@ -712,7 +720,7 @@ class DictionaryTests(unittest.TestCase):
             path = f.name
         try:
             os.environ["VOICEPI_DICTIONARY"] = path
-            import vp_dictionary
+            from whisper_dictate import vp_dictionary
 
             d = vp_dictionary.DICTIONARY
             self.assertIn("OpenClaw", d.terms)
@@ -722,7 +730,7 @@ class DictionaryTests(unittest.TestCase):
             os.remove(path)
 
     def test_invalid_prompt_limits_fall_back_to_defaults(self):
-        import vp_dictionary
+        from whisper_dictate import vp_dictionary
 
         os.environ["VOICEPI_DICTIONARY_MAX_TERMS"] = "bogus"
         os.environ["VOICEPI_DICTIONARY_PROMPT_CHARS"] = "bogus"
@@ -735,7 +743,7 @@ class DictionaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "dictionary.json")
             os.environ["VOICEPI_DICTIONARY"] = path
-            import vp_dictionary
+            from whisper_dictate import vp_dictionary
 
             written, added = vp_dictionary.add_dictionary_term("Claude Code")
             _, added_again = vp_dictionary.add_dictionary_term("claude code")
@@ -749,7 +757,7 @@ class DictionaryTests(unittest.TestCase):
         self.assertEqual(data["replacements"], {})
 
     def test_dictionary_writes_reject_unsafe_targets(self):
-        import vp_dictionary
+        from whisper_dictate import vp_dictionary
 
         with self.assertRaises(ValueError):
             vp_dictionary.ensure_dictionary_file(Path("relative-dictionary.json"))
@@ -764,7 +772,7 @@ class DictionaryTests(unittest.TestCase):
             path = f.name
         try:
             os.environ["VOICEPI_DICTIONARY"] = path
-            import vp_dictionary
+            from whisper_dictate import vp_dictionary
 
             written, src, dst, changed = vp_dictionary.add_dictionary_replacement(
                 "code X=Codex")
@@ -784,7 +792,7 @@ class DictionaryTests(unittest.TestCase):
             path = f.name
         try:
             os.environ["VOICEPI_DICTIONARY"] = path
-            import vp_dictionary
+            from whisper_dictate import vp_dictionary
 
             written, changed = vp_dictionary.add_dictionary_replacements({
                 "code X": "Codex",

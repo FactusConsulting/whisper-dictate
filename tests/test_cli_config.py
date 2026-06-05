@@ -185,9 +185,9 @@ class DebugConfigTests(unittest.TestCase):
         self.assertIn("VOICEPI_QUIT_KEY=f12", out)
 
     def test_quit_key_is_not_hardcoded_to_escape(self):
-        cli = Path("vp_cli.py").read_text(encoding="utf-8")
-        runtime = Path("voice_pi.py").read_text(encoding="utf-8")
-        config = Path("vp_config.py").read_text(encoding="utf-8")
+        cli = Path("src/python/whisper_dictate/vp_cli.py").read_text(encoding="utf-8")
+        runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        config = Path("src/python/whisper_dictate/vp_config.py").read_text(encoding="utf-8")
 
         self.assertIn('Setting("VOICEPI_QUIT_KEY", "quit_key", "esc", live=False)', config)
         self.assertIn('QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc")', cli)
@@ -318,7 +318,7 @@ class ArgumentParserTests(unittest.TestCase):
 
 class ModelCapacityTests(unittest.TestCase):
     def test_estimate_model_fits_uses_free_and_total_vram(self):
-        import vp_model_capacity
+        from whisper_dictate import vp_model_capacity
 
         gpus = [vp_model_capacity.GpuInfo(
             index=0,
@@ -335,9 +335,9 @@ class ModelCapacityTests(unittest.TestCase):
         self.assertEqual(by_name["NVIDIA Parakeet TDT 1.1B"].status, "too-small")
 
     def test_capacity_report_json_shape(self):
-        import vp_model_capacity
+        from whisper_dictate import vp_model_capacity
 
-        with patch("vp_model_capacity.query_gpus", return_value=[
+        with patch("whisper_dictate.vp_model_capacity.query_gpus", return_value=[
             vp_model_capacity.GpuInfo(0, "RTX Test", 16384, 12000),
         ]):
             data = json.loads(vp_model_capacity.capacity_report(as_json=True))
@@ -347,9 +347,9 @@ class ModelCapacityTests(unittest.TestCase):
                             for item in data["models"]))
 
     def test_capacity_report_plain_mentions_free_vram(self):
-        import vp_model_capacity
+        from whisper_dictate import vp_model_capacity
 
-        with patch("vp_model_capacity.query_gpus", return_value=[
+        with patch("whisper_dictate.vp_model_capacity.query_gpus", return_value=[
             vp_model_capacity.GpuInfo(0, "RTX Test", 8192, 4096),
         ]):
             report = vp_model_capacity.capacity_report()
@@ -359,20 +359,18 @@ class ModelCapacityTests(unittest.TestCase):
         self.assertIn("Use free VRAM", report)
 
 class ModuleSurfaceTests(unittest.TestCase):
-    """voice_pi.py re-exports names that were moved into vp_cli / vp_transcribe
-    when the file was split. Tests, the installer, and downstream callers
-    still reach for these on the voice_pi module — make sure they resolve."""
+    """runtime.py exposes names that were moved into focused package modules."""
 
-    def test_voice_pi_reexports_cli_symbols(self):
+    def test_runtime_reexports_cli_symbols(self):
         vp = load_voice_pi()
         for name in ("build_arg_parser", "_print_effective_config",
                      "KEY", "MODEL_NAME", "DEVICE", "LANG",
                      "INJECT_MODE", "VALID_INJECT_MODES",
                      "QUIT_COUNT", "QUIT_WINDOW_MS", "BEAM_SIZE"):
             self.assertTrue(hasattr(vp, name),
-                            f"voice_pi.{name} missing — re-export broken")
+                            f"runtime.{name} missing - re-export broken")
 
-    def test_voice_pi_reexports_transcribe_symbols(self):
+    def test_runtime_reexports_transcribe_symbols(self):
         vp = load_voice_pi()
         for name in ("_transcribe", "_HALLUCINATIONS",
                      "is_hallucination", "SR", "INITIAL_PROMPT",
@@ -380,9 +378,9 @@ class ModuleSurfaceTests(unittest.TestCase):
                      "STT_BACKEND", "VALID_STT_BACKENDS",
                      "load_stt_model"):
             self.assertTrue(hasattr(vp, name),
-                            f"voice_pi.{name} missing — re-export broken")
+                            f"runtime.{name} missing - re-export broken")
 
-    def test_voice_pi_reexports_device_audio_keymap(self):
+    def test_runtime_reexports_device_audio_keymap(self):
         vp = load_voice_pi()
         for name in ("_resolve_device", "VALID_DEVICES",
                      "_noise_snr", "_boost_quiet", "_looks_like_speech",
@@ -390,10 +388,10 @@ class ModuleSurfaceTests(unittest.TestCase):
                      "_LAYOUT_KEYCODES", "_LANG_TO_XKB",
                      "_detect_xkb_layout", "_build_ydotool_ops"):
             self.assertTrue(hasattr(vp, name),
-                            f"voice_pi.{name} missing — re-export broken")
+                            f"runtime.{name} missing - re-export broken")
 
 class CliModuleIsolationTests(unittest.TestCase):
-    """vp_cli.build_arg_parser must work standalone — no voice_pi import.
+    """vp_cli.build_arg_parser must work standalone - no runtime import.
     Catches regressions where someone accidentally re-couples them."""
 
     def setUp(self):
@@ -407,17 +405,17 @@ class CliModuleIsolationTests(unittest.TestCase):
 
     def test_parser_works_without_voice_pi(self):
         before = set(sys.modules)
-        import vp_cli
+        from whisper_dictate import vp_cli
         ns = vp_cli.build_arg_parser().parse_args([])
         # Defaults pulled from env vars; just check the shape.
         for attr in ("key", "model", "lang", "device", "mode", "autodetect"):
             self.assertTrue(hasattr(ns, attr),
                             f"parser missing --{attr}")
-        # voice_pi may already have been loaded by an earlier test, but
-        # importing vp_cli here must NOT pull it in fresh.
+        # The runtime may already have been loaded by an earlier test, but
+        # importing vp_cli here must not pull it in fresh.
         newly_loaded = set(sys.modules) - before
-        self.assertNotIn("voice_pi", newly_loaded,
-                         "vp_cli must not pull in voice_pi")
+        self.assertNotIn("whisper_dictate.runtime", newly_loaded,
+                         "vp_cli must not pull in runtime")
 
 class TemperatureParseTests(unittest.TestCase):
     """vp_transcribe._parse_temperatures: CSV float list with a safe
@@ -427,7 +425,7 @@ class TemperatureParseTests(unittest.TestCase):
         for n in ("vp_transcribe", "vp_audio"):
             sys.modules.pop(n, None)
         sys.modules.setdefault("numpy", types.ModuleType("numpy"))
-        import vp_transcribe
+        from whisper_dictate import vp_transcribe
         self.t = vp_transcribe
 
     def test_unset_returns_default_ladder(self):
@@ -477,7 +475,7 @@ class MetricsTests(unittest.TestCase):
     def test_append_jsonl_writes_unicode_event(self):
         for n in ("vp_metrics",):
             sys.modules.pop(n, None)
-        import vp_metrics
+        from whisper_dictate import vp_metrics
 
         with tempfile.NamedTemporaryFile(delete=False) as f:
             path = f.name
@@ -514,7 +512,7 @@ class ConfigTests(unittest.TestCase):
             path = os.path.join(d, "config.json")
             os.environ["VOICEPI_CONFIG"] = path
             os.environ["VOICEPI_LANG"] = "en"
-            import vp_config
+            from whisper_dictate import vp_config
 
             vp_config.save_config({"lang": "da", "model": "large-v3", "xkb_layout": "dk"})
             self.assertEqual(vp_config.get_value("VOICEPI_LANG"), "da")
@@ -548,7 +546,7 @@ class PrivacyModeTests(unittest.TestCase):
 
     def test_local_only_applies_offline_environment_gates(self):
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        import vp_privacy
+        from whisper_dictate import vp_privacy
 
         self.assertTrue(vp_privacy.apply_local_only_network_lock())
         self.assertEqual(os.environ["HF_HUB_OFFLINE"], "1")
@@ -561,7 +559,7 @@ class PrivacyModeTests(unittest.TestCase):
     def test_local_only_does_not_override_existing_offline_values(self):
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
         os.environ["HF_HUB_OFFLINE"] = "custom"
-        import vp_privacy
+        from whisper_dictate import vp_privacy
 
         vp_privacy.apply_local_only_network_lock()
 
@@ -569,20 +567,20 @@ class PrivacyModeTests(unittest.TestCase):
 
     def test_local_only_blocks_cloud_backends(self):
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        import vp_privacy
+        from whisper_dictate import vp_privacy
 
         with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
             vp_privacy.assert_local_backend("openai:gpt-4o-transcribe")
 
     def test_local_only_allows_current_local_backends(self):
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        import vp_privacy
+        from whisper_dictate import vp_privacy
 
         for backend in ("whisper", "faster-whisper", "parakeet"):
             vp_privacy.assert_local_backend(backend)
 
     def test_local_only_is_registered_as_config_setting(self):
-        import vp_config
+        from whisper_dictate import vp_config
 
         self.assertIn("VOICEPI_LOCAL_ONLY", vp_config.SETTING_BY_ENV)
         self.assertEqual(
@@ -592,15 +590,64 @@ class PrivacyModeTests(unittest.TestCase):
         self.assertFalse(vp_config.SETTING_BY_ENV["VOICEPI_LOCAL_ONLY"].live)
 
     def test_debug_dump_reports_local_only_setting(self):
-        with open("vp_cli.py", encoding="utf-8") as f:
+        with open("src/python/whisper_dictate/vp_cli.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn('"local only"', script)
         self.assertIn("VOICEPI_LOCAL_ONLY", script)
 
+class WindowsStdioEncodingTests(unittest.TestCase):
+    def test_windows_stdio_keeps_interactive_console_native(self):
+        voice_pi = load_voice_pi()
+
+        class Stream:
+            def __init__(self, tty):
+                self.tty = tty
+                self.calls = []
+
+            def isatty(self):
+                return self.tty
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        stdout = Stream(tty=True)
+        stderr = Stream(tty=True)
+        with patch.object(voice_pi.os, "name", "nt"), \
+                patch.object(voice_pi.sys, "stdout", stdout), \
+                patch.object(voice_pi.sys, "stderr", stderr):
+            voice_pi._configure_windows_stdio()
+
+        self.assertEqual(stdout.calls, [])
+        self.assertEqual(stderr.calls, [])
+
+    def test_windows_stdio_forces_utf8_for_piped_worker_output(self):
+        voice_pi = load_voice_pi()
+
+        class Stream:
+            def __init__(self):
+                self.calls = []
+
+            def isatty(self):
+                return False
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        stdout = Stream()
+        stderr = Stream()
+        with patch.object(voice_pi.os, "name", "nt"), \
+                patch.object(voice_pi.sys, "stdout", stdout), \
+                patch.object(voice_pi.sys, "stderr", stderr):
+            voice_pi._configure_windows_stdio()
+
+        expected = [{"encoding": "utf-8", "errors": "replace"}]
+        self.assertEqual(stdout.calls, expected)
+        self.assertEqual(stderr.calls, expected)
+
 class CommandHookTests(unittest.TestCase):
     def test_command_hook_sends_event_json_on_stdin(self):
-        import vp_command_hook
+        from whisper_dictate import vp_command_hook
 
         with tempfile.NamedTemporaryFile(delete=False) as f:
             out_path = f.name
@@ -626,7 +673,7 @@ class CommandHookTests(unittest.TestCase):
         self.assertEqual(written, "hello Codex")
 
     def test_command_hook_timeout_is_nonfatal(self):
-        import vp_command_hook
+        from whisper_dictate import vp_command_hook
 
         command = json.dumps([sys.executable, "-c", "import time; time.sleep(2)"])
         with patch.dict(os.environ, {
@@ -640,7 +687,7 @@ class CommandHookTests(unittest.TestCase):
         self.assertIn("timed out", result.error)
 
     def test_command_hook_rejects_invalid_json_array(self):
-        import vp_command_hook
+        from whisper_dictate import vp_command_hook
 
         with patch.dict(os.environ, {"VOICEPI_COMMAND_HOOK": '["ok", 5]'}, clear=False):
             result = vp_command_hook.run_command_hook({"text": "bad"})
@@ -648,8 +695,8 @@ class CommandHookTests(unittest.TestCase):
         self.assertTrue(result.enabled)
         self.assertIn("array of strings", result.error)
 
-    def test_voice_pi_records_command_hook_after_event_creation(self):
-        with open("voice_pi.py", encoding="utf-8") as f:
+    def test_runtime_records_command_hook_after_event_creation(self):
+        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
         stop_body = script[script.index("def _stop_and_transcribe"):]
@@ -664,11 +711,11 @@ class CommandHookTests(unittest.TestCase):
 
 class DebugToolingTests(unittest.TestCase):
     def test_probe_key_is_documented_and_ci_sanity_checked(self):
-        probe = Path("scripts/probe-key.py").read_text(encoding="utf-8")
-        config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+        probe = Path("scripts/dev/probe-key.py").read_text(encoding="utf-8")
+        config = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
         workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
         self.assertIn("Probe a push-to-talk key/chord", probe)
-        self.assertIn("python scripts/probe-key.py", config)
+        self.assertIn("python scripts/dev/probe-key.py", config)
         self.assertIn("probe-key.py sanity", workflow)
-        self.assertIn("python scripts/probe-key.py bogus_key 1", workflow)
+        self.assertIn("python scripts/dev/probe-key.py bogus_key 1", workflow)

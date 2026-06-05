@@ -13,7 +13,7 @@ class InjectStrategyTests(unittest.TestCase):
     def setUp(self):
         for n in ("vp_inject", "vp_keymap"):
             sys.modules.pop(n, None)
-        import vp_inject
+        from whisper_dictate import vp_inject
         self.inject = vp_inject
 
     def _dummy(self, title=None, process=None):
@@ -90,7 +90,7 @@ class InjectStrategyTests(unittest.TestCase):
                 self.inject.InjectMixin._text_prefers_paste(target, "plain ascii"))
 
     def test_windows_auto_pastes_layout_sensitive_text(self):
-        with open("vp_inject.py", encoding="utf-8") as f:
+        with open("src/python/whisper_dictate/vp_inject.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("_WINDOWS_LAYOUT_SENSITIVE_CHARS", script)

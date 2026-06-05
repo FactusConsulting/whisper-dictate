@@ -66,7 +66,7 @@ class AudioDspTests(unittest.TestCase):
         self.assertLessEqual(float(np.max(np.abs(out))), 0.99 + 1e-6)
 
     def test_cap_line_is_bold_on_interactive_terminal(self):
-        import vp_audio
+        from whisper_dictate import vp_audio
 
         class Tty:
             def isatty(self):
@@ -80,7 +80,7 @@ class AudioDspTests(unittest.TestCase):
                 )
 
     def test_cap_line_stays_plain_for_piped_output(self):
-        import vp_audio
+        from whisper_dictate import vp_audio
 
         class Pipe:
             def isatty(self):
@@ -93,7 +93,7 @@ class AudioDspTests(unittest.TestCase):
             )
 
     def test_cap_line_highlight_respects_no_color(self):
-        import vp_audio
+        from whisper_dictate import vp_audio
 
         class Tty:
             def isatty(self):
@@ -134,7 +134,7 @@ class AudioDspTests(unittest.TestCase):
 
 class AudioDuckingTests(unittest.TestCase):
     def test_audio_ducker_restore_resets_saved_session_volumes(self):
-        import vp_audio_ducking
+        from whisper_dictate import vp_audio_ducking
 
         class Volume:
             def __init__(self):
@@ -157,7 +157,7 @@ class AudioDuckingTests(unittest.TestCase):
     def test_audio_ducker_config_is_disabled_by_default_and_clamps_level(self):
         with _env(VOICEPI_AUDIO_DUCKING=None, VOICEPI_AUDIO_DUCKING_LEVEL="2.5"):
             sys.modules.pop("vp_audio_ducking", None)
-            import vp_audio_ducking
+            from whisper_dictate import vp_audio_ducking
 
             ducker = vp_audio_ducking.AudioDucker.from_config()
 
@@ -169,7 +169,7 @@ class CalibrationTests(unittest.TestCase):
         np = AudioDspTests.np
         sys.modules["numpy"] = np
         sys.modules.pop("vp_calibration", None)
-        import vp_calibration
+        from whisper_dictate import vp_calibration
 
         quiet = np.full(4000, 0.001, dtype=np.float32)
         speech = np.full(12000, 0.15, dtype=np.float32)
@@ -186,7 +186,7 @@ class CalibrationTests(unittest.TestCase):
         np = AudioDspTests.np
         sys.modules["numpy"] = np
         sys.modules.pop("vp_calibration", None)
-        import vp_calibration
+        from whisper_dictate import vp_calibration
 
         pcm = (np.full(16000, 0.01, dtype=np.float32) * 32767).astype(np.int16)
 
@@ -196,7 +196,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertTrue(result["warnings"])
 
     def test_calibration_json_output_is_single_json_object(self):
-        import vp_calibration
+        from whisper_dictate import vp_calibration
 
         result = {
             "event": "mic_calibration",
@@ -215,7 +215,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_parser_accepts_calibration_options(self):
         sys.modules.pop("vp_cli", None)
-        import vp_cli
+        from whisper_dictate import vp_cli
 
         args = vp_cli.build_arg_parser().parse_args(["--calibrate-mic"])
         self.assertEqual(args.calibrate_mic, 5.0)
@@ -224,8 +224,8 @@ class CalibrationTests(unittest.TestCase):
         args = vp_cli.build_arg_parser().parse_args(["--calibrate-file", "sample.wav"])
         self.assertEqual(args.calibrate_file, "sample.wav")
 
-    def test_voice_pi_handles_calibration_before_model_load(self):
-        with open("voice_pi.py", encoding="utf-8") as f:
+    def test_runtime_handles_calibration_before_model_load(self):
+        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
         calibration = script.index("if a.calibrate_mic is not None or a.calibrate_file")
@@ -233,7 +233,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertLess(calibration, model_load)
 
     def test_cloud_backend_uses_api_device_and_no_local_model_ready_log(self):
-        script = Path("voice_pi.py").read_text(encoding="utf-8")
+        script = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
 
         backend_lookup = script.index("backend = STT_BACKEND")
         cloud_device = script.index('if backend == "openai":\n        dev, ctype = "api", "remote"')
@@ -247,7 +247,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertIn("using {label} {loaded_model_name} via configured API", script)
 
     def test_cloud_model_load_runtime_error_is_reported_without_traceback(self):
-        script = Path("voice_pi.py").read_text(encoding="utf-8")
+        script = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
 
         model_load = script.index("_model = load_stt_model(loaded_model_name, dev, ctype)")
         before = script.rfind("try:", 0, model_load)
@@ -260,7 +260,7 @@ class CalibrationTests(unittest.TestCase):
 
 class WorkerEventTests(unittest.TestCase):
     def test_worker_events_disabled_by_default(self):
-        import vp_worker_events
+        from whisper_dictate import vp_worker_events
 
         with patch.dict(os.environ, {}, clear=True):
             buf = io.StringIO()
@@ -269,7 +269,7 @@ class WorkerEventTests(unittest.TestCase):
             self.assertEqual(buf.getvalue(), "")
 
     def test_worker_events_emit_compact_json_on_stderr(self):
-        import vp_worker_events
+        from whisper_dictate import vp_worker_events
 
         with patch.dict(os.environ, {"VOICEPI_WORKER_EVENTS": "1"}, clear=True):
             buf = io.StringIO()

@@ -1,5 +1,11 @@
 # Repository Instructions
 
+## Local Command Execution
+
+- Run PowerShell commands without loading the user profile. Prefer no-profile
+  execution for local automation because profile startup is slow and unrelated
+  to repository behavior.
+
 ## Regression Tests
 
 Whenever fixing a bug, add a regression test in the same change unless there is
@@ -24,7 +30,7 @@ summary and include the manual verification that covers the bug.
 - Use the local installer loop for internal Windows testing. When changing
   installer files, shortcuts, bundled files, Rust UI/controller behavior, or
   Windows launch behavior, build a local installer with
-  `scripts/build-windows-installer.ps1` and report the generated
+  `scripts/windows/build-installer.ps1` and report the generated
   `Output\*.exe` and `Output\*.zip`.
 - Do not create GitHub releases as part of normal iteration. Build local
   installers by default; create a release only when explicitly requested.

@@ -11,12 +11,11 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("whisper-dictate-linux-rust-ui-${VERSION}", workflow)
         self.assertIn('install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"', workflow)
         self.assertIn('INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-${VERSION}.zip"', workflow)
-        self.assertIn('[ -f requirements-cpu.txt ] && cp requirements-cpu.txt "$d/"', workflow)
-        self.assertIn('[ -f requirements-gpu.txt ] && cp requirements-gpu.txt "$d/"', workflow)
+        self.assertIn('cp -r requirements "$d/"', workflow)
         self.assertIn('cp assets/whisper-dictate-logo.svg "$d/assets/"', workflow)
-        self.assertIn("scripts/install-linux-rust-ui.sh", workflow)
+        self.assertIn("scripts/linux/install-rust-ui.sh", workflow)
         self.assertIn('cp ubuntu26.04/setup.sh "$d/ubuntu26.04/"', workflow)
-        self.assertIn("bash -n scripts/install-linux-rust-ui.sh", workflow)
+        self.assertIn("bash -n scripts/linux/install-rust-ui.sh", workflow)
         self.assertIn("bash -n ubuntu26.04/setup.sh", workflow)
 
     def test_homebrew_formula_installs_linux_release_bundle(self):
@@ -68,14 +67,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn('exec "#{libexec}/setup.sh"', bump_step)
 
     def test_chocolatey_package_template_installs_release_asset(self):
-        nuspec = Path("packaging/chocolatey/whisper-dictate.nuspec").read_text(
+        nuspec = Path("packaging/windows/chocolatey/whisper-dictate.nuspec").read_text(
             encoding="utf-8"
         )
         install = Path(
-            "packaging/chocolatey/tools/chocolateyinstall.ps1"
+            "packaging/windows/chocolatey/tools/chocolateyinstall.ps1"
         ).read_text(encoding="utf-8")
         uninstall = Path(
-            "packaging/chocolatey/tools/chocolateyuninstall.ps1"
+            "packaging/windows/chocolatey/tools/chocolateyuninstall.ps1"
         ).read_text(encoding="utf-8")
 
         self.assertIn("<id>whisper-dictate</id>", nuspec)
@@ -99,14 +98,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("nuget.pkg.github.com/${{ github.repository_owner }}", workflow, path.as_posix())
             self.assertIn("dotnet nuget push", workflow, path.as_posix())
             self.assertIn("Publish public Chocolatey feed to GitHub Pages", workflow, path.as_posix())
-            self.assertIn(".\\scripts\\publish-chocolatey-feed.ps1 -PackagePath", workflow, path.as_posix())
+            self.assertIn(".\\scripts\\windows\\publish-chocolatey-feed.ps1 -PackagePath", workflow, path.as_posix())
             self.assertIn("CHOCOLATEY_NUGET_SOURCE", workflow, path.as_posix())
             self.assertIn("CHOCOLATEY_NUGET_API_KEY", workflow, path.as_posix())
             self.assertIn("choco push", workflow, path.as_posix())
-            self.assertIn("packaging/chocolatey/", workflow, path.as_posix())
+            self.assertIn("packaging/windows/", workflow, path.as_posix())
 
     def test_public_chocolatey_feed_script_publishes_static_github_pages_feed(self):
-        script = Path("scripts/publish-chocolatey-feed.ps1").read_text(
+        script = Path("scripts/windows/publish-chocolatey-feed.ps1").read_text(
             encoding="utf-8"
         )
 
@@ -146,23 +145,50 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("choco pin add -n=whisper-dictate", readme)
         self.assertIn("choco uninstall whisper-dictate -y", readme)
         self.assertIn("choco --version", readme)
+        self.assertIn(r"winget install --manifest .\whisper-dictate\packaging\windows\winget", readme)
         self.assertIn("nuget.pkg.github.com/FactusConsulting/index.json", readme)
         self.assertIn("CHOCOLATEY_NUGET_SOURCE", readme)
         self.assertIn("CHOCOLATEY_NUGET_API_KEY", readme)
 
-    def test_crate_lockfile_stays_in_sync_with_workspace_lockfile(self):
-        root_lock = Path("Cargo.lock").read_text(encoding="utf-8")
-        crate_lock = Path("crates/whisper-dictate-app/Cargo.lock").read_text(
-            encoding="utf-8"
-        )
+    def test_winget_manifests_live_with_windows_packaging(self):
+        for path in (
+            Path(".github/workflows/release.yml"),
+            Path(".github/workflows/windows-installer.yml"),
+        ):
+            workflow = path.read_text(encoding="utf-8")
+            self.assertIn(r'$manifestDir = "packaging\windows\winget"', workflow)
+            self.assertIn("packaging/windows/winget", workflow)
+            self.assertIn("git add packaging/windows/winget/", workflow)
+            self.assertNotIn("New-Item -ItemType Directory -Force manifests", workflow)
 
-        self.assertEqual(crate_lock, root_lock)
+        for name in (
+            "FactusConsulting.WhisperDictate.yaml",
+            "FactusConsulting.WhisperDictate.locale.en-US.yaml",
+            "FactusConsulting.WhisperDictate.installer.yaml",
+        ):
+            self.assertTrue(Path("packaging/windows/winget", name).is_file(), name)
+        self.assertFalse(Path("manifests").exists())
+
+    def test_rust_workspace_uses_single_root_lockfile(self):
+        self.assertTrue(Path("Cargo.lock").is_file())
+        self.assertFalse(Path("src/rust/whisper-dictate-app/Cargo.lock").exists())
 
     def test_sonar_uses_supported_python_version(self):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
 
         self.assertIn("sonar.projectKey=FactusConsulting_whisper-dictate", sonar)
         self.assertIn("sonar.python.version=3.12", sonar)
+
+    def test_root_flake_delegates_to_nix_flake_logic(self):
+        root_flake = Path("flake.nix").read_text(encoding="utf-8")
+        nix_flake = Path("nix/flake.nix").read_text(encoding="utf-8")
+        package = Path("nix/package.nix").read_text(encoding="utf-8")
+
+        self.assertIn("outputs = inputs: import ./nix/flake.nix inputs;", root_flake)
+        self.assertIn("pkgs.callPackage ./package.nix { src = self; }", nix_flake)
+        self.assertIn("import ./module.nix", nix_flake)
+        self.assertIn("Used by nix/flake.nix", package)
+        self.assertIn('$out/lib/whisper-dictate/src/python', package)
 
     def test_workflows_use_node24_checkout_action(self):
         for path in Path(".github/workflows").glob("*.yml"):

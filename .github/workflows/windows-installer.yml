@@ -2,7 +2,7 @@ name: windows-installer
 
 # Triggers after the main release workflow creates the GitHub Release.
 # Only builds and submits to winget when Windows-relevant files changed.
-# Windows-relevant: Rust app, voice_pi.py, vp_*.py, requirements-*.txt, scripts/, installer/
+# Windows-relevant: Rust app, Python package, requirements/, scripts/, packaging/windows/
 
 on:
   workflow_dispatch:
@@ -47,12 +47,11 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "$prev" HEAD -- \
-            Cargo.toml Cargo.lock crates/ \
-            voice_pi.py 'vp_*.py' \
-            requirements-cpu.txt requirements-gpu.txt \
+            Cargo.toml Cargo.lock src/rust/ \
+            src/ \
+            requirements/ \
             scripts/ \
-            installer/ \
-            packaging/chocolatey/)
+            packaging/windows/)
           if [ -n "$changed" ]; then
             echo "changed=true"  >> "$GITHUB_OUTPUT"
             echo "Windows files changed since $prev:"
@@ -84,7 +83,7 @@ jobs:
           $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $outDir  = "$PWD\Output"
           New-Item -ItemType Directory -Force $outDir | Out-Null
-          & $iscc /DVERSION=$version /O"$outDir" installer\whisper-dictate.iss
+          & $iscc /DVERSION=$version /O"$outDir" packaging\windows\inno\whisper-dictate.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
       - name: Build Windows ZIP packages
@@ -96,17 +95,16 @@ jobs:
           $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
           Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $bundle | Out-Null
-          Copy-Item voice_pi.py $bundle
-          Copy-Item vp_*.py $bundle
-          Copy-Item README.md,TECHNICAL.md,LICENSE,VERSION $bundle
+          Copy-Item src $bundle -Recurse
+          Copy-Item README.md,LICENSE,VERSION $bundle
+          Copy-Item docs $bundle -Recurse
           Copy-Item dictionary.example.json $bundle -ErrorAction SilentlyContinue
-          Copy-Item requirements-parakeet.txt $bundle -ErrorAction SilentlyContinue
-          Copy-Item requirements-cpu.txt,requirements-gpu.txt $bundle
+          Copy-Item requirements $bundle -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
           Copy-Item target\release\whisper-dictate.exe $bundle
           New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
-          Copy-Item scripts\inject-smoke.py (Join-Path $bundle "scripts")
+          Copy-Item scripts\dev\inject-smoke.py (Join-Path $bundle "scripts")
           $zip = Join-Path $outDir "whisper-dictate-windows-$version.zip"
           Remove-Item $zip -Force -ErrorAction SilentlyContinue
           Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
@@ -141,9 +139,9 @@ jobs:
           $packageDir = "Output\chocolatey\whisper-dictate"
           Remove-Item $packageDir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force "$packageDir\tools" | Out-Null
-          Copy-Item packaging\chocolatey\tools\*.ps1 "$packageDir\tools\"
+          Copy-Item packaging\windows\chocolatey\tools\*.ps1 "$packageDir\tools\"
 
-          $nuspec = Get-Content packaging\chocolatey\whisper-dictate.nuspec -Raw
+          $nuspec = Get-Content packaging\windows\chocolatey\whisper-dictate.nuspec -Raw
           $nuspec = $nuspec.Replace('__VERSION__', $version)
           Set-Content "$packageDir\whisper-dictate.nuspec" $nuspec -Encoding utf8
 
@@ -182,7 +180,7 @@ jobs:
         run: |
           $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
           if (-not $package) { throw "Chocolatey package was not built" }
-          .\scripts\publish-chocolatey-feed.ps1 -PackagePath $package.FullName
+          .\scripts\windows\publish-chocolatey-feed.ps1 -PackagePath $package.FullName
 
       - name: Publish Chocolatey package to private NuGet feed
         if: steps.win-check.outputs.changed == 'true'
@@ -219,7 +217,8 @@ jobs:
           $date    = Get-Date -Format 'yyyy-MM-dd'
           $productCode = '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
 
-          New-Item -ItemType Directory -Force manifests | Out-Null
+          $manifestDir = "packaging\windows\winget"
+          New-Item -ItemType Directory -Force $manifestDir | Out-Null
 
           @(
             '# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json',
@@ -228,7 +227,7 @@ jobs:
             "DefaultLocale: en-US",
             "ManifestType: version",
             "ManifestVersion: 1.12.0"
-          ) | Set-Content "manifests\FactusConsulting.WhisperDictate.yaml" -Encoding utf8
+          ) | Set-Content "$manifestDir\FactusConsulting.WhisperDictate.yaml" -Encoding utf8
 
           @(
             '# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json',
@@ -254,7 +253,7 @@ jobs:
             "  - ai",
             "ManifestType: defaultLocale",
             "ManifestVersion: 1.12.0"
-          ) | Set-Content "manifests\FactusConsulting.WhisperDictate.locale.en-US.yaml" -Encoding utf8
+          ) | Set-Content "$manifestDir\FactusConsulting.WhisperDictate.locale.en-US.yaml" -Encoding utf8
 
           @(
             '# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json',
@@ -277,7 +276,7 @@ jobs:
             "        ProductCode: '$productCode'",
             "ManifestType: installer",
             "ManifestVersion: 1.12.0"
-          ) | Set-Content "manifests\FactusConsulting.WhisperDictate.installer.yaml" -Encoding utf8
+          ) | Set-Content "$manifestDir\FactusConsulting.WhisperDictate.installer.yaml" -Encoding utf8
 
       - name: Commit updated manifests to main
         if: steps.win-check.outputs.changed == 'true'
@@ -285,11 +284,12 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          cp -r manifests /tmp/winget-manifests
+          cp -r packaging/windows/winget /tmp/winget-manifests
           git fetch origin main
           git checkout -f main
-          cp -r /tmp/winget-manifests/. manifests/
-          git add manifests/
+          mkdir -p packaging/windows/winget
+          cp -r /tmp/winget-manifests/. packaging/windows/winget/
+          git add packaging/windows/winget/
           git diff --cached --quiet && echo "no manifest changes" && exit 0
           git commit -m "chore: update winget manifests for $TAG"
           for attempt in 1 2 3; do

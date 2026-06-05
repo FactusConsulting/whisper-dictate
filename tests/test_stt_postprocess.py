@@ -16,10 +16,11 @@ class HallucinationFilterTests(unittest.TestCase):
 
     def setUp(self):
         # Pure import — no numpy / faster_whisper needed for this surface.
-        for n in ("vp_transcribe", "vp_audio"):
+        for n in ("vp_transcribe", "vp_audio",
+                  "whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio"):
             sys.modules.pop(n, None)
         sys.modules.setdefault("numpy", types.ModuleType("numpy"))
-        import vp_transcribe
+        from whisper_dictate import vp_transcribe
         self.t = vp_transcribe
 
     def test_known_hallucination_filtered(self):
@@ -43,10 +44,11 @@ class TranscribeDetailTests(unittest.TestCase):
             np = real_numpy()
         except ImportError as e:
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
-        for n in ("vp_transcribe", "vp_audio"):
+        for n in ("vp_transcribe", "vp_audio",
+                  "whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio"):
             sys.modules.pop(n, None)
         sys.modules["numpy"] = np
-        import vp_transcribe
+        from whisper_dictate import vp_transcribe
         self.t = vp_transcribe
         self.np = np
 
@@ -95,11 +97,21 @@ class TranscribeDetailTests(unittest.TestCase):
         )
 
 class STTBackendTests(unittest.TestCase):
+    def _drop_package_module(self, name):
+        sys.modules.pop(name, None)
+        package = sys.modules.get("whisper_dictate")
+        attr = name.rsplit(".", 1)[-1]
+        if package is not None and hasattr(package, attr):
+            delattr(package, attr)
+
     def setUp(self):
         self._old = {k: os.environ.pop(k, None) for k in (
             "VOICEPI_STT_BACKEND", "VOICEPI_MODEL", "VOICEPI_PARAKEET_MODEL",
             "VOICEPI_STT_BASE_URL", "VOICEPI_STT_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
+        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio",
+                  "whisper_dictate.vp_parakeet", "whisper_dictate.vp_privacy"):
+            self._drop_package_module(n)
         for n in list(sys.modules):
             if (n in ("vp_transcribe", "vp_audio", "vp_parakeet",
                       "faster_whisper", "nemo")
@@ -111,6 +123,9 @@ class STTBackendTests(unittest.TestCase):
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
+        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_parakeet",
+                  "whisper_dictate.vp_privacy"):
+            self._drop_package_module(n)
         for n in list(sys.modules):
             if n in ("vp_transcribe", "vp_parakeet") or n.startswith("nemo."):
                 sys.modules.pop(n, None)
@@ -127,7 +142,7 @@ class STTBackendTests(unittest.TestCase):
         sys.modules["faster_whisper"] = fw
         sys.modules["numpy"] = types.ModuleType("numpy")
 
-        import vp_transcribe
+        from whisper_dictate import vp_transcribe
 
         model = vp_transcribe.load_stt_model("large-v3-turbo", "cpu", "int8")
 
@@ -138,7 +153,7 @@ class STTBackendTests(unittest.TestCase):
     def test_invalid_backend_is_rejected(self):
         os.environ["VOICEPI_STT_BACKEND"] = "bogus"
         sys.modules["numpy"] = types.ModuleType("numpy")
-        import vp_transcribe
+        from whisper_dictate import vp_transcribe
 
         with self.assertRaisesRegex(ValueError, "VOICEPI_STT_BACKEND"):
             vp_transcribe.load_stt_model("large-v3-turbo", "cpu", "int8")
@@ -146,7 +161,7 @@ class STTBackendTests(unittest.TestCase):
     def test_parakeet_missing_deps_error_is_actionable(self):
         os.environ["VOICEPI_STT_BACKEND"] = "parakeet"
         sys.modules["numpy"] = types.ModuleType("numpy")
-        import vp_transcribe
+        from whisper_dictate import vp_transcribe
 
         real_import = __import__
 
@@ -156,14 +171,14 @@ class STTBackendTests(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=fake_import):
-            with self.assertRaisesRegex(RuntimeError, "requirements-parakeet.txt"):
+            with self.assertRaisesRegex(RuntimeError, "requirements/parakeet.txt"):
                 vp_transcribe.load_stt_model("large-v3-turbo", "cuda", "float16")
 
     def test_openai_backend_uses_external_transcription_adapter(self):
         os.environ["VOICEPI_STT_BACKEND"] = "openai"
         os.environ["VOICEPI_STT_API_KEY"] = "test-key"
-        import vp_transcribe
-        import vp_external_api
+        from whisper_dictate import vp_transcribe
+        from whisper_dictate import vp_external_api
 
         with patch.object(vp_external_api.ExternalTranscriptionModel, "__init__", return_value=None) as init:
             model = vp_transcribe.load_stt_model("gpt-4o-mini-transcribe", "cpu", "int8")
@@ -174,7 +189,7 @@ class STTBackendTests(unittest.TestCase):
     def test_local_only_blocks_openai_stt_backend(self):
         os.environ["VOICEPI_STT_BACKEND"] = "openai"
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        import vp_transcribe
+        from whisper_dictate import vp_transcribe
 
         with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
             vp_transcribe.load_stt_model("gpt-4o-mini-transcribe", "cpu", "int8")
@@ -221,7 +236,7 @@ class STTBackendTests(unittest.TestCase):
         sys.modules["nemo.collections"] = collections
         sys.modules["nemo.collections.asr"] = asr
 
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
         model = vp_parakeet.ParakeetModel("large-v3-turbo", device="cuda")
         with tempfile.NamedTemporaryFile(delete=False) as f:
             path = f.name
@@ -267,7 +282,7 @@ class STTBackendTests(unittest.TestCase):
         sys.modules["nemo.collections"] = types.ModuleType("nemo.collections")
         sys.modules["nemo.collections.asr"] = asr
 
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         vp_parakeet.ParakeetModel("large-v3", device="cuda")
 
@@ -292,13 +307,13 @@ class STTBackendTests(unittest.TestCase):
         sys.modules["nemo.collections"] = types.ModuleType("nemo.collections")
         sys.modules["nemo.collections.asr"] = asr
 
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         with self.assertRaisesRegex(RuntimeError, "CUDA-enabled PyTorch"):
             vp_parakeet.ParakeetModel("large-v3", device="cuda")
 
     def test_parakeet_accepts_explicit_nvidia_model_name(self):
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         self.assertEqual(
             vp_parakeet.resolve_parakeet_model_name("nvidia/custom-parakeet"),
@@ -307,7 +322,7 @@ class STTBackendTests(unittest.TestCase):
 
     def test_parakeet_env_override_wins_over_whisper_model_name(self):
         os.environ["VOICEPI_PARAKEET_MODEL"] = "nvidia/explicit-parakeet"
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         self.assertEqual(
             vp_parakeet.resolve_parakeet_model_name("large-v3"),
@@ -315,7 +330,7 @@ class STTBackendTests(unittest.TestCase):
         )
 
     def test_parakeet_model_dropdown_options_are_exported(self):
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         self.assertEqual(vp_parakeet.PARAKEET_MODELS[0], vp_parakeet.DEFAULT_MODEL)
         self.assertEqual(vp_parakeet.PARAKEET_MODELS, [
@@ -325,7 +340,7 @@ class STTBackendTests(unittest.TestCase):
         ])
 
     def test_parakeet_suppresses_irrelevant_pydub_ffmpeg_warning(self):
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         with open(vp_parakeet.__file__, encoding="utf-8") as f:
             script = f.read()
@@ -333,7 +348,7 @@ class STTBackendTests(unittest.TestCase):
         self.assertIn("Couldn't find ffmpeg or avconv", script)
 
     def test_parakeet_quiets_nemo_output_unless_stt_debug_is_enabled(self):
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         with open(vp_parakeet.__file__, encoding="utf-8") as f:
             script = f.read()
@@ -344,7 +359,7 @@ class STTBackendTests(unittest.TestCase):
         self.assertIn("with _nemo_output_context():", script)
 
     def test_parakeet_model_load_and_transcribe_are_quieted(self):
-        import vp_parakeet
+        from whisper_dictate import vp_parakeet
 
         with open(vp_parakeet.__file__, encoding="utf-8") as f:
             script = f.read()
@@ -375,13 +390,13 @@ class PostprocessTests(unittest.TestCase):
             sys.modules.pop(n, None)
 
     def test_default_ollama_model_literal_is_centralized(self):
-        source = Path("vp_postprocess.py").read_text(encoding="utf-8")
+        source = Path("src/python/whisper_dictate/vp_postprocess.py").read_text(encoding="utf-8")
 
         self.assertIn('DEFAULT_OLLAMA_POST_MODEL = "qwen2.5:3b"', source)
         self.assertEqual(source.count('"qwen2.5:3b"'), 1)
 
     def test_raw_mode_returns_text_unchanged(self):
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         result = vp_postprocess.postprocess_text("keep this")
 
@@ -391,7 +406,7 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(result.mode, "raw")
 
     def test_postprocess_mode_prompts_cover_roadmap_modes(self):
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         expectations = {
             "clean": "Clean punctuation",
@@ -411,7 +426,7 @@ class PostprocessTests(unittest.TestCase):
     def test_postprocess_accepts_bullet_list_alias(self):
         os.environ["VOICEPI_POST_PROCESSOR"] = "ollama"
         os.environ["VOICEPI_POST_MODE"] = "bullet-list"
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.load_postprocess_settings()
 
@@ -453,7 +468,7 @@ class PostprocessTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
 
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="ollama",
@@ -503,7 +518,7 @@ class PostprocessTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
 
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="openai",
@@ -525,7 +540,7 @@ class PostprocessTests(unittest.TestCase):
         os.environ["VOICEPI_POST_BASE_URL"] = "http://localhost:11434"
         os.environ["VOICEPI_POST_MODEL"] = "qwen2.5:3b"
         os.environ["GROQ_API_KEY"] = "groq-test-key"
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.load_postprocess_settings()
 
@@ -567,7 +582,7 @@ class PostprocessTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
 
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="groq",
@@ -617,7 +632,7 @@ class PostprocessTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
 
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="openai",
@@ -641,7 +656,7 @@ class PostprocessTests(unittest.TestCase):
         self.assertTrue(all("value" not in item for item in result.redactions))
 
     def test_ollama_failure_falls_back_to_original_text(self):
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="ollama",
@@ -657,7 +672,7 @@ class PostprocessTests(unittest.TestCase):
 
     def test_local_only_blocks_remote_postprocess_url(self):
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="ollama",
@@ -670,7 +685,7 @@ class PostprocessTests(unittest.TestCase):
 
     def test_local_only_blocks_openai_postprocessor_even_on_localhost(self):
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="openai",
@@ -684,7 +699,7 @@ class PostprocessTests(unittest.TestCase):
 
     def test_local_only_allows_localhost_postprocess_url(self):
         os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        import vp_postprocess
+        from whisper_dictate import vp_postprocess
 
         settings = vp_postprocess.PostprocessSettings(
             processor="ollama",
@@ -694,8 +709,8 @@ class PostprocessTests(unittest.TestCase):
 
         vp_postprocess.validate_postprocess_settings(settings)
 
-    def test_voice_pi_records_postprocess_metrics(self):
-        with open("voice_pi.py", encoding="utf-8") as f:
+    def test_runtime_records_postprocess_metrics(self):
+        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("postprocess_text(text", script)
@@ -703,8 +718,8 @@ class PostprocessTests(unittest.TestCase):
         self.assertIn("post_processor=post_result.provider", script)
         self.assertIn("post_fallback=post_result.fallback", script)
 
-    def test_voice_pi_logs_postprocess_status_for_every_utterance(self):
-        with open("voice_pi.py", encoding="utf-8") as f:
+    def test_runtime_logs_postprocess_status_for_every_utterance(self):
+        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("[post] skipped", script)
@@ -717,7 +732,7 @@ class FormatCommandTests(unittest.TestCase):
         sys.modules.pop("vp_formatting", None)
 
     def test_format_commands_are_off_by_default(self):
-        import vp_formatting
+        from whisper_dictate import vp_formatting
 
         result = vp_formatting.apply_format_commands("write comma literally")
 
@@ -725,7 +740,7 @@ class FormatCommandTests(unittest.TestCase):
         self.assertEqual(result.text, "write comma literally")
 
     def test_english_format_commands_replace_whole_phrases(self):
-        import vp_formatting
+        from whisper_dictate import vp_formatting
 
         result = vp_formatting.apply_format_commands(
             "first item comma new line second item period", "en")
@@ -736,7 +751,7 @@ class FormatCommandTests(unittest.TestCase):
         self.assertIn({"command": "new line", "replacement": "\n", "count": "1"}, result.applied)
 
     def test_danish_format_commands_replace_whole_phrases(self):
-        import vp_formatting
+        from whisper_dictate import vp_formatting
 
         result = vp_formatting.apply_format_commands(
             "første punkt komma ny linje andet punkt punktum", "da")
@@ -744,7 +759,7 @@ class FormatCommandTests(unittest.TestCase):
         self.assertEqual(result.text, "første punkt,\nandet punkt.")
 
     def test_format_commands_do_not_replace_inside_words(self):
-        import vp_formatting
+        from whisper_dictate import vp_formatting
 
         result = vp_formatting.apply_format_commands(
             "Common words and kommandolinje stay literal", "both")
@@ -753,7 +768,7 @@ class FormatCommandTests(unittest.TestCase):
         self.assertEqual(result.text, "Common words and kommandolinje stay literal")
 
     def test_format_tidy_normalizes_spacing_without_regex_backtracking(self):
-        import vp_formatting
+        from whisper_dictate import vp_formatting
 
         cleaned = vp_formatting._tidy(
             "first      ,second\n   third      -      fourth\n\n\n\nfifth")
@@ -762,7 +777,7 @@ class FormatCommandTests(unittest.TestCase):
 
     def test_python_formatting_delegates_to_rust_helper_when_available(self):
         import subprocess
-        import vp_formatting
+        from whisper_dictate import vp_formatting
 
         completed = subprocess.CompletedProcess(
             ["whisper-dictate"],
@@ -778,7 +793,7 @@ class FormatCommandTests(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
-                patch("vp_formatting.subprocess.run", return_value=completed) as run:
+                patch("whisper_dictate.vp_formatting.subprocess.run", return_value=completed) as run:
             result = vp_formatting.apply_format_commands("første komma ny linje andet punktum", "da")
 
         self.assertEqual(result.text, "første,\nandet.")
@@ -787,7 +802,7 @@ class FormatCommandTests(unittest.TestCase):
 
     def test_python_formatting_falls_back_when_rust_helper_fails(self):
         import subprocess
-        import vp_formatting
+        from whisper_dictate import vp_formatting
 
         completed = subprocess.CompletedProcess(
             ["whisper-dictate"],
@@ -797,13 +812,13 @@ class FormatCommandTests(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
-                patch("vp_formatting.subprocess.run", return_value=completed):
+                patch("whisper_dictate.vp_formatting.subprocess.run", return_value=completed):
             result = vp_formatting.apply_format_commands("first comma", "en")
 
         self.assertEqual(result.text, "first,")
 
-    def test_voice_pi_applies_formatting_before_injection_and_metrics(self):
-        with open("voice_pi.py", encoding="utf-8") as f:
+    def test_runtime_applies_formatting_before_injection_and_metrics(self):
+        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
         post_pos = script.index("def _postprocess_and_format")

@@ -133,7 +133,7 @@ restart-only settings change.
 Install it for your user:
 
 ```bash
-scripts/install-linux-rust-ui.sh
+scripts/linux/install-rust-ui.sh
 ```
 
 Then run:
@@ -236,7 +236,7 @@ workflow from this source — it has not been tampered with.
 > profile as a keylogger, so Microsoft Defender's machine-learning
 > heuristics (detection names ending in `!ml`, e.g. `Wacatac`, `Sabsik`) may
 > flag it. The installer payload is listed in
-> [`installer/whisper-dictate.iss`](installer/whisper-dictate.iss): the
+> [`packaging/windows/inno/whisper-dictate.iss`](packaging/windows/inno/whisper-dictate.iss): the
 > Python runtime files, docs, and the Rust controller
 > binary built by CI. After
 > verifying the SHA256 above you can cross-check on
@@ -319,7 +319,7 @@ winget settings --enable LocalManifestFiles
 
 # Then (no admin needed):
 git clone https://github.com/FactusConsulting/whisper-dictate.git
-winget install --manifest .\whisper-dictate\manifests
+winget install --manifest .\whisper-dictate\packaging\windows\winget
 ```
 
 > The installer is not yet code-signed, so Windows SmartScreen warns
@@ -424,7 +424,7 @@ keyboard layout so that æøå are injected correctly.
 
 Every setting — all `VOICEPI_*` env vars **and** CLI flags, their possible
 values, defaults, and how to set them per platform (Windows .exe / Homebrew /
-Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
+Nix / CLI): see **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**. The most common knobs:
 
 | Env var | Default | Effect |
 |---|---|---|
@@ -445,7 +445,7 @@ Nix / CLI): see **[CONFIGURATION.md](CONFIGURATION.md)**. The most common knobs:
 | `VOICEPI_BEAM_SIZE` | `1` | raise to `5` for better accuracy — 3-4× slower on CPU |
 | `VOICEPI_INITIAL_PROMPT` | _(none)_ | context hint for domain-specific terms, e.g. `"Winget, whisper-dictate"` |
 | `VOICEPI_DICTIONARY` | user config path | JSON/text dictionary of product names and smart replacements, e.g. `Cloud Code` → `Claude Code` |
-| `VOICEPI_COMPUTE_TYPE` | _(default: `int8_float16` on GPU, `int8` on CPU)_ | force precision (`float16`, `bfloat16`, `float32`) — see VRAM table in [CONFIGURATION.md](CONFIGURATION.md) |
+| `VOICEPI_COMPUTE_TYPE` | _(default: `int8_float16` on GPU, `int8` on CPU)_ | force precision (`float16`, `bfloat16`, `float32`) — see VRAM table in [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
 | `VOICEPI_DEBUG` | _(unset)_ | `1` → log every effective setting + which env var supplied it at startup (verifies `setx` actually arrived) |
 | `VOICEPI_JSON` | _(unset)_ | `1` → print one JSON event per accepted utterance |
 | `VOICEPI_METRICS_JSONL` | _(unset)_ | append one JSON metrics event per accepted utterance to this file |
@@ -482,7 +482,7 @@ dictionary. In the Windows Settings UI, open the Dictionary tab and use
 Benchmark suggestions to preview the same suggestions and apply the shown
 replacement candidates to the configured dictionary.
 
-Optional Parakeet backend: install `requirements-parakeet.txt`, then set
+Optional Parakeet backend: install `requirements/parakeet.txt`, then set
 `VOICEPI_STT_BACKEND=parakeet`. NeMo is imported lazily, so default Whisper
 runs and `--doctor` do not need Parakeet dependencies. The UI lists only the
 practical Parakeet models: 0.6B v3 for Danish/mixed Danish-English, TDT 1.1B
@@ -537,19 +537,19 @@ File transcription for benchmarks/debugging uses the same backend, dictionary
 and replacement pipeline as live dictation:
 
 ```powershell
-python voice_pi.py --transcribe-file sample.wav
-python voice_pi.py --transcribe-file sample.wav --json
-python voice_pi.py --benchmark-files sample.wav `
+whisper-dictate run --transcribe-file sample.wav
+whisper-dictate run --transcribe-file sample.wav --json
+whisper-dictate run --benchmark-files sample.wav `
   --benchmark-backends "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3" `
   --benchmark-jsonl benchmark.jsonl
-python voice_pi.py --benchmark-corpus benchmark\corpus.json `
+whisper-dictate run --benchmark-corpus benchmark\corpus.json `
   --benchmark-backends "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3" `
   --benchmark-jsonl benchmark\results.jsonl
-python voice_pi.py --calibrate-mic 5
-python voice_pi.py --calibrate-file sample.wav --json
+whisper-dictate run --calibrate-mic 5
+whisper-dictate run --calibrate-file sample.wav --json
 whisper-dictate history last
 whisper-dictate run --history-copy-last
-python voice_pi.py --dictionary-suggest benchmark\results.jsonl --json
+whisper-dictate run --dictionary-suggest benchmark\results.jsonl --json
 ```
 
 16-bit WAV works without extra tools. Other formats such as mp3/m4a require
@@ -557,7 +557,7 @@ python voice_pi.py --dictionary-suggest benchmark\results.jsonl --json
 child process and writes one JSONL result per file/backend, including failures.
 The corpus manifest in `benchmark/corpus.json` adds reference text, WER/CER and
 expected technical-term hits/misses. Record missing local corpus audio with
-`py -3.12 scripts\record-corpus.py --manifest benchmark\corpus.json --seconds 7`.
+`py -3.12 scripts\benchmark\record-corpus.py --manifest benchmark\corpus.json --seconds 7`.
 Calibration prints raw dBFS, noise floor, SNR, peak and recommended audio
 threshold settings without loading an STT model.
 `whisper-dictate model-capacity` prints NVIDIA GPU free/total VRAM and
@@ -596,7 +596,7 @@ line breaks. The feature is off by default so literal dictation of words like
 `comma` or `punktum` is not changed unless you explicitly enable it.
 
 Desktop UI: on Windows, use the Start-menu **whisper-dictate** shortcut. On
-Linux, install the Rust UI with `scripts/install-linux-rust-ui.sh` and run
+Linux, install the Rust UI with `scripts/linux/install-rust-ui.sh` and run
 `whisper-dictate ui`. The UI owns the dictation process, shows the runtime log,
 saves settings and restarts dictation when backend/model/device/hotkey settings
 change. It writes `%APPDATA%\WhisperDictate\config.json` on Windows and
@@ -611,24 +611,25 @@ transcription took half as long as the recording, `2.00` means twice as long.
 
 Full reference — every `[cap]`/`[gate]`/`[stt]` field, what good vs bad looks
 like, and how to compare two microphones: see
-[MICROPHONE.md](MICROPHONE.md).
+[docs/MICROPHONE.md](docs/MICROPHONE.md).
 
 To test text injection without recording or loading Whisper, focus a target
-input field and run `python scripts/inject-smoke.py --mode auto`. Try the same
+input field and run `python scripts/dev/inject-smoke.py --mode auto`. Try the same
 target with `--mode type` and `--mode paste`; on Wayland, test both a normal
 text editor and a terminal because terminals use a different paste shortcut.
 
 ## Technical documentation
 
 Architecture, data flow, Wayland injection details, evdev keycode
-reference, and audio routing: see [TECHNICAL.md](TECHNICAL.md).
+reference, and audio routing: see [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
 ## Tests
 
 Run the fast unit tests with:
 
 ```bash
-python -m unittest discover -s tests -v
+python -m pip install pytest numpy
+python -m pytest tests -q
 ```
 
 ## Releasing
@@ -660,7 +661,7 @@ to that additional private Chocolatey/NuGet feed.
 For a faster local Windows test loop without creating a release:
 
 ```powershell
-.\scripts\build-windows-installer.ps1
+.\scripts\windows\build-installer.ps1
 ```
 
 The local installer and portable ZIP are written to `Output\`. The script uses

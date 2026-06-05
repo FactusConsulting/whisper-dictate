@@ -15,6 +15,9 @@ from contextlib import redirect_stderr, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+SRC = Path(__file__).resolve().parents[1] / "src" / "python"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 _TEST_CONFIG = os.path.join(tempfile.gettempdir(), "whisper-dictate-test-config.json")
 os.environ.setdefault("VOICEPI_CONFIG", _TEST_CONFIG)
@@ -30,9 +33,13 @@ except ImportError:
 
 
 def load_voice_pi(cuda_devices: int = 0):
-    for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
-                 "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
-                 "vp_config", "vp_privacy", "vp_postprocess",
+    for name in ("voice_pi", "whisper_dictate.runtime",
+                 "whisper_dictate.vp_keymap", "whisper_dictate.vp_device",
+                 "whisper_dictate.vp_audio", "whisper_dictate.vp_inject",
+                 "whisper_dictate.vp_cli", "whisper_dictate.vp_transcribe",
+                 "whisper_dictate.vp_dictionary", "whisper_dictate.vp_parakeet",
+                 "whisper_dictate.vp_config", "whisper_dictate.vp_privacy",
+                 "whisper_dictate.vp_postprocess",
                  "ctranslate2", "faster_whisper", "numpy",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -62,15 +69,19 @@ def load_voice_pi(cuda_devices: int = 0):
     sys.modules["pynput"] = pynput
     sys.modules["pynput.keyboard"] = keyboard
 
-    return importlib.import_module("voice_pi")
+    return importlib.import_module("whisper_dictate.runtime")
 
 
 def load_voice_pi_realnp():
     """Import voice_pi with the REAL numpy (for audio-DSP tests) but the
     heavy/uninstalled deps stubbed. CI installs numpy (see tests workflow)."""
-    for name in ("voice_pi", "vp_keymap", "vp_device", "vp_audio", "vp_inject",
-                 "vp_cli", "vp_transcribe", "vp_dictionary", "vp_parakeet",
-                 "vp_config", "vp_privacy", "vp_postprocess",
+    for name in ("voice_pi", "whisper_dictate.runtime",
+                 "whisper_dictate.vp_keymap", "whisper_dictate.vp_device",
+                 "whisper_dictate.vp_audio", "whisper_dictate.vp_inject",
+                 "whisper_dictate.vp_cli", "whisper_dictate.vp_transcribe",
+                 "whisper_dictate.vp_dictionary", "whisper_dictate.vp_parakeet",
+                 "whisper_dictate.vp_config", "whisper_dictate.vp_privacy",
+                 "whisper_dictate.vp_postprocess",
                  "ctranslate2", "faster_whisper",
                  "sounddevice", "pynput", "pynput.keyboard"):
         sys.modules.pop(name, None)
@@ -94,7 +105,7 @@ def load_voice_pi_realnp():
     pynput.keyboard = kb
     sys.modules["pynput"] = pynput
     sys.modules["pynput.keyboard"] = kb
-    return importlib.import_module("voice_pi")
+    return importlib.import_module("whisper_dictate.runtime")
 
 
 @contextmanager

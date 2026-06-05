@@ -1,5 +1,5 @@
 # whisper-dictate Nix derivation.
-# Used by flake.nix (src = self) and can be submitted to nixpkgs (src = fetchFromGitHub).
+# Used by nix/flake.nix (src = self) and can be submitted to nixpkgs (src = fetchFromGitHub).
 { lib
 , python3
 , makeWrapper
@@ -35,7 +35,7 @@ let
     scipy
   ]);
 
-  # External CLI tools voice_pi.py shells out to. The X11 vs Wayland
+  # External CLI tools the Python runtime shells out to. The X11 vs Wayland
   # choice is made at RUNTIME (per session, via $WAYLAND_DISPLAY) — never
   # at build/download time — so the package ships BOTH paths' tools and
   # the app picks one each time it starts. Linux-only.
@@ -55,13 +55,13 @@ in stdenv.mkDerivation {
   installPhase = ''
     runHook preInstall
 
-    install -Dm644 voice_pi.py $out/lib/whisper-dictate/voice_pi.py
-    for _m in vp_*.py; do
-      [ -e "$_m" ] && install -Dm644 "$_m" "$out/lib/whisper-dictate/$_m"
+    for _m in src/python/whisper_dictate/*.py; do
+      install -Dm644 "$_m" "$out/lib/whisper-dictate/$_m"
     done
 
     makeWrapper ${pythonEnv}/bin/python3 $out/bin/whisper-dictate \
-      --add-flags "$out/lib/whisper-dictate/voice_pi.py" \
+      --prefix PYTHONPATH : "$out/lib/whisper-dictate/src/python" \
+      --add-flags "-m whisper_dictate.runtime" \
       --set VOICEPI_SKIP_SYSCHECK 1 \
       --prefix PATH : ${lib.makeBinPath runtimeTools}
 

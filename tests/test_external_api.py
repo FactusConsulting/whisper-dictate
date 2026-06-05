@@ -15,11 +15,18 @@ class ExternalApiTests(unittest.TestCase):
     def test_external_api_import_path_does_not_require_numpy_until_transcription(self):
         completed = subprocess.run(
             [sys.executable, "-S", "-c",
-             "import vp_external_api, vp_postprocess; "
+             "from whisper_dictate import vp_external_api, vp_postprocess; "
              "assert vp_external_api.DEFAULT_OPENAI_BASE_URL; "
              "assert 'openai' in vp_postprocess.VALID_PROCESSORS"],
             cwd=os.getcwd(),
             capture_output=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.path.abspath("src/python") + (
+                    os.pathsep + os.environ["PYTHONPATH"]
+                    if os.environ.get("PYTHONPATH") else ""
+                ),
+            },
             text=True,
             timeout=10,
         )
@@ -29,7 +36,7 @@ class ExternalApiTests(unittest.TestCase):
     def test_external_stt_maps_local_whisper_default_to_openai_model(self):
         with _env(VOICEPI_MODEL="large-v3-turbo", VOICEPI_STT_API_KEY="test-key"):
             sys.modules.pop("vp_external_api", None)
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             settings = vp_external_api.load_stt_api_settings("large-v3-turbo")
 
@@ -38,7 +45,7 @@ class ExternalApiTests(unittest.TestCase):
     def test_external_stt_configured_model_takes_precedence(self):
         with _env(VOICEPI_STT_MODEL="gpt-4o-transcribe", VOICEPI_STT_API_KEY="test-key"):
             sys.modules.pop("vp_external_api", None)
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             settings = vp_external_api.load_stt_api_settings("large-v3")
 
@@ -53,7 +60,7 @@ class ExternalApiTests(unittest.TestCase):
             VOICEPI_STT_MODEL="whisper-large-v3-turbo",
         ):
             sys.modules.pop("vp_external_api", None)
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             settings = vp_external_api.load_stt_api_settings("large-v3")
 
@@ -63,7 +70,7 @@ class ExternalApiTests(unittest.TestCase):
 
     def test_external_api_adds_default_user_agent_for_groq_gateway(self):
         sys.modules.pop("vp_external_api", None)
-        import vp_external_api
+        from whisper_dictate import vp_external_api
 
         headers = vp_external_api.default_headers({"Authorization": "Bearer test"})
 
@@ -73,7 +80,7 @@ class ExternalApiTests(unittest.TestCase):
 
     def test_external_api_preserves_explicit_user_agent(self):
         sys.modules.pop("vp_external_api", None)
-        import vp_external_api
+        from whisper_dictate import vp_external_api
 
         headers = vp_external_api.default_headers({"User-Agent": "custom-client"})
 
@@ -81,7 +88,7 @@ class ExternalApiTests(unittest.TestCase):
 
     def test_groq_transcription_prompt_is_capped_to_provider_limit(self):
         sys.modules.pop("vp_external_api", None)
-        import vp_external_api
+        from whisper_dictate import vp_external_api
 
         prompt = "x" * 911
         capped = vp_external_api._cap_transcription_prompt(
@@ -93,7 +100,7 @@ class ExternalApiTests(unittest.TestCase):
 
     def test_non_groq_transcription_prompt_is_not_capped(self):
         sys.modules.pop("vp_external_api", None)
-        import vp_external_api
+        from whisper_dictate import vp_external_api
 
         prompt = "x" * 911
         capped = vp_external_api._cap_transcription_prompt(
@@ -112,7 +119,7 @@ class ExternalApiTests(unittest.TestCase):
             VOICEPI_STT_MODEL="custom-transcribe",
         ):
             sys.modules.pop("vp_external_api", None)
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             settings = vp_external_api.load_stt_api_settings("large-v3")
 
@@ -159,7 +166,7 @@ class ExternalApiTests(unittest.TestCase):
             VOICEPI_STT_API_KEY="test-key",
             VOICEPI_STT_BASE_URL=f"http://127.0.0.1:{server.server_port}/v1",
         ):
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             model = vp_external_api.ExternalTranscriptionModel("gpt-4o-mini-transcribe")
             segments, info = model.transcribe(np.zeros(1600, dtype=np.float32), language="en")
@@ -193,10 +200,10 @@ class ExternalApiTests(unittest.TestCase):
             VOICEPI_STT_API_KEY="test-key",
             VOICEPI_STT_BASE_URL="https://api.openai.com/v1",
         ):
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             model = vp_external_api.ExternalTranscriptionModel("gpt-4o-mini-transcribe")
-            with patch("vp_external_api.subprocess.run", return_value=completed) as run:
+            with patch("whisper_dictate.vp_external_api.subprocess.run", return_value=completed) as run:
                 segments, info = model.transcribe(np.zeros(1600, dtype=np.float32), language="en")
 
         args = run.call_args.args[0]
@@ -225,10 +232,10 @@ class ExternalApiTests(unittest.TestCase):
             VOICEPI_STT_API_KEY="test-key",
             VOICEPI_STT_BASE_URL="https://api.openai.com/v1",
         ):
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             model = vp_external_api.ExternalTranscriptionModel("gpt-4o-mini-transcribe")
-            with patch("vp_external_api.subprocess.run", return_value=completed), \
+            with patch("whisper_dictate.vp_external_api.subprocess.run", return_value=completed), \
                     patch.object(vp_external_api, "_request_json", return_value={"text": "fallback"}):
                 segments, _ = model.transcribe(np.zeros(1600, dtype=np.float32), language="en")
 
@@ -270,7 +277,7 @@ class ExternalApiTests(unittest.TestCase):
             VOICEPI_STT_API_KEY="test-key",
             VOICEPI_STT_BASE_URL=f"http://127.0.0.1:{server.server_port}/openai/v1",
         ):
-            import vp_external_api
+            from whisper_dictate import vp_external_api
 
             model = vp_external_api.ExternalTranscriptionModel("whisper-large-v3-turbo")
             model.settings = dataclasses.replace(
@@ -287,7 +294,7 @@ class ExternalApiTests(unittest.TestCase):
     def test_external_api_http_error_includes_provider_message(self):
         import urllib.error
         sys.modules.pop("vp_external_api", None)
-        import vp_external_api
+        from whisper_dictate import vp_external_api
 
         body = io.BytesIO(json.dumps({
             "error": {"message": "model access denied for this API key"}
@@ -313,7 +320,7 @@ class ExternalApiTests(unittest.TestCase):
         import urllib.error
         from email.message import Message
         sys.modules.pop("vp_external_api", None)
-        import vp_external_api
+        from whisper_dictate import vp_external_api
 
         headers = Message()
         headers["Retry-After"] = "12"
@@ -343,7 +350,7 @@ class ExternalApiTests(unittest.TestCase):
     def test_external_api_429_post_processing_names_openai_provider(self):
         import urllib.error
         sys.modules.pop("vp_external_api", None)
-        import vp_external_api
+        from whisper_dictate import vp_external_api
 
         error = urllib.error.HTTPError(
             "https://api.openai.com/v1/chat/completions",
@@ -365,7 +372,7 @@ class ExternalApiTests(unittest.TestCase):
 
 class RedactionTests(unittest.TestCase):
     def test_redacts_email_phone_tokens_and_custom_terms_without_public_values(self):
-        import vp_redaction
+        from whisper_dictate import vp_redaction
 
         result = vp_redaction.redact_text(
             "Mail lars@example.com or call +45 12 34 56 78 with sk-testtoken123456789",

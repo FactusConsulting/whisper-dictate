@@ -14,9 +14,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test deps
-        run: python -m pip install --quiet numpy
+        run: python -m pip install --quiet pytest numpy
       - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+        run: python -m pytest tests -q
 
   lint-workflows:
     runs-on: ubuntu-latest
@@ -59,10 +59,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: voice_pi --help
-        run: python voice_pi.py --help
-      - name: voice_pi --doctor smoke
-        run: python voice_pi.py --doctor
+      - name: runtime --help
+        run: PYTHONPATH=src/python python -m whisper_dictate.runtime --help
+      - name: runtime --doctor smoke
+        run: PYTHONPATH=src/python python -m whisper_dictate.runtime --doctor
         continue-on-error: true
       - name: Install pynput (Windows only)
         if: runner.os == 'Windows'
@@ -77,7 +77,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          python scripts/probe-key.py bogus_key 1
+          python scripts/dev/probe-key.py bogus_key 1
           rc=$?
           set -e
           if [ "$rc" != "3" ]; then

@@ -6,22 +6,27 @@ from tests.test_helpers import (
 
 def rust_ui_source():
     paths = [
-        "crates/whisper-dictate-app/src/ui.rs",
-        "crates/whisper-dictate-app/src/ui/tabs.rs",
-        "crates/whisper-dictate-app/src/ui/api_keys.rs",
-        "crates/whisper-dictate-app/src/ui/icon.rs",
+        "src/rust/whisper-dictate-app/src/ui.rs",
+        "src/rust/whisper-dictate-app/src/ui/tabs.rs",
+        "src/rust/whisper-dictate-app/src/ui/api_keys.rs",
+        "src/rust/whisper-dictate-app/src/ui/icon.rs",
     ]
     return "\n".join(Path(path).read_text(encoding="utf-8") for path in paths)
 
 class RustUiInstallerTests(unittest.TestCase):
     def test_linux_rust_ui_installer_builds_release_binary_and_desktop_entry(self):
-        path = Path("scripts/install-linux-rust-ui.sh")
+        path = Path("scripts/linux/install-rust-ui.sh")
         script = path.read_text(encoding="utf-8")
 
         self.assertTrue(os.access(path, os.X_OK))
+        self.assertIn('SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"', script)
+        self.assertIn('HERE="$(cd "${SCRIPT_DIR}/../.." && pwd)"', script)
+        self.assertIn('HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"', script)
+        self.assertIn('if [[ -x "${HERE}/whisper-dictate" ]]; then', script)
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
         self.assertIn('REAL_BIN="${LIB_DIR}/whisper-dictate-app"', script)
-        self.assertIn('install -m 0755 "${HERE}/target/release/whisper-dictate" "${REAL_BIN}"', script)
+        self.assertIn('SOURCE_BIN="${HERE}/target/release/whisper-dictate"', script)
+        self.assertIn('install -m 0755 "${SOURCE_BIN}" "${REAL_BIN}"', script)
         self.assertIn('install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"', script)
         self.assertIn('export VOICEPI_APP_ROOT="${HERE}"', script)
         self.assertIn('exec "${REAL_BIN}" "\\$@"', script)
@@ -51,27 +56,27 @@ class RustUiInstallerTests(unittest.TestCase):
 
     def test_linux_ui_docs_point_to_rust_ui_not_pyside_powershell(self):
         readme = Path("README.md").read_text(encoding="utf-8")
-        config = Path("CONFIGURATION.md").read_text(encoding="utf-8")
+        config = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
 
-        self.assertIn("scripts/install-linux-rust-ui.sh", readme)
+        self.assertIn("scripts/linux/install-rust-ui.sh", readme)
         self.assertIn("whisper-dictate ui", readme)
-        self.assertIn("scripts/install-linux-rust-ui.sh", config)
+        self.assertIn("scripts/linux/install-rust-ui.sh", config)
         self.assertNotIn("On Linux/macOS, install\n`requirements-ui.txt`", readme)
         self.assertNotIn("setup.ps1 --settings-ui", readme)
 
     def test_technical_docs_include_rust_platform_capability_matrix(self):
-        technical = Path("TECHNICAL.md").read_text(encoding="utf-8")
+        technical = Path("docs/TECHNICAL.md").read_text(encoding="utf-8")
 
         self.assertIn("Rust desktop platform capability matrix", technical)
         self.assertIn("| Capability | Windows 10/11 | Linux Wayland | Linux X11 |", technical)
         self.assertIn("whisper-dictate run -- ...", technical)
-        self.assertIn("scripts/install-linux-rust-ui.sh", technical)
-        self.assertIn("scripts/build-windows-installer.ps1", technical)
+        self.assertIn("scripts/linux/install-rust-ui.sh", technical)
+        self.assertIn("scripts/windows/build-installer.ps1", technical)
 
     def test_groq_provider_is_persisted_and_key_is_not_plain_config(self):
         ui = rust_ui_source()
-        api_keys = Path("crates/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
-        config = Path("crates/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+        api_keys = Path("src/rust/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
+        config = Path("src/rust/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
 
         self.assertIn('"Cloud STT provider"', ui)
         self.assertIn("fn set_cloud_provider(&mut self, provider: CloudProvider)", ui)
