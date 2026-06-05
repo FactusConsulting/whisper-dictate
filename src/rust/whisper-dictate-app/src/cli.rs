@@ -32,7 +32,11 @@ pub enum Command {
     /// Run the Ubuntu Wayland desktop setup helper.
     SetupUbuntu,
     /// Show local GPU VRAM and model-fit guidance.
-    ModelCapacity,
+    ModelCapacity {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect configuration paths and values.
     Config {
         #[command(subcommand)]
@@ -102,6 +106,35 @@ pub enum Command {
         #[arg(long, default_value_t = 30000)]
         timeout_ms: u64,
     },
+    /// Internal helper used by the Python worker to append JSONL safely.
+    #[command(hide = true)]
+    AppendJsonl {
+        /// JSONL file to append to.
+        #[arg(long)]
+        path: String,
+    },
+    /// Internal helper used by the Python worker to append filtered history.
+    #[command(hide = true)]
+    AppendHistory {
+        /// History JSONL file to append to.
+        #[arg(long)]
+        path: String,
+    },
+    /// Internal helper used by the Python worker to emit controller events.
+    #[command(hide = true)]
+    WorkerEvent,
+    /// Internal helper used by the Python worker to run command hooks.
+    #[command(hide = true)]
+    CommandHook,
+    /// Internal helper used by the Python worker for cloud-safe redaction.
+    #[command(hide = true)]
+    RedactText,
+    /// Internal helper used by the Python worker for target profile matching.
+    #[command(hide = true)]
+    ApplyProfile,
+    /// Internal helper used by the Python worker for local-only checks.
+    #[command(hide = true)]
+    Privacy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -204,7 +237,10 @@ mod tests {
     #[test]
     fn parses_model_capacity_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "model-capacity"]);
-        assert_eq!(cli.command, Some(Command::ModelCapacity));
+        assert_eq!(cli.command, Some(Command::ModelCapacity { json: false }));
+
+        let cli = Cli::parse_from(["whisper-dictate", "model-capacity", "--json"]);
+        assert_eq!(cli.command, Some(Command::ModelCapacity { json: true }));
     }
 
     #[test]
@@ -311,5 +347,44 @@ mod tests {
                 timeout_ms: 30000,
             })
         );
+    }
+
+    #[test]
+    fn parses_hidden_telemetry_helpers() {
+        let cli = Cli::parse_from(["whisper-dictate", "append-jsonl", "--path", "metrics.jsonl"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::AppendJsonl {
+                path: "metrics.jsonl".to_owned(),
+            })
+        );
+
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "append-history",
+            "--path",
+            "history.jsonl",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::AppendHistory {
+                path: "history.jsonl".to_owned(),
+            })
+        );
+
+        let cli = Cli::parse_from(["whisper-dictate", "worker-event"]);
+        assert_eq!(cli.command, Some(Command::WorkerEvent));
+
+        let cli = Cli::parse_from(["whisper-dictate", "command-hook"]);
+        assert_eq!(cli.command, Some(Command::CommandHook));
+
+        let cli = Cli::parse_from(["whisper-dictate", "redact-text"]);
+        assert_eq!(cli.command, Some(Command::RedactText));
+
+        let cli = Cli::parse_from(["whisper-dictate", "apply-profile"]);
+        assert_eq!(cli.command, Some(Command::ApplyProfile));
+
+        let cli = Cli::parse_from(["whisper-dictate", "privacy"]);
+        assert_eq!(cli.command, Some(Command::Privacy));
     }
 }

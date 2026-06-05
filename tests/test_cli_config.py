@@ -316,48 +316,6 @@ class ArgumentParserTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 0)
         self.assertEqual(data["terms"], ["OpenClaw"])
 
-class ModelCapacityTests(unittest.TestCase):
-    def test_estimate_model_fits_uses_free_and_total_vram(self):
-        from whisper_dictate import vp_model_capacity
-
-        gpus = [vp_model_capacity.GpuInfo(
-            index=0,
-            name="RTX Test",
-            total_mb=8192,
-            free_mb=4096,
-        )]
-
-        _, fits = vp_model_capacity.estimate_model_fits(gpus)
-        by_name = {fit.profile.name: fit for fit in fits}
-
-        self.assertEqual(by_name["Whisper large-v3-turbo"].status, "ok")
-        self.assertEqual(by_name["Whisper large-v3 float16"].status, "free-vram")
-        self.assertEqual(by_name["NVIDIA Parakeet TDT 1.1B"].status, "too-small")
-
-    def test_capacity_report_json_shape(self):
-        from whisper_dictate import vp_model_capacity
-
-        with patch("whisper_dictate.vp_model_capacity.query_gpus", return_value=[
-            vp_model_capacity.GpuInfo(0, "RTX Test", 16384, 12000),
-        ]):
-            data = json.loads(vp_model_capacity.capacity_report(as_json=True))
-
-        self.assertEqual(data["gpus"][0]["name"], "RTX Test")
-        self.assertTrue(any(item["name"] == "Whisper large-v3 float16"
-                            for item in data["models"]))
-
-    def test_capacity_report_plain_mentions_free_vram(self):
-        from whisper_dictate import vp_model_capacity
-
-        with patch("whisper_dictate.vp_model_capacity.query_gpus", return_value=[
-            vp_model_capacity.GpuInfo(0, "RTX Test", 8192, 4096),
-        ]):
-            report = vp_model_capacity.capacity_report()
-
-        self.assertIn("4096 MB free / 8192 MB total", report)
-        self.assertIn("Whisper large-v3-turbo", report)
-        self.assertIn("Use free VRAM", report)
-
 class ModuleSurfaceTests(unittest.TestCase):
     """runtime.py exposes names that were moved into focused package modules."""
 
@@ -471,26 +429,6 @@ class ContextMinSecondsTests(unittest.TestCase):
         self.assertTrue(self._gate(5.0, 5.0))
         self.assertTrue(self._gate(5.0, 19.4))
 
-class MetricsTests(unittest.TestCase):
-    def test_append_jsonl_writes_unicode_event(self):
-        for n in ("vp_metrics",):
-            sys.modules.pop(n, None)
-        from whisper_dictate import vp_metrics
-
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            path = f.name
-        try:
-            vp_metrics.append_jsonl(path, {"text": "rødgrød", "n": 1})
-            with open(path, encoding="utf-8") as f:
-                data = f.read()
-            self.assertIn('"text": "rødgrød"', data)
-            self.assertIn('"n": 1', data)
-        finally:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
 class ConfigTests(unittest.TestCase):
     def setUp(self):
         self._old = {k: os.environ.pop(k, None) for k in (
@@ -524,77 +462,6 @@ class ConfigTests(unittest.TestCase):
             )
             self.assertEqual(os.environ["VOICEPI_LANG"], "da")
             self.assertEqual(os.environ["VOICEPI_XKB_LAYOUT"], "dk")
-
-class PrivacyModeTests(unittest.TestCase):
-    def setUp(self):
-        self._old = {k: os.environ.pop(k, None) for k in (
-            "VOICEPI_LOCAL_ONLY", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE",
-            "HF_DATASETS_OFFLINE", "HF_HUB_DISABLE_TELEMETRY",
-            "WANDB_DISABLED", "WANDB_MODE",
-        )}
-        for n in ("vp_privacy", "vp_config", "vp_cli", "vp_transcribe"):
-            sys.modules.pop(n, None)
-
-    def tearDown(self):
-        for k in self._old:
-            os.environ.pop(k, None)
-        for k, v in self._old.items():
-            if v is not None:
-                os.environ[k] = v
-        for n in ("vp_privacy", "vp_config", "vp_cli", "vp_transcribe"):
-            sys.modules.pop(n, None)
-
-    def test_local_only_applies_offline_environment_gates(self):
-        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        from whisper_dictate import vp_privacy
-
-        self.assertTrue(vp_privacy.apply_local_only_network_lock())
-        self.assertEqual(os.environ["HF_HUB_OFFLINE"], "1")
-        self.assertEqual(os.environ["TRANSFORMERS_OFFLINE"], "1")
-        self.assertEqual(os.environ["HF_DATASETS_OFFLINE"], "1")
-        self.assertEqual(os.environ["HF_HUB_DISABLE_TELEMETRY"], "1")
-        self.assertEqual(os.environ["WANDB_DISABLED"], "true")
-        self.assertEqual(os.environ["WANDB_MODE"], "offline")
-
-    def test_local_only_does_not_override_existing_offline_values(self):
-        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        os.environ["HF_HUB_OFFLINE"] = "custom"
-        from whisper_dictate import vp_privacy
-
-        vp_privacy.apply_local_only_network_lock()
-
-        self.assertEqual(os.environ["HF_HUB_OFFLINE"], "custom")
-
-    def test_local_only_blocks_cloud_backends(self):
-        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        from whisper_dictate import vp_privacy
-
-        with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
-            vp_privacy.assert_local_backend("openai:gpt-4o-transcribe")
-
-    def test_local_only_allows_current_local_backends(self):
-        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
-        from whisper_dictate import vp_privacy
-
-        for backend in ("whisper", "faster-whisper", "parakeet"):
-            vp_privacy.assert_local_backend(backend)
-
-    def test_local_only_is_registered_as_config_setting(self):
-        from whisper_dictate import vp_config
-
-        self.assertIn("VOICEPI_LOCAL_ONLY", vp_config.SETTING_BY_ENV)
-        self.assertEqual(
-            vp_config.SETTING_BY_ENV["VOICEPI_LOCAL_ONLY"].key,
-            "local_only",
-        )
-        self.assertFalse(vp_config.SETTING_BY_ENV["VOICEPI_LOCAL_ONLY"].live)
-
-    def test_debug_dump_reports_local_only_setting(self):
-        with open("src/python/whisper_dictate/vp_cli.py", encoding="utf-8") as f:
-            script = f.read()
-
-        self.assertIn('"local only"', script)
-        self.assertIn("VOICEPI_LOCAL_ONLY", script)
 
 class WindowsStdioEncodingTests(unittest.TestCase):
     def test_windows_stdio_keeps_interactive_console_native(self):
@@ -644,70 +511,6 @@ class WindowsStdioEncodingTests(unittest.TestCase):
         expected = [{"encoding": "utf-8", "errors": "replace"}]
         self.assertEqual(stdout.calls, expected)
         self.assertEqual(stderr.calls, expected)
-
-class CommandHookTests(unittest.TestCase):
-    def test_command_hook_sends_event_json_on_stdin(self):
-        from whisper_dictate import vp_command_hook
-
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            out_path = f.name
-        code = (
-            "import json,sys,pathlib;"
-            "event=json.loads(sys.stdin.read());"
-            f"pathlib.Path({out_path!r}).write_text(event['text'], encoding='utf-8')"
-        )
-        command = json.dumps([sys.executable, "-c", code])
-        try:
-            with patch.dict(os.environ, {
-                "VOICEPI_COMMAND_HOOK": command,
-                "VOICEPI_COMMAND_HOOK_TIMEOUT_MS": "2000",
-            }, clear=False):
-                result = vp_command_hook.run_command_hook({"text": "hello Codex"})
-            with open(out_path, encoding="utf-8") as f:
-                written = f.read()
-        finally:
-            os.remove(out_path)
-
-        self.assertTrue(result.enabled)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(written, "hello Codex")
-
-    def test_command_hook_timeout_is_nonfatal(self):
-        from whisper_dictate import vp_command_hook
-
-        command = json.dumps([sys.executable, "-c", "import time; time.sleep(2)"])
-        with patch.dict(os.environ, {
-            "VOICEPI_COMMAND_HOOK": command,
-            "VOICEPI_COMMAND_HOOK_TIMEOUT_MS": "100",
-        }, clear=False):
-            result = vp_command_hook.run_command_hook({"text": "slow"})
-
-        self.assertTrue(result.enabled)
-        self.assertTrue(result.timeout)
-        self.assertIn("timed out", result.error)
-
-    def test_command_hook_rejects_invalid_json_array(self):
-        from whisper_dictate import vp_command_hook
-
-        with patch.dict(os.environ, {"VOICEPI_COMMAND_HOOK": '["ok", 5]'}, clear=False):
-            result = vp_command_hook.run_command_hook({"text": "bad"})
-
-        self.assertTrue(result.enabled)
-        self.assertIn("array of strings", result.error)
-
-    def test_runtime_records_command_hook_after_event_creation(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
-            script = f.read()
-
-        stop_body = script[script.index("def _stop_and_transcribe"):]
-        event_pos = stop_body.index("event = self._utterance_event(")
-        record_pos = stop_body.index("self._record_utterance_event(event)")
-        record_body = script[script.index("def _record_utterance_event"):]
-        hook_pos = record_body.index("hook_result = run_command_hook(event)")
-        metrics_pos = record_body.index("append_jsonl(self.metrics_jsonl, event)")
-        self.assertLess(event_pos, record_pos)
-        self.assertLess(hook_pos, metrics_pos)
-
 
 class DebugToolingTests(unittest.TestCase):
     def test_probe_key_is_documented_and_ci_sanity_checked(self):

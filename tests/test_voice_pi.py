@@ -21,11 +21,35 @@ class TestSuiteSplitSmokeTests(unittest.TestCase):
     def test_runtime_python_files_are_discoverable_after_package_split(self):
         root_modules = sorted(Path(".").glob("vp_*.py"))
         package_modules = sorted(Path("src/python/whisper_dictate").glob("*.py"))
+        expected_modules = {
+            "__init__.py",
+            "runtime.py",
+            "vp_audio.py",
+            "vp_audio_ducking.py",
+            "vp_benchmark.py",
+            "vp_calibration.py",
+            "vp_cli.py",
+            "vp_config.py",
+            "vp_corpus.py",
+            "vp_device.py",
+            "vp_dictionary.py",
+            "vp_dictionary_suggest.py",
+            "vp_doctor.py",
+            "vp_external_api.py",
+            "vp_file_transcribe.py",
+            "vp_formatting.py",
+            "vp_history.py",
+            "vp_inject.py",
+            "vp_keymap.py",
+            "vp_parakeet.py",
+            "vp_postprocess.py",
+            "vp_transcribe.py",
+            "vp_version.py",
+            "vp_ydotool.py",
+        }
 
         self.assertEqual([], root_modules)
-        self.assertIn(Path("src/python/whisper_dictate/__init__.py"), package_modules)
-        self.assertIn(Path("src/python/whisper_dictate/runtime.py"), package_modules)
-        self.assertGreater(len(package_modules), 25)
+        self.assertEqual(expected_modules, {path.name for path in package_modules})
         self.assertTrue(all(path.is_file() for path in package_modules))
         self.assertEqual(len(package_modules), len(set(package_modules)))
 

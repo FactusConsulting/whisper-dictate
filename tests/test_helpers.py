@@ -38,7 +38,7 @@ def load_voice_pi(cuda_devices: int = 0):
                  "whisper_dictate.vp_audio", "whisper_dictate.vp_inject",
                  "whisper_dictate.vp_cli", "whisper_dictate.vp_transcribe",
                  "whisper_dictate.vp_dictionary", "whisper_dictate.vp_parakeet",
-                 "whisper_dictate.vp_config", "whisper_dictate.vp_privacy",
+                 "whisper_dictate.vp_config",
                  "whisper_dictate.vp_postprocess",
                  "ctranslate2", "faster_whisper", "numpy",
                  "sounddevice", "pynput", "pynput.keyboard"):
@@ -80,7 +80,7 @@ def load_voice_pi_realnp():
                  "whisper_dictate.vp_audio", "whisper_dictate.vp_inject",
                  "whisper_dictate.vp_cli", "whisper_dictate.vp_transcribe",
                  "whisper_dictate.vp_dictionary", "whisper_dictate.vp_parakeet",
-                 "whisper_dictate.vp_config", "whisper_dictate.vp_privacy",
+                 "whisper_dictate.vp_config",
                  "whisper_dictate.vp_postprocess",
                  "ctranslate2", "faster_whisper",
                  "sounddevice", "pynput", "pynput.keyboard"):

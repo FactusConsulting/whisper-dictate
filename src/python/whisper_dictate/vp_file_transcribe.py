@@ -5,15 +5,26 @@ import contextlib
 import json
 import subprocess
 import sys
+import time
 import wave
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from whisper_dictate.vp_metrics import base_event, compact_text
 from whisper_dictate.vp_postprocess import postprocess_text
 from whisper_dictate.vp_transcribe import SR, _transcribe_detail
+
+
+def _compact_text(text: str, limit: int = 240) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _base_event(**fields: Any) -> dict[str, Any]:
+    event = {"ts": time.time()}
+    event.update(fields)
+    return event
 
 
 def _mono_float_to_int16(audio: np.ndarray) -> np.ndarray:
@@ -96,12 +107,12 @@ def transcribe_file_event(
         result = _transcribe_detail(model, pcm, lang)
         post_result = postprocess_text(result.text)
     final_text = post_result.text
-    return base_event(
+    return _base_event(
         event="file_transcription",
         text=final_text,
         dictionary_text=result.text,
         raw_text=result.raw_text or result.text,
-        text_preview=compact_text(final_text),
+        text_preview=_compact_text(final_text),
         text_chars=len(final_text),
         recording_s=result.duration_s,
         audio_duration_s=result.duration_s,

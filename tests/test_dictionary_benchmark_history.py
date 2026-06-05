@@ -592,67 +592,18 @@ class HistoryTests(unittest.TestCase):
         with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
-        self.assertIn("from whisper_dictate.vp_history import append_history", script)
-        self.assertIn("append_history(event)", script)
-        self.assertLess(script.index("append_jsonl(self.metrics_jsonl, event)"),
-                        script.index("append_history(event)"))
+        self.assertIn('_append_jsonl(self.metrics_jsonl, event)', script)
+        self.assertIn("_append_history(event)", script)
+        self.assertLess(script.index("_append_jsonl(self.metrics_jsonl, event)"),
+                        script.index("_append_history(event)"))
 
 class ProfileTests(unittest.TestCase):
-    def test_profile_match_by_title_and_process_applies_settings(self):
-        from whisper_dictate import vp_profiles
-
-        profiles = [{
-            "name": "Claude terminal",
-            "match": {"title": "Claude Code", "process": "WindowsTerminal"},
-            "settings": {"inject_mode": "paste", "lang": "en"},
-        }]
-
-        config, name = vp_profiles.apply_profile_settings(
-            {"inject_mode": "auto", "lang": "da"},
-            profiles,
-            title="Claude Code - repo",
-            process="WindowsTerminal.exe",
-        )
-
-        self.assertEqual(name, "Claude terminal")
-        self.assertEqual(config["inject_mode"], "paste")
-        self.assertEqual(config["lang"], "en")
-
-    def test_profile_match_returns_default_when_no_match(self):
-        from whisper_dictate import vp_profiles
-
-        config, name = vp_profiles.apply_profile_settings(
-            {"inject_mode": "auto"},
-            [{"name": "Slack", "match": {"title": "Slack"}, "settings": {"lang": "en"}}],
-            title="Codex",
-            process="WindowsTerminal.exe",
-        )
-
-        self.assertIsNone(name)
-        self.assertEqual(config, {"inject_mode": "auto"})
-
-    def test_profile_match_supports_lists(self):
-        from whisper_dictate import vp_profiles
-
-        name, settings = vp_profiles.match_profile(
-            [{
-                "name": "AI terminals",
-                "match": {"title": ["Claude Code", "Codex"]},
-                "settings": {"inject_mode": "paste"},
-            }],
-            title="Codex",
-            process=None,
-        )
-
-        self.assertEqual(name, "AI terminals")
-        self.assertEqual(settings["inject_mode"], "paste")
-
     def test_runtime_records_active_profile_in_metrics(self):
         with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("def _profiled_config", script)
-        self.assertIn("apply_profile_settings", script)
+        self.assertIn("_apply_profile_settings", script)
         self.assertIn("[profile] active:", script)
         self.assertIn('profile=getattr(self, "_active_profile_name", None)', script)
 

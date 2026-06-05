@@ -6,15 +6,63 @@ parser only ever sees the resolved value.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
 
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 from whisper_dictate.vp_device import VALID_DEVICES
-from whisper_dictate.vp_privacy import apply_local_only_network_lock, local_only_enabled
 from whisper_dictate.vp_postprocess import load_postprocess_settings
 
 apply_config_to_environ()
-apply_local_only_network_lock()
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def local_only_enabled() -> bool:
+    return _truthy(get_value("VOICEPI_LOCAL_ONLY"))
+
+
+def _apply_local_only_network_lock() -> bool:
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    enabled = local_only_enabled()
+    if helper:
+        try:
+            r = subprocess.run(
+                [helper, "privacy"],
+                input=json.dumps({"action": "env_updates", "local_only": enabled}),
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=5,
+                shell=False,
+            )
+            if r.returncode == 0:
+                payload = json.loads(r.stdout or "{}")
+                if isinstance(payload, dict):
+                    for name, value in payload.get("env", {}).items():
+                        os.environ.setdefault(str(name), str(value))
+                    return bool(payload.get("enabled", False))
+        except Exception:
+            pass
+    if not enabled:
+        return False
+    for name in (
+        "HF_HUB_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+        "HF_DATASETS_OFFLINE",
+        "HF_HUB_DISABLE_TELEMETRY",
+    ):
+        os.environ.setdefault(name, "1")
+    os.environ.setdefault("WANDB_DISABLED", "true")
+    os.environ.setdefault("WANDB_MODE", "offline")
+    return True
+
+
+_apply_local_only_network_lock()
 
 MODEL_NAME = get_value("VOICEPI_MODEL", "large-v3-turbo")
 DEVICE = get_value("VOICEPI_DEVICE", "auto")

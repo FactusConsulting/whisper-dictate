@@ -47,6 +47,11 @@ class TranscribeDetailTests(unittest.TestCase):
         for n in ("vp_transcribe", "vp_audio",
                   "whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio"):
             sys.modules.pop(n, None)
+        pkg = sys.modules.get("whisper_dictate")
+        if pkg is not None:
+            for attr in ("vp_transcribe", "vp_audio"):
+                if hasattr(pkg, attr):
+                    delattr(pkg, attr)
         sys.modules["numpy"] = np
         from whisper_dictate import vp_transcribe
         self.t = vp_transcribe
@@ -110,7 +115,7 @@ class STTBackendTests(unittest.TestCase):
             "VOICEPI_STT_BASE_URL", "VOICEPI_STT_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
         for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio",
-                  "whisper_dictate.vp_parakeet", "whisper_dictate.vp_privacy"):
+                  "whisper_dictate.vp_parakeet"):
             self._drop_package_module(n)
         for n in list(sys.modules):
             if (n in ("vp_transcribe", "vp_audio", "vp_parakeet",
@@ -123,8 +128,7 @@ class STTBackendTests(unittest.TestCase):
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
-        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_parakeet",
-                  "whisper_dictate.vp_privacy"):
+        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_parakeet"):
             self._drop_package_module(n)
         for n in list(sys.modules):
             if n in ("vp_transcribe", "vp_parakeet") or n.startswith("nemo."):
@@ -377,7 +381,7 @@ class PostprocessTests(unittest.TestCase):
             "VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY", "OPENAI_API_KEY",
             "GROQ_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
-        for n in ("vp_postprocess", "vp_config", "vp_privacy", "vp_external_api"):
+        for n in ("vp_postprocess", "vp_config", "vp_external_api"):
             sys.modules.pop(n, None)
 
     def tearDown(self):
@@ -386,7 +390,7 @@ class PostprocessTests(unittest.TestCase):
         for k, v in self._old.items():
             if v is not None:
                 os.environ[k] = v
-        for n in ("vp_postprocess", "vp_config", "vp_privacy", "vp_external_api"):
+        for n in ("vp_postprocess", "vp_config", "vp_external_api"):
             sys.modules.pop(n, None)
 
     def test_default_ollama_model_literal_is_centralized(self):
@@ -643,8 +647,29 @@ class PostprocessTests(unittest.TestCase):
             redact=True,
             redact_terms="Lars Andersen",
         )
-        result = vp_postprocess.postprocess_text(
-            "Contact Lars Andersen at lars@example.com.", settings)
+        redaction = {
+            "text": "Contact [[WD_TERM_2]] at [[WD_EMAIL_1]].",
+            "redactions": [
+                {
+                    "placeholder": "[[WD_EMAIL_1]]",
+                    "value": "lars@example.com",
+                    "kind": "email",
+                },
+                {
+                    "placeholder": "[[WD_TERM_2]]",
+                    "value": "Lars Andersen",
+                    "kind": "term",
+                },
+            ],
+        }
+        def rust_json(command, *_args, **_kwargs):
+            if command == "privacy":
+                return {"ok": True}
+            return redaction
+
+        with patch("whisper_dictate.vp_postprocess._rust_json", side_effect=rust_json):
+            result = vp_postprocess.postprocess_text(
+                "Contact Lars Andersen at lars@example.com.", settings)
 
         self.assertNotIn("Lars Andersen", calls["prompt"])
         self.assertNotIn("lars@example.com", calls["prompt"])
@@ -739,41 +764,12 @@ class FormatCommandTests(unittest.TestCase):
         self.assertFalse(result.enabled)
         self.assertEqual(result.text, "write comma literally")
 
-    def test_english_format_commands_replace_whole_phrases(self):
+    def test_format_commands_require_rust_helper_when_enabled(self):
         from whisper_dictate import vp_formatting
 
-        result = vp_formatting.apply_format_commands(
-            "first item comma new line second item period", "en")
-
-        self.assertTrue(result.enabled)
-        self.assertTrue(result.changed)
-        self.assertEqual(result.text, "first item,\nsecond item.")
-        self.assertIn({"command": "new line", "replacement": "\n", "count": "1"}, result.applied)
-
-    def test_danish_format_commands_replace_whole_phrases(self):
-        from whisper_dictate import vp_formatting
-
-        result = vp_formatting.apply_format_commands(
-            "første punkt komma ny linje andet punkt punktum", "da")
-
-        self.assertEqual(result.text, "første punkt,\nandet punkt.")
-
-    def test_format_commands_do_not_replace_inside_words(self):
-        from whisper_dictate import vp_formatting
-
-        result = vp_formatting.apply_format_commands(
-            "Common words and kommandolinje stay literal", "both")
-
-        self.assertFalse(result.changed)
-        self.assertEqual(result.text, "Common words and kommandolinje stay literal")
-
-    def test_format_tidy_normalizes_spacing_without_regex_backtracking(self):
-        from whisper_dictate import vp_formatting
-
-        cleaned = vp_formatting._tidy(
-            "first      ,second\n   third      -      fourth\n\n\n\nfifth")
-
-        self.assertEqual(cleaned, "first, second\nthird - fourth\n\nfifth")
+        with patch.dict(os.environ, {}, clear=True), \
+                self.assertRaisesRegex(RuntimeError, "Rust format-text helper"):
+            vp_formatting.apply_format_commands("first comma", "en")
 
     def test_python_formatting_delegates_to_rust_helper_when_available(self):
         import subprocess
@@ -800,7 +796,7 @@ class FormatCommandTests(unittest.TestCase):
         self.assertEqual(result.applied[0]["count"], "1")
         self.assertEqual(run.call_args.args[0][:2], ["whisper-dictate", "format-text"])
 
-    def test_python_formatting_falls_back_when_rust_helper_fails(self):
+    def test_python_formatting_reports_rust_helper_failure(self):
         import subprocess
         from whisper_dictate import vp_formatting
 
@@ -813,9 +809,8 @@ class FormatCommandTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
                 patch("whisper_dictate.vp_formatting.subprocess.run", return_value=completed):
-            result = vp_formatting.apply_format_commands("first comma", "en")
-
-        self.assertEqual(result.text, "first,")
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                vp_formatting.apply_format_commands("first comma", "en")
 
     def test_runtime_applies_formatting_before_injection_and_metrics(self):
         with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:

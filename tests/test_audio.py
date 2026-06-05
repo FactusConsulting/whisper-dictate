@@ -9,6 +9,7 @@ from tests.test_helpers import (
     Path,
     redirect_stderr,
     sys,
+    types,
     unittest,
 )
 
@@ -254,33 +255,6 @@ class CalibrationTests(unittest.TestCase):
         after = script.index("except RuntimeError as e:", model_load)
 
         self.assertLess(before, model_load)
-        self.assertIn('emit_worker_event("error"', script[model_load:after + 300])
+        self.assertIn('_emit_worker_event("error"', script[model_load:after + 300])
         self.assertIn("startup error", script[model_load:after + 300])
         self.assertIn("raise SystemExit(1)", script[model_load:after + 300])
-
-class WorkerEventTests(unittest.TestCase):
-    def test_worker_events_disabled_by_default(self):
-        from whisper_dictate import vp_worker_events
-
-        with patch.dict(os.environ, {}, clear=True):
-            buf = io.StringIO()
-            with redirect_stderr(buf):
-                vp_worker_events.emit("status", state="ready")
-            self.assertEqual(buf.getvalue(), "")
-
-    def test_worker_events_emit_compact_json_on_stderr(self):
-        from whisper_dictate import vp_worker_events
-
-        with patch.dict(os.environ, {"VOICEPI_WORKER_EVENTS": "1"}, clear=True):
-            buf = io.StringIO()
-            with redirect_stderr(buf):
-                vp_worker_events.emit("status", state="ready", model="large-v3")
-            line = buf.getvalue().strip()
-
-        self.assertTrue(line.startswith("[worker-event] "))
-        payload = json.loads(line.removeprefix("[worker-event] "))
-        self.assertEqual(payload, {
-            "event": "status",
-            "state": "ready",
-            "model": "large-v3",
-        })

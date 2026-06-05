@@ -1,11 +1,46 @@
 use std::fs;
-use std::path::PathBuf;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::cli::HistoryCommand;
 use crate::config;
+
+const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
+const HISTORY_KEYS: &[&str] = &[
+    "ts",
+    "event",
+    "text",
+    "raw_text",
+    "text_preview",
+    "text_chars",
+    "dictionary_text",
+    "recording_s",
+    "audio_duration_s",
+    "compute_s",
+    "real_time_factor",
+    "language",
+    "language_probability",
+    "model",
+    "stt_backend",
+    "device",
+    "compute_type",
+    "inject_mode",
+    "inject_strategy",
+    "target_title",
+    "target_process",
+    "profile",
+    "dictionary_replacements",
+    "post_processor",
+    "post_mode",
+    "post_model",
+    "post_latency_ms",
+    "post_changed",
+    "post_fallback",
+    "post_error",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonlPreview {
@@ -57,6 +92,49 @@ pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
     Ok(())
 }
 
+pub fn handle_append_jsonl(path: &Path) -> Result<()> {
+    let event = read_stdin_json()?;
+    append_jsonl(path, &event)
+}
+
+pub fn handle_append_history(path: &Path) -> Result<()> {
+    let event = read_stdin_json()?;
+    append_jsonl(path, &history_event(&event))
+}
+
+pub fn handle_worker_event() -> Result<()> {
+    let event = read_stdin_json()?;
+    eprintln!("{}{}", WORKER_EVENT_PREFIX, serde_json::to_string(&event)?);
+    Ok(())
+}
+
+pub fn append_jsonl(path: &Path, event: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut line = serde_json::to_string(event)?;
+    line.push('\n');
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(line.as_bytes())?;
+    Ok(())
+}
+
+pub fn history_event(event: &Value) -> Value {
+    let Some(object) = event.as_object() else {
+        return Value::Object(Map::new());
+    };
+    let mut filtered = Map::new();
+    for key in HISTORY_KEYS {
+        if let Some(value) = object.get(*key) {
+            filtered.insert((*key).to_owned(), value.clone());
+        }
+    }
+    Value::Object(filtered)
+}
+
 fn history_path_from_settings() -> Result<PathBuf> {
     let settings = config::load_settings()?;
     if settings.history_jsonl.trim().is_empty() {
@@ -64,6 +142,12 @@ fn history_path_from_settings() -> Result<PathBuf> {
     } else {
         Ok(PathBuf::from(settings.history_jsonl))
     }
+}
+
+fn read_stdin_json() -> Result<Value> {
+    let mut raw = String::new();
+    io::stdin().read_to_string(&mut raw)?;
+    Ok(serde_json::from_str(&raw)?)
 }
 
 fn format_row(value: &Value) -> String {
@@ -148,5 +232,70 @@ mod tests {
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows.last().unwrap()["text"], "last");
+    }
+
+    #[test]
+    fn append_jsonl_writes_utf8_json_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metrics.jsonl");
+        let event = serde_json::json!({"text": "rødgrød", "n": 1});
+
+        append_jsonl(&path, &event).unwrap();
+
+        let raw = fs::read_to_string(path).unwrap();
+        assert_eq!(raw, "{\"n\":1,\"text\":\"rødgrød\"}\n");
+    }
+
+    #[test]
+    fn append_jsonl_creates_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("metrics.jsonl");
+
+        append_jsonl(&path, &serde_json::json!({"event": "ok"})).unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "{\"event\":\"ok\"}\n");
+    }
+
+    #[test]
+    fn history_event_keeps_only_core_fields() {
+        let event = serde_json::json!({
+            "ts": 1,
+            "event": "utterance",
+            "text": "hello",
+            "target_title": "Editor",
+            "large_unused_blob": "drop"
+        });
+
+        let filtered = history_event(&event);
+
+        assert_eq!(filtered["text"], "hello");
+        assert_eq!(filtered["target_title"], "Editor");
+        assert!(filtered.get("large_unused_blob").is_none());
+    }
+
+    #[test]
+    fn history_event_keeps_postprocess_fields_and_replacements() {
+        let event = serde_json::json!({
+            "text": "clean text",
+            "dictionary_replacements": [{"from": "lead death", "to": "lead dev"}],
+            "post_processor": "openai",
+            "post_error": "rate limited",
+            "api_key": "secret"
+        });
+
+        let filtered = history_event(&event);
+
+        assert_eq!(filtered["post_processor"], "openai");
+        assert_eq!(filtered["post_error"], "rate limited");
+        assert_eq!(filtered["dictionary_replacements"][0]["to"], "lead dev");
+        assert!(filtered.get("api_key").is_none());
+    }
+
+    #[test]
+    fn history_event_non_object_becomes_empty_object() {
+        assert_eq!(
+            history_event(&serde_json::json!("not an object")),
+            serde_json::json!({})
+        );
     }
 }

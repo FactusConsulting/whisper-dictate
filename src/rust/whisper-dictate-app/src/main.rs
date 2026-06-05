@@ -4,7 +4,8 @@ use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command};
 use whisper_dictate_app::{
-    cloud_api, config, dictionary, formatting, injection, model_capacity, runtime, telemetry, ui,
+    cloud_api, command_hook, config, dictionary, formatting, injection, model_capacity, privacy,
+    profiles, redaction, runtime, telemetry, ui,
 };
 
 fn main() {
@@ -27,7 +28,7 @@ fn run() -> anyhow::Result<()> {
         Command::Doctor => runtime::doctor(),
         Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
-        Command::ModelCapacity => model_capacity::handle_command(),
+        Command::ModelCapacity { json } => model_capacity::handle_command(json),
         Command::Config { command } => config::handle_command(command),
         Command::Dictionary { command } => dictionary::handle_command(command),
         Command::History { command } => telemetry::handle_history_command(command),
@@ -60,5 +61,16 @@ fn run() -> anyhow::Result<()> {
             (!prompt.trim().is_empty()).then_some(prompt.as_str()),
             timeout_ms,
         ),
+        Command::AppendJsonl { path } => {
+            telemetry::handle_append_jsonl(std::path::Path::new(&path))
+        }
+        Command::AppendHistory { path } => {
+            telemetry::handle_append_history(std::path::Path::new(&path))
+        }
+        Command::WorkerEvent => telemetry::handle_worker_event(),
+        Command::CommandHook => command_hook::handle_command_hook(),
+        Command::RedactText => redaction::handle_redact_text(),
+        Command::ApplyProfile => profiles::handle_apply_profile(),
+        Command::Privacy => privacy::handle_privacy(),
     }
 }

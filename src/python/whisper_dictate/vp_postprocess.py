@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 from whisper_dictate.vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
-from whisper_dictate.vp_privacy import assert_local_processor, local_only_enabled
-from whisper_dictate.vp_redaction import RedactionResult, redact_text
 
 apply_config_to_environ()
 
@@ -24,6 +24,35 @@ MODE_ALIASES = {
     "bulletlist": "bullets",
 }
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+@dataclass(frozen=True)
+class Redaction:
+    placeholder: str
+    value: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class RedactionResult:
+    text: str
+    redactions: tuple[Redaction, ...] = field(default_factory=tuple)
+
+    def restore(self, text: str) -> str:
+        out = text
+        for redaction in self.redactions:
+            out = out.replace(redaction.placeholder, redaction.value)
+        return out
+
+    def public_summary(self) -> list[dict[str, object]]:
+        return [
+            {
+                "placeholder": redaction.placeholder,
+                "kind": redaction.kind,
+                "chars": len(redaction.value),
+            }
+            for redaction in self.redactions
+        ]
 
 
 @dataclass(frozen=True)
@@ -140,11 +169,11 @@ def validate_postprocess_settings(settings: PostprocessSettings) -> None:
         raise ValueError(f"invalid post processor: {settings.processor}")
     if mode not in VALID_MODES:
         raise ValueError(f"invalid post mode: {settings.mode}")
-    assert_local_processor(settings.processor)
+    _assert_local_processor(settings.processor)
     parsed = urllib.parse.urlparse(settings.base_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError(f"invalid post-process base URL: {settings.base_url!r}")
-    if local_only_enabled() and not _is_local_url(settings.base_url):
+    if _local_only_enabled() and not _is_local_url(settings.base_url):
         raise RuntimeError(
             "VOICEPI_LOCAL_ONLY=1 blocks remote post-processing URL "
             f"{settings.base_url!r}; use localhost or disable local-only mode.")
@@ -193,7 +222,69 @@ def _redaction_terms(settings: PostprocessSettings) -> list[str]:
 def _redact_for_cloud(text: str, settings: PostprocessSettings) -> RedactionResult:
     if settings.processor not in ("openai", "groq") or not settings.redact:
         return RedactionResult(text=text)
-    return redact_text(text, terms=_redaction_terms(settings))
+    return _redact_text(text, terms=_redaction_terms(settings))
+
+
+def _rust_json(command: str, payload: dict[str, object], *, timeout: float = 5.0) -> dict[str, object] | None:
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    if not helper:
+        return None
+    try:
+        r = subprocess.run(
+            [helper, command],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            shell=False,
+        )
+        if r.returncode != 0:
+            return None
+        result = json.loads(r.stdout or "{}")
+        return result if isinstance(result, dict) else None
+    except Exception:
+        return None
+
+
+def _local_only_enabled() -> bool:
+    return (get_value("VOICEPI_LOCAL_ONLY") or "").strip().lower() not in (
+        "", "0", "false", "no", "off")
+
+
+def _assert_local_processor(processor: str) -> None:
+    result = _rust_json("privacy", {
+        "action": "assert_processor",
+        "local_only": _local_only_enabled(),
+        "processor": processor,
+    })
+    if isinstance(result, dict):
+        if not result.get("ok", False):
+            raise RuntimeError(str(result.get("error") or "local-only check failed"))
+        return
+    if _local_only_enabled() and (processor or "").strip().lower() not in ("none", "ollama"):
+        raise RuntimeError(
+            f"VOICEPI_LOCAL_ONLY=1 blocks post-processing provider {processor!r}; "
+            "choose a local provider or disable local-only mode.")
+
+
+def _redact_text(text: str, *, terms: list[str]) -> RedactionResult:
+    result = _rust_json("redact-text", {"text": text, "terms": terms})
+    if not isinstance(result, dict):
+        raise RuntimeError("Rust redaction helper is not available")
+    return RedactionResult(
+        text=str(result.get("text", text)),
+        redactions=tuple(
+            Redaction(
+                placeholder=str(item.get("placeholder", "")),
+                value=str(item.get("value", "")),
+                kind=str(item.get("kind", "")),
+            )
+            for item in result.get("redactions", [])
+            if isinstance(item, dict)
+        ),
+    )
 
 
 def _ollama_generate(settings: PostprocessSettings, text: str) -> str:

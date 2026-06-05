@@ -38,8 +38,10 @@ the GPU VRAM. Configure with VOICEPI_QUIT_KEY and VOICEPI_QUIT_COUNT
 from __future__ import annotations
 
 import glob
+import json
 import os
 import site
+import subprocess
 import sys
 import threading
 import time
@@ -111,19 +113,14 @@ from whisper_dictate.vp_cli import (  # noqa: E402
     DEVICE, INJECT_MODE, KEY, LANG, MODEL_NAME, QUIT_COUNT, QUIT_KEY,
     QUIT_WINDOW_MS,
     VALID_INJECT_MODES,
-    _print_effective_config, build_arg_parser,
+    _apply_local_only_network_lock, _print_effective_config, build_arg_parser,
 )
 from whisper_dictate.vp_device import VALID_DEVICES, _resolve_device  # noqa: E402
 from whisper_dictate.vp_inject import InjectMixin  # noqa: E402
 from whisper_dictate.vp_keymap import (  # noqa: E402
     _LANG_TO_XKB, _LAYOUT_KEYCODES, _build_ydotool_ops, _detect_xkb_layout,
 )
-from whisper_dictate.vp_metrics import append_jsonl, base_event, compact_text, emit_json  # noqa: E402
-from whisper_dictate.vp_history import append_history  # noqa: E402
 from whisper_dictate.vp_version import VERSION  # noqa: E402
-from whisper_dictate.vp_worker_events import emit as emit_worker_event  # noqa: E402
-from whisper_dictate.vp_command_hook import annotate_event_with_hook, run_command_hook  # noqa: E402
-from whisper_dictate.vp_privacy import apply_local_only_network_lock  # noqa: E402
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402
 from whisper_dictate.vp_formatting import apply_format_commands  # noqa: E402
 from whisper_dictate.vp_audio_ducking import AudioDucker, register_active_ducker  # noqa: E402
@@ -133,6 +130,149 @@ from whisper_dictate.vp_config import (  # noqa: E402
 
 
 _ARECORD_DEVICE: str | None = None  # set once at startup
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _compact_text(text: str, limit: int = 240) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _base_event(**fields):
+    event = {"ts": time.time()}
+    event.update(fields)
+    return event
+
+
+def _emit_json(event: dict) -> None:
+    print(json.dumps(event, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def _rust_helper() -> str | None:
+    return os.environ.get("VOICEPI_RUST_INJECTOR")
+
+
+def _rust_json(command: str, payload: dict, *args: str, timeout: float = 5.0) -> dict | None:
+    helper = _rust_helper()
+    if not helper:
+        return None
+    try:
+        r = subprocess.run(
+            [helper, command, *args],
+            input=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout,
+            shell=False,
+        )
+        if r.returncode != 0:
+            err = (r.stderr or "").strip()
+            if err:
+                print(f"[rust:{command}] {err}", file=sys.stderr, flush=True)
+            return None
+        if r.stderr:
+            print(r.stderr, end="", file=sys.stderr, flush=True)
+        if not (r.stdout or "").strip():
+            return {}
+        result = json.loads(r.stdout)
+        return result if isinstance(result, dict) else None
+    except Exception as e:  # noqa: BLE001 - helper failures should not stop dictation
+        print(f"[rust:{command}] {e}", file=sys.stderr, flush=True)
+        return None
+
+
+def _append_jsonl(path: str | None, event: dict) -> None:
+    if not path:
+        return
+    _rust_json("append-jsonl", event, "--path", os.path.expanduser(path))
+
+
+def _append_history(event: dict) -> None:
+    path = event.get("_history_path")
+    if path:
+        _rust_json("append-history", event, "--path", str(path))
+        return
+    from whisper_dictate.vp_history import history_enabled, history_path
+
+    if history_enabled():
+        _rust_json("append-history", event, "--path", str(history_path()))
+
+
+def _emit_worker_event(event: str, **fields) -> None:
+    if not _truthy(os.environ.get("VOICEPI_WORKER_EVENTS")):
+        return
+    payload = {"event": event}
+    payload.update({key: value for key, value in fields.items() if value is not None})
+    _rust_json("worker-event", payload)
+
+
+def _run_command_hook_and_annotate(event: dict) -> None:
+    result = _rust_json(
+        "command-hook",
+        event,
+        timeout=max(
+            1.0,
+            float(os.environ.get("VOICEPI_COMMAND_HOOK_TIMEOUT_MS") or "2000") / 1000.0 + 1.0,
+        ),
+    )
+    result = result or {
+        "enabled": False,
+        "command": "",
+        "returncode": None,
+        "latency_ms": 0,
+        "timeout": False,
+        "error": None,
+    }
+    event.update({
+        "command_hook_enabled": bool(result.get("enabled", False)),
+        "command_hook_command": result.get("command") or None,
+        "command_hook_returncode": result.get("returncode"),
+        "command_hook_latency_ms": int(result.get("latency_ms") or 0),
+        "command_hook_timeout": bool(result.get("timeout", False)),
+        "command_hook_error": result.get("error"),
+    })
+
+
+def _apply_profile_settings(base: dict[str, str], profiles, *, title: str | None, process: str | None):
+    result = _rust_json("apply-profile", {
+        "base": base,
+        "profiles": profiles,
+        "title": title,
+        "process": process,
+    })
+    if not result:
+        return dict(base), None
+    config = result.get("config", {})
+    if not isinstance(config, dict):
+        return dict(base), None
+    name = result.get("name")
+    return {str(key): str(value) for key, value in config.items()}, str(name) if name else None
+
+
+def _print_model_capacity(as_json: bool) -> bool:
+    helper = _rust_helper()
+    if not helper:
+        return False
+    args = [helper, "model-capacity"]
+    if as_json:
+        args.append("--json")
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+    except Exception as e:  # noqa: BLE001
+        print(f"[model-capacity] {e}", file=sys.stderr, flush=True)
+        return False
+    if r.returncode != 0:
+        err = (r.stderr or "").strip()
+        if err:
+            print(f"[model-capacity] {err}", file=sys.stderr, flush=True)
+        return False
+    print((r.stdout or "").rstrip("\n"), flush=True)
+    return True
 
 _LAZY_EXPORTS = {
     "whisper_dictate.vp_audio": (
@@ -243,10 +383,8 @@ class Dictate(InjectMixin):
             print("[audio] using sounddevice (direct ALSA)", flush=True)
 
     def _profiled_config(self, base: dict[str, str]) -> dict[str, str]:
-        from whisper_dictate.vp_profiles import apply_profile_settings
-
         data = load_config()
-        after, profile_name = apply_profile_settings(
+        after, profile_name = _apply_profile_settings(
             base,
             data.get("profiles", []),
             title=getattr(self, "_inject_target_title", None),
@@ -429,12 +567,12 @@ class Dictate(InjectMixin):
         post_result,
         format_result,
     ) -> dict:
-        return base_event(
+        return _base_event(
             event="utterance",
             text=final_text,
             dictionary_text=source_text,
             raw_text=result.raw_text or source_text,
-            text_preview=compact_text(final_text),
+            text_preview=_compact_text(final_text),
             text_chars=len(final_text),
             recording_s=recording_s,
             audio_duration_s=result.duration_s,
@@ -474,17 +612,16 @@ class Dictate(InjectMixin):
         )
 
     def _record_utterance_event(self, event: dict) -> None:
-        hook_result = run_command_hook(event)
-        annotate_event_with_hook(event, hook_result)
-        if hook_result.error:
-            print(f"[hook] {hook_result.error}", file=sys.stderr, flush=True)
-        append_jsonl(self.metrics_jsonl, event)
+        _run_command_hook_and_annotate(event)
+        if event.get("command_hook_error"):
+            print(f"[hook] {event['command_hook_error']}", file=sys.stderr, flush=True)
+        _append_jsonl(self.metrics_jsonl, event)
         try:
-            append_history(event)
+            _append_history(event)
         except OSError as e:
             print(f"[history] could not write history: {e}", file=sys.stderr, flush=True)
         if self.json_output:
-            emit_json(event)
+            _emit_json(event)
 
     def _start(self):
         if self.recording:
@@ -502,7 +639,7 @@ class Dictate(InjectMixin):
             self._start_arecord()
         else:
             self._start_sounddevice()
-        emit_worker_event("status", state="listening")
+        _emit_worker_event("status", state="listening")
         print("● listening…", flush=True)
 
     def _stop_and_transcribe(self):
@@ -728,8 +865,8 @@ def main() -> None:
         from whisper_dictate.vp_doctor import run_doctor
         raise SystemExit(run_doctor())
     if a.model_capacity:
-        from whisper_dictate.vp_model_capacity import capacity_report
-        print(capacity_report(as_json=a.json), flush=True)
+        if not _print_model_capacity(a.json):
+            ap.error("Rust model-capacity helper is not available")
         raise SystemExit(0)
     if a.benchmark_files or a.benchmark_corpus:
         from whisper_dictate.vp_benchmark import run_benchmark
@@ -794,7 +931,7 @@ def main() -> None:
         xkb = _LANG_TO_XKB.get(lang, lang)
         os.environ["XKB_DEFAULT_LAYOUT"] = xkb
 
-    if apply_local_only_network_lock():
+    if _apply_local_only_network_lock():
         print("[privacy] local-only mode enabled; cloud backends and model downloads are blocked", flush=True)
 
     _load_runtime_modules()
@@ -837,7 +974,7 @@ def main() -> None:
     else:
         print(f"loading {label} {loaded_model_name} on {dev} ({ctype})… "
               f"first run downloads the model", flush=True)
-    emit_worker_event(
+    _emit_worker_event(
         "status",
         state="loading_model",
         backend=backend,
@@ -853,11 +990,11 @@ def main() -> None:
         _model = load_stt_model(loaded_model_name, dev, ctype)
     except RuntimeError as e:
         message = str(e)
-        emit_worker_event("error", state="failed", backend=backend, model=loaded_model_name, message=message)
+        _emit_worker_event("error", state="failed", backend=backend, model=loaded_model_name, message=message)
         print(f"  x startup error: {message}", flush=True)
         raise SystemExit(1)
     _model_load_s = time.monotonic() - _t
-    emit_worker_event(
+    _emit_worker_event(
         "status",
         state="ready",
         backend=backend,

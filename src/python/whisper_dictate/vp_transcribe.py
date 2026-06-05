@@ -6,7 +6,9 @@ import while the runtime module keeps the heavy DLL/CUDA bootstrap centralized.
 from __future__ import annotations
 
 import os
+import json
 import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,10 +18,8 @@ import numpy as np
 from whisper_dictate.vp_audio import _boost_quiet, _looks_like_speech
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 from whisper_dictate.vp_dictionary import DICTIONARY
-from whisper_dictate.vp_privacy import apply_local_only_network_lock, assert_local_backend
 
 apply_config_to_environ()
-apply_local_only_network_lock()
 
 SR = 16000
 
@@ -69,6 +69,47 @@ if STT_BACKEND == "faster-whisper":
     STT_BACKEND = "whisper"
 
 
+def _local_only_enabled() -> bool:
+    return (get_value("VOICEPI_LOCAL_ONLY") or "").strip().lower() not in (
+        "", "0", "false", "no", "off")
+
+
+def _assert_local_backend(backend: str, *, feature: str = "STT") -> None:
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    if helper:
+        try:
+            r = subprocess.run(
+                [helper, "privacy"],
+                input=json.dumps({
+                    "action": "assert_backend",
+                    "local_only": _local_only_enabled(),
+                    "backend": backend,
+                    "feature": feature,
+                }),
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=5,
+                shell=False,
+            )
+            if r.returncode == 0:
+                payload = json.loads(r.stdout or "{}")
+                if isinstance(payload, dict):
+                    if not payload.get("ok", False):
+                        raise RuntimeError(str(payload.get("error") or "local-only check failed"))
+                    return
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+    if _local_only_enabled() and (backend or "").strip().lower() not in (
+        "whisper", "faster-whisper", "parakeet"):
+        raise RuntimeError(
+            f"VOICEPI_LOCAL_ONLY=1 blocks {feature} backend {backend!r}; "
+            "choose a local backend or disable local-only mode.")
+
+
 def load_stt_model(model_name: str, device: str, compute_type: str):
     """Load the selected STT backend lazily.
 
@@ -76,7 +117,7 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
     Parakeet path imports NeMo only after VOICEPI_STT_BACKEND=parakeet is set.
     """
     backend = STT_BACKEND
-    assert_local_backend(backend)
+    _assert_local_backend(backend)
     if backend not in VALID_STT_BACKENDS:
         raise ValueError(
             "invalid VOICEPI_STT_BACKEND="

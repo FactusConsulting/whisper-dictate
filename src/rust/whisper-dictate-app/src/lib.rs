@@ -1,10 +1,14 @@
 pub mod cli;
 pub mod cloud_api;
+pub mod command_hook;
 pub mod config;
 pub mod dictionary;
 pub mod formatting;
 pub mod injection;
 pub mod model_capacity;
+pub mod privacy;
+pub mod profiles;
+pub mod redaction;
 pub mod runtime;
 pub mod telemetry;
 pub mod ui;

@@ -371,20 +371,27 @@ class ExternalApiTests(unittest.TestCase):
                 )
 
 class RedactionTests(unittest.TestCase):
-    def test_redacts_email_phone_tokens_and_custom_terms_without_public_values(self):
-        from whisper_dictate import vp_redaction
+    def test_postprocess_redaction_delegates_to_rust_helper(self):
+        from whisper_dictate import vp_postprocess
 
-        result = vp_redaction.redact_text(
-            "Mail lars@example.com or call +45 12 34 56 78 with sk-testtoken123456789",
-            terms=["Lars Andersen"],
-        )
+        class Completed:
+            returncode = 0
+            stdout = json.dumps({
+                "text": "[[WD_EMAIL_1]]",
+                "redactions": [{
+                    "placeholder": "[[WD_EMAIL_1]]",
+                    "value": "lars@example.com",
+                    "kind": "email",
+                }],
+            })
+            stderr = ""
 
-        self.assertNotIn("lars@example.com", result.text)
-        self.assertNotIn("+45 12 34 56 78", result.text)
-        self.assertIn("[[WD_EMAIL_1]]", result.text)
-        self.assertIn("[[WD_PHONE_", result.text)
-        restored = result.restore(result.text)
-        self.assertIn("lars@example.com", restored)
-        summary = result.public_summary()
-        self.assertTrue(all("value" not in item for item in summary))
-        self.assertTrue(any(item["kind"] == "email" for item in summary))
+        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}, clear=False), \
+                patch("whisper_dictate.vp_postprocess.subprocess.run", return_value=Completed()) as run:
+            result = vp_postprocess._redact_text("lars@example.com", terms=["Lars"])
+
+        self.assertEqual(run.call_args.args[0], ["whisper-dictate", "redact-text"])
+        self.assertIn('"terms": ["Lars"]', run.call_args.kwargs["input"])
+        self.assertEqual(result.text, "[[WD_EMAIL_1]]")
+        self.assertEqual(result.restore(result.text), "lars@example.com")
+        self.assertNotIn("value", result.public_summary()[0])

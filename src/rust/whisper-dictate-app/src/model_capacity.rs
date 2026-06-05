@@ -1,8 +1,9 @@
 use std::process::Command;
 
 use anyhow::Result;
+use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GpuInfo {
     pub index: usize,
     pub name: String,
@@ -11,7 +12,7 @@ pub struct GpuInfo {
     pub source: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelProfile {
     pub name: &'static str,
     pub category: &'static str,
@@ -93,8 +94,30 @@ const MODEL_PROFILES: &[ModelProfile] = &[
     },
 ];
 
-pub fn handle_command() -> Result<()> {
-    println!("{}", capacity_report(&query_gpus()));
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CapacityReport {
+    pub gpus: Vec<GpuInfo>,
+    pub models: Vec<ModelFitReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelFitReport {
+    pub name: &'static str,
+    pub category: &'static str,
+    pub required_free_mb: u32,
+    pub status: &'static str,
+    pub setting_hint: &'static str,
+    pub detail: String,
+    pub note: &'static str,
+}
+
+pub fn handle_command(json: bool) -> Result<()> {
+    let gpus = query_gpus();
+    if json {
+        println!("{}", serde_json::to_string(&capacity_report_json(&gpus))?);
+    } else {
+        println!("{}", capacity_report(&gpus));
+    }
     Ok(())
 }
 
@@ -186,6 +209,24 @@ pub fn capacity_report(gpus: &[GpuInfo]) -> String {
     lines.join("\n")
 }
 
+pub fn capacity_report_json(gpus: &[GpuInfo]) -> CapacityReport {
+    CapacityReport {
+        gpus: gpus.to_vec(),
+        models: estimate_model_fits(gpus)
+            .into_iter()
+            .map(|fit| ModelFitReport {
+                name: fit.profile.name,
+                category: fit.profile.category,
+                required_free_mb: fit.profile.required_free_mb,
+                status: fit.status,
+                setting_hint: fit.profile.setting_hint,
+                detail: fit.detail,
+                note: fit.profile.note,
+            })
+            .collect(),
+    }
+}
+
 fn parse_nvidia_smi_csv(raw: &str) -> Vec<GpuInfo> {
     raw.lines()
         .filter_map(parse_nvidia_smi_row)
@@ -251,5 +292,22 @@ mod tests {
         assert_eq!(fits[0].status, "ok");
         assert_eq!(fits[4].status, "free-vram");
         assert_eq!(fits[8].status, "too-small");
+    }
+
+    #[test]
+    fn capacity_report_json_shape_matches_python_contract() {
+        let gpus = vec![GpuInfo {
+            index: 0,
+            name: "RTX Test".to_owned(),
+            total_mb: 16_384,
+            free_mb: 12_000,
+            source: "test",
+        }];
+
+        let report = capacity_report_json(&gpus);
+
+        assert_eq!(report.gpus[0].name, "RTX Test");
+        assert_eq!(report.models[0].name, "Whisper large-v3-turbo");
+        assert_eq!(report.models[0].status, "ok");
     }
 }
