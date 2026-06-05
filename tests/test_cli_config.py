@@ -1,3 +1,5 @@
+import subprocess
+
 from tests.test_helpers import (
     _capture_stdout,
     _env,
@@ -511,6 +513,29 @@ class WindowsStdioEncodingTests(unittest.TestCase):
         expected = [{"encoding": "utf-8", "errors": "replace"}]
         self.assertEqual(stdout.calls, expected)
         self.assertEqual(stderr.calls, expected)
+
+
+class YdotooldDoctorTests(unittest.TestCase):
+    def test_process_detail_rejects_process_with_unready_socket(self):
+        from whisper_dictate import runtime
+
+        completed = subprocess.CompletedProcess(["pgrep", "-x", "ydotoold"], 0, stdout="9132\n")
+
+        with patch("whisper_dictate.runtime.subprocess.run", return_value=completed):
+            ok, detail = runtime._ydotoold_process_detail(socket_ready=False)
+
+        self.assertFalse(ok)
+        self.assertIn("socket is not accepting connections", detail)
+        self.assertIn("9132", detail)
+
+    def test_process_detail_accepts_ready_socket(self):
+        from whisper_dictate import runtime
+
+        ok, detail = runtime._ydotoold_process_detail(socket_ready=True)
+
+        self.assertTrue(ok)
+        self.assertEqual(detail, "accepting connections")
+
 
 class DebugToolingTests(unittest.TestCase):
     def test_probe_key_is_documented_and_ci_sanity_checked(self):
