@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from whisper_dictate.vp_corpus import load_corpus
+from whisper_dictate.vp_benchmark import load_corpus
 from whisper_dictate.vp_transcribe import SR
 
 

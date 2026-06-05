@@ -167,14 +167,14 @@ class TranscribeFileTests(unittest.TestCase):
 
     def test_load_audio_file_decodes_wav_as_16khz_int16_mono(self):
         sys.modules["numpy"] = real_numpy()
-        sys.modules.pop("vp_file_transcribe", None)
-        from whisper_dictate import vp_file_transcribe
+        sys.modules.pop("whisper_dictate.runtime", None)
+        from whisper_dictate import runtime
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             path = f.name
         try:
             self._write_test_wav(path, rate=8000)
-            pcm = vp_file_transcribe.load_audio_file(path)
+            pcm = runtime.load_audio_file(path)
         finally:
             os.remove(path)
 
@@ -185,9 +185,9 @@ class TranscribeFileTests(unittest.TestCase):
 
     def test_transcribe_file_event_uses_dictionary_replacements(self):
         sys.modules["numpy"] = real_numpy()
-        for name in ("vp_audio", "vp_transcribe", "vp_file_transcribe"):
+        for name in ("vp_audio", "vp_transcribe", "whisper_dictate.runtime"):
             sys.modules.pop(name, None)
-        from whisper_dictate import vp_file_transcribe
+        from whisper_dictate import runtime
         from whisper_dictate import vp_transcribe
 
         class Segment:
@@ -223,7 +223,7 @@ class TranscribeFileTests(unittest.TestCase):
             path = f.name
         try:
             self._write_test_wav(path)
-            event = vp_file_transcribe.transcribe_file_event(
+            event = runtime.transcribe_file_event(
                 Model(), path, "en",
                 model_name="fake", stt_backend="whisper",
                 device="cpu", compute_type="int8",
@@ -241,32 +241,32 @@ class TranscribeFileTests(unittest.TestCase):
         self.assertEqual(event["dictionary_replacements"][0]["from"], "lead death")
 
     def test_transcribe_file_json_output_is_single_json_object(self):
-        from whisper_dictate import vp_file_transcribe
+        from whisper_dictate import runtime
 
         event = {"event": "file_transcription", "text": "hello"}
         with _capture_stdout() as buf:
-            vp_file_transcribe.print_transcribe_file_result(event, as_json=True)
+            runtime.print_transcribe_file_result(event, as_json=True)
 
         self.assertEqual(json.loads(buf.getvalue()), event)
 
 class BenchmarkTests(unittest.TestCase):
     def test_corpus_manifest_loads_and_scores_terms(self):
-        from whisper_dictate import vp_corpus
+        from whisper_dictate import vp_benchmark
 
-        item = vp_corpus.load_corpus("benchmark/corpus.json")[0]
+        item = vp_benchmark.load_corpus("benchmark/corpus.json")[0]
 
         self.assertEqual(item.id, "da-short-001")
         self.assertTrue(str(item.audio).endswith("benchmark\\audio\\da-short-001.wav") or
                         str(item.audio).endswith("benchmark/audio/da-short-001.wav"))
-        self.assertEqual(vp_corpus.wer("Claude Code virker", "Claude virker"), 1 / 3)
-        report = vp_corpus.term_report(["Claude Code", "Codex"], "Claude Code works")
+        self.assertEqual(vp_benchmark.wer("Claude Code virker", "Claude virker"), 1 / 3)
+        report = vp_benchmark.term_report(["Claude Code", "Codex"], "Claude Code works")
         self.assertEqual(report["hits"], ["Claude Code"])
         self.assertEqual(report["misses"], ["Codex"])
 
     def test_corpus_annotates_benchmark_event(self):
-        from whisper_dictate import vp_corpus
+        from whisper_dictate import vp_benchmark
 
-        item = vp_corpus.CorpusItem(
+        item = vp_benchmark.CorpusItem(
             id="x",
             text="Claude Code and Codex",
             audio=Path("x.wav"),
@@ -274,7 +274,7 @@ class BenchmarkTests(unittest.TestCase):
             category="tech",
             terms=("Claude Code", "Codex"),
         )
-        event = vp_corpus.annotate_event({"text": "Claude Code and codec"}, item)
+        event = vp_benchmark.annotate_event({"text": "Claude Code and codec"}, item)
 
         self.assertEqual(event["corpus_id"], "x")
         self.assertEqual(event["corpus_language"], "en")
@@ -446,14 +446,14 @@ class BenchmarkTests(unittest.TestCase):
 
             try:
                 with patch("whisper_dictate.vp_benchmark._load_model_for_spec", return_value=("model", "m", "cpu", "int8")) as load:
-                    with patch("whisper_dictate.vp_file_transcribe.transcribe_file_event", side_effect=fake_transcribe):
+                    with patch("whisper_dictate.runtime.transcribe_file_event", side_effect=fake_transcribe):
                         results = vp_benchmark.run_benchmark(
                             None,
                             "whisper:tiny",
                             corpus_manifest=manifest_path,
                         )
             finally:
-                sys.modules.pop("vp_file_transcribe", None)
+                sys.modules.pop("whisper_dictate.runtime", None)
                 sys.modules.pop("vp_transcribe", None)
 
         self.assertEqual(load.call_count, 1)
@@ -490,8 +490,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(args.benchmark_jsonl, "out.jsonl")
 
 class HistoryTests(unittest.TestCase):
-    def test_append_and_read_history_keeps_core_fields(self):
-        from whisper_dictate import vp_history
+    def test_read_history_keeps_core_fields_written_by_rust(self):
+        from whisper_dictate import runtime
 
         event = {
             "ts": 1,
@@ -506,8 +506,9 @@ class HistoryTests(unittest.TestCase):
             path = f.name
         try:
             os.remove(path)
-            vp_history.append_history(event, Path(path))
-            rows = vp_history.read_history(10, Path(path))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(runtime._history_event(event), ensure_ascii=False) + "\n")
+            rows = runtime.read_history(10, Path(path))
         finally:
             try:
                 os.remove(path)
@@ -520,14 +521,14 @@ class HistoryTests(unittest.TestCase):
         self.assertNotIn("large_unused_blob", rows[0])
 
     def test_history_last_returns_latest_item(self):
-        from whisper_dictate import vp_history
+        from whisper_dictate import runtime
 
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
             path = f.name
             f.write(json.dumps({"text": "first"}) + "\n")
             f.write(json.dumps({"text": "second"}) + "\n")
         try:
-            item = vp_history.last_history(Path(path))
+            item = runtime.last_history(Path(path))
         finally:
             os.remove(path)
 
@@ -536,14 +537,13 @@ class HistoryTests(unittest.TestCase):
     def test_history_can_be_disabled(self):
         old = os.environ.get("VOICEPI_HISTORY_ENABLED")
         os.environ["VOICEPI_HISTORY_ENABLED"] = "0"
-        sys.modules.pop("vp_history", None)
-        from whisper_dictate import vp_history
+        from whisper_dictate import runtime
 
         with tempfile.NamedTemporaryFile(delete=False) as f:
             path = f.name
         try:
             os.remove(path)
-            written = vp_history.append_history({"text": "hidden"}, Path(path))
+            written = runtime.append_history({"text": "hidden"}, Path(path))
             self.assertIsNone(written)
             self.assertFalse(os.path.exists(path))
         finally:
@@ -551,10 +551,9 @@ class HistoryTests(unittest.TestCase):
                 os.environ.pop("VOICEPI_HISTORY_ENABLED", None)
             else:
                 os.environ["VOICEPI_HISTORY_ENABLED"] = old
-            sys.modules.pop("vp_history", None)
 
     def test_history_copy_last_uses_clipboard(self):
-        from whisper_dictate import vp_history
+        from whisper_dictate import runtime
 
         copied = {}
 
@@ -565,7 +564,7 @@ class HistoryTests(unittest.TestCase):
             path = f.name
             f.write(json.dumps({"text": "copy me"}) + "\n")
         try:
-            text = vp_history.copy_last_to_clipboard(Path(path))
+            text = runtime.copy_last_to_clipboard(Path(path))
         finally:
             os.remove(path)
             sys.modules.pop("pyperclip", None)
@@ -608,10 +607,10 @@ class ProfileTests(unittest.TestCase):
         self.assertIn('profile=getattr(self, "_active_profile_name", None)', script)
 
     def test_history_keeps_profile_field(self):
-        from whisper_dictate import vp_history
+        from whisper_dictate import runtime
 
         event = {"text": "hello", "profile": "Claude terminal"}
-        stored = vp_history._history_event(event)
+        stored = runtime._history_event(event)
 
         self.assertEqual(stored["profile"], "Claude terminal")
 

@@ -37,6 +37,7 @@ the GPU VRAM. Configure with VOICEPI_QUIT_KEY and VOICEPI_QUIT_COUNT
 """
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import os
@@ -45,6 +46,11 @@ import subprocess
 import sys
 import threading
 import time
+import atexit
+import wave
+from dataclasses import dataclass, field
+from pathlib import Path
+from shutil import which
 
 def _configure_windows_stdio() -> None:
     if os.name != "nt":
@@ -113,19 +119,16 @@ from whisper_dictate.vp_cli import (  # noqa: E402
     DEVICE, INJECT_MODE, KEY, LANG, MODEL_NAME, QUIT_COUNT, QUIT_KEY,
     QUIT_WINDOW_MS,
     VALID_INJECT_MODES,
+    VALID_DEVICES, _resolve_device,
     _apply_local_only_network_lock, _print_effective_config, build_arg_parser,
 )
-from whisper_dictate.vp_device import VALID_DEVICES, _resolve_device  # noqa: E402
-from whisper_dictate.vp_inject import InjectMixin  # noqa: E402
+from whisper_dictate.vp_inject import InjectMixin, ydotool_socket_path, ydotoold_ready  # noqa: E402
 from whisper_dictate.vp_keymap import (  # noqa: E402
     _LANG_TO_XKB, _LAYOUT_KEYCODES, _build_ydotool_ops, _detect_xkb_layout,
 )
-from whisper_dictate.vp_version import VERSION  # noqa: E402
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402
-from whisper_dictate.vp_formatting import apply_format_commands  # noqa: E402
-from whisper_dictate.vp_audio_ducking import AudioDucker, register_active_ducker  # noqa: E402
 from whisper_dictate.vp_config import (  # noqa: E402
-    apply_config_to_environ, config_mtime, effective_config, load_config,
+    apply_config_to_environ, config_mtime, effective_config, get_value, load_config,
 )
 
 
@@ -134,6 +137,557 @@ _ARECORD_DEVICE: str | None = None  # set once at startup
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _float_setting(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(get_value(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+@dataclass
+class AudioDucker:
+    enabled: bool
+    target_volume: float
+    _sessions: list[tuple[object, float]] = field(default_factory=list)
+    _warned: bool = False
+
+    @classmethod
+    def from_config(cls) -> "AudioDucker":
+        return cls(
+            enabled=_truthy(get_value("VOICEPI_AUDIO_DUCKING")),
+            target_volume=_float_setting("VOICEPI_AUDIO_DUCKING_LEVEL", 0.25, 0.0, 1.0),
+        )
+
+    def enter(self) -> None:
+        if not self.enabled or self._sessions:
+            return
+        if sys.platform != "win32":
+            self._warn_once("audio ducking is only implemented on Windows")
+            return
+        try:
+            import comtypes
+            from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+
+            comtypes.CoInitialize()
+            current_pid = os.getpid()
+            for session in AudioUtilities.GetAllSessions():
+                if session.Process and session.Process.pid == current_pid:
+                    continue
+                volume = session._ctl.QueryInterface(ISimpleAudioVolume)
+                previous = float(volume.GetMasterVolume())
+                if previous > self.target_volume:
+                    volume.SetMasterVolume(self.target_volume, None)
+                    self._sessions.append((volume, previous))
+            if self._sessions:
+                print(
+                    f"[audio-duck] lowered {len(self._sessions)} audio sessions "
+                    f"to {self.target_volume:.2f}",
+                    flush=True,
+                )
+        except Exception as exc:
+            self._sessions.clear()
+            self._warn_once(f"audio ducking unavailable: {exc}")
+
+    def exit(self) -> None:
+        if not self._sessions:
+            return
+        restored = 0
+        for volume, previous in reversed(self._sessions):
+            try:
+                volume.SetMasterVolume(previous, None)
+                restored += 1
+            except Exception:
+                pass
+        self._sessions.clear()
+        print(f"[audio-duck] restored {restored} audio sessions", flush=True)
+
+    def _warn_once(self, message: str) -> None:
+        if self._warned:
+            return
+        self._warned = True
+        print(f"[audio-duck] {message}", flush=True)
+
+
+_ACTIVE_DUCKERS: list[AudioDucker] = []
+
+
+def register_active_ducker(ducker: AudioDucker) -> AudioDucker:
+    if ducker not in _ACTIVE_DUCKERS:
+        _ACTIVE_DUCKERS.append(ducker)
+    return ducker
+
+
+def restore_all_duckers() -> None:
+    for ducker in list(_ACTIVE_DUCKERS):
+        ducker.exit()
+
+
+atexit.register(restore_all_duckers)
+
+
+def get_version() -> str:
+    here = Path(__file__).resolve().parent
+    version_file = here / "VERSION"
+    try:
+        version = version_file.read_text(encoding="utf-8").strip()
+        if version:
+            return version.removeprefix("v")
+    except OSError:
+        pass
+
+    try:
+        r = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=here,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+        if r.returncode == 0:
+            version = r.stdout.strip()
+            if version:
+                return version.removeprefix("v")
+    except Exception:
+        pass
+
+    return os.environ.get("VOICEPI_VERSION", "unknown").removeprefix("v")
+
+
+VERSION = get_version()
+
+
+@dataclass(frozen=True)
+class FormatCommandResult:
+    text: str
+    enabled: bool
+    changed: bool = False
+    command_set: str = "off"
+    applied: list[dict[str, str]] = field(default_factory=list)
+
+
+def _normalize_format_command_set(raw: str | None) -> str:
+    raw = (raw or "off").strip().lower()
+    if _truthy(raw) and raw not in ("en", "da", "both", "all"):
+        return "both"
+    if raw == "all":
+        return "both"
+    if raw in ("en", "da", "both"):
+        return raw
+    return "off"
+
+
+def _format_command_set() -> str:
+    return _normalize_format_command_set(get_value("VOICEPI_FORMAT_COMMANDS", "off"))
+
+
+def apply_format_commands(text: str, command_set: str | None = None) -> FormatCommandResult:
+    selected = (
+        _normalize_format_command_set(command_set)
+        if command_set is not None
+        else _format_command_set()
+    )
+    if selected == "off":
+        return FormatCommandResult(text=text, enabled=False, command_set="off")
+    helper = _rust_helper()
+    if not helper:
+        raise RuntimeError("Rust format-text helper is not available")
+    try:
+        r = subprocess.run(
+            [
+                helper,
+                "format-text",
+                "--text",
+                text,
+                "--command-set",
+                selected,
+            ],
+            capture_output=True,
+            timeout=5,
+            text=True,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Rust format-text helper error: {e}") from e
+    if r.returncode != 0:
+        err = (r.stderr or "").strip()
+        raise RuntimeError(err or "Rust format-text helper failed")
+    try:
+        payload = json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError("Rust format-text helper returned invalid JSON") from e
+    return FormatCommandResult(
+        text=str(payload.get("text", text)),
+        enabled=bool(payload.get("enabled", False)),
+        changed=bool(payload.get("changed", False)),
+        command_set=str(payload.get("command_set", "off")),
+        applied=[
+            {
+                "command": str(item.get("command", "")),
+                "replacement": str(item.get("replacement", "")),
+                "count": str(item.get("count", "0")),
+            }
+            for item in payload.get("applied", [])
+            if isinstance(item, dict)
+        ],
+    )
+
+
+@dataclass
+class Check:
+    name: str
+    ok: bool
+    detail: str
+    required: bool = True
+
+
+try:
+    import grp
+except ImportError:
+    grp = None
+
+
+def _in_group(name: str) -> bool:
+    if grp is None:
+        return False
+    try:
+        gid = grp.getgrnam(name).gr_gid
+    except KeyError:
+        return False
+    return gid in os.getgroups()
+
+
+def _can_import(name: str) -> bool:
+    try:
+        __import__(name)
+        return True
+    except Exception:
+        return False
+
+
+def _event_devices_readable() -> tuple[bool, str]:
+    paths = sorted(glob.glob("/dev/input/event*"))
+    if not paths:
+        return False, "no /dev/input/event* devices found"
+    readable = [p for p in paths if os.access(p, os.R_OK)]
+    if readable:
+        return True, f"{len(readable)}/{len(paths)} readable"
+    return False, f"0/{len(paths)} readable; add user to input group and log in again"
+
+
+def _ydotoold_process_detail(socket_ready: bool) -> tuple[bool, str]:
+    if socket_ready:
+        return True, "accepting connections"
+    try:
+        r = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True, timeout=1)
+    except Exception as e:
+        return False, str(e)
+    if r.returncode == 0:
+        pids = " ".join(r.stdout.split())
+        return False, f"process exists but socket is not accepting connections ({pids})"
+    return False, "not running"
+
+
+def _base_checks(on_linux: bool, on_wayland: bool) -> list[Check]:
+    return [
+        Check("platform", on_linux, sys.platform, required=False),
+        Check("session", on_wayland, "Wayland detected" if on_wayland else "not a Wayland session", required=False),
+        Check("python", sys.version_info[:2] >= (3, 10), sys.version.split()[0]),
+    ]
+
+
+def _linux_checks() -> list[Check]:
+    checks: list[Check] = []
+    checks.append(Check("evdev", _can_import("evdev"), "import evdev"))
+    checks.append(Check("ydotool", which("ydotool") is not None, which("ydotool") or "not found"))
+    checks.append(Check("ydotoold", which("ydotoold") is not None, which("ydotoold") or "not found"))
+    checks.append(Check("input group", _in_group("input"), "current process groups include input" if _in_group("input") else "not in input group"))
+    ok, detail = _event_devices_readable()
+    checks.append(Check("/dev/input", ok, detail))
+    checks.append(Check("XDG_RUNTIME_DIR", bool(os.environ.get("XDG_RUNTIME_DIR")), os.environ.get("XDG_RUNTIME_DIR", "unset"), required=False))
+    checks.append(Check("WAYLAND_DISPLAY", bool(os.environ.get("WAYLAND_DISPLAY")), os.environ.get("WAYLAND_DISPLAY", "unset"), required=False))
+
+    sock = ydotool_socket_path()
+    socket_ready = ydotoold_ready(sock, timeout=0.6)
+    checks.append(Check("ydotool socket", os.path.exists(sock), sock, required=False))
+    checks.append(Check("ydotool socket ready", socket_ready, sock))
+    process_ok, process_detail = _ydotoold_process_detail(socket_ready)
+    checks.append(Check("ydotoold process", process_ok, process_detail))
+    return checks
+
+
+def _print_checks(checks: list[Check]) -> bool:
+    failed = False
+
+    for c in checks:
+        level = "OK" if c.ok else ("FAIL" if c.required else "WARN")
+        print(f"[doctor] {level:<4} {c.name}: {c.detail}", flush=True)
+        failed = failed or (c.required and not c.ok)
+    return failed
+
+
+def _print_fix_hints() -> None:
+    print("[doctor] Fix hints:", flush=True)
+    print("  sudo usermod -aG input $USER  # then log out and back in", flush=True)
+    print("  sudo apt install ydotool", flush=True)
+    print("  python -m pip install -r requirements/cpu.txt", flush=True)
+
+
+def run_doctor() -> int:
+    on_linux = sys.platform.startswith("linux")
+    on_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+    checks = _base_checks(on_linux, on_wayland)
+
+    if not on_linux:
+        _print_checks(checks)
+        return 0
+
+    failed = _print_checks(checks + _linux_checks())
+    if failed:
+        _print_fix_hints()
+    return 1 if failed else 0
+
+
+def _calibration_dbfs(audio) -> float:
+    import numpy as np
+
+    rms = float(np.sqrt(np.mean(audio.reshape(-1).astype(np.float32) ** 2)) or 1e-9)
+    return 20 * np.log10(rms)
+
+
+def _calibration_status(raw_dbfs: float, snr_db: float) -> tuple[str, list[str]]:
+    warnings_list: list[str] = []
+    if raw_dbfs < -55:
+        warnings_list.append("input is very quiet")
+    elif raw_dbfs < -42:
+        warnings_list.append("input is quiet")
+    if snr_db < 6:
+        warnings_list.append("speech/noise contrast is too low")
+    elif snr_db < 15:
+        warnings_list.append("speech/noise contrast is marginal")
+    if not warnings_list:
+        return "pass", []
+    if raw_dbfs < -55 or snr_db < 6:
+        return "fail", warnings_list
+    return "warn", warnings_list
+
+
+def analyze_calibration_audio(pcm) -> dict:
+    import numpy as np
+    from whisper_dictate.vp_audio import _noise_snr
+    from whisper_dictate.vp_transcribe import SR
+
+    audio = pcm.reshape(-1).astype(np.float32)
+    if pcm.dtype.kind in ("i", "u"):
+        audio = audio / 32768.0
+    raw_dbfs = _calibration_dbfs(audio)
+    noise_dbfs, snr_db = _noise_snr(audio)
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    status, warnings_list = _calibration_status(raw_dbfs, snr_db)
+    recommended_min_input = min(-35.0, max(-65.0, raw_dbfs - 18.0))
+    recommended_min_snr = 6.0 if snr_db < 15 else min(12.0, max(6.0, snr_db - 12.0))
+    return {
+        "event": "mic_calibration",
+        "status": status,
+        "warnings": warnings_list,
+        "duration_s": len(audio) / SR if len(audio) else 0.0,
+        "raw_dbfs": raw_dbfs,
+        "noise_dbfs": noise_dbfs,
+        "snr_db": snr_db,
+        "peak": peak,
+        "recommended": {
+            "VOICEPI_TARGET_DBFS": "-20",
+            "VOICEPI_MIN_INPUT_DBFS": f"{recommended_min_input:.0f}",
+            "VOICEPI_MIN_SNR_DB": f"{recommended_min_snr:.0f}",
+        },
+    }
+
+
+def record_calibration_audio(seconds: float):
+    import numpy as np
+    import sounddevice as sd
+    from whisper_dictate.vp_transcribe import SR
+
+    seconds = max(1.0, float(seconds))
+    print(f"[calibrate] speak normally for {seconds:.1f}s...", flush=True)
+    audio = sd.rec(int(seconds * SR), samplerate=SR, channels=1, dtype="int16")
+    sd.wait()
+    return audio.astype(np.int16)
+
+
+def print_calibration_result(result: dict, *, as_json: bool = False) -> None:
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+              flush=True)
+        return
+    print(f"[calibrate] status={result['status']}", flush=True)
+    print(
+        "[calibrate] "
+        f"raw={result['raw_dbfs']:.0f}dBFS "
+        f"noise={result['noise_dbfs']:.0f}dBFS "
+        f"snr={result['snr_db']:.0f}dB "
+        f"peak={result['peak']:.3f}",
+        flush=True,
+    )
+    for warning in result["warnings"]:
+        print(f"[calibrate] warning: {warning}", flush=True)
+    rec = result["recommended"]
+    print("[calibrate] recommended settings:", flush=True)
+    for key, value in rec.items():
+        print(f"  {key}={value}", flush=True)
+
+
+def calibrate_microphone(seconds: float, *, as_json: bool = False) -> dict:
+    pcm = record_calibration_audio(seconds)
+    result = analyze_calibration_audio(pcm)
+    print_calibration_result(result, as_json=as_json)
+    return result
+
+
+def calibrate_file(path: str, *, as_json: bool = False) -> dict:
+    t0 = time.monotonic()
+    pcm = load_audio_file(path)
+    result = analyze_calibration_audio(pcm)
+    result["source_file"] = path
+    result["decode_s"] = time.monotonic() - t0
+    print_calibration_result(result, as_json=as_json)
+    return result
+
+
+def _mono_float_to_int16(audio):
+    import numpy as np
+
+    audio = np.clip(audio.reshape(-1), -1.0, 1.0)
+    return (audio * 32767.0).astype(np.int16).reshape(-1, 1)
+
+
+def _resample_mono(audio, source_rate: int):
+    import numpy as np
+    from whisper_dictate.vp_transcribe import SR
+
+    if source_rate == SR:
+        return audio.astype(np.float32)
+    if len(audio) == 0:
+        return audio.astype(np.float32)
+    duration = len(audio) / float(source_rate)
+    target_len = max(1, int(round(duration * SR)))
+    src_x = np.linspace(0.0, duration, num=len(audio), endpoint=False)
+    dst_x = np.linspace(0.0, duration, num=target_len, endpoint=False)
+    return np.interp(dst_x, src_x, audio).astype(np.float32)
+
+
+def _decode_wav(path: Path):
+    import numpy as np
+
+    with wave.open(str(path), "rb") as wav:
+        channels = wav.getnchannels()
+        sample_width = wav.getsampwidth()
+        rate = wav.getframerate()
+        frames = wav.readframes(wav.getnframes())
+    if sample_width != 2:
+        raise ValueError(
+            f"{path} uses {sample_width * 8}-bit WAV samples; only 16-bit PCM "
+            "WAV is supported without ffmpeg")
+    pcm = np.frombuffer(frames, dtype=np.int16)
+    if channels > 1:
+        pcm = pcm.reshape(-1, channels).mean(axis=1).astype(np.int16)
+    audio = pcm.astype(np.float32) / 32768.0
+    return _mono_float_to_int16(_resample_mono(audio, rate))
+
+
+def _decode_with_ffmpeg(path: Path):
+    import numpy as np
+    from whisper_dictate.vp_transcribe import SR
+
+    cmd = [
+        "ffmpeg", "-v", "error", "-i", str(path),
+        "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", str(SR), "-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"{path.suffix or 'audio'} files require ffmpeg unless they are "
+            "16-bit PCM WAV. Install ffmpeg or pass a .wav file.") from exc
+    except subprocess.CalledProcessError as exc:
+        err = exc.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg could not decode {path}: {err}") from exc
+    pcm = np.frombuffer(proc.stdout, dtype=np.int16)
+    return pcm.reshape(-1, 1)
+
+
+def load_audio_file(path: str | Path):
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(p)
+    if p.suffix.lower() == ".wav":
+        try:
+            return _decode_wav(p)
+        except (wave.Error, ValueError):
+            return _decode_with_ffmpeg(p)
+    return _decode_with_ffmpeg(p)
+
+
+def transcribe_file_event(
+    model,
+    path: str | Path,
+    lang: str | None,
+    *,
+    model_name: str,
+    stt_backend: str,
+    device: str,
+    compute_type: str,
+) -> dict:
+    from whisper_dictate.vp_transcribe import _transcribe_detail
+
+    p = Path(path)
+    pcm = load_audio_file(p)
+    with contextlib.redirect_stdout(sys.stderr):
+        result = _transcribe_detail(model, pcm, lang)
+        post_result = postprocess_text(result.text)
+    final_text = post_result.text
+    return _base_event(
+        event="file_transcription",
+        text=final_text,
+        dictionary_text=result.text,
+        raw_text=result.raw_text or result.text,
+        text_preview=_compact_text(final_text),
+        text_chars=len(final_text),
+        recording_s=result.duration_s,
+        audio_duration_s=result.duration_s,
+        post_boost_dbfs=result.post_boost_dbfs,
+        compute_s=result.compute_s,
+        real_time_factor=result.real_time_factor,
+        language=result.language or lang or "auto",
+        language_probability=result.language_probability,
+        gate=result.gate,
+        model=model_name,
+        stt_backend=stt_backend,
+        device=device,
+        compute_type=compute_type,
+        source_file=str(p),
+        segments=result.segments,
+        dictionary_terms=result.dictionary_terms,
+        dictionary_replacements=result.dictionary_replacements,
+        post_processor=post_result.provider,
+        post_mode=post_result.mode,
+        post_model=post_result.model,
+        post_latency_ms=post_result.latency_ms,
+        post_changed=post_result.changed,
+        post_fallback=post_result.fallback,
+        post_error=post_result.error or None,
+        post_redacted=post_result.redacted,
+        post_redactions=post_result.redactions or [],
+    )
+
+
+def print_transcribe_file_result(event: dict, *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+              flush=True)
+    else:
+        print(event.get("text", ""), flush=True)
 
 
 def _compact_text(text: str, limit: int = 240) -> str:
@@ -197,10 +751,150 @@ def _append_history(event: dict) -> None:
     if path:
         _rust_json("append-history", event, "--path", str(path))
         return
-    from whisper_dictate.vp_history import history_enabled, history_path
-
     if history_enabled():
         _rust_json("append-history", event, "--path", str(history_path()))
+
+
+def default_history_path() -> Path:
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "WhisperDictate" / "history.jsonl"
+    return (
+        Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        / "whisper-dictate"
+        / "history.jsonl"
+    )
+
+
+def history_path() -> Path:
+    raw = get_value("VOICEPI_HISTORY_JSONL")
+    return Path(raw).expanduser() if raw else default_history_path()
+
+
+def history_enabled() -> bool:
+    return _truthy(get_value("VOICEPI_HISTORY_ENABLED", "1"))
+
+
+def _history_event(event: dict) -> dict:
+    keys = (
+        "ts", "event", "text", "raw_text", "text_preview", "text_chars",
+        "dictionary_text",
+        "recording_s", "audio_duration_s", "compute_s", "real_time_factor",
+        "language", "language_probability", "model", "stt_backend", "device",
+        "compute_type", "inject_mode", "inject_strategy", "target_title",
+        "target_process", "profile", "dictionary_replacements",
+        "post_processor", "post_mode", "post_model", "post_latency_ms",
+        "post_changed", "post_fallback", "post_error",
+    )
+    return {key: event[key] for key in keys if key in event}
+
+
+def append_history(event: dict, path: Path | None = None) -> Path | None:
+    if not history_enabled():
+        return None
+    p = path or history_path()
+    _rust_json("append-history", event, "--path", str(p))
+    return p
+
+
+def read_history(limit: int = 20, path: Path | None = None) -> list[dict]:
+    p = path or history_path()
+    if not p.exists():
+        return []
+    rows: list[dict] = []
+    with p.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+    return rows[-max(0, limit):] if limit else rows
+
+
+def last_history(path: Path | None = None) -> dict | None:
+    rows = read_history(1, path)
+    return rows[-1] if rows else None
+
+
+def copy_last_to_clipboard(path: Path | None = None) -> str:
+    item = last_history(path)
+    if not item or not item.get("text"):
+        raise RuntimeError("history is empty")
+    import pyperclip
+
+    text = str(item["text"])
+    pyperclip.copy(text)
+    return text
+
+
+def reinject_last(path: Path | None = None) -> str:
+    text = copy_last_to_clipboard(path)
+    from pynput import keyboard
+
+    kb = keyboard.Controller()
+    with kb.pressed(keyboard.Key.ctrl):
+        kb.press("v")
+        kb.release("v")
+    return text
+
+
+def _run_rust_history_command(*args: str) -> bool:
+    helper = _rust_helper()
+    if not helper:
+        return False
+    try:
+        r = subprocess.run(
+            [helper, "history", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+    except Exception as e:
+        print(f"[history] {e}", file=sys.stderr, flush=True)
+        return False
+    if r.returncode != 0:
+        print((r.stderr or r.stdout).strip(), file=sys.stderr, flush=True)
+        return False
+    if r.stdout:
+        print(r.stdout.rstrip("\n"), flush=True)
+    return True
+
+
+def run_history_command(action: str, *, limit: int = 10, as_json: bool = False) -> None:
+    try:
+        if action == "list":
+            if as_json:
+                rows = read_history(limit)
+                print(json.dumps(rows, ensure_ascii=False, sort_keys=True), flush=True)
+            elif not _run_rust_history_command("list", str(limit)):
+                for row in read_history(limit):
+                    text = str(row.get("text", ""))
+                    ts = row.get("ts", "")
+                    backend = row.get("stt_backend", "")
+                    print(f"{ts} [{backend}] {text}", flush=True)
+        elif action == "last":
+            if as_json:
+                print(json.dumps(last_history() or {}, ensure_ascii=False, sort_keys=True), flush=True)
+            elif not _run_rust_history_command("last"):
+                print((last_history() or {}).get("text", ""), flush=True)
+        elif action == "copy-last":
+            text = copy_last_to_clipboard()
+            print(f"copied: {text}", flush=True)
+        elif action == "reinject-last":
+            text = reinject_last()
+            print(f"re-injected: {text}", flush=True)
+        else:
+            raise RuntimeError(f"unknown history action: {action}")
+    except Exception as e:
+        print(f"[history] {e}", file=sys.stderr, flush=True)
+        raise
 
 
 def _emit_worker_event(event: str, **fields) -> None:
@@ -432,7 +1126,6 @@ class Dictate(InjectMixin):
         from whisper_dictate import vp_dictionary
         from whisper_dictate import vp_postprocess
         from whisper_dictate import vp_transcribe
-        from whisper_dictate import vp_audio_ducking
 
         vp_audio.TARGET_DBFS = float(after.get("target_dbfs", "-20"))
         vp_audio.MIN_INPUT_DBFS = float(after.get("min_input_dbfs", "-55"))
@@ -450,9 +1143,7 @@ class Dictate(InjectMixin):
             "", "0", "false", "no", "off")
         vp_dictionary.DICTIONARY = vp_dictionary.load_dictionary()
         self.postprocess_settings = vp_postprocess.load_postprocess_settings()
-        self.audio_ducker = vp_audio_ducking.register_active_ducker(
-            vp_audio_ducking.AudioDucker.from_config()
-        )
+        self.audio_ducker = register_active_ducker(AudioDucker.from_config())
         self._effective_config = after
         print("[config] reloaded live settings", flush=True)
 
@@ -862,7 +1553,6 @@ def main() -> None:
     a = ap.parse_args()
     apply_config_to_environ()
     if a.doctor:
-        from whisper_dictate.vp_doctor import run_doctor
         raise SystemExit(run_doctor())
     if a.model_capacity:
         if not _print_model_capacity(a.json):
@@ -881,7 +1571,6 @@ def main() -> None:
             ap.error(str(e))
         raise SystemExit(0)
     if a.calibrate_mic is not None or a.calibrate_file:
-        from whisper_dictate.vp_calibration import calibrate_file, calibrate_microphone
         try:
             if a.calibrate_file:
                 calibrate_file(a.calibrate_file, as_json=a.json)
@@ -892,7 +1581,6 @@ def main() -> None:
         raise SystemExit(0)
     if (a.history_list is not None or a.history_last or
             a.history_copy_last or a.history_reinject_last):
-        from whisper_dictate.vp_history import run_history_command
         try:
             if a.history_last:
                 run_history_command("last", as_json=a.json)
@@ -1008,9 +1696,6 @@ def main() -> None:
     else:
         print(f"model ready in {_model_load_s:.1f}s", flush=True)
     if a.transcribe_file:
-        from whisper_dictate.vp_file_transcribe import (
-            print_transcribe_file_result, transcribe_file_event,
-        )
         event = transcribe_file_event(
             _model,
             a.transcribe_file,

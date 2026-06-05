@@ -353,11 +353,11 @@ class CliModuleIsolationTests(unittest.TestCase):
     Catches regressions where someone accidentally re-couples them."""
 
     def setUp(self):
-        # vp_cli depends only on vp_audio, vp_device, vp_transcribe — all
+        # vp_cli depends only on vp_audio and vp_transcribe for this dump — both
         # of which need numpy. Stub it the same way load_voice_pi does so
         # this test runs even without numpy installed.
         for n in ("voice_pi", "vp_cli", "vp_transcribe",
-                  "vp_audio", "vp_device"):
+                  "vp_audio"):
             sys.modules.pop(n, None)
         sys.modules.setdefault("numpy", types.ModuleType("numpy"))
 

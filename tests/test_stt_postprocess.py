@@ -754,26 +754,26 @@ class PostprocessTests(unittest.TestCase):
 
 class FormatCommandTests(unittest.TestCase):
     def setUp(self):
-        sys.modules.pop("vp_formatting", None)
+        sys.modules.pop("whisper_dictate.runtime", None)
 
     def test_format_commands_are_off_by_default(self):
-        from whisper_dictate import vp_formatting
+        from whisper_dictate import runtime
 
-        result = vp_formatting.apply_format_commands("write comma literally")
+        result = runtime.apply_format_commands("write comma literally")
 
         self.assertFalse(result.enabled)
         self.assertEqual(result.text, "write comma literally")
 
     def test_format_commands_require_rust_helper_when_enabled(self):
-        from whisper_dictate import vp_formatting
+        from whisper_dictate import runtime
 
         with patch.dict(os.environ, {}, clear=True), \
                 self.assertRaisesRegex(RuntimeError, "Rust format-text helper"):
-            vp_formatting.apply_format_commands("first comma", "en")
+            runtime.apply_format_commands("first comma", "en")
 
     def test_python_formatting_delegates_to_rust_helper_when_available(self):
         import subprocess
-        from whisper_dictate import vp_formatting
+        from whisper_dictate import runtime
 
         completed = subprocess.CompletedProcess(
             ["whisper-dictate"],
@@ -789,8 +789,8 @@ class FormatCommandTests(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
-                patch("whisper_dictate.vp_formatting.subprocess.run", return_value=completed) as run:
-            result = vp_formatting.apply_format_commands("første komma ny linje andet punktum", "da")
+                patch("whisper_dictate.runtime.subprocess.run", return_value=completed) as run:
+            result = runtime.apply_format_commands("første komma ny linje andet punktum", "da")
 
         self.assertEqual(result.text, "første,\nandet.")
         self.assertEqual(result.applied[0]["count"], "1")
@@ -798,7 +798,7 @@ class FormatCommandTests(unittest.TestCase):
 
     def test_python_formatting_reports_rust_helper_failure(self):
         import subprocess
-        from whisper_dictate import vp_formatting
+        from whisper_dictate import runtime
 
         completed = subprocess.CompletedProcess(
             ["whisper-dictate"],
@@ -808,9 +808,9 @@ class FormatCommandTests(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
-                patch("whisper_dictate.vp_formatting.subprocess.run", return_value=completed):
+                patch("whisper_dictate.runtime.subprocess.run", return_value=completed):
             with self.assertRaisesRegex(RuntimeError, "boom"):
-                vp_formatting.apply_format_commands("first comma", "en")
+                runtime.apply_format_commands("first comma", "en")
 
     def test_runtime_applies_formatting_before_injection_and_metrics(self):
         with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:

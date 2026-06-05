@@ -34,7 +34,7 @@ except ImportError:
 
 def load_voice_pi(cuda_devices: int = 0):
     for name in ("voice_pi", "whisper_dictate.runtime",
-                 "whisper_dictate.vp_keymap", "whisper_dictate.vp_device",
+                 "whisper_dictate.vp_keymap",
                  "whisper_dictate.vp_audio", "whisper_dictate.vp_inject",
                  "whisper_dictate.vp_cli", "whisper_dictate.vp_transcribe",
                  "whisper_dictate.vp_dictionary", "whisper_dictate.vp_parakeet",
@@ -76,7 +76,7 @@ def load_voice_pi_realnp():
     """Import voice_pi with the REAL numpy (for audio-DSP tests) but the
     heavy/uninstalled deps stubbed. CI installs numpy (see tests workflow)."""
     for name in ("voice_pi", "whisper_dictate.runtime",
-                 "whisper_dictate.vp_keymap", "whisper_dictate.vp_device",
+                 "whisper_dictate.vp_keymap",
                  "whisper_dictate.vp_audio", "whisper_dictate.vp_inject",
                  "whisper_dictate.vp_cli", "whisper_dictate.vp_transcribe",
                  "whisper_dictate.vp_dictionary", "whisper_dictate.vp_parakeet",

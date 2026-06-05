@@ -135,7 +135,7 @@ class AudioDspTests(unittest.TestCase):
 
 class AudioDuckingTests(unittest.TestCase):
     def test_audio_ducker_restore_resets_saved_session_volumes(self):
-        from whisper_dictate import vp_audio_ducking
+        from whisper_dictate import runtime
 
         class Volume:
             def __init__(self):
@@ -146,7 +146,7 @@ class AudioDuckingTests(unittest.TestCase):
 
         first = Volume()
         second = Volume()
-        ducker = vp_audio_ducking.AudioDucker(enabled=True, target_volume=0.25)
+        ducker = runtime.AudioDucker(enabled=True, target_volume=0.25)
         ducker._sessions = [(first, 0.8), (second, 0.6)]
 
         ducker.exit()
@@ -157,10 +157,10 @@ class AudioDuckingTests(unittest.TestCase):
 
     def test_audio_ducker_config_is_disabled_by_default_and_clamps_level(self):
         with _env(VOICEPI_AUDIO_DUCKING=None, VOICEPI_AUDIO_DUCKING_LEVEL="2.5"):
-            sys.modules.pop("vp_audio_ducking", None)
-            from whisper_dictate import vp_audio_ducking
+            sys.modules.pop("whisper_dictate.runtime", None)
+            from whisper_dictate import runtime
 
-            ducker = vp_audio_ducking.AudioDucker.from_config()
+            ducker = runtime.AudioDucker.from_config()
 
         self.assertFalse(ducker.enabled)
         self.assertEqual(ducker.target_volume, 1.0)
@@ -169,14 +169,14 @@ class CalibrationTests(unittest.TestCase):
     def test_calibration_analysis_passes_clean_audio(self):
         np = AudioDspTests.np
         sys.modules["numpy"] = np
-        sys.modules.pop("vp_calibration", None)
-        from whisper_dictate import vp_calibration
+        sys.modules.pop("whisper_dictate.runtime", None)
+        from whisper_dictate import runtime
 
         quiet = np.full(4000, 0.001, dtype=np.float32)
         speech = np.full(12000, 0.15, dtype=np.float32)
         pcm = (np.concatenate([quiet, speech]) * 32767).astype(np.int16)
 
-        result = vp_calibration.analyze_calibration_audio(pcm)
+        result = runtime.analyze_calibration_audio(pcm)
 
         self.assertEqual(result["event"], "mic_calibration")
         self.assertEqual(result["status"], "pass")
@@ -186,18 +186,18 @@ class CalibrationTests(unittest.TestCase):
     def test_calibration_analysis_warns_on_low_snr(self):
         np = AudioDspTests.np
         sys.modules["numpy"] = np
-        sys.modules.pop("vp_calibration", None)
-        from whisper_dictate import vp_calibration
+        sys.modules.pop("whisper_dictate.runtime", None)
+        from whisper_dictate import runtime
 
         pcm = (np.full(16000, 0.01, dtype=np.float32) * 32767).astype(np.int16)
 
-        result = vp_calibration.analyze_calibration_audio(pcm)
+        result = runtime.analyze_calibration_audio(pcm)
 
         self.assertIn(result["status"], ("warn", "fail"))
         self.assertTrue(result["warnings"])
 
     def test_calibration_json_output_is_single_json_object(self):
-        from whisper_dictate import vp_calibration
+        from whisper_dictate import runtime
 
         result = {
             "event": "mic_calibration",
@@ -210,7 +210,7 @@ class CalibrationTests(unittest.TestCase):
             "recommended": {},
         }
         with _capture_stdout() as buf:
-            vp_calibration.print_calibration_result(result, as_json=True)
+            runtime.print_calibration_result(result, as_json=True)
 
         self.assertEqual(json.loads(buf.getvalue()), result)
 

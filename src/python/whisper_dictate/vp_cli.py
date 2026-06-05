@@ -11,10 +11,11 @@ import os
 import subprocess
 
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
-from whisper_dictate.vp_device import VALID_DEVICES
 from whisper_dictate.vp_postprocess import load_postprocess_settings
 
 apply_config_to_environ()
+
+VALID_DEVICES = ("auto", "cuda", "cpu")
 
 
 def _truthy(value: str | None) -> bool:
@@ -86,6 +87,30 @@ QUIT_WINDOW_MS = int(get_value("VOICEPI_QUIT_WINDOW_MS", "1500") or "1500")
 def _truthy_env(name: str) -> bool:
     return (os.environ.get(name) or "").strip().lower() not in (
         "", "0", "false", "no", "off")
+
+
+def _resolve_device(want: str) -> tuple[str, str]:
+    want = (want or "auto").lower()
+    if want not in VALID_DEVICES:
+        raise ValueError(f"invalid device '{want}' (expected: "
+                         f"{', '.join(VALID_DEVICES)})")
+
+    override = (get_value("VOICEPI_COMPUTE_TYPE") or "").strip() or None
+
+    def _ct(default: str) -> str:
+        return override if override else default
+
+    if want == "cuda":
+        return "cuda", _ct("int8_float16")
+    if want == "cpu":
+        return "cpu", _ct("int8")
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", _ct("int8_float16")
+    except Exception:
+        pass
+    return "cpu", _ct("int8")
 
 
 class _DictionaryAction(argparse.Action):
