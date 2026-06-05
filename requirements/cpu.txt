@@ -10,7 +10,7 @@ numpy<2.2                 # ctranslate2 / onnxruntime ABI constraint
 # system PortAudio lib (libportaudio2); pyperclip needs a clipboard
 # tool (wl-clipboard on Wayland, xclip/xsel on X11). See README.
 sounddevice>=0.4,<0.6
-pynput>=1.7,<2.0
+pynput>=1.8.2,<2.0
 pyperclip>=1.8,<2.0       # --paste mode (required on Wayland)
 pycaw>=20240210; sys_platform == "win32"  # optional audio ducking
 
