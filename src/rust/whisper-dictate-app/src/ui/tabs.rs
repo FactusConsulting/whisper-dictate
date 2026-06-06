@@ -1601,7 +1601,11 @@ fn latest_log_summary(log: &str, prefix: &str) -> String {
         .to_owned()
 }
 
-fn live_audio_level_summary(raw_dbfs: Option<f32>, peak: Option<f32>, active: bool) -> String {
+pub(super) fn live_audio_level_summary(
+    raw_dbfs: Option<f32>,
+    peak: Option<f32>,
+    active: bool,
+) -> String {
     if !active {
         return "Not recording".to_owned();
     }
@@ -1612,11 +1616,11 @@ fn live_audio_level_summary(raw_dbfs: Option<f32>, peak: Option<f32>, active: bo
     }
 }
 
-fn mic_label_char_budget(width: f32) -> usize {
+pub(super) fn mic_label_char_budget(width: f32) -> usize {
     ((width / 7.0).floor() as usize).clamp(8, 34)
 }
 
-fn audio_device_label(value: &str, max_chars: usize) -> String {
+pub(super) fn audio_device_label(value: &str, max_chars: usize) -> String {
     let value = value.trim();
     if value.is_empty() {
         return "Input pending".to_owned();
@@ -1624,7 +1628,7 @@ fn audio_device_label(value: &str, max_chars: usize) -> String {
     compact_label(value, max_chars.clamp(8, 34))
 }
 
-fn full_audio_device_label(value: &str) -> &str {
+pub(super) fn full_audio_device_label(value: &str) -> &str {
     let value = value.trim();
     if value.is_empty() {
         "Not reported yet"

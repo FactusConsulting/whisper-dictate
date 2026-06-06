@@ -1,4 +1,7 @@
 use super::test_support::test_app;
+use super::tabs::{
+    audio_device_label, full_audio_device_label, live_audio_level_summary, mic_label_char_budget,
+};
 use super::*;
 
 #[test]
@@ -128,6 +131,55 @@ fn audio_meter_level_uses_live_worker_level_only_while_recording() {
     assert_eq!(audio_meter_level(0.42, RuntimeState::Running, true), 0.42);
     assert_eq!(audio_meter_level(2.0, RuntimeState::Running, true), 1.0);
     assert_eq!(audio_meter_level(-1.0, RuntimeState::Running, true), 0.0);
+}
+
+#[test]
+fn live_audio_summary_reports_only_active_capture_levels() {
+    assert_eq!(
+        live_audio_level_summary(Some(-33.25), Some(0.282), true),
+        "raw=-33.2dBFS  peak=0.282"
+    );
+    assert_eq!(
+        live_audio_level_summary(Some(-47.0), None, true),
+        "raw=-47.0dBFS"
+    );
+    assert_eq!(
+        live_audio_level_summary(None, Some(0.4), true),
+        "Waiting for audio level"
+    );
+    assert_eq!(
+        live_audio_level_summary(Some(-33.25), Some(0.282), false),
+        "Not recording"
+    );
+}
+
+#[test]
+fn audio_device_labels_fit_compact_meter_space() {
+    assert_eq!(audio_device_label("", 20), "Input pending");
+    assert_eq!(
+        audio_device_label("  Microphone (Yeti Classic)  ", 34),
+        "Microphone (Yeti Classic)"
+    );
+    assert_eq!(
+        audio_device_label("Analogue 1 + 2 (Focusrite USB Audio)", 18),
+        "Analogue 1 + 2 (Fo..."
+    );
+    assert_eq!(
+        audio_device_label("Analogue 1 + 2 (Focusrite USB Audio)", 4),
+        "Analogue..."
+    );
+    assert_eq!(full_audio_device_label(""), "Not reported yet");
+    assert_eq!(
+        full_audio_device_label("  Microphone (Yeti Classic)  "),
+        "Microphone (Yeti Classic)"
+    );
+}
+
+#[test]
+fn mic_label_budget_is_bounded_for_narrow_and_wide_layouts() {
+    assert_eq!(mic_label_char_budget(0.0), 8);
+    assert_eq!(mic_label_char_budget(70.0), 10);
+    assert_eq!(mic_label_char_budget(1000.0), 34);
 }
 
 #[test]
