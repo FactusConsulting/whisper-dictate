@@ -131,6 +131,8 @@ from whisper_dictate.vp_config import (  # noqa: E402
 
 
 _ARECORD_DEVICE: str | None = None  # set once at startup
+SOUNDDEVICE_START_BLOCK_MS = 20
+FIRST_AUDIO_WAIT_S = 0.35
 
 _LANG_TO_XKB = {
     "da": "dk", "de": "de", "fr": "fr", "fi": "fi", "sv": "se",
@@ -991,6 +993,21 @@ def _sounddevice_capture_channel_candidates(max_channels: int) -> list[int]:
     return candidates
 
 
+def _sounddevice_stream_kwargs(channels: int, callback) -> list[dict]:
+    base = {
+        "samplerate": SR,
+        "channels": channels,
+        "dtype": "int16",
+        "callback": callback,
+    }
+    low_latency = dict(base)
+    low_latency.update({
+        "blocksize": max(1, int(SR * SOUNDDEVICE_START_BLOCK_MS / 1000)),
+        "latency": "low",
+    })
+    return [low_latency, base]
+
+
 def _audio_meter_level_from_dbfs(raw_dbfs: float) -> float:
     try:
         raw = float(raw_dbfs)
@@ -1359,17 +1376,15 @@ class Dictate(InjectMixin):
         last_error = None
         for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
             self._capture_channels = channels
-            try:
-                self._stream = sd.InputStream(
-                    samplerate=SR,
-                    channels=self._capture_channels,
-                    dtype="int16",
-                    callback=self._cb,
-                )
+            for kwargs in _sounddevice_stream_kwargs(self._capture_channels, self._cb):
+                try:
+                    self._stream = sd.InputStream(**kwargs)
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    self._stream = None
+            if self._stream is not None:
                 break
-            except Exception as exc:
-                last_error = exc
-                self._stream = None
         if self._stream is None:
             raise last_error
         self._stream.start()
@@ -1521,7 +1536,7 @@ class Dictate(InjectMixin):
             self._capture_backend, self._audio_input_device = self._start_arecord()
         else:
             self._capture_backend, self._audio_input_device = self._start_sounddevice()
-        first_audio_ready = self._first_audio_event.wait(timeout=0.2)
+        first_audio_ready = self._first_audio_event.wait(timeout=FIRST_AUDIO_WAIT_S)
         startup_ms = int((time.monotonic() - self._record_keydown_at) * 1000)
         if not first_audio_ready:
             self._record_started = time.monotonic()

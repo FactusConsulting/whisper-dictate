@@ -240,6 +240,69 @@ class RuntimeAudioDeviceTests(unittest.TestCase):
         self.assertEqual(self.runtime._sounddevice_input_channels(fake), 1)
         self.assertEqual(self.runtime._sounddevice_capture_channel_candidates(12), [8, 2, 1])
 
+    def test_sounddevice_stream_kwargs_try_low_latency_before_default(self):
+        self.runtime.SR = 16000
+        callback = object()
+
+        low_latency, fallback = self.runtime._sounddevice_stream_kwargs(2, callback)
+
+        self.assertEqual(low_latency["samplerate"], 16000)
+        self.assertEqual(low_latency["channels"], 2)
+        self.assertEqual(low_latency["dtype"], "int16")
+        self.assertIs(low_latency["callback"], callback)
+        self.assertEqual(low_latency["blocksize"], 320)
+        self.assertEqual(low_latency["latency"], "low")
+        self.assertEqual(fallback, {
+            "samplerate": 16000,
+            "channels": 2,
+            "dtype": "int16",
+            "callback": callback,
+        })
+
+    def test_sounddevice_start_falls_back_when_low_latency_is_rejected(self):
+        self.runtime.SR = 16000
+        calls = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+                if kwargs.get("latency") == "low":
+                    raise RuntimeError("low latency unsupported")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        class Default:
+            device = (3, 7)
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream,
+            default=Default(),
+            query_devices=lambda device=None, kind=None: {
+                "name": "USB Microphone",
+                "max_input_channels": 2,
+            },
+        )
+        fake = types.SimpleNamespace(
+            _capture_backend="",
+            _audio_input_device="",
+            _capture_channels=0,
+            _stream=None,
+            _cb=lambda *_args: None,
+        )
+
+        with patch.dict(sys.modules, {"sounddevice": fake_sd}):
+            backend, device = self.runtime.Dictate._start_sounddevice(fake)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertEqual(device, "USB Microphone")
+        self.assertEqual(fake._capture_channels, 2)
+        self.assertTrue(fake._stream.started)
+        self.assertEqual(calls[0]["latency"], "low")
+        self.assertNotIn("latency", calls[1])
+        self.assertEqual(calls[1]["channels"], 2)
+
     def test_runtime_worker_events_report_capture_state_and_audio_device(self):
         script = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
 
@@ -302,7 +365,7 @@ class RuntimeAudioDeviceTests(unittest.TestCase):
         self.assertIn('self._first_audio_event.clear()', start)
         self.assertIn('self._record_keydown_at = time.monotonic()', start)
         self.assertIn('_emit_worker_event("status", state="opening")', start)
-        self.assertIn('first_audio_ready = self._first_audio_event.wait(timeout=0.2)', start)
+        self.assertIn('first_audio_ready = self._first_audio_event.wait(timeout=FIRST_AUDIO_WAIT_S)', start)
         self.assertIn('first_audio="ok" if first_audio_ready else "pending"', start)
         self.assertLess(start.index('state="opening"'), start.index("self._start_sounddevice()"))
         self.assertLess(start.index("self._start_sounddevice()"), start.index('state="recording"'))
