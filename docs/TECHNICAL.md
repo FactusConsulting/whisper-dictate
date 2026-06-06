@@ -16,6 +16,11 @@
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+## Source ownership
+
+The current Rust/Python source split and migration guidance are documented in
+[SOURCE_OWNERSHIP.md](SOURCE_OWNERSHIP.md).
+
 ## End-to-end data flow
 
 ```

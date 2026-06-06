@@ -622,6 +622,8 @@ text editor and a terminal because terminals use a different paste shortcut.
 
 Architecture, data flow, Wayland injection details, evdev keycode
 reference, and audio routing: see [docs/TECHNICAL.md](docs/TECHNICAL.md).
+For the current Rust/Python source split and migration guidance, see
+[docs/SOURCE_OWNERSHIP.md](docs/SOURCE_OWNERSHIP.md).
 
 ## Tests
 
