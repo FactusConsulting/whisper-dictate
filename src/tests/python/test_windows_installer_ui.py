@@ -1,4 +1,4 @@
-from tests.test_helpers import (
+from helpers import (
     Path,
     unittest,
 )
@@ -127,18 +127,90 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn("egui::ScrollArea::vertical()", runtime_tab)
         self.assertIn('.id_salt("runtime_log_scroll")', runtime_tab)
-        self.assertIn(".max_height(height)", runtime_tab)
+        self.assertIn("const RUNTIME_LOG_VERTICAL_CHROME: f32 = 112.0;", script)
+        self.assertIn("const RUNTIME_LOG_MIN_HEIGHT: f32 = 300.0;", script)
+        self.assertIn("let log_height = (height - RUNTIME_LOG_VERTICAL_CHROME).max(RUNTIME_LOG_MIN_HEIGHT);", runtime_tab)
+        self.assertIn(".max_height(log_height)", runtime_tab)
         self.assertIn(".stick_to_bottom(true)", runtime_tab)
-        self.assertIn("ui.set_min_size(egui::vec2(ui.available_width(), height));", runtime_tab)
+        self.assertIn("ui.set_min_size(egui::vec2(ui.available_width(), log_height));", runtime_tab)
+        self.assertIn("const RUNTIME_LOG_TOP_MARGIN: f32 = 16.0;", script)
+        self.assertIn("runtime_log_frame(palette).show(ui, |ui|", runtime_tab)
+        self.assertIn("top: RUNTIME_LOG_TOP_MARGIN,", script)
+        self.assertNotIn("ui.add_space(RUNTIME_LOG_TOP_PADDING);", runtime_tab)
+        self.assertIn('if card.title.trim().is_empty() {', runtime_tab)
         self.assertIn("bottom.scroll_to_me(Some(egui::Align::BOTTOM));", runtime_tab)
+        self.assertIn("self.live_dictation_panel(ui, palette, height);", runtime_tab)
+        self.assertNotIn("dashboard_side_panel", runtime_tab)
+        self.assertNotIn("self.session_panel(ui, palette)", runtime_tab)
+        self.assertNotIn("self.output_logging_panel(ui, palette)", runtime_tab)
+        self.assertNotIn('.id_salt("runtime_dashboard_side_scroll")', runtime_tab)
+        self.assertNotIn('.id_salt("runtime_dashboard_scroll")', runtime_tab)
+        runtime_header = runtime_tab.split("ui.add_space(12.0);", 1)[0]
+        log_toolbar = runtime_tab.split("ui.add_space(12.0);", 1)[1].split("ui.add_space(10.0);", 1)[0]
+        self.assertIn(
+            "fn listening_gauge(&self, ui: &mut egui::Ui, palette: UiPalette, max_width: f32)",
+            runtime_tab,
+        )
+        self.assertIn("let mic_width = (ui.available_width() - 10.0).clamp(0.0, MIC_INDICATOR_MAX_WIDTH);", runtime_header)
+        self.assertIn("self.listening_gauge(ui, palette, mic_width);", runtime_header)
+        self.assertNotIn("self.listening_gauge", log_toolbar)
+        self.assertIn("MIC_INDICATOR_MIN_WIDTH", script)
+        self.assertIn("fn mic_label_char_budget(width: f32) -> usize", script)
+        self.assertIn("fn audio_device_label(value: &str, max_chars: usize) -> String", script)
+        self.assertIn("level_gauge(ui, palette, level, active, gauge_width)", runtime_tab)
+        self.assertIn("fn level_gauge(", script)
+        self.assertIn("fn gauge_color_for_position(", script)
+        self.assertIn("audio_capture_active: bool", script)
+        self.assertIn("audio_capture_opening: bool", script)
+        self.assertIn("audio_meter_level: f32", script)
+        self.assertIn("audio_meter_raw_dbfs: Option<f32>", script)
+        self.assertIn("active_audio_device: String", script)
+        self.assertIn(
+            "let active = self.audio_capture_active && self.runtime_state == RuntimeState::Running;",
+            script,
+        )
+        self.assertIn('} else if self.audio_capture_opening {', script)
+        self.assertIn('"Opening"', script)
+        self.assertIn("self.update_worker_audio(&event);", script)
+        self.assertIn("fn worker_event_f32(payload: &serde_json::Value, key: &str) -> Option<f32>", script)
+        self.assertIn("audio_meter_level(self.audio_meter_level, self.runtime_state, active)", script)
+        self.assertIn("fn audio_capture_active_for_worker_state(state: &str) -> Option<bool>", script)
+        self.assertIn("fn worker_status_log_line(event: &WorkerEvent) -> Option<String>", script)
+        self.assertIn('"startup_ms"', script)
+        self.assertIn('"first_audio"', script)
+        self.assertIn('"opening" | "ready" | "transcribing" | "loading_model" | "failed" => Some(false)', script)
+        self.assertNotIn("fn latest_audio_peak", script)
+        self.assertNotIn("parse_metric_f32(line", script)
+        self.assertNotIn("fn audio_input_panel", script)
+        self.assertNotIn("self.audio_input_panel(ui, palette)", runtime_tab)
+        self.assertNotIn("let active = self.runtime_state != RuntimeState::Stopped;", script)
+
+    def test_rust_output_tab_owns_logging_and_session_controls(self):
+        script = rust_ui_source()
+        output_tab = script.split("pub(super) fn output_tab", 1)[1].split(
+            "pub(super) fn post_processing_tab", 1
+        )[0]
+
+        self.assertIn('section_label(ui, "Log view", palette);', output_tab)
+        self.assertIn("self.log_mode_selector(ui, palette);", output_tab)
+        self.assertIn("theme_toggle(ui, &mut self.settings.ui_theme, palette);", output_tab)
+        self.assertIn("self.session_panel(ui, palette);", output_tab)
+        self.assertIn('"UI theme"', output_tab)
 
     def test_rust_runtime_log_can_be_copied(self):
         script = rust_ui_source()
 
-        self.assertIn('ui.button("Copy").clicked()', script)
-        self.assertIn("ui.ctx().copy_text(self.runtime_log.clone())", script)
+        self.assertIn('ui.button(icon_text(icons::ICON_COPY_ALL, "Copy")).clicked()', script)
+        self.assertIn("ui.ctx().copy_text(self.visible_runtime_log())", script)
+        self.assertIn("LogViewMode::Minimal => final_output_text(log)", script)
+        self.assertIn("fn final_output_text(log: &str) -> String", script)
+        self.assertIn(".filter_map(extract_inject_preview)", script)
         runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
-        self.assertIn("egui::Label::new(egui::RichText::new(&self.runtime_log).monospace())", runtime_tab)
+        self.assertIn("egui::Label::new(", runtime_tab)
+        self.assertIn("let visible_log = self.visible_runtime_log();", runtime_tab)
+        self.assertIn("egui::RichText::new(&visible_log)", runtime_tab)
+        self.assertIn(".monospace()", runtime_tab)
+        self.assertIn(".color(palette.text)", runtime_tab)
         self.assertIn(".selectable(true)", runtime_tab)
         self.assertNotIn("TextEdit::multiline", runtime_tab)
         self.assertNotIn(".interactive(false)", runtime_tab)
@@ -146,28 +218,37 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_rust_runtime_tab_can_clear_log_without_stopping_runtime(self):
         script = rust_ui_source()
 
-        self.assertIn('ui.button("Clear").clicked()', script)
+        self.assertIn('ui.button(icon_text(icons::ICON_DELETE, "Clear")).clicked()', script)
         self.assertIn("self.runtime_log.clear();", script)
         self.assertIn("self.runtime_log_scroll_to_bottom = true;", script)
 
     def test_rust_ui_shows_version_in_title_and_top_bar(self):
         script = rust_ui_source()
         icon = Path("src/rust/whisper-dictate-app/src/ui/icon.rs").read_text(encoding="utf-8")
+        cargo = Path("src/rust/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
 
         self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
         self.assertIn("app_version: runtime::version()", script)
-        self.assertIn('egui::RichText::new(format!("whisper-dictate {}", self.app_version))', script)
+        self.assertIn('egui_material_icons = "0.2.0"', cargo)
+        self.assertIn("egui_material_icons::initialize(&cc.egui_ctx)", script)
+        self.assertIn("fn icon_text(", script)
+        self.assertIn("fn icon(self) -> &'static str", script)
+        self.assertIn("egui_material_icons::icons::ICON_MIC", script)
+        self.assertIn("egui_material_icons::icons::ICON_OUTPUT", script)
+        self.assertIn('egui::RichText::new("whisper-dictate")', script)
+        self.assertIn('egui::SidePanel::left("primary_navigation")', script)
+        self.assertIn('egui::TopBottomPanel::top("runtime_status")', script)
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
             "impl WhisperDictateApp", 1
         )[0]
         self.assertNotIn("runtime::version()", update_impl)
         self.assertIn(".strong()", script)
         self.assertIn('.resizable(false)', script)
-        self.assertIn("egui::vec2(88.0, 28.0)", script)
+        self.assertIn("fn nav_button(", script)
         self.assertIn(".with_icon(app_icon())", script)
         self.assertIn("fn app_icon() -> egui::IconData", icon)
 
-    def test_rust_runtime_controls_are_global_and_not_clipped_by_fixed_topbar(self):
+    def test_rust_runtime_controls_live_in_fixed_top_status_bar(self):
         script = rust_ui_source()
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
             "impl WhisperDictateApp", 1
@@ -176,26 +257,35 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "pub(super) fn runtime_tab", 1
         )[0]
 
-        self.assertIn("self.global_controls(ui);", update_impl)
+        self.assertIn("self.sidebar(ui, palette)", update_impl)
+        self.assertIn("self.top_status_bar(ui, palette)", update_impl)
         self.assertLess(
-            update_impl.index("self.global_controls(ui);"),
+            update_impl.index("self.top_status_bar(ui, palette)"),
             update_impl.index("egui::CentralPanel::default()"),
         )
-        self.assertIn("let header_height = runtime_controls_header_height", update_impl)
-        self.assertIn(".exact_height(header_height)", update_impl)
+        self.assertIn("top_status_bar_height(&self.settings.ui_text_scale)", update_impl)
+        self.assertIn('egui::SidePanel::left("primary_navigation")', update_impl)
+        self.assertIn('egui::TopBottomPanel::top("runtime_status")', update_impl)
         self.assertNotIn(".exact_height(76.0)", update_impl)
         self.assertNotIn("ui.horizontal_centered", update_impl)
         self.assertIn("let is_stopped = self.runtime_state == RuntimeState::Stopped;", controls)
-        self.assertIn("let is_running = self.runtime_state == RuntimeState::Running;", controls)
         self.assertIn("let is_active = !is_stopped;", controls)
-        self.assertIn('add_enabled(is_stopped, egui::Button::new("Start"))', controls)
-        self.assertIn('add_enabled(is_active, egui::Button::new("Stop"))', controls)
-        self.assertIn('add_enabled(is_running, egui::Button::new("Restart runtime"))', controls)
-        self.assertIn("self.restart_runtime();", controls)
-        self.assertIn('.button("Reload config")', controls)
+        self.assertIn('icon_text(icons::ICON_PLAY_ARROW, "Start").strong()', controls)
+        self.assertIn('icon_text(icons::ICON_STOP, "Stop").strong()', controls)
+        self.assertNotIn('egui::Button::new(icon_text(icons::ICON_RESTART_ALT, "Restart"))', controls)
+        self.assertNotIn("self.restart_runtime();", controls)
+        self.assertIn("fn top_status_controls_width() -> f32", script)
+        self.assertIn("let controls_width = top_status_controls_width();", script)
+        self.assertIn("fn status_card_wide(", script)
+        self.assertIn("status_card_wide(", script)
+        self.assertIn("ui.set_min_width(min_width);", script)
+        self.assertIn(".on_hover_text(value);", script)
+        self.assertIn('egui::Button::new(icon_text(icons::ICON_REFRESH, "Reload config"))', script)
         self.assertNotIn("Reload settings", controls)
-        self.assertIn('egui::Button::new("Install/Repair")', controls)
-        self.assertIn("fn runtime_controls_header_height(raw_scale: &str) -> f32", script)
+        self.assertIn('egui::Button::new(icon_text(icons::ICON_BUILD, "Install/Repair"))', script)
+        self.assertNotIn('egui::Button::new(icon_text(icons::ICON_BUILD, "Install/Repair"))', controls)
+        self.assertIn("fn top_status_bar_height(raw_scale: &str) -> f32", script)
+        self.assertIn("fn sidebar_width(raw_scale: &str) -> f32", script)
 
     def test_rust_ui_has_cloud_provider_dropdown_and_key_storage(self):
         script = rust_ui_source()
@@ -244,10 +334,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("keyring::Entry::new", api_keys)
         self.assertIn("STT_API_KEY_ENV", api_keys)
         self.assertIn("fn has_unsaved_settings(&self) -> bool", script)
-        self.assertIn('egui::RichText::new("Save settings *").strong()', script)
+        self.assertIn('icon_text(icons::ICON_SAVE, "Save settings *").strong()', script)
         self.assertIn(".add_enabled(is_dirty, save_button)", script)
         self.assertIn('"Unsaved changes"', script)
-        self.assertIn('.button("Reload config")', script)
+        self.assertIn('.button(icon_text(icons::ICON_REFRESH, "Reload config"))', script)
         self.assertNotIn('ui.button("Clear API key").clicked()', script)
 
     def test_rust_ui_uses_same_api_key_loader_on_start_and_reload(self):
@@ -284,20 +374,25 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('self.post_api_key_status = message.to_owned()', script)
         self.assertIn('format!("[OK] {} passed: {detail}", result.label)', script)
         self.assertIn('format!("[ERROR] {} failed to run: {error}", result.label)', script)
-        self.assertIn("fn status_label(ui: &mut egui::Ui, text: &str)", script)
+        self.assertIn("fn status_label(ui: &mut egui::Ui, text: &str, palette: UiPalette)", script)
         self.assertIn('text.starts_with("[OK]")', script)
         self.assertIn('text.starts_with("[ERROR]")', script)
         self.assertIn("fn settings_messages(&self, ui: &mut egui::Ui)", script)
         self.assertIn('ui.strong("Messages")', script)
         self.assertIn("Tab::Speech if !self.stt_api_key_status.trim().is_empty()", script)
         self.assertIn("Tab::Post if !self.post_api_key_status.trim().is_empty()", script)
-        self.assertIn("status_label(ui, message);", script)
+        self.assertIn("let palette = ui_palette(&self.settings.ui_theme);", script)
+        self.assertIn("status_label(ui, message, palette);", script)
 
     def test_rust_settings_pages_scroll_above_fixed_footer(self):
         script = rust_ui_source()
         settings_panel = script.split("fn settings_panel", 1)[1].split("fn settings_messages", 1)[0]
 
-        self.assertIn("let footer_height = 148.0;", settings_panel)
+        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 184.0;", script)
+        self.assertIn("const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;", script)
+        self.assertIn("const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 74.0;", script)
+        self.assertIn("let footer_height = SETTINGS_FOOTER_HEIGHT;", settings_panel)
+        self.assertIn("ui.available_height() - footer_height - SETTINGS_FOOTER_CHROME_HEIGHT", settings_panel)
         self.assertIn("egui::Layout::top_down(egui::Align::LEFT)", settings_panel)
         self.assertIn("self.settings_messages(ui);", settings_panel)
         self.assertIn("self.settings_actions(ui);", settings_panel)
@@ -307,8 +402,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("body(self, ui);", settings_panel)
         self.assertIn("fn settings_actions(&mut self, ui: &mut egui::Ui)", script)
         self.assertIn("ui.horizontal_wrapped(|ui|", script)
-        self.assertIn("ui.set_min_height(72.0);", script)
-        self.assertIn("egui::Margin::symmetric(14.0, 12.0)", script)
+        self.assertIn("ui.set_min_height(92.0);", script)
+        self.assertIn('.id_salt(format!("settings_messages_{:?}", self.selected_tab))', script)
+        self.assertIn(".max_height(SETTINGS_MESSAGES_MAX_HEIGHT)", script)
+        self.assertIn("egui::Label::new(rich_text).wrap()", script)
+        self.assertIn("fn panel_frame(palette: UiPalette) -> egui::Frame", script)
+        self.assertIn(".rounding(egui::Rounding::same(PANEL_RADIUS as f32))", script)
+        self.assertIn("egui::Margin::symmetric(16.0, 14.0)", script)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
         script = rust_ui_source()
@@ -343,12 +443,19 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("provider: PostProvider,", api_keys)
         self.assertIn("Result<SecretSaveReport>", api_keys)
         self.assertIn("self.reload_post_api_key();", script)
-        self.assertIn("const GROQ_POST_MODELS: &[&str]", script)
+        self.assertIn("const GROQ_POST_MODELS: &[(&str, &str)]", script)
+        self.assertIn('GROQ_POST_MODEL: &str = "llama-3.3-70b-versatile"', api_keys)
         self.assertIn('"llama-3.1-8b-instant"', script)
         self.assertIn('"llama-3.3-70b-versatile"', script)
+        self.assertIn('"llama-3.3-70b-versatile - recommended Danish final check"', script)
+        self.assertIn('"qwen/qwen3-32b - strong multilingual, use hidden reasoning"', script)
+        self.assertIn('"openai/gpt-oss-20b - fast quality/cost candidate"', script)
+        self.assertIn('"llama-4-scout-17b - preview, not preferred for Danish"', script)
         self.assertIn('"qwen/qwen3-32b"', script)
         self.assertIn('"openai/gpt-oss-20b"', script)
         self.assertIn('"groq/compound-mini"', script)
+        self.assertIn("combo_help_labeled(", script)
+        self.assertIn("fn labeled_options_contain(", script)
         self.assertIn("const POST_PROCESSOR_OPTIONS: &[(&str, &str)]", script)
         self.assertIn('("groq", "Groq")', script)
         self.assertIn('("openai", "OpenAI")', script)
@@ -403,12 +510,16 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("label_with_help_enabled(ui, enabled, label, help)", script)
         self.assertIn("fn grid_help_row(", script)
         self.assertIn("fn inline_help(", script)
-        self.assertIn("fn apply_ui_text_scale(", script)
+        self.assertIn("fn apply_ui_theme(", script)
         self.assertIn("DEFAULT_UI_TEXT_SCALE", script)
         self.assertIn("style.text_styles = text_styles", script)
         self.assertNotIn(".small().color(ui.visuals().weak_text_color())", script)
         self.assertIn("data.insert_persisted(id, show_help)", script)
         self.assertIn("response.on_hover_text(help)", script)
+        inline_help = script.split("fn inline_help", 1)[1].split("fn apply_ui_theme", 1)[0]
+        self.assertIn("egui::Label::new", inline_help)
+        self.assertIn(".wrap()", inline_help)
+        self.assertNotIn("ui.label(egui::RichText::new(help)", inline_help)
         for label in (
             "STT backend",
             "Whisper model",
@@ -416,6 +527,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "Cloud STT model",
             "Linux keyboard layout",
             "Beam size",
+            "VAD speech pad ms",
             "Audio ducking",
             "Audio ducking level",
             "Initial prompt",
@@ -425,10 +537,48 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "JSON stdout",
             "Cloud redaction",
             "Redaction terms",
+            "UI theme",
             "UI text scale",
             "Profiles JSON",
         ):
             self.assertIn(label, script)
+
+    def test_rust_ui_uses_switchable_accented_themes(self):
+        script = rust_ui_source()
+        config = Path("src/rust/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+
+        self.assertIn("const UI_ACCENT_BLUE: egui::Color32", script)
+        self.assertIn("egui::Color32::from_rgb(125, 211, 252)", script)
+        self.assertIn("const UI_ACCENT_DARK: egui::Color32", script)
+        self.assertIn("const UI_LIGHT_ACCENT_BLUE: egui::Color32", script)
+        self.assertIn("const UI_LIGHT_HEADER_BG: egui::Color32", script)
+        self.assertIn("enum UiThemeMode", script)
+        self.assertIn('match raw {\n            "light" => Self::Light,', script)
+        self.assertIn("struct UiPalette", script)
+        self.assertIn("fn ui_palette(raw_theme: &str) -> UiPalette", script)
+        self.assertIn("fn apply_ui_theme(", script)
+        self.assertIn("fn themed_visuals(theme: UiThemeMode, palette: UiPalette) -> egui::Visuals", script)
+        self.assertIn("egui::Visuals::dark()", script)
+        self.assertIn("egui::Visuals::light()", script)
+        self.assertIn("visuals.panel_fill = palette.panel_bg", script)
+        self.assertIn("visuals.selection.bg_fill = palette.selection_bg", script)
+        self.assertIn("style.visuals = themed_visuals(theme, palette)", script)
+        self.assertIn("fn nav_button(", script)
+        self.assertIn("palette.accent_dark", script)
+        self.assertIn("egui::Button::new(text).fill(fill).stroke(stroke)", script)
+        self.assertIn("palette.header_bg", script)
+        self.assertIn("fn runtime_status_badge(", script)
+        self.assertIn("Status: {}", script)
+        self.assertIn('"UI theme"', script)
+        self.assertIn("fn theme_toggle(", script)
+        self.assertIn('("dark", icons::ICON_DARK_MODE, "Dark")', script)
+        self.assertIn('("light", icons::ICON_LIGHT_MODE, "Light")', script)
+        self.assertIn('pub ui_theme: String', config)
+        self.assertIn('ui_theme: "dark".to_owned()', config)
+        self.assertIn('validate_choice("ui_theme", &self.ui_theme, &["dark", "light"])', config)
+        self.assertIn('set_string(object, "ui_theme", &self.ui_theme)', config)
+        restart_keys = config.split("const RESTART_KEYS", 1)[1].split("];", 1)[0]
+        self.assertNotIn('"ui_theme"', restart_keys)
         self.assertIn('("", "Auto")', script)
         self.assertIn('("da", "Danish")', script)
         self.assertIn('if !cfg!(windows) {', script)
@@ -446,6 +596,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         for token in (
             "VOICEPI_AUDIO_DUCKING",
             "VOICEPI_AUDIO_DUCKING_LEVEL",
+            "VOICEPI_VAD_SPEECH_PAD_MS",
             "VOICEPI_POST_REDACT",
             "VOICEPI_POST_REDACT_TERMS",
         ):
@@ -453,6 +604,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         for key in (
             "audio_ducking",
             "audio_ducking_level",
+            "vad_speech_pad_ms",
             "post_redact",
             "post_redact_terms",
         ):

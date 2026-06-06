@@ -935,7 +935,110 @@ def _emit_worker_event(event: str, **fields) -> None:
         return
     payload = {"event": event}
     payload.update({key: value for key, value in fields.items() if value is not None})
-    _rust_json("worker-event", payload)
+    print(
+        "[worker-event] "
+        + json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _sounddevice_input_info(sd) -> dict | None:
+    try:
+        default_device = getattr(getattr(sd, "default", None), "device", None)
+        input_device = None
+        if isinstance(default_device, (list, tuple)) and default_device:
+            input_device = default_device[0]
+        elif isinstance(default_device, int):
+            input_device = default_device
+
+        if input_device is None or input_device == -1:
+            info = sd.query_devices(kind="input")
+        else:
+            info = sd.query_devices(input_device)
+        if isinstance(info, dict):
+            return info
+    except Exception:
+        return None
+    return None
+
+
+def _sounddevice_input_name(sd) -> str | None:
+    info = _sounddevice_input_info(sd)
+    if not info:
+        return None
+    name = str(info.get("name") or "").strip()
+    return name or None
+
+
+def _sounddevice_input_channels(sd) -> int:
+    info = _sounddevice_input_info(sd)
+    if not info:
+        return 1
+    try:
+        channels = int(info.get("max_input_channels") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, channels)
+
+
+def _sounddevice_capture_channel_candidates(max_channels: int) -> list[int]:
+    max_channels = max(1, min(8, int(max_channels or 1)))
+    candidates = [max_channels]
+    for fallback in (2, 1):
+        if fallback <= max_channels and fallback not in candidates:
+            candidates.append(fallback)
+    return candidates
+
+
+def _audio_meter_level_from_dbfs(raw_dbfs: float) -> float:
+    try:
+        raw = float(raw_dbfs)
+    except (TypeError, ValueError):
+        return 0.0
+    if raw != raw:
+        return 0.0
+    floor = -60.0
+    ceiling = -12.0
+    clamped = min(ceiling, max(floor, raw))
+    normalized = (clamped - floor) / (ceiling - floor)
+    return float(normalized ** 1.4)
+
+
+def _select_active_channel_pcm(pcm):
+    import numpy as np
+
+    audio = np.asarray(pcm)
+    if audio.ndim == 0:
+        return audio.reshape(1, 1)
+    if audio.ndim == 1:
+        return audio.reshape(-1, 1)
+    if audio.ndim > 2:
+        audio = audio.reshape(audio.shape[0], -1)
+    if audio.shape[1] <= 1:
+        return audio.reshape(-1, 1)
+
+    levels = audio.astype(np.float32)
+    if getattr(audio, "dtype", None) is not None and audio.dtype.kind in ("i", "u"):
+        levels = levels / 32768.0
+    rms_by_channel = np.sqrt(np.mean(levels ** 2, axis=0))
+    active_channel = int(np.argmax(rms_by_channel))
+    return audio[:, active_channel:active_channel + 1]
+
+
+def _audio_level_metrics(pcm) -> tuple[float, float, float]:
+    import numpy as np
+
+    mono = _select_active_channel_pcm(pcm)
+    audio = mono.reshape(-1).astype(np.float32)
+    if len(audio) == 0:
+        return -120.0, 0.0, 0.0
+    if getattr(mono, "dtype", None) is not None and mono.dtype.kind in ("i", "u"):
+        audio = audio / 32768.0
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    rms = float(np.sqrt(np.mean(audio ** 2)) or 1e-9)
+    raw_dbfs = float(20 * np.log10(max(rms, 1e-9)))
+    return raw_dbfs, peak, _audio_meter_level_from_dbfs(raw_dbfs)
 
 
 def _run_command_hook_and_annotate(event: dict) -> None:
@@ -1085,8 +1188,15 @@ class Dictate(InjectMixin):
         self.frames: list[np.ndarray] = []
         self.recording = False
         self._record_started = 0.0
+        self._record_keydown_at = 0.0
+        self._first_audio_at = 0.0
+        self._first_audio_event = threading.Event()
+        self._last_audio_level_event = 0.0
         self._stream = None
         self._arecord_proc = None
+        self._capture_backend = ""
+        self._audio_input_device = ""
+        self._capture_channels = 1
         from pynput import keyboard
         self._kb = keyboard.Controller()
         self._inject_target_xwin: str | None = None   # XID captured at record start
@@ -1166,6 +1276,7 @@ class Dictate(InjectMixin):
         self.release_tail_ms = int(float(after.get("release_tail_ms", "200")))
         vp_transcribe.VAD_THRESHOLD = float(after.get("vad_threshold", "0.3"))
         vp_transcribe.VAD_MIN_SILENCE_MS = int(after.get("vad_min_silence_ms", "600"))
+        vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))
         vp_transcribe.INITIAL_PROMPT = after.get("initial_prompt") or None
         vp_transcribe.STT_DEBUG = (after.get("stt_debug") or "").lower() not in (
             "", "0", "false", "no", "off")
@@ -1184,7 +1295,13 @@ class Dictate(InjectMixin):
 
     def _cb(self, indata, frames, t, status):
         if self.recording:
-            self.frames.append(indata.copy())
+            if not self._first_audio_event.is_set():
+                self._first_audio_at = time.monotonic()
+                self._record_started = self._first_audio_at
+                self._first_audio_event.set()
+            chunk = indata.copy()
+            self.frames.append(chunk)
+            self._emit_audio_level(chunk)
 
     def _arecord_reader(self, proc):
         # Read raw S16_LE mono 16kHz from arecord stdout into self.frames
@@ -1194,10 +1311,35 @@ class Dictate(InjectMixin):
             if not data:
                 break
             arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 1)
+            if not self._first_audio_event.is_set():
+                self._first_audio_at = time.monotonic()
+                self._record_started = self._first_audio_at
+                self._first_audio_event.set()
             self.frames.append(arr)
+            self._emit_audio_level(arr)
 
-    def _start_arecord(self) -> None:
+    def _emit_audio_level(self, pcm) -> None:
+        now = time.monotonic()
+        if now - self._last_audio_level_event < 0.12:
+            return
+        raw_dbfs, peak, level = _audio_level_metrics(pcm)
+        self._last_audio_level_event = now
+        _emit_worker_event(
+            "audio",
+            state="recording",
+            level=round(level, 3),
+            raw_dbfs=round(raw_dbfs, 1),
+            peak=round(peak, 3),
+            capture_backend=self._capture_backend,
+            audio_device=self._audio_input_device,
+            capture_channels=self._capture_channels,
+        )
+
+    def _start_arecord(self) -> tuple[str, str]:
         import subprocess
+        self._capture_backend = "arecord"
+        self._audio_input_device = f"arecord -D {_ARECORD_DEVICE}"
+        self._capture_channels = 1
         self._arecord_proc = subprocess.Popen(
             ["arecord", "-D", _ARECORD_DEVICE, "-f", "S16_LE",
              "-r", str(SR), "-c", "1", "-"],
@@ -1208,13 +1350,30 @@ class Dictate(InjectMixin):
             args=(self._arecord_proc,),
             daemon=True,
         ).start()
+        return self._capture_backend, self._audio_input_device
 
-    def _start_sounddevice(self) -> None:
+    def _start_sounddevice(self) -> tuple[str, str]:
         import sounddevice as sd
-        self._stream = sd.InputStream(
-            samplerate=SR, channels=1, dtype="int16", callback=self._cb
-        )
+        self._capture_backend = "sounddevice"
+        self._audio_input_device = _sounddevice_input_name(sd) or "sounddevice default input"
+        last_error = None
+        for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
+            self._capture_channels = channels
+            try:
+                self._stream = sd.InputStream(
+                    samplerate=SR,
+                    channels=self._capture_channels,
+                    dtype="int16",
+                    callback=self._cb,
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                self._stream = None
+        if self._stream is None:
+            raise last_error
         self._stream.start()
+        return self._capture_backend, self._audio_input_device
 
     def _stop_capture_streams(self) -> None:
         if self._arecord_proc:
@@ -1350,14 +1509,38 @@ class Dictate(InjectMixin):
         if after != self._effective_config:
             self._apply_effective_config(after)
         self.frames = []
+        self._first_audio_event.clear()
+        self._first_audio_at = 0.0
+        self._last_audio_level_event = 0.0
         self.recording = True
-        self._record_started = time.monotonic()
+        self._record_keydown_at = time.monotonic()
+        self._record_started = 0.0
         self.audio_ducker.enter()
+        _emit_worker_event("status", state="opening")
         if _ARECORD_DEVICE:
-            self._start_arecord()
+            self._capture_backend, self._audio_input_device = self._start_arecord()
         else:
-            self._start_sounddevice()
-        _emit_worker_event("status", state="listening")
+            self._capture_backend, self._audio_input_device = self._start_sounddevice()
+        first_audio_ready = self._first_audio_event.wait(timeout=0.2)
+        startup_ms = int((time.monotonic() - self._record_keydown_at) * 1000)
+        if not first_audio_ready:
+            self._record_started = time.monotonic()
+        _emit_worker_event(
+            "status",
+            state="recording",
+            capture_backend=self._capture_backend,
+            audio_device=self._audio_input_device,
+            capture_channels=self._capture_channels,
+            startup_ms=startup_ms,
+            first_audio="ok" if first_audio_ready else "pending",
+        )
+        print(
+            f"[cap] startup={startup_ms}ms first_audio="
+            f"{'ok' if first_audio_ready else 'pending'} "
+            f"capture_backend={self._capture_backend} "
+            f"capture_channels={self._capture_channels}",
+            flush=True,
+        )
         print("● listening…", flush=True)
 
     def _stop_and_transcribe(self):
@@ -1372,31 +1555,48 @@ class Dictate(InjectMixin):
             self._stop_capture_streams()
         finally:
             self.audio_ducker.exit()
-        if not self.frames:
-            return
-        pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
-        recording_s = self._recording_seconds(pcm)
-        if self._should_skip_pcm(pcm, recording_s):
-            return
-        result = self._transcribe_pcm(pcm)
-        if result is None:
-            return
-        text = result.text
-        post_result, format_result = self._postprocess_and_format(text)
-        final_text = format_result.text
-        inject_t0 = time.monotonic()
-        self._inject(final_text)
-        inject_elapsed_ms = int((time.monotonic() - inject_t0) * 1000)
-        event = self._utterance_event(
-            result=result,
-            source_text=text,
-            final_text=final_text,
-            recording_s=recording_s,
-            inject_elapsed_ms=inject_elapsed_ms,
-            post_result=post_result,
-            format_result=format_result,
+        _emit_worker_event(
+            "status",
+            state="transcribing",
+            capture_backend=self._capture_backend,
+            audio_device=self._audio_input_device,
+            capture_channels=self._capture_channels,
         )
-        self._record_utterance_event(event)
+        try:
+            if not self.frames:
+                return
+            pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
+            pcm = _select_active_channel_pcm(pcm).astype(np.int16)
+            recording_s = self._recording_seconds(pcm)
+            if self._should_skip_pcm(pcm, recording_s):
+                return
+            result = self._transcribe_pcm(pcm)
+            if result is None:
+                return
+            text = result.text
+            post_result, format_result = self._postprocess_and_format(text)
+            final_text = format_result.text
+            inject_t0 = time.monotonic()
+            self._inject(final_text)
+            inject_elapsed_ms = int((time.monotonic() - inject_t0) * 1000)
+            event = self._utterance_event(
+                result=result,
+                source_text=text,
+                final_text=final_text,
+                recording_s=recording_s,
+                inject_elapsed_ms=inject_elapsed_ms,
+                post_result=post_result,
+                format_result=format_result,
+            )
+            self._record_utterance_event(event)
+        finally:
+            _emit_worker_event(
+                "status",
+                state="ready",
+                capture_backend=self._capture_backend,
+                audio_device=self._audio_input_device,
+                capture_channels=self._capture_channels,
+            )
 
     # pynput key name → evdev key code mapping for common PTT keys
     _EVDEV_MAP = {

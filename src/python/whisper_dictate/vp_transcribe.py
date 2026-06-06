@@ -60,6 +60,7 @@ TEMPERATURES = _parse_temperatures(get_value("VOICEPI_TEMPERATURE"))
 CONTEXT_MIN_SECONDS = float(get_value("VOICEPI_CONTEXT_MIN_SECONDS", "0") or "0")
 VAD_THRESHOLD = float(get_value("VOICEPI_VAD_THRESHOLD", "0.3") or "0.3")
 VAD_MIN_SILENCE_MS = int(get_value("VOICEPI_VAD_MIN_SILENCE_MS", "600") or "600")
+VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200") or "200")
 STT_DEBUG = (get_value("VOICEPI_STT_DEBUG") or "").strip().lower() not in (
     "", "0", "false", "no", "off")
 VALID_STT_BACKENDS = ("whisper", "parakeet", "openai")
@@ -301,7 +302,8 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         log_prob_threshold=-1.0,
         vad_filter=True,
         vad_parameters=dict(threshold=VAD_THRESHOLD,
-                            min_silence_duration_ms=VAD_MIN_SILENCE_MS),
+                            min_silence_duration_ms=VAD_MIN_SILENCE_MS,
+                            speech_pad_ms=VAD_SPEECH_PAD_MS),
     )
     segment_list = list(segments)
     # Concatenate with Whisper's OWN spacing. Each segment text already

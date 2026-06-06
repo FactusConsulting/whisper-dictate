@@ -9,6 +9,7 @@ suite importing Dictate, and smoke-tested on Linux.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -49,6 +50,13 @@ _LINUX_TERMINAL_TARGETS = (
     "gnome-console",
     "gnome-terminal",
 )
+_SELF_INJECTION_PROCESSES = {
+    "whisper-dictate",
+    "whisper-dictate.exe",
+    "whisper_dictate",
+    "whisper_dictate.exe",
+}
+_SELF_INJECTION_TITLE_RE = re.compile(r"^whisper-dictate(?:\s+\d+(?:\.\d+){1,3}.*)?$")
 
 
 def ydotool_socket_path() -> str:
@@ -317,6 +325,15 @@ class InjectMixin:
             return True
         return any(term in target for term in _LINUX_TERMINAL_TARGETS)
 
+    def _target_is_self(self) -> bool:
+        process = os.path.basename(
+            (getattr(self, "_inject_target_process", None) or "").strip()
+        ).lower()
+        if process in _SELF_INJECTION_PROCESSES:
+            return True
+        title = " ".join((getattr(self, "_inject_target_title", None) or "").split()).lower()
+        return bool(_SELF_INJECTION_TITLE_RE.fullmatch(title))
+
     def _wayland_paste_shortcut(self) -> bool:
         if self._try_rust_inject("paste"):
             return True
@@ -386,6 +403,11 @@ class InjectMixin:
             print(f'[inject] → "{preview}"  (target: {target})', flush=True)
         else:
             print(f'[inject] → "{preview}"', flush=True)
+
+        if self._target_is_self():
+            self._last_inject_strategy = "skipped-self"
+            print("[inject] skipped self-target", flush=True)
+            return
 
         if on_wayland:
             mode = self.mode

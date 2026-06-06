@@ -1,98 +1,415 @@
 use super::*;
+use egui_material_icons::icons;
+
+const MIC_INDICATOR_MAX_WIDTH: f32 = 330.0;
+const MIC_INDICATOR_MIN_WIDTH: f32 = 150.0;
+const MIC_GAUGE_MAX_WIDTH: f32 = 150.0;
+const MIC_GAUGE_MIN_WIDTH: f32 = 86.0;
+const RUNTIME_LOG_TOP_MARGIN: f32 = 16.0;
+const RUNTIME_LOG_VERTICAL_CHROME: f32 = 112.0;
+const RUNTIME_LOG_MIN_HEIGHT: f32 = 300.0;
+const SETTINGS_FOOTER_HEIGHT: f32 = 184.0;
+const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;
+const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 74.0;
 
 impl WhisperDictateApp {
-    pub(super) fn global_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            let is_stopped = self.runtime_state == RuntimeState::Stopped;
-            let is_running = self.runtime_state == RuntimeState::Running;
-            let is_active = !is_stopped;
+    pub(super) fn sidebar(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
+        ui.set_min_height(ui.available_height());
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(icons::ICON_KEYBOARD_VOICE)
+                    .size(25.0)
+                    .color(palette.accent_blue),
+            );
+            ui.label(
+                egui::RichText::new("whisper-dictate")
+                    .size(20.0)
+                    .strong()
+                    .color(palette.accent_blue),
+            );
+        });
+        ui.label(
+            icon_text(icons::ICON_TUNE, "Rust control surface")
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+        ui.add_space(18.0);
 
+        for tab in Tab::ALL {
+            let selected = self.selected_tab == tab;
+            if nav_button(ui, selected, tab.icon(), tab.label(), palette).clicked() {
+                self.selected_tab = tab;
+            }
+            ui.add_space(5.0);
+        }
+
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+            ui.label(
+                egui::RichText::new(format!("v{}", self.app_version))
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+            ui.add_space(8.0);
             if ui
-                .add_enabled(is_stopped, egui::Button::new("Start"))
+                .add_enabled_ui(self.background_task.is_none(), |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), 34.0],
+                        egui::Button::new(icon_text(icons::ICON_BUILD, "Install/Repair")),
+                    )
+                })
+                .inner
+                .on_hover_text("Install or repair the local runtime environment.")
                 .clicked()
             {
-                self.start_runtime();
+                self.run_install();
             }
+            ui.add_space(6.0);
             if ui
-                .add_enabled(is_active, egui::Button::new("Stop"))
+                .add_sized(
+                    [ui.available_width(), 34.0],
+                    egui::Button::new(icon_text(icons::ICON_HEALTH_AND_SAFETY, "Doctor")),
+                )
                 .clicked()
             {
-                self.stop_runtime();
+                self.run_doctor();
             }
             if ui
-                .add_enabled(is_running, egui::Button::new("Restart runtime"))
-                .on_hover_text("Restart the dictation runtime with the current settings.")
-                .clicked()
-            {
-                self.restart_runtime();
-            }
-            if ui
-                .button("Reload config")
+                .add_sized(
+                    [ui.available_width(), 34.0],
+                    egui::Button::new(icon_text(icons::ICON_REFRESH, "Reload config")),
+                )
                 .on_hover_text("Reload the config file from disk.")
                 .clicked()
             {
                 self.reload_settings();
             }
-            if ui.button("Doctor").clicked() {
-                self.run_doctor();
-            }
-            if ui
-                .add_enabled(
-                    self.background_task.is_none(),
-                    egui::Button::new("Install/Repair"),
-                )
-                .clicked()
-            {
-                self.run_install();
-            }
-            ui.separator();
-            ui.label(format!("Status: {}", self.runtime_state.label()));
-            if let Some(label) = self.background_task_label {
-                ui.label(format!("Task: {label} running"));
-            }
+            ui.add_space(10.0);
+            sidebar_save_state(ui, self.has_unsaved_settings(), palette);
         });
+    }
+
+    pub(super) fn top_status_bar(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
+        let controls_width = top_status_controls_width();
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(
+                    (ui.available_width() - controls_width).max(300.0),
+                    ui.available_height(),
+                ),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    status_card(
+                        ui,
+                        "Status",
+                        icons::ICON_RADIO_BUTTON_CHECKED,
+                        self.runtime_state.label(),
+                        runtime_state_color(self.runtime_state, palette),
+                        palette,
+                    );
+                    status_card(
+                        ui,
+                        "Backend",
+                        icons::ICON_MODEL_TRAINING,
+                        self.backend_summary(),
+                        palette.accent_blue,
+                        palette,
+                    );
+                    let (detail_label, detail_icon, detail_value) = self.stt_detail_summary();
+                    status_card_wide(
+                        ui,
+                        detail_label,
+                        detail_icon,
+                        detail_value,
+                        palette.accent_blue,
+                        palette,
+                    );
+                    if let Some(label) = self.background_task_label {
+                        status_card(
+                            ui,
+                            "Task",
+                            icons::ICON_PENDING_ACTIONS,
+                            label,
+                            palette.warn_text,
+                            palette,
+                        );
+                    }
+                },
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.global_controls(ui, palette);
+            });
+        });
+    }
+
+    pub(super) fn global_controls(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
+        let is_stopped = self.runtime_state == RuntimeState::Stopped;
+        let is_active = !is_stopped;
+
+        if ui
+            .add_enabled(
+                is_active,
+                egui::Button::new(icon_text(icons::ICON_STOP, "Stop").strong())
+                    .fill(palette.error_text)
+                    .min_size(egui::vec2(78.0, 34.0)),
+            )
+            .clicked()
+        {
+            self.stop_runtime();
+        }
+        if ui
+            .add_enabled(
+                is_stopped,
+                egui::Button::new(icon_text(icons::ICON_PLAY_ARROW, "Start").strong())
+                    .fill(palette.accent_dark)
+                    .min_size(egui::vec2(88.0, 34.0)),
+            )
+            .clicked()
+        {
+            self.start_runtime();
+        }
     }
 
     pub(super) fn runtime_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Log");
+        let palette = ui_palette(&self.settings.ui_theme);
+        let height = ui.available_height();
+        self.live_dictation_panel(ui, palette, height);
+    }
+
+    fn live_dictation_panel(&mut self, ui: &mut egui::Ui, palette: UiPalette, height: f32) {
         ui.horizontal(|ui| {
-            if ui.button("Clear").clicked() {
-                self.runtime_log.clear();
-                self.runtime_log_scroll_to_bottom = true;
-            }
-            if ui.button("Copy").clicked() {
-                ui.ctx().copy_text(self.runtime_log.clone());
+            ui.label(
+                icon_text(icons::ICON_MIC, "Live dictation")
+                    .size(18.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            runtime_status_badge(ui, self.runtime_state, palette);
+            let mic_width = (ui.available_width() - 10.0).clamp(0.0, MIC_INDICATOR_MAX_WIDTH);
+            if mic_width >= MIC_INDICATOR_MIN_WIDTH {
+                ui.add_space(10.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(mic_width, 30.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        self.listening_gauge(ui, palette, mic_width);
+                    },
+                );
             }
         });
-
-        ui.separator();
-        ui.label(format!("Config: {}", self.config_path));
-        ui.add_space(8.0);
-        ui.label("Runtime log");
-        let height = (ui.available_height() - 8.0).max(240.0);
-        egui::ScrollArea::vertical()
-            .id_salt("runtime_log_scroll")
-            .auto_shrink([false, false])
-            .stick_to_bottom(true)
-            .max_height(height)
-            .show(ui, |ui| {
-                ui.set_min_size(egui::vec2(ui.available_width(), height));
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&self.runtime_log).monospace())
-                        .selectable(true)
-                        .wrap(),
-                );
-                let bottom = ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
-                if self.runtime_log_scroll_to_bottom {
-                    bottom.scroll_to_me(Some(egui::Align::BOTTOM));
-                    self.runtime_log_scroll_to_bottom = false;
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label("Log output");
+            self.log_mode_selector(ui, palette);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(icon_text(icons::ICON_COPY_ALL, "Copy")).clicked() {
+                    ui.ctx().copy_text(self.visible_runtime_log());
+                }
+                if ui.button(icon_text(icons::ICON_DELETE, "Clear")).clicked() {
+                    self.runtime_log.clear();
+                    self.runtime_log_scroll_to_bottom = true;
                 }
             });
+        });
+        ui.add_space(10.0);
+
+        let log_height = (height - RUNTIME_LOG_VERTICAL_CHROME).max(RUNTIME_LOG_MIN_HEIGHT);
+        let visible_log = self.visible_runtime_log();
+        runtime_log_frame(palette).show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("runtime_log_scroll")
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .max_height(log_height)
+                .show(ui, |ui| {
+                    ui.set_min_size(egui::vec2(ui.available_width(), log_height));
+                    if self.runtime_log_view == LogViewMode::Debug {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&visible_log)
+                                    .monospace()
+                                    .color(palette.text),
+                            )
+                            .selectable(true)
+                            .wrap(),
+                        );
+                    } else {
+                        let cards = runtime_log_cards(&self.runtime_log, self.runtime_log_view);
+                        if cards.is_empty() {
+                            empty_log_state(ui, self.runtime_state, palette);
+                        } else {
+                            for card in cards {
+                                if card.title.trim().is_empty() {
+                                    continue;
+                                }
+                                runtime_log_card(ui, &card, palette);
+                                ui.add_space(8.0);
+                            }
+                        }
+                    }
+                    let bottom = ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+                    if self.runtime_log_scroll_to_bottom {
+                        bottom.scroll_to_me(Some(egui::Align::BOTTOM));
+                        self.runtime_log_scroll_to_bottom = false;
+                    }
+                });
+        });
+    }
+
+    fn listening_gauge(&self, ui: &mut egui::Ui, palette: UiPalette, max_width: f32) {
+        let active = self.audio_capture_active && self.runtime_state == RuntimeState::Running;
+        if active {
+            ui.ctx().request_repaint_after(Duration::from_millis(80));
+        }
+        let level = audio_meter_level(self.audio_meter_level, self.runtime_state, active);
+        let status = if active {
+            "Recording"
+        } else if self.audio_capture_opening {
+            "Opening"
+        } else if self.runtime_state == RuntimeState::Running {
+            "Ready"
+        } else {
+            "Idle"
+        };
+        let gauge_width = (max_width * 0.42).clamp(MIC_GAUGE_MIN_WIDTH, MIC_GAUGE_MAX_WIDTH);
+        let label_width = (max_width - gauge_width - 8.0).max(0.0);
+        let label_chars = mic_label_char_budget(label_width);
+        let audio_device = audio_device_label(&self.active_audio_device, label_chars);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let response = level_gauge(ui, palette, level, active, gauge_width);
+            ui.add_sized(
+                egui::vec2(label_width, 18.0),
+                egui::Label::new(
+                    icon_text(icons::ICON_MIC, format!("{status} - {audio_device}"))
+                        .size(12.0)
+                        .color(if active {
+                            palette.accent_blue
+                        } else {
+                            palette.text_muted
+                        }),
+                ),
+            );
+            response.on_hover_text(format!(
+                "Audio input: {}\nLive: {}\nCapture: {}\nGate: {}",
+                full_audio_device_label(&self.active_audio_device),
+                live_audio_level_summary(self.audio_meter_raw_dbfs, self.audio_meter_peak, active,),
+                latest_metric_summary(&self.runtime_log, "[cap]"),
+                latest_metric_summary(&self.runtime_log, "[gate]")
+            ));
+        });
+    }
+
+    fn session_panel(&self, ui: &mut egui::Ui, palette: UiPalette) {
+        panel_frame(palette).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(icon_text(icons::ICON_TASK_ALT, "Session").strong());
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                metric_box(ui, "Backend", self.backend_summary(), palette);
+                metric_box(
+                    ui,
+                    "Post",
+                    empty_as_disabled(&self.settings.post_processor),
+                    palette,
+                );
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                metric_box(
+                    ui,
+                    "STT",
+                    latest_metric_summary(&self.runtime_log, "[stt]"),
+                    palette,
+                );
+                metric_box(
+                    ui,
+                    "Inject",
+                    latest_log_summary(&self.runtime_log, "[inject] strategy:"),
+                    palette,
+                );
+            });
+        });
+    }
+
+    fn log_mode_selector(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for mode in LogViewMode::ALL {
+                let selected = self.runtime_log_view == mode;
+                let fill = if selected {
+                    palette.accent_dark
+                } else {
+                    palette.surface_bg
+                };
+                let text = if selected {
+                    egui::RichText::new(mode.label())
+                        .strong()
+                        .color(palette.text)
+                } else {
+                    egui::RichText::new(mode.label()).color(palette.text_muted)
+                };
+                if ui
+                    .add_sized(
+                        egui::vec2(92.0, 30.0),
+                        egui::Button::new(text)
+                            .fill(fill)
+                            .stroke(egui::Stroke::new(1.0, palette.border_soft)),
+                    )
+                    .clicked()
+                {
+                    self.runtime_log_view = mode;
+                    self.runtime_log_scroll_to_bottom = true;
+                }
+            }
+        });
+    }
+
+    fn visible_runtime_log(&self) -> String {
+        log_view_text(&self.runtime_log, self.runtime_log_view)
+    }
+
+    fn backend_summary(&self) -> &str {
+        match self.settings.stt_backend.as_str() {
+            "parakeet" => "Parakeet",
+            "openai" => self.current_cloud_provider().label(),
+            _ => "Whisper",
+        }
+    }
+
+    pub(super) fn stt_detail_summary(&self) -> (&'static str, &'static str, String) {
+        match SttBackendMode::from_raw(&self.settings.stt_backend) {
+            SttBackendMode::Cloud => (
+                "Model",
+                icons::ICON_MODEL_TRAINING,
+                compact_label(self.cloud_stt_model_summary(), 28),
+            ),
+            SttBackendMode::Whisper | SttBackendMode::Parakeet => {
+                ("Compute", icons::ICON_MEMORY, self.compute_summary())
+            }
+        }
+    }
+
+    fn cloud_stt_model_summary(&self) -> &str {
+        let model = self.settings.stt_model.trim();
+        if model.is_empty() {
+            self.current_cloud_provider().default_model()
+        } else {
+            model
+        }
+    }
+
+    fn compute_summary(&self) -> String {
+        format!(
+            "{} / {}",
+            empty_as_auto(&self.settings.device),
+            empty_as_auto(&self.settings.compute_type)
+        )
     }
 
     pub(super) fn settings_panel(&mut self, ui: &mut egui::Ui, body: fn(&mut Self, &mut egui::Ui)) {
-        let footer_height = 148.0;
-        let body_height = (ui.available_height() - footer_height).max(0.0);
+        let footer_height = SETTINGS_FOOTER_HEIGHT;
+        let body_height =
+            (ui.available_height() - footer_height - SETTINGS_FOOTER_CHROME_HEIGHT).max(0.0);
 
         egui::ScrollArea::vertical()
             .id_salt(format!("settings_body_{:?}", self.selected_tab))
@@ -119,9 +436,9 @@ impl WhisperDictateApp {
         let is_dirty = self.has_unsaved_settings();
         ui.horizontal_wrapped(|ui| {
             let mut save_button = egui::Button::new(if is_dirty {
-                egui::RichText::new("Save settings *").strong()
+                icon_text(icons::ICON_SAVE, "Save settings *").strong()
             } else {
-                egui::RichText::new("Save settings")
+                icon_text(icons::ICON_SAVE, "Save settings")
             });
             if is_dirty {
                 save_button = save_button.fill(ui.visuals().selection.bg_fill);
@@ -134,7 +451,7 @@ impl WhisperDictateApp {
                 self.save_settings();
             }
             if ui
-                .button("Reload config")
+                .button(icon_text(icons::ICON_REFRESH, "Reload config"))
                 .on_hover_text("Reload the config file from disk.")
                 .clicked()
             {
@@ -162,22 +479,29 @@ impl WhisperDictateApp {
             _ => {}
         }
 
-        egui::Frame::group(ui.style())
-            .inner_margin(egui::Margin::symmetric(14.0, 12.0))
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.set_min_height(72.0);
-                ui.strong("Messages");
-                ui.add_space(6.0);
-                if messages.is_empty() {
-                    ui.label(
-                        egui::RichText::new("No messages").color(ui.visuals().weak_text_color()),
-                    );
-                }
-                for message in messages {
-                    status_label(ui, message);
-                }
-            });
+        let palette = ui_palette(&self.settings.ui_theme);
+        panel_frame(palette).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.set_min_height(92.0);
+            ui.strong("Messages");
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .id_salt(format!("settings_messages_{:?}", self.selected_tab))
+                .auto_shrink([false, false])
+                .max_height(SETTINGS_MESSAGES_MAX_HEIGHT)
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    if messages.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No messages")
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                    }
+                    for message in messages {
+                        status_label(ui, message, palette);
+                    }
+                });
+        });
     }
 
     pub(super) fn core_tab(&mut self, ui: &mut egui::Ui) {
@@ -186,6 +510,7 @@ impl WhisperDictateApp {
         let mut provider_id = self.current_cloud_provider().id().to_owned();
         egui::Grid::new("core_settings")
             .num_columns(2)
+            .spacing(egui::vec2(16.0, 8.0))
             .show(ui, |ui| {
                 combo_help_labeled(
                     ui,
@@ -408,6 +733,7 @@ impl WhisperDictateApp {
         ui.heading("Quality");
         egui::Grid::new("quality_settings")
             .num_columns(2)
+            .spacing(egui::vec2(16.0, 8.0))
             .show(ui, |ui| {
                 text_help(
                     ui,
@@ -450,6 +776,12 @@ impl WhisperDictateApp {
                     "VAD min silence ms",
                     &mut self.settings.vad_min_silence_ms,
                     "Silence duration used by VAD to split or end speech.",
+                );
+                text_help(
+                    ui,
+                    "VAD speech pad ms",
+                    &mut self.settings.vad_speech_pad_ms,
+                    "Audio padding kept around detected speech so soft first and last syllables are not trimmed.",
                 );
                 text_help(
                     ui,
@@ -510,6 +842,7 @@ impl WhisperDictateApp {
         });
         egui::Grid::new("dictionary_settings")
             .num_columns(2)
+            .spacing(egui::vec2(16.0, 8.0))
             .show(ui, |ui| {
                 text_help(
                     ui,
@@ -549,9 +882,24 @@ impl WhisperDictateApp {
     }
 
     pub(super) fn output_tab(&mut self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
         ui.heading("Output");
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            section_label(ui, "Log view", palette);
+            self.log_mode_selector(ui, palette);
+            ui.add_space(12.0);
+            section_label(ui, "UI theme", palette);
+            theme_toggle(ui, &mut self.settings.ui_theme, palette);
+        });
+        ui.add_space(14.0);
+        self.session_panel(ui, palette);
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(8.0);
         egui::Grid::new("output_settings")
             .num_columns(2)
+            .spacing(egui::vec2(16.0, 8.0))
             .show(ui, |ui| {
                 combo_help(
                     ui,
@@ -670,6 +1018,7 @@ impl WhisperDictateApp {
         let previous_post_provider = PostProvider::from_settings(&self.settings);
         egui::Grid::new("post_processing_settings")
             .num_columns(2)
+            .spacing(egui::vec2(16.0, 8.0))
             .show(ui, |ui| {
                 combo_help_labeled(
                     ui,
@@ -688,12 +1037,12 @@ impl WhisperDictateApp {
                     "Controls what the post processor is allowed to do. raw bypasses post-processing and does not call the model; clean fixes punctuation/casing and obvious transcription artifacts; prompt rewrites for coding agents; terminal preserves commands and paths; slack/email/bullets format for those destinations.",
                 );
                 match self.settings.post_processor.as_str() {
-                    "groq" => combo_help(
+                    "groq" => combo_help_labeled(
                         ui,
                         "Post model",
                         &mut self.settings.post_model,
                         GROQ_POST_MODELS,
-                        "Groq chat model used for the optional final text cleanup pass. STT Whisper models are not listed here because they transcribe audio, not text.",
+                        "Groq chat model used for the optional final text cleanup pass. The list labels show the recommended Danish cleanup default, faster alternatives, reasoning models and preview models. STT Whisper models are not listed here because they transcribe audio, not text.",
                     ),
                     "openai" => combo_help(
                         ui,
@@ -827,12 +1176,408 @@ impl WhisperDictateApp {
     }
 }
 
-fn status_label(ui: &mut egui::Ui, text: &str) {
-    if text.starts_with("[OK]") {
-        ui.colored_label(egui::Color32::from_rgb(20, 140, 70), text);
-    } else if text.starts_with("[ERROR]") {
-        ui.colored_label(ui.visuals().error_fg_color, text);
-    } else {
-        ui.label(text);
+fn sidebar_save_state(ui: &mut egui::Ui, is_dirty: bool, palette: UiPalette) {
+    inset_panel_frame(palette).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        if is_dirty {
+            ui.label(icon_text(icons::ICON_ERROR, "Unsaved changes").color(palette.warn_text));
+        } else {
+            ui.label(icon_text(icons::ICON_CHECK_CIRCLE, "Settings saved").color(palette.ok_text));
+        }
+    });
+}
+
+fn section_label(ui: &mut egui::Ui, label: &str, palette: UiPalette) {
+    ui.label(
+        egui::RichText::new(label)
+            .size(12.0)
+            .strong()
+            .color(palette.text_muted),
+    );
+}
+
+fn theme_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for (raw, icon, label) in [
+            ("dark", icons::ICON_DARK_MODE, "Dark"),
+            ("light", icons::ICON_LIGHT_MODE, "Light"),
+        ] {
+            let selected = value == raw;
+            let fill = if selected {
+                palette.accent_dark
+            } else {
+                palette.surface_bg
+            };
+            let text = if selected {
+                icon_text(icon, label).strong().color(palette.text)
+            } else {
+                icon_text(icon, label).color(palette.text_muted)
+            };
+            if ui
+                .add_sized(
+                    egui::vec2(92.0, 30.0),
+                    egui::Button::new(text)
+                        .fill(fill)
+                        .stroke(egui::Stroke::new(0.8, palette.border_soft)),
+                )
+                .clicked()
+            {
+                *value = raw.to_owned();
+            }
+        }
+    });
+}
+
+fn status_card(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: &str,
+    value: impl AsRef<str>,
+    accent: egui::Color32,
+    palette: UiPalette,
+) {
+    status_card_sized(ui, label, icon, value, accent, palette, 134.0);
+}
+
+fn status_card_wide(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: &str,
+    value: impl AsRef<str>,
+    accent: egui::Color32,
+    palette: UiPalette,
+) {
+    status_card_sized(ui, label, icon, value, accent, palette, 218.0);
+}
+
+fn status_card_sized(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: &str,
+    value: impl AsRef<str>,
+    accent: egui::Color32,
+    palette: UiPalette,
+    min_width: f32,
+) {
+    let value = value.as_ref();
+    egui::Frame::default()
+        .fill(palette.surface_bg)
+        .stroke(egui::Stroke::new(0.8, palette.border_soft))
+        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(14.0, 9.0))
+        .show(ui, |ui| {
+            ui.set_min_width(min_width);
+            ui.label(icon_text(icon, label).size(12.0).color(palette.text_muted));
+            ui.label(egui::RichText::new(value).strong().color(accent))
+                .on_hover_text(value);
+        });
+}
+
+fn top_status_controls_width() -> f32 {
+    186.0
+}
+
+fn runtime_log_frame(palette: UiPalette) -> egui::Frame {
+    egui::Frame::default()
+        .fill(palette.bg)
+        .stroke(egui::Stroke::new(0.8, palette.border_soft))
+        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+        .inner_margin(egui::Margin {
+            left: 12.0,
+            right: 12.0,
+            top: RUNTIME_LOG_TOP_MARGIN,
+            bottom: 10.0,
+        })
+}
+
+fn runtime_state_color(state: RuntimeState, palette: UiPalette) -> egui::Color32 {
+    match state {
+        RuntimeState::Stopped => palette.text_muted,
+        RuntimeState::Starting => palette.warn_text,
+        RuntimeState::Running => palette.ok_text,
     }
+}
+
+fn runtime_log_card(ui: &mut egui::Ui, card: &RuntimeLogCard, palette: UiPalette) {
+    let (icon, accent) = match card.kind {
+        RuntimeLogCardKind::FinalText => (icons::ICON_CHECK_CIRCLE, palette.ok_text),
+        RuntimeLogCardKind::Status => (icons::ICON_INFO, palette.accent_blue),
+        RuntimeLogCardKind::Diagnostic => (icons::ICON_GRAPHIC_EQ, palette.warn_text),
+    };
+    let fill = match card.kind {
+        RuntimeLogCardKind::FinalText => palette.surface_active_bg,
+        RuntimeLogCardKind::Status => palette.surface_bg,
+        RuntimeLogCardKind::Diagnostic => palette.header_bg,
+    };
+    egui::Frame::default()
+        .fill(fill)
+        .stroke(egui::Stroke::new(0.8, palette.border_soft))
+        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(12.0, 12.0))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                egui::Frame::default()
+                    .fill(accent)
+                    .rounding(egui::Rounding::same(PILL_RADIUS as f32))
+                    .show(ui, |ui| {
+                        ui.set_min_size(egui::vec2(4.0, 46.0));
+                    });
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(icon).size(20.0).color(accent));
+                ui.vertical(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&card.title)
+                                .size(match card.kind {
+                                    RuntimeLogCardKind::FinalText => 17.0,
+                                    _ => 14.0,
+                                })
+                                .strong()
+                                .color(palette.text),
+                        )
+                        .wrap(),
+                    );
+                    if !card.detail.is_empty() || !card.badge.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            if !card.detail.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(&card.detail)
+                                        .size(12.0)
+                                        .color(palette.text_muted),
+                                );
+                            }
+                            if !card.badge.is_empty() {
+                                status_pill(ui, &card.badge, accent, palette);
+                            }
+                        });
+                    }
+                });
+            });
+        });
+}
+
+fn empty_log_state(ui: &mut egui::Ui, state: RuntimeState, palette: UiPalette) {
+    egui::Frame::default()
+        .fill(palette.surface_bg)
+        .stroke(egui::Stroke::new(0.8, palette.border_soft))
+        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(16.0, 14.0))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                icon_text(icons::ICON_MIC, "No dictation output yet")
+                    .strong()
+                    .color(palette.text),
+            );
+            ui.label(
+                egui::RichText::new(format!("Runtime status: {}", state.label()))
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+        });
+}
+
+fn status_pill(ui: &mut egui::Ui, label: &str, accent: egui::Color32, palette: UiPalette) {
+    egui::Frame::default()
+        .fill(palette.header_bg)
+        .stroke(egui::Stroke::new(0.8, accent))
+        .rounding(egui::Rounding::same(PILL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(label).size(11.0).strong().color(accent));
+        });
+}
+
+fn level_gauge(
+    ui: &mut egui::Ui,
+    palette: UiPalette,
+    level: f32,
+    active: bool,
+    width: f32,
+) -> egui::Response {
+    let size = egui::vec2(width.clamp(MIC_GAUGE_MIN_WIDTH, MIC_GAUGE_MAX_WIDTH), 18.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+
+    let painter = ui.painter_at(rect);
+    painter.rect(
+        rect,
+        8.0,
+        palette.header_bg,
+        egui::Stroke::new(0.8, palette.border_soft),
+    );
+
+    let segments = 18;
+    let gap = 2.0;
+    let segment_width = (rect.width() - gap * (segments - 1) as f32) / segments as f32;
+    let shown_level = if active { level.clamp(0.0, 1.0) } else { 0.0 };
+
+    for index in 0..segments {
+        let start_x = rect.left() + index as f32 * (segment_width + gap);
+        let segment_rect = egui::Rect::from_min_size(
+            egui::pos2(start_x, rect.top() + 3.0),
+            egui::vec2(segment_width, rect.height() - 6.0),
+        );
+        let threshold = (index + 1) as f32 / segments as f32;
+        let filled = shown_level >= threshold;
+        let color = if filled {
+            gauge_color_for_position(index as f32 / (segments - 1) as f32, palette)
+        } else {
+            palette.border_soft
+        };
+        painter.rect_filled(segment_rect, 3.0, color);
+    }
+
+    response
+}
+
+fn gauge_color_for_position(position: f32, palette: UiPalette) -> egui::Color32 {
+    if position < 0.68 {
+        palette.ok_text
+    } else if position < 0.86 {
+        palette.warn_text
+    } else {
+        palette.error_text
+    }
+}
+
+fn metric_box(ui: &mut egui::Ui, label: &str, value: impl AsRef<str>, palette: UiPalette) {
+    egui::Frame::default()
+        .fill(palette.header_bg)
+        .stroke(egui::Stroke::new(0.8, palette.border_soft))
+        .rounding(egui::Rounding::same(CONTROL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(11.0, 8.0))
+        .show(ui, |ui| {
+            ui.set_min_width(102.0);
+            ui.label(
+                egui::RichText::new(label)
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(value.as_ref())
+                        .size(12.0)
+                        .color(palette.text),
+                )
+                .wrap(),
+            );
+        });
+}
+
+fn latest_metric_summary(log: &str, prefix: &str) -> String {
+    latest_prefixed_line(log, prefix)
+        .map(compact_diagnostic_title)
+        .unwrap_or_else(|| "No data yet".to_owned())
+}
+
+fn latest_log_summary(log: &str, prefix: &str) -> String {
+    latest_prefixed_line(log, prefix)
+        .map(strip_log_prefix)
+        .unwrap_or("No data yet")
+        .to_owned()
+}
+
+fn live_audio_level_summary(raw_dbfs: Option<f32>, peak: Option<f32>, active: bool) -> String {
+    if !active {
+        return "Not recording".to_owned();
+    }
+    match (raw_dbfs, peak) {
+        (Some(raw_dbfs), Some(peak)) => format!("raw={raw_dbfs:.1}dBFS  peak={peak:.3}"),
+        (Some(raw_dbfs), None) => format!("raw={raw_dbfs:.1}dBFS"),
+        _ => "Waiting for audio level".to_owned(),
+    }
+}
+
+fn mic_label_char_budget(width: f32) -> usize {
+    ((width / 7.0).floor() as usize).clamp(8, 34)
+}
+
+fn audio_device_label(value: &str, max_chars: usize) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return "Input pending".to_owned();
+    }
+    compact_label(value, max_chars.clamp(8, 34))
+}
+
+fn full_audio_device_label(value: &str) -> &str {
+    let value = value.trim();
+    if value.is_empty() {
+        "Not reported yet"
+    } else {
+        value
+    }
+}
+
+fn compact_label(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let mut out = String::new();
+    for _ in 0..max_chars {
+        let Some(ch) = chars.next() else {
+            return value.to_owned();
+        };
+        out.push(ch);
+    }
+    if chars.next().is_some() {
+        out.push_str("...");
+    }
+    out
+}
+
+fn empty_as_auto(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "Auto"
+    } else {
+        trimmed
+    }
+}
+
+fn empty_as_disabled(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "none" {
+        "Disabled"
+    } else {
+        trimmed
+    }
+}
+
+fn status_label(ui: &mut egui::Ui, text: &str, palette: UiPalette) {
+    let rich_text = if text.starts_with("[OK]") {
+        egui::RichText::new(text).color(palette.ok_text)
+    } else if text.starts_with("[ERROR]") {
+        egui::RichText::new(text).color(palette.error_text)
+    } else {
+        egui::RichText::new(text)
+    };
+    ui.add(egui::Label::new(rich_text).wrap());
+}
+
+fn runtime_status_badge(ui: &mut egui::Ui, state: RuntimeState, palette: UiPalette) {
+    let (fill, stroke, text) = match state {
+        RuntimeState::Stopped => (palette.surface_bg, palette.border, palette.text_muted),
+        RuntimeState::Starting => (
+            palette.accent_dark,
+            palette.accent_blue,
+            palette.accent_blue,
+        ),
+        RuntimeState::Running => (palette.surface_active_bg, palette.ok_text, palette.ok_text),
+    };
+    egui::Frame::default()
+        .fill(fill)
+        .stroke(egui::Stroke::new(0.8, stroke))
+        .rounding(egui::Rounding::same(PILL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("Status: {}", state.label()))
+                    .strong()
+                    .color(text),
+            );
+        });
 }

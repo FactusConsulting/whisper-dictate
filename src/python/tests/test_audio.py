@@ -1,4 +1,4 @@
-from tests.test_helpers import (
+from helpers import (
     _capture_stdout,
     _env,
     io,
@@ -92,7 +92,6 @@ class AudioDspTests(unittest.TestCase):
                 vp_audio._highlight_cap_line("[cap] raw=-20dBFS"),
                 "[cap] raw=-20dBFS",
             )
-
     def test_cap_line_highlight_respects_no_color(self):
         from whisper_dictate import vp_audio
 
@@ -132,6 +131,182 @@ class AudioDspTests(unittest.TestCase):
             for i in range(10)])
         ok, _ = self.vp._looks_like_speech(a)
         self.assertTrue(ok)
+
+    def test_audio_level_metrics_use_rms_not_peak_for_live_meter(self):
+        np = self.np
+        pcm = np.zeros((16000, 1), dtype=np.int16)
+        pcm[0, 0] = 32767
+
+        raw_dbfs, peak, level = self.vp._audio_level_metrics(pcm)
+
+        self.assertEqual(round(peak, 3), 1.0)
+        self.assertLess(raw_dbfs, -40.0)
+        self.assertLess(level, 0.3)
+
+    def test_audio_level_metrics_map_normal_speech_to_visible_meter(self):
+        np = self.np
+        pcm = (np.full((16000, 1), 0.1, dtype=np.float32) * 32767).astype(np.int16)
+
+        raw_dbfs, peak, level = self.vp._audio_level_metrics(pcm)
+
+        self.assertAlmostEqual(raw_dbfs, -20.0, places=1)
+        self.assertAlmostEqual(peak, 0.1, places=2)
+        self.assertGreater(level, 0.7)
+
+    def test_select_active_channel_pcm_preserves_loudest_stereo_channel(self):
+        np = self.np
+        left = np.zeros(16000, dtype=np.int16)
+        right = (np.full(16000, 0.1, dtype=np.float32) * 32767).astype(np.int16)
+        stereo = np.stack([left, right], axis=1)
+
+        mono = self.vp._select_active_channel_pcm(stereo)
+
+        self.assertEqual(mono.shape, (16000, 1))
+        self.assertAlmostEqual(float(np.max(np.abs(mono))) / 32768.0, 0.1, places=2)
+
+    def test_select_active_channel_pcm_supports_multichannel_interfaces(self):
+        np = self.np
+        channels = [
+            np.zeros(16000, dtype=np.int16),
+            (np.full(16000, 0.02, dtype=np.float32) * 32767).astype(np.int16),
+            np.zeros(16000, dtype=np.int16),
+            (np.full(16000, 0.12, dtype=np.float32) * 32767).astype(np.int16),
+        ]
+        multichannel = np.stack(channels, axis=1)
+
+        mono = self.vp._select_active_channel_pcm(multichannel)
+
+        self.assertEqual(mono.shape, (16000, 1))
+        self.assertAlmostEqual(float(np.max(np.abs(mono))) / 32768.0, 0.12, places=2)
+
+    def test_audio_level_metrics_use_active_stereo_channel_for_live_meter(self):
+        np = self.np
+        left = np.zeros(16000, dtype=np.int16)
+        right = (np.full(16000, 0.1, dtype=np.float32) * 32767).astype(np.int16)
+        stereo = np.stack([left, right], axis=1)
+
+        raw_dbfs, peak, level = self.vp._audio_level_metrics(stereo)
+
+        self.assertAlmostEqual(raw_dbfs, -20.0, places=1)
+        self.assertAlmostEqual(peak, 0.1, places=2)
+        self.assertGreater(level, 0.7)
+
+
+class RuntimeAudioDeviceTests(unittest.TestCase):
+    def setUp(self):
+        from helpers import load_voice_pi
+
+        self.runtime = load_voice_pi()
+
+    def test_sounddevice_input_name_uses_default_input_index(self):
+        class Default:
+            device = (3, 7)
+
+        class FakeSoundDevice:
+            default = Default()
+
+            def __init__(self):
+                self.calls = []
+
+            def query_devices(self, device=None, kind=None):
+                self.calls.append((device, kind))
+                return {"name": "USB Microphone", "max_input_channels": 2}
+
+        fake = FakeSoundDevice()
+
+        self.assertEqual(self.runtime._sounddevice_input_name(fake), "USB Microphone")
+        self.assertEqual(fake.calls, [(3, None)])
+        self.assertEqual(self.runtime._sounddevice_input_channels(fake), 2)
+        self.assertEqual(self.runtime._sounddevice_capture_channel_candidates(2), [2, 1])
+
+    def test_sounddevice_input_name_falls_back_to_default_input_query(self):
+        class Default:
+            device = (-1, 7)
+
+        class FakeSoundDevice:
+            default = Default()
+
+            def __init__(self):
+                self.calls = []
+
+            def query_devices(self, device=None, kind=None):
+                self.calls.append((device, kind))
+                return {"name": "Default Array", "max_input_channels": 1}
+
+        fake = FakeSoundDevice()
+
+        self.assertEqual(self.runtime._sounddevice_input_name(fake), "Default Array")
+        self.assertEqual(fake.calls, [(None, "input")])
+        self.assertEqual(self.runtime._sounddevice_input_channels(fake), 1)
+        self.assertEqual(self.runtime._sounddevice_capture_channel_candidates(12), [8, 2, 1])
+
+    def test_runtime_worker_events_report_capture_state_and_audio_device(self):
+        script = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+
+        self.assertIn('state="recording"', script)
+        self.assertIn('state="transcribing"', script)
+        self.assertIn('state="ready"', script)
+        self.assertIn("audio_device=self._audio_input_device", script)
+        self.assertIn("capture_backend=self._capture_backend", script)
+        self.assertIn("capture_channels=self._capture_channels", script)
+        self.assertIn("_sounddevice_capture_channel_candidates", script)
+        self.assertIn("channels=self._capture_channels", script)
+        self.assertIn("pcm = _select_active_channel_pcm(pcm).astype(np.int16)", script)
+        self.assertIn('_emit_worker_event(\n            "audio"', script)
+        self.assertIn("level=round(level, 3)", script)
+        self.assertIn("raw_dbfs=round(raw_dbfs, 1)", script)
+
+    def test_worker_event_emits_structured_ascii_stderr_without_helper_process(self):
+        with _env(VOICEPI_WORKER_EVENTS="1"):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.runtime._emit_worker_event(
+                    "audio",
+                    state="recording",
+                    audio_device="Mikrofon æøå",
+                    level=0.25,
+                )
+
+        line = stderr.getvalue().strip()
+        self.assertTrue(line.startswith("[worker-event] "))
+        self.assertIn(r"Mikrofon \u00e6\u00f8\u00e5", line)
+        payload = json.loads(line.removeprefix("[worker-event] "))
+        self.assertEqual(payload["event"], "audio")
+        self.assertEqual(payload["state"], "recording")
+        self.assertEqual(payload["level"], 0.25)
+
+    def test_first_audio_callback_sets_recording_start_event_and_time(self):
+        np = AudioDspTests.np
+        fake = types.SimpleNamespace(
+            recording=True,
+            frames=[],
+            _first_audio_event=self.runtime.threading.Event(),
+            _first_audio_at=0.0,
+            _record_started=0.0,
+            _emit_audio_level=lambda _chunk: None,
+        )
+        chunk = np.ones((320, 1), dtype=np.int16)
+
+        self.runtime.Dictate._cb(fake, chunk, len(chunk), None, None)
+
+        self.assertTrue(fake._first_audio_event.is_set())
+        self.assertGreater(fake._first_audio_at, 0.0)
+        self.assertEqual(fake._record_started, fake._first_audio_at)
+        self.assertEqual(len(fake.frames), 1)
+        self.assertIsNot(fake.frames[0], chunk)
+
+    def test_runtime_start_reports_opening_and_first_audio_without_persistent_capture(self):
+        script = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        start = script.split("def _start(self):", 1)[1].split("def _stop_and_transcribe", 1)[0]
+
+        self.assertIn('self._first_audio_event.clear()', start)
+        self.assertIn('self._record_keydown_at = time.monotonic()', start)
+        self.assertIn('_emit_worker_event("status", state="opening")', start)
+        self.assertIn('first_audio_ready = self._first_audio_event.wait(timeout=0.2)', start)
+        self.assertIn('first_audio="ok" if first_audio_ready else "pending"', start)
+        self.assertLess(start.index('state="opening"'), start.index("self._start_sounddevice()"))
+        self.assertLess(start.index("self._start_sounddevice()"), start.index('state="recording"'))
+
 
 class AudioDuckingTests(unittest.TestCase):
     def test_audio_ducker_restore_resets_saved_session_volumes(self):

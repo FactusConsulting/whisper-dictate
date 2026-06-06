@@ -2,8 +2,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from tests.test_helpers import (
+from helpers import (
     _env,
+    _capture_stdout,
     contextmanager,
     load_voice_pi,
     os,
@@ -38,7 +39,8 @@ class InjectStrategyTests(unittest.TestCase):
         class Dummy(mixin):
             def __init__(self):
                 self.mode = mode
-                self._kb = types.SimpleNamespace(type=lambda text: None)
+                self.typed = []
+                self._kb = types.SimpleNamespace(type=self.typed.append)
                 self._inject_target_xwin = None
                 self._inject_target_title = title
                 self._inject_target_process = process
@@ -106,6 +108,26 @@ class InjectStrategyTests(unittest.TestCase):
         with patch.object(self.inject.os, "name", "posix"):
             self.assertFalse(
                 self.inject.InjectMixin._target_prefers_paste(target))
+
+    def test_inject_skips_self_target_but_keeps_final_preview_log(self):
+        target = self._injector(
+            title="whisper-dictate 1.0.0",
+            process="whisper-dictate.exe",
+        )
+
+        with patch.object(self.inject.os, "name", "nt"), _capture_stdout() as stdout:
+            target._inject("Og hvad kan vi så se her?")
+
+        self.assertEqual(target._last_inject_strategy, "skipped-self")
+        self.assertEqual(target.typed, [])
+        self.assertEqual(target.pasted, [])
+        self.assertIn('[inject] → "Og hvad kan vi så se her?"', stdout.getvalue())
+        self.assertIn("[inject] skipped self-target", stdout.getvalue())
+
+    def test_terminal_title_containing_project_name_is_not_self_target(self):
+        target = self._dummy("whisper-dictate - Terminal", "WindowsTerminal.exe")
+
+        self.assertFalse(self.inject.InjectMixin._target_is_self(target))
 
     def test_wayland_auto_pastes_non_ascii_text(self):
         target = self._injector(mode="auto")

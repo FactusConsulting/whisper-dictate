@@ -7,7 +7,7 @@ use crate::config::AppSettings;
 
 pub(super) const GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1";
 pub(super) const GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
-pub(super) const GROQ_POST_MODEL: &str = "llama-3.1-8b-instant";
+pub(super) const GROQ_POST_MODEL: &str = "llama-3.3-70b-versatile";
 pub(super) const GROQ_KEYS_URL: &str = "https://console.groq.com/keys";
 pub(super) const OPENAI_STT_BASE_URL: &str = "https://api.openai.com/v1";
 pub(super) const OPENAI_STT_MODEL: &str = "gpt-4o-mini-transcribe";

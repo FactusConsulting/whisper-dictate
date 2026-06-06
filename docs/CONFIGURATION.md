@@ -70,6 +70,7 @@ requiring restart/model reload.
 | **VAD silence** | `VOICEPI_VAD_MIN_SILENCE_MS` | _none_ | `600` | integer ms | minimum silence gap used by VAD segmentation |
 | **Skip syscheck** | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `packaging/linux/ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
 | **Debug dump** | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | log every effective setting at startup |
+| **UI theme** | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 
 The detailed tables below are the same knobs split by surface (env vars
 vs flags) with the longer prose. Most users only need the cheat sheet +

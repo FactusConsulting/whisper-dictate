@@ -1,0 +1,232 @@
+use super::test_support::test_app;
+use super::*;
+
+#[test]
+fn log_view_modes_filter_runtime_output_by_detail_level() {
+    let log = [
+        "Rust UI ready. Start launches the Python dictation worker directly.",
+        "[ui] started: python worker",
+        "[worker] status=listening",
+        "[gate] raw=-30dBFS noise=-80dBFS snr=54dB",
+        "[cap] raw=-30dBFS peak=0.359 gain=2.8x noise=-80dBFS snr=54dB",
+        "[stt] dur=12.8s post-boost=-21dBFS compute=0.5s rtf=0.04 text='hej'",
+        "[stt-debug] segment#0 avg_logprob=-0.1",
+        "[post] clean/groq changed in 450ms",
+        "[inject] -> \"hej\"  (target: editor)",
+        "[inject] strategy: type",
+        "third-party library noise",
+    ]
+    .join("\n");
+
+    let minimal = log_view_text(&log, LogViewMode::Minimal);
+    assert_eq!(minimal, "hej");
+    assert!(!minimal.contains("[ui] started"));
+    assert!(!minimal.contains("[post] clean/groq"));
+    assert!(!minimal.contains("[inject]"));
+    assert!(!minimal.contains("[inject] strategy"));
+    assert!(!minimal.contains("[gate] raw="));
+    assert!(!minimal.contains("third-party library noise"));
+
+    let diagnostic = log_view_text(&log, LogViewMode::Diagnostic);
+    assert!(diagnostic.contains("[post] clean/groq"));
+    assert!(diagnostic.contains("[inject] -> \"hej\""));
+    assert!(diagnostic.contains("[inject] strategy"));
+    assert!(diagnostic.contains("[gate] raw="));
+    assert!(diagnostic.contains("[cap] raw="));
+    assert!(diagnostic.contains("[stt] dur="));
+    assert!(diagnostic.contains("[stt-debug] segment#0"));
+    assert!(!diagnostic.contains("third-party library noise"));
+
+    let debug = log_view_text(&log, LogViewMode::Debug);
+    assert!(debug.contains("third-party library noise"));
+}
+
+#[test]
+fn minimal_log_cards_prioritize_final_output() {
+    let log = [
+        "[worker] status=listening",
+        "[post] clean/groq changed in 450ms",
+        "[inject] -> \"Hej, Sara.\"  (target: Word)",
+        "[inject] strategy: type",
+    ]
+    .join("\n");
+
+    let cards = runtime_log_cards(&log, LogViewMode::Minimal);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].kind, RuntimeLogCardKind::FinalText);
+    assert_eq!(cards[0].title, "Hej, Sara.");
+    assert_eq!(cards[0].detail, "");
+    assert_eq!(cards[0].badge, "Final");
+}
+
+#[test]
+fn minimal_log_cards_ignore_blank_inject_preview() {
+    let log = [
+        "[inject] -> \"\"  (target: whisper-dictate 1.0.0)",
+        "[inject] -> \"   \"  (target: whisper-dictate 1.0.0)",
+        "[inject] skipped self-target",
+    ]
+    .join("\n");
+
+    assert!(runtime_log_cards(&log, LogViewMode::Minimal).is_empty());
+    assert_eq!(log_view_text(&log, LogViewMode::Minimal), "");
+}
+
+#[test]
+fn minimal_copy_text_contains_only_final_injected_text() {
+    let log = [
+        "[worker] status=listening",
+        "[stt] dur=1.0s text='midlertidig tekst'",
+        "[post] clean/groq changed in 120ms",
+        "[inject] -> \"First final.\"  (target: Word)",
+        "[inject] strategy: type",
+        "[post] skipped clean/none",
+        "[inject] -> \"Second final.\"  (target: Word)",
+    ]
+    .join("\n");
+
+    assert_eq!(
+        log_view_text(&log, LogViewMode::Minimal),
+        "First final.\nSecond final."
+    );
+}
+
+#[test]
+fn diagnostic_log_cards_summarize_audio_and_stt_metrics() {
+    let log = [
+        "[gate] raw=-30dBFS noise=-80dBFS snr=54dB",
+        "[cap] raw=-30dBFS peak=0.359 gain=2.8x noise=-80dBFS snr=54dB",
+        "[stt] dur=12.8s post-boost=-21dBFS compute=0.5s rtf=0.04 text='hej'",
+        "[post] clean/groq changed in 450ms",
+        "[inject] -> \"hej\"  (target: editor)",
+    ]
+    .join("\n");
+
+    let cards = runtime_log_cards(&log, LogViewMode::Diagnostic);
+    assert!(cards.iter().any(|card| {
+        card.kind == RuntimeLogCardKind::FinalText
+            && card.title == "hej"
+            && card.detail == "clean/groq changed in 450ms"
+    }));
+    assert!(cards.iter().any(|card| {
+        card.kind == RuntimeLogCardKind::Diagnostic
+            && card.badge == "Capture"
+            && card.title.contains("peak=0.359")
+    }));
+    assert!(cards.iter().any(|card| {
+        card.kind == RuntimeLogCardKind::Diagnostic
+            && card.badge == "STT"
+            && card.title.contains("dur=12.8s")
+            && card.title.contains("rtf=0.04")
+    }));
+}
+
+#[test]
+fn audio_meter_level_uses_live_worker_level_only_while_recording() {
+    assert_eq!(audio_meter_level(0.42, RuntimeState::Stopped, true), 0.0);
+    assert_eq!(audio_meter_level(0.42, RuntimeState::Running, false), 0.0);
+    assert_eq!(audio_meter_level(0.42, RuntimeState::Running, true), 0.42);
+    assert_eq!(audio_meter_level(2.0, RuntimeState::Running, true), 1.0);
+    assert_eq!(audio_meter_level(-1.0, RuntimeState::Running, true), 0.0);
+}
+
+#[test]
+fn worker_status_updates_capture_state_and_logs_audio_device() {
+    assert_eq!(
+        audio_capture_active_for_worker_state("recording"),
+        Some(true)
+    );
+    assert_eq!(
+        audio_capture_active_for_worker_state("listening"),
+        Some(true)
+    );
+    assert_eq!(
+        audio_capture_active_for_worker_state("opening"),
+        Some(false)
+    );
+    assert_eq!(
+        audio_capture_active_for_worker_state("transcribing"),
+        Some(false)
+    );
+    assert_eq!(audio_capture_active_for_worker_state("ready"), Some(false));
+
+    let event = WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("recording".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "recording",
+            "capture_backend": "sounddevice",
+            "capture_channels": 2,
+            "audio_device": "USB Microphone",
+            "startup_ms": 42,
+            "first_audio": "ok",
+        }),
+    };
+    assert_eq!(
+        worker_status_log_line(&event),
+        Some(
+            "[worker] status=recording capture_backend=sounddevice capture_channels=2 audio_device=USB Microphone startup_ms=42 first_audio=ok"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn opening_worker_status_marks_meter_as_arming_not_recording() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.audio_capture_active = true;
+    app.audio_meter_level = 0.5;
+
+    let event = WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("opening".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "opening",
+        }),
+    };
+
+    app.update_worker_status(&event);
+
+    assert!(app.audio_capture_opening);
+    assert!(!app.audio_capture_active);
+    assert_eq!(app.audio_meter_level, 0.0);
+}
+
+#[test]
+fn worker_audio_event_updates_live_meter_and_device_without_log_output() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.runtime_log = "[cap] raw=-10dBFS peak=0.999 gain=1.0x noise=-80dBFS snr=70dB".to_owned();
+
+    let event = WorkerEvent {
+        event: "audio".to_owned(),
+        state: Some("recording".to_owned()),
+        payload: serde_json::json!({
+            "event": "audio",
+            "state": "recording",
+            "level": 0.31,
+            "raw_dbfs": -35.5,
+            "peak": 0.12,
+            "audio_device": "Stereo USB Microphone",
+        }),
+    };
+
+    app.update_worker_audio(&event);
+
+    assert!(app.audio_capture_active);
+    assert_eq!(app.audio_meter_level, 0.31);
+    assert_eq!(app.audio_meter_raw_dbfs, Some(-35.5));
+    assert_eq!(app.audio_meter_peak, Some(0.12));
+    assert_eq!(app.active_audio_device, "Stereo USB Microphone");
+    assert_eq!(
+        audio_meter_level(
+            app.audio_meter_level,
+            app.runtime_state,
+            app.audio_capture_active
+        ),
+        0.31
+    );
+}

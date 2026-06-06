@@ -22,6 +22,7 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_env);
+    let _stt_model_guard = EnvVarGuard::remove("VOICEPI_STT_MODEL");
 
     let saved_settings = AppSettings {
         stt_backend: "openai".to_owned(),
@@ -41,7 +42,10 @@ fn saving_api_key_persists_selected_cloud_provider_settings() {
     app.saved_settings = saved_settings;
 
     let path = app.persist_cloud_provider_selection().unwrap().unwrap();
-    let saved = config::load_settings().unwrap();
+    let saved = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap(),
+    )
+    .unwrap();
 
     assert_eq!(path, config);
     assert_eq!(saved.stt_backend, "openai");

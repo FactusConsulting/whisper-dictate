@@ -1,6 +1,6 @@
 import subprocess
 
-from tests.test_helpers import (
+from helpers import (
     _capture_stdout,
     _env,
     io,
@@ -431,6 +431,18 @@ class ContextMinSecondsTests(unittest.TestCase):
         self.assertFalse(self._gate(5.0, 4.9))
         self.assertTrue(self._gate(5.0, 5.0))
         self.assertTrue(self._gate(5.0, 19.4))
+
+
+class VadSpeechPaddingTests(unittest.TestCase):
+    def test_vad_speech_padding_is_configurable_and_passed_to_whisper(self):
+        config = Path("src/python/whisper_dictate/vp_config.py").read_text(encoding="utf-8")
+        transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
+        runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+
+        self.assertIn('Setting("VOICEPI_VAD_SPEECH_PAD_MS", "vad_speech_pad_ms", "200"', config)
+        self.assertIn('VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200")', transcribe)
+        self.assertIn("speech_pad_ms=VAD_SPEECH_PAD_MS", transcribe)
+        self.assertIn('vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))', runtime)
 
 class ConfigTests(unittest.TestCase):
     def setUp(self):

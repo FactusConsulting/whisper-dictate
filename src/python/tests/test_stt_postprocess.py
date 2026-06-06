@@ -1,4 +1,4 @@
-from tests.test_helpers import (
+from helpers import (
     _capture_stdout,
     json,
     os,

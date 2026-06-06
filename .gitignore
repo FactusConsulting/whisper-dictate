@@ -11,6 +11,7 @@ __pycache__/
 
 # Rust build output
 target/
+target-clippy/
 
 # Local installer/ZIP build output
 Output/
@@ -28,6 +29,7 @@ Thumbs.db
 
 # Claude Code settings (personal, machine-local — never commit)
 .claude/
+.codex/screenshots/
 
 # Local benchmark recordings/results
 benchmark/audio/

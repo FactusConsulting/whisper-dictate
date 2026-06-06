@@ -1,3 +1,4 @@
+use super::test_support::test_app;
 use super::*;
 
 #[test]
@@ -29,4 +30,38 @@ fn combo_labels_keep_cloud_backend_distinct_from_openai_provider() {
         selected_option_label("custom", CLOUD_PROVIDER_OPTIONS),
         "custom"
     );
+}
+
+#[test]
+fn top_status_detail_uses_cloud_model_instead_of_local_compute() {
+    let app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "groq".to_owned(),
+        stt_model: "whisper-large-v3".to_owned(),
+        device: "cuda".to_owned(),
+        compute_type: "int8_float16".to_owned(),
+        ..Default::default()
+    });
+
+    let (label, _, value) = app.stt_detail_summary();
+
+    assert_eq!(label, "Model");
+    assert_eq!(value, "whisper-large-v3");
+    assert!(!value.contains("cuda"));
+    assert!(!value.contains("int8"));
+}
+
+#[test]
+fn top_status_detail_keeps_compute_for_local_backend() {
+    let app = test_app(AppSettings {
+        stt_backend: "whisper".to_owned(),
+        device: "cuda".to_owned(),
+        compute_type: "int8_float16".to_owned(),
+        ..Default::default()
+    });
+
+    let (label, _, value) = app.stt_detail_summary();
+
+    assert_eq!(label, "Compute");
+    assert_eq!(value, "cuda / int8_float16");
 }

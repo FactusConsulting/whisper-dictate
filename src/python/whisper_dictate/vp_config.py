@@ -47,6 +47,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOICEPI_RELEASE_TAIL_MS", "release_tail_ms", "200", live=True),
     Setting("VOICEPI_VAD_THRESHOLD", "vad_threshold", "0.3", live=True),
     Setting("VOICEPI_VAD_MIN_SILENCE_MS", "vad_min_silence_ms", "600", live=True),
+    Setting("VOICEPI_VAD_SPEECH_PAD_MS", "vad_speech_pad_ms", "200", live=True),
     Setting("VOICEPI_TARGET_DBFS", "target_dbfs", "-20", live=True),
     Setting("VOICEPI_MIN_INPUT_DBFS", "min_input_dbfs", "-55", live=True),
     Setting("VOICEPI_MIN_SNR_DB", "min_snr_db", "6", live=True),

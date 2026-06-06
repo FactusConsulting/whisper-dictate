@@ -127,6 +127,11 @@ const RUNTIME_SETTINGS: &[RuntimeSetting] = &[
         default: Some("600"),
     },
     RuntimeSetting {
+        env: "VOICEPI_VAD_SPEECH_PAD_MS",
+        key: "vad_speech_pad_ms",
+        default: Some("200"),
+    },
+    RuntimeSetting {
         env: "VOICEPI_TARGET_DBFS",
         key: "target_dbfs",
         default: Some("-20"),
@@ -301,6 +306,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "release_tail_ms",
     "vad_threshold",
     "vad_min_silence_ms",
+    "vad_speech_pad_ms",
     "target_dbfs",
     "min_input_dbfs",
     "min_snr_db",
@@ -331,6 +337,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "quit_key",
     "quit_count",
     "quit_window_ms",
+    "ui_theme",
     "ui_text_scale",
 ];
 
@@ -504,6 +511,7 @@ pub struct AppSettings {
     pub release_tail_ms: String,
     pub vad_threshold: String,
     pub vad_min_silence_ms: String,
+    pub vad_speech_pad_ms: String,
     pub target_dbfs: String,
     pub min_input_dbfs: String,
     pub min_snr_db: String,
@@ -534,6 +542,7 @@ pub struct AppSettings {
     pub quit_key: String,
     pub quit_count: String,
     pub quit_window_ms: String,
+    pub ui_theme: String,
     pub ui_text_scale: String,
     pub profiles_json: String,
 }
@@ -563,6 +572,7 @@ impl Default for AppSettings {
             release_tail_ms: "200".to_owned(),
             vad_threshold: "0.3".to_owned(),
             vad_min_silence_ms: "600".to_owned(),
+            vad_speech_pad_ms: "200".to_owned(),
             target_dbfs: "-20".to_owned(),
             min_input_dbfs: "-55".to_owned(),
             min_snr_db: "6".to_owned(),
@@ -593,6 +603,7 @@ impl Default for AppSettings {
             quit_key: "esc".to_owned(),
             quit_count: "3".to_owned(),
             quit_window_ms: "1500".to_owned(),
+            ui_theme: "dark".to_owned(),
             ui_text_scale: "1.15".to_owned(),
             profiles_json: "[]".to_owned(),
         }
@@ -625,6 +636,7 @@ impl AppSettings {
                 "raw", "clean", "prompt", "terminal", "slack", "email", "bullets",
             ],
         )?;
+        validate_choice("ui_theme", &self.ui_theme, &["dark", "light"])?;
 
         if self.stt_backend == "openai" {
             validate_http_url("stt_base_url", &self.stt_base_url)?;
@@ -644,6 +656,7 @@ impl AppSettings {
         validate_u32("stt_timeout_ms", &self.stt_timeout_ms, 100)?;
         validate_u32("beam_size", &self.beam_size, 1)?;
         validate_u32("vad_min_silence_ms", &self.vad_min_silence_ms, 0)?;
+        validate_u32("vad_speech_pad_ms", &self.vad_speech_pad_ms, 0)?;
         validate_u32("dictionary_max_terms", &self.dictionary_max_terms, 1)?;
         validate_u32("dictionary_prompt_chars", &self.dictionary_prompt_chars, 1)?;
         validate_u32("post_timeout_ms", &self.post_timeout_ms, 100)?;
@@ -711,6 +724,8 @@ impl AppSettings {
             settings.vad_threshold = string_value(object, "vad_threshold", &defaults.vad_threshold);
             settings.vad_min_silence_ms =
                 string_value(object, "vad_min_silence_ms", &defaults.vad_min_silence_ms);
+            settings.vad_speech_pad_ms =
+                string_value(object, "vad_speech_pad_ms", &defaults.vad_speech_pad_ms);
             settings.target_dbfs = string_value(object, "target_dbfs", &defaults.target_dbfs);
             settings.min_input_dbfs =
                 string_value(object, "min_input_dbfs", &defaults.min_input_dbfs);
@@ -768,6 +783,7 @@ impl AppSettings {
             settings.quit_count = string_value(object, "quit_count", &defaults.quit_count);
             settings.quit_window_ms =
                 string_value(object, "quit_window_ms", &defaults.quit_window_ms);
+            settings.ui_theme = string_value(object, "ui_theme", &defaults.ui_theme);
             settings.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
             settings.profiles_json = object
                 .get("profiles")
@@ -806,6 +822,7 @@ impl AppSettings {
         set_string(object, "release_tail_ms", &self.release_tail_ms);
         set_string(object, "vad_threshold", &self.vad_threshold);
         set_string(object, "vad_min_silence_ms", &self.vad_min_silence_ms);
+        set_string(object, "vad_speech_pad_ms", &self.vad_speech_pad_ms);
         set_string(object, "target_dbfs", &self.target_dbfs);
         set_string(object, "min_input_dbfs", &self.min_input_dbfs);
         set_string(object, "min_snr_db", &self.min_snr_db);
@@ -844,6 +861,7 @@ impl AppSettings {
         set_string(object, "quit_key", &self.quit_key);
         set_string(object, "quit_count", &self.quit_count);
         set_string(object, "quit_window_ms", &self.quit_window_ms);
+        set_string(object, "ui_theme", &self.ui_theme);
         set_string(object, "ui_text_scale", &self.ui_text_scale);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
@@ -1081,6 +1099,7 @@ mod tests {
             "audio_ducking": "1",
             "post_redact": "1",
             "post_redact_terms": "Lars Andersen",
+            "ui_theme": "light",
             "profiles": [{"name": "terminal"}]
         });
 
@@ -1096,6 +1115,7 @@ mod tests {
         assert!(settings.audio_ducking);
         assert!(settings.post_redact);
         assert_eq!(settings.post_redact_terms, "Lars Andersen");
+        assert_eq!(settings.ui_theme, "light");
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
         assert_eq!(settings.ui_text_scale, "1.15");
@@ -1176,6 +1196,20 @@ mod tests {
     }
 
     #[test]
+    fn settings_validation_rejects_invalid_ui_theme() {
+        let settings = AppSettings {
+            ui_theme: "solarized".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("ui_theme"));
+    }
+
+    #[test]
     fn settings_validation_rejects_cloud_without_http_url() {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),
@@ -1224,6 +1258,7 @@ mod tests {
             audio_ducking: true,
             post_redact: true,
             post_redact_terms: "Lars Andersen".to_owned(),
+            ui_theme: "light".to_owned(),
             ui_text_scale: "1.3".to_owned(),
             profiles_json: r#"[{"name":"new"}]"#.to_owned(),
             ..AppSettings::default()
@@ -1240,6 +1275,7 @@ mod tests {
         assert_eq!(saved["audio_ducking"], "1");
         assert_eq!(saved["post_redact"], "1");
         assert_eq!(saved["post_redact_terms"], "Lars Andersen");
+        assert_eq!(saved["ui_theme"], "light");
         assert_eq!(saved["ui_text_scale"], "1.3");
         assert!(saved.get("stt_model").is_none());
         assert_eq!(saved["profiles"][0]["name"], "new");
@@ -1275,6 +1311,14 @@ mod tests {
         };
 
         assert_eq!(restart_required_keys(&before, &after), vec!["quit_key"]);
+
+        let after = AppSettings {
+            ui_theme: "light".to_owned(),
+            ui_text_scale: "1.3".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(restart_required_keys(&before, &after).is_empty());
     }
 
     #[test]

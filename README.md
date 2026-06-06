@@ -631,7 +631,7 @@ Run the fast unit tests with:
 
 ```bash
 python -m pip install pytest numpy
-python -m pytest tests -q
+python -m pytest src/python/tests src/tests/python -q
 ```
 
 ## Releasing

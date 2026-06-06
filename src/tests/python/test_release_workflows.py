@@ -1,7 +1,8 @@
-from tests.test_helpers import (
+from helpers import (
     Path,
     unittest,
 )
+import tomllib
 
 class RustReleaseWorkflowTests(unittest.TestCase):
     def test_release_uploads_linux_rust_ui_binary(self):
@@ -182,6 +183,12 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('members = ["whisper-dictate-app"]', root_workspace)
         self.assertFalse(Path("src/rust/whisper-dictate-app/Cargo.lock").exists())
 
+    def test_rust_workspace_disables_incremental_cache_for_windows_stability(self):
+        workspace = tomllib.loads(Path("src/rust/Cargo.toml").read_text(encoding="utf-8"))
+
+        self.assertFalse(workspace["profile"]["dev"]["incremental"])
+        self.assertFalse(workspace["profile"]["test"]["incremental"])
+
     def test_vscode_rust_analyzer_links_moved_workspace(self):
         settings = Path(".vscode/settings.json").read_text(encoding="utf-8")
         gitignore = Path(".gitignore").read_text(encoding="utf-8")
@@ -241,6 +248,22 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("dictionary.example.json') -Destination $bundle", local_installer)
         self.assertNotIn("Copy-Item dictionary.example.json", workflows)
         self.assertNotIn("[ -f dictionary.example.json ]", workflows)
+
+    def test_python_tests_live_under_source_test_roots(self):
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+        technical = Path("docs/TECHNICAL.md").read_text(encoding="utf-8")
+        test_command = "python -m pytest src/python/tests src/tests/python -q"
+
+        self.assertFalse(Path("tests").exists())
+        self.assertTrue(Path("src/python/tests/helpers.py").is_file())
+        self.assertTrue(Path("src/python/tests/test_audio.py").is_file())
+        self.assertTrue(Path("src/tests/python/test_release_workflows.py").is_file())
+        self.assertIn(test_command, workflow)
+        self.assertIn(test_command, readme)
+        self.assertIn(test_command, technical)
+        self.assertNotIn("python -m pytest tests -q", workflow)
+        self.assertNotIn("python -m pytest src/tests/python -q", workflow)
 
     def test_workflows_use_node24_checkout_action(self):
         for path in Path(".github/workflows").glob("*.yml"):

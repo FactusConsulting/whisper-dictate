@@ -156,7 +156,7 @@ two implementations during the migration.
 Manual smoke procedures before tagging a Rust UI release:
 
 1. `cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app`
-2. `python -m pytest tests -q`
+2. `python -m pytest src/python/tests src/tests/python -q`
 3. Linux: `scripts/linux/install-rust-ui.sh`, then
    `~/.local/bin/whisper-dictate doctor` and
    `~/.local/bin/whisper-dictate ui`

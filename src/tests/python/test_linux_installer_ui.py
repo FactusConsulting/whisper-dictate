@@ -1,4 +1,4 @@
-from tests.test_helpers import (
+from helpers import (
     os,
     Path,
     subprocess,

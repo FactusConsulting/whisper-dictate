@@ -1110,6 +1110,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui_material_icons"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1456a754392e6007785d625c4f17b0150d57c3e41b14b0ea282dee653d25046"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "emath"
 version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4027,11 +4036,12 @@ dependencies = [
 
 [[package]]
 name = "whisper-dictate-app"
-version = "0.3.27"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "eframe",
+ "egui_material_icons",
  "keyring",
  "regex",
  "serde",

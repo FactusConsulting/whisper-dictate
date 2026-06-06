@@ -6,3 +6,12 @@ resolver = "2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
+
+# Windows intermittently denies rustc access while finalizing incremental cache
+# directories, which turns clean builds/tests into noisy warnings. Full rebuilds
+# are a bit slower, but deterministic logs are more useful for this desktop app.
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
