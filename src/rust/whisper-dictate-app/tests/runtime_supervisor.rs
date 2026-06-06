@@ -42,6 +42,44 @@ fn supervisor_captures_stdout_and_exit() {
 }
 
 #[test]
+fn supervisor_forces_utf8_stdio_for_piped_python_worker() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                concat!(
+                    "import os; ",
+                    "print(os.environ.get('PYTHONUTF8'), flush=True); ",
+                    "print(os.environ.get('PYTHONIOENCODING'), flush=True); ",
+                    "print('ændret prøv', flush=True)"
+                )
+                .to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "ændret prøv") && has_exit(events)
+    });
+
+    assert!(has_stdout(&events, "1"));
+    assert!(has_stdout(&events, "utf-8"));
+    assert!(has_stdout(&events, "ændret prøv"));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::Stdout(line) if line.contains("Ã¦") || line.contains("Ã¸")
+    )));
+    assert!(has_exit(&events));
+}
+
+#[test]
 fn supervisor_stops_running_process() {
     let Some(python) = test_python() else {
         return;
