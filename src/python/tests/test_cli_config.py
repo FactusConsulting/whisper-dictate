@@ -342,6 +342,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_inject.py",
             "vp_parakeet.py",
             "vp_postprocess.py",
+            "vp_rust.py",
             "vp_transcribe.py",
         }
 
