@@ -182,6 +182,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('members = ["whisper-dictate-app"]', root_workspace)
         self.assertFalse(Path("src/rust/whisper-dictate-app/Cargo.lock").exists())
 
+    def test_vscode_rust_analyzer_links_moved_workspace(self):
+        settings = Path(".vscode/settings.json").read_text(encoding="utf-8")
+        gitignore = Path(".gitignore").read_text(encoding="utf-8")
+
+        self.assertIn('"rust-analyzer.linkedProjects"', settings)
+        self.assertIn('"src/rust/Cargo.toml"', settings)
+        self.assertIn("!.vscode/settings.json", gitignore)
+
     def test_sonar_uses_supported_python_version(self):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
         workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")

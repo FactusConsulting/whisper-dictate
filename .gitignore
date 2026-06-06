@@ -22,7 +22,9 @@ Output/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+.vscode/*
+!.vscode/
+!.vscode/settings.json
 
 # Claude Code settings (personal, machine-local — never commit)
 .claude/

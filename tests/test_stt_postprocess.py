@@ -426,6 +426,9 @@ class PostprocessTests(unittest.TestCase):
                 prompt = vp_postprocess.build_prompt("hello world", mode)
                 self.assertIn(phrase, prompt)
                 self.assertIn("Return only the rewritten text", prompt)
+                self.assertIn("Do not include the original text", prompt)
+                if mode == "clean":
+                    self.assertIn("Do not paraphrase", prompt)
 
     def test_postprocess_accepts_bullet_list_alias(self):
         os.environ["VOICEPI_POST_PROCESSOR"] = "ollama"
@@ -538,6 +541,50 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(calls["path"], "/v1/chat/completions")
         self.assertEqual(calls["auth"], "Bearer test-key")
         self.assertIn("Clean punctuation", calls["payload"]["messages"][1]["content"])
+
+    def test_postprocessor_extracts_final_text_from_before_after_answer(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        source = "Hej, mit navn er Sara. Jeg er Lars' datter."
+        final = "Hej, mit navn er Sara. Jeg er datter af Lars."
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                data = json.dumps({
+                    "choices": [{
+                        "message": {"content": f"{source}\n\nbecomes\n\n{final}"}
+                    }]
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        from whisper_dictate import vp_postprocess
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            model="gpt-4o-mini",
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            api_key="test-key",
+        )
+        result = vp_postprocess.postprocess_text(source, settings)
+
+        self.assertEqual(result.text, final)
+        self.assertNotIn("becomes", result.text)
 
     def test_groq_postprocessor_defaults_to_groq_chat_model_and_key(self):
         os.environ["VOICEPI_POST_PROCESSOR"] = "groq"

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -181,8 +182,9 @@ def validate_postprocess_settings(settings: PostprocessSettings) -> None:
 
 _MODE_INSTRUCTIONS = {
     "clean": (
-        "Clean punctuation, casing and obvious grammar while preserving the "
-        "speaker's exact meaning. Do not add new facts."
+        "Clean punctuation, casing and only obvious transcription artifacts. "
+        "Preserve the speaker's wording, word order and sentence structure "
+        "unless grammar is clearly broken. Do not paraphrase or add facts."
     ),
     "prompt": (
         "Rewrite into a clear, actionable prompt for an AI coding agent. "
@@ -211,6 +213,8 @@ def build_prompt(text: str, mode: str) -> str:
         "You are a local text post-processor for speech dictation.\n"
         f"Task: {instruction}\n"
         "Return only the rewritten text. If the input is already good, return it unchanged.\n\n"
+        "Do not include the original text, labels, explanations, before/after formatting, "
+        "or words such as 'becomes'.\n\n"
         f"Input:\n{text}"
     )
 
@@ -311,6 +315,39 @@ def _ollama_generate(settings: PostprocessSettings, text: str) -> str:
     return output or text
 
 
+def _comparison_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+_FINAL_MARKER_RE = re.compile(
+    r"(?im)^\s*(?:becomes|bliver til|rewritten|rewrite|output|final|result|cleaned|"
+    r"rettet|endelig(?:\s+tekst)?)\s*:?\s*$"
+)
+_INLINE_FINAL_MARKER_RE = re.compile(r"\s+(?:becomes|bliver til|=>|->|→)\s+", re.IGNORECASE)
+
+
+def _extract_final_text(output: str, source_text: str) -> str:
+    out = (output or "").strip()
+    source = (source_text or "").strip()
+    if not out or not source:
+        return out
+
+    source_cmp = _comparison_text(source)
+    for marker in _FINAL_MARKER_RE.finditer(out):
+        prefix = out[: marker.start()]
+        final = out[marker.end():].strip()
+        if final and source_cmp in _comparison_text(prefix):
+            return final
+
+    for marker in _INLINE_FINAL_MARKER_RE.finditer(out):
+        prefix = out[: marker.start()]
+        final = out[marker.end():].strip()
+        if final and _comparison_text(prefix) == source_cmp:
+            return final
+
+    return out
+
+
 def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> PostprocessResult:
     settings = settings or load_postprocess_settings()
     mode = normalize_mode(settings.mode)
@@ -344,6 +381,7 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             )
         else:
             raise ValueError(f"unsupported post processor: {settings.processor}")
+        out = _extract_final_text(out, prompt_text)
         if redaction.redactions:
             out = redaction.restore(out)
         out = out[: settings.max_output_chars].strip() or text
