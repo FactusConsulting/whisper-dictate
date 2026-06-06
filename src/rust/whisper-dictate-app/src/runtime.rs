@@ -952,4 +952,20 @@ fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests;
+mod app_root_tests;
+#[cfg(test)]
+mod desktop_entry_tests;
+#[cfg(test)]
+mod install_plan_tests;
+#[cfg(test)]
+mod process_capture_tests;
+#[cfg(test)]
+mod state_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod windows_process_tests;
+#[cfg(test)]
+mod worker_command_tests;
+#[cfg(test)]
+mod worker_event_tests;

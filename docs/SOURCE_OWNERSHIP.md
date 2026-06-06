@@ -17,7 +17,7 @@ Rust source lives in `src/rust`.
 |---|---|---|
 | CLI/controller | `cli.rs`, `main.rs` | Public `whisper-dictate` command, hidden worker helpers, command dispatch. |
 | Desktop UI | `ui.rs`, `ui/*` | egui settings/runtime UI, API key UI, tabs, platform controls. |
-| Runtime supervision | `runtime.rs`, `runtime/tests.rs` | Starts/stops/restarts the Python worker, exports effective config as `VOICEPI_*`, runs install/doctor/setup commands, parses worker events, keeps Windows launch behavior unified. |
+| Runtime supervision | `runtime.rs`, `runtime/*_tests.rs` | Starts/stops/restarts the Python worker, exports effective config as `VOICEPI_*`, runs install/doctor/setup commands, parses worker events, keeps Windows launch behavior unified. |
 | Config schema | `config.rs` | Config path, defaults, validation, save/load, restart-key checks, runtime env export. |
 | Dictionary | `dictionary.rs` | JSON/text dictionary parsing, prompt term caps, deterministic replacements, CLI add/status/open/replace, runtime dictionary helper. |
 | Injection core | `injection.rs` | Rust text injection helper and Wayland keycode maps/layout handling. |

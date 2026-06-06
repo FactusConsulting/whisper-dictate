@@ -1,0 +1,68 @@
+use super::*;
+use std::env;
+use std::ffi::OsString;
+use std::sync::Mutex;
+
+pub(super) static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
+    WhisperDictateApp {
+        app_version: "test".to_owned(),
+        selected_tab: Tab::Log,
+        runtime_state: RuntimeState::Stopped,
+        runtime_log: String::new(),
+        runtime_log_scroll_to_bottom: false,
+        config_path: String::new(),
+        saved_settings: settings.clone(),
+        settings,
+        settings_status: String::new(),
+        stt_api_key_input: String::new(),
+        saved_stt_api_key_input: String::new(),
+        stt_api_key_reveal_until: None,
+        stt_api_key_status: String::new(),
+        post_api_key_input: String::new(),
+        saved_post_api_key_input: String::new(),
+        post_api_key_reveal_until: None,
+        post_api_key_status: String::new(),
+        dictionary_preview: String::new(),
+        history_preview: String::new(),
+        metrics_preview: String::new(),
+        supervisor: RuntimeSupervisor::new(),
+        background_task: None,
+        background_task_label: None,
+    }
+}
+
+pub(super) struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    pub(super) fn set(key: &'static str, value: &str) -> Self {
+        let original = env::var_os(key);
+        unsafe {
+            env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+
+    pub(super) fn remove(key: &'static str) -> Self {
+        let original = env::var_os(key);
+        unsafe {
+            env::remove_var(key);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
+}
