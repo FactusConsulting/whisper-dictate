@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -13,6 +11,7 @@ from dataclasses import dataclass, field
 
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 from whisper_dictate.vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
+from whisper_dictate.vp_rust import run_json_helper
 
 apply_config_to_environ()
 
@@ -230,26 +229,7 @@ def _redact_for_cloud(text: str, settings: PostprocessSettings) -> RedactionResu
 
 
 def _rust_json(command: str, payload: dict[str, object], *, timeout: float = 5.0) -> dict[str, object] | None:
-    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
-    if not helper:
-        return None
-    try:
-        r = subprocess.run(
-            [helper, command],
-            input=json.dumps(payload, ensure_ascii=False),
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            timeout=timeout,
-            shell=False,
-        )
-        if r.returncode != 0:
-            return None
-        result = json.loads(r.stdout or "{}")
-        return result if isinstance(result, dict) else None
-    except Exception:
-        return None
+    return run_json_helper(command, payload, timeout=timeout)
 
 
 def _local_only_enabled() -> bool:

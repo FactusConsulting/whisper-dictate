@@ -128,6 +128,7 @@ from whisper_dictate.vp_postprocess import load_postprocess_settings, postproces
 from whisper_dictate.vp_config import (  # noqa: E402
     apply_config_to_environ, config_mtime, effective_config, get_value, load_config,
 )
+from whisper_dictate.vp_rust import helper_path as rust_helper_path  # noqa: E402
 
 
 _ARECORD_DEVICE: str | None = None  # set once at startup
@@ -741,7 +742,7 @@ def _emit_json(event: dict) -> None:
 
 
 def _rust_helper() -> str | None:
-    return os.environ.get("VOICEPI_RUST_INJECTOR")
+    return rust_helper_path()
 
 
 def _rust_json(command: str, payload: dict, *args: str, timeout: float = 5.0) -> dict | None:

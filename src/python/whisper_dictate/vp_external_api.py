@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from whisper_dictate.vp_config import get_value
+from whisper_dictate.vp_rust import helper_path
 
 SR = 16000
 
@@ -239,7 +240,7 @@ class ExternalTranscriptionModel:
         )
 
     def _try_rust_transcribe(self, audio, *, language, prompt) -> dict[str, Any] | None:
-        helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+        helper = helper_path()
         if not helper:
             return None
         wav = _wav_bytes(audio)
