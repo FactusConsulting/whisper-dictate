@@ -97,8 +97,8 @@ fn minimal_copy_text_contains_only_final_injected_text() {
 #[test]
 fn diagnostic_log_cards_summarize_audio_and_stt_metrics() {
     let log = [
-        "[gate] raw=-30dBFS noise=-80dBFS snr=54dB",
-        "[cap] raw=-30dBFS peak=0.359 gain=2.8x noise=-80dBFS snr=54dB",
+        "[gate] raw=-30dBFS noise=-80dBFS snr=54dB input=good",
+        "[cap] raw=-30dBFS peak=0.359 input=good gain=2.8x noise=-80dBFS snr=54dB",
         "[stt] dur=12.8s post-boost=-21dBFS compute=0.5s rtf=0.04 text='hej'",
         "[post] clean/groq changed in 450ms",
         "[inject] -> \"hej\"  (target: editor)",
@@ -112,9 +112,10 @@ fn diagnostic_log_cards_summarize_audio_and_stt_metrics() {
             && card.detail == "clean/groq changed in 450ms"
     }));
     assert!(cards.iter().any(|card| {
-        card.kind == RuntimeLogCardKind::Diagnostic
+            card.kind == RuntimeLogCardKind::Diagnostic
             && card.badge == "Capture"
             && card.title.contains("peak=0.359")
+            && card.title.contains("input=good")
     }));
     assert!(cards.iter().any(|card| {
         card.kind == RuntimeLogCardKind::Diagnostic

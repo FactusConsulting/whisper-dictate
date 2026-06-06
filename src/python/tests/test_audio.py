@@ -111,18 +111,42 @@ class AudioDspTests(unittest.TestCase):
                     "[cap] raw=-20dBFS",
                 )
 
+    def test_input_level_status_labels_actionable_gain_ranges(self):
+        from whisper_dictate import vp_audio
+
+        self.assertEqual(vp_audio._input_level_status(-60.0, 0.01, 40.0), "too_quiet")
+        self.assertEqual(vp_audio._input_level_status(-35.0, 0.20, 40.0), "good")
+        self.assertEqual(vp_audio._input_level_status(-47.0, 0.07, 35.0), "quiet")
+        self.assertEqual(vp_audio._input_level_status(-20.0, 0.10, 2.0), "low_snr")
+        self.assertEqual(vp_audio._input_level_status(-16.0, 0.30, 35.0), "hot")
+        self.assertEqual(vp_audio._input_level_status(-24.0, 0.99, 35.0), "clip_risk")
+
+    def test_cap_line_reports_input_level_status(self):
+        np = self.np
+        a = np.concatenate([
+            np.full(480, 0.1 if i % 2 == 0 else 0.002, dtype=np.float32)
+            for i in range(10)
+        ])
+
+        with _capture_stdout() as buf:
+            self.vp._boost_quiet(a)
+
+        self.assertIn("input=good", buf.getvalue())
+
     # --- _looks_like_speech ---
     def test_looks_like_speech_rejects_too_quiet(self):
         a = self.np.full(1920, 1e-4, dtype=self.np.float32)
         ok, msg = self.vp._looks_like_speech(a)
         self.assertFalse(ok)
         self.assertIn("too quiet", msg)
+        self.assertIn("input=too_quiet", msg)
 
     def test_looks_like_speech_rejects_flat_signal(self):
         a = self.np.full(1920, 0.1, dtype=self.np.float32)
         ok, msg = self.vp._looks_like_speech(a)
         self.assertFalse(ok)
         self.assertIn("no speech contrast", msg)
+        self.assertIn("input=low_snr", msg)
 
     def test_looks_like_speech_accepts_contrasted_speech(self):
         np = self.np

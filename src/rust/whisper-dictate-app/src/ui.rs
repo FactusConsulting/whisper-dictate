@@ -2014,10 +2014,13 @@ fn compact_diagnostic_title(line: &str) -> String {
         let raw = extract_metric_token(line, "raw=").unwrap_or("raw=?");
         let snr = extract_metric_token(line, "snr=").unwrap_or("snr=?");
         let peak = extract_metric_token(line, "peak=");
-        return peak.map_or_else(
-            || format!("{raw}  {snr}"),
-            |peak| format!("{raw}  {peak}  {snr}"),
-        );
+        let input = extract_metric_token(line, "input=");
+        return match (peak, input) {
+            (Some(peak), Some(input)) => format!("{raw}  {peak}  {input}  {snr}"),
+            (Some(peak), None) => format!("{raw}  {peak}  {snr}"),
+            (None, Some(input)) => format!("{raw}  {input}  {snr}"),
+            (None, None) => format!("{raw}  {snr}"),
+        };
     }
     strip_log_prefix(line).to_owned()
 }

@@ -59,6 +59,20 @@ def _noise_snr(a: np.ndarray) -> tuple[float, float]:
     return noise_dbfs, snr_db
 
 
+def _input_level_status(raw_dbfs: float, peak: float, snr_db: float) -> str:
+    if raw_dbfs < MIN_INPUT_DBFS:
+        return "too_quiet"
+    if snr_db < MIN_INPUT_SNR_DB:
+        return "low_snr"
+    if peak >= 0.98:
+        return "clip_risk"
+    if peak >= 0.75 or raw_dbfs > -18:
+        return "hot"
+    if raw_dbfs < -42:
+        return "quiet"
+    return "good"
+
+
 def _boost_quiet(a: np.ndarray) -> np.ndarray:
     rms = float(np.sqrt(np.mean(a**2)) or 1e-9)
     cur_dbfs = 20 * np.log10(rms)
@@ -66,7 +80,9 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
     peak = float(np.max(np.abs(a)) or 1e-9)
     gain = min(gain, 0.99 / peak)  # never clip
     noise_dbfs, snr_db = _noise_snr(a)
-    line = (f"[cap] raw={cur_dbfs:.0f}dBFS peak={peak:.3f} gain={gain:.1f}x "
+    input_status = _input_level_status(cur_dbfs, peak, snr_db)
+    line = (f"[cap] raw={cur_dbfs:.0f}dBFS peak={peak:.3f} "
+            f"input={input_status} gain={gain:.1f}x "
             f"noise={noise_dbfs:.0f}dBFS snr={snr_db:.0f}dB")
     print(_highlight_cap_line(line), flush=True)
     return (a * gain).astype(np.float32)
@@ -75,20 +91,22 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
 def _looks_like_speech(a: np.ndarray) -> tuple[bool, str]:
     rms = float(np.sqrt(np.mean(a**2)) or 1e-9)
     raw_dbfs = 20 * np.log10(rms)
+    peak = float(np.max(np.abs(a)) or 1e-9)
     noise_dbfs, snr_db = _noise_snr(a)
+    input_status = _input_level_status(raw_dbfs, peak, snr_db)
     if raw_dbfs < MIN_INPUT_DBFS:
         return False, (
             f"input too quiet: raw={raw_dbfs:.0f}dBFS "
-            f"< {MIN_INPUT_DBFS:.0f}dBFS"
+            f"< {MIN_INPUT_DBFS:.0f}dBFS input={input_status}"
         )
     if snr_db < MIN_INPUT_SNR_DB:
         return False, (
             f"no speech contrast: snr={snr_db:.0f}dB "
-            f"< {MIN_INPUT_SNR_DB:.0f}dB"
+            f"< {MIN_INPUT_SNR_DB:.0f}dB input={input_status}"
         )
     return True, (
         f"raw={raw_dbfs:.0f}dBFS noise={noise_dbfs:.0f}dBFS "
-        f"snr={snr_db:.0f}dB"
+        f"snr={snr_db:.0f}dB input={input_status}"
     )
 
 
