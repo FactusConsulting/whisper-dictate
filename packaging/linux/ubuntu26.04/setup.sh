@@ -2,7 +2,7 @@
 # whisper-dictate — Ubuntu 26.04 LTS (GNOME 50, Wayland) setup
 # Idempotent. Run from any directory. Requires sudo for system packages.
 #
-#   bash ubuntu26.04/setup.sh
+#   bash packaging/linux/ubuntu26.04/setup.sh
 #
 # What this does:
 #   1. Installs whisper-dictate via Homebrew (brew must be installed first)
@@ -27,7 +27,7 @@ step "whisper-dictate: Homebrew-installation"
 if ! command -v brew &>/dev/null; then
     echo "ERROR: Homebrew ikke fundet."
     echo "  Installer: https://brew.sh"
-    echo "  Kør derefter: bash ubuntu26.04/setup.sh"
+    echo "  Kør derefter: bash packaging/linux/ubuntu26.04/setup.sh"
     exit 1
 fi
 

@@ -55,7 +55,8 @@ pub fn install() -> Result<()> {
 }
 
 pub fn setup_ubuntu() -> Result<()> {
-    let script = app_root().join("ubuntu26.04").join("setup.sh");
+    let root = app_root();
+    let script = ubuntu_setup_script_path(&root);
     if !script.exists() {
         return Err(anyhow!(
             "Ubuntu setup script not found at {}",
@@ -79,6 +80,18 @@ pub fn setup_ubuntu() -> Result<()> {
                 .unwrap_or_else(|| "unknown".to_owned())
         ))
     }
+}
+
+fn ubuntu_setup_script_path(root: &Path) -> PathBuf {
+    let packaging_path = root
+        .join("packaging")
+        .join("linux")
+        .join("ubuntu26.04")
+        .join("setup.sh");
+    if packaging_path.exists() {
+        return packaging_path;
+    }
+    root.join("ubuntu26.04").join("setup.sh")
 }
 
 fn install_linux_desktop_entries() -> Result<()> {
@@ -963,6 +976,8 @@ mod process_capture_tests;
 mod state_tests;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod ubuntu_setup_tests;
 #[cfg(test)]
 mod windows_process_tests;
 #[cfg(test)]

@@ -14,9 +14,9 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('cp -r requirements "$d/"', workflow)
         self.assertIn('cp assets/whisper-dictate-logo.svg "$d/assets/"', workflow)
         self.assertIn("scripts/linux/install-rust-ui.sh", workflow)
-        self.assertIn('cp ubuntu26.04/setup.sh "$d/ubuntu26.04/"', workflow)
+        self.assertIn('cp packaging/linux/ubuntu26.04/setup.sh "$d/packaging/linux/ubuntu26.04/"', workflow)
         self.assertIn("bash -n scripts/linux/install-rust-ui.sh", workflow)
-        self.assertIn("bash -n ubuntu26.04/setup.sh", workflow)
+        self.assertIn("bash -n packaging/linux/ubuntu26.04/setup.sh", workflow)
 
     def test_homebrew_formula_installs_linux_release_bundle(self):
         workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -62,7 +62,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("path.write <<~DESKTOP", bump_step)
         self.assertNotIn("DESKTOP\n              )", bump_step)
         self.assertIn("def autostart_enabled_line(raw)", bump_step)
-        self.assertIn('assert_path_exists libexec/"ubuntu26.04/setup.sh"', bump_step)
+        self.assertIn('assert_path_exists libexec/"packaging/linux/ubuntu26.04/setup.sh"', bump_step)
         self.assertNotIn("archive/refs/tags", bump_step)
         self.assertNotIn('exec "#{libexec}/setup.sh"', bump_step)
 

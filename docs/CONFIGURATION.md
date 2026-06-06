@@ -68,7 +68,7 @@ requiring restart/model reload.
 | **Disable terminal color** | `VOICEPI_NO_COLOR` / `NO_COLOR` | _none_ | _(unset)_ | any non-empty | keep terminal status lines plain even when stdout is interactive |
 | **VAD threshold** | `VOICEPI_VAD_THRESHOLD` | _none_ | `0.3` | float | Silero VAD speech threshold passed to faster-whisper |
 | **VAD silence** | `VOICEPI_VAD_MIN_SILENCE_MS` | _none_ | `600` | integer ms | minimum silence gap used by VAD segmentation |
-| **Skip syscheck** | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
+| **Skip syscheck** | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `packaging/linux/ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
 | **Debug dump** | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | log every effective setting at startup |
 
 The detailed tables below are the same knobs split by surface (env vars
@@ -132,7 +132,7 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_RELEASE_TAIL_MS` | `200` | integer milliseconds (`0` disables) | Extra audio captured after the hotkey is released. Useful when the last syllable or word is clipped because the key is released slightly before speech fully ends. Live-reloadable. |
 | `VOICEPI_AUDIO_DUCKING` | *(unset)* | truthy / falsey | Windows-only optional audio ducking. While recording, other app audio sessions are lowered and restored before transcription starts. Disabled by default. |
 | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | float 0.0-1.0 | Target volume for other app sessions while recording when audio ducking is enabled. |
-| `VOICEPI_SKIP_SYSCHECK` | *(unset)* | any non-empty value | Linux: skip the `ubuntu26.04/setup.sh` apt dependency check. Set automatically by the Homebrew/Nix wrappers; rarely set by hand. |
+| `VOICEPI_SKIP_SYSCHECK` | *(unset)* | any non-empty value | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt dependency check. Set automatically by the Homebrew/Nix wrappers; rarely set by hand. |
 | `VOICEPI_DEBUG` | *(unset)* | `1` / `true` / any truthy (empty, `0`, `false`, `no`, `off` = disabled) | At startup, prints a `[debug] effective settings:` block listing every setting + which env var supplied it. Useful for "is my `setx` actually arriving in the running process?" — run with `VOICEPI_DEBUG=1` and the first lines of the log show the truth. Zero runtime cost when unset. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR

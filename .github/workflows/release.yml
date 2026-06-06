@@ -41,7 +41,7 @@ jobs:
         run: |
           python3 -m py_compile src/python/whisper_dictate/*.py
           bash -n scripts/linux/install-rust-ui.sh
-          bash -n ubuntu26.04/setup.sh
+          bash -n packaging/linux/ubuntu26.04/setup.sh
 
       - name: Install Linux Rust UI build deps
         run: |
@@ -76,8 +76,8 @@ jobs:
             mkdir -p "$d/scripts"
             cp scripts/dev/inject-smoke.py "$d/scripts/"
             cp scripts/linux/install-rust-ui.sh "$d/scripts/"
-            mkdir -p "$d/ubuntu26.04"
-            cp ubuntu26.04/setup.sh "$d/ubuntu26.04/"
+            mkdir -p "$d/packaging/linux/ubuntu26.04"
+            cp packaging/linux/ubuntu26.04/setup.sh "$d/packaging/linux/ubuntu26.04/"
             printf "%s\n" "$VERSION" > "$d/VERSION"
             if [ "${INCLUDE_RUST_UI:-0}" = "1" ]; then
               install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"
@@ -177,7 +177,7 @@ jobs:
               payload = Dir["*"] if payload.empty?
               libexec.install payload
               chmod 0755, libexec/"whisper-dictate"
-              chmod 0755, libexec/"ubuntu26.04/setup.sh"
+              chmod 0755, libexec/"packaging/linux/ubuntu26.04/setup.sh"
 
               py = Formula["python@3.12"].opt_bin/"python3.12"
             (bin/"whisper-dictate").write <<~SH
@@ -341,7 +341,7 @@ jobs:
             test do
               assert_path_exists libexec/"src/whisper_dictate/runtime.py"
               assert_path_exists libexec/"whisper-dictate"
-              assert_path_exists libexec/"ubuntu26.04/setup.sh"
+              assert_path_exists libexec/"packaging/linux/ubuntu26.04/setup.sh"
               assert_match version.to_s, shell_output("#{bin}/whisper-dictate --version")
             end
           end

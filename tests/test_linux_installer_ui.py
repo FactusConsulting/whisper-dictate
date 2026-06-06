@@ -55,7 +55,7 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('.with_app_id("whisper-dictate")', ui)
 
     def test_ubuntu_setup_resets_stale_ydotoold_before_starting_service(self):
-        script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")
+        script = Path("packaging/linux/ubuntu26.04/setup.sh").read_text(encoding="utf-8")
 
         self.assertIn("systemctl --user stop ydotoold.service", script)
         self.assertIn("systemctl --user reset-failed ydotoold.service", script)

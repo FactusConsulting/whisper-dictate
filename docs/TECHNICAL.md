@@ -193,7 +193,7 @@ chunk  type      command
 
 The GNOME compositor (Mutter) applies the active XKB layout to
 ydotoold's uinput virtual keyboard device. With input source set
-to `[('xkb', 'dk')]` (done by `ubuntu26.04/setup.sh`), scancode
+to `[('xkb', 'dk')]` (done by `packaging/linux/ubuntu26.04/setup.sh`), scancode
 40 maps to ø, 39 to æ, 26 to å.
 
 ## Evdev keycode reference (DK layout)

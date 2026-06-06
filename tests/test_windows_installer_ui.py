@@ -264,7 +264,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("load_stt_api_key_state(provider)", reload_impl)
         self.assertIn("fn load_stt_api_key_state(provider: CloudProvider)", api_keys)
         self.assertIn("Loaded {} API key from environment. Use Save API key to store it.", api_keys)
-        ui_tests = Path("src/rust/whisper-dictate-app/src/ui/tests.rs").read_text(encoding="utf-8")
+        ui_tests = "\n".join(
+            Path(path).read_text(encoding="utf-8")
+            for path in (
+                "src/rust/whisper-dictate-app/src/ui/api_key_store_tests.rs",
+                "src/rust/whisper-dictate-app/src/ui/cloud_settings_tests.rs",
+            )
+        )
         self.assertIn("environment_api_keys_do_not_make_settings_dirty_at_startup", ui_tests)
         self.assertIn("edited_api_key_still_makes_settings_dirty", ui_tests)
         self.assertIn("successful_keyring_save_keeps_file_fallback", ui_tests)
@@ -462,7 +468,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('["whisper-dictate", "setup-ubuntu"]', cli)
         self.assertIn("Command::SetupUbuntu => runtime::setup_ubuntu()", main)
         self.assertIn("pub fn setup_ubuntu() -> Result<()>", runtime)
-        self.assertIn('join("ubuntu26.04").join("setup.sh")', runtime)
+        self.assertIn("fn ubuntu_setup_script_path(root: &Path) -> PathBuf", runtime)
+        self.assertIn('join("packaging")', runtime)
+        self.assertIn('join("linux")', runtime)
+        self.assertIn('join("ubuntu26.04")', runtime)
+        self.assertIn('join("setup.sh")', runtime)
         self.assertIn('env("VOICEPI_RUST_OWNS_DESKTOP", "1")', runtime)
         self.assertIn("fn install_linux_desktop_entries() -> Result<()>", runtime)
         self.assertIn(
@@ -472,7 +482,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn start_linux_ui_detached() -> Result<()>", runtime)
 
     def test_ubuntu_setup_creates_launcher_autostart_and_starts_rust_ui(self):
-        script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")
+        script = Path("packaging/linux/ubuntu26.04/setup.sh").read_text(encoding="utf-8")
         runtime = Path("src/rust/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
 
         self.assertIn('VOICEPI_RUST_OWNS_DESKTOP', script)
@@ -487,7 +497,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn('Exec=whisper-dictate --key shift_r+ctrl_r --lang da', script)
 
     def test_ubuntu_setup_uses_bash_conditionals_for_reliability(self):
-        script = Path("ubuntu26.04/setup.sh").read_text(encoding="utf-8")
+        script = Path("packaging/linux/ubuntu26.04/setup.sh").read_text(encoding="utf-8")
 
         self.assertIn("[[ ! -f /usr/local/bin/gcc-12 ]]", script)
         self.assertIn('[[ -n "$GCC" ]]', script)
