@@ -6,7 +6,7 @@ Installers:
     Scope: user
     InstallerType: inno
     InstallerUrl: https://github.com/FactusConsulting/whisper-dictate/releases/download/v1.2.2/whisper-dictate-windows-setup-1.2.2.exe
-    InstallerSha256: 27df93e5acae4063291349c0d1e1c913ac46e3d47ee878ad19e07c5d5111c35a
+    InstallerSha256: 278c07e73f002fc89eb47d9e9212f3eae8b84dd6cdb602e8f15bb90b655c373e
     ProductCode: '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
     InstallerSwitches:
       Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
