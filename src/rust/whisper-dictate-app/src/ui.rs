@@ -132,6 +132,8 @@ const TOP_STATUS_HEIGHT: f32 = 64.0;
 const CONTROL_RADIUS: u8 = 8;
 const PANEL_RADIUS: u8 = 12;
 const PILL_RADIUS: u8 = 14;
+const SETTINGS_LABEL_WIDTH: f32 = 190.0;
+const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UiThemeMode {
@@ -1355,7 +1357,7 @@ impl WhisperDictateApp {
 
 fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
     let show_help = label_with_help(ui, label, help);
-    ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
+    ui.add(egui::TextEdit::singleline(value).desired_width(settings_control_width(ui)));
     ui.end_row();
     grid_help_row(ui, show_help, help);
 }
@@ -1363,7 +1365,7 @@ fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
 fn text_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, value: &mut String, help: &str) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
-        ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
+        ui.add(egui::TextEdit::singleline(value).desired_width(settings_control_width(ui)));
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
@@ -1463,6 +1465,7 @@ fn checkbox_help(ui: &mut egui::Ui, label: &str, value: &mut bool, help: &str) {
 fn combo_help(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[&str], help: &str) {
     let show_help = label_with_help(ui, label, help);
     egui::ComboBox::from_id_salt(label)
+        .width(settings_control_width(ui))
         .selected_text(if value.is_empty() {
             "(empty)"
         } else {
@@ -1490,6 +1493,7 @@ fn combo_help_labeled(
 ) {
     let show_help = label_with_help(ui, label, help);
     egui::ComboBox::from_id_salt(label)
+        .width(settings_control_width(ui))
         .selected_text(selected_option_label(value, options))
         .show_ui(ui, |ui| {
             for (option, display) in options {
@@ -1572,6 +1576,7 @@ fn labeled_options_contain(options: &[(&str, &str)], value: &str) -> bool {
 
 fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
     ui.horizontal(|ui| {
+        ui.set_min_width(SETTINGS_LABEL_WIDTH);
         let response = ui.label(label);
         if !help.is_empty() {
             response.on_hover_text(help);
@@ -1583,6 +1588,7 @@ fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
 
 fn label_with_help_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, help: &str) -> bool {
     ui.horizontal(|ui| {
+        ui.set_min_width(SETTINGS_LABEL_WIDTH);
         let response = ui.add_enabled(enabled, egui::Label::new(label));
         if !help.is_empty() {
             response.on_hover_text(help);
@@ -1590,6 +1596,10 @@ fn label_with_help_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, help: 
         help_badge(ui, label, help)
     })
     .inner
+}
+
+fn settings_control_width(ui: &egui::Ui) -> f32 {
+    ui.available_width().clamp(260.0, SETTINGS_CONTROL_MAX_WIDTH)
 }
 
 fn help_badge(ui: &mut egui::Ui, label: &str, help: &str) -> bool {

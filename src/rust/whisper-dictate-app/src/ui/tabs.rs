@@ -10,7 +10,7 @@ const RUNTIME_LOG_CONTENT_TOP_PADDING: f32 = 10.0;
 const RUNTIME_LOG_CONTENT_BOTTOM_PADDING: f32 = 14.0;
 const RUNTIME_LOG_VERTICAL_CHROME: f32 = 112.0;
 const RUNTIME_LOG_MIN_HEIGHT: f32 = 300.0;
-const SETTINGS_FOOTER_HEIGHT: f32 = 252.0;
+const SETTINGS_FOOTER_HEIGHT: f32 = 264.0;
 const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;
 const SETTINGS_MESSAGES_TOP_GAP: f32 = 14.0;
 const SETTINGS_MESSAGES_BOTTOM_GAP: f32 = 20.0;
@@ -444,7 +444,8 @@ impl WhisperDictateApp {
 
     fn settings_actions(&mut self, ui: &mut egui::Ui) {
         let is_dirty = self.has_unsaved_settings();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             let mut save_button = egui::Button::new(if is_dirty {
                 icon_text(icons::ICON_SAVE, "Save settings *").strong()
             } else {
@@ -478,13 +479,14 @@ impl WhisperDictateApp {
                 ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
             }
         });
-        ui.add_space(7.0);
+        ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
             let palette = ui_palette(&self.settings.ui_theme);
+            let config_chars = ((ui.available_width() / 8.0).floor() as usize).clamp(38, 92);
             ui.label(egui::RichText::new("Config:").color(palette.text_muted));
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(compact_label(&self.config_path, 68))
+                    egui::RichText::new(compact_label(&self.config_path, config_chars))
                         .monospace()
                         .color(palette.text),
                 )
@@ -552,9 +554,7 @@ impl WhisperDictateApp {
         ui.heading("Speech recognition");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         let mut provider_id = self.current_cloud_provider().id().to_owned();
-        egui::Grid::new("core_settings")
-            .num_columns(2)
-            .spacing(egui::vec2(16.0, 8.0))
+        settings_grid("core_settings")
             .show(ui, |ui| {
                 combo_help_labeled(
                     ui,
@@ -775,9 +775,7 @@ impl WhisperDictateApp {
 
     pub(super) fn quality_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Quality");
-        egui::Grid::new("quality_settings")
-            .num_columns(2)
-            .spacing(egui::vec2(16.0, 8.0))
+        settings_grid("quality_settings")
             .show(ui, |ui| {
                 text_help(
                     ui,
@@ -884,9 +882,7 @@ impl WhisperDictateApp {
                 self.preview_dictionary();
             }
         });
-        egui::Grid::new("dictionary_settings")
-            .num_columns(2)
-            .spacing(egui::vec2(16.0, 8.0))
+        settings_grid("dictionary_settings")
             .show(ui, |ui| {
                 text_help(
                     ui,
@@ -941,9 +937,7 @@ impl WhisperDictateApp {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(8.0);
-        egui::Grid::new("output_settings")
-            .num_columns(2)
-            .spacing(egui::vec2(16.0, 8.0))
+        settings_grid("output_settings")
             .show(ui, |ui| {
                 combo_help(
                     ui,
@@ -1060,9 +1054,7 @@ impl WhisperDictateApp {
     pub(super) fn post_processing_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Post-processing");
         let previous_post_provider = PostProvider::from_settings(&self.settings);
-        egui::Grid::new("post_processing_settings")
-            .num_columns(2)
-            .spacing(egui::vec2(16.0, 8.0))
+        settings_grid("post_processing_settings")
             .show(ui, |ui| {
                 combo_help_labeled(
                     ui,
@@ -1304,6 +1296,12 @@ pub(super) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.profiles_json = defaults.profiles_json;
         }
     }
+}
+
+fn settings_grid(id: &'static str) -> egui::Grid {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing(egui::vec2(20.0, 10.0))
 }
 
 fn section_label(ui: &mut egui::Ui, label: &str, palette: UiPalette) {
