@@ -111,6 +111,42 @@ fn worker_command_does_not_force_utf8_for_foreground_console() {
 }
 
 #[test]
+fn worker_command_exports_effective_config_to_python_env() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::json!({
+            "lang": "da",
+            "model": "large-v3",
+            "stt_debug": "1"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path);
+    let _model_guard = EnvVarGuard::set("VOICEPI_MODEL", "env-model");
+    let _device_guard = EnvVarGuard::set("VOICEPI_DEVICE", "cuda");
+    let _key_guard = EnvVarGuard::remove("VOICEPI_KEY");
+    let command = worker_command("/tmp/whisper-dictate");
+    let env = command
+        .env
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(env["VOICEPI_MODEL"], "large-v3");
+    assert_eq!(env["VOICEPI_LANG"], "da");
+    assert_eq!(env["VOICEPI_DEVICE"], "cuda");
+    assert_eq!(env["VOICEPI_KEY"], "ctrl_r");
+    assert_eq!(env["VOICEPI_STT_DEBUG"], "1");
+}
+
+#[test]
 fn worker_command_honors_python_override() {
     let _guard = ENV_LOCK.lock().unwrap();
     let root = PathBuf::from("/tmp/whisper-dictate");

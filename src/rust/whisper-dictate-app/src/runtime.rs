@@ -695,6 +695,7 @@ pub fn worker_command_with_args(
         PYTHONPATH_ENV.to_owned(),
         python_source_root(&app_root).display().to_string(),
     )];
+    env.extend(config::worker_env_overrides());
     if let Ok(exe) = env::current_exe() {
         env.push((RUST_INJECTOR_ENV.to_owned(), exe.display().to_string()));
     }
