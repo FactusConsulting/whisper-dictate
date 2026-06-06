@@ -6,6 +6,8 @@ const MIC_INDICATOR_MIN_WIDTH: f32 = 150.0;
 const MIC_GAUGE_MAX_WIDTH: f32 = 150.0;
 const MIC_GAUGE_MIN_WIDTH: f32 = 86.0;
 const RUNTIME_LOG_TOP_MARGIN: f32 = 16.0;
+const RUNTIME_LOG_CONTENT_TOP_PADDING: f32 = 10.0;
+const RUNTIME_LOG_CONTENT_BOTTOM_PADDING: f32 = 14.0;
 const RUNTIME_LOG_VERTICAL_CHROME: f32 = 112.0;
 const RUNTIME_LOG_MIN_HEIGHT: f32 = 300.0;
 const SETTINGS_FOOTER_HEIGHT: f32 = 184.0;
@@ -215,13 +217,15 @@ impl WhisperDictateApp {
         let log_height = (height - RUNTIME_LOG_VERTICAL_CHROME).max(RUNTIME_LOG_MIN_HEIGHT);
         let visible_log = self.visible_runtime_log();
         runtime_log_frame(palette).show(ui, |ui| {
+            ui.set_min_height(log_height);
             egui::ScrollArea::vertical()
                 .id_salt("runtime_log_scroll")
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
                 .max_height(log_height)
                 .show(ui, |ui| {
-                    ui.set_min_size(egui::vec2(ui.available_width(), log_height));
+                    ui.set_min_width(ui.available_width());
+                    ui.add_space(RUNTIME_LOG_CONTENT_TOP_PADDING);
                     if self.runtime_log_view == LogViewMode::Debug {
                         ui.add(
                             egui::Label::new(
@@ -246,7 +250,10 @@ impl WhisperDictateApp {
                             }
                         }
                     }
-                    let bottom = ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+                    let bottom = ui.allocate_response(
+                        egui::vec2(ui.available_width(), RUNTIME_LOG_CONTENT_BOTTOM_PADDING),
+                        egui::Sense::hover(),
+                    );
                     if self.runtime_log_scroll_to_bottom {
                         bottom.scroll_to_me(Some(egui::Align::BOTTOM));
                         self.runtime_log_scroll_to_bottom = false;

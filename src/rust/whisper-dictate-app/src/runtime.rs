@@ -874,11 +874,13 @@ fn kill_child(child: &mut Child) -> Result<()> {
     #[cfg(windows)]
     {
         let pid = child.id().to_string();
-        let status = Command::new("taskkill")
+        let mut command = Command::new("taskkill");
+        command
             .args(["/PID", &pid, "/T", "/F"])
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+            .stderr(Stdio::null());
+        configure_background_process(&mut command);
+        let status = command.status();
         if status.as_ref().is_ok_and(|s| s.success()) {
             return Ok(());
         }

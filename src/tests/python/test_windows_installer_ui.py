@@ -132,11 +132,19 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("let log_height = (height - RUNTIME_LOG_VERTICAL_CHROME).max(RUNTIME_LOG_MIN_HEIGHT);", runtime_tab)
         self.assertIn(".max_height(log_height)", runtime_tab)
         self.assertIn(".stick_to_bottom(true)", runtime_tab)
-        self.assertIn("ui.set_min_size(egui::vec2(ui.available_width(), log_height));", runtime_tab)
+        self.assertIn("ui.set_min_height(log_height);", runtime_tab)
+        self.assertIn("ui.set_min_width(ui.available_width());", runtime_tab)
+        self.assertNotIn("ui.set_min_size(egui::vec2(ui.available_width(), log_height));", runtime_tab)
         self.assertIn("const RUNTIME_LOG_TOP_MARGIN: f32 = 16.0;", script)
+        self.assertIn("const RUNTIME_LOG_CONTENT_TOP_PADDING: f32 = 10.0;", script)
+        self.assertIn("const RUNTIME_LOG_CONTENT_BOTTOM_PADDING: f32 = 14.0;", script)
         self.assertIn("runtime_log_frame(palette).show(ui, |ui|", runtime_tab)
         self.assertIn("top: RUNTIME_LOG_TOP_MARGIN,", script)
-        self.assertNotIn("ui.add_space(RUNTIME_LOG_TOP_PADDING);", runtime_tab)
+        self.assertIn("ui.add_space(RUNTIME_LOG_CONTENT_TOP_PADDING);", runtime_tab)
+        self.assertIn(
+            "egui::vec2(ui.available_width(), RUNTIME_LOG_CONTENT_BOTTOM_PADDING)",
+            runtime_tab,
+        )
         self.assertIn('if card.title.trim().is_empty() {', runtime_tab)
         self.assertIn("bottom.scroll_to_me(Some(egui::Align::BOTTOM));", runtime_tab)
         self.assertIn("self.live_dictation_panel(ui, palette, height);", runtime_tab)

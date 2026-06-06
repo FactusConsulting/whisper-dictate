@@ -64,3 +64,20 @@ fn install_commands_use_background_process_flags() {
     assert!(run_install_command.contains("configure_background_process(&mut process);"));
     assert!(!run_install_command.contains("Command::new(&command.program)\n        .args"));
 }
+
+#[test]
+fn windows_taskkill_stop_uses_background_process_flags() {
+    let runtime = include_str!("../runtime.rs");
+    let kill_child = runtime
+        .split_once("fn kill_child")
+        .unwrap()
+        .1
+        .split_once("fn python_program")
+        .unwrap()
+        .0;
+
+    assert!(kill_child.contains("Command::new(\"taskkill\")"));
+    assert!(kill_child.contains("configure_background_process(&mut command);"));
+    assert!(kill_child.contains(".stdout(Stdio::null())"));
+    assert!(kill_child.contains(".stderr(Stdio::null())"));
+}
