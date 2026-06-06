@@ -446,14 +446,16 @@ impl eframe::App for WhisperDictateApp {
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        paint_sidebar_bridge(ctx, palette, &self.settings.ui_text_scale);
 
         egui::SidePanel::left("primary_navigation")
             .resizable(false)
+            .show_separator_line(false)
             .exact_width(sidebar_width(&self.settings.ui_text_scale))
             .frame(
                 egui::Frame::default()
                     .fill(palette.header_bg)
-                    .stroke(egui::Stroke::new(0.8, palette.border_soft))
+                    .stroke(egui::Stroke::NONE)
                     .inner_margin(egui::Margin::symmetric(14.0, 14.0)),
             )
             .show(ctx, |ui| self.sidebar(ui, palette));
@@ -1749,6 +1751,17 @@ fn icon_text(icon: &str, label: impl AsRef<str>) -> egui::RichText {
 fn sidebar_width(raw_scale: &str) -> f32 {
     let scale = raw_scale.parse::<f32>().unwrap_or(1.0).clamp(0.85, 1.6);
     SIDEBAR_WIDTH * scale
+}
+
+fn paint_sidebar_bridge(ctx: &egui::Context, palette: UiPalette, raw_scale: &str) {
+    let screen = ctx.screen_rect();
+    let left = screen.left() + sidebar_width(raw_scale) - 1.0;
+    let bridge = egui::Rect::from_min_max(
+        egui::pos2(left, screen.top()),
+        egui::pos2((left + 16.0).min(screen.right()), screen.bottom()),
+    );
+    ctx.layer_painter(egui::LayerId::background())
+        .rect_filled(bridge, 0.0, palette.panel_bg);
 }
 
 fn top_status_bar_height(raw_scale: &str) -> f32 {

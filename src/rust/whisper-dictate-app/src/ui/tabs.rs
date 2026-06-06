@@ -10,9 +10,11 @@ const RUNTIME_LOG_CONTENT_TOP_PADDING: f32 = 10.0;
 const RUNTIME_LOG_CONTENT_BOTTOM_PADDING: f32 = 14.0;
 const RUNTIME_LOG_VERTICAL_CHROME: f32 = 112.0;
 const RUNTIME_LOG_MIN_HEIGHT: f32 = 300.0;
-const SETTINGS_FOOTER_HEIGHT: f32 = 184.0;
+const SETTINGS_FOOTER_HEIGHT: f32 = 252.0;
 const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;
-const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 74.0;
+const SETTINGS_MESSAGES_TOP_GAP: f32 = 14.0;
+const SETTINGS_MESSAGES_BOTTOM_GAP: f32 = 20.0;
+const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 88.0;
 
 impl WhisperDictateApp {
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
@@ -433,15 +435,16 @@ impl WhisperDictateApp {
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
                 self.settings_actions(ui);
-                ui.add_space(8.0);
+                ui.add_space(SETTINGS_MESSAGES_TOP_GAP);
                 self.settings_messages(ui);
+                ui.add_space(SETTINGS_MESSAGES_BOTTOM_GAP);
             },
         );
     }
 
     fn settings_actions(&mut self, ui: &mut egui::Ui) {
         let is_dirty = self.has_unsaved_settings();
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             let mut save_button = egui::Button::new(if is_dirty {
                 icon_text(icons::ICON_SAVE, "Save settings *").strong()
             } else {
@@ -474,7 +477,20 @@ impl WhisperDictateApp {
             if is_dirty {
                 ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
             }
-            ui.label(format!("Config: {}", self.config_path));
+        });
+        ui.add_space(7.0);
+        ui.horizontal_wrapped(|ui| {
+            let palette = ui_palette(&self.settings.ui_theme);
+            ui.label(egui::RichText::new("Config:").color(palette.text_muted));
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(compact_label(&self.config_path, 68))
+                        .monospace()
+                        .color(palette.text),
+                )
+                .wrap(),
+            )
+            .on_hover_text(&self.config_path);
         });
     }
 
@@ -510,9 +526,9 @@ impl WhisperDictateApp {
         let palette = ui_palette(&self.settings.ui_theme);
         panel_frame(palette).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.set_min_height(92.0);
+            ui.set_min_height(112.0);
             ui.strong("Messages");
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             egui::ScrollArea::vertical()
                 .id_salt(format!("settings_messages_{:?}", self.selected_tab))
                 .auto_shrink([false, false])

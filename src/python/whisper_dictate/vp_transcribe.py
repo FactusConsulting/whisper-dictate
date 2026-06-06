@@ -57,7 +57,7 @@ TEMPERATURES = _parse_temperatures(get_value("VOICEPI_TEMPERATURE"))
 # the HALLUCINATIONS set was added to filter). Set to e.g. 5 to opt
 # long utterances into context-conditioned decode, which helps
 # Whisper keep word boundaries coherent across segments.
-CONTEXT_MIN_SECONDS = float(get_value("VOICEPI_CONTEXT_MIN_SECONDS", "0") or "0")
+CONTEXT_MIN_SECONDS = float(get_value("VOICEPI_CONTEXT_MIN_SECONDS", "5") or "5")
 VAD_THRESHOLD = float(get_value("VOICEPI_VAD_THRESHOLD", "0.3") or "0.3")
 VAD_MIN_SILENCE_MS = int(get_value("VOICEPI_VAD_MIN_SILENCE_MS", "600") or "600")
 VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200") or "200")

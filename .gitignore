@@ -29,7 +29,7 @@ Thumbs.db
 
 # Claude Code settings (personal, machine-local — never commit)
 .claude/
-.codex/screenshots/
+.codex/
 
 # Local benchmark recordings/results
 benchmark/audio/

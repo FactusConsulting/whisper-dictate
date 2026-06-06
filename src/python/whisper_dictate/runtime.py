@@ -1271,7 +1271,7 @@ class Dictate(InjectMixin):
 
         vp_transcribe.BEAM_SIZE = int(after.get("beam_size", "1"))
         vp_transcribe.TEMPERATURES = vp_transcribe._parse_temperatures(after.get("temperature"))
-        vp_transcribe.CONTEXT_MIN_SECONDS = float(after.get("context_min_seconds", "0"))
+        vp_transcribe.CONTEXT_MIN_SECONDS = float(after.get("context_min_seconds", "5"))
         self.parakeet_min_seconds = float(after.get("parakeet_min_seconds", "1.5"))
         self.release_tail_ms = int(float(after.get("release_tail_ms", "200")))
         vp_transcribe.VAD_THRESHOLD = float(after.get("vad_threshold", "0.3"))

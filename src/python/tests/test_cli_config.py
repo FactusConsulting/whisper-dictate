@@ -414,7 +414,8 @@ class TemperatureParseTests(unittest.TestCase):
 
 class ContextMinSecondsTests(unittest.TestCase):
     """VOICEPI_CONTEXT_MIN_SECONDS gates condition_on_previous_text:
-      * 0 (default)  -> always False (backwards-compatible)
+      * 5 (default)  -> True for utterances at least five seconds long
+      * 0            -> always False
       * > 0          -> True only when utterance duration meets the bar
     The bar lives in vp_transcribe.CONTEXT_MIN_SECONDS; the gate itself
     is one line in _transcribe so we mirror its expression here."""
@@ -426,6 +427,19 @@ class ContextMinSecondsTests(unittest.TestCase):
         for dur in (0.0, 1.0, 5.0, 30.0, 1000.0):
             self.assertFalse(self._gate(0.0, dur),
                              f"threshold=0, dur={dur} must stay False")
+
+    def test_default_threshold_is_five_seconds(self):
+        config = Path("src/python/whisper_dictate/vp_config.py").read_text(encoding="utf-8")
+        transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
+        runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'Setting("VOICEPI_CONTEXT_MIN_SECONDS", "context_min_seconds", "5", live=True)',
+            config,
+        )
+        self.assertIn('get_value("VOICEPI_CONTEXT_MIN_SECONDS", "5") or "5"', transcribe)
+        self.assertIn('after.get("context_min_seconds", "5")', runtime)
+        self.assertFalse(self._gate(5.0, 4.9))
+        self.assertTrue(self._gate(5.0, 5.0))
 
     def test_positive_threshold_gates_on_duration(self):
         self.assertFalse(self._gate(5.0, 4.9))

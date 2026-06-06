@@ -104,7 +104,7 @@ const RUNTIME_SETTINGS: &[RuntimeSetting] = &[
     RuntimeSetting {
         env: "VOICEPI_CONTEXT_MIN_SECONDS",
         key: "context_min_seconds",
-        default: Some("0"),
+        default: Some("5"),
     },
     RuntimeSetting {
         env: "VOICEPI_PARAKEET_MIN_SECONDS",
@@ -567,7 +567,7 @@ impl Default for AppSettings {
             format_commands: "off".to_owned(),
             beam_size: "1".to_owned(),
             temperature: "0.0,0.2".to_owned(),
-            context_min_seconds: "0".to_owned(),
+            context_min_seconds: "5".to_owned(),
             parakeet_min_seconds: "1.5".to_owned(),
             release_tail_ms: "200".to_owned(),
             vad_threshold: "0.3".to_owned(),
@@ -1118,6 +1118,7 @@ mod tests {
         assert_eq!(settings.ui_theme, "light");
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
+        assert_eq!(settings.context_min_seconds, "5");
         assert_eq!(settings.ui_text_scale, "1.15");
     }
 
@@ -1157,6 +1158,7 @@ mod tests {
         assert_eq!(env_values["VOICEPI_LANG"], "da");
         assert_eq!(env_values["VOICEPI_DEVICE"], "cuda");
         assert_eq!(env_values["VOICEPI_KEY"], "ctrl_r");
+        assert_eq!(env_values["VOICEPI_CONTEXT_MIN_SECONDS"], "5");
         assert_eq!(env_values["VOICEPI_DEBUG"], "True");
 
         restore_env(CONFIG_ENV, old_config);

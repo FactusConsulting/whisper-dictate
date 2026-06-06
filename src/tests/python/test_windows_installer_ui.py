@@ -256,6 +256,38 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".with_icon(app_icon())", script)
         self.assertIn("fn app_icon() -> egui::IconData", icon)
 
+    def test_rust_ui_uses_soft_sidebar_and_settings_footer_layout(self):
+        script = rust_ui_source()
+        update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
+            "impl WhisperDictateApp", 1
+        )[0]
+        settings_panel = script.split("pub(super) fn settings_panel", 1)[1].split(
+            "pub(super) fn core_tab", 1
+        )[0]
+
+        self.assertIn('egui::SidePanel::left("primary_navigation")', update_impl)
+        self.assertIn("paint_sidebar_bridge(ctx, palette, &self.settings.ui_text_scale);", update_impl)
+        self.assertIn("fn paint_sidebar_bridge(", script)
+        self.assertIn("ctx.layer_painter(egui::LayerId::background())", script)
+        self.assertIn(".show_separator_line(false)", update_impl)
+        navigation_frame = update_impl.split('egui::SidePanel::left("primary_navigation")', 1)[
+            1
+        ].split(".show(ctx, |ui| self.sidebar(ui, palette))", 1)[0]
+        self.assertIn(".stroke(egui::Stroke::NONE)", navigation_frame)
+        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 252.0;", script)
+        self.assertIn("const SETTINGS_MESSAGES_TOP_GAP: f32 = 14.0;", script)
+        self.assertIn("const SETTINGS_MESSAGES_BOTTOM_GAP: f32 = 20.0;", script)
+        self.assertIn("const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 88.0;", script)
+        self.assertIn("ui.add_space(SETTINGS_MESSAGES_TOP_GAP);", settings_panel)
+        self.assertIn("ui.add_space(SETTINGS_MESSAGES_BOTTOM_GAP);", settings_panel)
+        self.assertIn("ui.set_min_height(112.0);", settings_panel)
+        self.assertIn("ui.add_space(8.0);", settings_panel)
+        self.assertIn('ui.label(egui::RichText::new("Config:").color(palette.text_muted));', settings_panel)
+        self.assertIn("egui::RichText::new(compact_label(&self.config_path, 68))", settings_panel)
+        self.assertIn(".monospace()", settings_panel)
+        self.assertIn(".on_hover_text(&self.config_path)", settings_panel)
+        self.assertNotIn('ui.label(format!("Config: {}", self.config_path));', settings_panel)
+
     def test_rust_runtime_controls_live_in_fixed_top_status_bar(self):
         script = rust_ui_source()
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
@@ -396,9 +428,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         script = rust_ui_source()
         settings_panel = script.split("fn settings_panel", 1)[1].split("fn settings_messages", 1)[0]
 
-        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 184.0;", script)
+        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 252.0;", script)
         self.assertIn("const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;", script)
-        self.assertIn("const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 74.0;", script)
+        self.assertIn("const SETTINGS_MESSAGES_TOP_GAP: f32 = 14.0;", script)
+        self.assertIn("const SETTINGS_MESSAGES_BOTTOM_GAP: f32 = 20.0;", script)
+        self.assertIn("const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 88.0;", script)
         self.assertIn("let footer_height = SETTINGS_FOOTER_HEIGHT;", settings_panel)
         self.assertIn("ui.available_height() - footer_height - SETTINGS_FOOTER_CHROME_HEIGHT", settings_panel)
         self.assertIn("egui::Layout::top_down(egui::Align::LEFT)", settings_panel)
@@ -409,8 +443,15 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".max_height(body_height)", settings_panel)
         self.assertIn("body(self, ui);", settings_panel)
         self.assertIn("fn settings_actions(&mut self, ui: &mut egui::Ui)", script)
+        self.assertIn("ui.horizontal(|ui|", script)
         self.assertIn("ui.horizontal_wrapped(|ui|", script)
-        self.assertIn("ui.set_min_height(92.0);", script)
+        self.assertIn('ui.label(egui::RichText::new("Config:").color(palette.text_muted));', script)
+        self.assertIn("egui::RichText::new(compact_label(&self.config_path, 68))", script)
+        self.assertIn(".on_hover_text(&self.config_path)", script)
+        self.assertNotIn('ui.label(format!("Config: {}", self.config_path));', script)
+        self.assertIn("ui.add_space(SETTINGS_MESSAGES_TOP_GAP);", settings_panel)
+        self.assertIn("ui.add_space(SETTINGS_MESSAGES_BOTTOM_GAP);", settings_panel)
+        self.assertIn("ui.set_min_height(112.0);", script)
         self.assertIn('.id_salt(format!("settings_messages_{:?}", self.selected_tab))', script)
         self.assertIn(".max_height(SETTINGS_MESSAGES_MAX_HEIGHT)", script)
         self.assertIn("egui::Label::new(rich_text).wrap()", script)
