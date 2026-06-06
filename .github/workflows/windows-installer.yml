@@ -98,7 +98,6 @@ jobs:
           Copy-Item src $bundle -Recurse
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
-          Copy-Item dictionary.example.json $bundle -ErrorAction SilentlyContinue
           Copy-Item requirements $bundle -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")

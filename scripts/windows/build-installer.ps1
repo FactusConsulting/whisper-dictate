@@ -123,7 +123,6 @@ try {
   Copy-Item -LiteralPath (Join-Path $root 'src') -Destination $bundle -Recurse
   Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'LICENSE'), $versionFile -Destination $bundle
   Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination $bundle -Recurse
-  Copy-Item -LiteralPath (Join-Path $root 'dictionary.example.json') -Destination $bundle -ErrorAction SilentlyContinue
   Copy-Item -LiteralPath (Join-Path $root 'requirements') -Destination $bundle -Recurse
   $assetDir = Join-Path $bundle 'assets'
   New-Item -ItemType Directory -Force $assetDir | Out-Null

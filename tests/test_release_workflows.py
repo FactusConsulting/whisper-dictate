@@ -208,6 +208,32 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Used by nix/flake.nix", package)
         self.assertIn('$out/lib/whisper-dictate/src/python', package)
 
+    def test_dictionary_example_lives_under_docs_examples(self):
+        self.assertFalse(Path("dictionary.example.json").exists())
+        self.assertTrue(Path("docs/examples/dictionary.example.json").is_file())
+
+        inno = Path("packaging/windows/inno/whisper-dictate.iss").read_text(
+            encoding="utf-8"
+        )
+        local_installer = Path("scripts/windows/build-installer.ps1").read_text(
+            encoding="utf-8"
+        )
+        workflows = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                Path(".github/workflows/release.yml"),
+                Path(".github/workflows/windows-installer.yml"),
+            )
+        )
+
+        self.assertIn(
+            r'Source: "..\..\..\docs\examples\dictionary.example.json"; DestDir: "{app}\docs\examples"',
+            inno,
+        )
+        self.assertNotIn("dictionary.example.json') -Destination $bundle", local_installer)
+        self.assertNotIn("Copy-Item dictionary.example.json", workflows)
+        self.assertNotIn("[ -f dictionary.example.json ]", workflows)
+
     def test_workflows_use_node24_checkout_action(self):
         for path in Path(".github/workflows").glob("*.yml"):
             workflow = path.read_text(encoding="utf-8")

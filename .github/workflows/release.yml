@@ -69,7 +69,6 @@ jobs:
             shift || true
             d=whisper-dictate; rm -rf "$d"; mkdir "$d"
             cp -r src docs README.md LICENSE "$d/"
-            [ -f dictionary.example.json ] && cp dictionary.example.json "$d/"
             cp -r requirements "$d/"
             mkdir -p "$d/assets"
             cp assets/whisper-dictate-logo.svg "$d/assets/"
@@ -439,7 +438,6 @@ jobs:
           Copy-Item src $bundle -Recurse
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
-          Copy-Item dictionary.example.json $bundle -ErrorAction SilentlyContinue
           Copy-Item requirements $bundle -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
