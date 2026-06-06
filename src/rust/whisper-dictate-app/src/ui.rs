@@ -2125,4 +2125,6 @@ mod layout_tests;
 #[cfg(test)]
 mod log_view_tests;
 #[cfg(test)]
+mod settings_reset_tests;
+#[cfg(test)]
 mod test_support;
