@@ -12,7 +12,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         runtime_state: RuntimeState::Stopped,
         runtime_log: String::new(),
         runtime_log_scroll_to_bottom: false,
-        runtime_log_view: LogViewMode::Minimal,
+        runtime_log_view: LogViewMode::from_raw(&settings.ui_log_view),
         audio_capture_opening: false,
         audio_capture_active: false,
         audio_meter_level: 0.0,

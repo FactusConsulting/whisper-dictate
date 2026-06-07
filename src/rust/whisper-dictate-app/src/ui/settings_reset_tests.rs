@@ -49,6 +49,7 @@ fn changed_settings() -> AppSettings {
         debug: true,
         stt_debug: true,
         ui_text_scale: "1.35".to_owned(),
+        ui_log_view: "debug".to_owned(),
         post_processor: "groq".to_owned(),
         post_mode: "clean".to_owned(),
         post_model: "llama-3.3-70b-versatile".to_owned(),
@@ -155,6 +156,7 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.debug, defaults.debug);
     assert_eq!(settings.stt_debug, defaults.stt_debug);
     assert_eq!(settings.ui_language, defaults.ui_language);
+    assert_eq!(settings.ui_log_view, defaults.ui_log_view);
     assert_eq!(settings.ui_text_scale, defaults.ui_text_scale);
     assert_eq!(settings.lang, "da");
     assert_eq!(settings.stt_backend, "openai");

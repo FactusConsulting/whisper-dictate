@@ -1,8 +1,17 @@
-use super::test_support::test_app;
 use super::tabs::{
     audio_device_label, full_audio_device_label, live_audio_level_summary, mic_label_char_budget,
 };
+use super::test_support::test_app;
 use super::*;
+
+#[test]
+fn log_view_modes_round_trip_persisted_config_ids() {
+    for mode in LogViewMode::ALL {
+        assert_eq!(LogViewMode::from_raw(mode.id()), mode);
+    }
+    assert_eq!(LogViewMode::from_raw("full"), LogViewMode::Minimal);
+    assert_eq!(LogViewMode::from_raw(""), LogViewMode::Minimal);
+}
 
 #[test]
 fn log_view_modes_filter_runtime_output_by_detail_level() {
@@ -112,7 +121,7 @@ fn diagnostic_log_cards_summarize_audio_and_stt_metrics() {
             && card.detail == "clean/groq changed in 450ms"
     }));
     assert!(cards.iter().any(|card| {
-            card.kind == RuntimeLogCardKind::Diagnostic
+        card.kind == RuntimeLogCardKind::Diagnostic
             && card.badge == "Capture"
             && card.title.contains("peak=0.359")
             && card.title.contains("input=good")

@@ -419,6 +419,7 @@ impl WhisperDictateApp {
                     .clicked()
                 {
                     self.runtime_log_view = mode;
+                    self.settings.ui_log_view = mode.id().to_owned();
                     self.runtime_log_scroll_to_bottom = true;
                 }
             }
@@ -1365,6 +1366,7 @@ pub(super) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
         Tab::Output => {
             settings.ui_theme = defaults.ui_theme;
             settings.ui_language = defaults.ui_language;
+            settings.ui_log_view = defaults.ui_log_view;
             settings.inject_mode = defaults.inject_mode;
             settings.format_commands = defaults.format_commands;
             settings.inject_json = defaults.inject_json;

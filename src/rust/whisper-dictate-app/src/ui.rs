@@ -467,7 +467,7 @@ impl Default for WhisperDictateApp {
             runtime_state: RuntimeState::Stopped,
             runtime_log,
             runtime_log_scroll_to_bottom: true,
-            runtime_log_view: LogViewMode::Minimal,
+            runtime_log_view: LogViewMode::from_raw(&settings.ui_log_view),
             audio_capture_opening: false,
             audio_capture_active: false,
             audio_meter_level: 0.0,
@@ -573,6 +573,22 @@ impl LogViewMode {
             LogViewMode::Minimal => "Minimal",
             LogViewMode::Diagnostic => "Diagnostic",
             LogViewMode::Debug => "Debug",
+        }
+    }
+
+    fn from_raw(raw: &str) -> Self {
+        match raw {
+            "diagnostic" => Self::Diagnostic,
+            "debug" => Self::Debug,
+            _ => Self::Minimal,
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            LogViewMode::Minimal => "minimal",
+            LogViewMode::Diagnostic => "diagnostic",
+            LogViewMode::Debug => "debug",
         }
     }
 }
@@ -1120,6 +1136,7 @@ impl WhisperDictateApp {
         match config::load_settings() {
             Ok(settings) => {
                 self.saved_settings = settings.clone();
+                self.runtime_log_view = LogViewMode::from_raw(&settings.ui_log_view);
                 self.settings = settings;
                 self.reload_stt_api_key();
                 self.reload_post_api_key();
