@@ -17,16 +17,6 @@ function Get-CrateVersion {
   return $match.Matches[0].Groups[1].Value
 }
 
-function Get-LatestReleaseVersion {
-  if (Get-Command git -ErrorAction SilentlyContinue) {
-    $tag = (& git -C $root tag --list 'v[0-9]*' --sort=-v:refname 2>$null | Select-Object -First 1)
-    if (-not [string]::IsNullOrWhiteSpace($tag)) {
-      return $tag.Trim().TrimStart('v')
-    }
-  }
-  return Get-CrateVersion
-}
-
 function Get-LocalBuildMetadata {
   $stamp = Get-Date -Format 'yyyyMMddHHmmss'
   $sha = ''
@@ -58,7 +48,7 @@ function Get-VersionInfoVersion([string]$DisplayVersion) {
 }
 
 if (-not $Version) {
-  $Version = "$(Get-LatestReleaseVersion)+$(Get-LocalBuildMetadata)"
+  $Version = "$(Get-CrateVersion)+$(Get-LocalBuildMetadata)"
 }
 $versionInfo = Get-VersionInfoVersion $Version
 
