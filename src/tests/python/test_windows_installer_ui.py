@@ -393,7 +393,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".desired_width(input_width)", script)
         self.assertIn("eye_icon_button(ui, is_revealed, field.rect.height())", script)
         self.assertIn("fn save_stt_api_key_now(&mut self)", script)
-        self.assertIn("fn persist_cloud_provider_selection(&mut self)", script)
+        # `pub(in crate::ui)` visibility pushes this signature past rustfmt's width,
+        # so it now wraps `&mut self` onto its own line; match the fn name + receiver
+        # without assuming they stay on the same source line.
+        self.assertIn("fn persist_cloud_provider_selection(", script)
+        self.assertIn("&mut self,\n    ) -> Result<Option<std::path::PathBuf>>", script)
         self.assertIn("fn ensure_stt_api_key_loaded_for_runtime(&mut self)", script)
         self.assertIn("fn cloud_stt_missing_api_key(&self) -> bool", script)
         self.assertIn("fn save_stt_api_key_if_changed(", script)
@@ -595,7 +599,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn(".small().color(ui.visuals().weak_text_color())", script)
         self.assertIn("data.insert_persisted(id, show_help)", script)
         self.assertIn("response.on_hover_text(help)", script)
-        inline_help = script.split("fn inline_help", 1)[1].split("fn apply_ui_theme", 1)[0]
+        # `inline_help` and `apply_ui_theme` no longer share a file after the ui.rs
+        # decomposition (widgets vs theme submodules), so read inline_help from the
+        # widgets module where it now lives — it is the final fn in that file.
+        widgets = Path("src/rust/ui/widgets.rs").read_text(encoding="utf-8")
+        inline_help = widgets.split("fn inline_help", 1)[1]
         self.assertIn("egui::Label::new", inline_help)
         self.assertIn(".wrap()", inline_help)
         self.assertNotIn("ui.label(egui::RichText::new(help)", inline_help)

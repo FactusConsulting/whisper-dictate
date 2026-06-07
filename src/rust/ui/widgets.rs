@@ -1,0 +1,317 @@
+//! Reusable settings-grid form widgets: labelled text/combo/checkbox/password
+//! rows, the inline help-badge machinery, and small layout helpers shared by the
+//! settings tabs.
+
+use super::*;
+use std::time::{Duration, Instant};
+
+const SETTINGS_LABEL_WIDTH: f32 = 190.0;
+const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
+
+pub(in crate::ui) fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
+    let show_help = label_with_help(ui, label, help);
+    ui.add(egui::TextEdit::singleline(value).desired_width(settings_control_width(ui)));
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn text_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.add(egui::TextEdit::singleline(value).desired_width(settings_control_width(ui)));
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn password_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    reveal_until: &mut Option<Instant>,
+    help: &str,
+) {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    let now = Instant::now();
+    if reveal_until.is_some_and(|until| until <= now) {
+        *reveal_until = None;
+    }
+    let is_revealed = reveal_until.is_some_and(|until| until > now);
+    if let Some(until) = *reveal_until {
+        ui.ctx()
+            .request_repaint_after(until.saturating_duration_since(now));
+    }
+    ui.add_enabled_ui(enabled, |ui| {
+        const PASSWORD_CONTROL_WIDTH: f32 = 360.0;
+        const EYE_BUTTON_WIDTH: f32 = 26.0;
+        const EYE_BUTTON_GAP: f32 = 4.0;
+        let input_width = PASSWORD_CONTROL_WIDTH - EYE_BUTTON_WIDTH - EYE_BUTTON_GAP;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = EYE_BUTTON_GAP;
+            ui.set_width(PASSWORD_CONTROL_WIDTH);
+            // Render the field at its natural height and size the reveal button to
+            // match, so the eye stays vertically centered on the same row instead
+            // of drifting below the field (which made it look like it belonged to
+            // the next field).
+            let field = ui.add(
+                egui::TextEdit::singleline(value)
+                    .password(!is_revealed)
+                    .desired_width(input_width),
+            );
+            let response = eye_icon_button(ui, is_revealed, field.rect.height()).on_hover_text(
+                if is_revealed {
+                    "Hide API key."
+                } else {
+                    "Show API key for 3 seconds."
+                },
+            );
+            if response.clicked() {
+                *reveal_until = if is_revealed {
+                    None
+                } else {
+                    Some(Instant::now() + Duration::from_secs(3))
+                };
+            }
+        });
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+fn eye_icon_button(ui: &mut egui::Ui, active: bool, height: f32) -> egui::Response {
+    let size = egui::vec2(26.0, height.max(18.0));
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect(rect, 2.0, visuals.bg_fill, visuals.bg_stroke);
+
+        let stroke = egui::Stroke::new(
+            1.3,
+            if active {
+                ui.visuals().selection.stroke.color
+            } else {
+                visuals.fg_stroke.color
+            },
+        );
+        // Fixed-size eye glyph centered in the button, independent of its height.
+        let center = rect.center();
+        let half_w = 8.0;
+        let half_h = 5.0;
+        let left = egui::pos2(center.x - half_w, center.y);
+        let right = egui::pos2(center.x + half_w, center.y);
+        let top = egui::pos2(center.x, center.y - half_h);
+        let bottom = egui::pos2(center.x, center.y + half_h);
+        ui.painter().line_segment([left, top], stroke);
+        ui.painter().line_segment([top, right], stroke);
+        ui.painter().line_segment([right, bottom], stroke);
+        ui.painter().line_segment([bottom, left], stroke);
+        ui.painter().circle_stroke(center, 2.4, stroke);
+        if active {
+            ui.painter()
+                .circle_filled(center, 1.4, ui.visuals().selection.stroke.color);
+        }
+    }
+    response
+}
+
+pub(in crate::ui) fn checkbox_help(ui: &mut egui::Ui, label: &str, value: &mut bool, help: &str) {
+    let show_help = label_with_help(ui, label, help);
+    ui.checkbox(value, "");
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn combo_help(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    options: &[&str],
+    help: &str,
+) {
+    let show_help = label_with_help(ui, label, help);
+    egui::ComboBox::from_id_salt(label)
+        .width(settings_control_width(ui))
+        .selected_text(if value.is_empty() {
+            "(empty)"
+        } else {
+            value.as_str()
+        })
+        .show_ui(ui, |ui| {
+            for option in options {
+                ui.selectable_value(
+                    value,
+                    (*option).to_owned(),
+                    if option.is_empty() { "(empty)" } else { option },
+                );
+            }
+        });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn combo_help_labeled(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+) {
+    let show_help = label_with_help(ui, label, help);
+    egui::ComboBox::from_id_salt(label)
+        .width(settings_control_width(ui))
+        .selected_text(selected_option_label(value, options))
+        .show_ui(ui, |ui| {
+            for (option, display) in options {
+                ui.selectable_value(value, (*option).to_owned(), *display);
+            }
+        });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn combo_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[&str],
+    help: &str,
+) {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(if value.is_empty() {
+                "(empty)"
+            } else {
+                value.as_str()
+            })
+            .show_ui(ui, |ui| {
+                for option in options {
+                    ui.selectable_value(
+                        value,
+                        (*option).to_owned(),
+                        if option.is_empty() { "(empty)" } else { option },
+                    );
+                }
+            });
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn combo_enabled_labeled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+) {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(selected_option_label(value, options))
+            .show_ui(ui, |ui| {
+                for (option, display) in options {
+                    ui.selectable_value(value, (*option).to_owned(), *display);
+                }
+            });
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+pub(in crate::ui) fn selected_option_label(value: &str, options: &[(&str, &str)]) -> String {
+    options
+        .iter()
+        .find(|(option, _)| *option == value)
+        .map(|(_, display)| (*display).to_owned())
+        .unwrap_or_else(|| {
+            if value.is_empty() {
+                "(empty)".to_owned()
+            } else {
+                value.to_owned()
+            }
+        })
+}
+
+pub(in crate::ui) fn labeled_options_contain(options: &[(&str, &str)], value: &str) -> bool {
+    options.iter().any(|(option, _)| *option == value)
+}
+
+pub(in crate::ui) fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.set_min_width(SETTINGS_LABEL_WIDTH);
+        let response = ui.label(label);
+        if !help.is_empty() {
+            response.on_hover_text(help);
+        }
+        help_badge(ui, label, help)
+    })
+    .inner
+}
+
+pub(in crate::ui) fn label_with_help_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    help: &str,
+) -> bool {
+    ui.horizontal(|ui| {
+        ui.set_min_width(SETTINGS_LABEL_WIDTH);
+        let response = ui.add_enabled(enabled, egui::Label::new(label));
+        if !help.is_empty() {
+            response.on_hover_text(help);
+        }
+        help_badge(ui, label, help)
+    })
+    .inner
+}
+
+fn settings_control_width(ui: &egui::Ui) -> f32 {
+    ui.available_width()
+        .clamp(260.0, SETTINGS_CONTROL_MAX_WIDTH)
+}
+
+fn help_badge(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
+    if help.is_empty() {
+        return false;
+    }
+
+    let id = ui.make_persistent_id(("settings_help", label));
+    let mut show_help = ui
+        .data_mut(|data| data.get_persisted::<bool>(id))
+        .unwrap_or(false);
+    let response = ui.small_button("?");
+    if response.clicked() {
+        show_help = !show_help;
+        ui.data_mut(|data| data.insert_persisted(id, show_help));
+    }
+    let _ = response.on_hover_text(help);
+    show_help
+}
+
+fn grid_help_row(ui: &mut egui::Ui, show_help: bool, help: &str) {
+    if show_help {
+        ui.label("");
+        inline_help(ui, true, help);
+        ui.end_row();
+    }
+}
+
+pub(in crate::ui) fn inline_help(ui: &mut egui::Ui, show_help: bool, help: &str) {
+    if show_help {
+        ui.add(
+            egui::Label::new(egui::RichText::new(help).color(ui.visuals().weak_text_color()))
+                .wrap(),
+        );
+    }
+}
