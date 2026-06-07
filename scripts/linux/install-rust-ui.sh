@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/../../src/rust/Cargo.toml" && -d "${SCRIPT_DIR}/../../src/rust/whisper-dictate-app" ]]; then
+if [[ -f "${SCRIPT_DIR}/../../src/rust/Cargo.toml" && -d "${SCRIPT_DIR}/../../src/rust" ]]; then
   HERE="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 else
   HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"

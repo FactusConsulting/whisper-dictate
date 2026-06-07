@@ -55,11 +55,12 @@ jobs:
       - name: Normalize LCOV source paths to repo root
         # Sonar resolves LCOV `SF:` paths against the project base dir, so they
         # must be repo-root-relative. cargo-llvm-cov may emit absolute paths
-        # (strip the workspace prefix) or workspace-relative ones (add src/rust/);
-        # both seds are idempotent no-ops when the path is already normalized.
+        # (strip the workspace prefix) or crate-root-relative ones (the crate is
+        # flat under src/rust, so those start with e.g. lib.rs — prefix src/rust/).
+        # Both seds are idempotent no-ops when the path is already normalized.
         run: |
           sed -i "s#^SF:$(pwd)/#SF:#" lcov.info
-          sed -i "s#^SF:whisper-dictate-app/#SF:src/rust/whisper-dictate-app/#" lcov.info
+          sed -i -E "/^SF:src\//! s#^SF:#SF:src/rust/#" lcov.info
           # Sanity check: confirm the report has source records with repo-root paths.
           echo "LCOV SF records: $(grep -c '^SF:' lcov.info), sample: $(grep -m1 '^SF:' lcov.info)"
 

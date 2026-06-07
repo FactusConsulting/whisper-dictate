@@ -130,7 +130,7 @@ fn install_linux_app_icon(home: &Path) -> Result<()> {
     std::fs::create_dir_all(&icon_dir)?;
     std::fs::write(
         linux_app_icon_path(home),
-        include_str!("../../../../assets/whisper-dictate-logo.svg"),
+        include_str!("../../assets/whisper-dictate-logo.svg"),
     )?;
     Ok(())
 }

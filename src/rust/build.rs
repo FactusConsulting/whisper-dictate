@@ -4,7 +4,7 @@ fn main() {
     }
 
     let mut resource = winresource::WindowsResource::new();
-    resource.set_icon("../../../assets/whisper-dictate.ico");
+    resource.set_icon("../../assets/whisper-dictate.ico");
     if let Err(err) = resource.compile() {
         panic!("failed to embed Windows application icon: {err}");
     }

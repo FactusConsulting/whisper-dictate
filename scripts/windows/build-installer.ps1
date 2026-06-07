@@ -9,7 +9,7 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
 
 function Get-CrateVersion {
-  $cargoToml = Join-Path $root 'src\rust\whisper-dictate-app\Cargo.toml'
+  $cargoToml = Join-Path $root 'src\rust\Cargo.toml'
   $match = Select-String -LiteralPath $cargoToml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1
   if (-not $match) {
     throw "Could not read package version from $cargoToml"

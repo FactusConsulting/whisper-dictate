@@ -5,14 +5,14 @@ from helpers import (
 
 def rust_ui_source():
     # ui.rs + every non-test .rs under ui/ (resilient to the tabs/ split).
-    ui = Path("src/rust/whisper-dictate-app/src/ui")
-    paths = [Path("src/rust/whisper-dictate-app/src/ui.rs")]
+    ui = Path("src/rust/ui")
+    paths = [Path("src/rust/ui.rs")]
     paths += sorted(p for p in ui.rglob("*.rs") if not p.name.endswith("_tests.rs"))
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 def rust_config_source():
     # config.rs OR every .rs under config/ (resilient to the module split).
-    src = Path("src/rust/whisper-dictate-app/src")
+    src = Path("src/rust")
     single = src / "config.rs"
     paths = [single] if single.exists() else sorted((src / "config").rglob("*.rs"))
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
@@ -72,7 +72,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("Close whisper-dictate and run the installer again.", script)
 
     def test_rust_windows_ui_uses_gui_subsystem(self):
-        script = Path("src/rust/whisper-dictate-app/src/main.rs").read_text(encoding="utf-8")
+        script = Path("src/rust/main.rs").read_text(encoding="utf-8")
 
         self.assertIn(
             '#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]',
@@ -80,7 +80,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         )
 
     def test_rust_background_processes_hide_windows_console(self):
-        script = Path("src/rust/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
+        script = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
 
         self.assertIn("const CREATE_NO_WINDOW: u32 = 0x08000000;", script)
         self.assertIn("fn configure_background_process(", script)
@@ -105,7 +105,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_ui_does_not_spawn_shell_cleanup_before_starting_window(self):
         ui_script = rust_ui_source()
-        runtime_script = Path("src/rust/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
+        runtime_script = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
 
         ui_run = ui_script.split("pub fn run() -> Result<()>", 1)[1].split(
             "impl Default for WhisperDictateApp", 1
@@ -248,8 +248,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_ui_shows_version_in_title_and_top_bar(self):
         script = rust_ui_source()
-        icon = Path("src/rust/whisper-dictate-app/src/ui/icon.rs").read_text(encoding="utf-8")
-        cargo = Path("src/rust/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
+        icon = Path("src/rust/ui/icon.rs").read_text(encoding="utf-8")
+        cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
 
         self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
         self.assertIn("app_version: runtime::version()", script)
@@ -313,7 +313,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         # global_controls now lives in ui/tabs/shell.rs; scope to that file so the
         # assertNotIns aren't polluted by other tabs in the concatenated source.
         controls = (
-            Path("src/rust/whisper-dictate-app/src/ui/tabs/shell.rs")
+            Path("src/rust/ui/tabs/shell.rs")
             .read_text(encoding="utf-8")
             .split("fn global_controls", 1)[1]
         )
@@ -353,7 +353,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_ui_has_cloud_provider_dropdown_and_key_storage(self):
         script = rust_ui_source()
-        api_keys = Path("src/rust/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
+        api_keys = Path("src/rust/ui/api_keys.rs").read_text(encoding="utf-8")
 
         self.assertIn('GROQ_STT_BASE_URL: &str = "https://api.groq.com/openai/v1"', api_keys)
         self.assertIn('GROQ_STT_MODEL: &str = "whisper-large-v3-turbo"', api_keys)
@@ -410,7 +410,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_ui_uses_same_api_key_loader_on_start_and_reload(self):
         script = rust_ui_source()
-        api_keys = Path("src/rust/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
+        api_keys = Path("src/rust/ui/api_keys.rs").read_text(encoding="utf-8")
         default_impl = script.split("impl Default for WhisperDictateApp", 1)[1].split(
             "struct BackgroundTaskResult", 1
         )[0]
@@ -425,8 +425,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         ui_tests = "\n".join(
             Path(path).read_text(encoding="utf-8")
             for path in (
-                "src/rust/whisper-dictate-app/src/ui/api_key_store_tests.rs",
-                "src/rust/whisper-dictate-app/src/ui/cloud_settings_tests.rs",
+                "src/rust/ui/api_key_store_tests.rs",
+                "src/rust/ui/cloud_settings_tests.rs",
             )
         )
         self.assertIn("environment_api_keys_do_not_make_settings_dirty_at_startup", ui_tests)
@@ -504,7 +504,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_output_ui_supports_groq_postprocess_models(self):
         script = rust_ui_source()
-        api_keys = Path("src/rust/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
+        api_keys = Path("src/rust/ui/api_keys.rs").read_text(encoding="utf-8")
 
         self.assertIn('const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY"', api_keys)
         self.assertIn("enum PostProvider", api_keys)
@@ -552,7 +552,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"Quit key"', script)
 
     def test_rust_ui_keyring_uses_native_platform_backends(self):
-        cargo = Path("src/rust/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
+        cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
 
         self.assertIn('keyring = { version = "3.6"', cargo)
         self.assertIn('"windows-native"', cargo)
@@ -562,8 +562,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_ui_has_cloud_api_test_and_local_viewers(self):
         ui = rust_ui_source()
-        lib = Path("src/rust/whisper-dictate-app/src/lib.rs").read_text(encoding="utf-8")
-        cargo = Path("src/rust/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
+        lib = Path("src/rust/lib.rs").read_text(encoding="utf-8")
+        cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
 
         self.assertIn("pub mod cloud_api;", lib)
         self.assertIn("pub mod telemetry;", lib)
@@ -707,9 +707,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             self.assertIn(key, ui)
 
     def test_rust_cli_has_explicit_ubuntu_setup_command(self):
-        cli = Path("src/rust/whisper-dictate-app/src/cli.rs").read_text(encoding="utf-8")
-        main = Path("src/rust/whisper-dictate-app/src/main.rs").read_text(encoding="utf-8")
-        runtime = Path("src/rust/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
+        cli = Path("src/rust/cli.rs").read_text(encoding="utf-8")
+        main = Path("src/rust/main.rs").read_text(encoding="utf-8")
+        runtime = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
 
         self.assertIn("SetupUbuntu", cli)
         self.assertIn('["whisper-dictate", "setup-ubuntu"]', cli)
@@ -730,7 +730,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_ubuntu_setup_creates_launcher_autostart_and_starts_rust_ui(self):
         script = Path("packaging/linux/ubuntu26.04/setup.sh").read_text(encoding="utf-8")
-        runtime = Path("src/rust/whisper-dictate-app/src/runtime.rs").read_text(encoding="utf-8")
+        runtime = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
 
         self.assertIn('VOICEPI_RUST_OWNS_DESKTOP', script)
         self.assertIn("fn linux_desktop_exec_command() -> String", runtime)
@@ -823,13 +823,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fill=\"#FFFFFF\"", svg)
 
     def test_rust_windows_binary_embeds_application_icon_resource(self):
-        cargo = Path("src/rust/whisper-dictate-app/Cargo.toml").read_text(encoding="utf-8")
-        build = Path("src/rust/whisper-dictate-app/build.rs").read_text(encoding="utf-8")
+        cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
+        build = Path("src/rust/build.rs").read_text(encoding="utf-8")
 
         self.assertIn("winresource", cargo)
         self.assertIn("CARGO_CFG_TARGET_OS", build)
         self.assertIn('"windows"', build)
-        self.assertIn("../../../assets/whisper-dictate.ico", build)
+        self.assertIn("../../assets/whisper-dictate.ico", build)
         self.assertIn("resource.compile()", build)
 
     def test_github_docs_show_logo(self):
@@ -875,7 +875,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         readme = Path("README.md").read_text(encoding="utf-8")
 
         self.assertIn("function Get-CrateVersion", script)
-        self.assertIn("src\\rust\\whisper-dictate-app\\Cargo.toml", script)
+        self.assertIn("src\\rust\\Cargo.toml", script)
         self.assertIn("function Get-LocalBuildMetadata", script)
         self.assertIn('Version = "$(Get-CrateVersion)+$(Get-LocalBuildMetadata)"', script)
         self.assertNotIn("function Get-LatestReleaseVersion", script)
