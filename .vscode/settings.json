@@ -1,5 +1,9 @@
 {
   "rust-analyzer.linkedProjects": [
     "src/rust/Cargo.toml"
-  ]
+  ],
+  "sonarlint.connectedMode.project": {
+    "connectionId": "factusconsulting",
+    "projectKey": "FactusConsulting_whisper-dictate"
+  }
 }

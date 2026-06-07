@@ -13,6 +13,9 @@ __pycache__/
 target/
 target-clippy/
 
+# Clippy report generated in CI for SonarQube import
+clippy-report.json
+
 # Local installer/ZIP build output
 Output/
 

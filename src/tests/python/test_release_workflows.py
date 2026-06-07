@@ -205,8 +205,12 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("sonar.projectKey=FactusConsulting_whisper-dictate", sonar)
         self.assertIn("sonar.python.version=3.12", sonar)
         self.assertIn("sonar.rust.cargo.manifestPaths=src/rust/Cargo.toml", sonar)
+        # Rust is CI-analysed (not AA-eligible); Clippy lints are imported from a
+        # JSON report rather than re-run by the analyzer.
+        self.assertIn("sonar.rust.clippy.enabled=false", sonar)
+        self.assertIn("sonar.rust.clippyReport.reportPaths=clippy-report.json", sonar)
         self.assertIn("components: clippy", workflow)
-        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings", workflow)
+        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json", workflow)
         self.assertIn("SonarSource/sonarqube-scan-action@v6", workflow)
         self.assertIn("SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}", workflow)
         self.assertIn("components: clippy", test_workflow)
