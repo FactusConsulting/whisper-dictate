@@ -345,3 +345,9 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("  tests:\n    uses: ./.github/workflows/test.yml", release)
         self.assertIn("  release:\n    needs: tests\n", release)
         self.assertIn("  windows-installer:\n    needs: release\n", release)
+
+        # Manual (workflow_dispatch) re-releases must gate on the *tag* being
+        # shipped, not the dispatch branch: the reusable suite checks out a ref
+        # input in its jobs, and the release passes the resolved tag into it.
+        self.assertIn("ref: ${{ inputs.ref }}", test_workflow)
+        self.assertIn("ref: ${{ github.event.inputs.tag || github.ref_name }}", release)

@@ -21,6 +21,10 @@ jobs:
   # workflow_call). A tag must not ship if unit/rust/smoke/lint checks fail.
   tests:
     uses: ./.github/workflows/test.yml
+    with:
+      # Gate on the tag being shipped. On tag push this equals the workflow ref;
+      # on manual workflow_dispatch it is the explicit tag input, not the dispatch branch.
+      ref: ${{ github.event.inputs.tag || github.ref_name }}
 
   release:
     needs: tests
