@@ -1178,6 +1178,60 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[test]
+    fn every_schema_setting_is_wired_into_app_settings() {
+        // Adding a setting to settings_schema.json without wiring it into the
+        // typed AppSettings (read by from_value, written by apply_to_object) is a
+        // silent bug. Guard both halves so a forgotten field fails CI loudly.
+        fn field_for(key: &str) -> &str {
+            match key {
+                "json_output" => "inject_json", // config/schema key vs struct field name
+                other => other,
+            }
+        }
+
+        let schema: Value = serde_json::from_str(SETTINGS_SCHEMA_JSON).unwrap();
+        let default_json = serde_json::to_value(AppSettings::default()).unwrap();
+        let mut all_probes = Map::new();
+        let mut keys: Vec<String> = Vec::new();
+
+        for entry in schema["settings"].as_array().unwrap() {
+            let key = entry["key"].as_str().unwrap();
+            let field = field_for(key);
+            assert!(
+                default_json.get(field).is_some(),
+                "schema setting '{key}' has no matching AppSettings field '{field}'"
+            );
+            // A non-default probe value (always supplied as a JSON string, since
+            // both string_value and bool_value read via as_str()).
+            let probe = match &default_json[field] {
+                Value::Bool(b) => Value::String(if *b { "0" } else { "1" }.to_owned()),
+                Value::String(s) => Value::String(format!("{s}_wdprobe")),
+                other => panic!("unexpected AppSettings field type for '{key}': {other}"),
+            };
+            // from_value must READ the key: the probe must change the field.
+            let one = Value::Object([(key.to_owned(), probe.clone())].into_iter().collect());
+            let parsed = serde_json::to_value(AppSettings::from_value(one).unwrap()).unwrap();
+            assert_ne!(
+                parsed[field], default_json[field],
+                "AppSettings::from_value ignores schema setting '{key}'"
+            );
+            all_probes.insert(key.to_owned(), probe);
+            keys.push(key.to_owned());
+        }
+
+        // apply_to_object must WRITE every schema key back.
+        let settings = AppSettings::from_value(Value::Object(all_probes)).unwrap();
+        let mut written = Map::new();
+        settings.apply_to_object(&mut written);
+        for key in &keys {
+            assert!(
+                written.contains_key(key),
+                "AppSettings::apply_to_object does not persist schema setting '{key}'"
+            );
+        }
+    }
+
     fn restore_env(name: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
             env::set_var(name, value);
