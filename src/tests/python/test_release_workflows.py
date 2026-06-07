@@ -176,14 +176,18 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             self.assertTrue(Path("packaging/windows/winget", name).is_file(), name)
         self.assertFalse(Path("manifests").exists())
 
-    def test_rust_workspace_uses_single_root_lockfile(self):
-        root_workspace = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
+    def test_rust_crate_is_flat_single_crate_under_src_rust(self):
+        # The Rust code lives directly under src/rust as a single crate — no
+        # workspace wrapper and no nested per-crate subdirectory.
+        manifest = tomllib.loads(Path("src/rust/Cargo.toml").read_text(encoding="utf-8"))
 
+        self.assertIn("package", manifest)
+        self.assertNotIn("workspace", manifest)
+        self.assertEqual(manifest["package"]["name"], "whisper-dictate-app")
         self.assertTrue(Path("src/rust/Cargo.lock").is_file())
+        self.assertFalse(Path("src/rust/whisper-dictate-app").exists())
         self.assertFalse(Path("Cargo.toml").exists())
         self.assertFalse(Path("Cargo.lock").exists())
-        self.assertIn('members = ["whisper-dictate-app"]', root_workspace)
-        self.assertFalse(Path("src/rust/whisper-dictate-app/Cargo.lock").exists())
 
     def test_rust_workspace_disables_incremental_cache_for_windows_stability(self):
         workspace = tomllib.loads(Path("src/rust/Cargo.toml").read_text(encoding="utf-8"))
@@ -213,11 +217,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("sonar.rust.clippyReport.reportPaths=clippy-report.json", sonar)
         # sources and tests must be disjoint or the scanner fails ("indexed twice");
         # the test dirs live under src/, so sources lists the main dirs explicitly.
+        # The flat Rust crate lives at src/rust, with its tests carved out via
+        # sonar.exclusions so the nested src/rust/tests isn't indexed twice.
         self.assertIn(
-            "sonar.sources=src/python/whisper_dictate,src/rust/whisper-dictate-app/src,scripts,packaging,nix",
+            "sonar.sources=src/python/whisper_dictate,src/rust,scripts,packaging,nix",
             sonar,
         )
         self.assertNotIn("sonar.sources=src,", sonar)
+        self.assertIn("src/rust/tests/**", sonar)
         self.assertIn("components: clippy", workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json", workflow)
         self.assertIn("SonarSource/sonarqube-scan-action@v6", workflow)

@@ -7,14 +7,14 @@ from helpers import (
 
 def rust_ui_source():
     # ui.rs + every non-test .rs under ui/ (resilient to the tabs/ split).
-    ui = Path("src/rust/whisper-dictate-app/src/ui")
-    paths = [Path("src/rust/whisper-dictate-app/src/ui.rs")]
+    ui = Path("src/rust/ui")
+    paths = [Path("src/rust/ui.rs")]
     paths += sorted(p for p in ui.rglob("*.rs") if not p.name.endswith("_tests.rs"))
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 def rust_config_source():
     # config.rs OR every .rs under config/ (resilient to the module split).
-    src = Path("src/rust/whisper-dictate-app/src")
+    src = Path("src/rust")
     single = src / "config.rs"
     paths = [single] if single.exists() else sorted((src / "config").rglob("*.rs"))
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
@@ -31,7 +31,7 @@ class RustUiInstallerTests(unittest.TestCase):
         ).split()[0]
         self.assertEqual("100755", mode)
         self.assertIn('SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"', script)
-        self.assertIn('if [[ -f "${SCRIPT_DIR}/../../src/rust/Cargo.toml" && -d "${SCRIPT_DIR}/../../src/rust/whisper-dictate-app" ]]; then', script)
+        self.assertIn('if [[ -f "${SCRIPT_DIR}/../../src/rust/Cargo.toml" && -d "${SCRIPT_DIR}/../../src/rust" ]]; then', script)
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/../.." && pwd)"', script)
         self.assertIn('HERE="$(cd "${SCRIPT_DIR}/.." && pwd)"', script)
         self.assertIn('CARGO_MANIFEST="${HERE}/src/rust/Cargo.toml"', script)
@@ -89,7 +89,7 @@ class RustUiInstallerTests(unittest.TestCase):
 
     def test_groq_provider_is_persisted_and_key_is_not_plain_config(self):
         ui = rust_ui_source()
-        api_keys = Path("src/rust/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
+        api_keys = Path("src/rust/ui/api_keys.rs").read_text(encoding="utf-8")
         config = rust_config_source()
 
         self.assertIn('"Cloud STT provider"', ui)

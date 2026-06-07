@@ -54,18 +54,18 @@ class SettingsSchemaTests(unittest.TestCase):
         # The config module was split into config/*.rs; read config.rs if it
         # still exists, else the whole config/ directory. The include_str! path
         # is relative to the file that holds it, so config/schema.rs (one level
-        # deeper than the old config.rs) carries one extra `../`.
-        src = Path("src/rust/whisper-dictate-app/src")
+        # deeper than a flat config.rs) carries one extra `../`.
+        src = Path("src/rust")
         single = src / "config.rs"
         if single.exists():
             config_rs = single.read_text(encoding="utf-8")
-            schema_path = "../../../python/whisper_dictate/settings_schema.json"
+            schema_path = "../python/whisper_dictate/settings_schema.json"
         else:
             config_rs = "\n".join(
                 p.read_text(encoding="utf-8")
                 for p in sorted((src / "config").rglob("*.rs"))
             )
-            schema_path = "../../../../python/whisper_dictate/settings_schema.json"
+            schema_path = "../../python/whisper_dictate/settings_schema.json"
         self.assertIn(
             f'include_str!("{schema_path}")',
             config_rs,
