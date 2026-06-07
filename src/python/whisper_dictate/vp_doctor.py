@@ -1,8 +1,10 @@
-"""Linux/Wayland health checks for ``whisper-dictate doctor``.
+"""Doctor orchestration + Linux/Wayland injection checks.
 
-A no-model-load diagnostic: verifies evdev, ydotool/ydotoold, the input group,
-session env vars and readable /dev/input devices. Kept import-light (no numpy or
-faster-whisper) so ``--doctor`` stays fast.
+This module owns the Linux-specific injection checks (evdev, ydotool/ydotoold,
+the input group, session env vars, readable /dev/input) and the ``--doctor``
+orchestration. The cross-platform readiness probes (version, config, STT backend
++ deps, audio, GPU, cloud, disk) live in ``vp_doctor_checks``, which imports the
+heavy deps lazily so ``--help`` stays instant.
 """
 from __future__ import annotations
 
@@ -10,18 +12,10 @@ import glob
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
 from shutil import which
 
+from whisper_dictate.vp_doctor_checks import Check, readiness_checks
 from whisper_dictate.vp_inject import ydotool_socket_path, ydotoold_ready
-
-
-@dataclass
-class Check:
-    name: str
-    ok: bool
-    detail: str
-    required: bool = True
 
 
 try:
@@ -115,23 +109,23 @@ def _print_checks(checks: list[Check]) -> bool:
     return failed
 
 
-def _print_fix_hints() -> None:
+def _print_fix_hints(on_linux: bool) -> None:
     print("[doctor] Fix hints:", flush=True)
-    print("  sudo usermod -aG input $USER  # then log out and back in", flush=True)
-    print("  sudo apt install ydotool", flush=True)
-    print("  python -m pip install -r requirements/cpu.txt", flush=True)
+    print("  python -m pip install -r requirements/cpu.txt  # STT + audio deps", flush=True)
+    set_key = "export VOICEPI_STT_API_KEY=..." if os.name == "posix" else "set VOICEPI_STT_API_KEY=..."
+    print(f"  {set_key}  # required for the cloud (openai) backend", flush=True)
+    if on_linux:
+        print("  sudo usermod -aG input $USER  # then log out and back in", flush=True)
+        print("  sudo apt install ydotool", flush=True)
 
 
 def run_doctor() -> int:
     on_linux = sys.platform.startswith("linux")
     on_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE") == "wayland"
-    checks = _base_checks(on_linux, on_wayland)
-
-    if not on_linux:
-        _print_checks(checks)
-        return 0
-
-    failed = _print_checks(checks + _linux_checks())
+    checks = _base_checks(on_linux, on_wayland) + readiness_checks()
+    if on_linux:
+        checks += _linux_checks()
+    failed = _print_checks(checks)
     if failed:
-        _print_fix_hints()
+        _print_fix_hints(on_linux)
     return 1 if failed else 0
