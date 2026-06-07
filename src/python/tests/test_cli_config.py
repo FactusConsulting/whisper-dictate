@@ -350,6 +350,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_dictate.py",
             "vp_dictionary_suggest.py",
             "vp_doctor.py",
+            "vp_doctor_checks.py",
             "vp_events.py",
             "vp_external_api.py",
             "vp_format.py",
