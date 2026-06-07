@@ -12,7 +12,7 @@ numpy<2.5                 # ctranslate2 / onnxruntime ABI constraint
 sounddevice>=0.4,<0.6
 pynput>=1.8.2,<2.0
 pyperclip>=1.8,<2.0       # --paste mode (required on Wayland)
-pycaw>=20240210; sys_platform == "win32"  # optional audio ducking
+pycaw>=20251023; sys_platform == "win32"  # optional audio ducking
 
 # Wayland (Ubuntu 24.04+): evdev enables global hotkeys by reading
 # /dev/input/event* directly (requires the user to be in the 'input'

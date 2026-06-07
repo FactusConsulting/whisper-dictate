@@ -13,4 +13,4 @@ nvidia-cudnn-cu12==9.*
 sounddevice>=0.4,<0.6
 pynput>=1.8.2,<2.0
 pyperclip>=1.8,<2.0       # --paste mode
-pycaw>=20240210; sys_platform == "win32"  # optional audio ducking
+pycaw>=20251023; sys_platform == "win32"  # optional audio ducking
