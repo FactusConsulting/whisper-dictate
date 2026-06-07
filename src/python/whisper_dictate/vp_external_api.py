@@ -270,7 +270,7 @@ class ExternalTranscriptionModel:
                     str(prompt),
                     base_url=self.settings.base_url,
                 )])
-            r = subprocess.run(args, capture_output=True, timeout=self.settings.timeout_ms / 1000.0 + 2, text=True)
+            r = subprocess.run(args, capture_output=True, timeout=self.settings.timeout_ms / 1000.0 + 2, text=True, encoding="utf-8")
             if r.returncode != 0:
                 err = (r.stderr or "").strip()
                 if err:

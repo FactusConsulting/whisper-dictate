@@ -64,7 +64,7 @@ def _ydotoold_process_detail(socket_ready: bool) -> tuple[bool, str]:
     if socket_ready:
         return True, "accepting connections"
     try:
-        r = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True, timeout=1)
+        r = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True, encoding="utf-8", timeout=1)
     except Exception as e:
         return False, str(e)
     if r.returncode == 0:
