@@ -12,6 +12,13 @@ def rust_ui_source():
     paths += sorted(p for p in ui.rglob("*.rs") if not p.name.endswith("_tests.rs"))
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
+def rust_config_source():
+    # config.rs OR every .rs under config/ (resilient to the module split).
+    src = Path("src/rust/whisper-dictate-app/src")
+    single = src / "config.rs"
+    paths = [single] if single.exists() else sorted((src / "config").rglob("*.rs"))
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
 class RustUiInstallerTests(unittest.TestCase):
     def test_linux_rust_ui_installer_builds_release_binary_and_desktop_entry(self):
         path = Path("scripts/linux/install-rust-ui.sh")
@@ -83,7 +90,7 @@ class RustUiInstallerTests(unittest.TestCase):
     def test_groq_provider_is_persisted_and_key_is_not_plain_config(self):
         ui = rust_ui_source()
         api_keys = Path("src/rust/whisper-dictate-app/src/ui/api_keys.rs").read_text(encoding="utf-8")
-        config = Path("src/rust/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+        config = rust_config_source()
 
         self.assertIn('"Cloud STT provider"', ui)
         self.assertIn("fn set_cloud_provider(&mut self, provider: CloudProvider)", ui)

@@ -10,6 +10,13 @@ def rust_ui_source():
     paths += sorted(p for p in ui.rglob("*.rs") if not p.name.endswith("_tests.rs"))
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
+def rust_config_source():
+    # config.rs OR every .rs under config/ (resilient to the module split).
+    src = Path("src/rust/whisper-dictate-app/src")
+    single = src / "config.rs"
+    paths = [single] if single.exists() else sorted((src / "config").rglob("*.rs"))
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_installer_no_longer_packages_legacy_launchers(self):
         with open("packaging/windows/inno/whisper-dictate.iss", encoding="utf-8") as f:
@@ -87,7 +94,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_windows_shell_open_helpers_do_not_show_console_windows(self):
         ui = rust_ui_source()
-        config = Path("src/rust/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+        config = rust_config_source()
 
         ui_open_url = ui.split("fn open_url", 1)[1].split("#[cfg(test)]", 1)[0]
         config_open_path = config.split("fn open_path", 1)[1].split("#[cfg(test)]", 1)[0]
@@ -617,7 +624,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_ui_uses_switchable_accented_themes(self):
         script = rust_ui_source()
-        config = Path("src/rust/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+        config = rust_config_source()
 
         self.assertIn("const UI_ACCENT_BLUE: egui::Color32", script)
         self.assertIn("egui::Color32::from_rgb(125, 211, 252)", script)
@@ -678,7 +685,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_config_maps_audio_ducking_and_cloud_redaction(self):
         config = Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
-        rust_config = Path("src/rust/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
+        rust_config = rust_config_source()
         ui = rust_ui_source()
 
         for token in (
