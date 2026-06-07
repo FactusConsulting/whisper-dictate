@@ -280,7 +280,7 @@ fn cleanup_stale_desktop_processes_stops_worker_from_same_app_root() {
 
 fn test_python() -> Option<PathBuf> {
     for candidate in python_candidates() {
-        if Command::new(&candidate)
+        if Command::new(candidate)
             .arg("--version")
             .output()
             .is_ok_and(|output| output.status.success())
