@@ -44,11 +44,13 @@ jobs:
         run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json
 
       - name: Rust coverage (LCOV for Sonar import)
-        # Run the package test suite under instrumentation and emit LCOV. Use the
-        # repo-root target dir (matches clippy/test.yml, avoids extra rebuilds)
-        # and an absolute output path so the report always lands at the repo root
-        # regardless of how cargo-llvm-cov resolves a relative --output-path.
-        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-features --lcov --output-path $GITHUB_WORKSPACE/lcov.info
+        # Run the package test suite under instrumentation and emit LCOV.
+        # cargo-llvm-cov manages its own instrumented build tree
+        # (target/llvm-cov-target) and rejects a top-level --target-dir, so we
+        # leave that to its default. Use an absolute --output-path so the report
+        # always lands at the repo root regardless of how cargo-llvm-cov resolves
+        # a relative output path.
+        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path $GITHUB_WORKSPACE/lcov.info
 
       - name: Normalize LCOV source paths to repo root
         # Sonar resolves LCOV `SF:` paths against the project base dir, so they
