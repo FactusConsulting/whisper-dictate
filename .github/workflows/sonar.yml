@@ -33,8 +33,10 @@ jobs:
         with:
           components: clippy
 
-      - name: Rust Clippy
-        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
+      - name: Rust Clippy report (JSON for Sonar import)
+        # No -D warnings here: emit the report even when lints fire so Sonar can
+        # surface them as issues. The hard clippy gate lives in test.yml's rust job.
+        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json
 
       - name: SonarQube Scan
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
