@@ -331,3 +331,23 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             for path in Path(".github/workflows").glob("*.yml")
         )
         self.assertIn("windows-2025", workflow_text)
+
+    def test_release_is_gated_on_the_full_test_suite(self):
+        test_workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+        # test.yml must be reusable so the release runs the exact same checks
+        # instead of duplicating them.
+        self.assertIn("workflow_call:", test_workflow)
+
+        # The release calls the reusable suite and blocks on it; the dependent
+        # windows-installer job is gated transitively via needs: release.
+        self.assertIn("  tests:\n    uses: ./.github/workflows/test.yml", release)
+        self.assertIn("  release:\n    needs: tests\n", release)
+        self.assertIn("  windows-installer:\n    needs: release\n", release)
+
+        # Manual (workflow_dispatch) re-releases must gate on the *tag* being
+        # shipped, not the dispatch branch: the reusable suite checks out a ref
+        # input in its jobs, and the release passes the resolved tag into it.
+        self.assertIn("ref: ${{ inputs.ref }}", test_workflow)
+        self.assertIn("ref: ${{ github.event.inputs.tag || github.ref_name }}", release)

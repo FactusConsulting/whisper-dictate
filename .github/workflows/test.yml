@@ -4,12 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:        # allow other workflows (e.g. release) to run the full suite as a gate
+    inputs:
+      ref:
+        description: Git ref to check out for all jobs. Defaults to the triggering ref; the release passes the tag so manual re-releases gate on the shipped commit.
+        type: string
+        required: false
+        default: ''
 
 jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -22,6 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -56,6 +67,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -97,6 +110,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - name: Install Linux Rust UI build deps
         if: runner.os == 'Linux'
         run: |
