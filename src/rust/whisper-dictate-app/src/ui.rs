@@ -1840,6 +1840,10 @@ fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_theme: &str) {
         .parse::<f32>()
         .unwrap_or(DEFAULT_UI_TEXT_SCALE)
         .clamp(0.85, 1.6);
+    // Single source of truth for font sizes/weights. Headers go through
+    // `ui.heading()` / `section_label` (Heading / Small), body text and labels
+    // through Body, code/paths through Monospace, buttons through Button. Avoid
+    // ad-hoc `RichText::size()` for headers/labels — add or reuse a style here.
     let text_styles = BTreeMap::from([
         (
             egui::TextStyle::Heading,

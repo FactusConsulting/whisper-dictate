@@ -23,7 +23,7 @@ impl WhisperDictateApp {
                 icons::ICON_TUNE,
                 ui_text(&self.settings.ui_language, UiTextKey::SidebarSubtitle),
             )
-            .size(12.0)
+            .text_style(egui::TextStyle::Small)
             .color(palette.text_muted),
         );
         ui.add_space(18.0);
@@ -47,7 +47,7 @@ impl WhisperDictateApp {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.label(
                 egui::RichText::new(format!("v{}", self.app_version))
-                    .size(12.0)
+                    .text_style(egui::TextStyle::Small)
                     .color(palette.text_muted),
             );
             ui.add_space(8.0);
