@@ -209,6 +209,13 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # JSON report rather than re-run by the analyzer.
         self.assertIn("sonar.rust.clippy.enabled=false", sonar)
         self.assertIn("sonar.rust.clippyReport.reportPaths=clippy-report.json", sonar)
+        # sources and tests must be disjoint or the scanner fails ("indexed twice");
+        # the test dirs live under src/, so sources lists the main dirs explicitly.
+        self.assertIn(
+            "sonar.sources=src/python/whisper_dictate,src/rust/whisper-dictate-app/src,scripts,packaging,nix",
+            sonar,
+        )
+        self.assertNotIn("sonar.sources=src,", sonar)
         self.assertIn("components: clippy", workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json", workflow)
         self.assertIn("SonarSource/sonarqube-scan-action@v6", workflow)
