@@ -92,7 +92,9 @@ def read_history(limit: int = 20, path: Path | None = None) -> list[dict]:
                 continue
             if isinstance(obj, dict):
                 rows.append(obj)
-    return rows[-max(0, limit):] if limit else rows
+    # Clamp to >=1 (matches the Rust `history list`); limit<=0 must not dump all.
+    effective = max(1, limit)
+    return rows[-effective:]
 
 
 def last_history(path: Path | None = None) -> dict | None:

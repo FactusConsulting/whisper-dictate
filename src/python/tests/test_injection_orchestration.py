@@ -69,8 +69,6 @@ class _FakeClip:
 
 class _InjectBase(unittest.TestCase):
     def setUp(self):
-        for n in ("vp_inject",):
-            sys.modules.pop(n, None)
         from whisper_dictate import vp_inject
         self.inject = vp_inject
         self.kbmod = _fake_pynput_keyboard()
@@ -491,7 +489,7 @@ class FocusCaptureRestoreTests(_InjectBase):
         with patch.object(self.inject.shutil, "which", return_value="/usr/bin/xdotool"):
             self.assertFalse(self.inject.InjectMixin._restore_target_focus(t))
 
-    def test_inject_logs_refocus_target_on_wayland(self):
+    def test_inject_print_mode_skips_refocus_log(self):
         t = self._target(mode="print", title="Cool App")
         t._inject_target_xwin = "12345"
         t._restore_target_focus = lambda: True
@@ -499,9 +497,10 @@ class FocusCaptureRestoreTests(_InjectBase):
         with _env(WAYLAND_DISPLAY="wayland-0"), _capture_stdout() as out:
             self.inject.InjectMixin._inject(t, "hi")
 
-        # print mode short-circuits BEFORE the refocus log, so no refocus line.
+        # print mode short-circuits BEFORE the refocus log.
         self.assertEqual(t._last_inject_strategy, "print")
         self.assertIn("(heard) hi", out.getvalue())
+        self.assertNotIn("refocused", out.getvalue())
 
     def test_inject_refocus_log_for_non_print_wayland(self):
         t = self._target(mode="type", title="Cool App")

@@ -1230,6 +1230,14 @@ mod tests {
                 "AppSettings::apply_to_object does not persist schema setting '{key}'"
             );
         }
+        // Re-reading the written object must reproduce the same settings, so
+        // apply_to_object can't silently persist a wrong value (or a default)
+        // under the right key.
+        let reparsed = AppSettings::from_value(Value::Object(written)).unwrap();
+        assert_eq!(
+            reparsed, settings,
+            "apply_to_object/from_value round-trip lost or corrupted a value"
+        );
     }
 
     fn restore_env(name: &str, value: Option<std::ffi::OsString>) {

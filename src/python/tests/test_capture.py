@@ -432,18 +432,19 @@ class EmitAudioLevelTests(unittest.TestCase):
     def test_emit_audio_level_throttles_within_120ms_window(self):
         rt = self.runtime
         np = self.np
-        # Set last-event to "now-ish" so the 0.12s gate suppresses emission.
-        target = self._target(last_event=rt.time.monotonic())
+        # Pin the clock so the throttle window is deterministic (not wall-clock).
+        target = self._target(last_event=1000.0)
         pcm = np.zeros((2000, 1), dtype=np.int16)
 
-        with _env(VOICEPI_WORKER_EVENTS="1"):
+        with _env(VOICEPI_WORKER_EVENTS="1"), \
+                patch.object(rt.time, "monotonic", lambda: 1000.05):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
                 rt.Dictate._emit_audio_level(target, pcm)
 
         self.assertEqual(stderr.getvalue(), "")
-        # Throttled: timestamp not advanced.
-        self.assertNotEqual(target._last_audio_level_event, 0.0)
+        # Throttled (0.05s < 0.12s gate): timestamp not advanced.
+        self.assertEqual(target._last_audio_level_event, 1000.0)
 
     def test_emit_audio_level_emits_metered_worker_event(self):
         rt = self.runtime

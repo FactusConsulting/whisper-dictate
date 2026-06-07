@@ -46,6 +46,16 @@ class HistoryReadTests(unittest.TestCase):
         rows = vp_history.read_history(10, self.path)
         self.assertEqual([r["text"] for r in rows], ["ok", "ok2"])
 
+    def test_read_history_clamps_nonpositive_limit(self):
+        # limit <= 0 must not dump the whole file (matches the Rust clamp >= 1).
+        _write_jsonl(self.path, [{"text": f"t{i}"} for i in range(5)])
+        self.assertEqual(
+            [r["text"] for r in vp_history.read_history(0, self.path)], ["t4"]
+        )
+        self.assertEqual(
+            [r["text"] for r in vp_history.read_history(-3, self.path)], ["t4"]
+        )
+
     def test_last_history(self):
         _write_jsonl(self.path, [{"text": "a"}, {"text": "b"}])
         self.assertEqual(vp_history.last_history(self.path)["text"], "b")
