@@ -4,13 +4,11 @@ from helpers import (
 )
 
 def rust_ui_source():
-    paths = [
-        "src/rust/whisper-dictate-app/src/ui.rs",
-        "src/rust/whisper-dictate-app/src/ui/tabs.rs",
-        "src/rust/whisper-dictate-app/src/ui/api_keys.rs",
-        "src/rust/whisper-dictate-app/src/ui/icon.rs",
-    ]
-    return "\n".join(Path(path).read_text(encoding="utf-8") for path in paths)
+    # ui.rs + every non-test .rs under ui/ (resilient to the tabs/ split).
+    ui = Path("src/rust/whisper-dictate-app/src/ui")
+    paths = [Path("src/rust/whisper-dictate-app/src/ui.rs")]
+    paths += sorted(p for p in ui.rglob("*.rs") if not p.name.endswith("_tests.rs"))
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_installer_no_longer_packages_legacy_launchers(self):
@@ -195,8 +193,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_output_tab_owns_logging_and_session_controls(self):
         script = rust_ui_source()
-        output_tab = script.split("pub(super) fn output_tab", 1)[1].split(
-            "pub(super) fn post_processing_tab", 1
+        output_tab = script.split("pub(in crate::ui) fn output_tab", 1)[1].split(
+            "pub(in crate::ui) fn post_processing_tab", 1
         )[0]
 
         self.assertIn('section_label(ui, "Log view", palette);', output_tab)
@@ -269,8 +267,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
             "impl WhisperDictateApp", 1
         )[0]
-        settings_panel = script.split("pub(super) fn settings_panel", 1)[1].split(
-            "pub(super) fn core_tab", 1
+        settings_panel = script.split("pub(in crate::ui) fn settings_panel", 1)[1].split(
+            "pub(in crate::ui) fn core_tab", 1
         )[0]
 
         self.assertIn('egui::SidePanel::left("primary_navigation")', update_impl)
@@ -302,9 +300,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
             "impl WhisperDictateApp", 1
         )[0]
-        controls = script.split("pub(super) fn global_controls", 1)[1].split(
-            "pub(super) fn runtime_tab", 1
-        )[0]
+        # global_controls now lives in ui/tabs/shell.rs; scope to that file so the
+        # assertNotIns aren't polluted by other tabs in the concatenated source.
+        controls = (
+            Path("src/rust/whisper-dictate-app/src/ui/tabs/shell.rs")
+            .read_text(encoding="utf-8")
+            .split("fn global_controls", 1)[1]
+        )
 
         self.assertIn("self.sidebar(ui, palette)", update_impl)
         self.assertIn("self.top_status_bar(ui, palette)", update_impl)
@@ -497,7 +499,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("enum PostProvider", api_keys)
         self.assertIn('"Post API key"', script)
         self.assertIn("Tab::Post => self.settings_panel(ui, Self::post_processing_tab)", script)
-        self.assertIn("pub(super) fn post_processing_tab(&mut self, ui: &mut egui::Ui)", script)
+        self.assertIn("pub(in crate::ui) fn post_processing_tab(&mut self, ui: &mut egui::Ui)", script)
         self.assertIn('settings_grid("post_processing_settings")', script)
         self.assertIn("fn settings_grid(id: &'static str) -> egui::Grid", script)
         self.assertIn(".spacing(egui::vec2(20.0, 10.0))", script)

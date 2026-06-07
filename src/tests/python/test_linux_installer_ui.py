@@ -6,13 +6,11 @@ from helpers import (
 )
 
 def rust_ui_source():
-    paths = [
-        "src/rust/whisper-dictate-app/src/ui.rs",
-        "src/rust/whisper-dictate-app/src/ui/tabs.rs",
-        "src/rust/whisper-dictate-app/src/ui/api_keys.rs",
-        "src/rust/whisper-dictate-app/src/ui/icon.rs",
-    ]
-    return "\n".join(Path(path).read_text(encoding="utf-8") for path in paths)
+    # ui.rs + every non-test .rs under ui/ (resilient to the tabs/ split).
+    ui = Path("src/rust/whisper-dictate-app/src/ui")
+    paths = [Path("src/rust/whisper-dictate-app/src/ui.rs")]
+    paths += sorted(p for p in ui.rglob("*.rs") if not p.name.endswith("_tests.rs"))
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 class RustUiInstallerTests(unittest.TestCase):
     def test_linux_rust_ui_installer_builds_release_binary_and_desktop_entry(self):
