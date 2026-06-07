@@ -7,6 +7,10 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     assert_eq!(Tab::Dictionary.label("da"), "Ordbog");
     assert_eq!(ui_text("da", UiTextKey::LiveDictation), "Live diktering");
     assert_eq!(ui_text("da", UiTextKey::Copy), "Kopier");
+    assert_eq!(ui_text("da", UiTextKey::InstallRepair), "Installer/Reparer");
+    assert_eq!(ui_text("da", UiTextKey::Doctor), "Diagnose");
+    assert_eq!(ui_text("da", UiTextKey::Light), "Lys");
+    assert_eq!(LogViewMode::Diagnostic.label("da"), "Diagnostik");
     assert_eq!(runtime_state_label(RuntimeState::Running, "da"), "Kører");
 }
 

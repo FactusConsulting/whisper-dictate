@@ -69,7 +69,10 @@ impl WhisperDictateApp {
                 .add_enabled_ui(self.background_task.is_none(), |ui| {
                     ui.add_sized(
                         [ui.available_width(), 34.0],
-                        egui::Button::new(icon_text(icons::ICON_BUILD, "Install/Repair")),
+                        egui::Button::new(icon_text(
+                            icons::ICON_BUILD,
+                            ui_text(&self.settings.ui_language, UiTextKey::InstallRepair),
+                        )),
                     )
                 })
                 .inner
@@ -82,7 +85,10 @@ impl WhisperDictateApp {
             if ui
                 .add_sized(
                     [ui.available_width(), 34.0],
-                    egui::Button::new(icon_text(icons::ICON_HEALTH_AND_SAFETY, "Doctor")),
+                    egui::Button::new(icon_text(
+                        icons::ICON_HEALTH_AND_SAFETY,
+                        ui_text(&self.settings.ui_language, UiTextKey::Doctor),
+                    )),
                 )
                 .clicked()
             {
@@ -362,7 +368,13 @@ impl WhisperDictateApp {
     fn session_panel(&self, ui: &mut egui::Ui, palette: UiPalette) {
         panel_frame(palette).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(icon_text(icons::ICON_TASK_ALT, "Session").strong());
+            ui.label(
+                icon_text(
+                    icons::ICON_TASK_ALT,
+                    ui_text(&self.settings.ui_language, UiTextKey::Session),
+                )
+                .strong(),
+            );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 metric_box(ui, "Backend", self.backend_summary(), palette);
@@ -1008,7 +1020,8 @@ impl WhisperDictateApp {
                 ui_text(&self.settings.ui_language, UiTextKey::UiTheme),
                 palette,
             );
-            theme_toggle(ui, &mut self.settings.ui_theme, palette);
+            let ui_language = self.settings.ui_language.clone();
+            theme_toggle(ui, &mut self.settings.ui_theme, palette, &ui_language);
             ui.add_space(12.0);
             section_label(
                 ui,
@@ -1412,12 +1425,20 @@ fn section_label(ui: &mut egui::Ui, label: &str, palette: UiPalette) {
     );
 }
 
-fn theme_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette) {
+fn theme_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette, raw_language: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         for (raw, icon, label) in [
-            ("dark", icons::ICON_DARK_MODE, "Dark"),
-            ("light", icons::ICON_LIGHT_MODE, "Light"),
+            (
+                "dark",
+                icons::ICON_DARK_MODE,
+                ui_text(raw_language, UiTextKey::Dark),
+            ),
+            (
+                "light",
+                icons::ICON_LIGHT_MODE,
+                ui_text(raw_language, UiTextKey::Light),
+            ),
         ] {
             let selected = value == raw;
             let fill = if selected {

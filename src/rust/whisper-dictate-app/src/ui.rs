@@ -198,6 +198,14 @@ enum UiTextKey {
     English,
     Danish,
     UiTheme,
+    Dark,
+    Light,
+    Minimal,
+    Diagnostic,
+    Debug,
+    InstallRepair,
+    Doctor,
+    Session,
     Stopped,
     Starting,
     Running,
@@ -240,6 +248,14 @@ impl UiTextKey {
                 UiTextKey::English => "English",
                 UiTextKey::Danish => "Danish",
                 UiTextKey::UiTheme => "UI theme",
+                UiTextKey::Dark => "Dark",
+                UiTextKey::Light => "Light",
+                UiTextKey::Minimal => "Minimal",
+                UiTextKey::Diagnostic => "Diagnostic",
+                UiTextKey::Debug => "Debug",
+                UiTextKey::InstallRepair => "Install/Repair",
+                UiTextKey::Doctor => "Doctor",
+                UiTextKey::Session => "Session",
                 UiTextKey::Stopped => "Stopped",
                 UiTextKey::Starting => "Starting",
                 UiTextKey::Running => "Running",
@@ -278,6 +294,14 @@ impl UiTextKey {
                 UiTextKey::English => "Engelsk",
                 UiTextKey::Danish => "Dansk",
                 UiTextKey::UiTheme => "UI-tema",
+                UiTextKey::Dark => "Mørk",
+                UiTextKey::Light => "Lys",
+                UiTextKey::Minimal => "Minimal",
+                UiTextKey::Diagnostic => "Diagnostik",
+                UiTextKey::Debug => "Debug",
+                UiTextKey::InstallRepair => "Installer/Reparer",
+                UiTextKey::Doctor => "Diagnose",
+                UiTextKey::Session => "Session",
                 UiTextKey::Stopped => "Stoppet",
                 UiTextKey::Starting => "Starter",
                 UiTextKey::Running => "Kører",
@@ -568,11 +592,10 @@ impl LogViewMode {
     ];
 
     fn label(self, raw_language: &str) -> &'static str {
-        let _ = raw_language;
         match self {
-            LogViewMode::Minimal => "Minimal",
-            LogViewMode::Diagnostic => "Diagnostic",
-            LogViewMode::Debug => "Debug",
+            LogViewMode::Minimal => ui_text(raw_language, UiTextKey::Minimal),
+            LogViewMode::Diagnostic => ui_text(raw_language, UiTextKey::Diagnostic),
+            LogViewMode::Debug => ui_text(raw_language, UiTextKey::Debug),
         }
     }
 
