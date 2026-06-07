@@ -58,15 +58,10 @@ jobs:
         # (strip the workspace prefix) or workspace-relative ones (add src/rust/);
         # both seds are idempotent no-ops when the path is already normalized.
         run: |
-          echo "PWD=$(pwd)"
-          find . -name lcov.info -not -path './target/*' -printf '%p (%s bytes)\n' 2>/dev/null || true
-          echo "wc:"; wc -l lcov.info 2>&1 || echo "(no repo-root lcov.info)"
-          echo "head:"; head -15 lcov.info 2>&1 || true
-          echo "SF count before: $(grep -c '^SF:' lcov.info 2>/dev/null || echo 0)"
           sed -i "s#^SF:$(pwd)/#SF:#" lcov.info
           sed -i "s#^SF:whisper-dictate-app/#SF:src/rust/whisper-dictate-app/#" lcov.info
-          echo "SF count after: $(grep -c '^SF:' lcov.info 2>/dev/null || echo 0)"
-          grep -m1 '^SF:' lcov.info || true
+          # Sanity check: confirm the report has source records with repo-root paths.
+          echo "LCOV SF records: $(grep -c '^SF:' lcov.info), sample: $(grep -m1 '^SF:' lcov.info)"
 
       - uses: actions/setup-python@v6
         with:
