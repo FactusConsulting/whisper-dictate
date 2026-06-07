@@ -340,6 +340,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "__init__.py",
             "runtime.py",
             "vp_audio.py",
+            "vp_audio_ducking.py",
             "vp_benchmark.py",
             "vp_cli.py",
             "vp_config.py",

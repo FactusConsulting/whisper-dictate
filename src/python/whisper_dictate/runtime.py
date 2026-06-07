@@ -1,39 +1,10 @@
 #!/usr/bin/env python3
-r"""whisper-dictate — all-in-one push-to-talk dictation.
+"""whisper-dictate runtime — push-to-talk dictation orchestration.
 
-Speak prompts instead of typing them. Hold the hotkey, speak softly,
-release — the transcribed text is injected into whatever window has
-focus (a terminal, a browser chat box, an editor … anything).
-A mic→keyboard, not an AI chat: the "AI" is whatever app you're in.
-
-One process: mic capture and Whisper run together, no server, no
-network hop. Whisper runs on your NVIDIA GPU (CUDA) when present and
-falls back to CPU otherwise — same code, see --device. Use the Rust
-whisper-dictate controller for install, settings and runtime management.
-
-First run downloads the model into the Hugging Face cache (turbo
-~1.5 GB; large-v3 ~3 GB).
-
-Hold RIGHT CTRL, speak, release → text appears at your cursor.
-  --key f9        use a different hold-to-talk key (ctrl_r, alt_r, f9…;
-                  env VOICEPI_KEY)
-  --key a+b       chord: hold BOTH keys simultaneously (e.g. shift_r+ctrl_r)
-  --type          force direct keyboard typing on X11/Windows/Wayland
-  --paste         force clipboard + Ctrl+V
-  --no-type       just print what was heard (don't inject — testing)
-  --model NAME    Whisper model (default large-v3-turbo, the fastest;
-                  env VOICEPI_MODEL)
-  --device D      auto|cuda|cpu (default auto; env VOICEPI_DEVICE)
-  --lang CODE     spoken-language hint da/en/de/fr… (env VOICEPI_LANG)
-                  omit to let Whisper auto-detect (less reliable on short speech)
-  --autodetect    alias for omitting --lang
-
-On Wayland (Ubuntu 26.04), auto mode uses clipboard + Ctrl+V for
-non-ASCII text and direct ydotool injection for plain ASCII. Use --type
-to force direct ydotool key injection.
-Stop it by pressing Esc 3 times in a row (or Ctrl+C) — that frees
-the GPU VRAM. Configure with VOICEPI_QUIT_KEY and VOICEPI_QUIT_COUNT
-(0 disables; 1 = legacy).
+Normally launched by the Rust controller (``whisper-dictate run``); all
+behaviour comes from VOICEPI_* env vars + the JSON config. See
+docs/CONFIGURATION.md for the canonical settings reference and
+``whisper-dictate run --help`` for the flag list.
 """
 from __future__ import annotations
 
@@ -47,7 +18,6 @@ import subprocess
 import sys
 import threading
 import time
-import atexit
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,6 +103,9 @@ from whisper_dictate.vp_doctor import (  # noqa: E402,F401
     _print_fix_hints, _in_group, _can_import, _event_devices_readable,
     _ydotoold_process_detail,
 )
+from whisper_dictate.vp_audio_ducking import (  # noqa: E402,F401
+    AudioDucker, register_active_ducker, restore_all_duckers,
+)
 
 
 _ARECORD_DEVICE: str | None = None  # set once at startup
@@ -177,95 +150,6 @@ def _detect_xkb_layout(lang: str | None = None) -> str | None:
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
-
-
-def _float_setting(name: str, default: float, minimum: float, maximum: float) -> float:
-    try:
-        value = float(get_value(name, str(default)) or default)
-    except (TypeError, ValueError):
-        value = default
-    return min(maximum, max(minimum, value))
-
-
-@dataclass
-class AudioDucker:
-    enabled: bool
-    target_volume: float
-    _sessions: list[tuple[object, float]] = field(default_factory=list)
-    _warned: bool = False
-
-    @classmethod
-    def from_config(cls) -> "AudioDucker":
-        return cls(
-            enabled=_truthy(get_value("VOICEPI_AUDIO_DUCKING")),
-            target_volume=_float_setting("VOICEPI_AUDIO_DUCKING_LEVEL", 0.25, 0.0, 1.0),
-        )
-
-    def enter(self) -> None:
-        if not self.enabled or self._sessions:
-            return
-        if sys.platform != "win32":
-            self._warn_once("audio ducking is only implemented on Windows")
-            return
-        try:
-            import comtypes
-            from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
-
-            comtypes.CoInitialize()
-            current_pid = os.getpid()
-            for session in AudioUtilities.GetAllSessions():
-                if session.Process and session.Process.pid == current_pid:
-                    continue
-                volume = session._ctl.QueryInterface(ISimpleAudioVolume)
-                previous = float(volume.GetMasterVolume())
-                if previous > self.target_volume:
-                    volume.SetMasterVolume(self.target_volume, None)
-                    self._sessions.append((volume, previous))
-            if self._sessions:
-                print(
-                    f"[audio-duck] lowered {len(self._sessions)} audio sessions "
-                    f"to {self.target_volume:.2f}",
-                    flush=True,
-                )
-        except Exception as exc:
-            self._sessions.clear()
-            self._warn_once(f"audio ducking unavailable: {exc}")
-
-    def exit(self) -> None:
-        if not self._sessions:
-            return
-        restored = 0
-        for volume, previous in reversed(self._sessions):
-            try:
-                volume.SetMasterVolume(previous, None)
-                restored += 1
-            except Exception:
-                pass
-        self._sessions.clear()
-        print(f"[audio-duck] restored {restored} audio sessions", flush=True)
-
-    def _warn_once(self, message: str) -> None:
-        if self._warned:
-            return
-        self._warned = True
-        print(f"[audio-duck] {message}", flush=True)
-
-
-_ACTIVE_DUCKERS: list[AudioDucker] = []
-
-
-def register_active_ducker(ducker: AudioDucker) -> AudioDucker:
-    if ducker not in _ACTIVE_DUCKERS:
-        _ACTIVE_DUCKERS.append(ducker)
-    return ducker
-
-
-def restore_all_duckers() -> None:
-    for ducker in list(_ACTIVE_DUCKERS):
-        ducker.exit()
-
-
-atexit.register(restore_all_duckers)
 
 
 def get_version() -> str:
