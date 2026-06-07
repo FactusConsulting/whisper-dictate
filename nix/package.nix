@@ -59,6 +59,10 @@ in stdenv.mkDerivation {
       install -Dm644 "$_m" "$out/lib/whisper-dictate/$_m"
     done
 
+    # Ship the runtime-settings schema (single source of truth, read at import).
+    install -Dm644 src/python/whisper_dictate/settings_schema.json \
+      "$out/lib/whisper-dictate/src/python/whisper_dictate/settings_schema.json"
+
     makeWrapper ${pythonEnv}/bin/python3 $out/bin/whisper-dictate \
       --prefix PYTHONPATH : "$out/lib/whisper-dictate/src/python" \
       --add-flags "-m whisper_dictate.runtime" \

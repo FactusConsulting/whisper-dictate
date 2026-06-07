@@ -1,0 +1,317 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings: VOICEPI_* env var <-> config.json key <-> default value <-> live-reloadable flag. Consumed by Rust (config.rs via include_str!) and Python (vp_config.py). Edit settings here only; both sides derive from this file.",
+  "settings": [
+    {
+      "env": "VOICEPI_KEY",
+      "key": "key",
+      "default": "ctrl_r",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_MODEL",
+      "key": "model",
+      "default": "large-v3-turbo",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_STT_BACKEND",
+      "key": "stt_backend",
+      "default": "whisper",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_STT_MODEL",
+      "key": "stt_model",
+      "default": null,
+      "live": false
+    },
+    {
+      "env": "VOICEPI_STT_BASE_URL",
+      "key": "stt_base_url",
+      "default": "https://api.openai.com/v1",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_STT_TIMEOUT_MS",
+      "key": "stt_timeout_ms",
+      "default": "30000",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_PARAKEET_MODEL",
+      "key": "parakeet_model",
+      "default": null,
+      "live": false
+    },
+    {
+      "env": "VOICEPI_DEVICE",
+      "key": "device",
+      "default": "auto",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_COMPUTE_TYPE",
+      "key": "compute_type",
+      "default": null,
+      "live": false
+    },
+    {
+      "env": "VOICEPI_LANG",
+      "key": "lang",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_XKB_LAYOUT",
+      "key": "xkb_layout",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_INITIAL_PROMPT",
+      "key": "initial_prompt",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_INJECT_MODE",
+      "key": "inject_mode",
+      "default": "auto",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_FORMAT_COMMANDS",
+      "key": "format_commands",
+      "default": "off",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_BEAM_SIZE",
+      "key": "beam_size",
+      "default": "1",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_TEMPERATURE",
+      "key": "temperature",
+      "default": "0.0,0.2",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_CONTEXT_MIN_SECONDS",
+      "key": "context_min_seconds",
+      "default": "5",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_PARAKEET_MIN_SECONDS",
+      "key": "parakeet_min_seconds",
+      "default": "1.5",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_RELEASE_TAIL_MS",
+      "key": "release_tail_ms",
+      "default": "200",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_VAD_THRESHOLD",
+      "key": "vad_threshold",
+      "default": "0.3",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_VAD_MIN_SILENCE_MS",
+      "key": "vad_min_silence_ms",
+      "default": "600",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_VAD_SPEECH_PAD_MS",
+      "key": "vad_speech_pad_ms",
+      "default": "200",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_TARGET_DBFS",
+      "key": "target_dbfs",
+      "default": "-20",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_MIN_INPUT_DBFS",
+      "key": "min_input_dbfs",
+      "default": "-55",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_MIN_SNR_DB",
+      "key": "min_snr_db",
+      "default": "6",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_AUDIO_DUCKING",
+      "key": "audio_ducking",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_AUDIO_DUCKING_LEVEL",
+      "key": "audio_ducking_level",
+      "default": "0.25",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_DICTIONARY",
+      "key": "dictionary",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_DICTIONARY_ENABLED",
+      "key": "dictionary_enabled",
+      "default": "1",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_DICTIONARY_MAX_TERMS",
+      "key": "dictionary_max_terms",
+      "default": "80",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_DICTIONARY_PROMPT_CHARS",
+      "key": "dictionary_prompt_chars",
+      "default": "1200",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_JSON",
+      "key": "json_output",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_METRICS_JSONL",
+      "key": "metrics_jsonl",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_COMMAND_HOOK",
+      "key": "command_hook",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_COMMAND_HOOK_TIMEOUT_MS",
+      "key": "command_hook_timeout_ms",
+      "default": "2000",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_HISTORY_ENABLED",
+      "key": "history_enabled",
+      "default": "1",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_HISTORY_JSONL",
+      "key": "history_jsonl",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_LOCAL_ONLY",
+      "key": "local_only",
+      "default": null,
+      "live": false
+    },
+    {
+      "env": "VOICEPI_POST_PROCESSOR",
+      "key": "post_processor",
+      "default": "none",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_MODE",
+      "key": "post_mode",
+      "default": "raw",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_MODEL",
+      "key": "post_model",
+      "default": "qwen2.5:3b",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_BASE_URL",
+      "key": "post_base_url",
+      "default": "http://localhost:11434",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_TIMEOUT_MS",
+      "key": "post_timeout_ms",
+      "default": "2000",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_MAX_INPUT_CHARS",
+      "key": "post_max_input_chars",
+      "default": "4000",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_MAX_OUTPUT_CHARS",
+      "key": "post_max_output_chars",
+      "default": "4000",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_REDACT",
+      "key": "post_redact",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_POST_REDACT_TERMS",
+      "key": "post_redact_terms",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_DEBUG",
+      "key": "debug",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_STT_DEBUG",
+      "key": "stt_debug",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_QUIT_KEY",
+      "key": "quit_key",
+      "default": "esc",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_QUIT_COUNT",
+      "key": "quit_count",
+      "default": "3",
+      "live": false
+    },
+    {
+      "env": "VOICEPI_QUIT_WINDOW_MS",
+      "key": "quit_window_ms",
+      "default": "1500",
+      "live": false
+    }
+  ]
+}

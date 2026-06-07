@@ -671,7 +671,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"Wayland ydotool/XKB layout used for direct text injection on Linux.', script)
 
     def test_config_maps_audio_ducking_and_cloud_redaction(self):
-        config = Path("src/python/whisper_dictate/vp_config.py").read_text(encoding="utf-8")
+        config = Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
         rust_config = Path("src/rust/whisper-dictate-app/src/config.rs").read_text(encoding="utf-8")
         ui = rust_ui_source()
 

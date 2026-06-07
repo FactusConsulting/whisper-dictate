@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -13,275 +14,31 @@ use crate::cli::ConfigCommand;
 const CONFIG_ENV: &str = "VOICEPI_CONFIG";
 const DEFAULT_PARAKEET_MODEL: &str = "nvidia/parakeet-tdt-0.6b-v3";
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize)]
 struct RuntimeSetting {
-    env: &'static str,
-    key: &'static str,
-    default: Option<&'static str>,
+    env: String,
+    key: String,
+    #[serde(default)]
+    default: Option<String>,
 }
 
-const RUNTIME_SETTINGS: &[RuntimeSetting] = &[
-    RuntimeSetting {
-        env: "VOICEPI_KEY",
-        key: "key",
-        default: Some("ctrl_r"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_MODEL",
-        key: "model",
-        default: Some("large-v3-turbo"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_STT_BACKEND",
-        key: "stt_backend",
-        default: Some("whisper"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_STT_MODEL",
-        key: "stt_model",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_STT_BASE_URL",
-        key: "stt_base_url",
-        default: Some("https://api.openai.com/v1"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_STT_TIMEOUT_MS",
-        key: "stt_timeout_ms",
-        default: Some("30000"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_PARAKEET_MODEL",
-        key: "parakeet_model",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_DEVICE",
-        key: "device",
-        default: Some("auto"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_COMPUTE_TYPE",
-        key: "compute_type",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_LANG",
-        key: "lang",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_XKB_LAYOUT",
-        key: "xkb_layout",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_INITIAL_PROMPT",
-        key: "initial_prompt",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_INJECT_MODE",
-        key: "inject_mode",
-        default: Some("auto"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_FORMAT_COMMANDS",
-        key: "format_commands",
-        default: Some("off"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_BEAM_SIZE",
-        key: "beam_size",
-        default: Some("1"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_TEMPERATURE",
-        key: "temperature",
-        default: Some("0.0,0.2"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_CONTEXT_MIN_SECONDS",
-        key: "context_min_seconds",
-        default: Some("5"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_PARAKEET_MIN_SECONDS",
-        key: "parakeet_min_seconds",
-        default: Some("1.5"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_RELEASE_TAIL_MS",
-        key: "release_tail_ms",
-        default: Some("200"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_VAD_THRESHOLD",
-        key: "vad_threshold",
-        default: Some("0.3"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_VAD_MIN_SILENCE_MS",
-        key: "vad_min_silence_ms",
-        default: Some("600"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_VAD_SPEECH_PAD_MS",
-        key: "vad_speech_pad_ms",
-        default: Some("200"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_TARGET_DBFS",
-        key: "target_dbfs",
-        default: Some("-20"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_MIN_INPUT_DBFS",
-        key: "min_input_dbfs",
-        default: Some("-55"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_MIN_SNR_DB",
-        key: "min_snr_db",
-        default: Some("6"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_AUDIO_DUCKING",
-        key: "audio_ducking",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_AUDIO_DUCKING_LEVEL",
-        key: "audio_ducking_level",
-        default: Some("0.25"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_DICTIONARY",
-        key: "dictionary",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_DICTIONARY_ENABLED",
-        key: "dictionary_enabled",
-        default: Some("1"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_DICTIONARY_MAX_TERMS",
-        key: "dictionary_max_terms",
-        default: Some("80"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_DICTIONARY_PROMPT_CHARS",
-        key: "dictionary_prompt_chars",
-        default: Some("1200"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_JSON",
-        key: "json_output",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_METRICS_JSONL",
-        key: "metrics_jsonl",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_COMMAND_HOOK",
-        key: "command_hook",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_COMMAND_HOOK_TIMEOUT_MS",
-        key: "command_hook_timeout_ms",
-        default: Some("2000"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_HISTORY_ENABLED",
-        key: "history_enabled",
-        default: Some("1"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_HISTORY_JSONL",
-        key: "history_jsonl",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_LOCAL_ONLY",
-        key: "local_only",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_PROCESSOR",
-        key: "post_processor",
-        default: Some("none"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_MODE",
-        key: "post_mode",
-        default: Some("raw"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_MODEL",
-        key: "post_model",
-        default: Some("qwen2.5:3b"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_BASE_URL",
-        key: "post_base_url",
-        default: Some("http://localhost:11434"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_TIMEOUT_MS",
-        key: "post_timeout_ms",
-        default: Some("2000"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_MAX_INPUT_CHARS",
-        key: "post_max_input_chars",
-        default: Some("4000"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_MAX_OUTPUT_CHARS",
-        key: "post_max_output_chars",
-        default: Some("4000"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_REDACT",
-        key: "post_redact",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_POST_REDACT_TERMS",
-        key: "post_redact_terms",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_DEBUG",
-        key: "debug",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_STT_DEBUG",
-        key: "stt_debug",
-        default: None,
-    },
-    RuntimeSetting {
-        env: "VOICEPI_QUIT_KEY",
-        key: "quit_key",
-        default: Some("esc"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_QUIT_COUNT",
-        key: "quit_count",
-        default: Some("3"),
-    },
-    RuntimeSetting {
-        env: "VOICEPI_QUIT_WINDOW_MS",
-        key: "quit_window_ms",
-        default: Some("1500"),
-    },
-];
+#[derive(Deserialize)]
+struct SettingsSchema {
+    settings: Vec<RuntimeSetting>,
+}
+
+// SINGLE SOURCE OF TRUTH for the VOICEPI_* env var <-> config key <-> default
+// mapping, shared with the Python worker (vp_config.py reads the same file).
+// Embedded at compile time so the controller has no runtime file dependency;
+// add or change settings in settings_schema.json, not in a table here.
+static SETTINGS_SCHEMA_JSON: &str =
+    include_str!("../../../python/whisper_dictate/settings_schema.json");
+
+static RUNTIME_SETTINGS: LazyLock<Vec<RuntimeSetting>> = LazyLock::new(|| {
+    serde_json::from_str::<SettingsSchema>(SETTINGS_SCHEMA_JSON)
+        .expect("settings_schema.json must be valid JSON")
+        .settings
+});
 
 const SETTINGS_KEYS: &[&str] = &[
     "key",
@@ -407,7 +164,7 @@ pub fn effective_runtime_env() -> BTreeMap<String, String> {
     RUNTIME_SETTINGS
         .iter()
         .filter_map(|setting| {
-            runtime_setting_value(*setting, object).map(|value| (setting.env.to_owned(), value))
+            runtime_setting_value(setting, object).map(|value| (setting.env.to_owned(), value))
         })
         .collect()
 }
@@ -933,14 +690,18 @@ fn default_dictionary_path() -> PathBuf {
 }
 
 fn runtime_setting_value(
-    setting: RuntimeSetting,
+    setting: &RuntimeSetting,
     object: Option<&Map<String, Value>>,
 ) -> Option<String> {
     object
-        .and_then(|object| object.get(setting.key))
+        .and_then(|object| object.get(setting.key.as_str()))
         .and_then(value_to_env_string)
-        .or_else(|| env::var(setting.env).ok().filter(|value| !value.is_empty()))
-        .or_else(|| setting.default.map(str::to_owned))
+        .or_else(|| {
+            env::var(&setting.env)
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| setting.default.clone())
 }
 
 fn value_to_env_string(value: &Value) -> Option<String> {
@@ -1383,6 +1144,38 @@ mod tests {
 
         assert_eq!(saved["terms"], serde_json::json!([]));
         assert_eq!(saved["replacements"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn runtime_settings_load_from_embedded_schema() {
+        // settings_schema.json is the single source of truth; confirm it parsed
+        // and a representative entry survived the env/key/default round-trip.
+        assert!(!RUNTIME_SETTINGS.is_empty());
+        let model = RUNTIME_SETTINGS
+            .iter()
+            .find(|s| s.key == "model")
+            .expect("model setting present in schema");
+        assert_eq!(model.env, "VOICEPI_MODEL");
+        assert_eq!(model.default.as_deref(), Some("large-v3-turbo"));
+    }
+
+    #[test]
+    fn restart_keys_match_non_live_schema_settings_plus_provider() {
+        // RESTART_KEYS must stay consistent with the schema's `live` flag.
+        // stt_provider is the one UI-only restart key not exported to the worker.
+        let schema: Value = serde_json::from_str(SETTINGS_SCHEMA_JSON).unwrap();
+        let mut expected: Vec<String> = schema["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| !s["live"].as_bool().unwrap_or(true))
+            .map(|s| s["key"].as_str().unwrap().to_owned())
+            .collect();
+        expected.push("stt_provider".to_owned());
+        expected.sort();
+        let mut actual: Vec<String> = RESTART_KEYS.iter().map(|k| (*k).to_owned()).collect();
+        actual.sort();
+        assert_eq!(actual, expected);
     }
 
     fn restore_env(name: &str, value: Option<std::ffi::OsString>) {
