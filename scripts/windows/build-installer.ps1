@@ -96,7 +96,7 @@ if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 $versionFile = Join-Path $root 'VERSION'
 $hadVersion = Test-Path $versionFile
 $oldVersion = if ($hadVersion) { Get-Content $versionFile -Raw } else { $null }
-Set-Content $versionFile $Version -Encoding ascii
+Set-Content $versionFile $Version -Encoding ascii -NoNewline
 $outDir = Join-Path $root 'Output'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
@@ -111,6 +111,10 @@ try {
   Remove-Item -LiteralPath $zipRoot -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force $bundle | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'src') -Destination $bundle -Recurse
+  foreach ($generatedDir in 'target', '__pycache__', '.pytest_cache') {
+    Get-ChildItem -LiteralPath (Join-Path $bundle 'src') -Directory -Recurse -Force -Filter $generatedDir |
+      Remove-Item -Recurse -Force
+  }
   Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'LICENSE'), $versionFile -Destination $bundle
   Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination $bundle -Recurse
   Copy-Item -LiteralPath (Join-Path $root 'requirements') -Destination $bundle -Recurse
@@ -126,7 +130,7 @@ try {
   Compress-Archive -Path $bundle -DestinationPath $zipPath -CompressionLevel Optimal
 } finally {
   if ($hadVersion) {
-    Set-Content $versionFile $oldVersion -Encoding ascii
+    Set-Content $versionFile $oldVersion.TrimEnd("`r", "`n") -Encoding ascii -NoNewline
   } else {
     Remove-Item -LiteralPath $versionFile -ErrorAction SilentlyContinue
   }
