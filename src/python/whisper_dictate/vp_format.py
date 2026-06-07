@@ -66,6 +66,7 @@ def apply_format_commands(text: str, command_set: str | None = None) -> FormatCo
             capture_output=True,
             timeout=5,
             text=True,
+            encoding="utf-8",
         )
     except Exception as e:
         raise RuntimeError(f"Rust format-text helper error: {e}") from e

@@ -90,6 +90,28 @@ class ApplyFormatCommandsTests(unittest.TestCase):
         self.assertIn("--command-set", captured["cmd"])
         self.assertIn("en", captured["cmd"])
 
+    def test_helper_output_decoded_as_utf8_with_danish_text(self):
+        # The Rust helper emits UTF-8 JSON; decoding via the Windows locale
+        # (cp1252) would mangle Danish characters, so the call must pin utf-8.
+        payload = (
+            '{"text": "Goddag, æøå ÆØÅ", "enabled": true, "changed": true,'
+            ' "command_set": "da", "applied": []}'
+        )
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"], 0, stdout=payload, stderr="")
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return completed
+
+        with _env(VOICEPI_RUST_INJECTOR="whisper-dictate"), \
+                patch.object(vp_format.subprocess, "run", fake_run):
+            result = vp_format.apply_format_commands("goddag", "da")
+
+        self.assertEqual(captured.get("encoding"), "utf-8")
+        self.assertEqual(result.text, "Goddag, æøå ÆØÅ")
+
     def test_explicit_command_set_overrides_config(self):
         # command_set="off" wins even if VOICEPI_FORMAT_COMMANDS is set.
         with _env(VOICEPI_FORMAT_COMMANDS="both"):
