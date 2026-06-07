@@ -31,12 +31,44 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
-          components: clippy
+          components: clippy, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Rust Clippy report (JSON for Sonar import)
         # No -D warnings here: emit the report even when lints fire so Sonar can
         # surface them as issues. The hard clippy gate lives in test.yml's rust job.
         run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json
+
+      - name: Rust coverage (LCOV for Sonar import)
+        # Run the package test suite under instrumentation and emit LCOV.
+        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path lcov.info
+
+      - name: Normalize LCOV source paths to repo root
+        # Sonar resolves LCOV `SF:` paths against the project base dir, so they
+        # must be repo-root-relative. cargo-llvm-cov may emit absolute paths
+        # (strip the workspace prefix) or workspace-relative ones (add src/rust/);
+        # both seds are idempotent no-ops when the path is already normalized.
+        run: |
+          echo "SF sample before:"; grep -m1 '^SF:' lcov.info || true
+          sed -i "s#^SF:$(pwd)/#SF:#" lcov.info
+          sed -i "s#^SF:whisper-dictate-app/#SF:src/rust/whisper-dictate-app/#" lcov.info
+          echo "SF sample after:"; grep -m1 '^SF:' lcov.info || true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Python coverage (XML for Sonar import)
+        # coverage.py emits <source>=repo root + repo-root-relative filenames, so
+        # Sonar maps it onto sonar.sources without further path massaging.
+        run: |
+          python -m pip install --quiet pytest numpy coverage
+          python -m coverage run --source=src/python/whisper_dictate -m pytest src/python/tests src/tests/python -q
+          python -m coverage xml -o coverage.xml
 
       - name: SonarQube Scan
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
