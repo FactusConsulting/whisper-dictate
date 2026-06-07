@@ -44,8 +44,11 @@ jobs:
         run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json
 
       - name: Rust coverage (LCOV for Sonar import)
-        # Run the package test suite under instrumentation and emit LCOV.
-        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path lcov.info
+        # Run the package test suite under instrumentation and emit LCOV. Use the
+        # repo-root target dir (matches clippy/test.yml, avoids extra rebuilds)
+        # and an absolute output path so the report always lands at the repo root
+        # regardless of how cargo-llvm-cov resolves a relative --output-path.
+        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-features --lcov --output-path $GITHUB_WORKSPACE/lcov.info
 
       - name: Normalize LCOV source paths to repo root
         # Sonar resolves LCOV `SF:` paths against the project base dir, so they
@@ -53,10 +56,15 @@ jobs:
         # (strip the workspace prefix) or workspace-relative ones (add src/rust/);
         # both seds are idempotent no-ops when the path is already normalized.
         run: |
-          echo "SF sample before:"; grep -m1 '^SF:' lcov.info || true
+          echo "PWD=$(pwd)"
+          find . -name lcov.info -not -path './target/*' -printf '%p (%s bytes)\n' 2>/dev/null || true
+          echo "wc:"; wc -l lcov.info 2>&1 || echo "(no repo-root lcov.info)"
+          echo "head:"; head -15 lcov.info 2>&1 || true
+          echo "SF count before: $(grep -c '^SF:' lcov.info 2>/dev/null || echo 0)"
           sed -i "s#^SF:$(pwd)/#SF:#" lcov.info
           sed -i "s#^SF:whisper-dictate-app/#SF:src/rust/whisper-dictate-app/#" lcov.info
-          echo "SF sample after:"; grep -m1 '^SF:' lcov.info || true
+          echo "SF count after: $(grep -c '^SF:' lcov.info 2>/dev/null || echo 0)"
+          grep -m1 '^SF:' lcov.info || true
 
       - uses: actions/setup-python@v6
         with:
