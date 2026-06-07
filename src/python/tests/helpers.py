@@ -106,6 +106,24 @@ def load_voice_pi_realnp():
     return importlib.import_module("whisper_dictate.runtime")
 
 
+class RealNumpyAudioCase(unittest.TestCase):
+    """Base for audio-DSP tests that need the REAL numpy + the runtime module.
+
+    ``setUpClass`` loads voice_pi with real numpy (heavy deps stubbed) and
+    exposes ``cls.vp`` (the runtime module) and ``cls.np`` (numpy) — shared so
+    split audio test modules don't reach into each other's class attributes.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.vp = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        import numpy as np
+        cls.np = np
+
+
 @contextmanager
 def _capture_stdout():
     import contextlib
