@@ -1,0 +1,183 @@
+//! The typed [`AppSettings`] model and its defaults.
+//!
+//! The struct mirrors every key the app reads from / writes to config.json.
+//! Loading (`from_value`), saving (`apply_to_object`), and validation live in
+//! sibling modules as additional `impl AppSettings` blocks to keep each unit
+//! small and focused.
+
+use serde::{Deserialize, Serialize};
+
+use crate::config::io::platform_config_dir;
+use crate::config::keys::DEFAULT_PARAKEET_MODEL;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppSettings {
+    pub key: String,
+    pub model: String,
+    pub stt_backend: String,
+    pub stt_provider: String,
+    pub stt_model: String,
+    pub stt_base_url: String,
+    pub stt_timeout_ms: String,
+    pub parakeet_model: String,
+    pub device: String,
+    pub compute_type: String,
+    pub lang: String,
+    pub xkb_layout: String,
+    pub initial_prompt: String,
+    pub inject_mode: String,
+    pub format_commands: String,
+    pub beam_size: String,
+    pub temperature: String,
+    pub context_min_seconds: String,
+    pub parakeet_min_seconds: String,
+    pub release_tail_ms: String,
+    pub vad_threshold: String,
+    pub vad_min_silence_ms: String,
+    pub vad_speech_pad_ms: String,
+    pub target_dbfs: String,
+    pub min_input_dbfs: String,
+    pub min_snr_db: String,
+    pub audio_ducking: bool,
+    pub audio_ducking_level: String,
+    pub dictionary: String,
+    pub dictionary_enabled: bool,
+    pub dictionary_max_terms: String,
+    pub dictionary_prompt_chars: String,
+    pub inject_json: bool,
+    pub metrics_jsonl: String,
+    pub command_hook: String,
+    pub command_hook_timeout_ms: String,
+    pub history_enabled: bool,
+    pub history_jsonl: String,
+    pub local_only: bool,
+    pub post_processor: String,
+    pub post_mode: String,
+    pub post_model: String,
+    pub post_base_url: String,
+    pub post_timeout_ms: String,
+    pub post_max_input_chars: String,
+    pub post_max_output_chars: String,
+    pub post_redact: bool,
+    pub post_redact_terms: String,
+    pub debug: bool,
+    pub stt_debug: bool,
+    pub quit_key: String,
+    pub quit_count: String,
+    pub quit_window_ms: String,
+    pub ui_language: String,
+    pub ui_log_view: String,
+    pub ui_theme: String,
+    pub ui_text_scale: String,
+    pub profiles_json: String,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            key: "ctrl_r".to_owned(),
+            model: "large-v3-turbo".to_owned(),
+            stt_backend: "whisper".to_owned(),
+            stt_provider: "openai".to_owned(),
+            stt_model: String::new(),
+            stt_base_url: "https://api.openai.com/v1".to_owned(),
+            stt_timeout_ms: "30000".to_owned(),
+            parakeet_model: DEFAULT_PARAKEET_MODEL.to_owned(),
+            device: "auto".to_owned(),
+            compute_type: String::new(),
+            lang: String::new(),
+            xkb_layout: String::new(),
+            initial_prompt: String::new(),
+            inject_mode: "auto".to_owned(),
+            format_commands: "off".to_owned(),
+            beam_size: "1".to_owned(),
+            temperature: "0.0,0.2".to_owned(),
+            context_min_seconds: "5".to_owned(),
+            parakeet_min_seconds: "1.5".to_owned(),
+            release_tail_ms: "200".to_owned(),
+            vad_threshold: "0.3".to_owned(),
+            vad_min_silence_ms: "600".to_owned(),
+            vad_speech_pad_ms: "200".to_owned(),
+            target_dbfs: "-20".to_owned(),
+            min_input_dbfs: "-55".to_owned(),
+            min_snr_db: "6".to_owned(),
+            audio_ducking: false,
+            audio_ducking_level: "0.25".to_owned(),
+            dictionary: default_dictionary_path().display().to_string(),
+            dictionary_enabled: true,
+            dictionary_max_terms: "80".to_owned(),
+            dictionary_prompt_chars: "1200".to_owned(),
+            inject_json: false,
+            metrics_jsonl: String::new(),
+            command_hook: String::new(),
+            command_hook_timeout_ms: "2000".to_owned(),
+            history_enabled: true,
+            history_jsonl: String::new(),
+            local_only: false,
+            post_processor: "none".to_owned(),
+            post_mode: "raw".to_owned(),
+            post_model: "qwen2.5:3b".to_owned(),
+            post_base_url: "http://localhost:11434".to_owned(),
+            post_timeout_ms: "2000".to_owned(),
+            post_max_input_chars: "4000".to_owned(),
+            post_max_output_chars: "4000".to_owned(),
+            post_redact: false,
+            post_redact_terms: String::new(),
+            debug: false,
+            stt_debug: false,
+            quit_key: "esc".to_owned(),
+            quit_count: "3".to_owned(),
+            quit_window_ms: "1500".to_owned(),
+            ui_language: "en".to_owned(),
+            ui_log_view: "minimal".to_owned(),
+            ui_theme: "dark".to_owned(),
+            ui_text_scale: "1.15".to_owned(),
+            profiles_json: "[]".to_owned(),
+        }
+    }
+}
+
+impl AppSettings {
+    /// The string view of a restart-relevant key, used to diff two snapshots.
+    /// Returns `None` for keys that never trigger a restart.
+    pub(crate) fn setting_value(&self, key: &str) -> Option<&str> {
+        match key {
+            "key" => Some(&self.key),
+            "model" => Some(&self.model),
+            "stt_backend" => Some(&self.stt_backend),
+            "stt_provider" => Some(&self.stt_provider),
+            "stt_model" => Some(&self.stt_model),
+            "stt_base_url" => Some(&self.stt_base_url),
+            "stt_timeout_ms" => Some(&self.stt_timeout_ms),
+            "parakeet_model" => Some(&self.parakeet_model),
+            "device" => Some(&self.device),
+            "compute_type" => Some(&self.compute_type),
+            "local_only" => Some(if self.local_only { "1" } else { "0" }),
+            "quit_key" => Some(&self.quit_key),
+            "quit_count" => Some(&self.quit_count),
+            "quit_window_ms" => Some(&self.quit_window_ms),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn default_dictionary_path() -> std::path::PathBuf {
+    platform_config_dir().join("dictionary.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_settings_use_expected_baseline_values() {
+        let defaults = AppSettings::default();
+        assert_eq!(defaults.model, "large-v3-turbo");
+        assert_eq!(defaults.stt_backend, "whisper");
+        assert_eq!(defaults.stt_provider, "openai");
+        assert_eq!(defaults.parakeet_model, DEFAULT_PARAKEET_MODEL);
+        assert_eq!(defaults.ui_theme, "dark");
+        assert_eq!(defaults.ui_text_scale, "1.15");
+        assert!(defaults.dictionary.ends_with("dictionary.json"));
+    }
+}
