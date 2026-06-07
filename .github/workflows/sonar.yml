@@ -50,7 +50,7 @@ jobs:
         # leave that to its default. Use an absolute --output-path so the report
         # always lands at the repo root regardless of how cargo-llvm-cov resolves
         # a relative output path.
-        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path $GITHUB_WORKSPACE/lcov.info
+        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"
 
       - name: Normalize LCOV source paths to repo root
         # Sonar resolves LCOV `SF:` paths against the project base dir, so they
