@@ -225,6 +225,30 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("components: clippy", test_workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings", test_workflow)
 
+    def test_sonar_imports_python_and_rust_coverage(self):
+        sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
+        workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
+
+        # Coverage report paths are wired into the Sonar properties.
+        self.assertIn("sonar.python.coverage.reportPaths=coverage.xml", sonar)
+        self.assertIn("sonar.rust.lcov.reportPaths=lcov.info", sonar)
+
+        # sonar.yml must generate both reports before the scan runs.
+        self.assertIn("components: clippy, llvm-tools-preview", workflow)
+        self.assertIn("tool: cargo-llvm-cov", workflow)
+        self.assertIn(
+            'cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"',
+            workflow,
+        )
+        self.assertIn(
+            "python -m coverage run --source=src/python/whisper_dictate -m pytest src/python/tests src/tests/python -q",
+            workflow,
+        )
+        self.assertIn("python -m coverage xml -o coverage.xml", workflow)
+        # LCOV `SF:` paths must be normalized to repo-root-relative or Sonar
+        # cannot map them onto the indexed Rust sources.
+        self.assertIn('sed -i "s#^SF:$(pwd)/#SF:#" lcov.info', workflow)
+
     def test_root_flake_delegates_to_nix_flake_logic(self):
         root_flake = Path("flake.nix").read_text(encoding="utf-8")
         nix_flake = Path("nix/flake.nix").read_text(encoding="utf-8")
