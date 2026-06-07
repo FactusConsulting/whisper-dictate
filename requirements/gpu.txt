@@ -2,7 +2,7 @@
 # Install: pip install -r requirements/gpu.txt
 faster-whisper==1.1.1
 requests>=2.31            # faster-whisper 1.1.1 utils.py imports it for model download
-numpy<2.2                 # ctranslate2 / onnxruntime ABI constraint
+numpy<2.5                 # ctranslate2 / onnxruntime ABI constraint
 
 # CUDA runtime libs ctranslate2 needs (cublas/cudnn). The Python runtime
 # registers their nvidia\*\bin dirs on the DLL path at startup.
