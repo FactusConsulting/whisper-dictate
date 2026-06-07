@@ -148,15 +148,28 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
 
 
-def get_version() -> str:
-    here = Path(__file__).resolve().parent
-    version_file = here / "VERSION"
-    try:
-        version = version_file.read_text(encoding="utf-8").strip()
+def _version_from_files(start: Path) -> str | None:
+    """Find the nearest VERSION file at or above ``start`` (max 5 levels up).
+
+    The VERSION file ships at the repo root (dev checkout) or the bundle/app root
+    (installed), a few directories above this package — not in the package dir
+    itself — so we walk up instead of only checking ``start``.
+    """
+    for base in (start, *list(start.parents)[:5]):
+        try:
+            version = (base / "VERSION").read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
         if version:
             return version.removeprefix("v")
-    except OSError:
-        pass
+    return None
+
+
+def get_version() -> str:
+    here = Path(__file__).resolve().parent
+    found = _version_from_files(here)
+    if found:
+        return found
 
     try:
         r = subprocess.run(
