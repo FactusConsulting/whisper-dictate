@@ -81,10 +81,14 @@ def _base_checks(on_linux: bool, on_wayland: bool) -> list[Check]:
 
 def _linux_checks() -> list[Check]:
     checks: list[Check] = []
+    # Resolve PATH/group lookups once for consistent detail and fewer syscalls.
+    ydotool = which("ydotool")
+    ydotoold = which("ydotoold")
+    in_input_group = _in_group("input")
     checks.append(Check("evdev", _can_import("evdev"), "import evdev"))
-    checks.append(Check("ydotool", which("ydotool") is not None, which("ydotool") or "not found"))
-    checks.append(Check("ydotoold", which("ydotoold") is not None, which("ydotoold") or "not found"))
-    checks.append(Check("input group", _in_group("input"), "current process groups include input" if _in_group("input") else "not in input group"))
+    checks.append(Check("ydotool", ydotool is not None, ydotool or "not found"))
+    checks.append(Check("ydotoold", ydotoold is not None, ydotoold or "not found"))
+    checks.append(Check("input group", in_input_group, "current process groups include input" if in_input_group else "not in input group"))
     ok, detail = _event_devices_readable()
     checks.append(Check("/dev/input", ok, detail))
     checks.append(Check("XDG_RUNTIME_DIR", bool(os.environ.get("XDG_RUNTIME_DIR")), os.environ.get("XDG_RUNTIME_DIR", "unset"), required=False))
