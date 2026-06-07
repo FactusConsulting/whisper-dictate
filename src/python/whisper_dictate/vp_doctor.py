@@ -37,7 +37,9 @@ def _in_group(name: str) -> bool:
         gid = grp.getgrnam(name).gr_gid
     except KeyError:
         return False
-    return gid in os.getgroups()
+    # Include the primary GID, not only supplementary groups (os.getgroups()),
+    # so membership via the user's primary group isn't a false FAIL.
+    return gid in os.getgroups() or gid == os.getgid()
 
 
 def _can_import(name: str) -> bool:

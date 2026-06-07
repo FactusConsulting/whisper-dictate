@@ -94,7 +94,10 @@ _ACTIVE_DUCKERS: list[AudioDucker] = []
 
 
 def register_active_ducker(ducker: AudioDucker) -> AudioDucker:
-    if ducker not in _ACTIVE_DUCKERS:
+    # De-dupe by identity, not dataclass equality: a config reload builds a new
+    # AudioDucker that can compare equal to an existing one, which would skip
+    # registration and leave its lowered volumes unrestored at exit.
+    if not any(existing is ducker for existing in _ACTIVE_DUCKERS):
         _ACTIVE_DUCKERS.append(ducker)
     return ducker
 

@@ -21,6 +21,17 @@ a clear technical reason not to. Prefer the narrowest useful test:
 If a regression test is not practical, document the reason in the commit or PR
 summary and include the manual verification that covers the bug.
 
+## Pull request review
+
+- Every PR is auto-reviewed by GitHub Copilot. Before merging, wait for the
+  Copilot review to land (its overview notes "generated N comments") and address
+  **every** Copilot comment — fix it, or reply with a clear justification. Do
+  not merge while Copilot review comments are outstanding.
+- After pushing changes, re-request the review
+  (`gh pr edit <pr> --add-reviewer @copilot`) and re-check before merging.
+  Don't rely on a single early "0 comments" check — the review can land after CI
+  starts. The same applies to other automated reviewers (e.g. SonarCloud).
+
 ## Project-Specific Expectations
 
 - Treat Windows as the primary supported desktop path. Changes to the Rust
