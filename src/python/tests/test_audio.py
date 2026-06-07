@@ -345,20 +345,23 @@ class RuntimeAudioDeviceTests(unittest.TestCase):
         self.assertEqual(calls[1]["channels"], 2)
 
     def test_runtime_worker_events_report_capture_state_and_audio_device(self):
-        script = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        # The status/transcribe pipeline stays in vp_dictate; the low-level audio
+        # capture (channel selection + metered "audio" events) moved to vp_capture.
+        script = Path("src/python/whisper_dictate/vp_dictate.py").read_text(encoding="utf-8")
+        capture = Path("src/python/whisper_dictate/vp_capture.py").read_text(encoding="utf-8")
 
         self.assertIn('state="recording"', script)
         self.assertIn('state="transcribing"', script)
         self.assertIn('state="ready"', script)
-        self.assertIn("audio_device=self._audio_input_device", script)
-        self.assertIn("capture_backend=self._capture_backend", script)
-        self.assertIn("capture_channels=self._capture_channels", script)
-        self.assertIn("_sounddevice_capture_channel_candidates", script)
-        self.assertIn("channels=self._capture_channels", script)
+        self.assertIn("audio_device=self._audio_input_device", capture)
+        self.assertIn("capture_backend=self._capture_backend", capture)
+        self.assertIn("capture_channels=self._capture_channels", capture)
+        self.assertIn("_sounddevice_capture_channel_candidates", capture)
+        self.assertIn("channels=self._capture_channels", capture)
         self.assertIn("pcm = _select_active_channel_pcm(pcm).astype(np.int16)", script)
-        self.assertIn('_emit_worker_event(\n            "audio"', script)
-        self.assertIn("level=round(level, 3)", script)
-        self.assertIn("raw_dbfs=round(raw_dbfs, 1)", script)
+        self.assertIn('_emit_worker_event(\n            "audio"', capture)
+        self.assertIn("level=round(level, 3)", capture)
+        self.assertIn("raw_dbfs=round(raw_dbfs, 1)", capture)
 
     def test_worker_event_emits_structured_ascii_stderr_without_helper_process(self):
         with _env(VOICEPI_WORKER_EVENTS="1"):
@@ -398,11 +401,15 @@ class RuntimeAudioDeviceTests(unittest.TestCase):
         }
         fake = types.SimpleNamespace(metrics_jsonl=None, json_output=False)
 
+        # _record_utterance_event lives in vp_dictate and resolves these helpers
+        # from that module's namespace; patch them there to isolate the test from
+        # the Rust command-hook / history side-effects.
+        from whisper_dictate import vp_dictate
         with _env(VOICEPI_WORKER_EVENTS="1"):
             stderr = io.StringIO()
-            with patch.object(self.runtime, "_run_command_hook_and_annotate", lambda _event: None):
-                with patch.object(self.runtime, "_append_jsonl", lambda *_args, **_kwargs: None):
-                    with patch.object(self.runtime, "_append_history", lambda _event: None):
+            with patch.object(vp_dictate, "_run_command_hook_and_annotate", lambda _event: None):
+                with patch.object(vp_dictate, "_append_jsonl", lambda *_args, **_kwargs: None):
+                    with patch.object(vp_dictate, "_append_history", lambda _event: None):
                         with redirect_stderr(stderr):
                             self.runtime.Dictate._record_utterance_event(fake, event)
 
@@ -434,7 +441,7 @@ class RuntimeAudioDeviceTests(unittest.TestCase):
         self.assertIsNot(fake.frames[0], chunk)
 
     def test_runtime_start_reports_opening_and_first_audio_without_persistent_capture(self):
-        script = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        script = Path("src/python/whisper_dictate/vp_dictate.py").read_text(encoding="utf-8")
         start = script.split("def _start(self):", 1)[1].split("def _stop_and_transcribe", 1)[0]
 
         self.assertIn('self._first_audio_event.clear()', start)

@@ -67,12 +67,17 @@ class DictateLoopTests(unittest.TestCase):
         except ImportError as e:  # numpy missing
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         # Populate the lazily-loaded module globals (np, SR, _transcribe_detail, ...).
+        # The Dictate class lives in vp_dictate now; its methods resolve the
+        # transcribe/postprocess helpers from that module's namespace, so the
+        # patches below target vp_dictate.
         cls.runtime._load_runtime_modules()
+        import importlib
+        cls.dictate = importlib.import_module("whisper_dictate.vp_dictate")
         import numpy as np
         cls.np = np
 
     def _make_dictate(self):
-        d = object.__new__(self.runtime.Dictate)
+        d = object.__new__(self.dictate.Dictate)
         d.recording = True
         d.release_tail_ms = 0
         d._arecord_proc = None
@@ -109,7 +114,7 @@ class DictateLoopTests(unittest.TestCase):
         return self.np.zeros((samples, 1), dtype=self.np.int16)
 
     def _run(self, d):
-        rt = self.runtime
+        rt = self.dictate
         with patch.object(rt, "postprocess_text", _passthrough_postprocess), \
                 patch.object(rt, "is_hallucination", lambda _t: False), \
                 _capture_stdout():
@@ -118,7 +123,7 @@ class DictateLoopTests(unittest.TestCase):
     def test_full_utterance_is_transcribed_and_injected(self):
         d = self._make_dictate()
         d.frames = [self._pcm(16000)]  # 1.0 s
-        with patch.object(self.runtime, "_transcribe_detail",
+        with patch.object(self.dictate, "_transcribe_detail",
                           lambda *_a, **_k: _fake_transcribe_result("hej verden")):
             self._run(d)
         self.assertEqual(self.injected, ["hej verden"])
@@ -130,7 +135,7 @@ class DictateLoopTests(unittest.TestCase):
     def test_too_short_capture_is_skipped(self):
         d = self._make_dictate()
         d.frames = [self._pcm(1000)]  # < 0.3 s -> misfire
-        with patch.object(self.runtime, "_transcribe_detail",
+        with patch.object(self.dictate, "_transcribe_detail",
                           lambda *_a, **_k: _fake_transcribe_result("ignored")):
             self._run(d)
         self.assertEqual(self.injected, [])
@@ -139,7 +144,7 @@ class DictateLoopTests(unittest.TestCase):
     def test_hallucination_is_filtered_and_not_injected(self):
         d = self._make_dictate()
         d.frames = [self._pcm(16000)]
-        rt = self.runtime
+        rt = self.dictate
         with patch.object(rt, "_transcribe_detail",
                           lambda *_a, **_k: _fake_transcribe_result("thank you")), \
                 patch.object(rt, "postprocess_text", _passthrough_postprocess), \
