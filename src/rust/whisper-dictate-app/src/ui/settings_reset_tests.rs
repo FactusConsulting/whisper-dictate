@@ -58,6 +58,7 @@ fn changed_settings() -> AppSettings {
         post_max_output_chars: "2345".to_owned(),
         post_redact: true,
         post_redact_terms: "Sara,Lars".to_owned(),
+        ui_language: "da".to_owned(),
         profiles_json: r#"[{"name":"code"}]"#.to_owned(),
     }
 }
@@ -153,7 +154,9 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.local_only, defaults.local_only);
     assert_eq!(settings.debug, defaults.debug);
     assert_eq!(settings.stt_debug, defaults.stt_debug);
+    assert_eq!(settings.ui_language, defaults.ui_language);
     assert_eq!(settings.ui_text_scale, defaults.ui_text_scale);
+    assert_eq!(settings.lang, "da");
     assert_eq!(settings.stt_backend, "openai");
     assert_eq!(settings.vad_threshold, "0.42");
 }

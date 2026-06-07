@@ -33,15 +33,26 @@ impl WhisperDictateApp {
             );
         });
         ui.label(
-            icon_text(icons::ICON_TUNE, "Rust control surface")
-                .size(12.0)
-                .color(palette.text_muted),
+            icon_text(
+                icons::ICON_TUNE,
+                ui_text(&self.settings.ui_language, UiTextKey::SidebarSubtitle),
+            )
+            .size(12.0)
+            .color(palette.text_muted),
         );
         ui.add_space(18.0);
 
         for tab in Tab::ALL {
             let selected = self.selected_tab == tab;
-            if nav_button(ui, selected, tab.icon(), tab.label(), palette).clicked() {
+            if nav_button(
+                ui,
+                selected,
+                tab.icon(),
+                tab.label(&self.settings.ui_language),
+                palette,
+            )
+            .clicked()
+            {
                 self.selected_tab = tab;
             }
             ui.add_space(5.0);
@@ -80,7 +91,10 @@ impl WhisperDictateApp {
             if ui
                 .add_sized(
                     [ui.available_width(), 34.0],
-                    egui::Button::new(icon_text(icons::ICON_REFRESH, "Reload config")),
+                    egui::Button::new(icon_text(
+                        icons::ICON_REFRESH,
+                        ui_text(&self.settings.ui_language, UiTextKey::ReloadConfig),
+                    )),
                 )
                 .on_hover_text("Reload the config file from disk.")
                 .clicked()
@@ -88,7 +102,12 @@ impl WhisperDictateApp {
                 self.reload_settings();
             }
             ui.add_space(10.0);
-            sidebar_save_state(ui, self.has_unsaved_settings(), palette);
+            sidebar_save_state(
+                ui,
+                self.has_unsaved_settings(),
+                palette,
+                &self.settings.ui_language,
+            );
         });
     }
 
@@ -104,15 +123,15 @@ impl WhisperDictateApp {
                 |ui| {
                     status_card(
                         ui,
-                        "Status",
+                        ui_text(&self.settings.ui_language, UiTextKey::Status),
                         icons::ICON_RADIO_BUTTON_CHECKED,
-                        self.runtime_state.label(),
+                        runtime_state_label(self.runtime_state, &self.settings.ui_language),
                         runtime_state_color(self.runtime_state, palette),
                         palette,
                     );
                     status_card(
                         ui,
-                        "Backend",
+                        ui_text(&self.settings.ui_language, UiTextKey::Backend),
                         icons::ICON_MODEL_TRAINING,
                         self.backend_summary(),
                         palette.accent_blue,
@@ -130,7 +149,7 @@ impl WhisperDictateApp {
                     if let Some(label) = self.background_task_label {
                         status_card(
                             ui,
-                            "Task",
+                            ui_text(&self.settings.ui_language, UiTextKey::Task),
                             icons::ICON_PENDING_ACTIONS,
                             label,
                             palette.warn_text,
@@ -152,9 +171,15 @@ impl WhisperDictateApp {
         if ui
             .add_enabled(
                 is_active,
-                egui::Button::new(icon_text(icons::ICON_STOP, "Stop").strong())
-                    .fill(palette.error_text)
-                    .min_size(egui::vec2(78.0, 34.0)),
+                egui::Button::new(
+                    icon_text(
+                        icons::ICON_STOP,
+                        ui_text(&self.settings.ui_language, UiTextKey::Stop),
+                    )
+                    .strong(),
+                )
+                .fill(palette.error_text)
+                .min_size(egui::vec2(78.0, 34.0)),
             )
             .clicked()
         {
@@ -163,9 +188,15 @@ impl WhisperDictateApp {
         if ui
             .add_enabled(
                 is_stopped,
-                egui::Button::new(icon_text(icons::ICON_PLAY_ARROW, "Start").strong())
-                    .fill(palette.accent_dark)
-                    .min_size(egui::vec2(88.0, 34.0)),
+                egui::Button::new(
+                    icon_text(
+                        icons::ICON_PLAY_ARROW,
+                        ui_text(&self.settings.ui_language, UiTextKey::Start),
+                    )
+                    .strong(),
+                )
+                .fill(palette.accent_dark)
+                .min_size(egui::vec2(88.0, 34.0)),
             )
             .clicked()
         {
@@ -182,12 +213,15 @@ impl WhisperDictateApp {
     fn live_dictation_panel(&mut self, ui: &mut egui::Ui, palette: UiPalette, height: f32) {
         ui.horizontal(|ui| {
             ui.label(
-                icon_text(icons::ICON_MIC, "Live dictation")
-                    .size(18.0)
-                    .strong()
-                    .color(palette.text),
+                icon_text(
+                    icons::ICON_MIC,
+                    ui_text(&self.settings.ui_language, UiTextKey::LiveDictation),
+                )
+                .size(18.0)
+                .strong()
+                .color(palette.text),
             );
-            runtime_status_badge(ui, self.runtime_state, palette);
+            runtime_status_badge(ui, self.runtime_state, palette, &self.settings.ui_language);
             let mic_width = (ui.available_width() - 10.0).clamp(0.0, MIC_INDICATOR_MAX_WIDTH);
             if mic_width >= MIC_INDICATOR_MIN_WIDTH {
                 ui.add_space(10.0);
@@ -202,13 +236,25 @@ impl WhisperDictateApp {
         });
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label("Log output");
+            ui.label(ui_text(&self.settings.ui_language, UiTextKey::LogOutput));
             self.log_mode_selector(ui, palette);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(icon_text(icons::ICON_COPY_ALL, "Copy")).clicked() {
+                if ui
+                    .button(icon_text(
+                        icons::ICON_COPY_ALL,
+                        ui_text(&self.settings.ui_language, UiTextKey::Copy),
+                    ))
+                    .clicked()
+                {
                     ui.ctx().copy_text(self.visible_runtime_log());
                 }
-                if ui.button(icon_text(icons::ICON_DELETE, "Clear")).clicked() {
+                if ui
+                    .button(icon_text(
+                        icons::ICON_DELETE,
+                        ui_text(&self.settings.ui_language, UiTextKey::Clear),
+                    ))
+                    .clicked()
+                {
                     self.runtime_log.clear();
                     self.runtime_log_scroll_to_bottom = true;
                 }
@@ -241,7 +287,12 @@ impl WhisperDictateApp {
                     } else {
                         let cards = runtime_log_cards(&self.runtime_log, self.runtime_log_view);
                         if cards.is_empty() {
-                            empty_log_state(ui, self.runtime_state, palette);
+                            empty_log_state(
+                                ui,
+                                self.runtime_state,
+                                palette,
+                                &self.settings.ui_language,
+                            );
                         } else {
                             for card in cards {
                                 if card.title.trim().is_empty() {
@@ -351,11 +402,12 @@ impl WhisperDictateApp {
                     palette.surface_bg
                 };
                 let text = if selected {
-                    egui::RichText::new(mode.label())
+                    egui::RichText::new(mode.label(&self.settings.ui_language))
                         .strong()
                         .color(palette.text)
                 } else {
-                    egui::RichText::new(mode.label()).color(palette.text_muted)
+                    egui::RichText::new(mode.label(&self.settings.ui_language))
+                        .color(palette.text_muted)
                 };
                 if ui
                     .add_sized(
@@ -388,13 +440,15 @@ impl WhisperDictateApp {
     pub(super) fn stt_detail_summary(&self) -> (&'static str, &'static str, String) {
         match SttBackendMode::from_raw(&self.settings.stt_backend) {
             SttBackendMode::Cloud => (
-                "Model",
+                ui_text(&self.settings.ui_language, UiTextKey::Model),
                 icons::ICON_MODEL_TRAINING,
                 compact_label(self.cloud_stt_model_summary(), 28),
             ),
-            SttBackendMode::Whisper | SttBackendMode::Parakeet => {
-                ("Compute", icons::ICON_MEMORY, self.compute_summary())
-            }
+            SttBackendMode::Whisper | SttBackendMode::Parakeet => (
+                ui_text(&self.settings.ui_language, UiTextKey::Compute),
+                icons::ICON_MEMORY,
+                self.compute_summary(),
+            ),
         }
     }
 
@@ -447,9 +501,16 @@ impl WhisperDictateApp {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             let mut save_button = egui::Button::new(if is_dirty {
-                icon_text(icons::ICON_SAVE, "Save settings *").strong()
+                icon_text(
+                    icons::ICON_SAVE,
+                    ui_text(&self.settings.ui_language, UiTextKey::SaveSettingsDirty),
+                )
+                .strong()
             } else {
-                icon_text(icons::ICON_SAVE, "Save settings")
+                icon_text(
+                    icons::ICON_SAVE,
+                    ui_text(&self.settings.ui_language, UiTextKey::SaveSettings),
+                )
             });
             if is_dirty {
                 save_button = save_button.fill(ui.visuals().selection.bg_fill);
@@ -462,21 +523,30 @@ impl WhisperDictateApp {
                 self.save_settings();
             }
             if ui
-                .button(icon_text(icons::ICON_REFRESH, "Reload config"))
+                .button(icon_text(
+                    icons::ICON_REFRESH,
+                    ui_text(&self.settings.ui_language, UiTextKey::ReloadConfig),
+                ))
                 .on_hover_text("Reload the config file from disk.")
                 .clicked()
             {
                 self.reload_settings();
             }
             if ui
-                .button(icon_text(icons::ICON_REFRESH, "Reset page"))
+                .button(icon_text(
+                    icons::ICON_REFRESH,
+                    ui_text(&self.settings.ui_language, UiTextKey::ResetPage),
+                ))
                 .on_hover_text("Reset only the settings shown on this page to the built-in defaults. Save to keep the reset.")
                 .clicked()
             {
                 self.reset_current_tab_settings();
             }
             if is_dirty {
-                ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes");
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    ui_text(&self.settings.ui_language, UiTextKey::UnsavedChanges),
+                );
             }
         });
         ui.add_space(10.0);
@@ -506,7 +576,7 @@ impl WhisperDictateApp {
         }
         self.settings_status = format!(
             "Reset {} settings to defaults. Save settings to keep the reset.",
-            tab.label()
+            tab.label(&self.settings.ui_language)
         );
     }
 
@@ -529,7 +599,7 @@ impl WhisperDictateApp {
         panel_frame(palette).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(112.0);
-            ui.strong("Messages");
+            ui.strong(ui_text(&self.settings.ui_language, UiTextKey::Messages));
             ui.add_space(8.0);
             egui::ScrollArea::vertical()
                 .id_salt(format!("settings_messages_{:?}", self.selected_tab))
@@ -539,8 +609,11 @@ impl WhisperDictateApp {
                     ui.set_min_width(ui.available_width());
                     if messages.is_empty() {
                         ui.label(
-                            egui::RichText::new("No messages")
-                                .color(ui.visuals().weak_text_color()),
+                            egui::RichText::new(ui_text(
+                                &self.settings.ui_language,
+                                UiTextKey::NoMessages,
+                            ))
+                            .color(ui.visuals().weak_text_color()),
                         );
                     }
                     for message in messages {
@@ -929,8 +1002,19 @@ impl WhisperDictateApp {
             section_label(ui, "Log view", palette);
             self.log_mode_selector(ui, palette);
             ui.add_space(12.0);
-            section_label(ui, "UI theme", palette);
+            section_label(
+                ui,
+                ui_text(&self.settings.ui_language, UiTextKey::UiTheme),
+                palette,
+            );
             theme_toggle(ui, &mut self.settings.ui_theme, palette);
+            ui.add_space(12.0);
+            section_label(
+                ui,
+                ui_text(&self.settings.ui_language, UiTextKey::UiLanguage),
+                palette,
+            );
+            language_toggle(ui, &mut self.settings.ui_language, palette);
         });
         ui.add_space(14.0);
         self.session_panel(ui, palette);
@@ -1212,13 +1296,25 @@ impl WhisperDictateApp {
     }
 }
 
-fn sidebar_save_state(ui: &mut egui::Ui, is_dirty: bool, palette: UiPalette) {
+fn sidebar_save_state(ui: &mut egui::Ui, is_dirty: bool, palette: UiPalette, raw_language: &str) {
     inset_panel_frame(palette).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         if is_dirty {
-            ui.label(icon_text(icons::ICON_ERROR, "Unsaved changes").color(palette.warn_text));
+            ui.label(
+                icon_text(
+                    icons::ICON_ERROR,
+                    ui_text(raw_language, UiTextKey::UnsavedChanges),
+                )
+                .color(palette.warn_text),
+            );
         } else {
-            ui.label(icon_text(icons::ICON_CHECK_CIRCLE, "Settings saved").color(palette.ok_text));
+            ui.label(
+                icon_text(
+                    icons::ICON_CHECK_CIRCLE,
+                    ui_text(raw_language, UiTextKey::SettingsSaved),
+                )
+                .color(palette.ok_text),
+            );
         }
     });
 }
@@ -1268,6 +1364,7 @@ pub(super) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
         }
         Tab::Output => {
             settings.ui_theme = defaults.ui_theme;
+            settings.ui_language = defaults.ui_language;
             settings.inject_mode = defaults.inject_mode;
             settings.format_commands = defaults.format_commands;
             settings.inject_json = defaults.inject_json;
@@ -1330,6 +1427,39 @@ fn theme_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette) {
                 icon_text(icon, label).strong().color(palette.text)
             } else {
                 icon_text(icon, label).color(palette.text_muted)
+            };
+            if ui
+                .add_sized(
+                    egui::vec2(92.0, 30.0),
+                    egui::Button::new(text)
+                        .fill(fill)
+                        .stroke(egui::Stroke::new(0.8, palette.border_soft)),
+                )
+                .clicked()
+            {
+                *value = raw.to_owned();
+            }
+        }
+    });
+}
+
+fn language_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for (raw, label) in [
+            ("en", ui_text(value.as_str(), UiTextKey::English)),
+            ("da", ui_text(value.as_str(), UiTextKey::Danish)),
+        ] {
+            let selected = value == raw;
+            let fill = if selected {
+                palette.accent_dark
+            } else {
+                palette.surface_bg
+            };
+            let text = if selected {
+                egui::RichText::new(label).strong().color(palette.text)
+            } else {
+                egui::RichText::new(label).color(palette.text_muted)
             };
             if ui
                 .add_sized(
@@ -1475,7 +1605,7 @@ fn runtime_log_card(ui: &mut egui::Ui, card: &RuntimeLogCard, palette: UiPalette
         });
 }
 
-fn empty_log_state(ui: &mut egui::Ui, state: RuntimeState, palette: UiPalette) {
+fn empty_log_state(ui: &mut egui::Ui, state: RuntimeState, palette: UiPalette, raw_language: &str) {
     egui::Frame::default()
         .fill(palette.surface_bg)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
@@ -1484,14 +1614,21 @@ fn empty_log_state(ui: &mut egui::Ui, state: RuntimeState, palette: UiPalette) {
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                icon_text(icons::ICON_MIC, "No dictation output yet")
-                    .strong()
-                    .color(palette.text),
+                icon_text(
+                    icons::ICON_MIC,
+                    ui_text(raw_language, UiTextKey::NoDictationOutputYet),
+                )
+                .strong()
+                .color(palette.text),
             );
             ui.label(
-                egui::RichText::new(format!("Runtime status: {}", state.label()))
-                    .size(12.0)
-                    .color(palette.text_muted),
+                egui::RichText::new(format!(
+                    "{}: {}",
+                    ui_text(raw_language, UiTextKey::RuntimeStatus),
+                    runtime_state_label(state, raw_language)
+                ))
+                .size(12.0)
+                .color(palette.text_muted),
             );
         });
 }
@@ -1679,7 +1816,12 @@ fn status_label(ui: &mut egui::Ui, text: &str, palette: UiPalette) {
     ui.add(egui::Label::new(rich_text).wrap());
 }
 
-fn runtime_status_badge(ui: &mut egui::Ui, state: RuntimeState, palette: UiPalette) {
+fn runtime_status_badge(
+    ui: &mut egui::Ui,
+    state: RuntimeState,
+    palette: UiPalette,
+    raw_language: &str,
+) {
     let (fill, stroke, text) = match state {
         RuntimeState::Stopped => (palette.surface_bg, palette.border, palette.text_muted),
         RuntimeState::Starting => (
@@ -1696,9 +1838,13 @@ fn runtime_status_badge(ui: &mut egui::Ui, state: RuntimeState, palette: UiPalet
         .inner_margin(egui::Margin::symmetric(10.0, 4.0))
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new(format!("Status: {}", state.label()))
-                    .strong()
-                    .color(text),
+                egui::RichText::new(format!(
+                    "{}: {}",
+                    ui_text(raw_language, UiTextKey::Status),
+                    runtime_state_label(state, raw_language)
+                ))
+                .strong()
+                .color(text),
             );
         });
 }

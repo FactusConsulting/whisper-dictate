@@ -337,6 +337,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "quit_key",
     "quit_count",
     "quit_window_ms",
+    "ui_language",
     "ui_theme",
     "ui_text_scale",
 ];
@@ -542,6 +543,7 @@ pub struct AppSettings {
     pub quit_key: String,
     pub quit_count: String,
     pub quit_window_ms: String,
+    pub ui_language: String,
     pub ui_theme: String,
     pub ui_text_scale: String,
     pub profiles_json: String,
@@ -603,6 +605,7 @@ impl Default for AppSettings {
             quit_key: "esc".to_owned(),
             quit_count: "3".to_owned(),
             quit_window_ms: "1500".to_owned(),
+            ui_language: "en".to_owned(),
             ui_theme: "dark".to_owned(),
             ui_text_scale: "1.15".to_owned(),
             profiles_json: "[]".to_owned(),
@@ -637,6 +640,7 @@ impl AppSettings {
             ],
         )?;
         validate_choice("ui_theme", &self.ui_theme, &["dark", "light"])?;
+        validate_choice("ui_language", &self.ui_language, &["en", "da"])?;
 
         if self.stt_backend == "openai" {
             validate_http_url("stt_base_url", &self.stt_base_url)?;
@@ -784,6 +788,7 @@ impl AppSettings {
             settings.quit_window_ms =
                 string_value(object, "quit_window_ms", &defaults.quit_window_ms);
             settings.ui_theme = string_value(object, "ui_theme", &defaults.ui_theme);
+            settings.ui_language = string_value(object, "ui_language", &defaults.ui_language);
             settings.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
             settings.profiles_json = object
                 .get("profiles")
@@ -862,6 +867,7 @@ impl AppSettings {
         set_string(object, "quit_count", &self.quit_count);
         set_string(object, "quit_window_ms", &self.quit_window_ms);
         set_string(object, "ui_theme", &self.ui_theme);
+        set_string(object, "ui_language", &self.ui_language);
         set_string(object, "ui_text_scale", &self.ui_text_scale);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
@@ -1100,6 +1106,7 @@ mod tests {
             "post_redact": "1",
             "post_redact_terms": "Lars Andersen",
             "ui_theme": "light",
+            "ui_language": "da",
             "profiles": [{"name": "terminal"}]
         });
 
@@ -1116,6 +1123,7 @@ mod tests {
         assert!(settings.post_redact);
         assert_eq!(settings.post_redact_terms, "Lars Andersen");
         assert_eq!(settings.ui_theme, "light");
+        assert_eq!(settings.ui_language, "da");
         assert!(settings.profiles_json.contains("terminal"));
         assert_eq!(settings.model, "large-v3-turbo");
         assert_eq!(settings.context_min_seconds, "5");
@@ -1212,6 +1220,20 @@ mod tests {
     }
 
     #[test]
+    fn settings_validation_rejects_invalid_ui_language() {
+        let settings = AppSettings {
+            ui_language: "dk".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("ui_language"));
+    }
+
+    #[test]
     fn settings_validation_rejects_cloud_without_http_url() {
         let settings = AppSettings {
             stt_backend: "openai".to_owned(),
@@ -1261,6 +1283,7 @@ mod tests {
             post_redact: true,
             post_redact_terms: "Lars Andersen".to_owned(),
             ui_theme: "light".to_owned(),
+            ui_language: "da".to_owned(),
             ui_text_scale: "1.3".to_owned(),
             profiles_json: r#"[{"name":"new"}]"#.to_owned(),
             ..AppSettings::default()
@@ -1278,6 +1301,7 @@ mod tests {
         assert_eq!(saved["post_redact"], "1");
         assert_eq!(saved["post_redact_terms"], "Lars Andersen");
         assert_eq!(saved["ui_theme"], "light");
+        assert_eq!(saved["ui_language"], "da");
         assert_eq!(saved["ui_text_scale"], "1.3");
         assert!(saved.get("stt_model").is_none());
         assert_eq!(saved["profiles"][0]["name"], "new");
@@ -1316,6 +1340,7 @@ mod tests {
 
         let after = AppSettings {
             ui_theme: "light".to_owned(),
+            ui_language: "da".to_owned(),
             ui_text_scale: "1.3".to_owned(),
             ..AppSettings::default()
         };
