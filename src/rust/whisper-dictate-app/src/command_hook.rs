@@ -112,7 +112,11 @@ fn run_argv(
         .spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(serde_json::to_string(event)?.as_bytes())?;
+        match stdin.write_all(serde_json::to_string(event)?.as_bytes()) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {}
+            Err(err) => return Err(err.into()),
+        }
     }
 
     loop {
