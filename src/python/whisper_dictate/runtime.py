@@ -693,6 +693,12 @@ def transcribe_file_event(
         recording_s=result.duration_s,
         audio_duration_s=result.duration_s,
         post_boost_dbfs=result.post_boost_dbfs,
+        audio_raw_dbfs=result.raw_dbfs,
+        audio_peak=result.peak,
+        audio_gain=result.gain,
+        audio_noise_dbfs=result.noise_dbfs,
+        audio_snr_db=result.snr_db,
+        audio_input_status=result.input_status,
         compute_s=result.compute_s,
         real_time_factor=result.real_time_factor,
         language=result.language or lang or "auto",
@@ -1125,8 +1131,8 @@ def _print_model_capacity(as_json: bool) -> bool:
 _LAZY_EXPORTS = {
     "whisper_dictate.vp_audio": (
         "MIN_INPUT_DBFS", "MIN_INPUT_SNR_DB", "TARGET_DBFS",
-        "_boost_quiet", "_find_arecord_device", "_looks_like_speech",
-        "_noise_snr",
+        "_boost_quiet", "_boost_quiet_detail", "_find_arecord_device",
+        "_looks_like_speech", "_noise_snr",
     ),
     "whisper_dictate.vp_transcribe": (
         "BEAM_SIZE", "CONTEXT_MIN_SECONDS", "HALLUCINATIONS",
@@ -1157,7 +1163,8 @@ def __getattr__(name: str):
 def _load_runtime_modules() -> None:
     global np
     global MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
-    global _boost_quiet, _find_arecord_device, _looks_like_speech, _noise_snr
+    global _boost_quiet, _boost_quiet_detail, _find_arecord_device
+    global _looks_like_speech, _noise_snr
     global BEAM_SIZE, CONTEXT_MIN_SECONDS, _HALLUCINATIONS, INITIAL_PROMPT
     global SR, STT_BACKEND, TEMPERATURES, VALID_STT_BACKENDS
     global _transcribe, _transcribe_detail, is_hallucination, load_stt_model
@@ -1165,7 +1172,8 @@ def _load_runtime_modules() -> None:
     import numpy as np  # noqa: F401
     from whisper_dictate.vp_audio import (
         MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS,
-        _boost_quiet, _find_arecord_device, _looks_like_speech, _noise_snr,
+        _boost_quiet, _boost_quiet_detail, _find_arecord_device,
+        _looks_like_speech, _noise_snr,
     )
     from whisper_dictate.vp_transcribe import (
         BEAM_SIZE, CONTEXT_MIN_SECONDS,
@@ -1470,6 +1478,12 @@ class Dictate(InjectMixin):
             recording_s=recording_s,
             audio_duration_s=result.duration_s,
             post_boost_dbfs=result.post_boost_dbfs,
+            audio_raw_dbfs=result.raw_dbfs,
+            audio_peak=result.peak,
+            audio_gain=result.gain,
+            audio_noise_dbfs=result.noise_dbfs,
+            audio_snr_db=result.snr_db,
+            audio_input_status=result.input_status,
             compute_s=result.compute_s,
             real_time_factor=result.real_time_factor,
             language=result.language or self.lang or "auto",
@@ -1508,6 +1522,10 @@ class Dictate(InjectMixin):
         _run_command_hook_and_annotate(event)
         if event.get("command_hook_error"):
             print(f"[hook] {event['command_hook_error']}", file=sys.stderr, flush=True)
+        _emit_worker_event(
+            "utterance",
+            **{key: value for key, value in event.items() if key != "event"},
+        )
         _append_jsonl(self.metrics_jsonl, event)
         try:
             _append_history(event)

@@ -6,6 +6,7 @@ must keep those green unchanged.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 import sys
 
@@ -27,6 +28,16 @@ MIN_INPUT_DBFS = float(get_value("VOICEPI_MIN_INPUT_DBFS", "-55") or "-55")
 MIN_INPUT_SNR_DB = float(get_value("VOICEPI_MIN_SNR_DB", "6") or "6")
 _ANSI_BOLD = "\033[1m"
 _ANSI_RESET = "\033[0m"
+
+
+@dataclass(frozen=True)
+class AudioCaptureMetrics:
+    raw_dbfs: float
+    peak: float
+    gain: float
+    noise_dbfs: float
+    snr_db: float
+    input_status: str
 
 
 def _highlight_cap_line(line: str) -> str:
@@ -73,7 +84,7 @@ def _input_level_status(raw_dbfs: float, peak: float, snr_db: float) -> str:
     return "good"
 
 
-def _boost_quiet(a: np.ndarray) -> np.ndarray:
+def _capture_metrics(a: np.ndarray) -> AudioCaptureMetrics:
     rms = float(np.sqrt(np.mean(a**2)) or 1e-9)
     cur_dbfs = 20 * np.log10(rms)
     gain = 10 ** ((TARGET_DBFS - cur_dbfs) / 20)
@@ -81,11 +92,29 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
     gain = min(gain, 0.99 / peak)  # never clip
     noise_dbfs, snr_db = _noise_snr(a)
     input_status = _input_level_status(cur_dbfs, peak, snr_db)
-    line = (f"[cap] raw={cur_dbfs:.0f}dBFS peak={peak:.3f} "
-            f"input={input_status} gain={gain:.1f}x "
-            f"noise={noise_dbfs:.0f}dBFS snr={snr_db:.0f}dB")
+    return AudioCaptureMetrics(
+        raw_dbfs=cur_dbfs,
+        peak=peak,
+        gain=gain,
+        noise_dbfs=noise_dbfs,
+        snr_db=snr_db,
+        input_status=input_status,
+    )
+
+
+def _boost_quiet_detail(a: np.ndarray) -> tuple[np.ndarray, AudioCaptureMetrics]:
+    metrics = _capture_metrics(a)
+    line = (
+        f"[cap] raw={metrics.raw_dbfs:.0f}dBFS peak={metrics.peak:.3f} "
+        f"input={metrics.input_status} gain={metrics.gain:.1f}x "
+        f"noise={metrics.noise_dbfs:.0f}dBFS snr={metrics.snr_db:.0f}dB"
+    )
     print(_highlight_cap_line(line), flush=True)
-    return (a * gain).astype(np.float32)
+    return (a * metrics.gain).astype(np.float32), metrics
+
+
+def _boost_quiet(a: np.ndarray) -> np.ndarray:
+    return _boost_quiet_detail(a)[0]
 
 
 def _looks_like_speech(a: np.ndarray) -> tuple[bool, str]:

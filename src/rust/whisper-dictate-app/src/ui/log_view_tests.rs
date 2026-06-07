@@ -135,6 +135,63 @@ fn diagnostic_log_cards_summarize_audio_and_stt_metrics() {
 }
 
 #[test]
+fn diagnostic_log_cards_prefer_structured_utterance_events() {
+    let log = [
+        "[stt] dur=12.8s post-boost=-21dBFS compute=0.5s rtf=0.04 text='mellemtekst'",
+        "[inject] -> \"Hej, mit navn er Sara.\"  (target: Word)",
+        r#"[utterance] {"event":"utterance","text":"Hej, mit navn er Sara.","text_preview":"Hej, mit navn er Sara.","recording_s":12.8,"audio_raw_dbfs":-33.2,"audio_peak":0.282,"audio_noise_dbfs":-78.0,"audio_snr_db":49.0,"audio_gain":3.5,"post_boost_dbfs":-22.0,"compute_s":0.5,"real_time_factor":0.04,"stt_backend":"openai","model":"whisper-large-v3-turbo","device":"api","dictionary_terms":["Sara"],"dictionary_replacements":[{"from":"Lars datter","to":"Lars' datter","count":1}],"post_processor":"groq","post_mode":"clean","post_model":"llama-3.3-70b-versatile","post_latency_ms":450,"post_changed":true,"post_fallback":false,"inject_strategy":"type","target_title":"Microsoft Word"}"#,
+    ]
+    .join("\n");
+
+    let cards = runtime_log_cards(&log, LogViewMode::Diagnostic);
+
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].kind, RuntimeLogCardKind::Diagnostic);
+    assert_eq!(cards[0].badge, "Utterance");
+    assert_eq!(cards[0].title, "Hej, mit navn er Sara.");
+    assert!(cards[0].detail.contains("recording=12.8s"));
+    assert!(cards[0].detail.contains("raw=-33dBFS"));
+    assert!(cards[0].detail.contains("peak=0.282"));
+    assert!(cards[0].detail.contains("snr=49dB"));
+    assert!(cards[0].detail.contains("gain=3.5x"));
+    assert!(cards[0].detail.contains("compute=0.5s"));
+    assert!(cards[0].detail.contains("rtf=0.04"));
+    assert!(cards[0].detail.contains("backend=openai"));
+    assert!(cards[0]
+        .detail
+        .contains("dictionary terms=1 replacements=1"));
+    assert!(cards[0].detail.contains("provider=groq"));
+    assert!(cards[0]
+        .detail
+        .contains("post_model=llama-3.3-70b-versatile"));
+    assert!(cards[0].detail.contains("changed=true"));
+    assert!(cards[0].detail.contains("fallback=false"));
+    assert!(cards[0].detail.contains("inject=type"));
+}
+
+#[test]
+fn worker_utterance_events_are_logged_as_structured_debug_lines() {
+    let event = WorkerEvent {
+        event: "utterance".to_owned(),
+        state: None,
+        payload: serde_json::json!({
+            "event": "utterance",
+            "text_preview": "Når æøå virker",
+            "audio_raw_dbfs": -34.0,
+            "post_processor": "groq",
+        }),
+    };
+
+    let line = worker_utterance_log_line(&event).expect("utterance log line");
+
+    assert!(line.starts_with("[utterance] "));
+    assert!(line.contains(r#""text_preview":"Når æøå virker""#));
+    assert!(line.contains(r#""audio_raw_dbfs":-34.0"#));
+    assert_eq!(log_view_text(&line, LogViewMode::Minimal), "Når æøå virker");
+    assert!(log_view_text(&line, LogViewMode::Debug).contains("[utterance]"));
+}
+
+#[test]
 fn audio_meter_level_uses_live_worker_level_only_while_recording() {
     assert_eq!(audio_meter_level(0.42, RuntimeState::Stopped, true), 0.0);
     assert_eq!(audio_meter_level(0.42, RuntimeState::Running, false), 0.0);

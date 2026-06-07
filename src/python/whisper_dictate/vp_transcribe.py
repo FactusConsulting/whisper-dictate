@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from whisper_dictate.vp_audio import _boost_quiet, _looks_like_speech
+from whisper_dictate.vp_audio import _boost_quiet, _boost_quiet_detail, _looks_like_speech
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 
 apply_config_to_environ()
@@ -138,6 +138,12 @@ class TranscribeResult:
     raw_text: str = ""
     duration_s: float = 0.0
     post_boost_dbfs: float | None = None
+    raw_dbfs: float | None = None
+    peak: float | None = None
+    gain: float | None = None
+    noise_dbfs: float | None = None
+    snr_db: float | None = None
+    input_status: str = ""
     compute_s: float = 0.0
     real_time_factor: float | None = None
     language: str | None = None
@@ -284,7 +290,7 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         print(f"[gate] {gate}", flush=True)
         return TranscribeResult(text="", gate=gate)
     print(f"[gate] {gate}", flush=True)
-    audio = _boost_quiet(raw_audio)
+    audio, capture_metrics = _boost_quiet_detail(raw_audio)
     dur = len(audio) / SR
     in_dbfs = 20 * np.log10(float(np.sqrt(np.mean(audio**2)) or 1e-9))
     use_context = CONTEXT_MIN_SECONDS > 0 and dur >= CONTEXT_MIN_SECONDS
@@ -329,6 +335,12 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         raw_text=raw_text,
         duration_s=dur,
         post_boost_dbfs=in_dbfs,
+        raw_dbfs=capture_metrics.raw_dbfs,
+        peak=capture_metrics.peak,
+        gain=capture_metrics.gain,
+        noise_dbfs=capture_metrics.noise_dbfs,
+        snr_db=capture_metrics.snr_db,
+        input_status=capture_metrics.input_status,
         compute_s=compute_s,
         real_time_factor=rtf,
         language=getattr(info, "language", None),

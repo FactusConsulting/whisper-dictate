@@ -66,6 +66,23 @@ class AudioDspTests(unittest.TestCase):
             out = self.vp._boost_quiet(a)
         self.assertLessEqual(float(np.max(np.abs(out))), 0.99 + 1e-6)
 
+    def test_boost_quiet_detail_returns_structured_capture_metrics(self):
+        np = self.np
+        a = np.concatenate([
+            np.full(480, 0.1 if i % 2 == 0 else 0.002, dtype=np.float32)
+            for i in range(10)
+        ])
+
+        with _capture_stdout():
+            _out, metrics = self.vp._boost_quiet_detail(a)
+
+        self.assertAlmostEqual(metrics.raw_dbfs, -23.0, places=1)
+        self.assertAlmostEqual(metrics.peak, 0.1, places=2)
+        self.assertGreater(metrics.gain, 1.0)
+        self.assertLess(metrics.noise_dbfs, -50.0)
+        self.assertGreater(metrics.snr_db, 20.0)
+        self.assertEqual(metrics.input_status, "good")
+
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
 
@@ -361,6 +378,40 @@ class RuntimeAudioDeviceTests(unittest.TestCase):
         self.assertEqual(payload["event"], "audio")
         self.assertEqual(payload["state"], "recording")
         self.assertEqual(payload["level"], 0.25)
+
+    def test_record_utterance_event_emits_structured_audio_and_post_metadata(self):
+        event = {
+            "event": "utterance",
+            "text": "Hej, mit navn er Sara.",
+            "text_preview": "Hej, mit navn er Sara.",
+            "audio_raw_dbfs": -33.2,
+            "audio_peak": 0.282,
+            "audio_noise_dbfs": -78.0,
+            "audio_snr_db": 49.0,
+            "audio_gain": 3.5,
+            "post_processor": "groq",
+            "post_mode": "clean",
+            "post_model": "llama-3.3-70b-versatile",
+            "post_changed": True,
+            "dictionary_terms": ["Sara"],
+            "dictionary_replacements": [{"from": "Lars datter", "to": "Lars' datter", "count": 1}],
+        }
+        fake = types.SimpleNamespace(metrics_jsonl=None, json_output=False)
+
+        with _env(VOICEPI_WORKER_EVENTS="1"):
+            stderr = io.StringIO()
+            with patch.object(self.runtime, "_run_command_hook_and_annotate", lambda _event: None):
+                with patch.object(self.runtime, "_append_jsonl", lambda *_args, **_kwargs: None):
+                    with patch.object(self.runtime, "_append_history", lambda _event: None):
+                        with redirect_stderr(stderr):
+                            self.runtime.Dictate._record_utterance_event(fake, event)
+
+        payload = json.loads(stderr.getvalue().strip().removeprefix("[worker-event] "))
+        self.assertEqual(payload["event"], "utterance")
+        self.assertEqual(payload["text"], "Hej, mit navn er Sara.")
+        self.assertEqual(payload["audio_raw_dbfs"], -33.2)
+        self.assertEqual(payload["post_processor"], "groq")
+        self.assertEqual(payload["dictionary_terms"], ["Sara"])
 
     def test_first_audio_callback_sets_recording_start_event_and_time(self):
         np = AudioDspTests.np

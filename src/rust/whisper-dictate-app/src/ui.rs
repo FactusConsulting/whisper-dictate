@@ -1007,6 +1007,10 @@ impl WhisperDictateApp {
                         }
                     } else if event.event == "audio" {
                         self.update_worker_audio(&event);
+                    } else if event.event == "utterance" {
+                        if let Some(line) = worker_utterance_log_line(&event) {
+                            self.append_runtime_log(line);
+                        }
                     }
                 }
                 RuntimeEvent::Stdout(line) | RuntimeEvent::Stderr(line) => {
@@ -1992,6 +1996,15 @@ fn worker_status_log_line(event: &WorkerEvent) -> Option<String> {
     Some(line)
 }
 
+fn worker_utterance_log_line(event: &WorkerEvent) -> Option<String> {
+    if event.event != "utterance" {
+        return None;
+    }
+    serde_json::to_string(&event.payload)
+        .ok()
+        .map(|payload| format!("[utterance] {payload}"))
+}
+
 fn worker_event_string(payload: &serde_json::Value, key: &str) -> Option<String> {
     let value = payload.get(key)?;
     if let Some(raw) = value.as_str() {
@@ -2037,9 +2050,20 @@ fn runtime_log_cards(log: &str, mode: LogViewMode) -> Vec<RuntimeLogCard> {
         return Vec::new();
     }
 
+    let has_structured_utterance = log.lines().any(|line| line.starts_with("[utterance] "));
     let mut cards = Vec::new();
     for line in log.lines() {
+        if matches!(mode, LogViewMode::Diagnostic) {
+            if let Some(card) = structured_utterance_card(line) {
+                cards.push(card);
+                continue;
+            }
+        }
+
         if let Some(text) = extract_inject_preview(line) {
+            if matches!(mode, LogViewMode::Diagnostic) && has_structured_utterance {
+                continue;
+            }
             cards.push(RuntimeLogCard {
                 kind: RuntimeLogCardKind::FinalText,
                 title: text,
@@ -2051,6 +2075,13 @@ fn runtime_log_cards(log: &str, mode: LogViewMode) -> Vec<RuntimeLogCard> {
                 },
                 badge: "Final".to_owned(),
             });
+            continue;
+        }
+
+        if matches!(mode, LogViewMode::Diagnostic)
+            && has_structured_utterance
+            && (line.starts_with("[post]") || is_diagnostic_detail_line(line))
+        {
             continue;
         }
 
@@ -2101,8 +2132,15 @@ fn runtime_log_cards(log: &str, mode: LogViewMode) -> Vec<RuntimeLogCard> {
 }
 
 fn final_output_text(log: &str) -> String {
-    log.lines()
+    let injected = log
+        .lines()
         .filter_map(extract_inject_preview)
+        .collect::<Vec<_>>();
+    if !injected.is_empty() {
+        return injected.join("\n");
+    }
+    log.lines()
+        .filter_map(extract_utterance_text)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2124,6 +2162,151 @@ fn is_diagnostic_detail_line(line: &str) -> bool {
         || line.starts_with("[cap]")
         || line.starts_with("[stt]")
         || line.starts_with("[stt-debug]")
+        || line.starts_with("[utterance] ")
+}
+
+fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
+    let payload = parse_utterance_payload(line)?;
+    let title = extract_utterance_text(line).unwrap_or_else(|| "Utterance".to_owned());
+    let mut details = Vec::new();
+
+    let recording = format_metric_seconds(&payload, "recording_s", "recording");
+    let raw = format_metric_dbfs(&payload, "audio_raw_dbfs", "raw");
+    let peak = format_metric_float(&payload, "audio_peak", "peak", 3);
+    let noise = format_metric_dbfs(&payload, "audio_noise_dbfs", "noise");
+    let snr = format_metric_db(&payload, "audio_snr_db", "snr");
+    let gain = format_metric_gain(&payload, "audio_gain", "gain");
+    let post_boost = format_metric_dbfs(&payload, "post_boost_dbfs", "post-boost");
+    push_joined(
+        &mut details,
+        [recording, raw, peak, noise, snr, gain, post_boost],
+    );
+
+    let compute = format_metric_seconds(&payload, "compute_s", "compute");
+    let rtf = format_metric_float(&payload, "real_time_factor", "rtf", 2);
+    push_joined(&mut details, [compute, rtf]);
+
+    push_joined(
+        &mut details,
+        [
+            worker_event_string(&payload, "stt_backend").map(|value| format!("backend={value}")),
+            worker_event_string(&payload, "model").map(|value| format!("model={value}")),
+            worker_event_string(&payload, "device").map(|value| format!("device={value}")),
+        ],
+    );
+
+    let dictionary_terms = json_array_len(&payload, "dictionary_terms");
+    let dictionary_replacements = json_array_len(&payload, "dictionary_replacements");
+    details.push(format!(
+        "dictionary terms={} replacements={}",
+        dictionary_terms.unwrap_or(0),
+        dictionary_replacements.unwrap_or(0)
+    ));
+
+    push_joined(
+        &mut details,
+        [
+            worker_event_string(&payload, "post_mode").map(|value| format!("post={value}")),
+            worker_event_string(&payload, "post_processor")
+                .map(|value| format!("provider={value}")),
+            worker_event_string(&payload, "post_model").map(|value| format!("post_model={value}")),
+            format_metric_ms(&payload, "post_latency_ms", "post"),
+            worker_event_bool(&payload, "post_changed").map(|value| format!("changed={value}")),
+            worker_event_bool(&payload, "post_fallback").map(|value| format!("fallback={value}")),
+        ],
+    );
+
+    push_joined(
+        &mut details,
+        [
+            worker_event_string(&payload, "inject_strategy")
+                .or_else(|| worker_event_string(&payload, "inject_mode"))
+                .map(|value| format!("inject={value}")),
+            worker_event_string(&payload, "target_title")
+                .map(|value| format!("target={}", compact_runtime_text(&value, 48))),
+        ],
+    );
+
+    Some(RuntimeLogCard {
+        kind: RuntimeLogCardKind::Diagnostic,
+        title: compact_runtime_text(&title, 140),
+        detail: details.join("  |  "),
+        badge: "Utterance".to_owned(),
+    })
+}
+
+fn parse_utterance_payload(line: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(line.strip_prefix("[utterance] ")?).ok()
+}
+
+fn extract_utterance_text(line: &str) -> Option<String> {
+    let payload = parse_utterance_payload(line)?;
+    worker_event_string(&payload, "text_preview")
+        .or_else(|| worker_event_string(&payload, "text"))
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn push_joined<const N: usize>(details: &mut Vec<String>, values: [Option<String>; N]) {
+    let line = values.into_iter().flatten().collect::<Vec<_>>().join("  ");
+    if !line.is_empty() {
+        details.push(line);
+    }
+}
+
+fn format_metric_seconds(payload: &serde_json::Value, key: &str, label: &str) -> Option<String> {
+    worker_event_f32(payload, key).map(|value| format!("{label}={value:.1}s"))
+}
+
+fn format_metric_ms(payload: &serde_json::Value, key: &str, label: &str) -> Option<String> {
+    worker_event_f32(payload, key).map(|value| format!("{label}={value:.0}ms"))
+}
+
+fn format_metric_dbfs(payload: &serde_json::Value, key: &str, label: &str) -> Option<String> {
+    worker_event_f32(payload, key).map(|value| format!("{label}={value:.0}dBFS"))
+}
+
+fn format_metric_db(payload: &serde_json::Value, key: &str, label: &str) -> Option<String> {
+    worker_event_f32(payload, key).map(|value| format!("{label}={value:.0}dB"))
+}
+
+fn format_metric_gain(payload: &serde_json::Value, key: &str, label: &str) -> Option<String> {
+    worker_event_f32(payload, key).map(|value| format!("{label}={value:.1}x"))
+}
+
+fn format_metric_float(
+    payload: &serde_json::Value,
+    key: &str,
+    label: &str,
+    decimals: usize,
+) -> Option<String> {
+    worker_event_f32(payload, key).map(|value| format!("{label}={value:.decimals$}"))
+}
+
+fn json_array_len(payload: &serde_json::Value, key: &str) -> Option<usize> {
+    payload.get(key)?.as_array().map(Vec::len)
+}
+
+fn worker_event_bool(payload: &serde_json::Value, key: &str) -> Option<bool> {
+    let value = payload.get(key)?;
+    value
+        .as_bool()
+        .or_else(|| value.as_str().and_then(|raw| raw.parse::<bool>().ok()))
+}
+
+fn compact_runtime_text(value: &str, max_chars: usize) -> String {
+    let value = value.trim();
+    let mut chars = value.chars();
+    let mut out = String::new();
+    for _ in 0..max_chars {
+        let Some(ch) = chars.next() else {
+            return value.to_owned();
+        };
+        out.push(ch);
+    }
+    if chars.next().is_some() {
+        out.push_str("...");
+    }
+    out
 }
 
 fn extract_inject_preview(line: &str) -> Option<String> {
