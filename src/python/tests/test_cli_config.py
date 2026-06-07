@@ -344,6 +344,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_cli.py",
             "vp_config.py",
             "vp_dictionary_suggest.py",
+            "vp_doctor.py",
             "vp_external_api.py",
             "vp_inject.py",
             "vp_parakeet.py",
