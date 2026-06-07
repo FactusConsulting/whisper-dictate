@@ -7,6 +7,8 @@ const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;
 const SETTINGS_MESSAGES_TOP_GAP: f32 = 14.0;
 const SETTINGS_MESSAGES_BOTTOM_GAP: f32 = 20.0;
 const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 88.0;
+// Vertical inner padding of the messages card (matches the shared panel frame).
+const SETTINGS_MESSAGES_CARD_VERTICAL_PAD: f32 = 14.0;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn settings_panel(
@@ -32,6 +34,10 @@ impl WhisperDictateApp {
             egui::vec2(ui.available_width(), footer_height),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
+                // Pin the footer column to the full available width so the
+                // children below (actions row + messages card) expand with the
+                // window instead of collapsing to their content width.
+                ui.set_min_width(ui.available_width());
                 self.settings_actions(ui);
                 ui.add_space(SETTINGS_MESSAGES_TOP_GAP);
                 self.settings_messages(ui);
@@ -95,6 +101,9 @@ impl WhisperDictateApp {
         });
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
+            // Claim the full width so the "Config:" row tracks the window on
+            // resize, matching the messages card below it.
+            ui.set_min_width(ui.available_width());
             let palette = ui_palette(&self.settings.ui_theme);
             let config_chars = ((ui.available_width() / 8.0).floor() as usize).clamp(38, 92);
             ui.label(egui::RichText::new("Config:").color(palette.text_muted));
@@ -124,6 +133,17 @@ impl WhisperDictateApp {
         );
     }
 
+    /// Render the settings footer (actions row + messages card) and report the
+    /// painted width of the messages card. Used by the layout regression test
+    /// to prove the card fills the available width on resize.
+    #[cfg(test)]
+    pub(in crate::ui) fn footer_messages_card_width(&mut self, ui: &mut egui::Ui) -> f32 {
+        self.settings_actions(ui);
+        ui.add_space(SETTINGS_MESSAGES_TOP_GAP);
+        let card = ui.scope(|ui| self.settings_messages(ui));
+        card.response.rect.width()
+    }
+
     fn settings_messages(&self, ui: &mut egui::Ui) {
         let mut messages = Vec::new();
         if !self.settings_status.trim().is_empty() {
@@ -140,10 +160,14 @@ impl WhisperDictateApp {
         }
 
         let palette = ui_palette(&self.settings.ui_theme);
-        panel_frame(palette).show(ui, |ui| {
+        messages_card_frame(palette).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(112.0);
-            ui.strong(ui_text(&self.settings.ui_language, UiTextKey::Messages));
+            section_label(
+                ui,
+                ui_text(&self.settings.ui_language, UiTextKey::Messages),
+                palette,
+            );
             ui.add_space(8.0);
             egui::ScrollArea::vertical()
                 .id_salt(format!("settings_messages_{:?}", self.selected_tab))
@@ -166,6 +190,20 @@ impl WhisperDictateApp {
                 });
         });
     }
+}
+
+/// Inner padding for the settings "Messages" card. The left/right padding is
+/// intentionally tied to [`SETTINGS_MESSAGES_BOTTOM_GAP`] so the card's side
+/// inset matches the gap left below it, keeping the footer visually balanced.
+fn messages_card_margin() -> egui::Margin {
+    egui::Margin::symmetric(
+        SETTINGS_MESSAGES_BOTTOM_GAP,
+        SETTINGS_MESSAGES_CARD_VERTICAL_PAD,
+    )
+}
+
+fn messages_card_frame(palette: UiPalette) -> egui::Frame {
+    panel_frame(palette).inner_margin(messages_card_margin())
 }
 
 pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
@@ -242,5 +280,21 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
         Tab::Profiles => {
             settings.profiles_json = defaults.profiles_json;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messages_card_side_padding_matches_bottom_gap() {
+        let margin = messages_card_margin();
+        // The card's left/right inset is tied to the gap left below it so the
+        // footer reads as a balanced block.
+        assert_eq!(margin.left, SETTINGS_MESSAGES_BOTTOM_GAP);
+        assert_eq!(margin.right, SETTINGS_MESSAGES_BOTTOM_GAP);
+        assert_eq!(margin.top, SETTINGS_MESSAGES_CARD_VERTICAL_PAD);
+        assert_eq!(margin.bottom, SETTINGS_MESSAGES_CARD_VERTICAL_PAD);
     }
 }

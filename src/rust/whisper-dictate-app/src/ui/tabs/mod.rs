@@ -27,9 +27,11 @@ fn settings_grid(id: &'static str) -> egui::Grid {
 }
 
 fn section_label(ui: &mut egui::Ui, label: &str, palette: UiPalette) {
+    // Size comes from the centralized `TextStyle::Small` so all section headers
+    // scale together with the UI text-scale setting.
     ui.label(
         egui::RichText::new(label)
-            .size(12.0)
+            .text_style(egui::TextStyle::Small)
             .strong()
             .color(palette.text_muted),
     );

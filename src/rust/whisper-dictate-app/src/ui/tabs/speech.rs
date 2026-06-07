@@ -3,6 +3,7 @@ use super::*;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
         ui.heading("Speech recognition");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         let mut provider_id = self.current_cloud_provider().id().to_owned();
@@ -16,7 +17,7 @@ impl WhisperDictateApp {
                     "Choose the transcription engine. Cloud STT can use either Groq or OpenAI; the saved config value is still openai for compatibility with OpenAI-compatible APIs.",
                 );
                 ui.end_row();
-                ui.strong("Local Whisper");
+                section_label(ui, "Local Whisper", palette);
                 ui.label("Used only when STT backend is whisper.");
                 ui.end_row();
                 combo_enabled(
@@ -28,7 +29,7 @@ impl WhisperDictateApp {
                     "Local faster-whisper model used only with STT backend = whisper.",
                 );
                 ui.end_row();
-                ui.strong("Local NVIDIA Parakeet");
+                section_label(ui, "Local NVIDIA Parakeet", palette);
                 ui.label("Used only when STT backend is parakeet.");
                 ui.end_row();
                 combo_enabled(
@@ -40,7 +41,7 @@ impl WhisperDictateApp {
                     "Local NVIDIA NeMo Parakeet model used only with STT backend = parakeet.",
                 );
                 ui.end_row();
-                ui.strong("Cloud STT");
+                section_label(ui, "Cloud STT", palette);
                 ui.label("Used only when Speech engine is Cloud STT.");
                 ui.end_row();
                 combo_enabled_labeled(
@@ -140,7 +141,7 @@ impl WhisperDictateApp {
                     );
                     ui.end_row();
                 }
-                ui.strong("Local runtime");
+                section_label(ui, "Local runtime", palette);
                 ui.label("Used only by local Whisper and Parakeet.");
                 ui.end_row();
                 combo_enabled(
@@ -159,7 +160,7 @@ impl WhisperDictateApp {
                     &["", "int8_float16", "float16", "bfloat16", "float32", "int8"],
                     "Local model precision/performance mode. Leave empty for backend default.",
                 );
-                ui.strong("Dictation controls");
+                section_label(ui, "Dictation controls", palette);
                 ui.label("Applies to local and cloud speech engines.");
                 ui.end_row();
                 combo_help_labeled(
