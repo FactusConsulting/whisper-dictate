@@ -2,7 +2,7 @@
 
 Decode + calibration helpers that operate on a recorded buffer/file. The WAV
 happy path and transcribe_file_event are already exercised in
-test_dictionary_benchmark_history.py; these add the DSP edge cases
+test_transcribe_file.py; these add the DSP edge cases
 (_resample_mono / _mono_float_to_int16), the calibration status thresholds, the
 missing-file guard, and the ffmpeg-required error path.
 """
