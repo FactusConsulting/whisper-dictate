@@ -9,17 +9,14 @@ const MIC_GAUGE_MIN_WIDTH: f32 = 86.0;
 const RUNTIME_LOG_TOP_MARGIN: f32 = 16.0;
 const RUNTIME_LOG_CONTENT_TOP_PADDING: f32 = 10.0;
 const RUNTIME_LOG_CONTENT_BOTTOM_PADDING: f32 = 14.0;
-const RUNTIME_LOG_VERTICAL_CHROME: f32 = 112.0;
-const RUNTIME_LOG_MIN_HEIGHT: f32 = 300.0;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn runtime_tab(&mut self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
-        let height = ui.available_height();
-        self.live_dictation_panel(ui, palette, height);
+        self.live_dictation_panel(ui, palette);
     }
 
-    fn live_dictation_panel(&mut self, ui: &mut egui::Ui, palette: UiPalette, height: f32) {
+    fn live_dictation_panel(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
         ui.horizontal(|ui| {
             ui.label(
                 icon_text(
@@ -71,7 +68,10 @@ impl WhisperDictateApp {
         });
         ui.add_space(10.0);
 
-        let log_height = (height - RUNTIME_LOG_VERTICAL_CHROME).max(RUNTIME_LOG_MIN_HEIGHT);
+        // Fill the remaining height so the log card ends at the panel's content
+        // bottom (a uniform EDGE_MARGIN gap via the CentralPanel) instead of being
+        // forced taller than the window and overflowing below the bottom edge.
+        let log_height = (ui.available_height() - (RUNTIME_LOG_TOP_MARGIN + 10.0)).max(0.0);
         let visible_log = self.visible_runtime_log();
         runtime_log_frame(palette).show(ui, |ui| {
             ui.set_min_height(log_height);

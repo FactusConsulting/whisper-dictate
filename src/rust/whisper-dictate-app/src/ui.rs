@@ -134,6 +134,10 @@ const PANEL_RADIUS: u8 = 12;
 const PILL_RADIUS: u8 = 14;
 const SETTINGS_LABEL_WIDTH: f32 = 190.0;
 const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
+/// Uniform inset between content and the surrounding panel/window edges. Used as
+/// the CentralPanel margin and reused for the settings footer card so the gap is
+/// identical on every edge instead of drifting between ad-hoc values.
+pub(in crate::ui) const EDGE_MARGIN: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UiThemeMode {
@@ -667,7 +671,7 @@ impl eframe::App for WhisperDictateApp {
             .frame(
                 egui::Frame::default()
                     .fill(palette.panel_bg)
-                    .inner_margin(egui::Margin::symmetric(12.0, 12.0)),
+                    .inner_margin(egui::Margin::symmetric(EDGE_MARGIN, EDGE_MARGIN)),
             )
             .show(ctx, |ui| match self.selected_tab {
                 Tab::Log => self.runtime_tab(ui),
@@ -1591,17 +1595,22 @@ fn password_enabled(
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = EYE_BUTTON_GAP;
             ui.set_width(PASSWORD_CONTROL_WIDTH);
-            ui.add_sized(
-                egui::vec2(input_width, 22.0),
+            // Render the field at its natural height and size the reveal button to
+            // match, so the eye stays vertically centered on the same row instead
+            // of drifting below the field (which made it look like it belonged to
+            // the next field).
+            let field = ui.add(
                 egui::TextEdit::singleline(value)
                     .password(!is_revealed)
                     .desired_width(input_width),
             );
-            let response = eye_icon_button(ui, is_revealed).on_hover_text(if is_revealed {
-                "Hide API key."
-            } else {
-                "Show API key for 3 seconds."
-            });
+            let response = eye_icon_button(ui, is_revealed, field.rect.height()).on_hover_text(
+                if is_revealed {
+                    "Hide API key."
+                } else {
+                    "Show API key for 3 seconds."
+                },
+            );
             if response.clicked() {
                 *reveal_until = if is_revealed {
                     None
@@ -1615,8 +1624,8 @@ fn password_enabled(
     grid_help_row(ui, show_help, help);
 }
 
-fn eye_icon_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
-    let size = egui::vec2(26.0, 22.0);
+fn eye_icon_button(ui: &mut egui::Ui, active: bool, height: f32) -> egui::Response {
+    let size = egui::vec2(26.0, height.max(18.0));
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&response);
@@ -1631,11 +1640,14 @@ fn eye_icon_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
                 visuals.fg_stroke.color
             },
         );
+        // Fixed-size eye glyph centered in the button, independent of its height.
         let center = rect.center();
-        let left = egui::pos2(rect.left() + 5.0, center.y);
-        let right = egui::pos2(rect.right() - 5.0, center.y);
-        let top = egui::pos2(center.x, rect.top() + 6.0);
-        let bottom = egui::pos2(center.x, rect.bottom() - 6.0);
+        let half_w = 8.0;
+        let half_h = 5.0;
+        let left = egui::pos2(center.x - half_w, center.y);
+        let right = egui::pos2(center.x + half_w, center.y);
+        let top = egui::pos2(center.x, center.y - half_h);
+        let bottom = egui::pos2(center.x, center.y + half_h);
         ui.painter().line_segment([left, top], stroke);
         ui.painter().line_segment([top, right], stroke);
         ui.painter().line_segment([right, bottom], stroke);
