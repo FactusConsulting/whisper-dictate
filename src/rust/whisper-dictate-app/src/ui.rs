@@ -2527,6 +2527,8 @@ mod log_view_tests;
 #[cfg(test)]
 mod settings_reset_tests;
 #[cfg(test)]
+mod tab_helpers_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod ui_language_tests;
