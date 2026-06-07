@@ -189,9 +189,15 @@ class DebugConfigTests(unittest.TestCase):
     def test_quit_key_is_not_hardcoded_to_escape(self):
         cli = Path("src/python/whisper_dictate/vp_cli.py").read_text(encoding="utf-8")
         runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
-        config = Path("src/python/whisper_dictate/vp_config.py").read_text(encoding="utf-8")
+        schema = json.loads(
+            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+        )
 
-        self.assertIn('Setting("VOICEPI_QUIT_KEY", "quit_key", "esc", live=False)', config)
+        quit_key = next(s for s in schema["settings"] if s["key"] == "quit_key")
+        self.assertEqual(
+            (quit_key["env"], quit_key["default"], quit_key["live"]),
+            ("VOICEPI_QUIT_KEY", "esc", False),
+        )
         self.assertIn('QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc")', cli)
         self.assertIn("if k == quit_key:", runtime)
         self.assertNotIn("if k == keyboard.Key.esc:", runtime)
@@ -430,12 +436,15 @@ class ContextMinSecondsTests(unittest.TestCase):
                              f"threshold=0, dur={dur} must stay False")
 
     def test_default_threshold_is_five_seconds(self):
-        config = Path("src/python/whisper_dictate/vp_config.py").read_text(encoding="utf-8")
+        schema = json.loads(
+            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+        )
         transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
         runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
-        self.assertIn(
-            'Setting("VOICEPI_CONTEXT_MIN_SECONDS", "context_min_seconds", "5", live=True)',
-            config,
+        ctx = next(s for s in schema["settings"] if s["key"] == "context_min_seconds")
+        self.assertEqual(
+            (ctx["env"], ctx["default"], ctx["live"]),
+            ("VOICEPI_CONTEXT_MIN_SECONDS", "5", True),
         )
         self.assertIn('get_value("VOICEPI_CONTEXT_MIN_SECONDS", "5") or "5"', transcribe)
         self.assertIn('after.get("context_min_seconds", "5")', runtime)
@@ -450,11 +459,14 @@ class ContextMinSecondsTests(unittest.TestCase):
 
 class VadSpeechPaddingTests(unittest.TestCase):
     def test_vad_speech_padding_is_configurable_and_passed_to_whisper(self):
-        config = Path("src/python/whisper_dictate/vp_config.py").read_text(encoding="utf-8")
+        schema = json.loads(
+            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+        )
         transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
         runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
 
-        self.assertIn('Setting("VOICEPI_VAD_SPEECH_PAD_MS", "vad_speech_pad_ms", "200"', config)
+        vad = next(s for s in schema["settings"] if s["key"] == "vad_speech_pad_ms")
+        self.assertEqual((vad["env"], vad["default"]), ("VOICEPI_VAD_SPEECH_PAD_MS", "200"))
         self.assertIn('VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200")', transcribe)
         self.assertIn("speech_pad_ms=VAD_SPEECH_PAD_MS", transcribe)
         self.assertIn('vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))', runtime)

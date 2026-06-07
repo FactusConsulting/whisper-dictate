@@ -36,6 +36,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "..\..\..\src\python\whisper_dictate\*.py"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
+Source: "..\..\..\src\python\whisper_dictate\*.json"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
 Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion

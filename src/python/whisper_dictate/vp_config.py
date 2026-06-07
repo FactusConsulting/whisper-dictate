@@ -25,60 +25,28 @@ class Setting:
     live: bool = True
 
 
-SETTINGS: tuple[Setting, ...] = (
-    Setting("VOICEPI_KEY", "key", "ctrl_r", live=False),
-    Setting("VOICEPI_MODEL", "model", "large-v3-turbo", live=False),
-    Setting("VOICEPI_STT_BACKEND", "stt_backend", "whisper", live=False),
-    Setting("VOICEPI_STT_MODEL", "stt_model", None, live=False),
-    Setting("VOICEPI_STT_BASE_URL", "stt_base_url", "https://api.openai.com/v1", live=False),
-    Setting("VOICEPI_STT_TIMEOUT_MS", "stt_timeout_ms", "30000", live=False),
-    Setting("VOICEPI_PARAKEET_MODEL", "parakeet_model", None, live=False),
-    Setting("VOICEPI_DEVICE", "device", "auto", live=False),
-    Setting("VOICEPI_COMPUTE_TYPE", "compute_type", None, live=False),
-    Setting("VOICEPI_LANG", "lang", None, live=True),
-    Setting("VOICEPI_XKB_LAYOUT", "xkb_layout", None, live=True),
-    Setting("VOICEPI_INITIAL_PROMPT", "initial_prompt", None, live=True),
-    Setting("VOICEPI_INJECT_MODE", "inject_mode", "auto", live=True),
-    Setting("VOICEPI_FORMAT_COMMANDS", "format_commands", "off", live=True),
-    Setting("VOICEPI_BEAM_SIZE", "beam_size", "1", live=True),
-    Setting("VOICEPI_TEMPERATURE", "temperature", "0.0,0.2", live=True),
-    Setting("VOICEPI_CONTEXT_MIN_SECONDS", "context_min_seconds", "5", live=True),
-    Setting("VOICEPI_PARAKEET_MIN_SECONDS", "parakeet_min_seconds", "1.5", live=True),
-    Setting("VOICEPI_RELEASE_TAIL_MS", "release_tail_ms", "200", live=True),
-    Setting("VOICEPI_VAD_THRESHOLD", "vad_threshold", "0.3", live=True),
-    Setting("VOICEPI_VAD_MIN_SILENCE_MS", "vad_min_silence_ms", "600", live=True),
-    Setting("VOICEPI_VAD_SPEECH_PAD_MS", "vad_speech_pad_ms", "200", live=True),
-    Setting("VOICEPI_TARGET_DBFS", "target_dbfs", "-20", live=True),
-    Setting("VOICEPI_MIN_INPUT_DBFS", "min_input_dbfs", "-55", live=True),
-    Setting("VOICEPI_MIN_SNR_DB", "min_snr_db", "6", live=True),
-    Setting("VOICEPI_AUDIO_DUCKING", "audio_ducking", None, live=True),
-    Setting("VOICEPI_AUDIO_DUCKING_LEVEL", "audio_ducking_level", "0.25", live=True),
-    Setting("VOICEPI_DICTIONARY", "dictionary", None, live=True),
-    Setting("VOICEPI_DICTIONARY_ENABLED", "dictionary_enabled", "1", live=True),
-    Setting("VOICEPI_DICTIONARY_MAX_TERMS", "dictionary_max_terms", "80", live=True),
-    Setting("VOICEPI_DICTIONARY_PROMPT_CHARS", "dictionary_prompt_chars", "1200", live=True),
-    Setting("VOICEPI_JSON", "json_output", None, live=True),
-    Setting("VOICEPI_METRICS_JSONL", "metrics_jsonl", None, live=True),
-    Setting("VOICEPI_COMMAND_HOOK", "command_hook", None, live=True),
-    Setting("VOICEPI_COMMAND_HOOK_TIMEOUT_MS", "command_hook_timeout_ms", "2000", live=True),
-    Setting("VOICEPI_HISTORY_ENABLED", "history_enabled", "1", live=True),
-    Setting("VOICEPI_HISTORY_JSONL", "history_jsonl", None, live=True),
-    Setting("VOICEPI_LOCAL_ONLY", "local_only", None, live=False),
-    Setting("VOICEPI_POST_PROCESSOR", "post_processor", "none", live=True),
-    Setting("VOICEPI_POST_MODE", "post_mode", "raw", live=True),
-    Setting("VOICEPI_POST_MODEL", "post_model", "qwen2.5:3b", live=True),
-    Setting("VOICEPI_POST_BASE_URL", "post_base_url", "http://localhost:11434", live=True),
-    Setting("VOICEPI_POST_TIMEOUT_MS", "post_timeout_ms", "2000", live=True),
-    Setting("VOICEPI_POST_MAX_INPUT_CHARS", "post_max_input_chars", "4000", live=True),
-    Setting("VOICEPI_POST_MAX_OUTPUT_CHARS", "post_max_output_chars", "4000", live=True),
-    Setting("VOICEPI_POST_REDACT", "post_redact", None, live=True),
-    Setting("VOICEPI_POST_REDACT_TERMS", "post_redact_terms", None, live=True),
-    Setting("VOICEPI_DEBUG", "debug", None, live=True),
-    Setting("VOICEPI_STT_DEBUG", "stt_debug", None, live=True),
-    Setting("VOICEPI_QUIT_KEY", "quit_key", "esc", live=False),
-    Setting("VOICEPI_QUIT_COUNT", "quit_count", "3", live=False),
-    Setting("VOICEPI_QUIT_WINDOW_MS", "quit_window_ms", "1500", live=False),
-)
+def _load_settings_schema() -> tuple[Setting, ...]:
+    """Load the canonical runtime-settings schema.
+
+    ``settings_schema.json`` (next to this module) is the SINGLE SOURCE OF TRUTH
+    for the VOICEPI_* env var <-> config key <-> default <-> live mapping. The
+    Rust controller embeds the same file via ``include_str!``. Add or change
+    settings there, not in a hand-maintained table here.
+    """
+    path = Path(__file__).with_name("settings_schema.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return tuple(
+        Setting(
+            env=row["env"],
+            key=row["key"],
+            default=row.get("default"),
+            live=bool(row.get("live", True)),
+        )
+        for row in data["settings"]
+    )
+
+
+SETTINGS: tuple[Setting, ...] = _load_settings_schema()
 
 SETTING_BY_ENV = {s.env: s for s in SETTINGS}
 SETTING_BY_KEY = {s.key: s for s in SETTINGS}
