@@ -2,6 +2,7 @@ use super::*;
 use egui_material_icons::icons;
 
 mod dictionary;
+mod log_card;
 mod output;
 mod post;
 mod profiles;
@@ -10,6 +11,10 @@ mod runtime;
 mod settings;
 mod shell;
 mod speech;
+
+// Log-card render widgets used by the runtime tab; re-exported into the `tabs`
+// root so `runtime` (and any future tab) can reach them via `super::*`.
+pub(in crate::ui) use log_card::{empty_log_state, metric_box, runtime_log_card};
 
 // Free helpers consumed by sibling test modules through `ui::tabs::NAME`.
 #[cfg(test)]
