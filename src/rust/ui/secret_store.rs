@@ -1,6 +1,7 @@
 //! Low-level secret storage primitives shared by `api_keys`: the save-location
-//! report types, the OS-keyring policy probe, and the 0600 fallback key-file
-//! store with its platform config-dir resolution.
+//! report types, the OS-keyring policy probe, and the fallback key-file store
+//! (0600 on Unix; default filesystem ACLs elsewhere) with its platform
+//! config-dir resolution.
 
 use anyhow::{Context, Result};
 use std::env;

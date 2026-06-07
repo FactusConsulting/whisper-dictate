@@ -125,6 +125,13 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn clear_audio_meter(&mut self) {
         self.audio_capture_opening = false;
         self.audio_capture_active = false;
+        self.clear_audio_meter_readings();
+    }
+
+    /// Blank the live meter readings (level / dBFS / peak) without touching the
+    /// capture-active flags — used whenever capture goes inactive so stale
+    /// numbers don't linger on the gauge.
+    fn clear_audio_meter_readings(&mut self) {
         self.audio_meter_level = 0.0;
         self.audio_meter_raw_dbfs = None;
         self.audio_meter_peak = None;
@@ -203,9 +210,7 @@ impl WhisperDictateApp {
             if let Some(active) = audio_capture_active_for_worker_state(state) {
                 self.audio_capture_active = active;
                 if !active {
-                    self.audio_meter_level = 0.0;
-                    self.audio_meter_raw_dbfs = None;
-                    self.audio_meter_peak = None;
+                    self.clear_audio_meter_readings();
                 }
             }
         }
@@ -229,7 +234,7 @@ impl WhisperDictateApp {
             if let Some(active) = audio_capture_active_for_worker_state(state) {
                 self.audio_capture_active = active;
                 if !active {
-                    self.audio_meter_level = 0.0;
+                    self.clear_audio_meter_readings();
                 }
             }
         } else {

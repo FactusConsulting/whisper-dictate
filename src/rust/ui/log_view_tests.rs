@@ -349,3 +349,34 @@ fn worker_audio_event_updates_live_meter_and_device_without_log_output() {
         0.31
     );
 }
+
+#[test]
+fn worker_audio_event_with_inactive_state_clears_meter_readings() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    // The meter is showing live readings from a prior recording chunk.
+    app.audio_meter_level = 0.4;
+    app.audio_meter_raw_dbfs = Some(-12.0);
+    app.audio_meter_peak = Some(0.8);
+
+    // An audio event whose state means capture is no longer active must blank
+    // the whole meter — not just the level — so stale dBFS/peak don't linger.
+    let event = WorkerEvent {
+        event: "audio".to_owned(),
+        state: Some("transcribing".to_owned()),
+        payload: serde_json::json!({
+            "event": "audio",
+            "state": "transcribing",
+            "level": 0.31,
+            "raw_dbfs": -35.5,
+            "peak": 0.12,
+        }),
+    };
+
+    app.update_worker_audio(&event);
+
+    assert!(!app.audio_capture_active);
+    assert_eq!(app.audio_meter_level, 0.0);
+    assert_eq!(app.audio_meter_raw_dbfs, None);
+    assert_eq!(app.audio_meter_peak, None);
+}
