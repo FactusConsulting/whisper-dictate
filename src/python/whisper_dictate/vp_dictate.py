@@ -2,8 +2,9 @@
 
 Extracted from runtime.py — this is the core product path: hold the key,
 capture audio (arecord or sounddevice), transcribe, post-process + format,
-inject, and emit the utterance event. Key detection is mixed in from
-vp_keys.KeyBackendMixin; text injection from vp_inject.InjectMixin.
+inject, and emit the utterance event. The audio-capture state machine is mixed
+in from vp_capture.CaptureMixin; key detection from vp_keys.KeyBackendMixin;
+text injection from vp_inject.InjectMixin.
 
 numpy / sounddevice / faster_whisper stay lazy: importing this module must not
 drag in the heavy ML/audio stack. The transcribe-side globals (``np``, ``SR``,
@@ -14,20 +15,20 @@ working.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import threading
 import time
 
+from whisper_dictate import vp_capture
 from whisper_dictate.vp_audio_ducking import AudioDucker, register_active_ducker
+from whisper_dictate.vp_capture import CaptureMixin, FIRST_AUDIO_WAIT_S
 from whisper_dictate.vp_config import (
     apply_config_to_environ, config_mtime, effective_config, load_config,
 )
 from whisper_dictate.vp_events import (
-    _apply_profile_settings, _audio_level_metrics, _base_event, _compact_text,
+    _apply_profile_settings, _base_event, _compact_text,
     _emit_json, _emit_worker_event, _run_command_hook_and_annotate,
-    _select_active_channel_pcm, _sounddevice_capture_channel_candidates,
-    _sounddevice_input_channels, _sounddevice_input_name, _sounddevice_stream_kwargs,
+    _select_active_channel_pcm,
 )
 from whisper_dictate.vp_format import apply_format_commands
 from whisper_dictate.vp_history import _append_history, _append_jsonl
@@ -36,16 +37,12 @@ from whisper_dictate.vp_keymap import _detect_xkb_layout
 from whisper_dictate.vp_keys import KeyBackendMixin
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text
 
-_ARECORD_DEVICE: str | None = None  # set once at startup
-FIRST_AUDIO_WAIT_S = 0.35
-
 # Populated lazily by _load_runtime_modules() (numpy + transcribe backend).
 np = None
 SR = 16000
 STT_BACKEND = ""
 _transcribe_detail = None
 is_hallucination = None
-_find_arecord_device = None
 
 
 def _load_runtime_modules() -> None:
@@ -53,25 +50,24 @@ def _load_runtime_modules() -> None:
 
     Mirrors runtime.py's loader; safe to call repeatedly. Kept here so the
     Dictate methods resolve ``np`` / ``_transcribe_detail`` / ``is_hallucination``
-    / ``STT_BACKEND`` / ``_find_arecord_device`` from this module's namespace
-    (which is also what the unit tests patch).
+    / ``STT_BACKEND`` from this module's namespace (which is also what the unit
+    tests patch). Also materialises the capture-side globals in vp_capture.
     """
-    global np, SR, STT_BACKEND, _transcribe_detail, is_hallucination, _find_arecord_device
+    global np, SR, STT_BACKEND, _transcribe_detail, is_hallucination
 
     import numpy as np  # noqa: F811
-    from whisper_dictate.vp_audio import _find_arecord_device  # noqa: F811
     from whisper_dictate.vp_transcribe import (  # noqa: F811
         SR, STT_BACKEND, _transcribe_detail, is_hallucination,
     )
+    vp_capture._load_runtime_modules()
 
 
-class Dictate(InjectMixin, KeyBackendMixin):
+class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
     def __init__(self, model: "WhisperModel", key: str, mode: str,
                  lang: str | None, *, json_output: bool = False,
                  metrics_jsonl: str | None = None, model_name: str = "",
                  device: str = "", compute_type: str = "",
                  model_load_s: float | None = None):
-        global _ARECORD_DEVICE
         self.model = model
         self.key = key
         self.mode = mode  # "auto" | "type" | "paste" | "print"
@@ -117,10 +113,9 @@ class Dictate(InjectMixin, KeyBackendMixin):
             print(f"[inject] Rust keymap layout: {xkb}", flush=True)
         if bool(os.environ.get('WAYLAND_DISPLAY')):
             self._ensure_ydotoold()
-        if _ARECORD_DEVICE is None:
-            _ARECORD_DEVICE = _find_arecord_device()
-        if _ARECORD_DEVICE:
-            print(f"[audio] using arecord -D {_ARECORD_DEVICE} (PipeWire route)", flush=True)
+        arecord_device = vp_capture._ensure_arecord_device()
+        if arecord_device:
+            print(f"[audio] using arecord -D {arecord_device} (PipeWire route)", flush=True)
         else:
             print("[audio] using sounddevice (direct ALSA)", flush=True)
 
@@ -141,6 +136,16 @@ class Dictate(InjectMixin, KeyBackendMixin):
         return after
 
     def _apply_effective_config(self, after: dict[str, str]) -> None:
+        self._report_restart_required(after)
+        self._apply_live_session_settings(after)
+        self._apply_runtime_module_config(after)
+        self.postprocess_settings = load_postprocess_settings()
+        self.audio_ducker = register_active_ducker(AudioDucker.from_config())
+        self._effective_config = after
+        print("[config] reloaded live settings", flush=True)
+
+    def _report_restart_required(self, after: dict[str, str]) -> None:
+        """Warn once about changed settings that only take effect on restart."""
         restart_keys = {"stt_backend", "model", "parakeet_model", "device", "compute_type", "key"}
         changed_restart = [k for k in sorted(restart_keys) if self._effective_config.get(k) != after.get(k)]
         if changed_restart and not self._restart_required_reported:
@@ -151,6 +156,8 @@ class Dictate(InjectMixin, KeyBackendMixin):
             )
             self._restart_required_reported = True
 
+    def _apply_live_session_settings(self, after: dict[str, str]) -> None:
+        """Apply settings that live on this Dictate instance (mode, lang, xkb)."""
         self.mode = (after.get("inject_mode") or self.mode or "auto").lower()
         self.json_output = (after.get("json_output") or "").lower() not in (
             "", "0", "false", "no", "off")
@@ -169,8 +176,9 @@ class Dictate(InjectMixin, KeyBackendMixin):
             if bool(os.environ.get('WAYLAND_DISPLAY')) and xkb:
                 print(f"[inject] Rust keymap layout: {xkb}", flush=True)
 
+    def _apply_runtime_module_config(self, after: dict[str, str]) -> None:
+        """Push live-tunable settings into the vp_audio / vp_transcribe modules."""
         from whisper_dictate import vp_audio
-        from whisper_dictate import vp_postprocess
         from whisper_dictate import vp_transcribe
 
         vp_audio.TARGET_DBFS = float(after.get("target_dbfs", "-20"))
@@ -188,10 +196,6 @@ class Dictate(InjectMixin, KeyBackendMixin):
         vp_transcribe.INITIAL_PROMPT = after.get("initial_prompt") or None
         vp_transcribe.STT_DEBUG = (after.get("stt_debug") or "").lower() not in (
             "", "0", "false", "no", "off")
-        self.postprocess_settings = vp_postprocess.load_postprocess_settings()
-        self.audio_ducker = register_active_ducker(AudioDucker.from_config())
-        self._effective_config = after
-        print("[config] reloaded live settings", flush=True)
 
     def _reload_live_config_if_changed(self) -> None:
         mt = config_mtime()
@@ -200,100 +204,6 @@ class Dictate(InjectMixin, KeyBackendMixin):
         self._config_mtime = mt
         apply_config_to_environ()
         self._apply_effective_config(self._profiled_config(effective_config()))
-
-    def _cb(self, indata, frames, t, status):
-        if self.recording:
-            if not self._first_audio_event.is_set():
-                self._first_audio_at = time.monotonic()
-                self._record_started = self._first_audio_at
-                self._first_audio_event.set()
-            chunk = indata.copy()
-            self.frames.append(chunk)
-            self._emit_audio_level(chunk)
-
-    def _arecord_reader(self, proc):
-        # Read raw S16_LE mono 16kHz from arecord stdout into self.frames
-        chunk = SR * 2 * 1  # 1 second of S16 mono = SR*2 bytes
-        while self.recording:
-            data = proc.stdout.read(chunk // 8)  # read ~125ms chunks
-            if not data:
-                break
-            arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 1)
-            if not self._first_audio_event.is_set():
-                self._first_audio_at = time.monotonic()
-                self._record_started = self._first_audio_at
-                self._first_audio_event.set()
-            self.frames.append(arr)
-            self._emit_audio_level(arr)
-
-    def _emit_audio_level(self, pcm) -> None:
-        now = time.monotonic()
-        if now - self._last_audio_level_event < 0.12:
-            return
-        raw_dbfs, peak, level = _audio_level_metrics(pcm)
-        self._last_audio_level_event = now
-        _emit_worker_event(
-            "audio",
-            state="recording",
-            level=round(level, 3),
-            raw_dbfs=round(raw_dbfs, 1),
-            peak=round(peak, 3),
-            capture_backend=self._capture_backend,
-            audio_device=self._audio_input_device,
-            capture_channels=self._capture_channels,
-        )
-
-    def _start_arecord(self) -> tuple[str, str]:
-        self._capture_backend = "arecord"
-        self._audio_input_device = f"arecord -D {_ARECORD_DEVICE}"
-        self._capture_channels = 1
-        self._arecord_proc = subprocess.Popen(
-            ["arecord", "-D", _ARECORD_DEVICE, "-f", "S16_LE",
-             "-r", str(SR), "-c", "1", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-        )
-        threading.Thread(
-            target=self._arecord_reader,
-            args=(self._arecord_proc,),
-            daemon=True,
-        ).start()
-        return self._capture_backend, self._audio_input_device
-
-    def _start_sounddevice(self) -> tuple[str, str]:
-        import sounddevice as sd
-        self._capture_backend = "sounddevice"
-        self._audio_input_device = _sounddevice_input_name(sd) or "sounddevice default input"
-        last_error = None
-        for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
-            self._capture_channels = channels
-            for kwargs in _sounddevice_stream_kwargs(self._capture_channels, self._cb):
-                try:
-                    self._stream = sd.InputStream(**kwargs)
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    self._stream = None
-            if self._stream is not None:
-                break
-        if self._stream is None:
-            raise last_error
-        self._stream.start()
-        return self._capture_backend, self._audio_input_device
-
-    def _stop_capture_streams(self) -> None:
-        if self._arecord_proc:
-            self._arecord_proc.terminate()
-            self._arecord_proc.wait()
-            self._arecord_proc = None
-        if self._stream:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
-
-    def _recording_seconds(self, pcm: np.ndarray) -> float:
-        if self._record_started:
-            return time.monotonic() - self._record_started
-        return len(pcm) / SR
 
     def _should_skip_pcm(self, pcm: np.ndarray, recording_s: float) -> bool:
         if len(pcm) < SR * 0.3:  # <0.3 s — almost certainly a misfire
@@ -349,6 +259,8 @@ class Dictate(InjectMixin, KeyBackendMixin):
         post_result,
         format_result,
     ) -> dict:
+        # Assembled from cohesive field groups so each part stays small and the
+        # produced dict is identical to the old flat _base_event(...) call.
         return _base_event(
             event="utterance",
             text=final_text,
@@ -357,6 +269,15 @@ class Dictate(InjectMixin, KeyBackendMixin):
             text_preview=_compact_text(final_text),
             text_chars=len(final_text),
             recording_s=recording_s,
+            **self._transcription_event_fields(result),
+            **self._inject_event_fields(inject_elapsed_ms),
+            **self._post_event_fields(post_result),
+            **self._format_event_fields(format_result),
+        )
+
+    def _transcription_event_fields(self, result) -> dict:
+        """Audio-metric + model + transcription fields drawn from ``result``."""
+        return dict(
             audio_duration_s=result.duration_s,
             post_boost_dbfs=result.post_boost_dbfs,
             audio_raw_dbfs=result.raw_dbfs,
@@ -375,15 +296,26 @@ class Dictate(InjectMixin, KeyBackendMixin):
             device=self.device,
             compute_type=self.compute_type,
             model_load_s=self.model_load_s,
+            segments=result.segments,
+            dictionary_terms=result.dictionary_terms,
+            dictionary_replacements=result.dictionary_replacements,
+        )
+
+    def _inject_event_fields(self, inject_elapsed_ms: int) -> dict:
+        """Injection target / strategy / profile fields for the utterance event."""
+        return dict(
             inject_mode=self.mode,
             inject_strategy=getattr(self, "_last_inject_strategy", None),
             inject_elapsed_ms=inject_elapsed_ms,
             target_title=getattr(self, "_inject_target_title", None),
             target_process=getattr(self, "_inject_target_process", None),
             profile=getattr(self, "_active_profile_name", None),
-            segments=result.segments,
-            dictionary_terms=result.dictionary_terms,
-            dictionary_replacements=result.dictionary_replacements,
+        )
+
+    @staticmethod
+    def _post_event_fields(post_result) -> dict:
+        """Post-processing provenance fields drawn from ``post_result``."""
+        return dict(
             post_processor=post_result.provider,
             post_mode=post_result.mode,
             post_model=post_result.model,
@@ -393,6 +325,12 @@ class Dictate(InjectMixin, KeyBackendMixin):
             post_error=post_result.error or None,
             post_redacted=post_result.redacted,
             post_redactions=post_result.redactions or [],
+        )
+
+    @staticmethod
+    def _format_event_fields(format_result) -> dict:
+        """Format-command provenance fields drawn from ``format_result``."""
+        return dict(
             format_commands_enabled=format_result.enabled,
             format_commands_set=format_result.command_set,
             format_commands_changed=format_result.changed,
@@ -432,7 +370,7 @@ class Dictate(InjectMixin, KeyBackendMixin):
         self._record_started = 0.0
         self.audio_ducker.enter()
         _emit_worker_event("status", state="opening")
-        if _ARECORD_DEVICE:
+        if vp_capture._arecord_device():
             self._capture_backend, self._audio_input_device = self._start_arecord()
         else:
             self._capture_backend, self._audio_input_device = self._start_sounddevice()

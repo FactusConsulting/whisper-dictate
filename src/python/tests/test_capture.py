@@ -63,9 +63,10 @@ class ArecordReaderTests(unittest.TestCase):
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
         import importlib
-        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
-        # threading) now live in vp_dictate; drive the class through it.
-        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
+        # The capture methods + their globals (np, SR, _ARECORD_DEVICE,
+        # subprocess, threading) live in vp_capture's CaptureMixin; drive them
+        # through that module so patched globals resolve where the methods read.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
         import numpy as np
         cls.np = np
 
@@ -88,7 +89,7 @@ class ArecordReaderTests(unittest.TestCase):
         proc = _FakeProc([c0, c1])
         target = self._reader_target()
 
-        self.runtime.Dictate._arecord_reader(target, proc)
+        self.runtime.CaptureMixin._arecord_reader(target, proc)
 
         self.assertEqual(len(target.frames), 2)
         self.assertEqual(target.frames[0].shape, (2000, 1))
@@ -107,7 +108,7 @@ class ArecordReaderTests(unittest.TestCase):
 
         # recording stays True, but the fake proc returns b"" after one chunk,
         # so the loop must break on EOF rather than spin forever.
-        self.runtime.Dictate._arecord_reader(target, proc)
+        self.runtime.CaptureMixin._arecord_reader(target, proc)
 
         self.assertEqual(len(target.frames), 1)
 
@@ -127,7 +128,7 @@ class ArecordReaderTests(unittest.TestCase):
 
         target._emit_audio_level = _flip
 
-        self.runtime.Dictate._arecord_reader(target, proc)
+        self.runtime.CaptureMixin._arecord_reader(target, proc)
 
         # Loop re-checks self.recording at the top: after the 3rd emit flips
         # the flag, no further chunk is read. So exactly 3 frames.
@@ -140,7 +141,7 @@ class ArecordReaderTests(unittest.TestCase):
         target = self._reader_target()
         target._emit_audio_level = seen.append
 
-        self.runtime.Dictate._arecord_reader(target, proc)
+        self.runtime.CaptureMixin._arecord_reader(target, proc)
 
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0].shape, (2000, 1))
@@ -155,9 +156,10 @@ class StartArecordTests(unittest.TestCase):
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
         import importlib
-        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
-        # threading) now live in vp_dictate; drive the class through it.
-        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
+        # The capture methods + their globals (np, SR, _ARECORD_DEVICE,
+        # subprocess, threading) live in vp_capture's CaptureMixin; drive them
+        # through that module so patched globals resolve where the methods read.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
 
     def test_start_arecord_sets_backend_device_and_spawns_reader_thread(self):
         rt = self.runtime
@@ -197,12 +199,12 @@ class StartArecordTests(unittest.TestCase):
         )
         # The reader thread target calls self._arecord_reader; bind the real
         # method so the synchronous FakeThread fills frames for real.
-        target._arecord_reader = lambda proc: rt.Dictate._arecord_reader(target, proc)
+        target._arecord_reader = lambda proc: rt.CaptureMixin._arecord_reader(target, proc)
 
         with patch.object(rt, "_ARECORD_DEVICE", "pipewire"), \
                 patch.object(rt.subprocess, "Popen", fake_popen), \
                 patch.object(rt.threading, "Thread", FakeThread):
-            backend, device = rt.Dictate._start_arecord(target)
+            backend, device = rt.CaptureMixin._start_arecord(target)
 
         self.assertEqual(backend, "arecord")
         self.assertEqual(device, "arecord -D pipewire")
@@ -232,9 +234,10 @@ class StartSounddeviceTests(unittest.TestCase):
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
         import importlib
-        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
-        # threading) now live in vp_dictate; drive the class through it.
-        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
+        # The capture methods + their globals (np, SR, _ARECORD_DEVICE,
+        # subprocess, threading) live in vp_capture's CaptureMixin; drive them
+        # through that module so patched globals resolve where the methods read.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
 
     def _fake_target(self):
         return types.SimpleNamespace(
@@ -272,7 +275,7 @@ class StartSounddeviceTests(unittest.TestCase):
         target = self._fake_target()
 
         with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
-            backend, device = rt.Dictate._start_sounddevice(target)
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
 
         self.assertEqual(backend, "sounddevice")
         self.assertEqual(device, "Studio Mic")
@@ -311,7 +314,7 @@ class StartSounddeviceTests(unittest.TestCase):
         target = self._fake_target()
 
         with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
-            backend, device = rt.Dictate._start_sounddevice(target)
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
 
         self.assertEqual(target._capture_channels, 1)
         self.assertTrue(target._stream.started)
@@ -340,7 +343,7 @@ class StartSounddeviceTests(unittest.TestCase):
 
         with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
             with self.assertRaises(RuntimeError) as ctx:
-                rt.Dictate._start_sounddevice(target)
+                rt.CaptureMixin._start_sounddevice(target)
         self.assertIn("device busy", str(ctx.exception))
         self.assertIsNone(target._stream)
 
@@ -353,14 +356,14 @@ class StopCaptureStreamsTests(unittest.TestCase):
         except ImportError as e:
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         import importlib
-        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
+        cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
 
     def test_stop_capture_streams_terminates_arecord_proc(self):
         rt = self.runtime
         proc = _FakeProc([])
         target = types.SimpleNamespace(_arecord_proc=proc, _stream=None)
 
-        rt.Dictate._stop_capture_streams(target)
+        rt.CaptureMixin._stop_capture_streams(target)
 
         self.assertTrue(proc.terminated)
         self.assertTrue(proc.waited)
@@ -383,7 +386,7 @@ class StopCaptureStreamsTests(unittest.TestCase):
         stream = Stream()
         target = types.SimpleNamespace(_arecord_proc=None, _stream=stream)
 
-        rt.Dictate._stop_capture_streams(target)
+        rt.CaptureMixin._stop_capture_streams(target)
 
         self.assertTrue(stream.stopped)
         self.assertTrue(stream.closed)
@@ -406,7 +409,7 @@ class StopCaptureStreamsTests(unittest.TestCase):
         stream = Stream()
         target = types.SimpleNamespace(_arecord_proc=proc, _stream=stream)
 
-        rt.Dictate._stop_capture_streams(target)
+        rt.CaptureMixin._stop_capture_streams(target)
 
         self.assertTrue(proc.terminated)
         self.assertTrue(stream.stopped and stream.closed)
@@ -418,7 +421,7 @@ class StopCaptureStreamsTests(unittest.TestCase):
         target = types.SimpleNamespace(_arecord_proc=None, _stream=None)
 
         # Must not raise when nothing is active.
-        rt.Dictate._stop_capture_streams(target)
+        rt.CaptureMixin._stop_capture_streams(target)
 
         self.assertIsNone(target._arecord_proc)
         self.assertIsNone(target._stream)
@@ -433,9 +436,10 @@ class EmitAudioLevelTests(unittest.TestCase):
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
         import importlib
-        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
-        # threading) now live in vp_dictate; drive the class through it.
-        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
+        # The capture methods + their globals (np, SR, _ARECORD_DEVICE,
+        # subprocess, threading) live in vp_capture's CaptureMixin; drive them
+        # through that module so patched globals resolve where the methods read.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
         import numpy as np
         cls.np = np
 
@@ -458,7 +462,7 @@ class EmitAudioLevelTests(unittest.TestCase):
                 patch.object(rt.time, "monotonic", lambda: 1000.05):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
-                rt.Dictate._emit_audio_level(target, pcm)
+                rt.CaptureMixin._emit_audio_level(target, pcm)
 
         self.assertEqual(stderr.getvalue(), "")
         # Throttled (0.05s < 0.12s gate): timestamp not advanced.
@@ -474,7 +478,7 @@ class EmitAudioLevelTests(unittest.TestCase):
         with _env(VOICEPI_WORKER_EVENTS="1"):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
-                rt.Dictate._emit_audio_level(target, pcm)
+                rt.CaptureMixin._emit_audio_level(target, pcm)
 
         line = stderr.getvalue().strip()
         self.assertTrue(line.startswith("[worker-event] "))
@@ -498,7 +502,7 @@ class EmitAudioLevelTests(unittest.TestCase):
         with _env(VOICEPI_WORKER_EVENTS="1"):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
-                rt.Dictate._emit_audio_level(target, pcm)
+                rt.CaptureMixin._emit_audio_level(target, pcm)
 
         payload = json.loads(
             stderr.getvalue().strip().removeprefix("[worker-event] "))
@@ -515,9 +519,10 @@ class RecordingSecondsTests(unittest.TestCase):
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
         import importlib
-        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
-        # threading) now live in vp_dictate; drive the class through it.
-        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
+        # The capture methods + their globals (np, SR, _ARECORD_DEVICE,
+        # subprocess, threading) live in vp_capture's CaptureMixin; drive them
+        # through that module so patched globals resolve where the methods read.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
         import numpy as np
         cls.np = np
 
@@ -528,7 +533,7 @@ class RecordingSecondsTests(unittest.TestCase):
         target = types.SimpleNamespace(_record_started=start)
         pcm = np.zeros((16000, 1), dtype=np.int16)  # 1 s by sample count
 
-        secs = rt.Dictate._recording_seconds(target, pcm)
+        secs = rt.CaptureMixin._recording_seconds(target, pcm)
 
         # Wall-clock based: ~5 s, not the 1 s implied by sample count.
         self.assertGreaterEqual(secs, 4.5)
@@ -540,7 +545,7 @@ class RecordingSecondsTests(unittest.TestCase):
         target = types.SimpleNamespace(_record_started=0.0)
         pcm = np.zeros((rt.SR * 2, 1), dtype=np.int16)  # exactly 2 s of samples
 
-        secs = rt.Dictate._recording_seconds(target, pcm)
+        secs = rt.CaptureMixin._recording_seconds(target, pcm)
 
         self.assertAlmostEqual(secs, 2.0, places=3)
 

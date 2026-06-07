@@ -344,6 +344,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_audio_ducking.py",
             "vp_audio_file.py",
             "vp_benchmark.py",
+            "vp_capture.py",
             "vp_cli.py",
             "vp_config.py",
             "vp_dictate.py",

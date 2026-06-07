@@ -14,7 +14,7 @@ from helpers import (
     unittest,
 )
 
-from whisper_dictate import vp_dictate, vp_keymap
+from whisper_dictate import vp_capture, vp_dictate, vp_keymap
 
 
 class NormalizeXkbTests(unittest.TestCase):
@@ -100,7 +100,11 @@ class LoadRuntimeModulesTests(unittest.TestCase):
         self.assertEqual(vp_dictate.SR, 16000)
         self.assertTrue(callable(vp_dictate._transcribe_detail))
         self.assertTrue(callable(vp_dictate.is_hallucination))
-        self.assertTrue(callable(vp_dictate._find_arecord_device))
+        # _load_runtime_modules also materialises the capture-side globals,
+        # whose home is now vp_capture (arecord probe + numpy + SR).
+        self.assertIsNotNone(vp_capture.np)
+        self.assertEqual(vp_capture.SR, 16000)
+        self.assertTrue(callable(vp_capture._find_arecord_device))
 
 
 if __name__ == "__main__":

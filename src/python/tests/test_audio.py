@@ -345,20 +345,23 @@ class RuntimeAudioDeviceTests(unittest.TestCase):
         self.assertEqual(calls[1]["channels"], 2)
 
     def test_runtime_worker_events_report_capture_state_and_audio_device(self):
+        # The status/transcribe pipeline stays in vp_dictate; the low-level audio
+        # capture (channel selection + metered "audio" events) moved to vp_capture.
         script = Path("src/python/whisper_dictate/vp_dictate.py").read_text(encoding="utf-8")
+        capture = Path("src/python/whisper_dictate/vp_capture.py").read_text(encoding="utf-8")
 
         self.assertIn('state="recording"', script)
         self.assertIn('state="transcribing"', script)
         self.assertIn('state="ready"', script)
-        self.assertIn("audio_device=self._audio_input_device", script)
-        self.assertIn("capture_backend=self._capture_backend", script)
-        self.assertIn("capture_channels=self._capture_channels", script)
-        self.assertIn("_sounddevice_capture_channel_candidates", script)
-        self.assertIn("channels=self._capture_channels", script)
+        self.assertIn("audio_device=self._audio_input_device", capture)
+        self.assertIn("capture_backend=self._capture_backend", capture)
+        self.assertIn("capture_channels=self._capture_channels", capture)
+        self.assertIn("_sounddevice_capture_channel_candidates", capture)
+        self.assertIn("channels=self._capture_channels", capture)
         self.assertIn("pcm = _select_active_channel_pcm(pcm).astype(np.int16)", script)
-        self.assertIn('_emit_worker_event(\n            "audio"', script)
-        self.assertIn("level=round(level, 3)", script)
-        self.assertIn("raw_dbfs=round(raw_dbfs, 1)", script)
+        self.assertIn('_emit_worker_event(\n            "audio"', capture)
+        self.assertIn("level=round(level, 3)", capture)
+        self.assertIn("raw_dbfs=round(raw_dbfs, 1)", capture)
 
     def test_worker_event_emits_structured_ascii_stderr_without_helper_process(self):
         with _env(VOICEPI_WORKER_EVENTS="1"):

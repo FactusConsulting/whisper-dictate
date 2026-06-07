@@ -139,6 +139,7 @@ from whisper_dictate.vp_audio_file import (  # noqa: E402,F401
 from whisper_dictate.vp_keymap import (  # noqa: E402,F401
     _detect_xkb_layout, _normalize_xkb_layout, _LANG_TO_XKB, _SUPPORTED_XKB_LAYOUTS,
 )
+from whisper_dictate.vp_capture import CaptureMixin  # noqa: E402,F401
 from whisper_dictate.vp_dictate import Dictate, FIRST_AUDIO_WAIT_S  # noqa: E402,F401
 from whisper_dictate import vp_dictate  # noqa: E402
 
@@ -242,12 +243,12 @@ def _load_runtime_modules() -> None:
     vp_dictate._load_runtime_modules()
 
 
-def main() -> None:
-    if not os.environ.get("VOICEPI_LAUNCHER_PRINTED_VERSION"):
-        print(f"whisper-dictate {VERSION}", flush=True)
-    ap = build_arg_parser()
-    a = ap.parse_args()
-    apply_config_to_environ()
+def _run_utility_subcommands(a, ap) -> None:
+    """Handle the one-shot CLI subcommands that don't load an STT model.
+
+    Each branch terminates the process via ``raise SystemExit`` on a hit; if no
+    subcommand matches, this returns and ``main`` proceeds to the dictation path.
+    """
     if a.doctor:
         raise SystemExit(run_doctor())
     if a.model_capacity:
@@ -307,19 +308,10 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001 - argparse should report cleanly
             ap.error(str(e))
         raise SystemExit(0)
-    lang = None if (a.autodetect or not a.lang) else a.lang
 
-    # Sæt XKB_DEFAULT_LAYOUT fra --lang så ydotool type og evt. auto-startet
-    # ydotoold arver det rigtige layout uden manuel konfiguration.
-    if lang and not os.environ.get("XKB_DEFAULT_LAYOUT"):
-        xkb = _LANG_TO_XKB.get(lang, lang)
-        os.environ["XKB_DEFAULT_LAYOUT"] = xkb
 
-    if _apply_local_only_network_lock():
-        print("[privacy] local-only mode enabled; cloud backends and model downloads are blocked", flush=True)
-
-    _load_runtime_modules()
-
+def _resolve_backend_and_device(a, ap) -> tuple[str, str, str]:
+    """Validate VOICEPI_STT_BACKEND and resolve the compute device/type."""
     try:
         backend = STT_BACKEND
         if backend not in VALID_STT_BACKENDS:
@@ -336,11 +328,11 @@ def main() -> None:
             dev, ctype = _resolve_device(a.device)
         except ValueError as e:
             ap.error(str(e))
+    return backend, dev, ctype
 
-    if (os.environ.get("VOICEPI_DEBUG") or "").strip().lower() not in (
-            "", "0", "false", "no", "off"):
-        _print_effective_config(a, dev, ctype)
 
+def _resolve_model_name(a, backend: str) -> tuple[str, str]:
+    """Resolve the human label + concrete model name for the chosen backend."""
     label = (
         "NVIDIA Parakeet" if backend == "parakeet"
         else "External API" if backend == "openai"
@@ -353,6 +345,12 @@ def main() -> None:
     elif backend == "openai":
         from whisper_dictate.vp_external_api import load_stt_api_settings
         loaded_model_name = load_stt_api_settings(a.model).model
+    return label, loaded_model_name
+
+
+def _load_model(a, ap, backend: str, dev: str, ctype: str) -> tuple[object, str, float]:
+    """Load the STT model, emitting the loading_model/ready/failed worker events."""
+    label, loaded_model_name = _resolve_model_name(a, backend)
     if backend == "openai":
         print(f"using {label} {loaded_model_name} via configured API", flush=True)
     else:
@@ -391,9 +389,15 @@ def main() -> None:
         print(f"api ready in {_model_load_s:.1f}s", flush=True)
     else:
         print(f"model ready in {_model_load_s:.1f}s", flush=True)
+    return _model, loaded_model_name, _model_load_s
+
+
+def _run_session(a, model, lang, backend: str, dev: str, ctype: str,
+                 loaded_model_name: str, model_load_s: float) -> None:
+    """Transcribe a one-shot file, or enter the live push-to-talk loop."""
     if a.transcribe_file:
         event = transcribe_file_event(
-            _model,
+            model,
             a.transcribe_file,
             lang,
             model_name=loaded_model_name,
@@ -405,16 +409,46 @@ def main() -> None:
         raise SystemExit(0)
     try:
         Dictate(
-            _model, a.key, a.mode, lang,
+            model, a.key, a.mode, lang,
             json_output=a.json,
             metrics_jsonl=os.environ.get("VOICEPI_METRICS_JSONL"),
             model_name=loaded_model_name,
             device=dev,
             compute_type=ctype,
-            model_load_s=_model_load_s,
+            model_load_s=model_load_s,
         ).run()
     except KeyboardInterrupt:
         print("\nbye")
+
+
+def main() -> None:
+    if not os.environ.get("VOICEPI_LAUNCHER_PRINTED_VERSION"):
+        print(f"whisper-dictate {VERSION}", flush=True)
+    ap = build_arg_parser()
+    a = ap.parse_args()
+    apply_config_to_environ()
+    _run_utility_subcommands(a, ap)
+    lang = None if (a.autodetect or not a.lang) else a.lang
+
+    # Sæt XKB_DEFAULT_LAYOUT fra --lang så ydotool type og evt. auto-startet
+    # ydotoold arver det rigtige layout uden manuel konfiguration.
+    if lang and not os.environ.get("XKB_DEFAULT_LAYOUT"):
+        xkb = _LANG_TO_XKB.get(lang, lang)
+        os.environ["XKB_DEFAULT_LAYOUT"] = xkb
+
+    if _apply_local_only_network_lock():
+        print("[privacy] local-only mode enabled; cloud backends and model downloads are blocked", flush=True)
+
+    _load_runtime_modules()
+
+    backend, dev, ctype = _resolve_backend_and_device(a, ap)
+
+    if (os.environ.get("VOICEPI_DEBUG") or "").strip().lower() not in (
+            "", "0", "false", "no", "off"):
+        _print_effective_config(a, dev, ctype)
+
+    model, loaded_model_name, model_load_s = _load_model(a, ap, backend, dev, ctype)
+    _run_session(a, model, lang, backend, dev, ctype, loaded_model_name, model_load_s)
 
 
 if __name__ == "__main__":
