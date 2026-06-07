@@ -1,0 +1,14 @@
+# Pin the Rust toolchain so local builds match CI exactly.
+#
+# rustfmt line-wrapping and clippy lints drift between stable releases, so an
+# unpinned "stable" means "green locally" does not guarantee "green in CI" (we
+# hit exactly that: a newer CI rustfmt re-wrapped a chain the local one left
+# inline, breaking `cargo fmt --check`).
+#
+# CI reads this file via dtolnay/rust-toolchain (no explicit `toolchain:` input),
+# and rustup uses it for local `cargo`. Bump the channel deliberately — never
+# back to a floating channel — and keep it in step with the CI runners.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

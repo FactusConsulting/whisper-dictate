@@ -2,6 +2,7 @@ from helpers import (
     Path,
     unittest,
 )
+import re
 import tomllib
 
 class RustReleaseWorkflowTests(unittest.TestCase):
@@ -194,6 +195,46 @@ class RustReleaseWorkflowTests(unittest.TestCase):
 
         self.assertFalse(workspace["profile"]["dev"]["incremental"])
         self.assertFalse(workspace["profile"]["test"]["incremental"])
+
+    def test_rust_toolchain_is_pinned_for_reproducible_ci(self):
+        # An unpinned "stable" drifts rustfmt/clippy between releases, so "green
+        # locally" stops guaranteeing "green in CI" (we hit exactly that: a newer
+        # CI rustfmt re-wrapped a chain the local one left inline). The
+        # `rust-toolchain.toml` pin gives both CI (via dtolnay/rust-toolchain,
+        # which reads it when no `toolchain:` input is set) and local rustup one
+        # concrete version. Bump it deliberately — never back to a floating channel.
+        toolchain = tomllib.loads(
+            Path("rust-toolchain.toml").read_text(encoding="utf-8")
+        )["toolchain"]
+
+        channel = toolchain["channel"]
+        parts = channel.split(".")
+        self.assertEqual(
+            len(parts), 3, f"channel must be a concrete x.y.z pin, got {channel!r}"
+        )
+        self.assertTrue(
+            all(p.isdigit() for p in parts),
+            f"channel must be a numeric version, got {channel!r}",
+        )
+
+        # Both CI gates (fmt + clippy) must run on the pinned toolchain.
+        self.assertIn("rustfmt", toolchain["components"])
+        self.assertIn("clippy", toolchain["components"])
+
+        # No dtolnay/rust-toolchain step may pass a `toolchain:` input — it would
+        # override rust-toolchain.toml and re-introduce drift. Scope the check to
+        # each action's own step block (up to the next step), not the whole file,
+        # so an unrelated `toolchain:` elsewhere can't trip the guard. Scan both
+        # extensions so a future `.yaml` workflow can't slip past.
+        workflows = [
+            *Path(".github/workflows").glob("*.yml"),
+            *Path(".github/workflows").glob("*.yaml"),
+        ]
+        for path in workflows:
+            text = path.read_text(encoding="utf-8")
+            for after in text.split("dtolnay/rust-toolchain")[1:]:
+                step_block = re.split(r"\n\s*- ", after, maxsplit=1)[0]
+                self.assertNotIn("toolchain:", step_block, path.as_posix())
 
     def test_vscode_rust_analyzer_links_moved_workspace(self):
         settings = Path(".vscode/settings.json").read_text(encoding="utf-8")
