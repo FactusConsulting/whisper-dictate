@@ -1219,13 +1219,12 @@ impl WhisperDictateApp {
                     self.settings.post_model = OPENAI_POST_MODEL.to_owned();
                 }
             }
-            "ollama" => {
+            "ollama"
                 if self.settings.post_base_url.trim().is_empty()
                     || self.settings.post_base_url == GROQ_STT_BASE_URL
-                    || self.settings.post_base_url == OPENAI_STT_BASE_URL
-                {
-                    self.settings.post_base_url = "http://localhost:11434".to_owned();
-                }
+                    || self.settings.post_base_url == OPENAI_STT_BASE_URL =>
+            {
+                self.settings.post_base_url = "http://localhost:11434".to_owned();
             }
             _ => {}
         }
@@ -2495,7 +2494,7 @@ fn open_url(url: &str) -> Result<()> {
             .args(["/C", "start", "", url])
             .creation_flags(0x08000000);
         command.spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]

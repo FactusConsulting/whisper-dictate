@@ -801,7 +801,7 @@ impl AppSettings {
             settings.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
             settings.profiles_json = object
                 .get("profiles")
-                .map(|value| serde_json::to_string_pretty(value))
+                .map(serde_json::to_string_pretty)
                 .transpose()?
                 .unwrap_or(defaults.profiles_json);
         }
@@ -929,11 +929,7 @@ fn platform_config_dir() -> PathBuf {
 }
 
 fn default_dictionary_path() -> PathBuf {
-    if cfg!(windows) {
-        platform_config_dir().join("dictionary.json")
-    } else {
-        platform_config_dir().join("dictionary.json")
-    }
+    platform_config_dir().join("dictionary.json")
 }
 
 fn runtime_setting_value(
@@ -1044,7 +1040,7 @@ fn open_path(path: &Path) -> Result<()> {
             .args(["/C", "start", "", &path.display().to_string()])
             .creation_flags(0x08000000);
         command.spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]

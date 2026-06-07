@@ -83,7 +83,7 @@ pub fn apply_format_commands(text: &str, command_set: Option<&str>) -> FormatCom
     let mut out = text.to_owned();
     let mut applied = Vec::new();
     let mut commands = commands_for(&selected);
-    commands.sort_by(|a, b| b.0.chars().count().cmp(&a.0.chars().count()));
+    commands.sort_by_key(|command| std::cmp::Reverse(command.0.chars().count()));
 
     for (command, replacement) in commands {
         let (next, count) = apply_phrase(&out, command, replacement);

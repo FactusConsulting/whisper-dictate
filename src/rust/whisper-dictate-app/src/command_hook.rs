@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::config;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CommandHookResult {
     pub enabled: bool,
     pub command: String,
@@ -17,19 +17,6 @@ pub struct CommandHookResult {
     pub latency_ms: u128,
     pub timeout: bool,
     pub error: Option<String>,
-}
-
-impl Default for CommandHookResult {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            command: String::new(),
-            returncode: None,
-            latency_ms: 0,
-            timeout: false,
-            error: None,
-        }
-    }
 }
 
 pub fn handle_command_hook() -> Result<()> {

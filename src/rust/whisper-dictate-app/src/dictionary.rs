@@ -140,7 +140,7 @@ impl Dictionary {
         let mut out = text.to_owned();
         let mut changes = Vec::new();
         let mut replacements = self.replacements.clone();
-        replacements.sort_by(|a, b| b.from.chars().count().cmp(&a.from.chars().count()));
+        replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.from.chars().count()));
 
         for replacement in replacements {
             if replacement.from.is_empty() {

@@ -40,6 +40,7 @@ fn inside_rounded_square(x: i32, y: i32, size: i32, radius: i32) -> bool {
     inside_rounded_rect(x, y, 0, 0, size, size, radius)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_rounded_rect(
     rgba: &mut [u8],
     canvas: u32,
