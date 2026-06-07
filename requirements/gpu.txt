@@ -1,7 +1,7 @@
 # GPU build — Windows with an NVIDIA card (CUDA).
 # Install: pip install -r requirements/gpu.txt
 faster-whisper==1.1.1
-requests>=2.31            # faster-whisper 1.1.1 utils.py imports it for model download
+requests>=2.34.2            # faster-whisper 1.1.1 utils.py imports it for model download
 numpy<2.5                 # ctranslate2 / onnxruntime ABI constraint
 
 # CUDA runtime libs ctranslate2 needs (cublas/cudnn). The Python runtime
