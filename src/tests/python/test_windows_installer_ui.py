@@ -931,7 +931,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('reconfigure(encoding="utf-8", errors="replace")', script)
 
     def test_runtime_has_parakeet_min_duration_and_backend_metrics(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
+        # The live Dictate loop moved into vp_dictate.
+        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("self.parakeet_min_seconds", script)
@@ -939,7 +940,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("stt_backend=self.stt_backend", script)
 
     def test_runtime_has_live_release_tail_padding(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
+        # The live Dictate loop moved into vp_dictate.
+        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("self.release_tail_ms", script)

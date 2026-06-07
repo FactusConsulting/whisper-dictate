@@ -594,7 +594,7 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(args.history_reinject_last)
 
     def test_runtime_appends_history_after_metrics(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
+        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn('_append_jsonl(self.metrics_jsonl, event)', script)
@@ -604,7 +604,7 @@ class HistoryTests(unittest.TestCase):
 
 class ProfileTests(unittest.TestCase):
     def test_runtime_records_active_profile_in_metrics(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
+        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("def _profiled_config", script)

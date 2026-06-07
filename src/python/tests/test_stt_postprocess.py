@@ -782,7 +782,7 @@ class PostprocessTests(unittest.TestCase):
         vp_postprocess.validate_postprocess_settings(settings)
 
     def test_runtime_records_postprocess_metrics(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
+        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("postprocess_text(text", script)
@@ -791,7 +791,7 @@ class PostprocessTests(unittest.TestCase):
         self.assertIn("post_fallback=post_result.fallback", script)
 
     def test_runtime_logs_postprocess_status_for_every_utterance(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
+        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
         self.assertIn("[post] skipped", script)
@@ -835,7 +835,7 @@ class FormatCommandTests(unittest.TestCase):
                 runtime.apply_format_commands("first comma", "en")
 
     def test_runtime_applies_formatting_before_injection_and_metrics(self):
-        with open("src/python/whisper_dictate/runtime.py", encoding="utf-8") as f:
+        with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
         post_pos = script.index("def _postprocess_and_format")

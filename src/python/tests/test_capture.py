@@ -62,6 +62,10 @@ class ArecordReaderTests(unittest.TestCase):
         except ImportError as e:  # numpy missing
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
+        import importlib
+        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
+        # threading) now live in vp_dictate; drive the class through it.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
         import numpy as np
         cls.np = np
 
@@ -150,6 +154,10 @@ class StartArecordTests(unittest.TestCase):
         except ImportError as e:
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
+        import importlib
+        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
+        # threading) now live in vp_dictate; drive the class through it.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
 
     def test_start_arecord_sets_backend_device_and_spawns_reader_thread(self):
         rt = self.runtime
@@ -223,6 +231,10 @@ class StartSounddeviceTests(unittest.TestCase):
         except ImportError as e:
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
+        import importlib
+        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
+        # threading) now live in vp_dictate; drive the class through it.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
 
     def _fake_target(self):
         return types.SimpleNamespace(
@@ -337,9 +349,11 @@ class StopCaptureStreamsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            cls.runtime = load_voice_pi_realnp()
+            load_voice_pi_realnp()
         except ImportError as e:
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        import importlib
+        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
 
     def test_stop_capture_streams_terminates_arecord_proc(self):
         rt = self.runtime
@@ -418,6 +432,10 @@ class EmitAudioLevelTests(unittest.TestCase):
         except ImportError as e:
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
+        import importlib
+        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
+        # threading) now live in vp_dictate; drive the class through it.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
         import numpy as np
         cls.np = np
 
@@ -496,6 +514,10 @@ class RecordingSecondsTests(unittest.TestCase):
         except ImportError as e:
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         cls.runtime._load_runtime_modules()
+        import importlib
+        # Dictate + its capture globals (np, SR, _ARECORD_DEVICE, subprocess,
+        # threading) now live in vp_dictate; drive the class through it.
+        cls.runtime = importlib.import_module("whisper_dictate.vp_dictate")
         import numpy as np
         cls.np = np
 

@@ -188,7 +188,8 @@ class DebugConfigTests(unittest.TestCase):
 
     def test_quit_key_is_not_hardcoded_to_escape(self):
         cli = Path("src/python/whisper_dictate/vp_cli.py").read_text(encoding="utf-8")
-        runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        # The pynput key backend (incl. the quit chord) lives in vp_keys.
+        keys = Path("src/python/whisper_dictate/vp_keys.py").read_text(encoding="utf-8")
         schema = json.loads(
             Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
         )
@@ -199,8 +200,8 @@ class DebugConfigTests(unittest.TestCase):
             ("VOICEPI_QUIT_KEY", "esc", False),
         )
         self.assertIn('QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc")', cli)
-        self.assertIn("if k == quit_key:", runtime)
-        self.assertNotIn("if k == keyboard.Key.esc:", runtime)
+        self.assertIn("if k == quit_key:", keys)
+        self.assertNotIn("if k == keyboard.Key.esc:", keys)
 
     def test_debug_dump_treats_groq_key_as_cloud_api_key(self):
         os.environ["GROQ_API_KEY"] = "test-groq-key"
@@ -341,14 +342,20 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "runtime.py",
             "vp_audio.py",
             "vp_audio_ducking.py",
+            "vp_audio_file.py",
             "vp_benchmark.py",
             "vp_cli.py",
             "vp_config.py",
+            "vp_dictate.py",
             "vp_dictionary_suggest.py",
             "vp_doctor.py",
+            "vp_events.py",
             "vp_external_api.py",
+            "vp_format.py",
             "vp_history.py",
             "vp_inject.py",
+            "vp_keymap.py",
+            "vp_keys.py",
             "vp_parakeet.py",
             "vp_postprocess.py",
             "vp_rust.py",
@@ -443,14 +450,15 @@ class ContextMinSecondsTests(unittest.TestCase):
             Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
         )
         transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
-        runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        # Live-config application moved into vp_dictate._apply_effective_config.
+        dictate = Path("src/python/whisper_dictate/vp_dictate.py").read_text(encoding="utf-8")
         ctx = next(s for s in schema["settings"] if s["key"] == "context_min_seconds")
         self.assertEqual(
             (ctx["env"], ctx["default"], ctx["live"]),
             ("VOICEPI_CONTEXT_MIN_SECONDS", "5", True),
         )
         self.assertIn('get_value("VOICEPI_CONTEXT_MIN_SECONDS", "5") or "5"', transcribe)
-        self.assertIn('after.get("context_min_seconds", "5")', runtime)
+        self.assertIn('after.get("context_min_seconds", "5")', dictate)
         self.assertFalse(self._gate(5.0, 4.9))
         self.assertTrue(self._gate(5.0, 5.0))
 
@@ -466,13 +474,14 @@ class VadSpeechPaddingTests(unittest.TestCase):
             Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
         )
         transcribe = Path("src/python/whisper_dictate/vp_transcribe.py").read_text(encoding="utf-8")
-        runtime = Path("src/python/whisper_dictate/runtime.py").read_text(encoding="utf-8")
+        # Live-config application moved into vp_dictate._apply_effective_config.
+        dictate = Path("src/python/whisper_dictate/vp_dictate.py").read_text(encoding="utf-8")
 
         vad = next(s for s in schema["settings"] if s["key"] == "vad_speech_pad_ms")
         self.assertEqual((vad["env"], vad["default"]), ("VOICEPI_VAD_SPEECH_PAD_MS", "200"))
         self.assertIn('VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200")', transcribe)
         self.assertIn("speech_pad_ms=VAD_SPEECH_PAD_MS", transcribe)
-        self.assertIn('vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))', runtime)
+        self.assertIn('vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))', dictate)
 
 class ConfigTests(unittest.TestCase):
     def setUp(self):
