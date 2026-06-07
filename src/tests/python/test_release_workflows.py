@@ -156,14 +156,16 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("CHOCOLATEY_NUGET_API_KEY", readme)
 
     def test_winget_manifests_live_with_windows_packaging(self):
+        # winget manifests are version-controlled under packaging/windows/winget
+        # and updated via PR — NOT generated or committed by CI (main is
+        # protected: PR + CI only, so CI must not push to it).
         for path in (
             Path(".github/workflows/release.yml"),
             Path(".github/workflows/windows-installer.yml"),
         ):
             workflow = path.read_text(encoding="utf-8")
-            self.assertIn(r'$manifestDir = "packaging\windows\winget"', workflow)
-            self.assertIn("packaging/windows/winget", workflow)
-            self.assertIn("git add packaging/windows/winget/", workflow)
+            self.assertNotIn("Generate winget manifests", workflow, path.as_posix())
+            self.assertNotIn("git add packaging/windows/winget/", workflow, path.as_posix())
             self.assertNotIn("New-Item -ItemType Directory -Force manifests", workflow)
 
         for name in (
@@ -322,15 +324,21 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             self.assertNotIn("contents: write", pre_jobs, path.as_posix())
             self.assertIn("permissions:\n      contents: write", workflow, path.as_posix())
 
-    def test_workflow_main_pushes_retry_after_rebase(self):
+    def test_release_workflows_do_not_push_version_bumps_to_main(self):
+        # main is protected (PR + CI only): release CI must not push to it.
+        # nix/package.nix is bumped in the pre-release version PR (with VERSION);
+        # winget manifests via a separate PR. The Homebrew tap push targets a
+        # different repo (cd tap) and is unaffected.
         for path in (
             Path(".github/workflows/release.yml"),
             Path(".github/workflows/windows-installer.yml"),
         ):
             workflow = path.read_text(encoding="utf-8")
-            self.assertIn("for attempt in 1 2 3; do", workflow, path.as_posix())
-            self.assertIn('echo "push attempt $attempt"', workflow, path.as_posix())
-            self.assertIn("git rebase origin/main", workflow, path.as_posix())
+            self.assertNotIn("Bump nix/package.nix version", workflow, path.as_posix())
+            self.assertNotIn("Generate winget manifests", workflow, path.as_posix())
+            self.assertNotIn("Commit updated manifests to main", workflow, path.as_posix())
+            self.assertNotIn("for attempt in 1 2 3", workflow, path.as_posix())
+            self.assertNotIn("git push origin main", workflow, path.as_posix())
 
     def test_windows_workflows_pin_current_windows_runner(self):
         for path in Path(".github/workflows").glob("*.yml"):
