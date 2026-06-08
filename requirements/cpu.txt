@@ -2,7 +2,7 @@
 # Linux. No CUDA wheels: ctranslate2 runs on the CPU. Slower, so the
 # default model is the fastest (large-v3-turbo).
 # Install: pip install -r requirements/cpu.txt
-faster-whisper==1.1.1
+faster-whisper==1.2.1
 requests>=2.34.2            # faster-whisper 1.1.1 utils.py imports it for model download
 numpy<2.5                 # ctranslate2 / onnxruntime ABI constraint
 
