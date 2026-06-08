@@ -2,6 +2,7 @@ from helpers import (
     Path,
     unittest,
 )
+import json
 import re
 import tomllib
 
@@ -442,3 +443,51 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # input in its jobs, and the release passes the resolved tag into it.
         self.assertIn("ref: ${{ inputs.ref }}", test_workflow)
         self.assertIn("ref: ${{ github.event.inputs.tag || github.ref_name }}", release)
+
+    def test_devcontainer_mirrors_ci_linux_build_deps(self):
+        # The dev container must apt-install every Linux egui/build dep that the
+        # CI rust job does, so "green in the container" == "green in CI". Parse
+        # CI's list dynamically so adding a dep there forces it here too.
+        dockerfile = Path(".devcontainer/Dockerfile").read_text(encoding="utf-8")
+        test_workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+
+        ci_deps = set(re.findall(r"\b(?:pkg-config|lib[a-z0-9-]+-dev)\b", test_workflow))
+        self.assertIn("libxkbcommon-dev", ci_deps)  # sanity: the list was found
+        # Token-precise (not a loose substring) so a dep can't "match" as part
+        # of a longer package name.
+        dockerfile_tokens = set(dockerfile.split())
+        missing = sorted(dep for dep in ci_deps if dep not in dockerfile_tokens)
+        self.assertEqual([], missing, f"dev container missing CI build deps: {missing}")
+
+        # Python stack mirrors the CI unit/lint jobs; Rust comes from rustup with
+        # the channel pinned by rust-toolchain.toml (no inline default toolchain).
+        self.assertIn("python3-venv", dockerfile)
+        self.assertIn("pytest", dockerfile)
+        self.assertIn("numpy", dockerfile)
+        self.assertIn("--default-toolchain none", dockerfile)
+        self.assertTrue(Path("rust-toolchain.toml").is_file())
+
+    def test_devcontainer_json_builds_the_dockerfile(self):
+        config = json.loads(
+            Path(".devcontainer/devcontainer.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(config["build"]["dockerfile"], "Dockerfile")
+        self.assertEqual(config["remoteUser"], "vscode")
+        # postCreate installs the pinned toolchain once the repo is mounted.
+        self.assertIn("rustup show", config["postCreateCommand"])
+
+    def test_devcontainer_ci_builds_and_runs_the_dev_loop(self):
+        workflow = Path(".github/workflows/devcontainer.yml").read_text(encoding="utf-8")
+        self.assertIn("devcontainers/ci@", workflow)
+        # The container's Rust loop must match the CI rust job verbatim (incl.
+        # --target-dir target) so the two can't drift.
+        self.assertIn(
+            "cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target "
+            "-p whisper-dictate-app --all-targets --all-features -- -D warnings",
+            workflow,
+        )
+        self.assertIn(
+            "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app",
+            workflow,
+        )
+        self.assertIn("python -m pytest src/python/tests src/tests/python", workflow)

@@ -1,0 +1,35 @@
+name: devcontainer
+
+# Builds the dev container and runs the exact dev loop inside it, proving the
+# container reproduces CI (fmt/clippy/test + pytest) so it can't silently rot.
+# Path-filtered: only runs when the container or its pinned inputs change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+      - "rust-toolchain.toml"
+      - "src/rust/Cargo.toml"
+      - "src/rust/Cargo.lock"
+  pull_request:
+    paths:
+      - ".devcontainer/**"
+      - "rust-toolchain.toml"
+      - "src/rust/Cargo.toml"
+      - "src/rust/Cargo.lock"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build devcontainer and run the dev loop
+        uses: devcontainers/ci@v0.3
+        with:
+          push: never
+          runCmd: |
+            set -e
+            cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
+            cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
+            cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
+            python -m pytest src/python/tests src/tests/python -q
