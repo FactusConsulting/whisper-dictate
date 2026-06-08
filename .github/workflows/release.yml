@@ -42,7 +42,7 @@ jobs:
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v5   # v5 = Node 24 (v4/Node 20 is being removed)
+      - uses: actions/checkout@v6   # v5 = Node 24 (v4/Node 20 is being removed)
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0          # full history + tags for generated release notes
@@ -364,7 +364,7 @@ jobs:
             echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
