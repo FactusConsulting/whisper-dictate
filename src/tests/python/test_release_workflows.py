@@ -269,7 +269,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("src/rust/tests/**", sonar)
         self.assertIn("components: clippy", workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json", workflow)
-        self.assertIn("SonarSource/sonarqube-scan-action@v6", workflow)
+        self.assertRegex(workflow, r"uses:\s*SonarSource/sonarqube-scan-action@v\d+")
         self.assertIn("SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}", workflow)
         self.assertIn("components: clippy", test_workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings", test_workflow)
@@ -352,10 +352,21 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("python -m pytest src/tests/python -q", workflow)
 
     def test_workflows_use_node24_checkout_action(self):
-        for path in Path(".github/workflows").glob("*.yml"):
+        # Guard the Node24 floor: every actions/checkout must be v5+ (reject the
+        # deprecated Node20 v4 and older). Robust to Dependabot bumping the major.
+        # Scan both extensions so a future `.yaml` workflow can't slip past.
+        workflows = [
+            *Path(".github/workflows").glob("*.yml"),
+            *Path(".github/workflows").glob("*.yaml"),
+        ]
+        majors = []
+        for path in workflows:
             workflow = path.read_text(encoding="utf-8")
-            self.assertNotIn("actions/checkout@v4", workflow, path.as_posix())
-            self.assertIn("actions/checkout@v5", workflow, path.as_posix())
+            for major in re.findall(r"uses:\s*actions/checkout@v(\d+)", workflow):
+                majors.append((path.as_posix(), int(major)))
+        self.assertTrue(majors, "no workflow uses actions/checkout")
+        for path, major in majors:
+            self.assertGreaterEqual(major, 5, f"{path} uses checkout older than v5 (Node20)")
 
     def test_workflows_use_node24_python_action(self):
         for path in Path(".github/workflows").glob("*.yml"):
