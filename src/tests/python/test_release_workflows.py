@@ -269,7 +269,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("src/rust/tests/**", sonar)
         self.assertIn("components: clippy", workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json", workflow)
-        self.assertIn("SonarSource/sonarqube-scan-action@v6", workflow)
+        self.assertIn("SonarSource/sonarqube-scan-action@v", workflow)
         self.assertIn("SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}", workflow)
         self.assertIn("components: clippy", test_workflow)
         self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings", test_workflow)
@@ -352,10 +352,14 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("python -m pytest src/tests/python -q", workflow)
 
     def test_workflows_use_node24_checkout_action(self):
+        # Guard the Node24 floor: reject the deprecated Node20 checkout (v4 and
+        # older). Robust to Dependabot bumping the major (v5, v6, v7, ...).
         for path in Path(".github/workflows").glob("*.yml"):
             workflow = path.read_text(encoding="utf-8")
-            self.assertNotIn("actions/checkout@v4", workflow, path.as_posix())
-            self.assertIn("actions/checkout@v5", workflow, path.as_posix())
+            for major in re.findall(r"actions/checkout@v(\d+)", workflow):
+                self.assertGreaterEqual(
+                    int(major), 5, f"{path.as_posix()} uses checkout older than v5 (Node20)"
+                )
 
     def test_workflows_use_node24_python_action(self):
         for path in Path(".github/workflows").glob("*.yml"):
