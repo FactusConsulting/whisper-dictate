@@ -129,6 +129,29 @@ class InjectStrategyTests(unittest.TestCase):
 
         self.assertFalse(self.inject.InjectMixin._target_is_self(target))
 
+    def test_self_injection_title_regex_matches_versions_without_redos(self):
+        # ReDoS-safe rewrite (Sonar S5852): the version uses no ambiguous
+        # bounded-repeat-then-.* construct. Match our own window title
+        # (name, optional dotted version, optional space-separated trailing).
+        rx = self.inject._SELF_INJECTION_TITLE_RE
+        for title in (
+            "whisper-dictate",
+            "whisper-dictate 1.0.0",
+            "whisper-dictate 1.7",
+            "whisper-dictate 1.7.0.0",
+            "whisper-dictate 1.7.0 settings",
+        ):
+            self.assertTrue(rx.fullmatch(title), title)
+        for title in (
+            "whisper-dictate 1",          # no dotted version
+            "whisper-dictate - terminal",  # terminal window, not us
+            "whisper-dictatex",
+            "my whisper-dictate",
+        ):
+            self.assertFalse(rx.fullmatch(title), title)
+        # Pathological input must resolve promptly (no catastrophic backtracking).
+        self.assertIsNone(rx.fullmatch("whisper-dictate " + "1." * 10000))
+
     def test_wayland_auto_pastes_non_ascii_text(self):
         target = self._injector(mode="auto")
 
