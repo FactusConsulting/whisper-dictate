@@ -236,8 +236,13 @@ needs the uinput device to be openable by the input group). It is
 configured as a systemd user service that starts with the graphical
 session.
 
-`whisper-dictate doctor` runs a no-model-load health check for the
-Wayland path: `evdev`, `ydotool`, `ydotoold`, socket readiness, `input`
+`whisper-dictate doctor` runs a no-model-load, cross-platform readiness
+check: app version, config validity, the Rust helper, the configured STT
+backend and its prerequisites (faster-whisper/CUDA + model cache, or the
+cloud API key and reachability), the audio stack, GPU details and free
+disk (the probes in `vp_doctor_checks.py`, with heavy deps imported
+lazily so `--help` stays instant). On Linux it also covers the Wayland
+injection path: `evdev`, `ydotool`, `ydotoold`, socket readiness, `input`
 group membership, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and readable
 `/dev/input/event*` devices.
 

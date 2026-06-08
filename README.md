@@ -388,7 +388,7 @@ NVIDIA GPU is used automatically if present.
 | `--paste` | force clipboard paste (env `VOICEPI_INJECT_MODE=paste`; on Wayland terminal/unknown targets use Ctrl+Shift+V, other known targets use Ctrl+V) |
 | `--no-type` | print transcription only, don't inject (env `VOICEPI_INJECT_MODE=print`; useful for testing) |
 | `--json` | also emit one structured JSON event per utterance (env `VOICEPI_JSON=1`) |
-| `--doctor` | run Linux/Wayland health checks and exit |
+| `--doctor` | run a cross-platform readiness check (version, config, STT backend + deps, audio, GPU, cloud reachability, disk; plus Linux/Wayland injection checks) and exit |
 | `model-capacity` | show local GPU VRAM and which local models can fit |
 | `--model NAME` | Whisper model (default `large-v3-turbo`; env `VOICEPI_MODEL`) |
 | `--device D` | `auto`/`cuda`/`cpu` (default `auto`; env `VOICEPI_DEVICE`; invalid values are rejected) |
@@ -627,12 +627,15 @@ For the current Rust/Python source split and migration guidance, see
 
 ## Tests
 
-Run the fast unit tests with:
+Run the fast Python unit tests with:
 
 ```bash
 python -m pip install pytest numpy
 python -m pytest src/python/tests src/tests/python -q
 ```
+
+For the Rust suite, clippy/fmt, or a CI-matched environment on any OS, use the
+dev container — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Releasing
 
