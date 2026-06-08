@@ -425,13 +425,17 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
         )
         doc = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
-        missing = sorted(s["env"] for s in schema["settings"] if s["env"] not in doc)
+        # Match the backticked form so a stray mention in prose/examples doesn't
+        # count as "documented" — settings are always backticked in the tables.
+        missing = sorted(
+            s["env"] for s in schema["settings"] if f"`{s['env']}`" not in doc
+        )
         self.assertEqual([], missing, f"docs/CONFIGURATION.md is missing: {missing}")
 
-    def test_configuration_cheat_sheet_maps_settings_to_ui_tabs(self):
-        # The cheat sheet must keep its "UI tab" column so each knob shows where
-        # it lives in the desktop Settings UI (or "—" for env-only knobs). Tab
-        # labels mirror src/rust/ui/text.rs (Speech/Quality/Dictionary/Output/Post).
+    def test_configuration_cheat_sheet_keeps_ui_tab_column_with_all_tabs(self):
+        # Guards only that the cheat sheet keeps its "UI tab" column and that all
+        # five tab labels appear at least once (not a full per-setting mapping).
+        # Tab labels mirror src/rust/ui/text.rs (Speech/Quality/Dictionary/Output/Post).
         doc = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
         self.assertIn("| Knob | UI tab | Env var | CLI flag |", doc)
         for tab in ("Speech", "Quality", "Dictionary", "Output", "Post"):
