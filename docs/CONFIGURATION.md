@@ -1,8 +1,12 @@
 # Configuration reference
 
 Every setting whisper-dictate reads, its possible values and defaults, and
-how to set it on each platform. Two layers:
+how to set it on each platform. Three surfaces:
 
+- **Desktop Settings UI** — the easiest way; the Rust settings app writes
+  `%APPDATA%\WhisperDictate\config.json`. The **UI tab** column in the cheat
+  sheet below names the tab each knob lives on (`—` = not in the UI, available
+  only as an env var / `config.json` key).
 - **Environment variables** — read once at startup. Best when you launch
   from a Start-menu shortcut / installed launcher (no place to pass flags).
 - **CLI flags** — passed to the launcher; override the matching env var for
@@ -26,51 +30,52 @@ requiring restart/model reload.
 
 ## Cheat sheet — every knob at a glance
 
-| Knob | Env var | CLI flag | Default | Range / options | What it does |
-|---|---|---|---|---|---|
-| **Whisper model** | `VOICEPI_MODEL` | `--model` | `large-v3-turbo` | `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3`, … | turbo = fastest default; `large-v3` = best accuracy |
-| **STT backend** | `VOICEPI_STT_BACKEND` | _none_ | `whisper` | `whisper` \| `parakeet` \| `openai` | default uses faster-whisper; `openai` sends audio to an external OpenAI-compatible API |
-| **External STT model** | `VOICEPI_STT_MODEL` | _none_ | _(unset)_ | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`, compatible names | model used when `VOICEPI_STT_BACKEND=openai` |
-| **External STT URL** | `VOICEPI_STT_BASE_URL` | _none_ | `https://api.openai.com/v1` | URL | OpenAI-compatible transcription API base URL |
-| **Device** | `VOICEPI_DEVICE` | `--device` | `auto` | `auto` \| `cuda` \| `cpu` | auto picks NVIDIA GPU if present, else CPU |
-| **Compute type / precision** | `VOICEPI_COMPUTE_TYPE` | _none_ | `int8_float16` (GPU) / `int8` (CPU) | `int8`, `int8_float16`, `float16`, `bfloat16`, `float32` | Whisper/CTranslate2 precision override — Parakeet currently ignores this setting; see VRAM table below |
-| **Spoken language** | `VOICEPI_LANG` | `--lang` / `--autodetect` | _(unset → auto-detect)_ | ISO 639-1: `da`, `en`, `de`, `fr`, `sv`, `nb`, `nl`, `fi`, `pl`, `pt`, `es`, `it`, `uk`, … | Whisper language hint; Parakeet v3 autodetects language and does not use this setting |
-| **Beam-search width** | `VOICEPI_BEAM_SIZE` | _none_ | `1` | integer ≥ 1 (typical 1-16) | wider = more accurate, slower (cheap on GPU) |
-| **Decode temperatures** | `VOICEPI_TEMPERATURE` | _none_ | `0.0,0.2` | CSV floats (e.g. `0.0`, `0.0,0.2,0.4`) | Whisper's fallback ladder. `0.0` locks to greedy decode = predictable output, no "creative" fallback on uncertainty. |
-| **Context for long ytringer** | `VOICEPI_CONTEXT_MIN_SECONDS` | _none_ | `5` | float seconds (`0` = disabled, `5` = enable for utterances ≥ 5 s) | Pass `condition_on_previous_text=True` only when an utterance is at least this long. Helps Whisper keep word boundaries on long sentences without triggering hallucinations on short ones. |
-| **Parakeet minimum utterance** | `VOICEPI_PARAKEET_MIN_SECONDS` | _none_ | `1.5` | float seconds (`0` disables) | Ignore very short Parakeet recordings because multilingual language autodetection is weaker on short clips. |
-| **Release tail padding** | `VOICEPI_RELEASE_TAIL_MS` | _none_ | `200` | integer ms (`0` disables) | continue capturing briefly after hotkey release so final syllables/words are not clipped. |
-| **Vocabulary hint** | `VOICEPI_INITIAL_PROMPT` | _none_ | _(unset)_ | free text up to ~1024 chars | bias toward your domain words/names |
-| **Custom dictionary** | `VOICEPI_DICTIONARY` | _none_ | user config path | JSON/text file path(s) | bounded vocabulary prompt + exact smart replacements for names like `Claude Code`, `Codex`, `OpenClaw` |
-| **Push-to-talk key** | `VOICEPI_KEY` | `--key` | `ctrl_r` | pynput key name (`ctrl_r`, `alt_r`, `f9`, …) or `a+b` chord | hold-to-talk key |
-| **Inject mode** | `VOICEPI_INJECT_MODE` | `--type` / `--paste` / `--no-type` | `auto` | `auto` \| `type` \| `paste` \| `print` | auto-select injection strategy, force typing, force clipboard paste (X11/Win), or print-only |
-| **Format commands** | `VOICEPI_FORMAT_COMMANDS` | _none_ | `off` | `off` \| `en` \| `da` \| `both` | Optional deterministic spoken formatting commands. English supports `new line`, `comma`, `period`; Danish supports `ny linje`, `komma`, `punktum`. |
-| **Global quit key** | `VOICEPI_QUIT_KEY` | _none_ | `esc` | pynput key name or one character | key used for the global quit shortcut (Windows/X11) |
-| **Global quit count** | `VOICEPI_QUIT_COUNT` | _none_ | `3` | integer ≥ 0 (`0` disables) | N consecutive quit-key presses to quit (Windows/X11) |
-| **Quit window** | `VOICEPI_QUIT_WINDOW_MS` | _none_ | `1500` | integer ms | time window for the consecutive quit-key presses |
-| **Audio loudness target** | `VOICEPI_TARGET_DBFS` | _none_ | `-20` | float dBFS ≤ 0 | target for quiet-boost normalisation |
-| **Audio min input** | `VOICEPI_MIN_INPUT_DBFS` | _none_ | `-55` | float dBFS | reject input quieter than this |
-| **Audio min SNR** | `VOICEPI_MIN_SNR_DB` | _none_ | `6` | float dB | reject input below this speech-vs-noise contrast |
-| **XKB layout (Wayland)** | `VOICEPI_XKB_LAYOUT` (highest), `XKB_DEFAULT_LAYOUT` (fallback) | _none_ | _(auto-detect)_ | `dk`, `se`, `de`, `fi`, `no`, `es`, `pt`, `br`, `pl`, `ua`, … | force keycode layout for special-char injection |
-| **JSON output** | `VOICEPI_JSON` | `--json` | _(unset)_ | truthy / falsey | print one structured JSON event per accepted utterance |
-| **Metrics file** | `VOICEPI_METRICS_JSONL` | _none_ | _(unset)_ | file path | append one structured JSON event per accepted utterance |
-| **Command hook** | `VOICEPI_COMMAND_HOOK` | _none_ | _(unset)_ | command string or JSON string array | Advanced opt-in automation hook. Receives one utterance JSON event on stdin and is executed without shell interpolation. |
-| **Command hook timeout** | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | _none_ | `2000` | integer ms | Maximum wait for the command hook. Timeout/failure is logged and recorded but does not block injection success. |
-| **Local history** | `VOICEPI_HISTORY_ENABLED` | _none_ | `1` | truthy / falsey | store accepted live dictations locally for copy/reinject/debug recovery |
-| **History file** | `VOICEPI_HISTORY_JSONL` | _none_ | user state path | file path | override the local history JSONL path |
-| **Local only** | `VOICEPI_LOCAL_ONLY` | _none_ | _(unset)_ | truthy / falsey | block cloud/BYOK backends and force model libraries into offline mode |
-| **Post processor** | `VOICEPI_POST_PROCESSOR` | _none_ | `none` | `none` \| `ollama` \| `openai` | optional second text pass after STT and dictionary replacements |
-| **Post mode** | `VOICEPI_POST_MODE` | _none_ | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` (`bullet-list` alias) | rewrite style for the optional second pass |
-| **Post model** | `VOICEPI_POST_MODEL` | _none_ | `qwen2.5:3b` | Ollama model name | local text model used by the post processor |
-| **Post base URL** | `VOICEPI_POST_BASE_URL` | _none_ | `http://localhost:11434` | URL | local Ollama endpoint |
-| **Post timeout** | `VOICEPI_POST_TIMEOUT_MS` | _none_ | `2000` | integer ms | fallback to dictionary-final text if local rewrite is too slow |
-| **STT segment debug** | `VOICEPI_STT_DEBUG` | _none_ | _(unset)_ | truthy / falsey | print Whisper segment metadata (`avg_logprob`, `no_speech_prob`, `compression_ratio` when available) |
-| **Disable terminal color** | `VOICEPI_NO_COLOR` / `NO_COLOR` | _none_ | _(unset)_ | any non-empty | keep terminal status lines plain even when stdout is interactive |
-| **VAD threshold** | `VOICEPI_VAD_THRESHOLD` | _none_ | `0.3` | float | Silero VAD speech threshold passed to faster-whisper |
-| **VAD silence** | `VOICEPI_VAD_MIN_SILENCE_MS` | _none_ | `600` | integer ms | minimum silence gap used by VAD segmentation |
-| **Skip syscheck** | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `packaging/linux/ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
-| **Debug dump** | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | log every effective setting at startup |
-| **UI theme** | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
+| Knob | UI tab | Env var | CLI flag | Default | Range / options | What it does |
+|---|---|---|---|---|---|---|
+| **Whisper model** | Speech | `VOICEPI_MODEL` | `--model` | `large-v3-turbo` | `large-v3-turbo`, `large-v3`, `medium`, `small`, `base`, `tiny`, `distil-large-v3`, … | turbo = fastest default; `large-v3` = best accuracy |
+| **STT backend** | Speech | `VOICEPI_STT_BACKEND` | _none_ | `whisper` | `whisper` \| `parakeet` \| `openai` | default uses faster-whisper; `openai` sends audio to an external OpenAI-compatible API |
+| **External STT model** | Speech | `VOICEPI_STT_MODEL` | _none_ | _(unset)_ | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1`, compatible names | model used when `VOICEPI_STT_BACKEND=openai` |
+| **External STT URL** | Speech | `VOICEPI_STT_BASE_URL` | _none_ | `https://api.openai.com/v1` | URL | OpenAI-compatible transcription API base URL |
+| **Device** | Speech | `VOICEPI_DEVICE` | `--device` | `auto` | `auto` \| `cuda` \| `cpu` | auto picks NVIDIA GPU if present, else CPU |
+| **Compute type / precision** | Speech | `VOICEPI_COMPUTE_TYPE` | _none_ | `int8_float16` (GPU) / `int8` (CPU) | `int8`, `int8_float16`, `float16`, `bfloat16`, `float32` | Whisper/CTranslate2 precision override — Parakeet currently ignores this setting; see VRAM table below |
+| **Spoken language** | Speech | `VOICEPI_LANG` | `--lang` / `--autodetect` | _(unset → auto-detect)_ | ISO 639-1: `da`, `en`, `de`, `fr`, `sv`, `nb`, `nl`, `fi`, `pl`, `pt`, `es`, `it`, `uk`, … | Whisper language hint; Parakeet v3 autodetects language and does not use this setting |
+| **Beam-search width** | Quality | `VOICEPI_BEAM_SIZE` | _none_ | `1` | integer ≥ 1 (typical 1-16) | wider = more accurate, slower (cheap on GPU) |
+| **Decode temperatures** | Quality | `VOICEPI_TEMPERATURE` | _none_ | `0.0,0.2` | CSV floats (e.g. `0.0`, `0.0,0.2,0.4`) | Whisper's fallback ladder. `0.0` locks to greedy decode = predictable output, no "creative" fallback on uncertainty. |
+| **Context for long utterances** | Quality | `VOICEPI_CONTEXT_MIN_SECONDS` | _none_ | `5` | float seconds (`0` = disabled, `5` = enable for utterances ≥ 5 s) | Pass `condition_on_previous_text=True` only when an utterance is at least this long. Helps Whisper keep word boundaries on long sentences without triggering hallucinations on short ones. |
+| **Parakeet minimum utterance** | Quality | `VOICEPI_PARAKEET_MIN_SECONDS` | _none_ | `1.5` | float seconds (`0` disables) | Ignore very short Parakeet recordings because multilingual language autodetection is weaker on short clips. |
+| **Release tail padding** | Quality | `VOICEPI_RELEASE_TAIL_MS` | _none_ | `200` | integer ms (`0` disables) | continue capturing briefly after hotkey release so final syllables/words are not clipped. |
+| **Vocabulary hint** | Quality | `VOICEPI_INITIAL_PROMPT` | _none_ | _(unset)_ | free text up to ~1024 chars | bias toward your domain words/names |
+| **Custom dictionary** | Dictionary | `VOICEPI_DICTIONARY` | _none_ | user config path | JSON/text file path(s) | bounded vocabulary prompt + exact smart replacements for names like `Claude Code`, `Codex`, `OpenClaw` |
+| **Push-to-talk key** | Speech | `VOICEPI_KEY` | `--key` | `ctrl_r` | pynput key name (`ctrl_r`, `alt_r`, `f9`, …) or `a+b` chord | hold-to-talk key |
+| **Inject mode** | Output | `VOICEPI_INJECT_MODE` | `--type` / `--paste` / `--no-type` | `auto` | `auto` \| `type` \| `paste` \| `print` | auto-select injection strategy, force typing, force clipboard paste (X11/Win), or print-only |
+| **Format commands** | Output | `VOICEPI_FORMAT_COMMANDS` | _none_ | `off` | `off` \| `en` \| `da` \| `both` | Optional deterministic spoken formatting commands. English supports `new line`, `comma`, `period`; Danish supports `ny linje`, `komma`, `punktum`. |
+| **Global quit key** | Speech | `VOICEPI_QUIT_KEY` | _none_ | `esc` | pynput key name or one character | key used for the global quit shortcut (Windows/X11) |
+| **Global quit count** | Speech | `VOICEPI_QUIT_COUNT` | _none_ | `3` | integer ≥ 0 (`0` disables) | N consecutive quit-key presses to quit (Windows/X11) |
+| **Quit window** | Speech | `VOICEPI_QUIT_WINDOW_MS` | _none_ | `1500` | integer ms | time window for the consecutive quit-key presses |
+| **Audio loudness target** | Quality | `VOICEPI_TARGET_DBFS` | _none_ | `-20` | float dBFS ≤ 0 | target for quiet-boost normalisation |
+| **Audio min input** | Quality | `VOICEPI_MIN_INPUT_DBFS` | _none_ | `-55` | float dBFS | reject input quieter than this |
+| **Audio min SNR** | Quality | `VOICEPI_MIN_SNR_DB` | _none_ | `6` | float dB | reject input below this speech-vs-noise contrast |
+| **XKB layout (Wayland)** | Speech | `VOICEPI_XKB_LAYOUT` (highest), `XKB_DEFAULT_LAYOUT` (fallback) | _none_ | _(auto-detect)_ | `dk`, `se`, `de`, `fi`, `no`, `es`, `pt`, `br`, `pl`, `ua`, … | force keycode layout for special-char injection |
+| **JSON output** | Output | `VOICEPI_JSON` | `--json` | _(unset)_ | truthy / falsey | print one structured JSON event per accepted utterance |
+| **Metrics file** | Output | `VOICEPI_METRICS_JSONL` | _none_ | _(unset)_ | file path | append one structured JSON event per accepted utterance |
+| **Command hook** | Output | `VOICEPI_COMMAND_HOOK` | _none_ | _(unset)_ | command string or JSON string array | Advanced opt-in automation hook. Receives one utterance JSON event on stdin and is executed without shell interpolation. |
+| **Command hook timeout** | Output | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | _none_ | `2000` | integer ms | Maximum wait for the command hook. Timeout/failure is logged and recorded but does not block injection success. |
+| **Local history** | Output | `VOICEPI_HISTORY_ENABLED` | _none_ | `1` | truthy / falsey | store accepted live dictations locally for copy/reinject/debug recovery |
+| **History file** | Output | `VOICEPI_HISTORY_JSONL` | _none_ | user state path | file path | override the local history JSONL path |
+| **Local only** | Output | `VOICEPI_LOCAL_ONLY` | _none_ | _(unset)_ | truthy / falsey | block cloud/BYOK backends and force model libraries into offline mode |
+| **Post processor** | Post | `VOICEPI_POST_PROCESSOR` | _none_ | `none` | `none` \| `ollama` \| `openai` | optional second text pass after STT and dictionary replacements |
+| **Post mode** | Post | `VOICEPI_POST_MODE` | _none_ | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` (`bullet-list` alias) | rewrite style for the optional second pass |
+| **Post model** | Post | `VOICEPI_POST_MODEL` | _none_ | `qwen2.5:3b` | Ollama model name | local text model used by the post processor |
+| **Post base URL** | Post | `VOICEPI_POST_BASE_URL` | _none_ | `http://localhost:11434` | URL | local Ollama endpoint |
+| **Post timeout** | Post | `VOICEPI_POST_TIMEOUT_MS` | _none_ | `2000` | integer ms | fallback to dictionary-final text if local rewrite is too slow |
+| **STT segment debug** | Output | `VOICEPI_STT_DEBUG` | _none_ | _(unset)_ | truthy / falsey | print Whisper segment metadata (`avg_logprob`, `no_speech_prob`, `compression_ratio` when available) |
+| **Disable terminal color** | — | `VOICEPI_NO_COLOR` / `NO_COLOR` | _none_ | _(unset)_ | any non-empty | keep terminal status lines plain even when stdout is interactive |
+| **VAD threshold** | Quality | `VOICEPI_VAD_THRESHOLD` | _none_ | `0.3` | float | Silero VAD speech threshold passed to faster-whisper |
+| **VAD silence** | Quality | `VOICEPI_VAD_MIN_SILENCE_MS` | _none_ | `600` | integer ms | minimum silence gap used by VAD segmentation |
+| **VAD speech padding** | Quality | `VOICEPI_VAD_SPEECH_PAD_MS` | _none_ | `200` | integer ms | padding kept around detected speech so soft first/last syllables aren't trimmed |
+| **Skip syscheck** | — | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `packaging/linux/ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
+| **Debug dump** | Output | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | log every effective setting at startup |
+| **UI theme** | Output | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 
 The detailed tables below are the same knobs split by surface (env vars
 vs flags) with the longer prose. Most users only need the cheat sheet +
@@ -129,6 +134,7 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_NO_COLOR` / `NO_COLOR` | *(unset)* | any non-empty value | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON, and the Rust UI stay plain automatically. |
 | `VOICEPI_VAD_THRESHOLD` | `0.3` | float | Silero VAD speech threshold passed to faster-whisper. Higher rejects more non-speech but can clip quiet speech. |
 | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | integer ms | Minimum silence gap used by VAD segmentation. Lower can reduce latency on clipped phrases; higher keeps phrases together. |
+| `VOICEPI_VAD_SPEECH_PAD_MS` | `200` | integer ms | Padding kept around detected speech segments so soft first/last syllables are not trimmed before transcription. |
 | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | float seconds (`0` disables) | Parakeet-only minimum recording length. Shorter clips are ignored to avoid poor language autodetection and low-context mistakes. |
 | `VOICEPI_RELEASE_TAIL_MS` | `200` | integer milliseconds (`0` disables) | Extra audio captured after the hotkey is released. Useful when the last syllable or word is clipped because the key is released slightly before speech fully ends. Live-reloadable. |
 | `VOICEPI_AUDIO_DUCKING` | *(unset)* | truthy / falsey | Windows-only optional audio ducking. While recording, other app audio sessions are lowered and restored before transcription starts. Disabled by default. |

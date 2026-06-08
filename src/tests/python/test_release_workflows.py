@@ -418,6 +418,29 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # Require the section heading, not just a stray "[x.y.z]" link reference.
         self.assertIn(f"## [{version}]", changelog)
 
+    def test_configuration_doc_covers_every_schema_setting(self):
+        # docs/CONFIGURATION.md must document every setting in the schema (the
+        # single source of truth), so the reference can't silently drift.
+        schema = json.loads(
+            Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
+        )
+        doc = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
+        # Match the backticked form so a stray mention in prose/examples doesn't
+        # count as "documented" — settings are always backticked in the tables.
+        missing = sorted(
+            s["env"] for s in schema["settings"] if f"`{s['env']}`" not in doc
+        )
+        self.assertEqual([], missing, f"docs/CONFIGURATION.md is missing: {missing}")
+
+    def test_configuration_cheat_sheet_keeps_ui_tab_column_with_all_tabs(self):
+        # Guards only that the cheat sheet keeps its "UI tab" column and that all
+        # five tab labels appear at least once (not a full per-setting mapping).
+        # Tab labels mirror src/rust/ui/text.rs (Speech/Quality/Dictionary/Output/Post).
+        doc = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
+        self.assertIn("| Knob | UI tab | Env var | CLI flag |", doc)
+        for tab in ("Speech", "Quality", "Dictionary", "Output", "Post"):
+            self.assertIn(f"| {tab} |", doc, f"cheat sheet has no {tab} tab cell")
+
     def test_write_permissions_are_job_scoped(self):
         for path in (
             Path(".github/workflows/release.yml"),
