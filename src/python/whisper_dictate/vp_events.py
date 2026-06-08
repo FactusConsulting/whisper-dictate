@@ -15,6 +15,7 @@ this module stays cheap (``--help`` / ``--doctor`` must not pull in heavy deps).
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -127,7 +128,7 @@ def _audio_meter_level_from_dbfs(raw_dbfs: float) -> float:
         raw = float(raw_dbfs)
     except (TypeError, ValueError):
         return 0.0
-    if raw != raw:
+    if math.isnan(raw):
         return 0.0
     floor = -60.0
     ceiling = -12.0
