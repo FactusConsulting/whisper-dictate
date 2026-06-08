@@ -305,9 +305,20 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
         match = re.search(r"^sonar\.coverage\.exclusions=(.+)$", sonar, re.MULTILINE)
         self.assertIsNotNone(match, "sonar.coverage.exclusions must be set")
-        exclusions = match.group(1)
-        for pattern in ("src/rust/ui/tabs/**", "scripts/dev/**", "scripts/benchmark/**"):
-            self.assertIn(pattern, exclusions)
+        patterns = {p.strip() for p in match.group(1).split(",")}
+        expected = {
+            "src/rust/ui/tabs/**",
+            "src/rust/ui/widgets.rs",
+            "src/rust/ui/previews.rs",
+            "src/rust/ui/log_render.rs",
+            "src/rust/ui/app.rs",
+            "scripts/dev/**",
+            "scripts/benchmark/**",
+        }
+        self.assertTrue(
+            expected.issubset(patterns),
+            f"sonar.coverage.exclusions missing: {sorted(expected - patterns)}",
+        )
 
     def test_root_flake_delegates_to_nix_flake_logic(self):
         root_flake = Path("flake.nix").read_text(encoding="utf-8")
