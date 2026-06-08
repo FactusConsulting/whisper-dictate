@@ -380,12 +380,35 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             workflow,
         )
 
-    def test_dependabot_scans_only_requirements_directory_for_pip(self):
+    def test_dependabot_covers_pip_actions_and_cargo(self):
         config = Path(".github/dependabot.yml").read_text(encoding="utf-8")
+        # Check per-ecosystem blocks so the directory is paired with the right
+        # ecosystem (not just present somewhere in the file).
+        blocks = config.split("- package-ecosystem:")
+        pip = next(b for b in blocks if '"pip"' in b)
+        self.assertIn('directory: "/requirements"', pip)  # pip scoped, not repo root
+        cargo = next(b for b in blocks if '"cargo"' in b)
+        self.assertIn('directory: "/src/rust"', cargo)
+        self.assertTrue(any('"github-actions"' in b for b in blocks))
 
-        self.assertIn('package-ecosystem: "pip"', config)
-        self.assertIn('directory: "/requirements"', config)
-        self.assertNotIn('directory: "/"', config)
+    def test_ci_caches_rust_and_cancels_superseded_runs(self):
+        test_wf = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        sonar_wf = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
+        devcontainer_wf = Path(".github/workflows/devcontainer.yml").read_text(encoding="utf-8")
+
+        # Rust builds (registry + target) are cached on the per-PR jobs so they
+        # don't recompile the whole egui/TLS tree from scratch every run.
+        self.assertIn("Swatinem/rust-cache@", test_wf)
+        self.assertIn("Swatinem/rust-cache@", sonar_wf)
+
+        # Superseded PR runs are cancelled — but never main/release runs (the
+        # group is unique for non-PR events), so the release gate (test.yml via
+        # workflow_call on a tag) is neither cancelled nor serialized.
+        for wf in (test_wf, sonar_wf, devcontainer_wf):
+            self.assertIn("concurrency:", wf)
+            self.assertIn(
+                "cancel-in-progress: ${{ github.event_name == 'pull_request' }}", wf
+            )
 
     def test_write_permissions_are_job_scoped(self):
         for path in (
