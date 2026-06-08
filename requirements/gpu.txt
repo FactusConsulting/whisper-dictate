@@ -12,5 +12,5 @@ nvidia-cudnn-cu12==9.*
 # Mic capture + hotkey + injection.
 sounddevice>=0.5.5,<0.6
 pynput>=1.8.2,<2.0
-pyperclip>=1.8,<2.0       # --paste mode
+pyperclip>=1.11.0,<2.0       # --paste mode
 pycaw>=20251023; sys_platform == "win32"  # optional audio ducking
