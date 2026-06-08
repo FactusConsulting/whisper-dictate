@@ -11,7 +11,7 @@ numpy<2.5                 # ctranslate2 / onnxruntime ABI constraint
 # tool (wl-clipboard on Wayland, xclip/xsel on X11). See README.
 sounddevice>=0.5.5,<0.6
 pynput>=1.8.2,<2.0
-pyperclip>=1.8,<2.0       # --paste mode (required on Wayland)
+pyperclip>=1.11.0,<2.0       # --paste mode (required on Wayland)
 pycaw>=20251023; sys_platform == "win32"  # optional audio ducking
 
 # Wayland (Ubuntu 24.04+): evdev enables global hotkeys by reading
