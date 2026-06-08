@@ -298,6 +298,17 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # cannot map them onto the indexed Rust sources.
         self.assertIn('sed -i "s#^SF:$(pwd)/#SF:#" lcov.info', workflow)
 
+    def test_sonar_excludes_ui_rendering_and_scripts_from_coverage(self):
+        # egui immediate-mode rendering + dev/benchmark scripts carry no
+        # meaningful unit coverage; keep them out of the coverage metric (they
+        # are still analysed for issues) so it reflects testable logic.
+        sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
+        match = re.search(r"^sonar\.coverage\.exclusions=(.+)$", sonar, re.MULTILINE)
+        self.assertIsNotNone(match, "sonar.coverage.exclusions must be set")
+        exclusions = match.group(1)
+        for pattern in ("src/rust/ui/tabs/**", "scripts/dev/**", "scripts/benchmark/**"):
+            self.assertIn(pattern, exclusions)
+
     def test_root_flake_delegates_to_nix_flake_logic(self):
         root_flake = Path("flake.nix").read_text(encoding="utf-8")
         nix_flake = Path("nix/flake.nix").read_text(encoding="utf-8")
