@@ -56,7 +56,7 @@ _SELF_INJECTION_PROCESSES = {
     "whisper_dictate",
     "whisper_dictate.exe",
 }
-_SELF_INJECTION_TITLE_RE = re.compile(r"^whisper-dictate(?:\s+\d+(?:\.\d+)+(?:\s.*)?)?$")
+_SELF_INJECTION_TITLE_RE = re.compile(r"^whisper-dictate(?:\s+\d.*)?$")
 
 
 def ydotool_socket_path() -> str:
