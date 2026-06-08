@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 PackageIdentifier: FactusConsulting.WhisperDictate
-PackageVersion: 1.5.0
+PackageVersion: 1.7.0
 PackageLocale: en-US
 Publisher: FactusConsulting
 PublisherUrl: https://github.com/FactusConsulting
