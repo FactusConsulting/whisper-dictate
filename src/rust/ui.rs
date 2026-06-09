@@ -58,14 +58,41 @@ pub(in crate::ui) use self::theme::*;
 pub(in crate::ui) use self::widgets::*;
 pub(in crate::ui) use self::worker_event::*;
 
+// Ordered most → least accurate. Larger models are more accurate but slower
+// and need more VRAM; see `whisper_model_hint` for per-model annotations.
 const WHISPER_MODELS: &[&str] = &[
-    "large-v3-turbo",
     "large-v3",
+    "large-v3-turbo",
     "medium",
     "small",
     "base",
     "tiny",
 ];
+
+/// Accuracy/speed note + approximate VRAM (MB, at the GPU `int8_float16`
+/// default) for a Whisper model value. Drives the model picker's labels and
+/// the "does it fit my GPU" grey-out.
+fn whisper_model_hint(model: &str) -> (&'static str, u32) {
+    match model {
+        "large-v3" => ("most accurate, slowest", 3200),
+        "large-v3-turbo" => ("great accuracy, fast", 1800),
+        "medium" => ("good accuracy, lighter", 1500),
+        "small" => ("ok accuracy, fast & light", 1000),
+        "base" => ("low accuracy, very light", 600),
+        "tiny" => ("lowest accuracy, fastest", 400),
+        _ => ("", 0),
+    }
+}
+
+/// Best total VRAM (MB) across detected NVIDIA GPUs, or `None` on CPU /
+/// non-NVIDIA. Detected once at startup and used to grey out Whisper models
+/// that can't fit the GPU.
+fn best_gpu_total_mb() -> Option<u32> {
+    crate::model_capacity::query_gpus()
+        .iter()
+        .map(|gpu| gpu.total_mb)
+        .max()
+}
 const GROQ_STT_MODELS: &[&str] = &[
     "whisper-large-v3-turbo",
     "whisper-large-v3",
@@ -177,6 +204,9 @@ struct WhisperDictateApp {
     supervisor: RuntimeSupervisor,
     background_task: Option<Receiver<BackgroundTaskResult>>,
     background_task_label: Option<&'static str>,
+    /// Best total VRAM (MB) of the detected NVIDIA GPU, or None on CPU /
+    /// non-NVIDIA. Detected once at startup; gates the Whisper model picker.
+    gpu_total_mb: Option<u32>,
 }
 
 impl Default for WhisperDictateApp {
@@ -240,6 +270,7 @@ impl Default for WhisperDictateApp {
             supervisor: RuntimeSupervisor::new(),
             background_task: None,
             background_task_label: None,
+            gpu_total_mb: best_gpu_total_mb(),
         }
     }
 }
@@ -315,6 +346,8 @@ mod keyboard_layout_tests;
 mod layout_tests;
 #[cfg(test)]
 mod log_view_tests;
+#[cfg(test)]
+mod model_picker_tests;
 #[cfg(test)]
 mod settings_reset_tests;
 #[cfg(test)]

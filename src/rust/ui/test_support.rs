@@ -37,6 +37,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         supervisor: RuntimeSupervisor::new(),
         background_task: None,
         background_task_label: None,
+        gpu_total_mb: None,
     }
 }
 
