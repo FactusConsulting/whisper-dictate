@@ -34,6 +34,25 @@ jobs:
       - name: Run unit tests
         run: python -m pytest src/python/tests src/tests/python -q
 
+  # Live Groq STT + post-processing smoke tests (#37). Non-required: they hit
+  # Groq's real API, so a network/quota hiccup must not block merges, and they
+  # skip automatically when the GROQ_API_KEY secret is absent (e.g. fork PRs).
+  groq-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: python -m pip install --quiet pytest numpy
+      - name: Run Groq integration tests (skipped without the secret)
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python -m pytest src/python/tests/test_groq_integration.py -v
+
   lint-workflows:
     runs-on: ubuntu-latest
     steps:
