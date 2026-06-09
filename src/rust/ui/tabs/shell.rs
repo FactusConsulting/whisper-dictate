@@ -93,13 +93,35 @@ impl WhisperDictateApp {
             {
                 self.reload_settings();
             }
+            ui.add_space(6.0);
+            // Save lives here, next to Reload config and the saved/unsaved status,
+            // rather than repeated on every settings page.
+            let is_dirty = self.has_unsaved_settings();
+            let save_text = if is_dirty {
+                UiTextKey::SaveSettingsDirty
+            } else {
+                UiTextKey::SaveSettings
+            };
+            let mut save_button = egui::Button::new(
+                icon_text(
+                    icons::ICON_SAVE,
+                    ui_text(&self.settings.ui_language, save_text),
+                )
+                .strong(),
+            )
+            .min_size(egui::vec2(ui.available_width(), 34.0));
+            if is_dirty {
+                save_button = save_button.fill(palette.accent_dark);
+            }
+            if ui
+                .add_enabled(is_dirty, save_button)
+                .on_hover_text("Save changed settings and any edited cloud API key.")
+                .clicked()
+            {
+                self.save_settings();
+            }
             ui.add_space(10.0);
-            sidebar_save_state(
-                ui,
-                self.has_unsaved_settings(),
-                palette,
-                &self.settings.ui_language,
-            );
+            sidebar_save_state(ui, is_dirty, palette, &self.settings.ui_language);
         });
     }
 
