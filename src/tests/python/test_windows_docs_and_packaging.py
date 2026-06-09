@@ -266,9 +266,12 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("Output\\*.exe` and `Output\\*.zip", agents)
         self.assertIn("Output\\*.exe` and `Output\\*.zip", technical)
 
-    def test_project_history_is_not_maintained_as_docs(self):
+    def test_project_history_is_not_maintained_by_hand(self):
         workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
 
+        # History is the generated release notes (git log between tags), not a
+        # hand-maintained changelog — anywhere in the tree.
+        self.assertFalse(Path("CHANGELOG.md").exists())
         self.assertFalse(Path("docs/CHANGELOG.md").exists())
         self.assertFalse(Path("docs/RELEASE_NOTES.md").exists())
         self.assertIn("git log --no-merges", workflow)
