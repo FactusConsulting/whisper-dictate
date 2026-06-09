@@ -95,7 +95,11 @@ jobs:
           $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
           Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $bundle | Out-Null
-          Copy-Item src $bundle -Recurse
+          # Ship only the Python worker package — not src\rust (compiled into the
+          # .exe) or the test trees. Mirrors the Inno installer's [Files] list.
+          New-Item -ItemType Directory -Force (Join-Path $bundle "src\python") | Out-Null
+          Copy-Item src\python\whisper_dictate (Join-Path $bundle "src\python") -Recurse
+          Get-ChildItem -LiteralPath $bundle -Directory -Recurse -Force -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
           Copy-Item requirements $bundle -Recurse
