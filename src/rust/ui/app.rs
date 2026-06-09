@@ -46,7 +46,9 @@ impl eframe::App for WhisperDictateApp {
                 egui::Frame::default()
                     .fill(palette.header_bg)
                     .stroke(egui::Stroke::new(0.8, palette.border_soft))
-                    .inner_margin(egui::Margin::symmetric(14.0, 4.0)),
+                    // Match the central panel's left inset so the status dot lines
+                    // up with the content above it.
+                    .inner_margin(egui::Margin::symmetric(EDGE_MARGIN, 4.0)),
             )
             .show(ctx, |ui| self.status_message_bar(ui, palette));
 

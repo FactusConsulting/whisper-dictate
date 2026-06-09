@@ -45,6 +45,22 @@ impl WhisperDictateApp {
         }
     }
 
+    /// Apply and persist the runtime log-view preference. The toolbar toggle
+    /// applies instantly *and* writes just this view setting, so switching the
+    /// log view doesn't leave the whole settings form looking "unsaved" — and it
+    /// never commits the user's other pending edits (those stay in `settings`
+    /// until an explicit Save). `saved_settings` is the on-disk snapshot, so
+    /// persisting a copy of it with the new view keeps the dirty check clean.
+    pub(in crate::ui) fn set_log_view(&mut self, mode: LogViewMode) {
+        self.runtime_log_view = mode;
+        self.settings.ui_log_view = mode.id().to_owned();
+        self.runtime_log_scroll_to_bottom = true;
+        self.saved_settings.ui_log_view = mode.id().to_owned();
+        if let Err(err) = config::save_settings(&self.saved_settings) {
+            self.append_runtime_log(format!("[ui] could not persist log view: {err}"));
+        }
+    }
+
     pub(in crate::ui) fn has_unsaved_settings(&self) -> bool {
         self.settings != self.saved_settings
             || self.stt_api_key_input != self.saved_stt_api_key_input

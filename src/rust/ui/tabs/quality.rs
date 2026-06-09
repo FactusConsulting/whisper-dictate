@@ -4,31 +4,40 @@ use super::*;
 impl WhisperDictateApp {
     pub(in crate::ui) fn quality_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Quality");
+        // Engine-specific decode settings are greyed out unless their engine is
+        // the active STT backend, so it's clear which knobs actually take effect.
+        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
+        let whisper = backend == SttBackendMode::Whisper;
+        let parakeet = backend == SttBackendMode::Parakeet;
         settings_grid("quality_settings")
             .show(ui, |ui| {
-                text_help(
+                text_enabled(
                     ui,
+                    whisper,
                     "Beam size",
                     &mut self.settings.beam_size,
-                    "Whisper beam search width. Higher can improve accuracy but costs more compute.",
+                    "Whisper beam search width. Higher can improve accuracy but costs more compute. Used only with STT backend = whisper.",
                 );
-                text_help(
+                text_enabled(
                     ui,
+                    whisper,
                     "Temperature ladder",
                     &mut self.settings.temperature,
-                    "Comma-separated Whisper fallback temperatures, for example 0.0,0.2.",
+                    "Comma-separated Whisper fallback temperatures, for example 0.0,0.2. Used only with STT backend = whisper.",
                 );
-                text_help(
+                text_enabled(
                     ui,
+                    whisper,
                     "Context min seconds",
                     &mut self.settings.context_min_seconds,
-                    "Minimum utterance length before passing previous context/prompt hints to Whisper.",
+                    "Minimum utterance length before passing previous context/prompt hints to Whisper. Used only with STT backend = whisper.",
                 );
-                text_help(
+                text_enabled(
                     ui,
+                    parakeet,
                     "Parakeet min seconds",
                     &mut self.settings.parakeet_min_seconds,
-                    "Minimum captured audio length before Parakeet transcription is attempted.",
+                    "Minimum captured audio length before Parakeet transcription is attempted. Used only with STT backend = parakeet.",
                 );
                 text_help(
                     ui,
