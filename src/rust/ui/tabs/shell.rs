@@ -120,9 +120,56 @@ impl WhisperDictateApp {
             {
                 self.save_settings();
             }
-            ui.add_space(10.0);
-            sidebar_save_state(ui, is_dirty, palette, &self.settings.ui_language);
         });
+    }
+
+    /// Thin global status bar (bottom of every tab): a saved/unsaved dot + the
+    /// latest message. Replaces the old sidebar badge and per-page Messages card.
+    pub(in crate::ui) fn status_message_bar(&self, ui: &mut egui::Ui, palette: UiPalette) {
+        ui.horizontal_centered(|ui| {
+            let is_dirty = self.has_unsaved_settings();
+            let (label_key, color) = if is_dirty {
+                (UiTextKey::UnsavedChanges, palette.warn_text)
+            } else {
+                (UiTextKey::SettingsSaved, palette.ok_text)
+            };
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(dot.center(), 4.0, color);
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(ui_text(&self.settings.ui_language, label_key))
+                    .color(color)
+                    .strong(),
+            );
+            let message = self.status_bar_message();
+            if !message.is_empty() {
+                ui.label(egui::RichText::new("·").color(palette.text_muted));
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&message).color(palette.text_muted))
+                        .truncate(),
+                )
+                .on_hover_text(&message);
+            }
+        });
+    }
+
+    /// The latest status text for the bottom bar: the settings status plus the
+    /// active tab's API-key status, joined compactly (full text on hover).
+    fn status_bar_message(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.settings_status.trim().is_empty() {
+            parts.push(self.settings_status.trim());
+        }
+        match self.selected_tab {
+            Tab::Speech if !self.stt_api_key_status.trim().is_empty() => {
+                parts.push(self.stt_api_key_status.trim());
+            }
+            Tab::Post if !self.post_api_key_status.trim().is_empty() => {
+                parts.push(self.post_api_key_status.trim());
+            }
+            _ => {}
+        }
+        parts.join("   ·   ")
     }
 
     pub(in crate::ui) fn top_status_bar(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
@@ -217,29 +264,6 @@ impl WhisperDictateApp {
             self.start_runtime();
         }
     }
-}
-
-fn sidebar_save_state(ui: &mut egui::Ui, is_dirty: bool, palette: UiPalette, raw_language: &str) {
-    inset_panel_frame(palette).show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        if is_dirty {
-            ui.label(
-                icon_text(
-                    icons::ICON_ERROR,
-                    ui_text(raw_language, UiTextKey::UnsavedChanges),
-                )
-                .color(palette.warn_text),
-            );
-        } else {
-            ui.label(
-                icon_text(
-                    icons::ICON_CHECK_CIRCLE,
-                    ui_text(raw_language, UiTextKey::SettingsSaved),
-                )
-                .color(palette.ok_text),
-            );
-        }
-    });
 }
 
 fn status_card(

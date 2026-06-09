@@ -116,17 +116,6 @@ fn language_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette) {
     });
 }
 
-fn status_label(ui: &mut egui::Ui, text: &str, palette: UiPalette) {
-    let rich_text = if text.starts_with("[OK]") {
-        egui::RichText::new(text).color(palette.ok_text)
-    } else if text.starts_with("[ERROR]") {
-        egui::RichText::new(text).color(palette.error_text)
-    } else {
-        egui::RichText::new(text)
-    };
-    ui.add(egui::Label::new(rich_text).wrap());
-}
-
 pub(in crate::ui) fn compact_label(value: &str, max_chars: usize) -> String {
     let mut chars = value.chars();
     let mut out = String::new();

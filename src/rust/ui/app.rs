@@ -37,6 +37,19 @@ impl eframe::App for WhisperDictateApp {
             )
             .show(ctx, |ui| self.top_status_bar(ui, palette));
 
+        // Thin global status bar: saved/unsaved state + the latest message,
+        // on every tab, replacing the per-page Messages card.
+        egui::TopBottomPanel::bottom("status_message_bar")
+            .resizable(false)
+            .exact_height(bottom_message_bar_height(&self.settings.ui_text_scale))
+            .frame(
+                egui::Frame::default()
+                    .fill(palette.header_bg)
+                    .stroke(egui::Stroke::new(0.8, palette.border_soft))
+                    .inner_margin(egui::Margin::symmetric(14.0, 4.0)),
+            )
+            .show(ctx, |ui| self.status_message_bar(ui, palette));
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()

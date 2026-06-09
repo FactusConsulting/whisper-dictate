@@ -290,14 +290,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             1
         ].split(".show(ctx, |ui| self.sidebar(ui, palette))", 1)[0]
         self.assertIn(".stroke(egui::Stroke::NONE)", navigation_frame)
-        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 264.0;", script)
-        self.assertIn("const SETTINGS_MESSAGES_TOP_GAP: f32 = 14.0;", script)
+        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 72.0;", script)
         self.assertIn("pub(in crate::ui) const EDGE_MARGIN: f32 = 12.0;", script)
         self.assertNotIn("SETTINGS_MESSAGES_BOTTOM_GAP", script)
-        self.assertIn("const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 88.0;", script)
-        self.assertIn("ui.add_space(SETTINGS_MESSAGES_TOP_GAP);", settings_panel)
-        self.assertIn("ui.set_min_height(inner_height);", settings_panel)
-        self.assertIn("ui.add_space(8.0);", settings_panel)
+        # Status messages moved out of the footer into the global bottom bar.
+        self.assertIn('egui::TopBottomPanel::bottom("status_message_bar")', update_impl)
+        self.assertNotIn("SETTINGS_MESSAGES_MAX_HEIGHT", script)
+        self.assertNotIn("fn settings_messages", script)
         self.assertIn('ui.label(egui::RichText::new("Config:").color(palette.text_muted));', settings_panel)
         self.assertIn("let config_chars = ((ui.available_width() / 8.0).floor() as usize).clamp(38, 92);", settings_panel)
         self.assertIn("egui::RichText::new(compact_label(&self.config_path, config_chars))", settings_panel)
