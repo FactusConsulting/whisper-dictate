@@ -44,28 +44,8 @@ impl WhisperDictateApp {
         let is_dirty = self.has_unsaved_settings();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            let mut save_button = egui::Button::new(if is_dirty {
-                icon_text(
-                    icons::ICON_SAVE,
-                    ui_text(&self.settings.ui_language, UiTextKey::SaveSettingsDirty),
-                )
-                .strong()
-            } else {
-                icon_text(
-                    icons::ICON_SAVE,
-                    ui_text(&self.settings.ui_language, UiTextKey::SaveSettings),
-                )
-            });
-            if is_dirty {
-                save_button = save_button.fill(ui.visuals().selection.bg_fill);
-            }
-            if ui
-                .add_enabled(is_dirty, save_button)
-                .on_hover_text("Save changed settings and any edited cloud API key.")
-                .clicked()
-            {
-                self.save_settings();
-            }
+            // Save now lives in the sidebar (next to Reload config + status), so
+            // it isn't repeated on every page. Reload + Reset stay page-local.
             if ui
                 .button(icon_text(
                     icons::ICON_REFRESH,
