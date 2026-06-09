@@ -298,7 +298,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # cannot map them onto the indexed Rust sources.
         self.assertIn('sed -i "s#^SF:$(pwd)/#SF:#" lcov.info', workflow)
 
-    def test_sonar_excludes_ui_rendering_and_scripts_from_coverage(self):
+    def test_sonar_excludes_untestable_integration_from_coverage(self):
         # Code whose uncovered remainder is genuinely OS/IO/UI integration (not
         # unit-testable business logic) is kept out of the coverage metric — it
         # is still analysed for issues — so the metric reflects testable logic.
