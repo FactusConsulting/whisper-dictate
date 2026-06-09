@@ -76,6 +76,17 @@ pub(in crate::ui) fn audio_capture_active_for_worker_state(state: &str) -> Optio
     }
 }
 
+/// The live dictation-pipeline stage a worker status maps to (drives the
+/// progress card), or `None` for non-pipeline states (idle/startup/error).
+pub(in crate::ui) fn pipeline_stage_for_worker_state(state: &str) -> Option<&'static str> {
+    match state {
+        "recording" => Some("recording"),
+        "transcribing" => Some("transcribing"),
+        "post-processing" => Some("post-processing"),
+        _ => None,
+    }
+}
+
 pub(in crate::ui) fn audio_meter_level(
     live_level: f32,
     state: RuntimeState,

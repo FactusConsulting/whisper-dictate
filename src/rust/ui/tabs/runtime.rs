@@ -107,6 +107,7 @@ impl WhisperDictateApp {
         } else {
             self.render_log_cards(ui, palette);
         }
+        self.render_pipeline_progress(ui, palette);
         let bottom = ui.allocate_response(
             egui::vec2(ui.available_width(), RUNTIME_LOG_CONTENT_BOTTOM_PADDING),
             egui::Sense::hover(),
@@ -115,6 +116,35 @@ impl WhisperDictateApp {
             bottom.scroll_to_me(Some(egui::Align::BOTTOM));
             self.runtime_log_scroll_to_bottom = false;
         }
+    }
+
+    /// Live card for the in-flight utterance: spins through the pipeline stages
+    /// (recording → transcribing → post-processing) so slow CPU runs show
+    /// progress. Cleared once the utterance settles into its Final card.
+    fn render_pipeline_progress(&self, ui: &mut egui::Ui, palette: UiPalette) {
+        let Some(stage) = self.pipeline_stage else {
+            return;
+        };
+        let (label, accent) = match stage {
+            "recording" => ("Recording…", palette.accent_blue),
+            "transcribing" => ("Transcribing…", palette.warn_text),
+            "post-processing" => ("Post-processing…", palette.accent_blue),
+            _ => return,
+        };
+        egui::Frame::default()
+            .fill(palette.surface_active_bg)
+            .stroke(egui::Stroke::new(0.8, accent))
+            .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(16.0).color(accent));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(label).strong().color(accent));
+                });
+            });
+        ui.add_space(8.0);
     }
 
     fn render_log_cards(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
