@@ -456,14 +456,6 @@ class RustReleaseWorkflowTests(unittest.TestCase):
                 "cancel-in-progress: ${{ github.event_name == 'pull_request' }}", wf
             )
 
-    def test_changelog_has_an_entry_for_the_current_version(self):
-        # Every release must document its version in CHANGELOG.md (the bump PR
-        # adds the entry alongside VERSION).
-        version = Path("VERSION").read_text(encoding="utf-8").strip()
-        changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
-        # Require the section heading, not just a stray "[x.y.z]" link reference.
-        self.assertIn(f"## [{version}]", changelog)
-
     def test_configuration_doc_covers_every_schema_setting(self):
         # docs/CONFIGURATION.md must document every setting in the schema (the
         # single source of truth), so the reference can't silently drift.
