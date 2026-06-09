@@ -238,6 +238,11 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
             self.assertNotIn('"requirements.txt"', workflow)
             self.assertIn("Copy-Item requirements $bundle -Recurse", workflow)
             self.assertIn("Output/*.exe Output/*.zip Output/*.nupkg sha256sums.txt", workflow)
+            # The portable ZIP ships only the Python worker package — never the
+            # whole src tree (no src\rust source, already compiled into the exe,
+            # and no test trees). Mirrors the Inno installer's [Files] list.
+            self.assertIn("Copy-Item src\\python\\whisper_dictate", workflow)
+            self.assertNotIn("Copy-Item src $bundle -Recurse", workflow)
 
         script = Path("scripts/windows/build-installer.ps1").read_text(encoding="utf-8")
         self.assertIn("Building unified Windows portable ZIP version $Version", script)

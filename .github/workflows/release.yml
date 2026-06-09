@@ -78,7 +78,11 @@ jobs:
             zip_name="$1"
             shift || true
             d=whisper-dictate; rm -rf "$d"; mkdir "$d"
-            cp -r src docs README.md LICENSE "$d/"
+            cp -r docs README.md LICENSE "$d/"
+            # Ship only the Python worker package — not src/rust (compiled into
+            # the binary) or the test trees. Mirrors the Inno installer's file list.
+            mkdir -p "$d/src/python"
+            cp -r src/python/whisper_dictate "$d/src/python/"
             cp -r requirements "$d/"
             mkdir -p "$d/assets"
             cp assets/whisper-dictate-logo.svg "$d/assets/"
@@ -427,7 +431,10 @@ jobs:
           $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
           Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $bundle | Out-Null
-          Copy-Item src $bundle -Recurse
+          # Ship only the Python worker package — not src\rust (compiled into the
+          # .exe) or the test trees. Mirrors the Inno installer's [Files] list.
+          New-Item -ItemType Directory -Force (Join-Path $bundle "src\python") | Out-Null
+          Copy-Item src\python\whisper_dictate (Join-Path $bundle "src\python") -Recurse
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
           Copy-Item requirements $bundle -Recurse

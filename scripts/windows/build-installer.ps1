@@ -110,11 +110,13 @@ try {
   $bundle = Join-Path $zipRoot 'whisper-dictate'
   Remove-Item -LiteralPath $zipRoot -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force $bundle | Out-Null
-  Copy-Item -LiteralPath (Join-Path $root 'src') -Destination $bundle -Recurse
-  foreach ($generatedDir in 'target', '__pycache__', '.pytest_cache') {
-    Get-ChildItem -LiteralPath (Join-Path $bundle 'src') -Directory -Recurse -Force -Filter $generatedDir |
-      Remove-Item -Recurse -Force
-  }
+  # Ship only the Python worker package — not src\rust (compiled into the exe)
+  # or the test trees. Mirrors the Inno installer's [Files] list.
+  $bundlePython = Join-Path $bundle 'src\python'
+  New-Item -ItemType Directory -Force $bundlePython | Out-Null
+  Copy-Item -LiteralPath (Join-Path $root 'src\python\whisper_dictate') -Destination $bundlePython -Recurse
+  Get-ChildItem -LiteralPath $bundlePython -Directory -Recurse -Force -Filter '__pycache__' |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'LICENSE'), $versionFile -Destination $bundle
   Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination $bundle -Recurse
   Copy-Item -LiteralPath (Join-Path $root 'requirements') -Destination $bundle -Recurse
