@@ -152,30 +152,46 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("choco pin add -n=whisper-dictate", readme)
         self.assertIn("choco uninstall whisper-dictate -y", readme)
         self.assertIn("choco --version", readme)
-        self.assertIn(r"winget install --manifest .\whisper-dictate\packaging\windows\winget", readme)
+        self.assertIn(r"winget install --manifest .\winget", readme)
+        self.assertIn("whisper-dictate-winget-<version>.zip", readme)
         self.assertIn("nuget.pkg.github.com/FactusConsulting/index.json", readme)
         self.assertIn("CHOCOLATEY_NUGET_SOURCE", readme)
         self.assertIn("CHOCOLATEY_NUGET_API_KEY", readme)
 
-    def test_winget_manifests_live_with_windows_packaging(self):
-        # winget manifests are version-controlled under packaging/windows/winget
-        # and updated via PR — NOT generated or committed by CI (main is
-        # protected: PR + CI only, so CI must not push to it).
+    def test_winget_manifests_are_templated_and_generated_in_release(self):
+        # The packaging/windows/winget manifests are version-controlled TEMPLATES
+        # (placeholders the release fills); CI generates the concrete manifests and
+        # ships them as a release asset — it never commits them back to protected
+        # main (PR + CI only, so CI must not push to it).
         for path in (
             Path(".github/workflows/release.yml"),
             Path(".github/workflows/windows-installer.yml"),
         ):
             workflow = path.read_text(encoding="utf-8")
-            self.assertNotIn("Generate winget manifests", workflow, path.as_posix())
+            # Generation happens, but the manifests are NOT committed/pushed.
+            self.assertIn("Generate winget manifests", workflow, path.as_posix())
+            self.assertIn("whisper-dictate-winget-$version.zip", workflow, path.as_posix())
             self.assertNotIn("git add packaging/windows/winget/", workflow, path.as_posix())
             self.assertNotIn("New-Item -ItemType Directory -Force manifests", workflow)
 
-        for name in (
+        names = (
             "FactusConsulting.WhisperDictate.yaml",
             "FactusConsulting.WhisperDictate.locale.en-US.yaml",
             "FactusConsulting.WhisperDictate.installer.yaml",
-        ):
+        )
+        for name in names:
             self.assertTrue(Path("packaging/windows/winget", name).is_file(), name)
+        # Every manifest carries the version placeholder; the installer manifest
+        # also templates the URL and SHA256 the release fills in.
+        for name in names:
+            text = Path("packaging/windows/winget", name).read_text(encoding="utf-8")
+            self.assertIn("PackageVersion: __VERSION__", text, name)
+        installer = Path(
+            "packaging/windows/winget/FactusConsulting.WhisperDictate.installer.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("InstallerUrl: __INSTALLER_URL__", installer)
+        self.assertIn("InstallerSha256: __INSTALLER_SHA256__", installer)
+        self.assertIn("ReleaseDate: __RELEASE_DATE__", installer)
         self.assertFalse(Path("manifests").exists())
 
     def test_rust_crate_is_flat_single_crate_under_src_rust(self):
@@ -491,16 +507,16 @@ class RustReleaseWorkflowTests(unittest.TestCase):
 
     def test_release_workflows_do_not_push_version_bumps_to_main(self):
         # main is protected (PR + CI only): release CI must not push to it.
-        # nix/package.nix is bumped in the pre-release version PR (with VERSION);
-        # winget manifests via a separate PR. The Homebrew tap push targets a
-        # different repo (cd tap) and is unaffected.
+        # nix/package.nix is bumped in the pre-release version PR (with VERSION).
+        # winget manifests are generated and shipped as a release asset (not
+        # committed). The Homebrew tap push targets a different repo (cd tap) and
+        # is unaffected.
         for path in (
             Path(".github/workflows/release.yml"),
             Path(".github/workflows/windows-installer.yml"),
         ):
             workflow = path.read_text(encoding="utf-8")
             self.assertNotIn("Bump nix/package.nix version", workflow, path.as_posix())
-            self.assertNotIn("Generate winget manifests", workflow, path.as_posix())
             self.assertNotIn("Commit updated manifests to main", workflow, path.as_posix())
             self.assertNotIn("for attempt in 1 2 3", workflow, path.as_posix())
             self.assertNotIn("git push origin main", workflow, path.as_posix())
