@@ -299,19 +299,30 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('sed -i "s#^SF:$(pwd)/#SF:#" lcov.info', workflow)
 
     def test_sonar_excludes_ui_rendering_and_scripts_from_coverage(self):
-        # egui immediate-mode rendering + dev/benchmark scripts carry no
-        # meaningful unit coverage; keep them out of the coverage metric (they
-        # are still analysed for issues) so it reflects testable logic.
+        # Code whose uncovered remainder is genuinely OS/IO/UI integration (not
+        # unit-testable business logic) is kept out of the coverage metric — it
+        # is still analysed for issues — so the metric reflects testable logic.
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
         match = re.search(r"^sonar\.coverage\.exclusions=(.+)$", sonar, re.MULTILINE)
         self.assertIsNotNone(match, "sonar.coverage.exclusions must be set")
         patterns = {p.strip() for p in match.group(1).split(",")}
         expected = {
+            # egui immediate-mode rendering
             "src/rust/ui/tabs/**",
             "src/rust/ui/widgets.rs",
             "src/rust/ui/previews.rs",
             "src/rust/ui/log_render.rs",
             "src/rust/ui/app.rs",
+            "src/rust/ui.rs",
+            # OS credential store, config-IO app state, subprocess, entrypoint
+            "src/rust/ui/api_keys.rs",
+            "src/rust/ui/secret_store.rs",
+            "src/rust/ui/settings_state.rs",
+            "src/rust/ui/tasks.rs",
+            "src/rust/main.rs",
+            "src/python/whisper_dictate/vp_keys.py",
+            "src/python/whisper_dictate/vp_rust.py",
+            # developer/benchmark scripts
             "scripts/dev/**",
             "scripts/benchmark/**",
         }
