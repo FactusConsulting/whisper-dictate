@@ -20,13 +20,19 @@ impl WhisperDictateApp {
                 section_label(ui, "Local Whisper", palette);
                 ui.label("Used only when STT backend is whisper.");
                 ui.end_row();
-                combo_enabled(
+                let gpu_total_mb = self.gpu_total_mb;
+                combo_model_vram(
                     ui,
                     backend == SttBackendMode::Whisper,
                     "Whisper model",
                     &mut self.settings.model,
                     WHISPER_MODELS,
-                    "Local faster-whisper model used only with STT backend = whisper.",
+                    whisper_model_hint,
+                    gpu_total_mb,
+                    "Larger models are more accurate but slower and use more VRAM. On a CUDA GPU, \
+                     models that don't fit your VRAM are greyed out; on CPU every model runs (large \
+                     ones just slower). The ~MB figure is the approximate VRAM at the int8_float16 \
+                     GPU default.",
                 );
                 ui.end_row();
                 section_label(ui, "Local NVIDIA Parakeet", palette);
