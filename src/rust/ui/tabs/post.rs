@@ -147,8 +147,7 @@ impl WhisperDictateApp {
                 self.post_api_key_status = "Opened Groq API keys page.".to_owned();
             }
             Err(err) => {
-                self.post_api_key_status =
-                    format!("Could not open Groq API keys page: {err}");
+                self.post_api_key_status = format!("Could not open Groq API keys page: {err}");
             }
         }
     }

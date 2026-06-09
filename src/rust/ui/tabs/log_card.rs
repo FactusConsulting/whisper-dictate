@@ -11,9 +11,11 @@ fn runtime_log_card_style(
     palette: UiPalette,
 ) -> (&'static str, egui::Color32, egui::Color32) {
     match kind {
-        RuntimeLogCardKind::FinalText => {
-            (icons::ICON_CHECK_CIRCLE, palette.ok_text, palette.surface_active_bg)
-        }
+        RuntimeLogCardKind::FinalText => (
+            icons::ICON_CHECK_CIRCLE,
+            palette.ok_text,
+            palette.surface_active_bg,
+        ),
         RuntimeLogCardKind::Status => (icons::ICON_INFO, palette.accent_blue, palette.surface_bg),
         RuntimeLogCardKind::Diagnostic => {
             (icons::ICON_GRAPHIC_EQ, palette.warn_text, palette.header_bg)

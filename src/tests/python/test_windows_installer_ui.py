@@ -187,7 +187,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         )
         self.assertIn('} else if self.audio_capture_opening {', script)
         self.assertIn('"Opening"', script)
-        self.assertIn("self.update_worker_audio(&event);", script)
+        self.assertIn("self.update_worker_audio(event)", script)
         self.assertIn("fn worker_event_f32(payload: &serde_json::Value, key: &str) -> Option<f32>", script)
         self.assertIn("audio_meter_level(self.audio_meter_level, self.runtime_state, active)", script)
         self.assertIn("fn audio_capture_active_for_worker_state(state: &str) -> Option<bool>", script)
@@ -231,7 +231,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         runtime_tab = script.split("fn runtime_tab", 1)[1].split("fn settings_panel", 1)[0]
         self.assertIn("egui::Label::new(", runtime_tab)
         self.assertIn("let visible_log = self.visible_runtime_log();", runtime_tab)
-        self.assertIn("egui::RichText::new(&visible_log)", runtime_tab)
+        self.assertIn("egui::RichText::new(visible_log)", runtime_tab)
         self.assertIn(".monospace()", runtime_tab)
         self.assertIn(".color(palette.text)", runtime_tab)
         self.assertIn(".selectable(true)", runtime_tab)

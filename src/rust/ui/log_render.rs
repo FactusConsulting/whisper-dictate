@@ -136,9 +136,7 @@ fn diagnostic_log_card(
         });
     }
 
-    if has_structured_utterance
-        && (line.starts_with("[post]") || is_diagnostic_detail_line(line))
-    {
+    if has_structured_utterance && (line.starts_with("[post]") || is_diagnostic_detail_line(line)) {
         return None;
     }
 
