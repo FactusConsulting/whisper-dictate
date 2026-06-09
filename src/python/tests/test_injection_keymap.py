@@ -371,6 +371,17 @@ class DetectXkbLayoutTests(unittest.TestCase):
             result = self.vp._detect_xkb_layout('nb')
         self.assertEqual(result, 'no')
 
+    def test_lang_hint_fr_and_it_now_resolve(self):
+        # fr/it gained Rust keycode maps, so they are supported layouts now.
+        with patch('builtins.open', side_effect=FileNotFoundError):
+            self.assertEqual(self.vp._detect_xkb_layout('fr'), 'fr')
+            self.assertEqual(self.vp._detect_xkb_layout('it'), 'it')
+
+    def test_lang_hint_nl_still_unsupported(self):
+        # nl has no keycode map yet → no supported layout (Unicode-type fallback).
+        with patch('builtins.open', side_effect=FileNotFoundError):
+            self.assertIsNone(self.vp._detect_xkb_layout('nl'))
+
     def test_no_hints_returns_none(self):
         with patch('builtins.open', side_effect=FileNotFoundError):
             result = self.vp._detect_xkb_layout(None)

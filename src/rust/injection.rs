@@ -128,6 +128,8 @@ fn keycodes_for(layout: &str, ch: char) -> Option<Vec<String>> {
         "se" => se_keycodes(ch),
         "de" => de_keycodes(ch),
         "fi" => fi_keycodes(ch),
+        "fr" => fr_keycodes(ch),
+        "it" => it_keycodes(ch),
         "es" => es_keycodes(ch),
         "pt" => pt_keycodes(ch),
         "br" => br_keycodes(ch),
@@ -180,6 +182,54 @@ fn fi_keycodes(ch: char) -> Option<Vec<String>> {
         'ö' => Some(key(39)),
         'Ö' => Some(shift_key(39)),
         _ => nordic_de_punct(ch),
+    }
+}
+
+// French AZERTY. Derived from the standard XKB `fr` layout, NOT hardware-tested
+// (see the README status table). The dedicated number-row accents (é è ç à) and
+// ù have no simple uppercase on AZERTY, so only their lowercase forms are mapped;
+// circumflex/diaeresis go through the dead key right of P (KEY_LEFTBRACE=26).
+fn fr_keycodes(ch: char) -> Option<Vec<String>> {
+    match ch {
+        'é' => Some(key(3)),  // KEY_2
+        'è' => Some(key(8)),  // KEY_7
+        'ç' => Some(key(10)), // KEY_9
+        'à' => Some(key(11)), // KEY_0
+        'ù' => Some(key(40)), // KEY_APOSTROPHE
+        'â' => Some(dead(26, 16)),
+        'Â' => Some(dead_up(26, 16)),
+        'ê' => Some(dead(26, 18)),
+        'Ê' => Some(dead_up(26, 18)),
+        'î' => Some(dead(26, 23)),
+        'Î' => Some(dead_up(26, 23)),
+        'ô' => Some(dead(26, 24)),
+        'Ô' => Some(dead_up(26, 24)),
+        'û' => Some(dead(26, 22)),
+        'Û' => Some(dead_up(26, 22)),
+        'ë' => Some(shift_dead(26, 18)),
+        'Ë' => Some(shift_dead_up(26, 18)),
+        'ï' => Some(shift_dead(26, 23)),
+        'Ï' => Some(shift_dead_up(26, 23)),
+        'ü' => Some(shift_dead(26, 22)),
+        'Ü' => Some(shift_dead_up(26, 22)),
+        _ => None,
+    }
+}
+
+// Italian QWERTY. Derived from the standard XKB `it` layout, NOT hardware-tested.
+// The accented vowels sit on dedicated keys to the right of the letters; their
+// uppercase forms are not directly reachable on this layout, so only lowercase
+// is mapped (uppercase falls back to Unicode `type`).
+fn it_keycodes(ch: char) -> Option<Vec<String>> {
+    match ch {
+        'ì' => Some(key(13)),       // KEY_EQUAL
+        'è' => Some(key(26)),       // KEY_LEFTBRACE
+        'é' => Some(shift_key(26)), // Shift of the è key
+        'ò' => Some(key(39)),       // KEY_SEMICOLON
+        'ç' => Some(shift_key(39)), // Shift of the ò key
+        'à' => Some(key(40)),       // KEY_APOSTROPHE
+        'ù' => Some(key(43)),       // KEY_BACKSLASH (ISO key by Enter)
+        _ => None,
     }
 }
 
@@ -490,6 +540,8 @@ mod tests {
             ("se", "äöåÄÖÅ"),
             ("de", "äöüÄÖÜ"),
             ("fi", "äöÄÖ"),
+            ("fr", "éèçàùâêîôûëïüÂÊÎÔÛËÏÜ"),
+            ("it", "ìèéòçàù"),
             ("es", "ñÑáéíóúÁÉÍÓÚüÜ"),
             ("pt", "çÇáéíóúÁÉÍÓÚàÀãõÃÕâêôÂÊÔ"),
             ("br", "çÇãõÃÕâêôÂÊÔáéíóúÁÉÍÓÚ"),
@@ -528,6 +580,8 @@ mod tests {
             ("se", "äöåÄÖÅ?-_:;/\""),
             ("de", "äöüÄÖÜ?-_:;/\""),
             ("fi", "äöÄÖ?-_:;/\""),
+            ("fr", "éèçàùâêîôûëïüÂÊÎÔÛËÏÜ"),
+            ("it", "ìèéòçàù"),
             ("es", "ñÑáéíóúÁÉÍÓÚüÜ"),
             ("pt", "çÇáéíóúÁÉÍÓÚàÀãõÃÕâêôÂÊÔ"),
             ("br", "çÇãõÃÕâêôÂÊÔáéíóúÁÉÍÓÚ"),
