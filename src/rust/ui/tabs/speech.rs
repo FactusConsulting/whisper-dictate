@@ -103,13 +103,27 @@ impl WhisperDictateApp {
                     &["auto", "cuda", "cpu"],
                     "Local inference device. auto chooses CUDA when available, otherwise CPU.",
                 );
-                combo_enabled(
+                combo_enabled_labeled(
                     ui,
                     backend != SttBackendMode::Cloud,
                     "Compute type",
                     &mut self.settings.compute_type,
-                    &["", "int8_float16", "float16", "bfloat16", "float32", "int8"],
-                    "Local model precision/performance mode. Leave empty for backend default.",
+                    // Ordered most → least accurate. The numeric precision the
+                    // local Whisper model runs at: higher precision = more
+                    // accurate but slower and more memory; lower = faster and
+                    // lighter with a small accuracy cost.
+                    &[
+                        ("", "Auto — best precision for your device (recommended)"),
+                        ("float32", "float32 — most accurate, slowest, most memory"),
+                        ("bfloat16", "bfloat16 — near-float32 accuracy (newer GPUs)"),
+                        ("float16", "float16 — high accuracy, ~half the VRAM (GPU)"),
+                        ("int8_float16", "int8_float16 — fast, low VRAM (good GPU default)"),
+                        ("int8", "int8 — fastest, least memory, slight accuracy loss (CPU)"),
+                    ],
+                    "Numeric precision the local Whisper model runs at. Higher precision is more \
+                     accurate but slower and uses more VRAM/RAM; lower is faster and lighter for a \
+                     small accuracy cost. Auto picks a sensible default per device (GPU vs CPU). \
+                     Parakeet ignores this — it always uses its own precision.",
                 );
                 section_label(ui, "Dictation controls", palette);
                 ui.label("Applies to local and cloud speech engines.");
