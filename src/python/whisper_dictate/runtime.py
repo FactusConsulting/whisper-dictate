@@ -257,70 +257,96 @@ def _load_runtime_modules() -> None:
     vp_dictate._load_runtime_modules()
 
 
+def _handle_model_capacity(a, ap) -> None:
+    if not _print_model_capacity(a.json):
+        ap.error("Rust model-capacity helper is not available")
+
+
+def _handle_benchmark(a, ap) -> None:
+    from whisper_dictate.vp_benchmark import run_benchmark
+    try:
+        run_benchmark(
+            a.benchmark_files,
+            a.benchmark_backends,
+            output_jsonl=a.benchmark_jsonl,
+            corpus_manifest=a.benchmark_corpus,
+        )
+    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        ap.error(str(e))
+
+
+def _handle_calibrate(a, ap) -> None:
+    try:
+        if a.calibrate_file:
+            calibrate_file(a.calibrate_file, as_json=a.json)
+        else:
+            calibrate_microphone(a.calibrate_mic, as_json=a.json)
+    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        ap.error(str(e))
+
+
+def _handle_history(a, ap) -> None:
+    try:
+        if a.history_last:
+            run_history_command("last", as_json=a.json)
+        elif a.history_copy_last:
+            run_history_command("copy-last")
+        elif a.history_reinject_last:
+            run_history_command("reinject-last")
+        else:
+            run_history_command("list", limit=a.history_list, as_json=a.json)
+    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        ap.error(str(e))
+
+
+def _handle_post_process(a) -> None:
+    from whisper_dictate.vp_postprocess import postprocess_text
+    result = postprocess_text(a.post_process_text)
+    if result.fallback and result.error:
+        print(f"[post] fallback: {result.error}", file=sys.stderr, flush=True)
+    print(result.text, flush=True)
+
+
+def _handle_dictionary_suggest(a, ap) -> None:
+    from whisper_dictate.vp_dictionary_suggest import print_suggestions, suggest_replacements
+    try:
+        suggestions = suggest_replacements(
+            a.dictionary_suggest,
+            min_confidence=a.dictionary_suggest_min_confidence,
+        )
+        print_suggestions(suggestions, as_json=a.json)
+    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        ap.error(str(e))
+
+
 def _run_utility_subcommands(a, ap) -> None:
     """Handle the one-shot CLI subcommands that don't load an STT model.
 
     Each branch terminates the process via ``raise SystemExit`` on a hit; if no
     subcommand matches, this returns and ``main`` proceeds to the dictation path.
+    The per-subcommand work lives in ``_handle_*`` helpers to keep this dispatch
+    flat.
     """
     if a.doctor:
         raise SystemExit(run_doctor())
     if a.model_capacity:
-        if not _print_model_capacity(a.json):
-            ap.error("Rust model-capacity helper is not available")
+        _handle_model_capacity(a, ap)
         raise SystemExit(0)
     if a.benchmark_files or a.benchmark_corpus:
-        from whisper_dictate.vp_benchmark import run_benchmark
-        try:
-            run_benchmark(
-                a.benchmark_files,
-                a.benchmark_backends,
-                output_jsonl=a.benchmark_jsonl,
-                corpus_manifest=a.benchmark_corpus,
-            )
-        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-            ap.error(str(e))
+        _handle_benchmark(a, ap)
         raise SystemExit(0)
     if a.calibrate_mic is not None or a.calibrate_file:
-        try:
-            if a.calibrate_file:
-                calibrate_file(a.calibrate_file, as_json=a.json)
-            else:
-                calibrate_microphone(a.calibrate_mic, as_json=a.json)
-        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-            ap.error(str(e))
+        _handle_calibrate(a, ap)
         raise SystemExit(0)
     if (a.history_list is not None or a.history_last or
             a.history_copy_last or a.history_reinject_last):
-        try:
-            if a.history_last:
-                run_history_command("last", as_json=a.json)
-            elif a.history_copy_last:
-                run_history_command("copy-last")
-            elif a.history_reinject_last:
-                run_history_command("reinject-last")
-            else:
-                run_history_command("list", limit=a.history_list, as_json=a.json)
-        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-            ap.error(str(e))
+        _handle_history(a, ap)
         raise SystemExit(0)
     if a.post_process_text is not None:
-        from whisper_dictate.vp_postprocess import postprocess_text
-        result = postprocess_text(a.post_process_text)
-        if result.fallback and result.error:
-            print(f"[post] fallback: {result.error}", file=sys.stderr, flush=True)
-        print(result.text, flush=True)
+        _handle_post_process(a)
         raise SystemExit(0)
     if a.dictionary_suggest:
-        from whisper_dictate.vp_dictionary_suggest import print_suggestions, suggest_replacements
-        try:
-            suggestions = suggest_replacements(
-                a.dictionary_suggest,
-                min_confidence=a.dictionary_suggest_min_confidence,
-            )
-            print_suggestions(suggestions, as_json=a.json)
-        except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-            ap.error(str(e))
+        _handle_dictionary_suggest(a, ap)
         raise SystemExit(0)
 
 

@@ -148,23 +148,31 @@ def _run_rust_history_command(*args: str) -> bool:
     return True
 
 
+def _history_list(limit: int, as_json: bool) -> None:
+    if as_json:
+        rows = read_history(limit)
+        print(json.dumps(rows, ensure_ascii=False, sort_keys=True), flush=True)
+    elif not _run_rust_history_command("list", str(limit)):
+        for row in read_history(limit):
+            text = str(row.get("text", ""))
+            ts = row.get("ts", "")
+            backend = row.get("stt_backend", "")
+            print(f"{ts} [{backend}] {text}", flush=True)
+
+
+def _history_last(as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(last_history() or {}, ensure_ascii=False, sort_keys=True), flush=True)
+    elif not _run_rust_history_command("last"):
+        print((last_history() or {}).get("text", ""), flush=True)
+
+
 def run_history_command(action: str, *, limit: int = 10, as_json: bool = False) -> None:
     try:
         if action == "list":
-            if as_json:
-                rows = read_history(limit)
-                print(json.dumps(rows, ensure_ascii=False, sort_keys=True), flush=True)
-            elif not _run_rust_history_command("list", str(limit)):
-                for row in read_history(limit):
-                    text = str(row.get("text", ""))
-                    ts = row.get("ts", "")
-                    backend = row.get("stt_backend", "")
-                    print(f"{ts} [{backend}] {text}", flush=True)
+            _history_list(limit, as_json)
         elif action == "last":
-            if as_json:
-                print(json.dumps(last_history() or {}, ensure_ascii=False, sort_keys=True), flush=True)
-            elif not _run_rust_history_command("last"):
-                print((last_history() or {}).get("text", ""), flush=True)
+            _history_last(as_json)
         elif action == "copy-last":
             text = copy_last_to_clipboard()
             print(f"copied: {text}", flush=True)

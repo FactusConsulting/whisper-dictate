@@ -20,6 +20,62 @@ import time
 from whisper_dictate.vp_cli import QUIT_COUNT, QUIT_KEY, QUIT_WINDOW_MS
 
 
+class _PynputListener:
+    """Push-to-talk state machine for the pynput backend.
+
+    Holds the mutable press / recording / quit-streak state so the listener
+    callbacks stay tiny (the previous nested closures pushed _run_pynput's
+    cognitive complexity well past the limit). ``owner`` is the Dictate
+    instance providing ``_start`` / ``_stop_and_transcribe``.
+    """
+
+    def __init__(self, owner, targets: set, quit_key) -> None:
+        self._owner = owner
+        self._targets = targets
+        self._quit_key = quit_key
+        self._pressed: set = set()
+        self._recording = False
+        self._quit_count = 0
+        self._quit_last = 0.0
+
+    def _quit_chord(self, k) -> bool:
+        # Track the consecutive quit-key streak; True once it reaches
+        # QUIT_COUNT within QUIT_WINDOW_MS. Any non-quit key resets the streak.
+        if k != self._quit_key:
+            self._quit_count = 0
+            return False
+        if QUIT_COUNT <= 0:
+            return False
+        now = time.monotonic()
+        if now - self._quit_last <= QUIT_WINDOW_MS / 1000.0:
+            self._quit_count += 1
+        else:
+            self._quit_count = 1
+        self._quit_last = now
+        return self._quit_count >= QUIT_COUNT
+
+    def on_press(self, k):
+        # Returning False stops the pynput listener (quit chord fired).
+        if self._quit_chord(k):
+            return False
+        if k == self._quit_key:
+            return None  # quit key never joins the PTT-key set
+        self._pressed.add(k)
+        if self._targets.issubset(self._pressed) and not self._recording:
+            self._recording = True
+            self._owner._start()
+        return None
+
+    def on_release(self, k):
+        if k in self._targets:
+            self._pressed.discard(k)
+            if self._recording and not self._targets.issubset(self._pressed):
+                self._recording = False
+                threading.Thread(target=self._owner._stop_and_transcribe,
+                                 daemon=True).start()
+        return None
+
+
 class KeyBackendMixin:
     # pynput key name → evdev key code mapping for common PTT keys
     _EVDEV_MAP = {
@@ -30,13 +86,9 @@ class KeyBackendMixin:
         **{f'f{i}': f'KEY_F{i}' for i in range(1, 13)},
     }
 
-    def _run_evdev(self, key_names: list[str]):
-        # Global hotkey detection via evdev — reads /dev/input/event* directly.
-        # Works on pure Wayland where pynput's Xorg backend misses events from
-        # Wayland-native windows. Requires user to be in the 'input' group.
-        import evdev
-        import select
-
+    def _evdev_target_codes(self, evdev, key_names: list[str]) -> set[int]:
+        # Resolve pynput-style key names to evdev keycodes, exiting on anything
+        # unmapped (the supported set is _EVDEV_MAP).
         target_codes: set[int] = set()
         for kn in key_names:
             ecname = self._EVDEV_MAP.get(kn)
@@ -47,8 +99,10 @@ class KeyBackendMixin:
             if code is None:
                 sys.exit(f"evdev has no keycode '{ecname}'")
             target_codes.add(code)
+        return target_codes
 
-        # Open all input devices that have EV_KEY capability (keyboards)
+    def _evdev_open_keyboards(self, evdev) -> list:
+        # Open all input devices that have EV_KEY capability (keyboards).
         devices = []
         for path in evdev.list_devices():
             try:
@@ -57,6 +111,45 @@ class KeyBackendMixin:
                     devices.append(d)
             except Exception:
                 pass
+        return devices
+
+    @staticmethod
+    def _evdev_close(devices) -> None:
+        for d in devices:
+            try:
+                d.close()
+            except Exception:
+                pass
+
+    def _evdev_apply_event(self, ev, evdev, target_codes: set[int],
+                           pressed: set[int], recording: bool) -> bool:
+        # PTT state machine for a single evdev event. Mutates ``pressed`` and
+        # returns the (possibly updated) recording flag. Pure given a fake evdev,
+        # which is what the unit tests exercise.
+        if ev.type != evdev.ecodes.EV_KEY or ev.code not in target_codes:
+            return recording
+        if ev.value == evdev.KeyEvent.key_down:
+            pressed.add(ev.code)
+            if target_codes.issubset(pressed) and not recording:
+                self._start()
+                return True
+        elif ev.value == evdev.KeyEvent.key_up:
+            pressed.discard(ev.code)
+            if recording and not target_codes.issubset(pressed):
+                threading.Thread(target=self._stop_and_transcribe,
+                                 daemon=True).start()
+                return False
+        return recording
+
+    def _run_evdev(self, key_names: list[str]):
+        # Global hotkey detection via evdev — reads /dev/input/event* directly.
+        # Works on pure Wayland where pynput's Xorg backend misses events from
+        # Wayland-native windows. Requires user to be in the 'input' group.
+        import evdev
+        import select
+
+        target_codes = self._evdev_target_codes(evdev, key_names)
+        devices = self._evdev_open_keyboards(evdev)
         if not devices:
             sys.exit("evdev: no keyboard devices found — are you in the 'input' group?")
 
@@ -75,30 +168,12 @@ class KeyBackendMixin:
                     except OSError:
                         continue
                     for ev in events:
-                        if ev.type != evdev.ecodes.EV_KEY:
-                            continue
-                        if ev.code not in target_codes:
-                            continue
-                        if ev.value == evdev.KeyEvent.key_down:
-                            pressed.add(ev.code)
-                            if target_codes.issubset(pressed) and not recording:
-                                recording = True
-                                self._start()
-                        elif ev.value == evdev.KeyEvent.key_up:
-                            pressed.discard(ev.code)
-                            if recording and not target_codes.issubset(pressed):
-                                recording = False
-                                threading.Thread(
-                                    target=self._stop_and_transcribe,
-                                    daemon=True).start()
+                        recording = self._evdev_apply_event(
+                            ev, evdev, target_codes, pressed, recording)
         except KeyboardInterrupt:
             pass
         finally:
-            for d in devices:
-                try:
-                    d.close()
-                except Exception:
-                    pass
+            self._evdev_close(devices)
         print("\nbye", flush=True)
 
     def _have_evdev(self) -> bool:
@@ -131,44 +206,13 @@ class KeyBackendMixin:
 
         targets = self._pynput_targets(keyboard, key_names)
         quit_key = self._pynput_quit_key(keyboard)
-        pressed: set = set()
-        recording = False
-        esc_count = 0
-        esc_last = 0.0
 
         quit_hint = f"{QUIT_COUNT}× {QUIT_KEY} or Ctrl+C" if QUIT_COUNT > 0 else "Ctrl+C"
         print(f"whisper-dictate [lang={self.lang or 'auto'}] (pynput). Hold "
               f"[{self.key}] to talk. {quit_hint} to quit.", flush=True)
 
-        def on_press(k):
-            nonlocal recording, esc_count, esc_last
-            if k == quit_key:
-                if QUIT_COUNT > 0:
-                    now = time.monotonic()
-                    if now - esc_last <= QUIT_WINDOW_MS / 1000.0:
-                        esc_count += 1
-                    else:
-                        esc_count = 1
-                    esc_last = now
-                    if esc_count >= QUIT_COUNT:
-                        return False
-                return  # never add the quit key to the PTT-key set
-            esc_count = 0  # any other key resets the consecutive-Esc streak
-            pressed.add(k)
-            if targets.issubset(pressed) and not recording:
-                recording = True
-                self._start()
-
-        def on_release(k):
-            nonlocal recording
-            if k in targets:
-                pressed.discard(k)
-                if recording and not targets.issubset(pressed):
-                    recording = False
-                    threading.Thread(target=self._stop_and_transcribe,
-                                     daemon=True).start()
-
-        ln = keyboard.Listener(on_press=on_press, on_release=on_release)
+        state = _PynputListener(self, targets, quit_key)
+        ln = keyboard.Listener(on_press=state.on_press, on_release=state.on_release)
         ln.start()
         try:
             ln.join()

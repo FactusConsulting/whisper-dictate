@@ -45,27 +45,7 @@ impl WhisperDictateApp {
         ui.horizontal(|ui| {
             ui.label(ui_text(&self.settings.ui_language, UiTextKey::LogOutput));
             self.log_mode_selector(ui, palette);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button(icon_text(
-                        icons::ICON_COPY_ALL,
-                        ui_text(&self.settings.ui_language, UiTextKey::Copy),
-                    ))
-                    .clicked()
-                {
-                    ui.ctx().copy_text(self.visible_runtime_log());
-                }
-                if ui
-                    .button(icon_text(
-                        icons::ICON_DELETE,
-                        ui_text(&self.settings.ui_language, UiTextKey::Clear),
-                    ))
-                    .clicked()
-                {
-                    self.runtime_log.clear();
-                    self.runtime_log_scroll_to_bottom = true;
-                }
-            });
+            self.runtime_log_actions(ui);
         });
         ui.add_space(10.0);
 
@@ -82,47 +62,74 @@ impl WhisperDictateApp {
                 .stick_to_bottom(true)
                 .max_height(log_height)
                 .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.add_space(RUNTIME_LOG_CONTENT_TOP_PADDING);
-                    if self.runtime_log_view == LogViewMode::Debug {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(&visible_log)
-                                    .monospace()
-                                    .color(palette.text),
-                            )
-                            .selectable(true)
-                            .wrap(),
-                        );
-                    } else {
-                        let cards = runtime_log_cards(&self.runtime_log, self.runtime_log_view);
-                        if cards.is_empty() {
-                            empty_log_state(
-                                ui,
-                                self.runtime_state,
-                                palette,
-                                &self.settings.ui_language,
-                            );
-                        } else {
-                            for card in cards {
-                                if card.title.trim().is_empty() {
-                                    continue;
-                                }
-                                runtime_log_card(ui, &card, palette);
-                                ui.add_space(8.0);
-                            }
-                        }
-                    }
-                    let bottom = ui.allocate_response(
-                        egui::vec2(ui.available_width(), RUNTIME_LOG_CONTENT_BOTTOM_PADDING),
-                        egui::Sense::hover(),
-                    );
-                    if self.runtime_log_scroll_to_bottom {
-                        bottom.scroll_to_me(Some(egui::Align::BOTTOM));
-                        self.runtime_log_scroll_to_bottom = false;
-                    }
+                    self.render_log_entries(ui, palette, &visible_log);
                 });
         });
+    }
+
+    fn runtime_log_actions(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button(icon_text(
+                    icons::ICON_COPY_ALL,
+                    ui_text(&self.settings.ui_language, UiTextKey::Copy),
+                ))
+                .clicked()
+            {
+                ui.ctx().copy_text(self.visible_runtime_log());
+            }
+            if ui
+                .button(icon_text(
+                    icons::ICON_DELETE,
+                    ui_text(&self.settings.ui_language, UiTextKey::Clear),
+                ))
+                .clicked()
+            {
+                self.runtime_log.clear();
+                self.runtime_log_scroll_to_bottom = true;
+            }
+        });
+    }
+
+    fn render_log_entries(&mut self, ui: &mut egui::Ui, palette: UiPalette, visible_log: &str) {
+        ui.set_min_width(ui.available_width());
+        ui.add_space(RUNTIME_LOG_CONTENT_TOP_PADDING);
+        if self.runtime_log_view == LogViewMode::Debug {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(visible_log)
+                        .monospace()
+                        .color(palette.text),
+                )
+                .selectable(true)
+                .wrap(),
+            );
+        } else {
+            self.render_log_cards(ui, palette);
+        }
+        let bottom = ui.allocate_response(
+            egui::vec2(ui.available_width(), RUNTIME_LOG_CONTENT_BOTTOM_PADDING),
+            egui::Sense::hover(),
+        );
+        if self.runtime_log_scroll_to_bottom {
+            bottom.scroll_to_me(Some(egui::Align::BOTTOM));
+            self.runtime_log_scroll_to_bottom = false;
+        }
+    }
+
+    fn render_log_cards(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
+        let cards = runtime_log_cards(&self.runtime_log, self.runtime_log_view);
+        if cards.is_empty() {
+            empty_log_state(ui, self.runtime_state, palette, &self.settings.ui_language);
+            return;
+        }
+        for card in cards {
+            if card.title.trim().is_empty() {
+                continue;
+            }
+            runtime_log_card(ui, &card, palette);
+            ui.add_space(8.0);
+        }
     }
 
     fn listening_gauge(&self, ui: &mut egui::Ui, palette: UiPalette, max_width: f32) {

@@ -42,6 +42,17 @@ class DictionarySnapshot:
     replacements: dict[str, str] = field(default_factory=dict)
 
 
+def _parse_replacements(payload: dict) -> dict[str, str]:
+    replacements: dict[str, str] = {}
+    for item in payload.get("replacements") or []:
+        if isinstance(item, dict):
+            source = str(item.get("from") or "").strip()
+            target = str(item.get("to") or "").strip()
+            if source and target:
+                replacements[source] = target
+    return replacements
+
+
 def _load_dictionary_snapshot() -> DictionarySnapshot:
     helper = os.environ.get("VOICEPI_RUST_INJECTOR")
     if not helper:
@@ -64,16 +75,9 @@ def _load_dictionary_snapshot() -> DictionarySnapshot:
         return DictionarySnapshot()
     if not isinstance(payload, dict):
         return DictionarySnapshot()
-    replacements = {}
-    for item in payload.get("replacements") or []:
-        if isinstance(item, dict):
-            source = str(item.get("from") or "").strip()
-            target = str(item.get("to") or "").strip()
-            if source and target:
-                replacements[source] = target
     return DictionarySnapshot(
         terms=[str(term) for term in (payload.get("all_terms") or payload.get("terms") or [])],
-        replacements=replacements,
+        replacements=_parse_replacements(payload),
     )
 
 

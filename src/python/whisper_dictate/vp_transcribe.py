@@ -74,35 +74,48 @@ def _local_only_enabled() -> bool:
         "", "0", "false", "no", "off")
 
 
+def _rust_privacy_ok(helper: str, backend: str, feature: str) -> bool:
+    """Ask the Rust privacy helper whether ``backend`` is allowed.
+
+    Returns True when the helper explicitly approves; raises RuntimeError when
+    it explicitly rejects; returns False when the helper is unavailable or its
+    answer is unusable (the caller then applies the Python fallback check).
+    """
+    try:
+        r = subprocess.run(
+            [helper, "privacy"],
+            input=json.dumps({
+                "action": "assert_backend",
+                "local_only": _local_only_enabled(),
+                "backend": backend,
+                "feature": feature,
+            }),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=5,
+            shell=False,
+        )
+    except Exception:  # noqa: BLE001 - fall back to the Python check
+        return False
+    if r.returncode != 0:
+        return False
+    try:
+        payload = json.loads(r.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if not payload.get("ok", False):
+        raise RuntimeError(str(payload.get("error") or "local-only check failed"))
+    return True
+
+
 def _assert_local_backend(backend: str, *, feature: str = "STT") -> None:
     helper = os.environ.get("VOICEPI_RUST_INJECTOR")
-    if helper:
-        try:
-            r = subprocess.run(
-                [helper, "privacy"],
-                input=json.dumps({
-                    "action": "assert_backend",
-                    "local_only": _local_only_enabled(),
-                    "backend": backend,
-                    "feature": feature,
-                }),
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                capture_output=True,
-                timeout=5,
-                shell=False,
-            )
-            if r.returncode == 0:
-                payload = json.loads(r.stdout or "{}")
-                if isinstance(payload, dict):
-                    if not payload.get("ok", False):
-                        raise RuntimeError(str(payload.get("error") or "local-only check failed"))
-                    return
-        except RuntimeError:
-            raise
-        except Exception:
-            pass
+    if helper and _rust_privacy_ok(helper, backend, feature):
+        return
     if _local_only_enabled() and (backend or "").strip().lower() not in (
         "whisper", "faster-whisper", "parakeet"):
         raise RuntimeError(
@@ -172,11 +185,15 @@ def _base_prompt_only(base_prompt: str | None) -> str | None:
     return prompt or None
 
 
-def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> DictionaryRuntimeResult:
-    fallback = DictionaryRuntimeResult(text=text, prompt=_base_prompt_only(base_prompt))
+def _run_dictionary_helper_payload(text: str, base_prompt: str | None) -> dict | None:
+    """Run the Rust dictionary-runtime helper and return its parsed dict.
+
+    Returns None when the helper is unavailable, exits non-zero, or returns
+    unparseable / non-dict output — the caller falls back in every such case.
+    """
     helper = os.environ.get("VOICEPI_RUST_INJECTOR")
     if not helper:
-        return fallback
+        return None
     try:
         r = subprocess.run(
             [helper, "dictionary-runtime"],
@@ -194,21 +211,22 @@ def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> Dicti
     except Exception as e:  # noqa: BLE001 - dictation must survive helper trouble
         if STT_DEBUG:
             print(f"[dictionary] Rust helper error: {e}", flush=True)
-        return fallback
+        return None
     if r.returncode != 0:
         if STT_DEBUG:
             err = (r.stderr or "").strip()
             print(f"[dictionary] Rust helper failed: {err}", flush=True)
-        return fallback
+        return None
     try:
         payload = json.loads(r.stdout or "{}")
     except json.JSONDecodeError as e:
         if STT_DEBUG:
             print(f"[dictionary] Rust helper returned invalid JSON: {e}", flush=True)
-        return fallback
-    if not isinstance(payload, dict):
-        return fallback
+        return None
+    return payload if isinstance(payload, dict) else None
 
+
+def _parse_dictionary_changes(payload: dict) -> list[dict[str, object]]:
     changes = []
     for item in payload.get("changes") or []:
         if not isinstance(item, dict):
@@ -218,6 +236,14 @@ def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> Dicti
             "to": str(item.get("to") or ""),
             "count": int(item.get("count") or 0),
         })
+    return changes
+
+
+def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> DictionaryRuntimeResult:
+    fallback = DictionaryRuntimeResult(text=text, prompt=_base_prompt_only(base_prompt))
+    payload = _run_dictionary_helper_payload(text, base_prompt)
+    if payload is None:
+        return fallback
 
     error = payload.get("error")
     if error and STT_DEBUG:
@@ -227,7 +253,7 @@ def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> Dicti
         text=str(payload.get("text", text)),
         prompt=payload.get("prompt") if isinstance(payload.get("prompt"), str) else None,
         terms=[str(term) for term in (payload.get("terms") or [])],
-        changes=changes,
+        changes=_parse_dictionary_changes(payload),
         term_count=int(payload.get("term_count") or 0),
         replacement_count=int(payload.get("replacement_count") or 0),
         path=str(payload["path"]) if payload.get("path") else None,

@@ -170,57 +170,68 @@ impl Dictionary {
     }
 }
 
+fn parse_dictionary_terms(object: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut terms = Vec::new();
+    let Some(raw_terms) = object.get("terms").and_then(Value::as_array) else {
+        return terms;
+    };
+    for item in raw_terms {
+        if let Some(term) = item.as_str() {
+            terms.push(term.to_owned());
+        } else if let Some(term) = item
+            .as_object()
+            .and_then(|object| object.get("term"))
+            .and_then(Value::as_str)
+        {
+            terms.push(term.to_owned());
+        }
+    }
+    terms
+}
+
+fn parse_dictionary_replacements(raw_replacements: &Value) -> Vec<Replacement> {
+    let mut replacements = Vec::new();
+    if let Some(map) = raw_replacements.as_object() {
+        for (from, to) in map {
+            replacements.push(Replacement {
+                from: from.to_owned(),
+                to: value_to_string(to),
+            });
+        }
+    } else if let Some(items) = raw_replacements.as_array() {
+        for item in items {
+            let Some(object) = item.as_object() else {
+                continue;
+            };
+            let Some(from) = object.get("from").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(to) = object.get("to").and_then(Value::as_str) else {
+                continue;
+            };
+            if from.is_empty() || to.is_empty() {
+                continue;
+            }
+            replacements.push(Replacement {
+                from: from.to_owned(),
+                to: to.to_owned(),
+            });
+        }
+    }
+    replacements
+}
+
 pub fn parse_json_dictionary(raw: &str) -> Result<Dictionary> {
     let value: Value = serde_json::from_str(raw)?;
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("dictionary JSON root must be an object"))?;
 
-    let mut terms = Vec::new();
-    if let Some(raw_terms) = object.get("terms").and_then(Value::as_array) {
-        for item in raw_terms {
-            if let Some(term) = item.as_str() {
-                terms.push(term.to_owned());
-            } else if let Some(term) = item
-                .as_object()
-                .and_then(|object| object.get("term"))
-                .and_then(Value::as_str)
-            {
-                terms.push(term.to_owned());
-            }
-        }
-    }
-
-    let mut replacements = Vec::new();
-    if let Some(raw_replacements) = object.get("replacements") {
-        if let Some(map) = raw_replacements.as_object() {
-            for (from, to) in map {
-                replacements.push(Replacement {
-                    from: from.to_owned(),
-                    to: value_to_string(to),
-                });
-            }
-        } else if let Some(items) = raw_replacements.as_array() {
-            for item in items {
-                let Some(object) = item.as_object() else {
-                    continue;
-                };
-                let Some(from) = object.get("from").and_then(Value::as_str) else {
-                    continue;
-                };
-                let Some(to) = object.get("to").and_then(Value::as_str) else {
-                    continue;
-                };
-                if from.is_empty() || to.is_empty() {
-                    continue;
-                }
-                replacements.push(Replacement {
-                    from: from.to_owned(),
-                    to: to.to_owned(),
-                });
-            }
-        }
-    }
+    let terms = parse_dictionary_terms(object);
+    let replacements = object
+        .get("replacements")
+        .map(parse_dictionary_replacements)
+        .unwrap_or_default();
 
     Ok(Dictionary {
         terms: dedupe_terms(terms),
