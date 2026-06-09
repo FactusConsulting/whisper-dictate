@@ -126,35 +126,42 @@ impl WhisperDictateApp {
     /// Thin global status bar (bottom of every tab): a saved/unsaved dot + the
     /// latest message. Replaces the old sidebar badge and per-page Messages card.
     pub(in crate::ui) fn status_message_bar(&self, ui: &mut egui::Ui, palette: UiPalette) {
-        ui.horizontal_centered(|ui| {
-            // Even, compact spacing so the status dot, label and message read as
-            // one row instead of drifting apart.
-            ui.spacing_mut().item_spacing.x = 6.0;
-            let is_dirty = self.has_unsaved_settings();
-            let (label_key, color) = if is_dirty {
-                (UiTextKey::UnsavedChanges, palette.warn_text)
-            } else {
-                (UiTextKey::SettingsSaved, palette.ok_text)
-            };
-            // A tight 8px dot whose circle fills its box, vertically centered with
-            // the label by the surrounding centered layout.
-            let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-            ui.painter().circle_filled(dot.center(), 4.0, color);
-            ui.label(
-                egui::RichText::new(ui_text(&self.settings.ui_language, label_key))
-                    .color(color)
-                    .strong(),
-            );
-            let message = self.status_bar_message();
-            if !message.is_empty() {
-                ui.label(egui::RichText::new("·").color(palette.text_muted));
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&message).color(palette.text_muted))
-                        .truncate(),
-                )
-                .on_hover_text(&message);
-            }
-        });
+        // Center the row vertically within the thin bar. `horizontal_centered`
+        // only centers items within their own row band, which leaves the content
+        // hugging the top of the panel; allocating the full height with a
+        // left-to-right Center layout (like the top status bar) centers it.
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), ui.available_height()),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                // Even, compact spacing so the dot, label and message read as one row.
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let is_dirty = self.has_unsaved_settings();
+                let (label_key, color) = if is_dirty {
+                    (UiTextKey::UnsavedChanges, palette.warn_text)
+                } else {
+                    (UiTextKey::SettingsSaved, palette.ok_text)
+                };
+                // A tight 8px dot whose circle fills its box, vertically centered
+                // with the label by the surrounding centered layout.
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot.center(), 4.0, color);
+                ui.label(
+                    egui::RichText::new(ui_text(&self.settings.ui_language, label_key))
+                        .color(color)
+                        .strong(),
+                );
+                let message = self.status_bar_message();
+                if !message.is_empty() {
+                    ui.label(egui::RichText::new("·").color(palette.text_muted));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&message).color(palette.text_muted))
+                            .truncate(),
+                    )
+                    .on_hover_text(&message);
+                }
+            },
+        );
     }
 
     /// The latest status text for the bottom bar: the settings status plus the
