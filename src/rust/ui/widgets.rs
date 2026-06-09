@@ -129,6 +129,21 @@ pub(in crate::ui) fn checkbox_help(ui: &mut egui::Ui, label: &str, value: &mut b
     grid_help_row(ui, show_help, help);
 }
 
+pub(in crate::ui) fn checkbox_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut bool,
+    help: &str,
+) {
+    let show_help = label_with_help_enabled(ui, enabled, label, help);
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.checkbox(value, "");
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
 pub(in crate::ui) fn combo_help(
     ui: &mut egui::Ui,
     label: &str,

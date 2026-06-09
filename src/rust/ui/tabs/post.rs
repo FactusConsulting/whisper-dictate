@@ -5,6 +5,9 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn post_processing_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Post-processing");
         let previous_post_provider = PostProvider::from_settings(&self.settings);
+        // Everything below the "Post processor" selector only applies once a
+        // processor is chosen — grey it out and lock it while post is disabled.
+        let post_enabled = self.settings.post_processor != "none";
         settings_grid("post_processing_settings")
             .show(ui, |ui| {
                 combo_help_labeled(
@@ -14,8 +17,9 @@ impl WhisperDictateApp {
                     POST_PROCESSOR_OPTIONS,
                     "Optional second text pass after speech recognition, dictionary replacements and before final injection. none disables it; ollama uses a local chat model; groq/openai send the dictated text to a cloud chat model for cleanup or rewriting.",
                 );
-                combo_help(
+                combo_enabled(
                     ui,
+                    post_enabled,
                     "Post mode",
                     &mut self.settings.post_mode,
                     &[
@@ -23,27 +27,31 @@ impl WhisperDictateApp {
                     ],
                     "Controls what the post processor is allowed to do. raw bypasses post-processing and does not call the model; clean fixes punctuation/casing and obvious transcription artifacts; prompt rewrites for coding agents; terminal preserves commands and paths; slack/email/bullets format for those destinations.",
                 );
-                self.post_model_field(ui);
-                text_help(
+                self.post_model_field(ui, post_enabled);
+                text_enabled(
                     ui,
+                    post_enabled,
                     "Post base URL",
                     &mut self.settings.post_base_url,
                     "Base URL for the post-processing provider. Ollama normally uses http://localhost:11434; Groq/OpenAI use OpenAI-compatible HTTPS endpoints.",
                 );
-                text_help(
+                text_enabled(
                     ui,
+                    post_enabled,
                     "Post timeout ms",
                     &mut self.settings.post_timeout_ms,
                     "Maximum time allowed for post-processing.",
                 );
-                text_help(
+                text_enabled(
                     ui,
+                    post_enabled,
                     "Post max input chars",
                     &mut self.settings.post_max_input_chars,
                     "Maximum transcript length sent to the post-processor.",
                 );
-                text_help(
+                text_enabled(
                     ui,
+                    post_enabled,
                     "Post max output chars",
                     &mut self.settings.post_max_output_chars,
                     "Maximum accepted length of post-processed output.",
@@ -51,14 +59,16 @@ impl WhisperDictateApp {
                 if let Some(provider) = PostProvider::from_settings(&self.settings) {
                     self.post_api_key_section(ui, provider);
                 }
-                checkbox_help(
+                checkbox_enabled(
                     ui,
+                    post_enabled,
                     "Cloud redaction",
                     &mut self.settings.post_redact,
                     "Before OpenAI-compatible post-processing, replace sensitive local text with placeholders and restore it afterward when possible.",
                 );
-                text_help(
+                text_enabled(
                     ui,
+                    post_enabled,
                     "Redaction terms",
                     &mut self.settings.post_redact_terms,
                     "Comma-separated names or terms to redact before cloud post-processing. Emails, phone numbers and common tokens are detected automatically.",
@@ -69,24 +79,27 @@ impl WhisperDictateApp {
         }
     }
 
-    fn post_model_field(&mut self, ui: &mut egui::Ui) {
+    fn post_model_field(&mut self, ui: &mut egui::Ui, enabled: bool) {
         match self.settings.post_processor.as_str() {
-            "groq" => combo_help_labeled(
+            "groq" => combo_enabled_labeled(
                 ui,
+                enabled,
                 "Post model",
                 &mut self.settings.post_model,
                 GROQ_POST_MODELS,
                 "Groq chat model used for the optional final text cleanup pass. The list labels show the recommended Danish cleanup default, faster alternatives, reasoning models and preview models. STT Whisper models are not listed here because they transcribe audio, not text.",
             ),
-            "openai" => combo_help(
+            "openai" => combo_enabled(
                 ui,
+                enabled,
                 "Post model",
                 &mut self.settings.post_model,
                 OPENAI_POST_MODELS,
                 "OpenAI chat model used for the optional final text cleanup pass.",
             ),
-            _ => text_help(
+            _ => text_enabled(
                 ui,
+                enabled,
                 "Post model",
                 &mut self.settings.post_model,
                 "Model name for post-processing, for example an Ollama model.",
