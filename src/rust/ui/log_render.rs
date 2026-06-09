@@ -78,82 +78,112 @@ pub(in crate::ui) fn runtime_log_cards(log: &str, mode: LogViewMode) -> Vec<Runt
     let has_structured_utterance = log.lines().any(|line| line.starts_with("[utterance] "));
     let mut cards = Vec::new();
     for line in log.lines() {
-        if matches!(mode, LogViewMode::Diagnostic) {
-            if let Some(card) = structured_utterance_card(line) {
-                cards.push(card);
-                continue;
-            }
-        }
-
-        if let Some(text) = extract_inject_preview(line) {
-            if matches!(mode, LogViewMode::Diagnostic) && has_structured_utterance {
-                continue;
-            }
-            cards.push(RuntimeLogCard {
-                kind: RuntimeLogCardKind::FinalText,
-                title: text,
-                detail: if matches!(mode, LogViewMode::Diagnostic) {
-                    latest_previous_post_detail(log, line)
-                        .unwrap_or_else(|| "Final output".to_owned())
-                } else {
-                    String::new()
-                },
-                badge: "Final".to_owned(),
-            });
-            continue;
-        }
-
-        if matches!(mode, LogViewMode::Diagnostic)
-            && has_structured_utterance
-            && (line.starts_with("[post]") || is_diagnostic_detail_line(line))
-        {
-            continue;
-        }
-
-        if matches!(mode, LogViewMode::Minimal) {
-            continue;
-        }
-
-        if line.starts_with("[post]") {
-            cards.push(RuntimeLogCard {
-                kind: RuntimeLogCardKind::Status,
-                title: strip_log_prefix(line).to_owned(),
-                detail: "Post-processing".to_owned(),
-                badge: "Post".to_owned(),
-            });
-            continue;
-        }
-
-        if line.starts_with("[worker] status=") {
-            cards.push(RuntimeLogCard {
-                kind: RuntimeLogCardKind::Status,
-                title: line.trim_start_matches("[worker] status=").to_owned(),
-                detail: "Worker state".to_owned(),
-                badge: "Worker".to_owned(),
-            });
-            continue;
-        }
-
-        if line.starts_with("[OK]") || line.starts_with("[ERROR]") {
-            cards.push(RuntimeLogCard {
-                kind: RuntimeLogCardKind::Status,
-                title: line.to_owned(),
-                detail: "Runtime message".to_owned(),
-                badge: "Status".to_owned(),
-            });
-            continue;
-        }
-
-        if matches!(mode, LogViewMode::Diagnostic) && is_diagnostic_detail_line(line) {
-            cards.push(RuntimeLogCard {
-                kind: RuntimeLogCardKind::Diagnostic,
-                title: compact_diagnostic_title(line),
-                detail: diagnostic_detail_label(line).to_owned(),
-                badge: diagnostic_badge(line).to_owned(),
-            });
+        if let Some(card) = runtime_log_card_for_line(line, mode, log, has_structured_utterance) {
+            cards.push(card);
         }
     }
     cards
+}
+
+/// Classify a single log line into at most one card. Returns `None` when the
+/// line produces no card in this mode (filtered, skipped, or unrecognised).
+fn runtime_log_card_for_line(
+    line: &str,
+    mode: LogViewMode,
+    log: &str,
+    has_structured_utterance: bool,
+) -> Option<RuntimeLogCard> {
+    match mode {
+        LogViewMode::Debug => None,
+        LogViewMode::Minimal => minimal_log_card(line),
+        LogViewMode::Diagnostic => diagnostic_log_card(line, log, has_structured_utterance),
+    }
+}
+
+/// Minimal mode shows only the final injected text.
+fn minimal_log_card(line: &str) -> Option<RuntimeLogCard> {
+    let text = extract_inject_preview(line)?;
+    Some(RuntimeLogCard {
+        kind: RuntimeLogCardKind::FinalText,
+        title: text,
+        detail: String::new(),
+        badge: "Final".to_owned(),
+    })
+}
+
+/// Diagnostic mode: structured utterance summaries, final text, status and
+/// per-stage diagnostic detail cards. When structured `[utterance]` lines are
+/// present they supersede the redundant `[inject]`/`[post]`/detail lines.
+fn diagnostic_log_card(
+    line: &str,
+    log: &str,
+    has_structured_utterance: bool,
+) -> Option<RuntimeLogCard> {
+    if let Some(card) = structured_utterance_card(line) {
+        return Some(card);
+    }
+
+    if let Some(text) = extract_inject_preview(line) {
+        if has_structured_utterance {
+            return None;
+        }
+        return Some(RuntimeLogCard {
+            kind: RuntimeLogCardKind::FinalText,
+            title: text,
+            detail: latest_previous_post_detail(log, line)
+                .unwrap_or_else(|| "Final output".to_owned()),
+            badge: "Final".to_owned(),
+        });
+    }
+
+    if has_structured_utterance && (line.starts_with("[post]") || is_diagnostic_detail_line(line)) {
+        return None;
+    }
+
+    if let Some(card) = status_card(line) {
+        return Some(card);
+    }
+
+    if is_diagnostic_detail_line(line) {
+        return Some(RuntimeLogCard {
+            kind: RuntimeLogCardKind::Diagnostic,
+            title: compact_diagnostic_title(line),
+            detail: diagnostic_detail_label(line).to_owned(),
+            badge: diagnostic_badge(line).to_owned(),
+        });
+    }
+
+    None
+}
+
+/// `[post]` / `[worker] status=` / `[OK]` / `[ERROR]` status lines (shown in
+/// both diagnostic and debug-adjacent views).
+fn status_card(line: &str) -> Option<RuntimeLogCard> {
+    if line.starts_with("[post]") {
+        return Some(RuntimeLogCard {
+            kind: RuntimeLogCardKind::Status,
+            title: strip_log_prefix(line).to_owned(),
+            detail: "Post-processing".to_owned(),
+            badge: "Post".to_owned(),
+        });
+    }
+    if line.starts_with("[worker] status=") {
+        return Some(RuntimeLogCard {
+            kind: RuntimeLogCardKind::Status,
+            title: line.trim_start_matches("[worker] status=").to_owned(),
+            detail: "Worker state".to_owned(),
+            badge: "Worker".to_owned(),
+        });
+    }
+    if line.starts_with("[OK]") || line.starts_with("[ERROR]") {
+        return Some(RuntimeLogCard {
+            kind: RuntimeLogCardKind::Status,
+            title: line.to_owned(),
+            detail: "Runtime message".to_owned(),
+            badge: "Status".to_owned(),
+        });
+    }
+    None
 }
 
 fn final_output_text(log: &str) -> String {

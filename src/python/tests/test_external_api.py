@@ -369,3 +369,41 @@ class ExternalApiTests(unittest.TestCase):
                     prompt="clean this",
                     timeout_ms=1000,
                 )
+
+
+class ExternalApiErrorHelperTests(unittest.TestCase):
+    def _exc(self, body=b"", code=400, reason="Bad Request", retry_after=None):
+        import types as _t
+        headers = {"Retry-After": retry_after} if retry_after else {}
+        return _t.SimpleNamespace(
+            read=lambda: body, code=code, reason=reason,
+            headers=_t.SimpleNamespace(get=lambda k: headers.get(k)),
+        )
+
+    def test_extract_detail_prefers_openai_error_message(self):
+        from whisper_dictate import vp_external_api as m
+        self.assertEqual(
+            m._extract_http_error_detail(self._exc(b'{"error": {"message": "bad key"}}')),
+            "bad key",
+        )
+
+    def test_extract_detail_falls_back_to_raw_on_bad_json(self):
+        from whisper_dictate import vp_external_api as m
+        self.assertEqual(
+            m._extract_http_error_detail(self._exc(b"plain text error")),
+            "plain text error",
+        )
+
+    def test_http_error_to_runtime_429_includes_retry_and_hint(self):
+        from whisper_dictate import vp_external_api as m
+        exc = self._exc(b'{"error": {"message": "slow down"}}', code=429,
+                        reason="Too Many Requests", retry_after="5")
+        msg = str(m._http_error_to_runtime(exc, "https://api.groq.com/openai/v1/audio"))
+        self.assertIn("429", msg)
+        self.assertIn("retry after 5s", msg)
+        self.assertIn("slow down", msg)
+
+    def test_http_error_to_runtime_generic(self):
+        from whisper_dictate import vp_external_api as m
+        err = m._http_error_to_runtime(self._exc(b"", code=500, reason="Server Error"), "https://x/y")
+        self.assertIn("HTTP 500 Server Error", str(err))

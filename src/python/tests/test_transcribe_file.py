@@ -126,3 +126,66 @@ class TranscribeFileTests(unittest.TestCase):
 
         self.assertEqual(json.loads(buf.getvalue()), event)
 
+
+
+class TranscribeRustHelperTests(unittest.TestCase):
+    """The Rust-helper + parsing pieces extracted from _assert_local_backend and
+    _dictionary_runtime, exercised with subprocess stubbed."""
+
+    def setUp(self):
+        from whisper_dictate import vp_transcribe
+        self.vp = vp_transcribe
+
+    def _completed(self, returncode=0, stdout=""):
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    def test_parse_dictionary_changes_keeps_valid_items_and_defaults_count(self):
+        payload = {"changes": [
+            {"from": "a", "to": "b", "count": 3},
+            "not-a-dict",
+            {"from": "x", "to": "y"},
+        ]}
+        self.assertEqual(
+            self.vp._parse_dictionary_changes(payload),
+            [{"from": "a", "to": "b", "count": 3},
+             {"from": "x", "to": "y", "count": 0}],
+        )
+
+    def test_run_dictionary_helper_payload_none_without_helper(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VOICEPI_RUST_INJECTOR", None)
+            self.assertIsNone(self.vp._run_dictionary_helper_payload("hi", None))
+
+    def test_run_dictionary_helper_payload_parses_dict(self):
+        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "rust"}), \
+                patch.object(self.vp.subprocess, "run",
+                             return_value=self._completed(0, '{"text": "hi", "enabled": true}')):
+            self.assertEqual(
+                self.vp._run_dictionary_helper_payload("hi", None),
+                {"text": "hi", "enabled": True},
+            )
+
+    def test_run_dictionary_helper_payload_none_on_bad_json_or_nonzero(self):
+        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "rust"}):
+            with patch.object(self.vp.subprocess, "run",
+                              return_value=self._completed(0, "not json")):
+                self.assertIsNone(self.vp._run_dictionary_helper_payload("hi", None))
+            with patch.object(self.vp.subprocess, "run",
+                              return_value=self._completed(1, "{}")):
+                self.assertIsNone(self.vp._run_dictionary_helper_payload("hi", None))
+            with patch.object(self.vp.subprocess, "run", side_effect=OSError("boom")):
+                self.assertIsNone(self.vp._run_dictionary_helper_payload("hi", None))
+
+    def test_rust_privacy_ok_true_false_and_raise(self):
+        with patch.object(self.vp.subprocess, "run",
+                          return_value=self._completed(0, '{"ok": true}')):
+            self.assertTrue(self.vp._rust_privacy_ok("rust", "whisper", "STT"))
+        with patch.object(self.vp.subprocess, "run",
+                          return_value=self._completed(0, '{"ok": false, "error": "blocked"}')):
+            with self.assertRaises(RuntimeError):
+                self.vp._rust_privacy_ok("rust", "openai", "STT")
+        with patch.object(self.vp.subprocess, "run",
+                          return_value=self._completed(1, "")):
+            self.assertFalse(self.vp._rust_privacy_ok("rust", "whisper", "STT"))
+        with patch.object(self.vp.subprocess, "run", side_effect=OSError("boom")):
+            self.assertFalse(self.vp._rust_privacy_ok("rust", "whisper", "STT"))

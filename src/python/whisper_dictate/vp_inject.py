@@ -220,10 +220,9 @@ class InjectMixin:
         # Foretræk systemd-service — den har XKB_DEFAULT_LAYOUT=dk konfigureret
         r = subprocess.run(["systemctl", "--user", "start", "ydotoold.service"],
                            capture_output=True)
-        if r.returncode == 0:
-            if self._wait_for_ydotoold():
-                print("[inject] ydotoold startet via systemd", flush=True)
-                return
+        if r.returncode == 0 and self._wait_for_ydotoold():
+            print("[inject] ydotoold startet via systemd", flush=True)
+            return
         # Fallback: start ydotoold direkte. NB: den autoritative kilde er
         # sessionens XKB-layout, som Mutter applicerer på uinput-enheden —
         # ikke ydotoolds egen env. XKB_DEFAULT_LAYOUT her er kun best-effort
@@ -377,14 +376,7 @@ class InjectMixin:
             print(f"[inject] paste fejlede: {e}", flush=True)
             return False
 
-    def _inject(self, text: str):
-        self._last_inject_strategy = None
-        if self.mode == "print":
-            self._last_inject_strategy = "print"
-            print(f"  (heard) {text}", flush=True)
-            return
-        on_wayland = bool(os.environ.get('WAYLAND_DISPLAY'))
-
+    def _inject_log_preview(self, text: str, on_wayland: bool) -> None:
         # CPU transcription takes 4+ seconds — focus has drifted to the
         # terminal by then. Restore the window that was focused when the
         # user pressed the PTT key.
@@ -404,32 +396,27 @@ class InjectMixin:
         else:
             print(f'[inject] → "{preview}"', flush=True)
 
-        if self._target_is_self():
-            self._last_inject_strategy = "skipped-self"
-            print("[inject] skipped self-target", flush=True)
-            return
+    def _inject_wayland(self, text: str) -> None:
+        mode = self.mode
+        if mode == "auto":
+            mode = "paste" if self._wayland_text_prefers_paste(text) else "ydotool"
+            print(f"[inject] strategy: {mode}", flush=True)
+        if mode == "paste":
+            self._last_inject_strategy = "paste"
+            if self._paste(text):
+                return
+            print("[inject] paste fejlede — fallback ydotool", flush=True)
 
-        if on_wayland:
-            mode = self.mode
-            if mode == "auto":
-                mode = "paste" if self._wayland_text_prefers_paste(text) else "ydotool"
-                print(f"[inject] strategy: {mode}", flush=True)
-            if mode == "paste":
-                self._last_inject_strategy = "paste"
-                if self._paste(text):
-                    return
-                print("[inject] paste fejlede — fallback ydotool", flush=True)
+        # ASCII via ydotool type. Explicit type also keeps direct key injection
+        # available for users who do not want clipboard-based insertion.
+        print("[inject] ydotool (direkte)", flush=True)
+        self._last_inject_strategy = "ydotool"
+        if not self._wayland_type(text):
+            print("[inject] ydotool fejlede — fallback pynput", flush=True)
+            self._last_inject_strategy = "type-fallback"
+            self._kb.type(text)
 
-            # ASCII via ydotool type. Explicit type also keeps direct key injection
-            # available for users who do not want clipboard-based insertion.
-            print("[inject] ydotool (direkte)", flush=True)
-            self._last_inject_strategy = "ydotool"
-            if not self._wayland_type(text):
-                print("[inject] ydotool fejlede — fallback pynput", flush=True)
-                self._last_inject_strategy = "type-fallback"
-                self._kb.type(text)
-            return
-
+    def _inject_other(self, text: str) -> None:
         # X11 / Windows / macOS: auto chooses paste for known fragile terminal
         # targets, otherwise direct typing. Explicit --paste/--type override it.
         mode = self.mode
@@ -446,3 +433,23 @@ class InjectMixin:
             return
         self._last_inject_strategy = "type"
         self._kb.type(text)
+
+    def _inject(self, text: str):
+        self._last_inject_strategy = None
+        if self.mode == "print":
+            self._last_inject_strategy = "print"
+            print(f"  (heard) {text}", flush=True)
+            return
+        on_wayland = bool(os.environ.get('WAYLAND_DISPLAY'))
+
+        self._inject_log_preview(text, on_wayland)
+
+        if self._target_is_self():
+            self._last_inject_strategy = "skipped-self"
+            print("[inject] skipped self-target", flush=True)
+            return
+
+        if on_wayland:
+            self._inject_wayland(text)
+        else:
+            self._inject_other(text)

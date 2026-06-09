@@ -102,6 +102,11 @@ class _InjectBase(unittest.TestCase):
             "_wayland_text_prefers_paste",
             "_wayland_target_prefers_terminal_paste",
             "_paste",
+            # _inject delegates its per-platform body to these; bind the real
+            # ones so the dispatch is exercised end-to-end on the namespace.
+            "_inject_log_preview",
+            "_inject_wayland",
+            "_inject_other",
         ):
             method = getattr(mixin, name)
             setattr(t, name, method.__get__(t, type(t)))

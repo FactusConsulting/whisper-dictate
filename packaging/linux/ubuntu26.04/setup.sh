@@ -20,14 +20,15 @@ step() { STEP=$((STEP+1)); echo; echo "[$STEP] $*"; }
 ok()   { echo "    ✓ $*"; }
 info() { echo "    → $*"; }
 warn() { echo "    ! $*"; }
+SEP="================================================================"
 
 # ---------------------------------------------------------------------------
 step "whisper-dictate: Homebrew-installation"
 # ---------------------------------------------------------------------------
 if ! command -v brew &>/dev/null; then
-    echo "ERROR: Homebrew ikke fundet."
-    echo "  Installer: https://brew.sh"
-    echo "  Kør derefter: bash packaging/linux/ubuntu26.04/setup.sh"
+    echo "ERROR: Homebrew ikke fundet." >&2
+    echo "  Installer: https://brew.sh" >&2
+    echo "  Kør derefter: bash packaging/linux/ubuntu26.04/setup.sh" >&2
     exit 1
 fi
 
@@ -162,9 +163,9 @@ step "whisper-dictate: GNOME app launcher"
 if [[ "${VOICEPI_RUST_OWNS_DESKTOP:-}" = "1" ]]; then
     ok "Rust CLI handles launcher/autostart creation and UI startup"
     echo
-    echo "================================================================"
+    echo "$SEP"
     echo " whisper-dictate Ubuntu 26.04 system setup færdig"
-    echo "================================================================"
+    echo "$SEP"
     echo
     if ! groups | grep -q '\binput\b'; then
         echo "  NÆSTE SKRIDT: Log ud og ind igen (input-gruppe aktiveres)"
@@ -216,9 +217,9 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
-echo "================================================================"
+echo "$SEP"
 echo " whisper-dictate Ubuntu 26.04 setup færdig"
-echo "================================================================"
+echo "$SEP"
 echo
 if ! groups | grep -q '\binput\b'; then
     echo "  NÆSTE SKRIDT: Log ud og ind igen (input-gruppe aktiveres)"

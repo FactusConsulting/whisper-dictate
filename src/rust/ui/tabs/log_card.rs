@@ -5,21 +5,67 @@ use super::super::*;
 use super::*;
 use egui_material_icons::icons;
 
+/// Icon glyph, accent colour and frame fill for a card kind.
+fn runtime_log_card_style(
+    kind: RuntimeLogCardKind,
+    palette: UiPalette,
+) -> (&'static str, egui::Color32, egui::Color32) {
+    match kind {
+        RuntimeLogCardKind::FinalText => (
+            icons::ICON_CHECK_CIRCLE,
+            palette.ok_text,
+            palette.surface_active_bg,
+        ),
+        RuntimeLogCardKind::Status => (icons::ICON_INFO, palette.accent_blue, palette.surface_bg),
+        RuntimeLogCardKind::Diagnostic => {
+            (icons::ICON_GRAPHIC_EQ, palette.warn_text, palette.header_bg)
+        }
+    }
+}
+
+/// Title line plus the optional detail/badge row (the card's right column).
+fn runtime_log_card_text(
+    ui: &mut egui::Ui,
+    card: &RuntimeLogCard,
+    accent: egui::Color32,
+    palette: UiPalette,
+) {
+    let title_size = match card.kind {
+        RuntimeLogCardKind::FinalText => 17.0,
+        _ => 14.0,
+    };
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(&card.title)
+                .size(title_size)
+                .strong()
+                .color(palette.text),
+        )
+        .wrap(),
+    );
+    if card.detail.is_empty() && card.badge.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        if !card.detail.is_empty() {
+            ui.label(
+                egui::RichText::new(&card.detail)
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+        }
+        if !card.badge.is_empty() {
+            status_pill(ui, &card.badge, accent, palette);
+        }
+    });
+}
+
 pub(in crate::ui) fn runtime_log_card(
     ui: &mut egui::Ui,
     card: &RuntimeLogCard,
     palette: UiPalette,
 ) {
-    let (icon, accent) = match card.kind {
-        RuntimeLogCardKind::FinalText => (icons::ICON_CHECK_CIRCLE, palette.ok_text),
-        RuntimeLogCardKind::Status => (icons::ICON_INFO, palette.accent_blue),
-        RuntimeLogCardKind::Diagnostic => (icons::ICON_GRAPHIC_EQ, palette.warn_text),
-    };
-    let fill = match card.kind {
-        RuntimeLogCardKind::FinalText => palette.surface_active_bg,
-        RuntimeLogCardKind::Status => palette.surface_bg,
-        RuntimeLogCardKind::Diagnostic => palette.header_bg,
-    };
+    let (icon, accent, fill) = runtime_log_card_style(card.kind, palette);
     egui::Frame::default()
         .fill(fill)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
@@ -36,34 +82,7 @@ pub(in crate::ui) fn runtime_log_card(
                     });
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(icon).size(20.0).color(accent));
-                ui.vertical(|ui| {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&card.title)
-                                .size(match card.kind {
-                                    RuntimeLogCardKind::FinalText => 17.0,
-                                    _ => 14.0,
-                                })
-                                .strong()
-                                .color(palette.text),
-                        )
-                        .wrap(),
-                    );
-                    if !card.detail.is_empty() || !card.badge.is_empty() {
-                        ui.horizontal_wrapped(|ui| {
-                            if !card.detail.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(&card.detail)
-                                        .size(12.0)
-                                        .color(palette.text_muted),
-                                );
-                            }
-                            if !card.badge.is_empty() {
-                                status_pill(ui, &card.badge, accent, palette);
-                            }
-                        });
-                    }
-                });
+                ui.vertical(|ui| runtime_log_card_text(ui, card, accent, palette));
             });
         });
 }

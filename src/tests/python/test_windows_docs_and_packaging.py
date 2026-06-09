@@ -290,7 +290,7 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
 
         self.assertIn("self.parakeet_min_seconds", script)
         self.assertIn("too short for Parakeet", script)
-        self.assertIn("stt_backend=self.stt_backend", script)
+        self.assertIn('"stt_backend": self.stt_backend', script)
 
     def test_runtime_has_live_release_tail_padding(self):
         # The live Dictate loop moved into vp_dictate.

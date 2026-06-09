@@ -168,20 +168,7 @@ impl WhisperDictateApp {
                 RuntimeEvent::Started { command } => {
                     self.append_runtime_log(format!("[ui] started: {command}"));
                 }
-                RuntimeEvent::Worker(event) => {
-                    if event.event == "status" {
-                        self.update_worker_status(&event);
-                        if let Some(line) = worker_status_log_line(&event) {
-                            self.append_runtime_log(line);
-                        }
-                    } else if event.event == "audio" {
-                        self.update_worker_audio(&event);
-                    } else if event.event == "utterance" {
-                        if let Some(line) = worker_utterance_log_line(&event) {
-                            self.append_runtime_log(line);
-                        }
-                    }
-                }
+                RuntimeEvent::Worker(event) => self.handle_worker_event(&event),
                 RuntimeEvent::Stdout(line) | RuntimeEvent::Stderr(line) => {
                     self.append_runtime_log(line);
                 }
@@ -199,6 +186,21 @@ impl WhisperDictateApp {
             }
         }
         self.runtime_state = self.supervisor.state();
+    }
+
+    fn handle_worker_event(&mut self, event: &WorkerEvent) {
+        if event.event == "status" {
+            self.update_worker_status(event);
+            if let Some(line) = worker_status_log_line(event) {
+                self.append_runtime_log(line);
+            }
+        } else if event.event == "audio" {
+            self.update_worker_audio(event);
+        } else if event.event == "utterance" {
+            if let Some(line) = worker_utterance_log_line(event) {
+                self.append_runtime_log(line);
+            }
+        }
     }
 
     pub(in crate::ui) fn update_worker_status(&mut self, event: &WorkerEvent) {

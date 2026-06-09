@@ -277,65 +277,65 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
 
     def _transcription_event_fields(self, result) -> dict:
         """Audio-metric + model + transcription fields drawn from ``result``."""
-        return dict(
-            audio_duration_s=result.duration_s,
-            post_boost_dbfs=result.post_boost_dbfs,
-            audio_raw_dbfs=result.raw_dbfs,
-            audio_peak=result.peak,
-            audio_gain=result.gain,
-            audio_noise_dbfs=result.noise_dbfs,
-            audio_snr_db=result.snr_db,
-            audio_input_status=result.input_status,
-            compute_s=result.compute_s,
-            real_time_factor=result.real_time_factor,
-            language=result.language or self.lang or "auto",
-            language_probability=result.language_probability,
-            gate=result.gate,
-            model=self.model_name,
-            stt_backend=self.stt_backend,
-            device=self.device,
-            compute_type=self.compute_type,
-            model_load_s=self.model_load_s,
-            segments=result.segments,
-            dictionary_terms=result.dictionary_terms,
-            dictionary_replacements=result.dictionary_replacements,
-        )
+        return {
+            "audio_duration_s": result.duration_s,
+            "post_boost_dbfs": result.post_boost_dbfs,
+            "audio_raw_dbfs": result.raw_dbfs,
+            "audio_peak": result.peak,
+            "audio_gain": result.gain,
+            "audio_noise_dbfs": result.noise_dbfs,
+            "audio_snr_db": result.snr_db,
+            "audio_input_status": result.input_status,
+            "compute_s": result.compute_s,
+            "real_time_factor": result.real_time_factor,
+            "language": result.language or self.lang or "auto",
+            "language_probability": result.language_probability,
+            "gate": result.gate,
+            "model": self.model_name,
+            "stt_backend": self.stt_backend,
+            "device": self.device,
+            "compute_type": self.compute_type,
+            "model_load_s": self.model_load_s,
+            "segments": result.segments,
+            "dictionary_terms": result.dictionary_terms,
+            "dictionary_replacements": result.dictionary_replacements,
+        }
 
     def _inject_event_fields(self, inject_elapsed_ms: int) -> dict:
         """Injection target / strategy / profile fields for the utterance event."""
-        return dict(
-            inject_mode=self.mode,
-            inject_strategy=getattr(self, "_last_inject_strategy", None),
-            inject_elapsed_ms=inject_elapsed_ms,
-            target_title=getattr(self, "_inject_target_title", None),
-            target_process=getattr(self, "_inject_target_process", None),
-            profile=getattr(self, "_active_profile_name", None),
-        )
+        return {
+            "inject_mode": self.mode,
+            "inject_strategy": getattr(self, "_last_inject_strategy", None),
+            "inject_elapsed_ms": inject_elapsed_ms,
+            "target_title": getattr(self, "_inject_target_title", None),
+            "target_process": getattr(self, "_inject_target_process", None),
+            "profile": getattr(self, "_active_profile_name", None),
+        }
 
     @staticmethod
     def _post_event_fields(post_result) -> dict:
         """Post-processing provenance fields drawn from ``post_result``."""
-        return dict(
-            post_processor=post_result.provider,
-            post_mode=post_result.mode,
-            post_model=post_result.model,
-            post_latency_ms=post_result.latency_ms,
-            post_changed=post_result.changed,
-            post_fallback=post_result.fallback,
-            post_error=post_result.error or None,
-            post_redacted=post_result.redacted,
-            post_redactions=post_result.redactions or [],
-        )
+        return {
+            "post_processor": post_result.provider,
+            "post_mode": post_result.mode,
+            "post_model": post_result.model,
+            "post_latency_ms": post_result.latency_ms,
+            "post_changed": post_result.changed,
+            "post_fallback": post_result.fallback,
+            "post_error": post_result.error or None,
+            "post_redacted": post_result.redacted,
+            "post_redactions": post_result.redactions or [],
+        }
 
     @staticmethod
     def _format_event_fields(format_result) -> dict:
         """Format-command provenance fields drawn from ``format_result``."""
-        return dict(
-            format_commands_enabled=format_result.enabled,
-            format_commands_set=format_result.command_set,
-            format_commands_changed=format_result.changed,
-            format_commands_applied=format_result.applied,
-        )
+        return {
+            "format_commands_enabled": format_result.enabled,
+            "format_commands_set": format_result.command_set,
+            "format_commands_changed": format_result.changed,
+            "format_commands_applied": format_result.applied,
+        }
 
     def _record_utterance_event(self, event: dict) -> None:
         _run_command_hook_and_annotate(event)

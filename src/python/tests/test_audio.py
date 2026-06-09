@@ -163,7 +163,7 @@ class AudioDspTests(RealNumpyAudioCase):
 
         raw_dbfs, peak, level = self.vp._audio_level_metrics(pcm)
 
-        self.assertEqual(round(peak, 3), 1.0)
+        self.assertAlmostEqual(peak, 1.0, places=3)
         self.assertLess(raw_dbfs, -40.0)
         self.assertLess(level, 0.3)
 

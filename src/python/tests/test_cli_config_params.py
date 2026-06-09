@@ -101,7 +101,7 @@ class VadSpeechPaddingTests(unittest.TestCase):
         vad = next(s for s in schema["settings"] if s["key"] == "vad_speech_pad_ms")
         self.assertEqual((vad["env"], vad["default"]), ("VOICEPI_VAD_SPEECH_PAD_MS", "200"))
         self.assertIn('VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200")', transcribe)
-        self.assertIn("speech_pad_ms=VAD_SPEECH_PAD_MS", transcribe)
+        self.assertIn('"speech_pad_ms": VAD_SPEECH_PAD_MS', transcribe)
         self.assertIn('vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))', dictate)
 
 class ConfigTests(unittest.TestCase):

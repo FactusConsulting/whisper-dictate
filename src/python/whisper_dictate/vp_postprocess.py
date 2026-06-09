@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import re
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -18,6 +17,7 @@ apply_config_to_environ()
 VALID_PROCESSORS = ("none", "ollama", "openai", "groq")
 VALID_MODES = ("raw", "clean", "prompt", "terminal", "slack", "email", "bullets")
 DEFAULT_OLLAMA_POST_MODEL = "qwen2.5:3b"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 MODE_ALIASES = {
     "bullet-list": "bullets",
     "bullet_list": "bullets",
@@ -60,7 +60,7 @@ class PostprocessSettings:
     processor: str = "none"
     mode: str = "raw"
     model: str = DEFAULT_OLLAMA_POST_MODEL
-    base_url: str = "http://localhost:11434"
+    base_url: str = DEFAULT_OLLAMA_BASE_URL
     timeout_ms: int = 2000
     max_input_chars: int = 4000
     max_output_chars: int = 4000
@@ -96,7 +96,7 @@ def _default_base_url(processor: str) -> str:
         return GROQ_BASE_URL
     if processor == "openai":
         return DEFAULT_OPENAI_BASE_URL
-    return "http://localhost:11434"
+    return DEFAULT_OLLAMA_BASE_URL
 
 
 def _postprocess_api_key() -> str:
@@ -116,7 +116,7 @@ def _normalized_model(processor: str, raw_model: str) -> str:
 
 
 def _normalized_base_url(processor: str, raw_base_url: str) -> str:
-    ollama_base_url = "http://localhost:11434"
+    ollama_base_url = DEFAULT_OLLAMA_BASE_URL
     if processor == "groq" and raw_base_url in ("", ollama_base_url, DEFAULT_OPENAI_BASE_URL):
         return GROQ_BASE_URL
     if processor == "openai" and raw_base_url in ("", ollama_base_url, GROQ_BASE_URL):
@@ -376,7 +376,9 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             redacted=bool(redaction.redactions),
             redactions=redaction_summary,
         )
-    except (OSError, TimeoutError, urllib.error.URLError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+    # OSError covers TimeoutError + urllib.error.URLError; ValueError covers
+    # json.JSONDecodeError — listing the subclasses would be redundant.
+    except (OSError, RuntimeError, ValueError) as exc:
         latency_ms = int((time.monotonic() - t0) * 1000)
         return PostprocessResult(
             text=text,

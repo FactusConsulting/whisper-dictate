@@ -119,6 +119,37 @@ def _cap_transcription_prompt(prompt: str, *, base_url: str) -> str:
     return trimmed
 
 
+def _extract_http_error_detail(exc: "urllib.error.HTTPError") -> str:
+    # Pull the most human-readable message out of an error response body,
+    # preferring the OpenAI-compatible {"error": {"message": ...}} shape but
+    # falling back to the raw body on anything unexpected.
+    detail = exc.read().decode("utf-8", errors="replace").strip()
+    try:
+        obj = json.loads(detail) if detail else {}
+    except json.JSONDecodeError:
+        return detail
+    error = obj.get("error") if isinstance(obj, dict) else None
+    if isinstance(error, dict):
+        return str(error.get("message") or detail)
+    if isinstance(error, str):
+        return error
+    return detail
+
+
+def _http_error_to_runtime(exc: "urllib.error.HTTPError", url: str) -> RuntimeError:
+    detail = _extract_http_error_detail(exc)
+    if exc.code == 429:
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        hint = RATE_LIMIT_HINT.format(provider=_provider_name(url))
+        if retry_after:
+            hint += f" (retry after {retry_after}s)"
+        if detail:
+            hint += f": {detail}"
+        return RuntimeError(f"HTTP 429 Too Many Requests from {url}: {hint}")
+    suffix = f": {detail}" if detail else ""
+    return RuntimeError(f"HTTP {exc.code} {exc.reason} from {url}{suffix}")
+
+
 def _request_json(
     url: str,
     *,
@@ -133,27 +164,7 @@ def _request_json(
         with urllib.request.urlopen(req, timeout=timeout_ms / 1000.0) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace").strip()
-        try:
-            obj = json.loads(detail) if detail else {}
-            error = obj.get("error") if isinstance(obj, dict) else None
-            if isinstance(error, dict):
-                detail = str(error.get("message") or detail)
-            elif isinstance(error, str):
-                detail = error
-        except json.JSONDecodeError:
-            pass
-        if exc.code == 429:
-            retry_after = exc.headers.get("Retry-After") if exc.headers else None
-            provider = _provider_name(url)
-            hint = RATE_LIMIT_HINT.format(provider=provider)
-            if retry_after:
-                hint += f" (retry after {retry_after}s)"
-            if detail:
-                hint += f": {detail}"
-            raise RuntimeError(f"HTTP 429 Too Many Requests from {url}: {hint}") from exc
-        suffix = f": {detail}" if detail else ""
-        raise RuntimeError(f"HTTP {exc.code} {exc.reason} from {url}{suffix}") from exc
+        raise _http_error_to_runtime(exc, url) from exc
 
 
 def _provider_name(url: str) -> str:

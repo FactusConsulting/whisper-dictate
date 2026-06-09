@@ -23,28 +23,7 @@ impl WhisperDictateApp {
                     ],
                     "Controls what the post processor is allowed to do. raw bypasses post-processing and does not call the model; clean fixes punctuation/casing and obvious transcription artifacts; prompt rewrites for coding agents; terminal preserves commands and paths; slack/email/bullets format for those destinations.",
                 );
-                match self.settings.post_processor.as_str() {
-                    "groq" => combo_help_labeled(
-                        ui,
-                        "Post model",
-                        &mut self.settings.post_model,
-                        GROQ_POST_MODELS,
-                        "Groq chat model used for the optional final text cleanup pass. The list labels show the recommended Danish cleanup default, faster alternatives, reasoning models and preview models. STT Whisper models are not listed here because they transcribe audio, not text.",
-                    ),
-                    "openai" => combo_help(
-                        ui,
-                        "Post model",
-                        &mut self.settings.post_model,
-                        OPENAI_POST_MODELS,
-                        "OpenAI chat model used for the optional final text cleanup pass.",
-                    ),
-                    _ => text_help(
-                        ui,
-                        "Post model",
-                        &mut self.settings.post_model,
-                        "Model name for post-processing, for example an Ollama model.",
-                    ),
-                }
+                self.post_model_field(ui);
                 text_help(
                     ui,
                     "Post base URL",
@@ -70,59 +49,7 @@ impl WhisperDictateApp {
                     "Maximum accepted length of post-processed output.",
                 );
                 if let Some(provider) = PostProvider::from_settings(&self.settings) {
-                    password_enabled(
-                        ui,
-                        true,
-                        "Post API key",
-                        &mut self.post_api_key_input,
-                        &mut self.post_api_key_reveal_until,
-                        "Optional separate API key for cloud post-processing. Stored in the OS credential store as VOICEPI_POST_API_KEY. If empty, the worker falls back to the Cloud STT API key when available.",
-                    );
-                    ui.label("");
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button("Save post API key")
-                            .on_hover_text("Stores only the post-processing API key in the OS credential store.")
-                            .clicked()
-                        {
-                            self.save_post_api_key_now();
-                        }
-                        if ui
-                            .button("Test post API")
-                            .on_hover_text("Sends a tiny chat-completions request to the selected post-processing provider and model.")
-                            .clicked()
-                        {
-                            self.run_post_api_check();
-                        }
-                        if provider == PostProvider::Groq
-                            && ui
-                                .link("Open Groq API keys")
-                                .on_hover_text("Open the Groq API key page.")
-                                .clicked()
-                        {
-                            match open_url(provider.key_url()) {
-                                Ok(()) => {
-                                    self.post_api_key_status =
-                                        "Opened Groq API keys page.".to_owned();
-                                }
-                                Err(err) => {
-                                    self.post_api_key_status =
-                                        format!("Could not open Groq API keys page: {err}");
-                                }
-                            }
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("");
-                    let key_help = if self.saved_post_api_key_input.trim().is_empty() {
-                        "Optional separate post-processing key. Leave empty to reuse the Cloud STT key when available."
-                    } else {
-                        "Saved post-processing key loaded. Edit and save to replace it, or clear the field and save to remove it."
-                    };
-                    ui.label(key_help).on_hover_text(
-                        "Post-processing API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
-                    );
-                    ui.end_row();
+                    self.post_api_key_section(ui, provider);
                 }
                 checkbox_help(
                     ui,
@@ -139,6 +66,89 @@ impl WhisperDictateApp {
             });
         if PostProvider::from_settings(&self.settings) != previous_post_provider {
             self.reload_post_api_key();
+        }
+    }
+
+    fn post_model_field(&mut self, ui: &mut egui::Ui) {
+        match self.settings.post_processor.as_str() {
+            "groq" => combo_help_labeled(
+                ui,
+                "Post model",
+                &mut self.settings.post_model,
+                GROQ_POST_MODELS,
+                "Groq chat model used for the optional final text cleanup pass. The list labels show the recommended Danish cleanup default, faster alternatives, reasoning models and preview models. STT Whisper models are not listed here because they transcribe audio, not text.",
+            ),
+            "openai" => combo_help(
+                ui,
+                "Post model",
+                &mut self.settings.post_model,
+                OPENAI_POST_MODELS,
+                "OpenAI chat model used for the optional final text cleanup pass.",
+            ),
+            _ => text_help(
+                ui,
+                "Post model",
+                &mut self.settings.post_model,
+                "Model name for post-processing, for example an Ollama model.",
+            ),
+        }
+    }
+
+    fn post_api_key_section(&mut self, ui: &mut egui::Ui, provider: PostProvider) {
+        password_enabled(
+            ui,
+            true,
+            "Post API key",
+            &mut self.post_api_key_input,
+            &mut self.post_api_key_reveal_until,
+            "Optional separate API key for cloud post-processing. Stored in the OS credential store as VOICEPI_POST_API_KEY. If empty, the worker falls back to the Cloud STT API key when available.",
+        );
+        ui.label("");
+        ui.horizontal(|ui| {
+            if ui
+                .button("Save post API key")
+                .on_hover_text("Stores only the post-processing API key in the OS credential store.")
+                .clicked()
+            {
+                self.save_post_api_key_now();
+            }
+            if ui
+                .button("Test post API")
+                .on_hover_text("Sends a tiny chat-completions request to the selected post-processing provider and model.")
+                .clicked()
+            {
+                self.run_post_api_check();
+            }
+            if provider == PostProvider::Groq
+                && ui
+                    .link("Open Groq API keys")
+                    .on_hover_text("Open the Groq API key page.")
+                    .clicked()
+            {
+                self.open_groq_keys_page(provider);
+            }
+        });
+        ui.end_row();
+        ui.label("");
+        let key_help = if self.saved_post_api_key_input.trim().is_empty() {
+            "Optional separate post-processing key. Leave empty to reuse the Cloud STT key when available."
+        } else {
+            "Saved post-processing key loaded. Edit and save to replace it, or clear the field and save to remove it."
+        };
+        ui.label(key_help).on_hover_text(
+            "Post-processing API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
+        );
+        ui.end_row();
+    }
+
+    fn open_groq_keys_page(&mut self, provider: PostProvider) {
+        match open_url(provider.key_url()) {
+            Ok(()) => {
+                self.post_api_key_status = "Opened Groq API keys page.".to_owned();
+            }
+            Err(err) => {
+                self.post_api_key_status = format!("Could not open Groq API keys page: {err}");
+            }
         }
     }
 }

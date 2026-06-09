@@ -90,56 +90,7 @@ impl WhisperDictateApp {
                     "Stored in the OS credential store and passed to the worker as VOICEPI_STT_API_KEY.",
                 );
                 if backend == SttBackendMode::Cloud {
-                    ui.label("");
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button("Save API key")
-                            .on_hover_text(
-                                "Stores the current API key in the platform credential store and remembers the selected cloud provider. Clear the field and save to remove it.",
-                            )
-                            .clicked()
-                        {
-                            self.save_stt_api_key_now();
-                        }
-                        if ui
-                            .add_enabled(
-                                self.background_task.is_none(),
-                                egui::Button::new("Test cloud API"),
-                            )
-                            .on_hover_text("Checks the selected provider key and model from Rust without starting the Python worker.")
-                            .clicked()
-                        {
-                            self.run_cloud_api_check();
-                        }
-                        if provider == CloudProvider::Groq
-                            && ui
-                                .link("Open Groq API keys")
-                                .on_hover_text("Open the Groq API key page.")
-                                .clicked()
-                        {
-                            match open_url(provider.key_url()) {
-                                Ok(()) => {
-                                    self.stt_api_key_status =
-                                        "Opened Groq API keys page.".to_owned();
-                                }
-                                Err(err) => {
-                                    self.stt_api_key_status =
-                                        format!("Could not open Groq API keys page: {err}");
-                                }
-                            }
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("");
-                    let key_help = if self.saved_stt_api_key_input.trim().is_empty() {
-                        "Paste an API key, then save it. Cloud STT sends recorded audio to the configured provider."
-                    } else {
-                        "Saved key loaded. Edit and save to replace it, or clear the field and save to remove it."
-                    };
-                    ui.label(key_help).on_hover_text(
-                        "API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
-                    );
-                    ui.end_row();
+                    self.cloud_stt_key_section(ui, provider);
                 }
                 section_label(ui, "Local runtime", palette);
                 ui.label("Used only by local Whisper and Parakeet.");
@@ -224,5 +175,60 @@ impl WhisperDictateApp {
                     "Maximum time window for consecutive quit-key presses.",
                 );
             });
+    }
+
+    fn cloud_stt_key_section(&mut self, ui: &mut egui::Ui, provider: CloudProvider) {
+        ui.label("");
+        ui.horizontal(|ui| {
+            if ui
+                .button("Save API key")
+                .on_hover_text(
+                    "Stores the current API key in the platform credential store and remembers the selected cloud provider. Clear the field and save to remove it.",
+                )
+                .clicked()
+            {
+                self.save_stt_api_key_now();
+            }
+            if ui
+                .add_enabled(
+                    self.background_task.is_none(),
+                    egui::Button::new("Test cloud API"),
+                )
+                .on_hover_text("Checks the selected provider key and model from Rust without starting the Python worker.")
+                .clicked()
+            {
+                self.run_cloud_api_check();
+            }
+            if provider == CloudProvider::Groq
+                && ui
+                    .link("Open Groq API keys")
+                    .on_hover_text("Open the Groq API key page.")
+                    .clicked()
+            {
+                self.open_groq_keys_page_stt(provider);
+            }
+        });
+        ui.end_row();
+        ui.label("");
+        let key_help = if self.saved_stt_api_key_input.trim().is_empty() {
+            "Paste an API key, then save it. Cloud STT sends recorded audio to the configured provider."
+        } else {
+            "Saved key loaded. Edit and save to replace it, or clear the field and save to remove it."
+        };
+        ui.label(key_help).on_hover_text(
+            "API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
+        );
+        ui.end_row();
+    }
+
+    fn open_groq_keys_page_stt(&mut self, provider: CloudProvider) {
+        match open_url(provider.key_url()) {
+            Ok(()) => {
+                self.stt_api_key_status = "Opened Groq API keys page.".to_owned();
+            }
+            Err(err) => {
+                self.stt_api_key_status = format!("Could not open Groq API keys page: {err}");
+            }
+        }
     }
 }
