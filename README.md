@@ -721,7 +721,8 @@ verification is incomplete — help wanted (open an issue/PR with results):
 | `se`, `de`, `fi` | direct keycodes | ⚠️ implemented, **not** hardware-tested |
 | `ua` | direct keycodes (full Cyrillic) | ⚠️ implemented, **not** hardware-tested |
 | `es`, `pt`, `br`, `pl` | dead-key / AltGr composition | ⚠️ implemented, **not** hardware-tested; composition is compositor-dependent and the highest-risk path |
-| `fr` (AZERTY), `it`, `nl` | — | ❌ **no keycode map** — non-ASCII for these layouts is dropped on Wayland; a `[inject] advarsel:` line lists the affected characters |
+| `fr` (AZERTY), `it` | dedicated-key + dead-key composition | ⚠️ implemented, **not** hardware-tested; lowercase accents (plus circumflex/diaeresis on `fr`) are mapped. A few uppercase accents that AZERTY/Italian have no simple key for fall back to Unicode `type` |
+| `nl` | — | ❌ **no keycode map** — Dutch typically uses US-International; set `VOICEPI_XKB_LAYOUT` to a mapped layout if one matches your hardware, otherwise non-ASCII falls back to Unicode `type` |
 
 Notes:
 

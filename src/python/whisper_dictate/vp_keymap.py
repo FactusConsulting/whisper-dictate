@@ -14,7 +14,9 @@ _LANG_TO_XKB = {
     "nb": "no", "nn": "no", "nl": "nl", "pl": "pl", "pt": "pt",
     "es": "es", "it": "it", "uk": "ua",
 }
-_SUPPORTED_XKB_LAYOUTS = {"br", "de", "dk", "es", "fi", "no", "pl", "pt", "se", "ua", "us"}
+_SUPPORTED_XKB_LAYOUTS = {
+    "br", "de", "dk", "es", "fi", "fr", "it", "no", "pl", "pt", "se", "ua", "us",
+}
 
 
 def _normalize_xkb_layout(layout: str | None) -> str | None:
