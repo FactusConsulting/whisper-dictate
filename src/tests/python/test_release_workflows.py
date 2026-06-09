@@ -322,6 +322,8 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "src/rust/main.rs",
             "src/python/whisper_dictate/vp_keys.py",
             "src/python/whisper_dictate/vp_rust.py",
+            "src/python/whisper_dictate/runtime.py",
+            "src/python/whisper_dictate/vp_dictate.py",
             # developer/benchmark scripts
             "scripts/dev/**",
             "scripts/benchmark/**",
