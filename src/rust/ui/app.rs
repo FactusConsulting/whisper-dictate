@@ -74,6 +74,7 @@ impl WhisperDictateApp {
         if self.cloud_stt_missing_api_key() {
             return;
         }
+        self.worker_ready = false;
         self.clear_audio_meter_and_device();
         let command = self.worker_command();
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
@@ -84,6 +85,7 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn stop_runtime(&mut self) {
+        self.worker_ready = false;
         self.clear_audio_meter();
         self.append_runtime_log("[ui] stopping runtime");
         if let Err(err) = self.supervisor.stop() {
@@ -98,6 +100,7 @@ impl WhisperDictateApp {
             return;
         }
         let command = self.worker_command();
+        self.worker_ready = false;
         self.clear_audio_meter_and_device();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
         if let Err(err) = self.supervisor.restart(command) {
@@ -186,6 +189,7 @@ impl WhisperDictateApp {
                     self.append_runtime_log(line);
                 }
                 RuntimeEvent::Exited { code } => {
+                    self.worker_ready = false;
                     self.clear_audio_meter();
                     self.append_runtime_log(format!(
                         "[ui] runtime exited with code {}",
@@ -193,6 +197,7 @@ impl WhisperDictateApp {
                     ));
                 }
                 RuntimeEvent::Error(message) => {
+                    self.worker_ready = false;
                     self.clear_audio_meter();
                     self.append_runtime_log(format!("[ui] runtime error: {message}"));
                 }
@@ -226,12 +231,27 @@ impl WhisperDictateApp {
         if let Some(state) = event.state.as_deref() {
             self.audio_capture_opening = state == "opening";
             self.pipeline_stage = pipeline_stage_for_worker_state(state);
+            if let Some(ready) = worker_ready_for_state(state) {
+                self.worker_ready = ready;
+            }
             if let Some(active) = audio_capture_active_for_worker_state(state) {
                 self.audio_capture_active = active;
                 if !active {
                     self.clear_audio_meter_readings();
                 }
             }
+        }
+    }
+
+    /// The runtime state to show in the UI: the OS process spawns almost
+    /// instantly (`Running`), but a local model can take a while to load, so we
+    /// keep displaying `Starting` until the worker reports it is ready to receive
+    /// speech. Control logic (Start/Stop enabling, audio meter) still uses the
+    /// raw `runtime_state`.
+    pub(in crate::ui) fn display_runtime_state(&self) -> RuntimeState {
+        match self.runtime_state {
+            RuntimeState::Running if !self.worker_ready => RuntimeState::Starting,
+            other => other,
         }
     }
 

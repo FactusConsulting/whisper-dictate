@@ -28,7 +28,13 @@ impl WhisperDictateApp {
                 .strong()
                 .color(palette.text),
             );
-            runtime_status_badge(ui, self.runtime_state, palette, &self.settings.ui_language);
+            runtime_status_badge(
+                ui,
+                self.display_runtime_state(),
+                palette,
+                &self.settings.ui_language,
+            );
+            push_to_talk_badge(ui, &self.settings.key, palette, &self.settings.ui_language);
             let mic_width = (ui.available_width() - 10.0).clamp(0.0, MIC_INDICATOR_MAX_WIDTH);
             if mic_width >= MIC_INDICATOR_MIN_WIDTH {
                 ui.add_space(10.0);
@@ -150,7 +156,12 @@ impl WhisperDictateApp {
     fn render_log_cards(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
         let cards = runtime_log_cards(&self.runtime_log, self.runtime_log_view);
         if cards.is_empty() {
-            empty_log_state(ui, self.runtime_state, palette, &self.settings.ui_language);
+            empty_log_state(
+                ui,
+                self.display_runtime_state(),
+                palette,
+                &self.settings.ui_language,
+            );
             return;
         }
         for card in cards {
@@ -173,7 +184,11 @@ impl WhisperDictateApp {
         } else if self.audio_capture_opening {
             "Opening"
         } else if self.runtime_state == RuntimeState::Running {
-            "Ready"
+            if self.worker_ready {
+                "Ready"
+            } else {
+                "Starting"
+            }
         } else {
             "Idle"
         };
@@ -490,4 +505,86 @@ fn runtime_status_badge(
                 .color(text),
             );
         });
+}
+
+/// A pill that shows the currently configured push-to-talk hotkey/chord so it is
+/// always visible while watching live dictation. The raw setting (e.g. `ctrl_r`
+/// or `shift_l+ctrl_l`) is rendered as a human-friendly chord (`Ctrl (right)`).
+fn push_to_talk_badge(ui: &mut egui::Ui, raw_keys: &str, palette: UiPalette, raw_language: &str) {
+    egui::Frame::default()
+        .fill(palette.surface_bg)
+        .stroke(egui::Stroke::new(0.8, palette.border))
+        .rounding(egui::Rounding::same(PILL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    icon_text(
+                        icons::ICON_KEYBOARD,
+                        format!(
+                            "{}: {}",
+                            ui_text(raw_language, UiTextKey::PushToTalk),
+                            format_push_to_talk_keys(raw_keys)
+                        ),
+                    )
+                    .strong()
+                    .color(palette.text),
+                )
+                .selectable(false),
+            )
+            .on_hover_text("Hold this key (or chord) to dictate. Change it in Speech → Hotkey.");
+        });
+}
+
+/// Render a raw hotkey setting (`ctrl_r`, `shift_l+ctrl_l`, …) as a friendly
+/// chord. Empty input becomes `None`; unknown tokens are passed through
+/// capitalized so custom keys still read sensibly.
+pub(in crate::ui) fn format_push_to_talk_keys(raw: &str) -> String {
+    let chord = raw
+        .split('+')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(format_key_token)
+        .collect::<Vec<_>>();
+    if chord.is_empty() {
+        return "None".to_owned();
+    }
+    chord.join(" + ")
+}
+
+fn format_key_token(token: &str) -> String {
+    let lower = token.to_ascii_lowercase();
+    let (base, side) = if let Some(base) = lower
+        .strip_suffix("_l")
+        .or_else(|| lower.strip_suffix("_left"))
+    {
+        (base, Some("left"))
+    } else if let Some(base) = lower
+        .strip_suffix("_r")
+        .or_else(|| lower.strip_suffix("_right"))
+    {
+        (base, Some("right"))
+    } else {
+        (lower.as_str(), None)
+    };
+    let label = match base {
+        "ctrl" | "control" => "Ctrl".to_owned(),
+        "shift" => "Shift".to_owned(),
+        "alt" | "option" => "Alt".to_owned(),
+        "cmd" | "command" | "super" | "win" | "meta" => "Cmd/Win".to_owned(),
+        "space" => "Space".to_owned(),
+        other => capitalize_ascii(other),
+    };
+    match side {
+        Some(side) => format!("{label} ({side})"),
+        None => label,
+    }
+}
+
+fn capitalize_ascii(token: &str) -> String {
+    let mut chars = token.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => token.to_owned(),
+    }
 }
