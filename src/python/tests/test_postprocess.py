@@ -298,8 +298,13 @@ class PostprocessTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
-                calls["payload"] = json.loads(body.decode("utf-8"))
-                prompt = calls["payload"]["messages"][1]["content"]
+                payload = json.loads(body.decode("utf-8"))
+                # Record everything the test asserts on BEFORE sending the
+                # response. Otherwise the client can receive the reply and return
+                # from postprocess_text while this server thread hasn't reached the
+                # recording lines yet — a race that made `calls["prompt"]` flaky.
+                calls["payload"] = payload
+                calls["prompt"] = payload["messages"][1]["content"]
                 data = json.dumps({
                     "choices": [{
                         "message": {"content": "Contact [[WD_TERM_2]] at [[WD_EMAIL_1]]."}
@@ -310,7 +315,6 @@ class PostprocessTests(unittest.TestCase):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
-                calls["prompt"] = prompt
 
             def log_message(self, *args):
                 # Silence the in-process HTTP server during this test.
