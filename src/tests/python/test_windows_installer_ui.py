@@ -62,6 +62,9 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("MB_RETRYCANCEL", prepare)
         self.assertIn("IDRETRY", prepare)
         self.assertIn("Close whisper-dictate, then click Retry to continue.", prepare)
+        # A silent install (winget/Chocolatey) must not hang on the auto-answered
+        # retry prompt — it fails fast with the reason instead.
+        self.assertIn("WizardSilent()", prepare)
         self.assertIn("$_.ExecutablePath -eq $appExe", script)
         self.assertIn("CloseMainWindow()", script)
         self.assertIn("Stop-Process -Id $_.ProcessId -Force", script)

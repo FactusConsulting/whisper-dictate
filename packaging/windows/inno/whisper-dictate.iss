@@ -219,6 +219,15 @@ begin
     if StopError = '' then
       Break;
 
+    // A silent install (winget/Chocolatey) cannot show a Retry prompt; an
+    // auto-answered MB_RETRYCANCEL would loop forever, so fail fast with the
+    // reason instead of hanging the upgrade.
+    if WizardSilent() then
+    begin
+      Result := StopError;
+      Exit;
+    end;
+
     if MsgBox(
       StopError + #13#10#13#10 +
         'Close whisper-dictate, then click Retry to continue.',
