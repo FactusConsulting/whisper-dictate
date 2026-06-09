@@ -157,6 +157,11 @@ pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1080.0, 760.0])
+            // Floor the window so the top status bar can't be squeezed until the
+            // Start/Stop controls overlap the Status/Backend/Model cards. Below
+            // this width there isn't room for the sidebar + all status cards +
+            // the runtime controls on one row.
+            .with_min_inner_size([1000.0, 640.0])
             .with_app_id("whisper-dictate")
             .with_icon(app_icon()),
         ..Default::default()
