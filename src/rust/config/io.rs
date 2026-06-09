@@ -252,7 +252,12 @@ mod tests {
         let path = dir.path().join("config.json");
         fs::write(&path, r#"{"profiles":[{"name":"old"}]}"#).unwrap();
 
-        save_settings_to_path(&AppSettings::default(), &path).unwrap();
+        // Empty profiles explicitly (the default now ships an example profile).
+        let settings = AppSettings {
+            profiles_json: "[]".to_owned(),
+            ..AppSettings::default()
+        };
+        save_settings_to_path(&settings, &path).unwrap();
         let saved: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
 
         assert!(saved.get("profiles").is_none());

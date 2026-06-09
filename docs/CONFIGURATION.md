@@ -413,6 +413,20 @@ apply them to the configured dictionary when they look correct.
 
 ### Target profiles
 
+**What they solve:** the best settings aren't the same in every app. You might
+want English and clipboard-paste injection in your code editor, Danish in your
+email client, and a "prompt" post-processing mode when dictating to a coding
+agent. Profiles let you override settings *per target window* without constantly
+changing the global config: when the focused window matches a profile, that
+profile's `settings` are layered on top of your base config for that utterance,
+then drop away when you switch to another window.
+
+**Getting started:** open the **Profiles** tab in the app — it ships with one
+inert example profile showing the structure. Edit its `match` to point at a real
+app (and tweak the `settings`), then **Save**. The active profile is logged as
+`[profile] active: …` and included in metrics/history events, so you can confirm
+it fired.
+
 Profiles live in `%APPDATA%\WhisperDictate\config.json` on Windows or
 `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/config.json` elsewhere:
 

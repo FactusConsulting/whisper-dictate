@@ -132,9 +132,28 @@ impl Default for AppSettings {
             ui_log_view: "minimal".to_owned(),
             ui_theme: "dark".to_owned(),
             ui_text_scale: "1.15".to_owned(),
-            profiles_json: "[]".to_owned(),
+            profiles_json: default_profiles_json(),
         }
     }
+}
+
+/// A single, inert example profile so new users see the shape of a profile in
+/// the Profiles tab. It matches a placeholder process/title, so it changes
+/// nothing until edited — the names and keys just document the structure. See
+/// the "Target profiles" section in docs/CONFIGURATION.md.
+///
+/// Built via `to_string_pretty` so it already matches the canonical form
+/// `load()` reproduces (sorted keys, pretty-printed), keeping it stable across
+/// a save/load round-trip.
+pub(crate) fn default_profiles_json() -> String {
+    serde_json::to_string_pretty(&serde_json::json!([
+        {
+            "name": "Example: per-app overrides (edit the match + settings, or delete me)",
+            "match": { "process": ["ExampleApp.exe"], "title": ["Example Window"] },
+            "settings": { "lang": "en", "inject_mode": "paste", "post_mode": "prompt" }
+        }
+    ]))
+    .unwrap_or_else(|_| "[]".to_owned())
 }
 
 impl AppSettings {
