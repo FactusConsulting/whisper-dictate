@@ -3,6 +3,25 @@
 All notable changes to whisper-dictate are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.7.1] — 2026-06-09
+
+### Fixed
+- **Release bundles no longer ship source code.** The Windows ZIP, Linux ZIP and
+  the local installer builder copied the entire `src/` tree — including the Rust
+  source (already compiled into the binary) and the test suites — into the
+  downloadable bundle. They now ship only the Python worker package
+  (`src/python/whisper_dictate`) that is actually run at runtime, matching the
+  Windows installer. Smaller downloads, no stray source. A packaging test guards
+  against the whole-tree copy returning.
+
+### Changed
+- Internal maintainability only (no behaviour change): reduced the cognitive
+  complexity of 16 functions across the Rust UI/controller and the Python worker
+  by extracting small, single-purpose helpers, and cleared the remaining
+  SonarCloud code smells (duplicate literals, redundant exception handlers,
+  unused parameters, nested ternaries, and similar). New unit tests lock the
+  extracted push-to-talk state machines.
+
 ## [1.7.0] — 2026-06-08
 
 ### Added
