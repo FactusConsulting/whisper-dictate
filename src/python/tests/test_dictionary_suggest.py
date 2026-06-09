@@ -141,3 +141,23 @@ class DictionarySuggestTests(unittest.TestCase):
         self.assertEqual(args.dictionary_suggest, "benchmark/results.jsonl")
         self.assertEqual(args.dictionary_suggest_min_confidence, 0.7)
 
+
+
+class DictionaryParseReplacementsTests(unittest.TestCase):
+    def test_parse_replacements_extracts_from_to_and_skips_invalid(self):
+        from whisper_dictate import vp_dictionary_suggest as m
+        payload = {"replacements": [
+            {"from": "Murch", "to": "Merge"},
+            "not-a-dict",
+            {"from": "", "to": "x"},
+            {"from": "a", "to": ""},
+            {"from": " plåede ", "to": " deploy "},
+        ]}
+        self.assertEqual(
+            m._parse_replacements(payload),
+            {"Murch": "Merge", "plåede": "deploy"},
+        )
+
+    def test_parse_replacements_empty_without_key(self):
+        from whisper_dictate import vp_dictionary_suggest as m
+        self.assertEqual(m._parse_replacements({}), {})

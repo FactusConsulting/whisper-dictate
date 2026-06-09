@@ -119,5 +119,56 @@ class HistoryWriteTests(unittest.TestCase):
             vp_history.copy_last_to_clipboard(self.path)
 
 
+class HistoryCommandHelperTests(unittest.TestCase):
+    """_history_list / _history_last extracted from run_history_command."""
+
+    def test_history_list_json_uses_read_history(self):
+        rows = [{"text": "hello", "ts": "t", "stt_backend": "whisper"}]
+        with patch.object(vp_history, "read_history", return_value=rows) as rh, \
+                patch("builtins.print") as pr:
+            vp_history._history_list(5, as_json=True)
+        rh.assert_called_once_with(5)
+        self.assertIn("hello", pr.call_args[0][0])
+
+    def test_history_list_text_falls_back_when_rust_helper_absent(self):
+        rows = [{"text": "hi", "ts": "2026", "stt_backend": "whisper"}]
+        with patch.object(vp_history, "_run_rust_history_command", return_value=False), \
+                patch.object(vp_history, "read_history", return_value=rows), \
+                patch("builtins.print") as pr:
+            vp_history._history_list(3, as_json=False)
+        printed = " ".join(str(c.args[0]) for c in pr.call_args_list)
+        self.assertIn("hi", printed)
+
+    def test_history_last_json_and_text_fallback(self):
+        with patch.object(vp_history, "last_history", return_value={"text": "last one"}), \
+                patch("builtins.print") as pr:
+            vp_history._history_last(as_json=True)
+        self.assertIn("last one", pr.call_args[0][0])
+        with patch.object(vp_history, "_run_rust_history_command", return_value=False), \
+                patch.object(vp_history, "last_history", return_value={"text": "last one"}), \
+                patch("builtins.print") as pr2:
+            vp_history._history_last(as_json=False)
+        self.assertIn("last one", pr2.call_args[0][0])
+
+    def test_run_history_command_dispatches_each_action(self):
+        with patch.object(vp_history, "_history_list") as hl, \
+                patch.object(vp_history, "_history_last") as hla, \
+                patch.object(vp_history, "copy_last_to_clipboard", return_value="x") as cl, \
+                patch.object(vp_history, "reinject_last", return_value="y") as rj, \
+                patch("builtins.print"):
+            vp_history.run_history_command("list", limit=7, as_json=True)
+            hl.assert_called_once_with(7, True)
+            vp_history.run_history_command("last", as_json=False)
+            hla.assert_called_once_with(False)
+            vp_history.run_history_command("copy-last")
+            cl.assert_called_once()
+            vp_history.run_history_command("reinject-last")
+            rj.assert_called_once()
+
+    def test_run_history_command_raises_and_logs_on_unknown_action(self):
+        with patch("builtins.print"), self.assertRaises(RuntimeError):
+            vp_history.run_history_command("bogus")
+
+
 if __name__ == "__main__":
     unittest.main()
