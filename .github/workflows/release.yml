@@ -538,7 +538,7 @@ jobs:
           $zip = "Output\whisper-dictate-winget-$version.zip"
           Remove-Item $zip -Force -ErrorAction SilentlyContinue
           Compress-Archive -Path "$outDir\*" -DestinationPath $zip
-          Write-Host "Generated winget manifests for $version:"
+          Write-Host "Generated winget manifests for ${version}:"
           Get-ChildItem $outDir | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: Upload installers + checksums to release
