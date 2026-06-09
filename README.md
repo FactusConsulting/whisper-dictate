@@ -310,17 +310,21 @@ choco install whisper-dictate --source="C:\path\to\nupkg-folder" -y
 ### Install via local winget manifests
 
 The official `winget-pkgs` path is not currently active; the package was
-rejected while the project is still new. Until that can be revisited, use the
-repo-local manifests:
+rejected while the project is still new. Until that can be revisited, each
+release ships ready-to-use manifests as the `whisper-dictate-winget-<version>.zip`
+asset (already pinned to that release's installer URL and SHA256):
 
 ```powershell
 # One-time, in an elevated (admin) PowerShell:
 winget settings --enable LocalManifestFiles
 
-# Then (no admin needed):
-git clone https://github.com/FactusConsulting/whisper-dictate.git
-winget install --manifest .\whisper-dictate\packaging\windows\winget
+# Then (no admin needed): download whisper-dictate-winget-<version>.zip from the
+# latest release, extract it, and point winget at the extracted folder:
+winget install --manifest .\winget
 ```
+
+Download the asset from
+[the latest release](https://github.com/FactusConsulting/whisper-dictate/releases/latest).
 
 > The installer is not yet code-signed, so Windows SmartScreen warns
 > that the publisher is unknown — choose **More info → Run anyway**.

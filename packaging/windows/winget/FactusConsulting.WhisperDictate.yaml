@@ -1,6 +1,7 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
+# Template: the release pipeline fills __VERSION__ and ships the concrete
+# manifests as the whisper-dictate-winget-<version>.zip release asset.
 PackageIdentifier: FactusConsulting.WhisperDictate
-PackageVersion: 1.7.3
+PackageVersion: __VERSION__
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.12.0

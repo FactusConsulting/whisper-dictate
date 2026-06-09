@@ -68,6 +68,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
+      # Cache the dependency build so the optimized release build reuses the
+      # crate graph instead of recompiling every dependency from scratch.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src/rust -> ../target"
+
       - name: Build Rust desktop UI
         run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app
 
@@ -408,6 +414,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: steps.win-check.outputs.changed == 'true'
 
+      - uses: Swatinem/rust-cache@v2
+        if: steps.win-check.outputs.changed == 'true'
+        with:
+          workspaces: "src/rust -> ../target"
+
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
@@ -495,6 +506,41 @@ jobs:
           choco pack "$packageDir\whisper-dictate.nuspec" --outputdirectory Output
           if ($LASTEXITCODE -ne 0) { throw "choco pack failed" }
 
+      # Fill the winget manifest templates with this release's version, installer
+      # URL and SHA256, then ship the concrete manifests as a release asset. This
+      # replaces the old manual "bump the winget manifests in a PR" step without
+      # pushing to protected main — users install via `winget install --manifest`
+      # against the extracted zip.
+      - name: Generate winget manifests
+        if: steps.win-check.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ env.TAG }}" -replace '^v',''
+          $repo    = "${{ github.repository }}"
+          $tag     = "${{ env.TAG }}"
+          $hashes  = Get-Content sha256sums.json | ConvertFrom-Json
+          $installerName = "whisper-dictate-windows-setup-$version.exe"
+          $installerHash = ($hashes | Where-Object File -eq $installerName).SHA256
+          if (-not $installerHash) { throw "Missing SHA256 for $installerName" }
+          $installerUrl = "https://github.com/$repo/releases/download/$tag/$installerName"
+          $releaseDate  = (Get-Date -Format 'yyyy-MM-dd')
+          $outDir = "Output\winget"
+          New-Item -ItemType Directory -Force $outDir | Out-Null
+          foreach ($f in Get-ChildItem packaging\windows\winget\*.yaml) {
+            # Drop template comment lines so the generated manifest is clean.
+            $body = (Get-Content $f.FullName | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+            $body = $body.Replace('__VERSION__', $version).
+              Replace('__INSTALLER_URL__', $installerUrl).
+              Replace('__INSTALLER_SHA256__', $installerHash).
+              Replace('__RELEASE_DATE__', $releaseDate)
+            Set-Content (Join-Path $outDir $f.Name) $body -Encoding utf8
+          }
+          $zip = "Output\whisper-dictate-winget-$version.zip"
+          Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$outDir\*" -DestinationPath $zip
+          Write-Host "Generated winget manifests for $version:"
+          Get-ChildItem $outDir | ForEach-Object { Write-Host "  $($_.Name)" }
+
       - name: Upload installers + checksums to release
         if: steps.win-check.outputs.changed == 'true'
         env:
@@ -544,7 +590,8 @@ jobs:
           choco push $package.FullName --source "$env:CHOCOLATEY_NUGET_SOURCE" --api-key "$env:CHOCOLATEY_NUGET_API_KEY" --force
           if ($LASTEXITCODE -ne 0) { throw "choco push failed" }
 
-      # NOTE: winget manifests (packaging/windows/winget) are NOT generated or
-      # committed here — main is protected (PR + CI only), so CI must not push to
-      # it. The installer SHA256 is published as the sha256sums.txt release asset;
-      # winget manifests are updated when needed via a separate PR using that hash.
+      # NOTE: winget manifests are generated from the packaging/windows/winget
+      # templates in the "Generate winget manifests" step above and shipped as the
+      # whisper-dictate-winget-<version>.zip release asset — NOT committed to main
+      # (protected: PR + CI only, so CI must not push to it). Users install via
+      # `winget install --manifest` against the extracted zip.

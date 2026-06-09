@@ -1,20 +1,22 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+# Template: the release pipeline fills __VERSION__ / __INSTALLER_URL__ /
+# __INSTALLER_SHA256__ / __RELEASE_DATE__ and ships the concrete manifests as the
+# whisper-dictate-winget-<version>.zip release asset (see .github/workflows).
 PackageIdentifier: FactusConsulting.WhisperDictate
-PackageVersion: 1.7.3
+PackageVersion: __VERSION__
 Installers:
   - Architecture: x64
     Scope: user
     InstallerType: inno
-    InstallerUrl: https://github.com/FactusConsulting/whisper-dictate/releases/download/v1.7.3/whisper-dictate-windows-setup-1.7.3.exe
-    InstallerSha256: 144cc3a13575b269c6c80bf0e9be6ccb9676531f45d9c925343da0aab12aab1d
+    InstallerUrl: __INSTALLER_URL__
+    InstallerSha256: __INSTALLER_SHA256__
     ProductCode: '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
     InstallerSwitches:
       Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-    ReleaseDate: 2026-06-09
+    ReleaseDate: __RELEASE_DATE__
     AppsAndFeaturesEntries:
       - DisplayName: whisper-dictate
         Publisher: FactusConsulting
-        DisplayVersion: 1.7.3
+        DisplayVersion: __VERSION__
         ProductCode: '{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}_is1'
 ManifestType: installer
 ManifestVersion: 1.12.0
