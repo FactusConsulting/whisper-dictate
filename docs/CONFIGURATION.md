@@ -572,3 +572,31 @@ setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8;
   clear sentences; auto-detect is unreliable on short utterances.
 - **Mic too quiet / noisy:** see [MICROPHONE.md](MICROPHONE.md) before tuning
   `VOICEPI_TARGET_DBFS`/`VOICEPI_MIN_*`.
+
+### Fast or rapid speech
+
+When you speak quickly, words run together and the two most common failures are
+(1) the voice-activity gate splitting or ending a phrase too early, and (2) the
+decoder dropping or merging words. Tune in this order — change one thing, test,
+keep what helps:
+
+| Symptom | Setting | Try | Why |
+|---|---|---|---|
+| Phrase cut off / split mid-sentence | `VOICEPI_VAD_MIN_SILENCE_MS` | `900`–`1200` (default `600`) | Require a longer pause before VAD ends/splits speech, so a quick breath isn't treated as the end |
+| First/last syllables clipped | `VOICEPI_VAD_SPEECH_PAD_MS` | `300` (default `200`) | Keep more audio around detected speech |
+| Quiet/fast onsets missed | `VOICEPI_VAD_THRESHOLD` | `0.2` (default `0.3`) | More sensitive speech detection (raise again if it triggers on noise) |
+| Last word dropped on release | `VOICEPI_RELEASE_TAIL_MS` | `300`–`400` (default `200`) | Capture a bit more after you release the key |
+| Words merged / wrong on hard audio | `VOICEPI_BEAM_SIZE` | `5` (default `1`) | Wider beam search = more accurate, slower (cheap on GPU) |
+| Long fast sentences lose coherence | `VOICEPI_CONTEXT_MIN_SECONDS` | keep `5` (the default already enables context for ≥5 s utterances) | `condition_on_previous_text` keeps word boundaries coherent |
+
+Model/engine notes for fast speech:
+
+- On a CUDA GPU prefer `VOICEPI_MODEL=large-v3` over `large-v3-turbo` — the full
+  model is more robust to fast, slurred or accented speech (turbo trades a little
+  accuracy for speed). On CPU, `large-v3-turbo` is the practical default.
+- Keep `VOICEPI_TEMPERATURE=0.0` — the fallback ladder can "invent" smoother but
+  less faithful text on uncertain (fast) audio.
+- `VOICEPI_LANG=<your language>` (not auto-detect) — language detection is
+  weaker on the short, run-together clips fast speech produces.
+- The local "Skip silent hallucinations" guard (default on) does **not** hurt
+  fast speech: it only drops segments the model itself flags as non-speech.
