@@ -106,7 +106,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("successful_keyring_save_keeps_file_fallback", ui_tests)
         self.assertIn("saving_api_key_persists_selected_cloud_provider_settings", ui_tests)
 
-    def test_api_check_results_are_visible_next_to_buttons_and_in_runtime_log(self):
+    def test_api_check_results_surface_in_runtime_log_and_status_bar(self):
         script = rust_ui_source()
 
         self.assertIn("fn set_api_check_status(&mut self, label: &str, message: &str)", script)
@@ -114,30 +114,35 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('self.post_api_key_status = message.to_owned()', script)
         self.assertIn('format!("[OK] {} passed: {detail}", result.label)', script)
         self.assertIn('format!("[ERROR] {} failed to run: {error}", result.label)', script)
-        self.assertIn("fn status_label(ui: &mut egui::Ui, text: &str, palette: UiPalette)", script)
-        self.assertIn('text.starts_with("[OK]")', script)
-        self.assertIn('text.starts_with("[ERROR]")', script)
-        self.assertIn("fn settings_messages(&self, ui: &mut egui::Ui)", script)
-        self.assertIn("UiTextKey::Messages", script)
-        self.assertIn("UiTextKey::NoMessages", script)
+        # API-key statuses surface in the global bottom message bar (not a
+        # per-page Messages card any more).
+        self.assertIn("fn status_message_bar(&self, ui: &mut egui::Ui, palette: UiPalette)", script)
+        self.assertIn("fn status_bar_message(&self) -> String", script)
         self.assertIn("Tab::Speech if !self.stt_api_key_status.trim().is_empty()", script)
         self.assertIn("Tab::Post if !self.post_api_key_status.trim().is_empty()", script)
-        self.assertIn("let palette = ui_palette(&self.settings.ui_theme);", script)
-        self.assertIn("status_label(ui, message, palette);", script)
+
+    def test_global_bottom_message_bar_replaces_per_page_messages_card(self):
+        script = rust_ui_source()
+
+        # A single thin status bar at the bottom on every tab, fed by the saved
+        # state + latest message — no per-page Messages card, no sidebar badge.
+        self.assertIn('egui::TopBottomPanel::bottom("status_message_bar")', script)
+        self.assertIn("self.status_message_bar(ui, palette)", script)
+        self.assertIn("bottom_message_bar_height(&self.settings.ui_text_scale)", script)
+        self.assertIn("fn bottom_message_bar_height(raw_scale: &str) -> f32", script)
+        self.assertNotIn("fn settings_messages", script)
+        self.assertNotIn("fn sidebar_save_state", script)
+        self.assertNotIn('format!("settings_messages_{:?}", self.selected_tab)', script)
 
     def test_rust_settings_pages_scroll_above_fixed_footer(self):
         script = rust_ui_source()
-        settings_panel = script.split("fn settings_panel", 1)[1].split("fn settings_messages", 1)[0]
+        settings_panel = script.split("fn settings_panel", 1)[1].split("fn settings_actions", 1)[0]
 
-        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 264.0;", script)
+        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 72.0;", script)
         self.assertIn("const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;", script)
-        self.assertIn("const SETTINGS_MESSAGES_TOP_GAP: f32 = 14.0;", script)
         self.assertIn("pub(in crate::ui) const EDGE_MARGIN: f32 = 12.0;", script)
-        self.assertIn("const SETTINGS_MESSAGES_MAX_HEIGHT: f32 = 88.0;", script)
         self.assertIn("let footer_height = SETTINGS_FOOTER_HEIGHT;", settings_panel)
         self.assertIn("ui.available_height() - footer_height - SETTINGS_FOOTER_CHROME_HEIGHT", settings_panel)
-        self.assertIn("egui::Layout::top_down(egui::Align::LEFT)", settings_panel)
-        self.assertIn("self.settings_messages(ui);", settings_panel)
         self.assertIn("self.settings_actions(ui);", settings_panel)
         self.assertIn("egui::ScrollArea::vertical()", settings_panel)
         self.assertIn('.id_salt(format!("settings_body_{:?}", self.selected_tab))', settings_panel)
@@ -150,11 +155,6 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("egui::RichText::new(compact_label(&self.config_path, config_chars))", script)
         self.assertIn(".on_hover_text(&self.config_path)", script)
         self.assertNotIn('ui.label(format!("Config: {}", self.config_path));', script)
-        self.assertIn("ui.add_space(SETTINGS_MESSAGES_TOP_GAP);", settings_panel)
-        self.assertIn("ui.set_min_height(inner_height);", script)
-        self.assertIn('.id_salt(format!("settings_messages_{:?}", self.selected_tab))', script)
-        self.assertIn(".max_height(SETTINGS_MESSAGES_MAX_HEIGHT)", script)
-        self.assertIn("egui::Label::new(rich_text).wrap()", script)
         self.assertIn("fn panel_frame(palette: UiPalette) -> egui::Frame", script)
         self.assertIn(".rounding(egui::Rounding::same(PANEL_RADIUS as f32))", script)
         self.assertIn("egui::Margin::symmetric(16.0, 14.0)", script)

@@ -41,6 +41,7 @@ const UI_LIGHT_ERROR_TEXT: egui::Color32 = egui::Color32::from_rgb(190, 18, 60);
 
 const SIDEBAR_WIDTH: f32 = 164.0;
 const TOP_STATUS_HEIGHT: f32 = 64.0;
+const BOTTOM_MESSAGE_BAR_HEIGHT: f32 = 30.0;
 pub(in crate::ui) const CONTROL_RADIUS: u8 = 8;
 pub(in crate::ui) const PANEL_RADIUS: u8 = 12;
 pub(in crate::ui) const PILL_RADIUS: u8 = 14;
@@ -284,20 +285,16 @@ pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
     TOP_STATUS_HEIGHT * layout_scale(raw_scale)
 }
 
+pub(in crate::ui) fn bottom_message_bar_height(raw_scale: &str) -> f32 {
+    BOTTOM_MESSAGE_BAR_HEIGHT * layout_scale(raw_scale)
+}
+
 pub(in crate::ui) fn panel_frame(palette: UiPalette) -> egui::Frame {
     egui::Frame::default()
         .fill(palette.surface_bg)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
         .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
         .inner_margin(egui::Margin::symmetric(16.0, 14.0))
-}
-
-pub(in crate::ui) fn inset_panel_frame(palette: UiPalette) -> egui::Frame {
-    egui::Frame::default()
-        .fill(palette.bg)
-        .stroke(egui::Stroke::new(0.8, palette.border_soft))
-        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
 }
 
 #[cfg(test)]
