@@ -61,6 +61,22 @@ CONTEXT_MIN_SECONDS = float(get_value("VOICEPI_CONTEXT_MIN_SECONDS", "5") or "5"
 VAD_THRESHOLD = float(get_value("VOICEPI_VAD_THRESHOLD", "0.3") or "0.3")
 VAD_MIN_SILENCE_MS = int(get_value("VOICEPI_VAD_MIN_SILENCE_MS", "600") or "600")
 VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200") or "200")
+
+# --- Trailing-silence hallucination guards (local Whisper only) ---
+# When on (default), ask faster-whisper to skip long silent gaps where it tends
+# to hallucinate "like and subscribe"-style text. This needs word timestamps
+# (small extra compute). Toggled from the UI; a no-op for cloud STT / Parakeet,
+# which never reach this code path.
+HALLUCINATION_GUARD = (get_value("VOICEPI_HALLUCINATION_GUARD", "1") or "1").strip().lower() not in (
+    "", "0", "false", "no", "off")
+HALLUCINATION_SILENCE_S = float(get_value("VOICEPI_HALLUCINATION_SILENCE_S", "2.0") or "2.0")
+# Always-on segment scrub (cheap, no setting): drop a transcribed segment the
+# model itself flags as very likely non-speech (high no_speech_prob AND low
+# confidence), or whose end timestamp runs past the captured audio — the classic
+# "like and subscribe" / repetition artifacts Whisper emits on trailing silence.
+NO_SPEECH_DROP = float(get_value("VOICEPI_NO_SPEECH_DROP", "0.6") or "0.6")
+NO_SPEECH_DROP_LOGPROB = float(get_value("VOICEPI_NO_SPEECH_DROP_LOGPROB", "-0.5") or "-0.5")
+SEGMENT_END_SLACK_S = 1.0
 STT_DEBUG = (get_value("VOICEPI_STT_DEBUG") or "").strip().lower() not in (
     "", "0", "false", "no", "off")
 VALID_STT_BACKENDS = ("whisper", "parakeet", "openai")
@@ -294,6 +310,31 @@ def is_hallucination(text: str) -> bool:
     return text.lower().rstrip() in HALLUCINATIONS
 
 
+def _drop_hallucinated_segments(segment_list, audio_duration_s):
+    """Split segments into (kept, dropped), dropping trailing-silence
+    hallucinations before the text is assembled.
+
+    A segment is dropped when the model itself flags it as very likely
+    non-speech (``no_speech_prob`` high AND ``avg_logprob`` low together), or
+    when its end timestamp runs past the captured audio (a hallucination beyond
+    the recording, e.g. a 30 s "like and subscribe" tail on a 35 s clip).
+    """
+    kept = []
+    dropped = []
+    for segment in segment_list:
+        no_speech = float(getattr(segment, "no_speech_prob", 0.0) or 0.0)
+        avg_logprob = float(getattr(segment, "avg_logprob", 0.0) or 0.0)
+        end = getattr(segment, "end", None)
+        likely_silence = no_speech >= NO_SPEECH_DROP and avg_logprob <= NO_SPEECH_DROP_LOGPROB
+        past_audio = (
+            end is not None
+            and audio_duration_s is not None
+            and float(end) > audio_duration_s + SEGMENT_END_SLACK_S
+        )
+        (dropped if (likely_silence or past_audio) else kept).append(segment)
+    return kept, dropped
+
+
 def _segment_metric(segment) -> dict[str, Any]:
     out: dict[str, Any] = {
         "start": getattr(segment, "start", None),
@@ -323,6 +364,13 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     t0 = time.monotonic()
     dictionary_prompt = _dictionary_runtime("", INITIAL_PROMPT)
     prompt = dictionary_prompt.prompt
+    # hallucination_silence_threshold only takes effect with word timestamps, so
+    # enable both together when the guard is on.
+    guard_kwargs = (
+        {"word_timestamps": True, "hallucination_silence_threshold": HALLUCINATION_SILENCE_S}
+        if HALLUCINATION_GUARD
+        else {}
+    )
     segments, info = model.transcribe(
         audio,
         language=lang,
@@ -338,8 +386,18 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
             "min_silence_duration_ms": VAD_MIN_SILENCE_MS,
             "speech_pad_ms": VAD_SPEECH_PAD_MS,
         },
+        **guard_kwargs,
     )
     segment_list = list(segments)
+    segment_list, dropped_segments = _drop_hallucinated_segments(segment_list, dur)
+    for segment in dropped_segments:
+        print(
+            f"[stt] dropped hallucinated segment: "
+            f"no_speech={float(getattr(segment, 'no_speech_prob', 0.0) or 0.0):.2f} "
+            f"end={float(getattr(segment, 'end', 0.0) or 0.0):.1f}s "
+            f"text={getattr(segment, 'text', '')!r}",
+            flush=True,
+        )
     # Concatenate with Whisper's OWN spacing. Each segment text already
     # carries a leading space on word boundaries (BPE tokens); strip()+
     # " ".join() drops that at segment joins -> "hørerdig". Join raw,

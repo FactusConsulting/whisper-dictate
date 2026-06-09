@@ -32,6 +32,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "beam_size",
     "temperature",
     "context_min_seconds",
+    "hallucination_guard",
     "parakeet_min_seconds",
     "release_tail_ms",
     "vad_threshold",

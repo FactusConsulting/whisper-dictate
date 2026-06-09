@@ -122,6 +122,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.beam_size = defaults.beam_size;
             settings.temperature = defaults.temperature;
             settings.context_min_seconds = defaults.context_min_seconds;
+            settings.hallucination_guard = defaults.hallucination_guard;
             settings.parakeet_min_seconds = defaults.parakeet_min_seconds;
             settings.release_tail_ms = defaults.release_tail_ms;
             settings.vad_threshold = defaults.vad_threshold;

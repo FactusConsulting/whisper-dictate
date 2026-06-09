@@ -36,6 +36,7 @@ impl AppSettings {
         set_string(object, "beam_size", &self.beam_size);
         set_string(object, "temperature", &self.temperature);
         set_string(object, "context_min_seconds", &self.context_min_seconds);
+        set_bool(object, "hallucination_guard", self.hallucination_guard);
         set_string(object, "parakeet_min_seconds", &self.parakeet_min_seconds);
         set_string(object, "release_tail_ms", &self.release_tail_ms);
         set_string(object, "vad_threshold", &self.vad_threshold);

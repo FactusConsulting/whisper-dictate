@@ -21,6 +21,7 @@ fn changed_settings() -> AppSettings {
         beam_size: "5".to_owned(),
         temperature: "0.4".to_owned(),
         context_min_seconds: "1.5".to_owned(),
+        hallucination_guard: false,
         parakeet_min_seconds: "2.5".to_owned(),
         release_tail_ms: "350".to_owned(),
         vad_threshold: "0.42".to_owned(),

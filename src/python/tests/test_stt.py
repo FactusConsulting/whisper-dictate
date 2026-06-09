@@ -38,6 +38,41 @@ class HallucinationFilterTests(unittest.TestCase):
             self.assertFalse(self.t.is_hallucination(phrase),
                              f"{phrase!r} should NOT match")
 
+    def test_drop_hallucinated_segments_removes_trailing_silence(self):
+        real = types.SimpleNamespace(
+            text=" real speech", start=0.0, end=34.6,
+            avg_logprob=-0.19, no_speech_prob=0.006)
+        # The classic "like and subscribe" tail: the model flags it as likely
+        # non-speech (high no_speech_prob + low confidence) AND its end (64.6s)
+        # runs past the 34.6s recording.
+        halluc = types.SimpleNamespace(
+            text=" like and subscribe", start=34.6, end=64.6,
+            avg_logprob=-0.56, no_speech_prob=0.66)
+        kept, dropped = self.t._drop_hallucinated_segments([real, halluc], 34.6)
+        self.assertEqual([s.text for s in kept], [" real speech"])
+        self.assertEqual([s.text for s in dropped], [" like and subscribe"])
+
+    def test_drop_hallucinated_segments_keeps_real_in_bounds_speech(self):
+        # Real speech (low no_speech_prob, end within the recording) is kept even
+        # if it contains repetition — that in-segment artifact is not what this
+        # trailing-silence scrub targets.
+        seg = types.SimpleNamespace(
+            text=" virkelig virkelig virkelig", start=0.0, end=19.4,
+            avg_logprob=-0.18, no_speech_prob=0.0006)
+        kept, dropped = self.t._drop_hallucinated_segments([seg], 19.6)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(dropped, [])
+
+    def test_drop_hallucinated_segments_requires_both_silence_signals(self):
+        # High no_speech_prob alone (but good confidence, in-bounds end) is NOT
+        # dropped — avoids nuking quiet-but-real speech.
+        quiet_real = types.SimpleNamespace(
+            text=" quiet real", start=0.0, end=5.0,
+            avg_logprob=-0.2, no_speech_prob=0.7)
+        kept, dropped = self.t._drop_hallucinated_segments([quiet_real], 5.0)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(dropped, [])
+
 class TranscribeDetailTests(unittest.TestCase):
     def setUp(self):
         try:
@@ -99,6 +134,14 @@ class TranscribeDetailTests(unittest.TestCase):
         self.assertEqual(
             model.kwargs["vad_parameters"]["threshold"],
             self.t.VAD_THRESHOLD,
+        )
+        # Hallucination guard is on by default → word timestamps + silence-skip
+        # threshold are passed so faster-whisper drops silent hallucinated gaps.
+        self.assertTrue(self.t.HALLUCINATION_GUARD)
+        self.assertTrue(model.kwargs.get("word_timestamps"))
+        self.assertEqual(
+            model.kwargs.get("hallucination_silence_threshold"),
+            self.t.HALLUCINATION_SILENCE_S,
         )
 
 class STTBackendTests(unittest.TestCase):

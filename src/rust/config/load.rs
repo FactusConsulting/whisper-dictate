@@ -63,6 +63,8 @@ impl AppSettings {
         self.temperature = string_value(object, "temperature", &defaults.temperature);
         self.context_min_seconds =
             string_value(object, "context_min_seconds", &defaults.context_min_seconds);
+        self.hallucination_guard =
+            bool_value(object, "hallucination_guard", defaults.hallucination_guard);
         self.parakeet_min_seconds = string_value(
             object,
             "parakeet_min_seconds",
