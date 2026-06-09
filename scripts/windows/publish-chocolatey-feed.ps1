@@ -10,8 +10,20 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Disable PowerShell's native-command error coupling so our explicit $LASTEXITCODE checks
+# stay in charge: some native calls use a non-zero exit as a normal signal rather than a
+# failure (e.g. `git diff --cached --quiet` returns 1 when there ARE staged changes, and
+# `git rm -rf .` on a fresh orphan branch returns non-zero with nothing to remove). With
+# $ErrorActionPreference = "Stop" those would otherwise throw on PowerShell 7.4+.
+#
+# $PSNativeCommandUseErrorActionPreference is a *preference* variable (designed to be set),
+# not an automatic variable, and it was only introduced in PowerShell 7.3. We guard with
+# Get-Variable so the script still runs on older PowerShell where the variable does not exist.
 if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
-    $PSNativeCommandUseErrorActionPreference = $false
+    # NOSONAR: powershelldre:S8626 is a false positive here - this is a preference variable,
+    # which is meant to be assigned (see the note above), not an automatic variable.
+    $PSNativeCommandUseErrorActionPreference = $false # NOSONAR
 }
 
 if (-not $Repository) {
