@@ -426,8 +426,8 @@ class PostprocessTests(unittest.TestCase):
 
         self.assertIn("postprocess_text(text", script)
         self.assertIn("dictionary_text=source_text", script)
-        self.assertIn("post_processor=post_result.provider", script)
-        self.assertIn("post_fallback=post_result.fallback", script)
+        self.assertIn('"post_processor": post_result.provider', script)
+        self.assertIn('"post_fallback": post_result.fallback', script)
 
     def test_runtime_logs_postprocess_status_for_every_utterance(self):
         with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:

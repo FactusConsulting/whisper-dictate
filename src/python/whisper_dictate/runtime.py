@@ -373,11 +373,12 @@ def _resolve_backend_and_device(a, ap) -> tuple[str, str, str]:
 
 def _resolve_model_name(a, backend: str) -> tuple[str, str]:
     """Resolve the human label + concrete model name for the chosen backend."""
-    label = (
-        "NVIDIA Parakeet" if backend == "parakeet"
-        else "External API" if backend == "openai"
-        else "Whisper"
-    )
+    if backend == "parakeet":
+        label = "NVIDIA Parakeet"
+    elif backend == "openai":
+        label = "External API"
+    else:
+        label = "Whisper"
     loaded_model_name = a.model
     if backend == "parakeet":
         from whisper_dictate.vp_parakeet import resolve_parakeet_model_name
@@ -388,7 +389,7 @@ def _resolve_model_name(a, backend: str) -> tuple[str, str]:
     return label, loaded_model_name
 
 
-def _load_model(a, ap, backend: str, dev: str, ctype: str) -> tuple[object, str, float]:
+def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, float]:
     """Load the STT model, emitting the loading_model/ready/failed worker events."""
     label, loaded_model_name = _resolve_model_name(a, backend)
     if backend == "openai":
@@ -487,7 +488,7 @@ def main() -> None:
             "", "0", "false", "no", "off"):
         _print_effective_config(a, dev, ctype)
 
-    model, loaded_model_name, model_load_s = _load_model(a, ap, backend, dev, ctype)
+    model, loaded_model_name, model_load_s = _load_model(a, backend, dev, ctype)
     _run_session(a, model, lang, backend, dev, ctype, loaded_model_name, model_load_s)
 
 

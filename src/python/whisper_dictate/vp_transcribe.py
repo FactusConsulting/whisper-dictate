@@ -333,9 +333,11 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         no_speech_threshold=0.45,
         log_prob_threshold=-1.0,
         vad_filter=True,
-        vad_parameters=dict(threshold=VAD_THRESHOLD,
-                            min_silence_duration_ms=VAD_MIN_SILENCE_MS,
-                            speech_pad_ms=VAD_SPEECH_PAD_MS),
+        vad_parameters={
+            "threshold": VAD_THRESHOLD,
+            "min_silence_duration_ms": VAD_MIN_SILENCE_MS,
+            "speech_pad_ms": VAD_SPEECH_PAD_MS,
+        },
     )
     segment_list = list(segments)
     # Concatenate with Whisper's OWN spacing. Each segment text already

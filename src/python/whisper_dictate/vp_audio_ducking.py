@@ -103,7 +103,7 @@ def register_active_ducker(ducker: AudioDucker) -> AudioDucker:
 
 
 def restore_all_duckers() -> None:
-    for ducker in list(_ACTIVE_DUCKERS):
+    for ducker in _ACTIVE_DUCKERS:
         ducker.exit()
 
 

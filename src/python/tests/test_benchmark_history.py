@@ -367,7 +367,7 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("def _profiled_config", script)
         self.assertIn("_apply_profile_settings", script)
         self.assertIn("[profile] active:", script)
-        self.assertIn('profile=getattr(self, "_active_profile_name", None)', script)
+        self.assertIn('"profile": getattr(self, "_active_profile_name", None)', script)
 
     def test_history_keeps_profile_field(self):
         from whisper_dictate import runtime

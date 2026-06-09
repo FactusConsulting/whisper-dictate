@@ -171,6 +171,10 @@ def _cloud_checks(*, ping: bool) -> list[Check]:
     return checks
 
 
+_CLOUD_REACHABLE = "cloud reachable"
+_MODEL_CACHE = "model cache"
+
+
 def _cloud_reachable(base_url: str, key: str) -> Check:
     import urllib.error
     import urllib.request
@@ -183,13 +187,14 @@ def _cloud_reachable(base_url: str, key: str) -> Check:
             code = resp.status
     except urllib.error.HTTPError as exc:
         code = exc.code
-    except Exception as exc:  # noqa: BLE001 - offline is a WARN, not a FAIL
-        return Check("cloud reachable", False, f"unreachable: {exc}", required=False)
+    # Offline / network errors are a WARN, not a FAIL.
+    except Exception as exc:  # noqa: BLE001
+        return Check(_CLOUD_REACHABLE, False, f"unreachable: {exc}", required=False)
     if code == 200:
-        return Check("cloud reachable", True, f"{base_url}/models -> HTTP 200", required=False)
+        return Check(_CLOUD_REACHABLE, True, f"{base_url}/models -> HTTP 200", required=False)
     # Reachable, but the key/endpoint was rejected — some providers gate /models.
     return Check(
-        "cloud reachable",
+        _CLOUD_REACHABLE,
         False,
         f"reachable but HTTP {code} (check key/permissions)",
         required=False,
@@ -206,16 +211,16 @@ def _model_cache_dir() -> Path:
 def model_cache_check() -> Check:
     cache = _model_cache_dir()
     if not cache.exists():
-        return Check("model cache", True, f"{cache} (empty; downloads on first run)", required=False)
+        return Check(_MODEL_CACHE, True, f"{cache} (empty; downloads on first run)", required=False)
     try:
         # Sum only the model weight blobs (hub/models--*/blobs/*) rather than
         # walking the whole cache, so this stays fast even with many models.
         size = sum(f.stat().st_size for f in cache.glob("hub/models--*/blobs/*") if f.is_file())
     except OSError as exc:
-        return Check("model cache", True, f"{cache} (size unknown: {exc})", required=False)
+        return Check(_MODEL_CACHE, True, f"{cache} (size unknown: {exc})", required=False)
     if size:
-        return Check("model cache", True, f"{cache} ({size / 1e9:.1f} GB in model blobs)", required=False)
-    return Check("model cache", True, f"{cache} (present; no model blobs yet)", required=False)
+        return Check(_MODEL_CACHE, True, f"{cache} ({size / 1e9:.1f} GB in model blobs)", required=False)
+    return Check(_MODEL_CACHE, True, f"{cache} (present; no model blobs yet)", required=False)
 
 
 def disk_check() -> Check:

@@ -99,11 +99,17 @@ def _linux_checks() -> list[Check]:
     return checks
 
 
+def _check_level(check: Check) -> str:
+    if check.ok:
+        return "OK"
+    return "FAIL" if check.required else "WARN"
+
+
 def _print_checks(checks: list[Check]) -> bool:
     failed = False
 
     for c in checks:
-        level = "OK" if c.ok else ("FAIL" if c.required else "WARN")
+        level = _check_level(c)
         print(f"[doctor] {level:<4} {c.name}: {c.detail}", flush=True)
         failed = failed or (c.required and not c.ok)
     return failed

@@ -220,10 +220,9 @@ class InjectMixin:
         # Foretræk systemd-service — den har XKB_DEFAULT_LAYOUT=dk konfigureret
         r = subprocess.run(["systemctl", "--user", "start", "ydotoold.service"],
                            capture_output=True)
-        if r.returncode == 0:
-            if self._wait_for_ydotoold():
-                print("[inject] ydotoold startet via systemd", flush=True)
-                return
+        if r.returncode == 0 and self._wait_for_ydotoold():
+            print("[inject] ydotoold startet via systemd", flush=True)
+            return
         # Fallback: start ydotoold direkte. NB: den autoritative kilde er
         # sessionens XKB-layout, som Mutter applicerer på uinput-enheden —
         # ikke ydotoolds egen env. XKB_DEFAULT_LAYOUT her er kun best-effort
