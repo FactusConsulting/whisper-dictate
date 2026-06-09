@@ -87,6 +87,18 @@ pub(in crate::ui) fn pipeline_stage_for_worker_state(state: &str) -> Option<&'st
     }
 }
 
+/// Whether a worker status means the stack has loaded the model and is ready to
+/// receive speech. `Some(true)` once `ready` (or any in-pipeline state) is seen;
+/// `Some(false)` while the model is still loading or after a load failure;
+/// `None` for states that should leave the current readiness untouched.
+pub(in crate::ui) fn worker_ready_for_state(state: &str) -> Option<bool> {
+    match state {
+        "ready" | "opening" | "recording" | "transcribing" | "post-processing" => Some(true),
+        "loading_model" | "failed" => Some(false),
+        _ => None,
+    }
+}
+
 pub(in crate::ui) fn audio_meter_level(
     live_level: f32,
     state: RuntimeState,
@@ -141,6 +153,22 @@ mod tests {
         assert_eq!(worker_event_f32(&payload, "c"), None);
         assert_eq!(worker_event_f32(&payload, "d"), None);
         assert_eq!(worker_event_f32(&payload, "missing"), None);
+    }
+
+    #[test]
+    fn worker_ready_tracks_model_load_and_pipeline_states() {
+        // Loading / failure mean "not ready to receive speech".
+        assert_eq!(worker_ready_for_state("loading_model"), Some(false));
+        assert_eq!(worker_ready_for_state("failed"), Some(false));
+        // The model-loaded signal and every in-pipeline state mean "ready".
+        assert_eq!(worker_ready_for_state("ready"), Some(true));
+        assert_eq!(worker_ready_for_state("opening"), Some(true));
+        assert_eq!(worker_ready_for_state("recording"), Some(true));
+        assert_eq!(worker_ready_for_state("transcribing"), Some(true));
+        assert_eq!(worker_ready_for_state("post-processing"), Some(true));
+        // Unknown states leave readiness untouched.
+        assert_eq!(worker_ready_for_state("listening"), None);
+        assert_eq!(worker_ready_for_state("whatever"), None);
     }
 
     #[test]

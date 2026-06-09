@@ -19,8 +19,8 @@ pub(in crate::ui) use log_card::{empty_log_state, metric_box, runtime_log_card};
 // Free helpers consumed by sibling test modules through `ui::tabs::NAME`.
 #[cfg(test)]
 pub(in crate::ui) use runtime::{
-    audio_device_label, empty_as_auto, empty_as_disabled, full_audio_device_label,
-    live_audio_level_summary, mic_label_char_budget,
+    audio_device_label, empty_as_auto, empty_as_disabled, format_push_to_talk_keys,
+    full_audio_device_label, live_audio_level_summary, mic_label_char_budget,
 };
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;

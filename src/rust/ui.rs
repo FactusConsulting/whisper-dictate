@@ -216,6 +216,11 @@ struct WhisperDictateApp {
     /// ("recording" / "transcribing" / "post-processing"), or None when idle.
     /// Drives the live progress card in the runtime log.
     pipeline_stage: Option<&'static str>,
+    /// Whether the worker has finished loading the model and is ready to receive
+    /// speech. The OS process spawns near-instantly (RuntimeState::Running), but
+    /// loading a local model takes time, so the status stays "Starting" until the
+    /// worker reports `ready`. Reset on each start/restart and on exit/error.
+    worker_ready: bool,
 }
 
 impl Default for WhisperDictateApp {
@@ -281,6 +286,7 @@ impl Default for WhisperDictateApp {
             background_task_label: None,
             gpu_total_mb: best_gpu_total_mb(),
             pipeline_stage: None,
+            worker_ready: false,
         }
     }
 }
@@ -358,6 +364,8 @@ mod layout_tests;
 mod log_view_tests;
 #[cfg(test)]
 mod model_picker_tests;
+#[cfg(test)]
+mod runtime_status_tests;
 #[cfg(test)]
 mod settings_reset_tests;
 #[cfg(test)]

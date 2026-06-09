@@ -182,12 +182,13 @@ impl WhisperDictateApp {
                 ),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
+                    let display_state = self.display_runtime_state();
                     status_card(
                         ui,
                         ui_text(&self.settings.ui_language, UiTextKey::Status),
                         icons::ICON_RADIO_BUTTON_CHECKED,
-                        runtime_state_label(self.runtime_state, &self.settings.ui_language),
-                        runtime_state_color(self.runtime_state, palette),
+                        runtime_state_label(display_state, &self.settings.ui_language),
+                        runtime_state_color(display_state, palette),
                         palette,
                     );
                     status_card(

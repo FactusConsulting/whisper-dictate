@@ -62,6 +62,7 @@ pub(in crate::ui) enum UiTextKey {
     Running,
     RuntimeStatus,
     NoDictationOutputYet,
+    PushToTalk,
 }
 
 impl UiTextKey {
@@ -110,6 +111,7 @@ impl UiTextKey {
                 UiTextKey::Running => "Running",
                 UiTextKey::RuntimeStatus => "Runtime status",
                 UiTextKey::NoDictationOutputYet => "No dictation output yet",
+                UiTextKey::PushToTalk => "Push-to-talk",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::SidebarSubtitle => "Rust kontrolflade",
@@ -154,6 +156,7 @@ impl UiTextKey {
                 UiTextKey::Running => "Kører",
                 UiTextKey::RuntimeStatus => "Runtime status",
                 UiTextKey::NoDictationOutputYet => "Ingen diktering endnu",
+                UiTextKey::PushToTalk => "Tale-tast",
             },
         }
     }
