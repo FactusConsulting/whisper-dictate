@@ -32,6 +32,13 @@ impl WhisperDictateApp {
                     &mut self.settings.context_min_seconds,
                     "Minimum utterance length before passing previous context/prompt hints to Whisper. Used only with STT backend = whisper.",
                 );
+                checkbox_enabled(
+                    ui,
+                    whisper,
+                    "Skip silent hallucinations",
+                    &mut self.settings.hallucination_guard,
+                    "Local Whisper only: skip long silent gaps where Whisper tends to hallucinate 'like and subscribe'-style text. Adds word timestamps (small extra compute). Used only with STT backend = whisper.",
+                );
                 text_enabled(
                     ui,
                     parakeet,

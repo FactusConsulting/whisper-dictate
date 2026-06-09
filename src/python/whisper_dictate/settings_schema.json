@@ -104,6 +104,12 @@
       "live": true
     },
     {
+      "env": "VOICEPI_HALLUCINATION_GUARD",
+      "key": "hallucination_guard",
+      "default": "1",
+      "live": true
+    },
+    {
       "env": "VOICEPI_PARAKEET_MIN_SECONDS",
       "key": "parakeet_min_seconds",
       "default": "1.5",
