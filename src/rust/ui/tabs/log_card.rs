@@ -43,21 +43,26 @@ fn runtime_log_card_text(
         )
         .wrap(),
     );
-    if card.detail.is_empty() && card.badge.is_empty() {
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
-        if !card.detail.is_empty() {
-            ui.label(
-                egui::RichText::new(&card.detail)
+    // Detail is one group per line ("\n"-separated) so the card reads as a
+    // scannable summary; render each as its own muted line instead of a single
+    // crammed run-on row.
+    for detail_line in card.detail.split('\n') {
+        if detail_line.is_empty() {
+            continue;
+        }
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(detail_line)
                     .size(12.0)
                     .color(palette.text_muted),
-            );
-        }
-        if !card.badge.is_empty() {
-            status_pill(ui, &card.badge, accent, palette);
-        }
-    });
+            )
+            .wrap(),
+        );
+    }
+    if !card.badge.is_empty() {
+        ui.add_space(2.0);
+        status_pill(ui, &card.badge, accent, palette);
+    }
 }
 
 pub(in crate::ui) fn runtime_log_card(

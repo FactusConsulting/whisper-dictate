@@ -435,3 +435,54 @@ fn toggling_log_view_leaves_unrelated_pending_edits_uncommitted() {
     assert_eq!(on_disk.ui_log_view, LogViewMode::Debug.id());
     assert_eq!(on_disk.beam_size, AppSettings::default().beam_size);
 }
+
+#[test]
+fn debug_view_pretty_prints_utterance_json() {
+    let log = [
+        "[worker] status=ready",
+        r#"[utterance] {"text":"hej","recording_s":2.0}"#,
+    ]
+    .join("\n");
+    let debug = log_view_text(&log, LogViewMode::Debug);
+    // Plain lines pass through unchanged...
+    assert!(debug.contains("[worker] status=ready"));
+    // ...but the one-line utterance JSON is expanded over indented lines.
+    assert!(debug.contains("[utterance]\n{"));
+    assert!(debug.contains("\n  \"text\": \"hej\""));
+}
+
+#[test]
+fn diagnostic_view_drops_transient_worker_step_cards() {
+    let log = [
+        "[worker] status=ready",        // lifecycle → kept
+        "[worker] status=recording",    // transient step → dropped
+        "[worker] status=transcribing", // transient step → dropped
+        r#"[utterance] {"text":"hej","recording_s":2.0}"#,
+    ]
+    .join("\n");
+    let cards = runtime_log_cards(&log, LogViewMode::Diagnostic);
+    let titles: Vec<&str> = cards.iter().map(|c| c.title.as_str()).collect();
+    assert!(titles.contains(&"ready"), "ready worker card kept");
+    assert!(!titles.contains(&"recording"));
+    assert!(!titles.contains(&"transcribing"));
+    assert!(cards.iter().any(|c| c.badge == "Utterance"));
+}
+
+#[test]
+fn diagnostic_utterance_detail_groups_onto_separate_lines() {
+    let log = concat!(
+        r#"[utterance] {"text":"hej","recording_s":2.0,"compute_s":0.5,"#,
+        r#""real_time_factor":0.04,"stt_backend":"whisper"}"#,
+    );
+    let cards = runtime_log_cards(log, LogViewMode::Diagnostic);
+    let card = cards
+        .iter()
+        .find(|c| c.badge == "Utterance")
+        .expect("utterance card");
+    // Groups are newline-separated (audio line, compute line, backend line…),
+    // and the metric tokens are preserved.
+    assert!(card.detail.contains('\n'));
+    assert!(card.detail.contains("recording=2.0s"));
+    assert!(card.detail.contains("compute=0.5s"));
+    assert!(card.detail.contains("backend=whisper"));
+}

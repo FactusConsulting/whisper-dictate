@@ -61,12 +61,32 @@ pub(in crate::ui) struct RuntimeLogCard {
 pub(in crate::ui) fn log_view_text(log: &str, mode: LogViewMode) -> String {
     match mode {
         LogViewMode::Minimal => final_output_text(log),
-        LogViewMode::Debug => log.to_owned(),
+        LogViewMode::Debug => log
+            .lines()
+            .map(prettify_debug_line)
+            .collect::<Vec<_>>()
+            .join("\n"),
         LogViewMode::Diagnostic => log
             .lines()
             .filter(|line| is_diagnostic_log_line(line))
             .collect::<Vec<_>>()
             .join("\n"),
+    }
+}
+
+/// Debug mode shows the raw log, but the single-line `[utterance] {…big JSON…}`
+/// event is unreadable as one wrapped line, so pretty-print its JSON over
+/// multiple indented lines. Every other line is passed through untouched.
+fn prettify_debug_line(line: &str) -> String {
+    let Some(rest) = line.strip_prefix("[utterance] ") else {
+        return line.to_owned();
+    };
+    match serde_json::from_str::<serde_json::Value>(rest)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+    {
+        Some(pretty) => format!("[utterance]\n{pretty}"),
+        None => line.to_owned(),
     }
 }
 
@@ -138,6 +158,20 @@ fn diagnostic_log_card(
 
     if has_structured_utterance && (line.starts_with("[post]") || is_diagnostic_detail_line(line)) {
         return None;
+    }
+
+    // Transient per-utterance worker states (opening/recording/transcribing/
+    // post-processing) are shown live by the pipeline-progress card and then
+    // summarized in the utterance card, so a card each would only clutter the
+    // history. The lifecycle states (loading_model/ready/failed) still surface.
+    if let Some(rest) = line.strip_prefix("[worker] status=") {
+        let state = rest.split_whitespace().next().unwrap_or("");
+        if matches!(
+            state,
+            "opening" | "recording" | "transcribing" | "post-processing"
+        ) {
+            return None;
+        }
     }
 
     if let Some(card) = status_card(line) {
@@ -285,7 +319,10 @@ fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
     Some(RuntimeLogCard {
         kind: RuntimeLogCardKind::Diagnostic,
         title: compact_runtime_text(&title, 140),
-        detail: details.join("  |  "),
+        // One group per line (audio / compute / backend / dictionary / post /
+        // inject) so the card reads as a scannable summary instead of one
+        // crammed run-on; the renderer prints each line separately.
+        detail: details.join("\n"),
         badge: "Utterance".to_owned(),
     })
 }
