@@ -177,7 +177,11 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {
-        self.settings.stt_backend == "openai" && self.stt_api_key_input.trim().is_empty()
+        // A self-hosted (Custom) endpoint usually needs no key, so don't block
+        // start on an empty key for it.
+        self.settings.stt_backend == "openai"
+            && self.current_cloud_provider() != CloudProvider::Custom
+            && self.stt_api_key_input.trim().is_empty()
     }
 
     fn poll_runtime(&mut self) {

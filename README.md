@@ -505,7 +505,9 @@ for OpenAI-compatible audio transcription, and set `OPENAI_API_KEY`,
 model, and save a separate Post API key if needed. Terminal runs can set
 `VOICEPI_POST_PROCESSOR=groq` or `openai`, `VOICEPI_POST_MODEL=<chat-model>` and
 `VOICEPI_POST_API_KEY`, `GROQ_API_KEY`, or `OPENAI_API_KEY`. `VOICEPI_LOCAL_ONLY=1` blocks these
-external providers before requests are made.
+external providers before requests are made — except a self-hosted STT endpoint
+on a loopback URL (`localhost`/`127.0.0.1`/`::1`), which stays on the machine and
+is therefore allowed. See "Self-host the STT model in a container" below.
 
 For cloud text cleanup, `VOICEPI_POST_REDACT=1` can redact emails, phone
 numbers, common API tokens and comma-separated `VOICEPI_POST_REDACT_TERMS`
@@ -526,6 +528,33 @@ setx GROQ_API_KEY "gsk_..."
 setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_BASE_URL https://api.groq.com/openai/v1
 setx VOICEPI_STT_MODEL whisper-large-v3-turbo
+```
+
+### Self-host the STT model in a container
+
+Only the heavy Whisper model can be containerized — the desktop app
+(microphone capture, the global push-to-talk hotkey and injecting text into the
+focused window) is host integration and stays on your machine. Run any
+OpenAI-compatible Whisper server (e.g. faster-whisper-server or speaches) in a
+container and point whisper-dictate at it:
+
+```powershell
+docker compose -f packaging/docker/docker-compose.yml up -d
+```
+
+Then in the Rust UI Speech tab choose `Speech engine = Cloud STT`,
+`Cloud STT provider = Custom (OpenAI-compatible)`, set the API URL to
+`http://localhost:8000/v1` and the model to whatever the server preloads (e.g.
+`Systran/faster-whisper-large-v3`). No API key is required for a local server.
+The **Custom** provider's base URL and model are never normalized away, unlike
+the Groq/OpenAI presets. Because the endpoint is loopback, `VOICEPI_LOCAL_ONLY=1`
+still permits it (nothing leaves the machine); a non-loopback URL stays blocked.
+Terminal runs can set this without the UI:
+
+```powershell
+setx VOICEPI_STT_BACKEND openai
+setx VOICEPI_STT_BASE_URL http://localhost:8000/v1
+setx VOICEPI_STT_MODEL Systran/faster-whisper-large-v3
 ```
 
 STT API keys saved from the Rust UI are stored in the OS credential store and

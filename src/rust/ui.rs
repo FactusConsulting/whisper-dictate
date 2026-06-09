@@ -104,7 +104,11 @@ const STT_BACKEND_OPTIONS: &[(&str, &str)] = &[
     ("parakeet", "Local NVIDIA Parakeet"),
     ("openai", "Cloud STT (Groq/OpenAI)"),
 ];
-const CLOUD_PROVIDER_OPTIONS: &[(&str, &str)] = &[("groq", "Groq"), ("openai", "OpenAI")];
+const CLOUD_PROVIDER_OPTIONS: &[(&str, &str)] = &[
+    ("groq", "Groq"),
+    ("openai", "OpenAI"),
+    ("custom", "Custom (OpenAI-compatible)"),
+];
 const POST_PROCESSOR_OPTIONS: &[(&str, &str)] = &[
     ("none", "Disabled"),
     ("ollama", "Local Ollama"),

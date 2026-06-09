@@ -119,6 +119,50 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
 }
 
 #[test]
+fn custom_provider_keeps_user_endpoint_and_needs_no_api_key() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "custom".to_owned(),
+        stt_base_url: "http://localhost:9000/v1".to_owned(),
+        stt_model: "Systran/faster-whisper-large-v3".to_owned(),
+        ..Default::default()
+    });
+    assert_eq!(app.current_cloud_provider(), CloudProvider::Custom);
+    // A self-hosted endpoint needs no key, so start is not blocked.
+    assert!(!app.cloud_stt_missing_api_key());
+
+    // Saving must NOT normalize the user's base URL/model back to a hosted default.
+    app.save_settings();
+    assert_eq!(app.settings.stt_provider, "custom");
+    assert_eq!(app.settings.stt_base_url, "http://localhost:9000/v1");
+    assert_eq!(app.settings.stt_model, "Systran/faster-whisper-large-v3");
+}
+
+#[test]
+fn switching_to_custom_seeds_localhost_from_a_hosted_url() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    // Provider just flipped to custom while the URL is still the hosted one.
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "custom".to_owned(),
+        stt_base_url: OPENAI_STT_BASE_URL.to_owned(),
+        ..Default::default()
+    });
+    // Save runs provider normalization, which seeds a localhost starting point.
+    app.save_settings();
+    assert_eq!(app.settings.stt_base_url, CUSTOM_STT_BASE_URL);
+}
+
+#[test]
 fn effective_post_api_key_uses_post_key_then_stt_fallback() {
     let settings = AppSettings {
         post_processor: "groq".to_owned(),

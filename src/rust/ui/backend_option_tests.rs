@@ -28,7 +28,7 @@ fn combo_labels_keep_cloud_backend_distinct_from_openai_provider() {
     );
     assert_eq!(
         selected_option_label("custom", CLOUD_PROVIDER_OPTIONS),
-        "custom"
+        "Custom (OpenAI-compatible)"
     );
 }
 
