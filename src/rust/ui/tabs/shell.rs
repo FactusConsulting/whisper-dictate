@@ -127,15 +127,19 @@ impl WhisperDictateApp {
     /// latest message. Replaces the old sidebar badge and per-page Messages card.
     pub(in crate::ui) fn status_message_bar(&self, ui: &mut egui::Ui, palette: UiPalette) {
         ui.horizontal_centered(|ui| {
+            // Even, compact spacing so the status dot, label and message read as
+            // one row instead of drifting apart.
+            ui.spacing_mut().item_spacing.x = 6.0;
             let is_dirty = self.has_unsaved_settings();
             let (label_key, color) = if is_dirty {
                 (UiTextKey::UnsavedChanges, palette.warn_text)
             } else {
                 (UiTextKey::SettingsSaved, palette.ok_text)
             };
-            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            // A tight 8px dot whose circle fills its box, vertically centered with
+            // the label by the surrounding centered layout.
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
             ui.painter().circle_filled(dot.center(), 4.0, color);
-            ui.add_space(2.0);
             ui.label(
                 egui::RichText::new(ui_text(&self.settings.ui_language, label_key))
                     .color(color)

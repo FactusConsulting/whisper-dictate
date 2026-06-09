@@ -286,9 +286,7 @@ impl WhisperDictateApp {
                     )
                     .clicked()
                 {
-                    self.runtime_log_view = mode;
-                    self.settings.ui_log_view = mode.id().to_owned();
-                    self.runtime_log_scroll_to_bottom = true;
+                    self.set_log_view(mode);
                 }
             }
         });

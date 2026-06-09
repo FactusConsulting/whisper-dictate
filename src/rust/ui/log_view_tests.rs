@@ -1,7 +1,7 @@
 use super::tabs::{
     audio_device_label, full_audio_device_label, live_audio_level_summary, mic_label_char_budget,
 };
-use super::test_support::test_app;
+use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
 use super::*;
 
 #[test]
@@ -379,4 +379,59 @@ fn worker_audio_event_with_inactive_state_clears_meter_readings() {
     assert_eq!(app.audio_meter_level, 0.0);
     assert_eq!(app.audio_meter_raw_dbfs, None);
     assert_eq!(app.audio_meter_peak, None);
+}
+
+#[test]
+fn toggling_log_view_persists_immediately_without_marking_settings_dirty() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let mut app = test_app(AppSettings::default());
+    assert!(!app.has_unsaved_settings());
+
+    // Switching the runtime log view should apply live, update the persisted
+    // preference, and NOT leave the settings form looking unsaved.
+    app.set_log_view(LogViewMode::Debug);
+
+    assert_eq!(app.runtime_log_view, LogViewMode::Debug);
+    assert_eq!(app.settings.ui_log_view, LogViewMode::Debug.id());
+    assert_eq!(app.saved_settings.ui_log_view, LogViewMode::Debug.id());
+    assert!(
+        !app.has_unsaved_settings(),
+        "toggling the log view must not mark settings dirty"
+    );
+
+    // The preference is written through to disk so it survives a restart.
+    let on_disk = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(on_disk.ui_log_view, LogViewMode::Debug.id());
+}
+
+#[test]
+fn toggling_log_view_leaves_unrelated_pending_edits_uncommitted() {
+    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+
+    let mut app = test_app(AppSettings::default());
+    // A genuine unsaved edit the user has not chosen to save yet.
+    app.settings.beam_size = "9".to_owned();
+    assert!(app.has_unsaved_settings());
+
+    app.set_log_view(LogViewMode::Debug);
+
+    // The edit is still pending (dirty), and disk only got the view preference,
+    // not the unrelated edit.
+    assert!(app.has_unsaved_settings());
+    let on_disk = config::AppSettings::from_value(
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(on_disk.ui_log_view, LogViewMode::Debug.id());
+    assert_eq!(on_disk.beam_size, AppSettings::default().beam_size);
 }
