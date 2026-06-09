@@ -212,6 +212,10 @@ struct WhisperDictateApp {
     /// Best total VRAM (MB) of the detected NVIDIA GPU, or None on CPU /
     /// non-NVIDIA. Detected once at startup; gates the Whisper model picker.
     gpu_total_mb: Option<u32>,
+    /// Current dictation pipeline stage from worker status events
+    /// ("recording" / "transcribing" / "post-processing"), or None when idle.
+    /// Drives the live progress card in the runtime log.
+    pipeline_stage: Option<&'static str>,
 }
 
 impl Default for WhisperDictateApp {
@@ -276,6 +280,7 @@ impl Default for WhisperDictateApp {
             background_task: None,
             background_task_label: None,
             gpu_total_mb: best_gpu_total_mb(),
+            pipeline_stage: None,
         }
     }
 }

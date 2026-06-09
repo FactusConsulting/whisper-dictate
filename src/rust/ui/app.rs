@@ -210,6 +210,9 @@ impl WhisperDictateApp {
         } else if event.event == "audio" {
             self.update_worker_audio(event);
         } else if event.event == "utterance" {
+            // The dictation finished and settles into a Final card — clear the
+            // live pipeline-progress card.
+            self.pipeline_stage = None;
             if let Some(line) = worker_utterance_log_line(event) {
                 self.append_runtime_log(line);
             }
@@ -222,6 +225,7 @@ impl WhisperDictateApp {
         }
         if let Some(state) = event.state.as_deref() {
             self.audio_capture_opening = state == "opening";
+            self.pipeline_stage = pipeline_stage_for_worker_state(state);
             if let Some(active) = audio_capture_active_for_worker_state(state) {
                 self.audio_capture_active = active;
                 if !active {

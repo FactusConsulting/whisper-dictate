@@ -427,6 +427,20 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             if result is None:
                 return
             text = result.text
+            # Surface a post-processing stage for the live pipeline card, but
+            # only when a processor is actually going to run (not none/raw).
+            if (
+                self.postprocess_settings is not None
+                and self.postprocess_settings.processor != "none"
+                and self.postprocess_settings.mode != "raw"
+            ):
+                _emit_worker_event(
+                    "status",
+                    state="post-processing",
+                    capture_backend=self._capture_backend,
+                    audio_device=self._audio_input_device,
+                    capture_channels=self._capture_channels,
+                )
             post_result, format_result = self._postprocess_and_format(text)
             final_text = format_result.text
             inject_t0 = time.monotonic()
