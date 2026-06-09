@@ -65,14 +65,24 @@ impl WhisperDictateApp {
                 }
                 ui.end_row();
                 let provider = self.current_cloud_provider();
-                combo_enabled(
-                    ui,
-                    backend == SttBackendMode::Cloud,
-                    "Cloud STT model",
-                    &mut self.settings.stt_model,
-                    provider.model_options(),
-                    "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
-                );
+                if provider == CloudProvider::Custom {
+                    text_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT model",
+                        &mut self.settings.stt_model,
+                        "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
+                    );
+                } else {
+                    combo_enabled(
+                        ui,
+                        backend == SttBackendMode::Cloud,
+                        "Cloud STT model",
+                        &mut self.settings.stt_model,
+                        provider.model_options(),
+                        "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
+                    );
+                }
                 text_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,

@@ -104,6 +104,16 @@ impl WhisperDictateApp {
 
     fn apply_cloud_provider_defaults(&mut self, provider: CloudProvider) {
         self.settings.stt_provider = provider.id().to_owned();
+        if provider == CloudProvider::Custom {
+            // A self-hosted endpoint is user-managed: never overwrite the base URL
+            // or model. Only seed a localhost starting point when switching in
+            // from a hosted provider (or from nothing).
+            let url = self.settings.stt_base_url.trim();
+            if url.is_empty() || url == OPENAI_STT_BASE_URL || url == GROQ_STT_BASE_URL {
+                self.settings.stt_base_url = CUSTOM_STT_BASE_URL.to_owned();
+            }
+            return;
+        }
         self.settings.stt_base_url = provider.base_url().to_owned();
         if !provider
             .model_options()

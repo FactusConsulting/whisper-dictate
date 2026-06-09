@@ -24,6 +24,10 @@ enum PrivacyRequest {
         backend: String,
         #[serde(default = "default_feature")]
         feature: String,
+        /// Configured STT base URL, if any. A loopback endpoint is treated as
+        /// local (it never leaves the machine) so it's allowed under local-only.
+        #[serde(default)]
+        base_url: Option<String>,
     },
     AssertProcessor {
         local_only: bool,
@@ -56,11 +60,15 @@ pub fn handle_privacy() -> Result<()> {
             local_only,
             backend,
             feature,
+            base_url,
         } => {
             println!(
                 "{}",
                 serde_json::to_string(&check_result(assert_local_backend(
-                    local_only, &backend, &feature
+                    local_only,
+                    &backend,
+                    &feature,
+                    base_url.as_deref()
                 )))?
             );
         }
@@ -105,7 +113,12 @@ pub fn local_only_env_updates(local_only: bool) -> EnvUpdates {
     }
 }
 
-pub fn assert_local_backend(local_only: bool, backend: &str, feature: &str) -> Result<()> {
+pub fn assert_local_backend(
+    local_only: bool,
+    backend: &str,
+    feature: &str,
+    base_url: Option<&str>,
+) -> Result<()> {
     if !local_only {
         return Ok(());
     }
@@ -113,9 +126,34 @@ pub fn assert_local_backend(local_only: bool, backend: &str, feature: &str) -> R
     if LOCAL_BACKENDS.contains(&normalized.as_str()) {
         return Ok(());
     }
+    // A self-hosted endpoint on loopback never leaves the machine, so it's
+    // compatible with local-only mode.
+    if base_url.is_some_and(is_loopback_url) {
+        return Ok(());
+    }
     Err(anyhow!(
-        "VOICEPI_LOCAL_ONLY=1 blocks {feature} backend {backend:?}; choose a local backend or disable local-only mode."
+        "VOICEPI_LOCAL_ONLY=1 blocks {feature} backend {backend:?}; choose a local backend, a loopback endpoint, or disable local-only mode."
     ))
+}
+
+/// Whether an HTTP(S) URL targets the local machine (loopback). Mirrors the
+/// Python `_is_loopback_url`; a loopback STT endpoint stays within local-only.
+pub fn is_loopback_url(url: &str) -> bool {
+    let authority = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split('/')
+        .next()
+        .unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority); // strip userinfo
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("") // [::1]:port
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    }
+    .trim()
+    .to_ascii_lowercase();
+    host == "localhost" || host == "::1" || host.starts_with("127.")
 }
 
 pub fn assert_local_processor(local_only: bool, processor: &str) -> Result<()> {
@@ -195,7 +233,7 @@ mod tests {
 
     #[test]
     fn local_only_blocks_remote_backend_and_processor() {
-        let backend = assert_local_backend(true, "openai:gpt-4o-transcribe", "STT")
+        let backend = assert_local_backend(true, "openai:gpt-4o-transcribe", "STT", None)
             .unwrap_err()
             .to_string();
         let processor = assert_local_processor(true, "openai")
@@ -209,10 +247,36 @@ mod tests {
     #[test]
     fn local_only_allows_local_backends_and_processors() {
         for backend in LOCAL_BACKENDS {
-            assert_local_backend(true, backend, "STT").unwrap();
+            assert_local_backend(true, backend, "STT", None).unwrap();
         }
         for processor in LOCAL_PROCESSORS {
             assert_local_processor(true, processor).unwrap();
+        }
+    }
+
+    #[test]
+    fn local_only_allows_self_hosted_loopback_endpoint() {
+        // A loopback self-hosted STT endpoint is local, so local-only permits it.
+        for url in [
+            "http://localhost:8000/v1",
+            "http://127.0.0.1:8000/v1",
+            "https://127.0.0.5/v1",
+            "http://[::1]:8000/v1",
+            "http://user:pass@localhost:8000/v1",
+        ] {
+            assert_local_backend(true, "openai", "STT", Some(url)).unwrap();
+            assert!(is_loopback_url(url), "{url} should be loopback");
+        }
+        // A non-loopback endpoint is still blocked.
+        assert!(
+            assert_local_backend(true, "openai", "STT", Some("https://api.openai.com/v1")).is_err()
+        );
+        for url in [
+            "https://api.openai.com/v1",
+            "http://example.com",
+            "http://10.0.0.5:8000",
+        ] {
+            assert!(!is_loopback_url(url), "{url} should not be loopback");
         }
     }
 }

@@ -241,6 +241,29 @@ class STTBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
             vp_transcribe.load_stt_model("gpt-4o-mini-transcribe", "cpu", "int8")
 
+    def test_local_only_allows_loopback_self_hosted_endpoint(self):
+        os.environ["VOICEPI_LOCAL_ONLY"] = "1"
+        os.environ.pop("VOICEPI_RUST_INJECTOR", None)  # use the Python fallback path
+        from whisper_dictate import vp_transcribe
+
+        # A loopback self-hosted endpoint is local → not blocked.
+        os.environ["VOICEPI_STT_BASE_URL"] = "http://localhost:8000/v1"
+        vp_transcribe._assert_local_backend("openai")
+        # A hosted endpoint under local-only is still blocked.
+        os.environ["VOICEPI_STT_BASE_URL"] = "https://api.openai.com/v1"
+        with self.assertRaisesRegex(RuntimeError, "VOICEPI_LOCAL_ONLY=1"):
+            vp_transcribe._assert_local_backend("openai")
+
+    def test_is_loopback_url_classifies_hosts(self):
+        from whisper_dictate import vp_transcribe
+        for url in ("http://localhost:8000/v1", "http://127.0.0.1/v1",
+                    "http://[::1]:9000/v1", "https://127.0.0.5",
+                    "http://user:pass@localhost:8000/v1"):
+            self.assertTrue(vp_transcribe._is_loopback_url(url), url)
+        for url in ("https://api.openai.com/v1", "http://example.com",
+                    "http://10.0.0.5:8000", "", None):
+            self.assertFalse(vp_transcribe._is_loopback_url(url), str(url))
+
     def test_parakeet_adapter_uses_nemo_stub_and_default_model(self):
         calls = {}
 

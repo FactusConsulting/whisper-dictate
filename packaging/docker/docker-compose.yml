@@ -1,0 +1,46 @@
+# Self-host the STT model in a container, then point whisper-dictate at it.
+#
+# Only the heavy Whisper model is containerized here. The whisper-dictate desktop
+# app (microphone capture, the global push-to-talk hotkey, and injecting text into
+# the focused window) is host integration that CANNOT run in a container — keep
+# running it natively on your machine.
+#
+# The container exposes an OpenAI-compatible API. In the app's Speech tab set:
+#   Speech engine      : Cloud STT
+#   Cloud STT provider : Custom (OpenAI-compatible)
+#   Cloud STT API URL  : http://localhost:8000/v1
+#   Cloud STT model    : Systran/faster-whisper-large-v3   (or your choice)
+# No API key is required for a local server, and VOICEPI_LOCAL_ONLY=1 still
+# permits it because the endpoint is loopback.
+#
+# GPU requires the NVIDIA Container Toolkit. For CPU-only, switch the image tag to
+# ":latest-cpu" and delete the deploy.resources block below.
+#
+# Start it with:  docker compose -f packaging/docker/docker-compose.yml up -d
+#
+# Any OpenAI-compatible Whisper server works (faster-whisper-server, speaches,
+# vLLM, …); this file uses faster-whisper-server. Check the image's own docs for
+# the exact model-preload variable if WHISPER__MODEL changes upstream.
+services:
+  faster-whisper-server:
+    image: fedirz/faster-whisper-server:latest-cuda
+    container_name: whisper-dictate-stt
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist downloaded models so restarts don't re-download.
+      - whisper-models:/root/.cache/huggingface
+    environment:
+      # Preload a model so the first dictation isn't slow. Any faster-whisper id.
+      - WHISPER__MODEL=Systran/faster-whisper-large-v3
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  whisper-models:

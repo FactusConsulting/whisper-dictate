@@ -21,10 +21,15 @@ pub(super) const POST_API_KEY_ENV: &str = "VOICEPI_POST_API_KEY";
 
 const CREDENTIAL_SERVICE: &str = "whisper-dictate";
 
+pub(super) const CUSTOM_STT_BASE_URL: &str = "http://localhost:8000/v1";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CloudProvider {
     Groq,
     OpenAi,
+    /// Self-hosted OpenAI-compatible endpoint (e.g. a local faster-whisper
+    /// container). The base URL and model are user-managed and never normalized.
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +43,7 @@ impl CloudProvider {
         match raw {
             "groq" => Some(Self::Groq),
             "openai" => Some(Self::OpenAi),
+            "custom" => Some(Self::Custom),
             _ => None,
         }
     }
@@ -61,6 +67,7 @@ impl CloudProvider {
         match self {
             Self::Groq => "groq",
             Self::OpenAi => "openai",
+            Self::Custom => "custom",
         }
     }
 
@@ -68,6 +75,7 @@ impl CloudProvider {
         match self {
             Self::Groq => "Groq",
             Self::OpenAi => "OpenAI",
+            Self::Custom => "Custom (OpenAI-compatible)",
         }
     }
 
@@ -75,6 +83,9 @@ impl CloudProvider {
         match self {
             Self::Groq => GROQ_STT_BASE_URL,
             Self::OpenAi => OPENAI_STT_BASE_URL,
+            // Seed for a fresh self-hosted setup; the user edits it freely and it
+            // is never normalized back.
+            Self::Custom => CUSTOM_STT_BASE_URL,
         }
     }
 
@@ -82,6 +93,7 @@ impl CloudProvider {
         match self {
             Self::Groq => GROQ_STT_MODEL,
             Self::OpenAi => OPENAI_STT_MODEL,
+            Self::Custom => "",
         }
     }
 
@@ -89,6 +101,9 @@ impl CloudProvider {
         match self {
             Self::Groq => super::GROQ_STT_MODELS,
             Self::OpenAi => super::OPENAI_STT_MODELS,
+            // No preset list — the model id is whatever the self-hosted server
+            // expects, so the UI shows a free-text field instead of a combo.
+            Self::Custom => &[],
         }
     }
 
@@ -96,6 +111,7 @@ impl CloudProvider {
         match self {
             Self::Groq => GROQ_KEYS_URL,
             Self::OpenAi => OPENAI_KEYS_URL,
+            Self::Custom => "",
         }
     }
 
@@ -103,6 +119,7 @@ impl CloudProvider {
         match self {
             Self::Groq => "stt-api-key:groq",
             Self::OpenAi => "stt-api-key:openai",
+            Self::Custom => "stt-api-key:custom",
         }
     }
 }
@@ -204,6 +221,8 @@ pub(super) fn load_stt_api_key_from_env(provider: CloudProvider) -> Option<Strin
     let candidates: &[&str] = match provider {
         CloudProvider::Groq => &["VOICEPI_STT_API_KEY", "GROQ_API_KEY"],
         CloudProvider::OpenAi => &["VOICEPI_STT_API_KEY", "OPENAI_API_KEY"],
+        // Self-hosted servers usually need no key; honour an explicit one if set.
+        CloudProvider::Custom => &["VOICEPI_STT_API_KEY"],
     };
     candidates
         .iter()

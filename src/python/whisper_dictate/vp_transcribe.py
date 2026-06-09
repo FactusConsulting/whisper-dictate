@@ -90,7 +90,26 @@ def _local_only_enabled() -> bool:
         "", "0", "false", "no", "off")
 
 
-def _rust_privacy_ok(helper: str, backend: str, feature: str) -> bool:
+def _is_loopback_url(url: str | None) -> bool:
+    """True when an HTTP(S) URL targets the local machine (loopback).
+
+    A self-hosted endpoint on loopback never leaves the box, so it stays
+    compatible with VOICEPI_LOCAL_ONLY. Mirrors the Rust privacy helper.
+    """
+    if not url:
+        return False
+    authority = url.split("://", 1)[-1].split("/", 1)[0]
+    host_port = authority.rsplit("@", 1)[-1]  # strip any user:pass@
+    if host_port.startswith("["):  # [::1]:port
+        host = host_port[1:].split("]", 1)[0]
+    else:
+        host = host_port.split(":", 1)[0]
+    host = host.strip().lower()
+    return host in ("localhost", "::1") or host == "127.0.0.1" or host.startswith("127.")
+
+
+def _rust_privacy_ok(helper: str, backend: str, feature: str,
+                     base_url: str | None = None) -> bool:
     """Ask the Rust privacy helper whether ``backend`` is allowed.
 
     Returns True when the helper explicitly approves; raises RuntimeError when
@@ -105,6 +124,7 @@ def _rust_privacy_ok(helper: str, backend: str, feature: str) -> bool:
                 "local_only": _local_only_enabled(),
                 "backend": backend,
                 "feature": feature,
+                "base_url": base_url or "",
             }),
             text=True,
             encoding="utf-8",
@@ -129,14 +149,16 @@ def _rust_privacy_ok(helper: str, backend: str, feature: str) -> bool:
 
 
 def _assert_local_backend(backend: str, *, feature: str = "STT") -> None:
+    base_url = get_value("VOICEPI_STT_BASE_URL")
     helper = os.environ.get("VOICEPI_RUST_INJECTOR")
-    if helper and _rust_privacy_ok(helper, backend, feature):
+    if helper and _rust_privacy_ok(helper, backend, feature, base_url):
         return
-    if _local_only_enabled() and (backend or "").strip().lower() not in (
-        "whisper", "faster-whisper", "parakeet"):
+    if (_local_only_enabled()
+            and (backend or "").strip().lower() not in ("whisper", "faster-whisper", "parakeet")
+            and not _is_loopback_url(base_url)):
         raise RuntimeError(
             f"VOICEPI_LOCAL_ONLY=1 blocks {feature} backend {backend!r}; "
-            "choose a local backend or disable local-only mode.")
+            "choose a local backend, a loopback endpoint, or disable local-only mode.")
 
 
 def load_stt_model(model_name: str, device: str, compute_type: str):
