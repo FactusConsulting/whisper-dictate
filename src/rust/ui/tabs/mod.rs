@@ -13,6 +13,7 @@ mod settings;
 mod shell;
 mod speech;
 mod system;
+mod top_status_layout;
 
 // Log-card render widgets used by the runtime tab; re-exported into the `tabs`
 // root so `runtime` (and any future tab) can reach them via `super::*`.
@@ -27,6 +28,15 @@ pub(in crate::ui) use runtime::{
     pipeline_progress_accent_color,
 };
 pub(in crate::ui) use shell::runtime_state_color;
+// Pure top-status-bar layout + post-indicator helpers live in their own module
+// (`top_status_layout.rs`) so the render code in `shell.rs` stays small. The
+// post on/off + label/hover helpers are used by `shell.rs`'s render code via
+// `super::*`; the fit/width budget fns and these are also re-exported to the
+// sibling test modules below.
+pub(in crate::ui) use top_status_layout::{
+    post_indicator_hover, post_indicator_label, post_processing_enabled, top_status_cards_fit,
+    top_status_controls_width, top_status_left_width,
+};
 // The default-metrics-path helper is reused at app construction (ui.rs) to
 // prefill the empty Metrics JSONL field, so re-export it from the tabs root.
 pub(in crate::ui) use system::default_metrics_jsonl_path;
@@ -39,12 +49,6 @@ pub(in crate::ui) use runtime::{format_push_to_talk_keys, push_to_talk_badge_lab
 pub(in crate::ui) use runtime::{empty_as_auto, empty_as_disabled, mic_label_char_budget};
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
-#[cfg(test)]
-pub(in crate::ui) use shell::{
-    post_indicator_hover, post_indicator_label, post_processing_enabled, top_status_cards_fit,
-    top_status_controls_width, top_status_left_width,
-};
-
 fn settings_grid(id: &'static str) -> egui::Grid {
     egui::Grid::new(id)
         .num_columns(2)

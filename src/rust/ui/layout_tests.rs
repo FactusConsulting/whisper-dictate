@@ -75,7 +75,9 @@ fn top_status_cards_fit_spacing_is_accounted() {
 fn top_status_cards_fit_scaled_widths_used_at_higher_scale() {
     // At scale 1.5, min widths grow, so fewer cards fit in the same left_width.
     let scale = "1.5";
-    let spacing = 9.0_f32 * 1.5; // item_spacing.x scales with layout_scale
+    // item_spacing.x scales with layout_scale; source the base from the shared
+    // const so this never drifts from `apply_ui_theme`.
+    let spacing = ITEM_SPACING_X * 1.5;
     let card = status_card_min_width(scale);
     let wide = status_card_wide_min_width(scale);
     let post = post_indicator_min_width(scale);
@@ -90,4 +92,37 @@ fn top_status_cards_fit_scaled_widths_used_at_higher_scale() {
         top_status_cards_fit(card + spacing - 1.0, &widths, spacing),
         1
     );
+}
+
+#[test]
+fn budget_outer_widths_match_real_card_geometry() {
+    // The fit budget must use each card's TRUE OUTER width — the inner
+    // `set_min_width` value PLUS the Frame's symmetric horizontal margin and
+    // both stroke edges — or cards overflow the left region and clip mid-card.
+    // Pin the exact relationship the render uses (margin/stroke from the same
+    // consts the Frame builders reference) so changing a Frame margin without
+    // updating the budget fails here. Checked at scale 1.0 and a scaled value.
+    for scale in ["1.0", "1.5"] {
+        let card_margin = 2.0 * STATUS_CARD_H_MARGIN + 2.0 * CARD_STROKE;
+        assert!(
+            (status_card_outer_width(scale) - (status_card_min_width(scale) + card_margin)).abs()
+                < 0.001,
+            "narrow card outer width drifted from inner+margin+stroke at scale {scale}"
+        );
+        assert!(
+            (status_card_wide_outer_width(scale)
+                - (status_card_wide_min_width(scale) + card_margin))
+                .abs()
+                < 0.001,
+            "wide card outer width drifted from inner+margin+stroke at scale {scale}"
+        );
+        // The pill uses a tighter horizontal margin than the cards.
+        let pill_margin = 2.0 * POST_PILL_H_MARGIN + 2.0 * CARD_STROKE;
+        assert!(
+            (post_indicator_outer_width(scale) - (post_indicator_min_width(scale) + pill_margin))
+                .abs()
+                < 0.001,
+            "post pill outer width drifted from inner+margin+stroke at scale {scale}"
+        );
+    }
 }

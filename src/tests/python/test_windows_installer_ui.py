@@ -413,8 +413,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("UiTextKey::ReloadConfig", sidebar)
 
     def test_rust_top_status_bar_shows_post_processing_indicator(self):
-        script = rust_ui_source()
         shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")
+        # The pure top-bar layout + post-indicator helpers were split out of
+        # shell.rs into their own module so the render code stays small.
+        layout = Path("src/rust/ui/tabs/top_status_layout.rs").read_text(encoding="utf-8")
 
         # The indicator is rendered inside the left status-card region (so it
         # shares the clipping budget), before the right-pinned controls.
@@ -423,15 +425,15 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         # On/off decision + label + hover are pure, testable functions mirroring
         # the worker gate (processor != none/empty AND mode != raw, where the
         # worker normalizes an EMPTY mode to raw — so unset mode reads as off).
-        self.assertIn("fn post_processing_enabled(processor: &str, mode: &str) -> bool", shell)
+        self.assertIn("fn post_processing_enabled(processor: &str, mode: &str) -> bool", layout)
         self.assertIn(
             '!processor.is_empty() && processor != "none" && !mode.is_empty() && mode != "raw"',
-            shell,
+            layout,
         )
-        self.assertIn("fn post_indicator_label(", shell)
-        self.assertIn("fn post_indicator_hover(", shell)
-        self.assertIn("UiTextKey::PostOn", shell)
-        self.assertIn("UiTextKey::PostOff", shell)
+        self.assertIn("fn post_indicator_label(", layout)
+        self.assertIn("fn post_indicator_hover(", layout)
+        self.assertIn("UiTextKey::PostOn", layout)
+        self.assertIn("UiTextKey::PostOff", layout)
 
     def test_rust_nav_button_inactive_tabs_look_clickable(self):
         theme = Path("src/rust/ui/theme.rs").read_text(encoding="utf-8")
@@ -456,6 +458,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_rust_runtime_controls_live_in_fixed_top_status_bar(self):
         script = rust_ui_source()
         shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")
+        # The pure fit/width budget now lives in its own module.
+        layout = Path("src/rust/ui/tabs/top_status_layout.rs").read_text(encoding="utf-8")
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
             "impl WhisperDictateApp", 1
         )[0]
@@ -524,24 +528,34 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("UiTextKey::InstallRepair", controls)
         self.assertIn("fn top_status_bar_height(raw_scale: &str) -> f32", script)
         self.assertIn("fn sidebar_width(raw_scale: &str) -> f32", script)
-        # Priority-drop budget: pure function + call site in top_status_bar.
+        # Priority-drop budget: pure function (now in top_status_layout.rs) +
+        # call site in top_status_bar.
         self.assertIn(
             "pub(in crate::ui) fn top_status_cards_fit(",
-            shell,
+            layout,
         )
         # Signature may be wrapped by rustfmt across lines — check the pieces.
-        self.assertIn("fn top_status_cards_fit(", shell)
-        self.assertIn("left_width: f32,", shell)
-        self.assertIn("card_widths: &[f32],", shell)
-        self.assertIn("spacing: f32,", shell)
+        self.assertIn("fn top_status_cards_fit(", layout)
+        self.assertIn("left_width: f32,", layout)
+        self.assertIn("card_widths: &[f32],", layout)
+        self.assertIn("spacing: f32,", layout)
         top_bar = shell.split("fn top_status_bar", 1)[1].split("fn global_controls", 1)[0]
         self.assertIn("top_status_cards_fit(", top_bar)
         self.assertIn("let fit_count = top_status_cards_fit(", top_bar)
-        # Scale-aware min-width helpers used in the budget computation.
-        self.assertIn("fn status_card_min_width(raw_scale: &str) -> f32", script)
-        self.assertIn("fn status_card_wide_min_width(raw_scale: &str) -> f32", script)
-        self.assertIn("status_card_min_width(", top_bar)
-        self.assertIn("status_card_wide_min_width(", top_bar)
+        # The budget MUST use each card's TRUE OUTER width (inner min-width +
+        # Frame margin + stroke), not the bare inner set_min_width value, or
+        # cards overflow the left region and clip mid-card.
+        self.assertIn("fn status_card_outer_width(raw_scale: &str) -> f32", script)
+        self.assertIn("fn status_card_wide_outer_width(raw_scale: &str) -> f32", script)
+        self.assertIn("fn post_indicator_outer_width(raw_scale: &str) -> f32", script)
+        self.assertIn("status_card_outer_width(", top_bar)
+        self.assertIn("status_card_wide_outer_width(", top_bar)
+        self.assertIn("post_indicator_outer_width(", top_bar)
+        # Single source of truth: the Frame margin/stroke consts are shared
+        # between the card/pill render and the outer-width helpers.
+        self.assertIn("STATUS_CARD_H_MARGIN", script)
+        self.assertIn("POST_PILL_H_MARGIN", script)
+        self.assertIn("CARD_STROKE", script)
         # Cards are rendered in priority order, highest first; skips use fit_count.
         self.assertIn("fit_count > 1", top_bar)
         self.assertIn("fit_count > 2", top_bar)
