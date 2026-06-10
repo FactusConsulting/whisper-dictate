@@ -205,31 +205,48 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         apply_config_to_environ()
         self._apply_effective_config(self._profiled_config(effective_config()))
 
-    def _should_skip_pcm(self, pcm: np.ndarray, recording_s: float) -> bool:
+    def _should_skip_pcm(self, pcm: np.ndarray, recording_s: float) -> "str | None":
+        """Return a skip-reason token if the clip should be discarded, else None.
+
+        The return value is falsy (None) when the clip is acceptable, and a
+        non-empty reason string when it should be skipped — so existing callers
+        that just do ``if self._should_skip_pcm(...)`` continue to work.
+        """
         if len(pcm) < SR * 0.3:  # <0.3 s — almost certainly a misfire
             print("  (too short — hold the key while you speak)", flush=True)
-            return True
+            return "too_short"
         if self.stt_backend == "parakeet" and recording_s < self.parakeet_min_seconds:
             print(
                 f"  (too short for Parakeet — speak at least {self.parakeet_min_seconds:.1f}s)",
                 flush=True,
             )
-            return True
-        return False
+            return "too_short"
+        return None
 
-    def _transcribe_pcm(self, pcm: np.ndarray):
+    def _transcribe_pcm(self, pcm: np.ndarray) -> "tuple[object, str | None]":
+        """Transcribe ``pcm`` and return ``(result, reason)`` where reason is a
+        no_text token (``"too_quiet"``, ``"no_speech"``, ``"empty"``) when the
+        result is unusable, or ``None`` on success.
+        """
         try:
             result = _transcribe_detail(self.model, pcm, self.lang)
         except Exception as e:  # noqa: BLE001 — surface any failure
             print(f"  ✗ transcribe error: {e}", flush=True)
-            return None
+            return None, "no_speech"
         if not result.text:
+            gate = getattr(result, "gate", "") or ""
+            if "input too quiet" in gate:
+                reason = "too_quiet"
+            elif "no speech" in gate.lower():
+                reason = "no_speech"
+            else:
+                reason = "empty"
             print("  (heard nothing — speak a touch louder / mic closer)", flush=True)
-            return None
+            return None, reason
         if is_hallucination(result.text):
             print(f"  (hallucination filtreret: {result.text!r})", flush=True)
-            return None
-        return result
+            return None, "no_speech"
+        return result, None
 
     def _postprocess_and_format(self, text: str):
         post_result = postprocess_text(text, self.postprocess_settings)
@@ -417,14 +434,35 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         )
         try:
             if not self.frames:
+                _emit_worker_event(
+                    "status",
+                    state="no_text",
+                    reason="no_audio",
+                )
+                print("[stt] no text (no_audio)", flush=True)
                 return
             pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
             pcm = _select_active_channel_pcm(pcm).astype(np.int16)
             recording_s = self._recording_seconds(pcm)
-            if self._should_skip_pcm(pcm, recording_s):
+            skip_reason = self._should_skip_pcm(pcm, recording_s)
+            if skip_reason:
+                _emit_worker_event(
+                    "status",
+                    state="no_text",
+                    reason=skip_reason,
+                    recording_s=round(recording_s, 2),
+                )
+                print(f"[stt] no text ({skip_reason}, {recording_s:.1f}s)", flush=True)
                 return
-            result = self._transcribe_pcm(pcm)
+            result, no_text_reason = self._transcribe_pcm(pcm)
             if result is None:
+                _emit_worker_event(
+                    "status",
+                    state="no_text",
+                    reason=no_text_reason,
+                    recording_s=round(recording_s, 2),
+                )
+                print(f"[stt] no text ({no_text_reason}, {recording_s:.1f}s)", flush=True)
                 return
             text = result.text
             # Surface a post-processing stage for the live pipeline card, but

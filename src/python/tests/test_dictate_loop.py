@@ -12,8 +12,13 @@ and utterance-event build are exercised.
 They run before the runtime.py split refactor so that refactor is provably
 behaviour-preserving.
 """
+import io
+import json
+from contextlib import redirect_stderr
+
 from helpers import (
     _capture_stdout,
+    _env,
     load_voice_pi_realnp,
     patch,
     types,
@@ -160,6 +165,55 @@ class DictateLoopTests(unittest.TestCase):
         self._run(d)
         self.assertEqual(self.injected, [])
         self.assertEqual(self.events, [])
+
+    # ── no_text event emission ────────────────────────────────────────────────
+
+    def _run_capture_worker_events(self, d):
+        """Run _stop_and_transcribe with VOICEPI_WORKER_EVENTS=1 and return
+        the parsed list of worker-event payloads emitted to stderr."""
+        rt = self.dictate
+        stderr_buf = io.StringIO()
+        with patch.object(rt, "postprocess_text", _passthrough_postprocess), \
+                patch.object(rt, "is_hallucination", lambda _t: False), \
+                _capture_stdout(), \
+                _env(VOICEPI_WORKER_EVENTS="1"), \
+                redirect_stderr(stderr_buf):
+            rt.Dictate._stop_and_transcribe(d)
+        events = []
+        for line in stderr_buf.getvalue().splitlines():
+            prefix = "[worker-event] "
+            if line.startswith(prefix):
+                events.append(json.loads(line[len(prefix):]))
+        return events
+
+    def test_no_frames_emits_no_text_no_audio(self):
+        d = self._make_dictate()
+        d.frames = []
+        events = self._run_capture_worker_events(d)
+        no_text = [e for e in events if e.get("state") == "no_text"]
+        self.assertEqual(len(no_text), 1, f"expected one no_text event; got {events}")
+        self.assertEqual(no_text[0]["reason"], "no_audio")
+
+    def test_too_short_clip_emits_no_text_too_short(self):
+        d = self._make_dictate()
+        d.frames = [self._pcm(1000)]  # < 0.3 s → misfire
+        with patch.object(self.dictate, "_transcribe_detail",
+                          lambda *_a, **_k: _fake_transcribe_result("ignored")):
+            events = self._run_capture_worker_events(d)
+        no_text = [e for e in events if e.get("state") == "no_text"]
+        self.assertEqual(len(no_text), 1, f"expected one no_text event; got {events}")
+        self.assertEqual(no_text[0]["reason"], "too_short")
+        # recording_s must be reported for too_short (so the user sees how long they held)
+        self.assertIn("recording_s", no_text[0])
+
+    def test_no_text_not_emitted_on_successful_utterance(self):
+        d = self._make_dictate()
+        d.frames = [self._pcm(16000)]
+        with patch.object(self.dictate, "_transcribe_detail",
+                          lambda *_a, **_k: _fake_transcribe_result("hello")):
+            events = self._run_capture_worker_events(d)
+        no_text = [e for e in events if e.get("state") == "no_text"]
+        self.assertEqual(no_text, [], f"unexpected no_text events on success: {events}")
 
 
 if __name__ == "__main__":

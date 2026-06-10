@@ -197,7 +197,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn worker_status_log_line(event: &WorkerEvent) -> Option<String>", script)
         self.assertIn('"startup_ms"', script)
         self.assertIn('"first_audio"', script)
-        self.assertIn('"opening" | "ready" | "transcribing" | "loading_model" | "failed" => Some(false)', script)
+        self.assertIn('"opening" | "ready" | "transcribing" | "loading_model" | "failed" | "no_text"', script)
         self.assertNotIn("fn latest_audio_peak", script)
         self.assertNotIn("parse_metric_f32(line", script)
         self.assertNotIn("fn audio_input_panel", script)
