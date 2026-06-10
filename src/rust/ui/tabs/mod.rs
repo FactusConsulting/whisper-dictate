@@ -21,6 +21,7 @@ pub(in crate::ui) use log_card::{empty_log_state, metric_box, runtime_log_card};
 pub(in crate::ui) use runtime::{
     audio_device_label, empty_as_auto, empty_as_disabled, format_push_to_talk_keys,
     full_audio_device_label, live_audio_level_summary, mic_label_char_budget,
+    push_to_talk_badge_label,
 };
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;

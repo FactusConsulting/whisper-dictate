@@ -1,7 +1,7 @@
 //! Tests for the derived runtime-display status (don't show "Running" until the
 //! worker has loaded the model) and the push-to-talk hotkey readout.
 
-use super::tabs::format_push_to_talk_keys;
+use super::tabs::{format_push_to_talk_keys, push_to_talk_badge_label};
 use super::test_support::test_app;
 use super::*;
 
@@ -128,4 +128,22 @@ fn push_to_talk_keys_render_as_friendly_chord() {
     // Empty / blank input has no configured key.
     assert_eq!(format_push_to_talk_keys(""), "None");
     assert_eq!(format_push_to_talk_keys("  "), "None");
+}
+
+#[test]
+fn badge_label_reflects_toggle_mode() {
+    // Hold mode keeps the "Push-to-talk" prefix; toggle mode switches to the
+    // "Toggle key" prefix while the chord rendering is unchanged.
+    assert_eq!(
+        push_to_talk_badge_label("ctrl_r", false, "en"),
+        "Push-to-talk: Ctrl (right)"
+    );
+    assert_eq!(
+        push_to_talk_badge_label("ctrl_r", true, "en"),
+        "Toggle key: Ctrl (right)"
+    );
+    assert_eq!(
+        push_to_talk_badge_label("shift_r+ctrl_r", true, "da"),
+        "Skiftetast: Shift (right) + Ctrl (right)"
+    );
 }

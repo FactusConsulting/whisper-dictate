@@ -391,6 +391,7 @@ NVIDIA GPU is used automatically if present.
 |---|---|
 | `--key ctrl_r` | hold-to-talk key (`ctrl_r`, `alt_r`, `f9`…; env `VOICEPI_KEY`) |
 | `--key a+b` | chord: hold **both** keys simultaneously, e.g. `shift_r+ctrl_r` |
+| `VOICEPI_TOGGLE=1` | toggle mode (no CLI flag — set the env var or the **Toggle mode** checkbox in the Speech tab, persisted as `toggle_mode` in config.json): **press** the hotkey to start recording, **press again** to stop and transcribe — instead of holding it. Key autorepeat is ignored (rising-edge only); restart-only. |
 | `--lang CODE` | spoken-language hint — see [Languages](#languages) |
 | `--autodetect` | let Whisper guess the language (less reliable on short speech) |
 | `--type` | force direct keyboard typing (env `VOICEPI_INJECT_MODE=type`; on Wayland this uses evdev keycodes and depends on the configured XKB layout for non-ASCII) |

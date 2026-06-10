@@ -34,7 +34,13 @@ impl WhisperDictateApp {
                 palette,
                 &self.settings.ui_language,
             );
-            push_to_talk_badge(ui, &self.settings.key, palette, &self.settings.ui_language);
+            push_to_talk_badge(
+                ui,
+                &self.settings.key,
+                self.settings.toggle_mode,
+                palette,
+                &self.settings.ui_language,
+            );
             let mic_width = (ui.available_width() - 10.0).clamp(0.0, MIC_INDICATOR_MAX_WIDTH);
             if mic_width >= MIC_INDICATOR_MIN_WIDTH {
                 ui.add_space(10.0);
@@ -528,10 +534,23 @@ fn runtime_status_badge(
         });
 }
 
-/// A pill that shows the currently configured push-to-talk hotkey/chord so it is
-/// always visible while watching live dictation. The raw setting (e.g. `ctrl_r`
-/// or `shift_l+ctrl_l`) is rendered as a human-friendly chord (`Ctrl (right)`).
-fn push_to_talk_badge(ui: &mut egui::Ui, raw_keys: &str, palette: UiPalette, raw_language: &str) {
+/// A pill that shows the currently configured hotkey/chord so it is always
+/// visible while watching live dictation. The raw setting (e.g. `ctrl_r` or
+/// `shift_l+ctrl_l`) is rendered as a human-friendly chord (`Ctrl (right)`).
+/// When toggle mode is on the label reads "Toggle key" (press to start, press
+/// again to stop); otherwise the usual "Push-to-talk".
+fn push_to_talk_badge(
+    ui: &mut egui::Ui,
+    raw_keys: &str,
+    toggle_mode: bool,
+    palette: UiPalette,
+    raw_language: &str,
+) {
+    let hover = if toggle_mode {
+        "Press this key (or chord) to start, press again to stop. Change it in Speech → Hotkey."
+    } else {
+        "Hold this key (or chord) to dictate. Change it in Speech → Hotkey."
+    };
     egui::Frame::default()
         .fill(palette.surface_bg)
         .stroke(egui::Stroke::new(0.8, palette.border))
@@ -542,19 +561,31 @@ fn push_to_talk_badge(ui: &mut egui::Ui, raw_keys: &str, palette: UiPalette, raw
                 egui::Label::new(
                     icon_text(
                         icons::ICON_KEYBOARD,
-                        format!(
-                            "{}: {}",
-                            ui_text(raw_language, UiTextKey::PushToTalk),
-                            format_push_to_talk_keys(raw_keys)
-                        ),
+                        push_to_talk_badge_label(raw_keys, toggle_mode, raw_language),
                     )
                     .strong()
                     .color(palette.text),
                 )
                 .selectable(false),
             )
-            .on_hover_text("Hold this key (or chord) to dictate. Change it in Speech → Hotkey.");
+            .on_hover_text(hover);
         });
+}
+
+/// Build the badge label text: a "Push-to-talk: <chord>" (hold mode) or
+/// "Toggle key: <chord>" (toggle mode) string. Kept pure so it is unit-testable
+/// without an egui context.
+pub(in crate::ui) fn push_to_talk_badge_label(
+    raw_keys: &str,
+    toggle_mode: bool,
+    raw_language: &str,
+) -> String {
+    let prefix = if toggle_mode {
+        ui_text(raw_language, UiTextKey::Toggle)
+    } else {
+        ui_text(raw_language, UiTextKey::PushToTalk)
+    };
+    format!("{}: {}", prefix, format_push_to_talk_keys(raw_keys))
 }
 
 /// Render a raw hotkey setting (`ctrl_r`, `shift_l+ctrl_l`, …) as a friendly

@@ -115,6 +115,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.lang = defaults.lang;
             settings.xkb_layout = defaults.xkb_layout;
             settings.key = defaults.key;
+            settings.toggle_mode = defaults.toggle_mode;
             settings.quit_key = defaults.quit_key;
             settings.quit_count = defaults.quit_count;
             settings.quit_window_ms = defaults.quit_window_ms;
