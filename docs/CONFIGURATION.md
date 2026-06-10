@@ -474,6 +474,21 @@ Profiles live in `%APPDATA%\WhisperDictate\config.json` on Windows or
 string or a list of strings. The first matching profile wins. Active profile is
 printed as `[profile] active: ...` and included in metrics/history events.
 
+**Picking a target window without hand-typing:** in the Profiles tab, click
+**List open windows** to fetch the live list of visible windows from the running
+OS. The picker shows each window as `process — title`; clicking **Insert**
+appends a ready-to-use profile object (pre-filled `match.process` and
+`match.title`) to the Profiles JSON above. Edit the `settings` block and
+**Save**. Window enumeration is **Windows only** for now — Wayland cannot
+enumerate windows without a compositor extension, and X11 support is deferred.
+On non-Windows platforms the button reports the limitation in the runtime log
+and leaves the JSON untouched. The same enumeration is also available from the
+command line:
+
+```powershell
+whisper-dictate run --list-windows
+```
+
 ### Injection smoke test
 
 To test a target app without loading Whisper, focus the input field and run:

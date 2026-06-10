@@ -44,11 +44,13 @@ mod tasks;
 mod text;
 mod theme;
 mod widgets;
+mod window_list;
 mod worker_event;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
 use self::icon::app_icon;
+pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
 // resolve these items; non-test code reaches them through `api_keys`.
 pub(in crate::ui) use self::log_render::*;
@@ -208,6 +210,10 @@ struct WhisperDictateApp {
     /// to the persisted `settings.audio_device`; the combo always offers
     /// "(System default)" → "" ahead of these.
     audio_device_options: Vec<String>,
+    /// Visible top-level windows refreshed on demand via `--list-windows`.
+    /// Each entry is `(title, process)`. Shown in the Profiles tab so the user
+    /// can pick a window and insert a matching profile object.
+    window_options: Vec<(String, String)>,
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
@@ -306,6 +312,7 @@ impl Default for WhisperDictateApp {
             audio_meter_peak: None,
             active_audio_device: String::new(),
             audio_device_options: Vec::new(),
+            window_options: Vec::new(),
             config_path,
             saved_settings: settings.clone(),
             settings,

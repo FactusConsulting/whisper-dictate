@@ -129,6 +129,26 @@ def list_input_devices(sd) -> list[dict]:
     return result
 
 
+def print_windows() -> int:
+    """Print the list of visible top-level windows as JSON and return an exit code.
+
+    On Windows prints a JSON array of ``{"title": "...", "process": "..."}``
+    objects and returns 0.  On non-Windows platforms (Wayland cannot enumerate
+    windows; X11 support is deferred) prints ``{"error": "..."}`` and returns 1.
+    """
+    if os.name != "nt":
+        print(json.dumps({"error": "window listing is only supported on Windows"}), flush=True)
+        return 1
+    try:
+        from whisper_dictate.vp_windows import list_visible_windows
+        windows = list_visible_windows()
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps({"error": f"could not enumerate windows: {exc}"}), flush=True)
+        return 1
+    print(json.dumps(windows, ensure_ascii=False), flush=True)
+    return 0
+
+
 def print_audio_devices() -> int:
     """Print the input-device list as JSON and return a process exit code.
 

@@ -5,7 +5,8 @@
 use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
 use crate::runtime::{
-    audio_devices_command, doctor_command, install_command, run_capture, WorkerCommand,
+    audio_devices_command, doctor_command, install_command, run_capture, windows_command,
+    WorkerCommand,
 };
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
@@ -13,6 +14,10 @@ use std::thread;
 /// Background-task label for the worker's `--list-audio-devices` run. Matched in
 /// `poll_background_task` to parse stdout into the Microphone picker options.
 pub(in crate::ui) const LIST_AUDIO_DEVICES_LABEL: &str = "list audio devices";
+
+/// Background-task label for the worker's `--list-windows` run. Matched in
+/// `poll_background_task` to parse stdout into the Profiles tab window picker.
+pub(in crate::ui) const LIST_WINDOWS_LABEL: &str = "list windows";
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn run_doctor(&mut self) {
@@ -46,6 +51,13 @@ impl WhisperDictateApp {
     /// `poll_background_task` once the run completes.
     pub(in crate::ui) fn run_list_audio_devices(&mut self) {
         self.run_background_command(LIST_AUDIO_DEVICES_LABEL, audio_devices_command());
+    }
+
+    /// Refresh the Profiles tab window list by running the worker with
+    /// `--list-windows` off-thread. The captured stdout is parsed in
+    /// `poll_background_task` once the run completes.
+    pub(in crate::ui) fn run_list_windows(&mut self) {
+        self.run_background_command(LIST_WINDOWS_LABEL, windows_command());
     }
 
     pub(in crate::ui) fn run_cloud_api_check(&mut self) {
@@ -219,6 +231,10 @@ impl WhisperDictateApp {
                 self.apply_audio_device_listing(&result);
                 return;
             }
+            if result.label == LIST_WINDOWS_LABEL {
+                self.apply_window_listing(&result);
+                return;
+            }
             self.append_runtime_output(result.stdout.trim_end());
             self.append_runtime_output(result.stderr.trim_end());
             if let Some(error) = result.error {
@@ -258,6 +274,30 @@ impl WhisperDictateApp {
             "cloud API check" => self.stt_api_key_status = message.to_owned(),
             "post API check" => self.post_api_key_status = message.to_owned(),
             _ => {}
+        }
+    }
+
+    /// Handle a finished `--list-windows` run: parse stdout into the Profiles
+    /// tab's window options, or report the failure via the runtime log.
+    fn apply_window_listing(&mut self, result: &BackgroundTaskResult) {
+        if let Some(error) = &result.error {
+            let message = format!("Could not list windows: {error}");
+            self.append_runtime_log(format!("[ERROR] {message}"));
+            return;
+        }
+        match parse_windows_json(&result.stdout) {
+            Ok(entries) => {
+                let count = entries.len();
+                self.window_options = entries.into_iter().map(|e| (e.title, e.process)).collect();
+                self.append_runtime_log(format!("[ui] window list refreshed: {count} window(s)"));
+            }
+            Err(error) => {
+                let message = format!("Could not read window list: {error}");
+                self.append_runtime_log(format!("[ERROR] {message}"));
+                if !result.stderr.trim().is_empty() {
+                    self.append_runtime_output(result.stderr.trim_end());
+                }
+            }
         }
     }
 

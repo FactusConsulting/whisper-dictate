@@ -16,6 +16,12 @@ import subprocess
 import threading
 import time
 
+from whisper_dictate.vp_windows import (
+    SELF_INJECTION_PROCESSES as _SELF_INJECTION_PROCESSES,
+    SELF_INJECTION_TITLE_RE as _SELF_INJECTION_TITLE_RE,
+    windows_process_name as _windows_process_name_shared,
+)
+
 # Seconds to wait before restoring the clipboard after a paste injection.
 # The delay is intentional: paste targets (especially on Wayland where
 # wl-copy serves content at request time) may read the clipboard lazily.
@@ -60,13 +66,9 @@ _LINUX_TERMINAL_TARGETS = (
     "gnome-console",
     "gnome-terminal",
 )
-_SELF_INJECTION_PROCESSES = {
-    "whisper-dictate",
-    "whisper-dictate.exe",
-    "whisper_dictate",
-    "whisper_dictate.exe",
-}
-_SELF_INJECTION_TITLE_RE = re.compile(r"^whisper-dictate(?:\s+\d.*)?$")
+# Re-export for any existing code that imports directly from this module.
+_SELF_INJECTION_PROCESSES = _SELF_INJECTION_PROCESSES  # noqa: PLW0127
+_SELF_INJECTION_TITLE_RE = _SELF_INJECTION_TITLE_RE  # noqa: PLW0127
 
 
 def ydotool_socket_path() -> str:
@@ -194,21 +196,7 @@ class InjectMixin:
             pass
 
     def _windows_process_name(self, ctypes, wintypes, pid: int) -> str | None:
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return None
-        try:
-            size = wintypes.DWORD(32768)
-            buf = ctypes.create_unicode_buffer(size.value)
-            if kernel32.QueryFullProcessImageNameW(
-                    handle, 0, buf, ctypes.byref(size)):
-                return os.path.basename(buf.value)
-            return str(pid)
-        finally:
-            kernel32.CloseHandle(handle)
+        return _windows_process_name_shared(ctypes, wintypes, pid)
 
     def _restore_target_focus(self) -> bool:
         # For Wayland-native windows (gedit, ghostty…) xdotool finds an XID
