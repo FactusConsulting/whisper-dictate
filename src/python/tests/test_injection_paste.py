@@ -234,17 +234,18 @@ class ClipboardRestoreTests(_InjectBase):
         from whisper_dictate import vp_inject
         restore_calls = []
 
-        original_thread = sys.modules.get("threading", None)
         import threading as _threading
 
         class _CapturingThread:
             """Capture the restore target callable instead of spawning a thread."""
-            def __init__(self, target=None, daemon=None):
+            def __init__(self, target=None, args=(), daemon=None):
                 self._target = target
+                self._args = tuple(args)
 
             def start(self):
                 if self._target is not None:
-                    restore_calls.append(self._target)
+                    target, args = self._target, self._args
+                    restore_calls.append(lambda: target(*args))
 
         with patch.object(vp_inject, "_CLIPBOARD_RESTORE_ENABLED", restore_enabled), \
                 patch.object(
@@ -296,6 +297,42 @@ class ClipboardRestoreTests(_InjectBase):
 
         # Clipboard must stay with the user's content.
         self.assertEqual(self.clip._current, "user copied this")
+
+    def test_restore_returns_when_clipboard_unreadable(self):
+        """paste() raising during restore leaves the clipboard untouched."""
+        from whisper_dictate import vp_inject
+
+        class _Boom:
+            def paste(self):
+                raise RuntimeError("clipboard locked")
+
+            def copy(self, _value):  # pragma: no cover - must not be reached
+                raise AssertionError("copy must not run when paste() fails")
+
+        # Direct call with delay 0 — covers the unreadable-clipboard return arm.
+        vp_inject._restore_clipboard_after_delay(_Boom(), "injected", "prev", delay_s=0)
+
+    def test_restore_swallows_copy_exception(self):
+        """copy() raising during restore is swallowed (injection already done)."""
+        from whisper_dictate import vp_inject
+
+        class _CopyBoom:
+            def paste(self):
+                return "injected"
+
+            def copy(self, _value):
+                raise RuntimeError("clipboard write blocked")
+
+        vp_inject._restore_clipboard_after_delay(
+            _CopyBoom(), "injected", "prev", delay_s=0)
+
+    def test_restore_swallows_unexpected_outer_exception(self):
+        """Even a failing sleep must never propagate out of the restore thread."""
+        from whisper_dictate import vp_inject
+
+        with patch.object(vp_inject.time, "sleep",
+                          side_effect=RuntimeError("interrupted")):
+            vp_inject._restore_clipboard_after_delay(self.clip, "injected", "prev")
 
     def test_restore_skipped_when_previous_was_none(self):
         """No restore thread is started when pyperclip.paste() raises (nothing saved)."""

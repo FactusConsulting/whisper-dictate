@@ -101,8 +101,10 @@ if echo "$current_sources" | grep -q "'${WD_XKB}'"; then
     ok "GNOME input source indeholder allerede $WD_XKB"
 else
     # Append the wanted layout rather than overwriting the whole list.
-    # gsettings returns either "@a(ss) []" (empty) or "[('xkb', 'a'), ...]".
-    if echo "$current_sources" | grep -q '@a(ss) \[\]'; then
+    # gsettings returns either "@a(ss) []" (empty) or "[('xkb', 'a'), ...]";
+    # an empty string means the gsettings call itself failed — treat both as
+    # "no existing layouts" so we never build an invalid ", (...)]" list.
+    if [[ -z "$current_sources" ]] || echo "$current_sources" | grep -q '@a(ss) \[\]'; then
         # Empty list — start fresh with just our layout.
         new_sources="[('xkb', '${WD_XKB}')]"
     else
