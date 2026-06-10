@@ -316,6 +316,8 @@ def _debug_rows(args, dev: str, ctype: str) -> list[tuple[str, str]]:
                              f"(env VOICEPI_PARAKEET_MIN_SECONDS={_env_preview('VOICEPI_PARAKEET_MIN_SECONDS')})"),
         ("release_tail_ms",  f"{get_value('VOICEPI_RELEASE_TAIL_MS', '200')}  "
                              f"(env VOICEPI_RELEASE_TAIL_MS={_env_preview('VOICEPI_RELEASE_TAIL_MS')})"),
+        ("preview_seconds",  f"{get_value('VOICEPI_PREVIEW_SECONDS', '3')}  "
+                             f"(env VOICEPI_PREVIEW_SECONDS={_env_preview('VOICEPI_PREVIEW_SECONDS')})"),
         ("vad",              f"threshold={VAD_THRESHOLD}  "
                              f"min_silence_ms={VAD_MIN_SILENCE_MS}"),
         ("initial_prompt",   _initial_prompt_preview()),

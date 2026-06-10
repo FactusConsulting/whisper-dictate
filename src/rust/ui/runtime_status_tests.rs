@@ -63,6 +63,52 @@ fn failed_model_load_drops_back_to_starting() {
     assert_eq!(app.display_runtime_state(), RuntimeState::Starting);
 }
 
+fn preview_event(text: &str, recording_s: f64) -> WorkerEvent {
+    WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("preview".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "preview",
+            "text_preview": text,
+            "recording_s": recording_s,
+        }),
+    }
+}
+
+#[test]
+fn preview_status_captures_text_without_clearing_recording_stage() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+
+    // Enter the recording stage (live spinner showing).
+    app.update_worker_status(&status_event("recording"));
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    assert_eq!(app.pipeline_preview, None);
+
+    // A preview tick must keep the recording stage (NOT clear the spinner) and
+    // capture the growing partial text.
+    app.update_worker_status(&preview_event("hello there", 1.5));
+    assert_eq!(
+        app.pipeline_stage,
+        Some("recording"),
+        "preview must not clear the active recording stage"
+    );
+    assert_eq!(app.pipeline_preview.as_deref(), Some("hello there"));
+    // Capture is still active and the worker stays ready.
+    assert!(app.audio_capture_active);
+    assert!(app.worker_ready);
+
+    // A later preview replaces the text.
+    app.update_worker_status(&preview_event("hello there friend", 3.0));
+    assert_eq!(app.pipeline_preview.as_deref(), Some("hello there friend"));
+
+    // Moving on to transcribing drops the stale preview text.
+    app.update_worker_status(&status_event("transcribing"));
+    assert_eq!(app.pipeline_stage, Some("transcribing"));
+    assert_eq!(app.pipeline_preview, None);
+}
+
 #[test]
 fn push_to_talk_keys_render_as_friendly_chord() {
     assert_eq!(format_push_to_talk_keys("ctrl_r"), "Ctrl (right)");

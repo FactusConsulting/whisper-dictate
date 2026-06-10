@@ -85,6 +85,7 @@ class DictateLoopTests(unittest.TestCase):
         d = object.__new__(self.dictate.Dictate)
         d.recording = True
         d.release_tail_ms = 0
+        d._preview = None
         d._arecord_proc = None
         d._stream = None
         d.audio_ducker = types.SimpleNamespace(enter=lambda: None, exit=lambda: None)

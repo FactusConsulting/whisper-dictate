@@ -474,6 +474,7 @@ Nix / CLI): see **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**. The most com
 | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | minimum silence gap used by VAD segmentation |
 | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | ignore very short Parakeet captures where language detection is weak |
 | `VOICEPI_RELEASE_TAIL_MS` | `200` | keep capturing briefly after hotkey release to avoid clipping final words |
+| `VOICEPI_PREVIEW_SECONDS` | `3` | local Whisper only: while recording, show a live partial transcription in the Runtime card every N seconds (`0` disables); display-only, the final text is unchanged |
 
 Dictionary helper commands are handled by the Rust controller before Python or
 Whisper loads, for example `whisper-dictate dictionary status`,

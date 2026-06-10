@@ -9,6 +9,7 @@ import os
 import json
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,6 +22,17 @@ from whisper_dictate.vp_config import apply_config_to_environ, get_value
 apply_config_to_environ()
 
 SR = 16000
+
+# Module-level lock that SERIALIZES every faster-whisper model.transcribe()
+# call — both the final transcription at key release (_transcribe_detail) and
+# the in-flight live previews (vp_preview). faster-whisper / CTranslate2 model
+# objects are not safe to drive from two threads at once, so the preview thread
+# and the final pass must never call transcribe concurrently. The final pass
+# acquires it blocking (it MAY wait for at most one in-flight preview chunk —
+# bounded, since a preview only transcribes the buffer captured so far); the
+# preview path acquires it non-blocking so previews never queue up behind each
+# other or behind the final pass.
+TRANSCRIBE_LOCK = threading.Lock()
 
 # beam_size=1 is fastest on CPU; raise to 5 for better accuracy at the
 # cost of 3-4x slower transcription. VOICEPI_BEAM_SIZE=5 is useful on
@@ -393,24 +405,29 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         if HALLUCINATION_GUARD
         else {}
     )
-    segments, info = model.transcribe(
-        audio,
-        language=lang,
-        initial_prompt=prompt,
-        beam_size=BEAM_SIZE,
-        temperature=TEMPERATURES,
-        condition_on_previous_text=use_context,
-        no_speech_threshold=0.45,
-        log_prob_threshold=-1.0,
-        vad_filter=True,
-        vad_parameters={
-            "threshold": VAD_THRESHOLD,
-            "min_silence_duration_ms": VAD_MIN_SILENCE_MS,
-            "speech_pad_ms": VAD_SPEECH_PAD_MS,
-        },
-        **guard_kwargs,
-    )
-    segment_list = list(segments)
+    # Hold TRANSCRIBE_LOCK across the whole decode (the generator is lazy, so
+    # segments must be drained inside the lock too). This serializes the final
+    # pass with any in-flight live preview — the final pass may wait for at most
+    # one bounded preview chunk to finish, which is acceptable.
+    with TRANSCRIBE_LOCK:
+        segments, info = model.transcribe(
+            audio,
+            language=lang,
+            initial_prompt=prompt,
+            beam_size=BEAM_SIZE,
+            temperature=TEMPERATURES,
+            condition_on_previous_text=use_context,
+            no_speech_threshold=0.45,
+            log_prob_threshold=-1.0,
+            vad_filter=True,
+            vad_parameters={
+                "threshold": VAD_THRESHOLD,
+                "min_silence_duration_ms": VAD_MIN_SILENCE_MS,
+                "speech_pad_ms": VAD_SPEECH_PAD_MS,
+            },
+            **guard_kwargs,
+        )
+        segment_list = list(segments)
     segment_list, dropped_segments = _drop_hallucinated_segments(segment_list, dur)
     for segment in dropped_segments:
         print(
@@ -462,3 +479,45 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
 
 def _transcribe(model, pcm: np.ndarray, lang: str | None) -> str:
     return _transcribe_detail(model, pcm, lang).text
+
+
+def transcribe_preview(model, pcm: np.ndarray, lang: str | None) -> str:
+    """Fast, display-only transcription of an in-progress recording buffer.
+
+    Used by the live-preview thread (vp_preview) to show the sentence growing
+    while the user is still holding the key. It is deliberately CHEAP and never
+    touches the quality knobs the final pass uses:
+
+      * beam_size=1, temperature=0.0, condition_on_previous_text=False — greedy,
+        no fallback ladder, no cross-segment context, so it is as fast as
+        possible and never queues.
+      * the existing VAD settings are reused (read-only) so silence handling
+        matches the final pass closely enough for a preview.
+      * the hallucination guard / word-timestamps are skipped (extra compute we
+        don't want for a throwaway preview).
+
+    This must NOT mutate any shared decode state (it only reads module globals)
+    and the final pass is the single source of truth for the injected text.
+
+    Returns the (whitespace-collapsed) preview text, or "" on no/empty speech.
+    The caller is responsible for acquiring TRANSCRIBE_LOCK (non-blocking) so a
+    preview never runs concurrently with the final pass or another preview.
+    """
+    audio = pcm.reshape(-1).astype(np.float32) / 32768.0
+    segments, _info = model.transcribe(
+        audio,
+        language=lang,
+        beam_size=1,
+        temperature=0.0,
+        condition_on_previous_text=False,
+        no_speech_threshold=0.45,
+        log_prob_threshold=-1.0,
+        vad_filter=True,
+        vad_parameters={
+            "threshold": VAD_THRESHOLD,
+            "min_silence_duration_ms": VAD_MIN_SILENCE_MS,
+            "speech_pad_ms": VAD_SPEECH_PAD_MS,
+        },
+    )
+    raw_text = re.sub(r"\s+", " ", "".join(s.text for s in segments)).strip()
+    return raw_text

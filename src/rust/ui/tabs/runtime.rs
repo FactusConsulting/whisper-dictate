@@ -149,6 +149,29 @@ impl WhisperDictateApp {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(label).strong().color(accent));
                 });
+                // While recording, show the live partial transcription growing
+                // beneath the spinner as a muted, wrapped second line so the
+                // user literally watches the sentence form before they release
+                // the key. Display-only — the Final card still comes from the
+                // utterance event.
+                if stage == "recording" {
+                    if let Some(preview) = self
+                        .pipeline_preview
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|preview| !preview.is_empty())
+                    {
+                        ui.add_space(6.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(preview)
+                                    .italics()
+                                    .color(palette.text_muted),
+                            )
+                            .wrap(),
+                        );
+                    }
+                }
             });
         ui.add_space(8.0);
     }
