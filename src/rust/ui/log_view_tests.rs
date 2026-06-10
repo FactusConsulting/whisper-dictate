@@ -190,6 +190,15 @@ fn final_card_shows_post_processing_mode_per_utterance() {
     });
     let cards = runtime_log_cards(&format!("[utterance] {raw}"), LogViewMode::Minimal);
     assert_eq!(cards[0].detail, "Post-processing off");
+
+    // Provider present but mode missing (older/partial payloads): the worker
+    // default is raw, so the card must read off — never "?".
+    let no_mode = serde_json::json!({
+        "event": "utterance", "text": "tekst",
+        "post_processor": "groq",
+    });
+    let cards = runtime_log_cards(&format!("[utterance] {no_mode}"), LogViewMode::Minimal);
+    assert_eq!(cards[0].detail, "Post-processing off");
 }
 
 #[test]

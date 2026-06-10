@@ -428,15 +428,15 @@ fn parse_utterance_payload(line: &str) -> Option<serde_json::Value> {
 fn post_processing_summary(payload: &serde_json::Value) -> String {
     let processor =
         worker_event_string(payload, "post_processor").unwrap_or_else(|| "none".to_owned());
-    let mode = worker_event_string(payload, "post_mode");
-    if processor == "none" || mode.as_deref() == Some("raw") {
+    // A missing mode means the worker default ("raw" = pass-through), so a
+    // payload with a provider but no mode still reads as off — never "?".
+    let Some(mode) = worker_event_string(payload, "post_mode") else {
+        return "Post-processing off".to_owned();
+    };
+    if processor == "none" || mode == "raw" {
         return "Post-processing off".to_owned();
     }
-    format!(
-        "Post-processing: {} ({})",
-        mode.unwrap_or_else(|| "?".to_owned()),
-        processor
-    )
+    format!("Post-processing: {mode} ({processor})")
 }
 
 /// The FULL dictated text of an `[utterance]` event — prefers the untruncated
