@@ -7,6 +7,9 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     assert_eq!(Tab::Speech.label("en"), "Speech");
     assert_eq!(Tab::Speech.label("da"), "Tale");
     assert_eq!(Tab::Dictionary.label("da"), "Ordbog");
+    // The diagnostic-card badge label (also the hover-match key in log_card).
+    assert_eq!(ui_text("en", UiTextKey::Dictation), "Dictation");
+    assert_eq!(ui_text("da", UiTextKey::Dictation), "Diktering");
     assert_eq!(ui_text("da", UiTextKey::LiveDictation), "Live diktering");
     assert_eq!(
         ui_text("en", UiTextKey::DictationOutput),

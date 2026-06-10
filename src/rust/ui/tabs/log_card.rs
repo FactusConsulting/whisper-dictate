@@ -50,7 +50,7 @@ fn runtime_log_card_text(
         if detail_line.is_empty() {
             continue;
         }
-        ui.add(
+        let response = ui.add(
             egui::Label::new(
                 egui::RichText::new(detail_line)
                     .size(12.0)
@@ -58,11 +58,75 @@ fn runtime_log_card_text(
             )
             .wrap(),
         );
+        if let Some(hover) = diagnostic_detail_hover(detail_line) {
+            let _ = response.on_hover_text(hover);
+        }
     }
     if !card.badge.is_empty() {
         ui.add_space(2.0);
-        status_pill(ui, &card.badge, accent, palette);
+        let pill = status_pill(ui, &card.badge, accent, palette);
+        // Match against the catalogue strings (both languages) instead of
+        // duplicating the translations here — a tweak in text.rs must not
+        // silently detach this hover.
+        if card.badge == ui_text("en", UiTextKey::Dictation)
+            || card.badge == ui_text("da", UiTextKey::Dictation)
+        {
+            let _ = pill.on_hover_text(
+                "One complete dictation: from key down to key up, with its measurements.",
+            );
+        }
     }
+}
+
+/// Return a plain-language hover for a structured-utterance detail line, or
+/// `None` when the line does not match any known group.
+fn diagnostic_detail_hover(line: &str) -> Option<&'static str> {
+    if line.starts_with("recording=") || line.starts_with("raw=") {
+        return Some(
+            "Audio captured for this dictation: \
+             recording = seconds of audio, \
+             raw/peak/noise/snr = input levels and signal-to-noise ratio, \
+             gain = microphone amplification applied.",
+        );
+    }
+    if line.starts_with("compute=") || line.starts_with("rtf=") {
+        return Some(
+            "Transcription timing: \
+             compute = how long the model took to process the audio, \
+             rtf = compute / duration (below 1.0 means faster than real time).",
+        );
+    }
+    if line.starts_with("backend=") {
+        return Some(
+            "The speech-to-text engine and model used for this dictation, \
+             and the compute device (cpu / cuda / api).",
+        );
+    }
+    if line.starts_with("dictionary") {
+        return Some(
+            "Dictionary hits: \
+             terms = words matched by the custom vocabulary list, \
+             replacements = substitutions applied.",
+        );
+    }
+    if line.starts_with("post=") || line.starts_with("provider=") {
+        return Some(
+            "Post-processing: \
+             post = mode (clean / fix / raw), \
+             provider = the LLM service used, \
+             post_model = specific model, \
+             changed = whether the text was modified, \
+             fallback = whether the primary provider was unavailable.",
+        );
+    }
+    if line.starts_with("inject=") {
+        return Some(
+            "How the text was inserted: \
+             inject = strategy (type = simulated keystrokes, paste = clipboard + Ctrl+V), \
+             target = the window that received the text.",
+        );
+    }
+    None
 }
 
 pub(in crate::ui) fn runtime_log_card(
@@ -125,7 +189,12 @@ pub(in crate::ui) fn empty_log_state(
         });
 }
 
-fn status_pill(ui: &mut egui::Ui, label: &str, accent: egui::Color32, palette: UiPalette) {
+fn status_pill(
+    ui: &mut egui::Ui,
+    label: &str,
+    accent: egui::Color32,
+    palette: UiPalette,
+) -> egui::Response {
     egui::Frame::default()
         .fill(palette.header_bg)
         .stroke(egui::Stroke::new(0.8, accent))
@@ -133,7 +202,8 @@ fn status_pill(ui: &mut egui::Ui, label: &str, accent: egui::Color32, palette: U
         .inner_margin(egui::Margin::symmetric(8.0, 3.0))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(label).size(11.0).strong().color(accent));
-        });
+        })
+        .response
 }
 
 pub(in crate::ui) fn metric_box(
@@ -141,7 +211,7 @@ pub(in crate::ui) fn metric_box(
     label: &str,
     value: impl AsRef<str>,
     palette: UiPalette,
-) {
+) -> egui::Response {
     egui::Frame::default()
         .fill(palette.header_bg)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
@@ -162,7 +232,8 @@ pub(in crate::ui) fn metric_box(
                 )
                 .wrap(),
             );
-        });
+        })
+        .response
 }
 
 /// Scroll the surrounding ScrollArea while the user drag-selects text past its

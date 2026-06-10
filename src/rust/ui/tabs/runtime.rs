@@ -196,9 +196,16 @@ impl WhisperDictateApp {
             );
             return;
         }
-        for card in cards {
+        let dictation_badge = ui_text(&self.settings.ui_language, UiTextKey::Dictation).to_owned();
+        for mut card in cards {
             if card.title.trim().is_empty() {
                 continue;
+            }
+            // Translate the internal "Utterance" marker to the user-visible
+            // localized badge ("Dictation" / "Diktering") at render time so the
+            // log-parsing layer stays language-agnostic and tests remain stable.
+            if card.badge == "Utterance" {
+                card.badge = dictation_badge.clone();
             }
             runtime_log_card(ui, &card, palette);
             ui.add_space(8.0);
@@ -265,13 +272,15 @@ impl WhisperDictateApp {
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                metric_box(ui, "Backend", self.backend_summary(), palette);
+                metric_box(ui, "Backend", self.backend_summary(), palette)
+                    .on_hover_text("The active speech-to-text engine for this session.");
                 metric_box(
                     ui,
                     "Post",
                     empty_as_disabled(&self.settings.post_processor),
                     palette,
-                );
+                )
+                .on_hover_text("The active post-processing provider (see the Post tab).");
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -280,12 +289,23 @@ impl WhisperDictateApp {
                     "STT",
                     latest_metric_summary(&self.runtime_log, "[stt]"),
                     palette,
+                )
+                .on_hover_text(
+                    "Last dictation: dur = how long you spoke, \
+                     compute = transcription time, \
+                     rtf = compute/duration (below 1.0 means faster than real time).",
                 );
                 metric_box(
                     ui,
                     "Inject",
                     latest_log_summary(&self.runtime_log, "[inject] strategy:"),
                     palette,
+                )
+                .on_hover_text(
+                    "How the text was inserted last: \
+                     type = simulated keystrokes, \
+                     paste = clipboard + Ctrl+V. \
+                     Auto picks per target window.",
                 );
             });
         });
