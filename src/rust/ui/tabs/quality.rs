@@ -3,15 +3,100 @@ use super::*;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn quality_tab(&mut self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
         ui.heading("Quality");
+        ui.add_space(6.0);
         // Engine-specific decode settings are greyed out unless their engine is
         // the active STT backend, so it's clear which knobs actually take effect.
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         let whisper = backend == SttBackendMode::Whisper;
         let parakeet = backend == SttBackendMode::Parakeet;
-        settings_grid("quality_settings")
-            .show(ui, |ui| {
-                text_enabled(
+        let language = self.settings.ui_language.clone();
+
+        // --- All backends: capture/normalization/anti-hallucination gates that
+        // run on every STT engine. min_record_seconds is enforced in the worker's
+        // _should_skip_pcm (pre-transcription, backend-independent); release_tail
+        // and max recording seconds live in audio capture; max_chars_per_second
+        // and the dBFS/SNR gates run in the unified _transcribe_detail path that
+        // every backend's model.transcribe() goes through.
+        scope_group(
+            ui,
+            palette,
+            ui_text(&language, UiTextKey::QualityGroupAllBackends),
+            "quality_all_backends",
+            |ui| {
+                text_help_short(
+                    ui,
+                    "Min recording seconds",
+                    &mut self.settings.min_record_seconds,
+                    "Discard recordings shorter than this (seconds) as accidental key taps before transcription. Clamped to a 0.3 s floor so even 0 keeps misfire protection. Helps avoid hallucinated subtitle/caption credits on quiet taps.",
+                );
+                text_help_short(
+                    ui,
+                    "Max chars per second",
+                    &mut self.settings.max_chars_per_second,
+                    "Drop a transcript whose characters-per-second is humanly impossible (real speech is ~15-25; default 30). Catches hallucinated subtitle/caption credits on quiet input. 0 disables this guard.",
+                );
+                text_help_short(
+                    ui,
+                    "Release tail ms",
+                    &mut self.settings.release_tail_ms,
+                    "Extra audio kept after releasing the hotkey so word endings are not clipped.",
+                );
+                text_help_short(
+                    ui,
+                    "Max recording seconds",
+                    &mut self.settings.max_record_s,
+                    "Maximum recording length in seconds. If a key is held down longer than this, further audio is silently dropped and a warning is logged. 0 disables the cap.",
+                );
+                text_help_short(
+                    ui,
+                    "Target dBFS",
+                    &mut self.settings.target_dbfs,
+                    "Audio normalization target loudness before transcription.",
+                );
+                text_help_short(
+                    ui,
+                    "Min input dBFS",
+                    &mut self.settings.min_input_dbfs,
+                    "Minimum raw microphone loudness accepted as speech candidate.",
+                );
+                text_help_short(
+                    ui,
+                    "Min SNR dB",
+                    &mut self.settings.min_snr_db,
+                    "Minimum signal-to-noise ratio accepted before transcription.",
+                );
+                checkbox_help(
+                    ui,
+                    "Audio ducking",
+                    &mut self.settings.audio_ducking,
+                    "Windows-only: temporarily lowers other app audio while recording, then restores it.",
+                );
+                text_help_short(
+                    ui,
+                    "Audio ducking level",
+                    &mut self.settings.audio_ducking_level,
+                    "Target volume for other apps while recording. 0.25 means 25%.",
+                );
+            },
+        );
+
+        ui.add_space(10.0);
+
+        // --- Whisper: faster-whisper decode knobs. beam_size, temperature,
+        // context_min_seconds and the hallucination guard are passed straight to
+        // faster-whisper's model.transcribe(); the VAD threshold/min-silence/
+        // speech-pad feed its vad_parameters. Live preview is gated to the local
+        // whisper backend (vp_preview.PREVIEW_BACKENDS) so it never hits a paid
+        // cloud API or the Parakeet path.
+        scope_group(
+            ui,
+            palette,
+            ui_text(&language, UiTextKey::QualityGroupWhisper),
+            "quality_whisper",
+            |ui| {
+                text_enabled_short(
                     ui,
                     whisper,
                     "Beam size",
@@ -25,7 +110,7 @@ impl WhisperDictateApp {
                     &mut self.settings.temperature,
                     "Comma-separated Whisper fallback temperatures, for example 0.0,0.2. Used only with STT backend = whisper.",
                 );
-                text_enabled(
+                text_enabled_short(
                     ui,
                     whisper,
                     "Context min seconds",
@@ -39,98 +124,59 @@ impl WhisperDictateApp {
                     &mut self.settings.hallucination_guard,
                     "Local Whisper only: skip long silent gaps where Whisper tends to hallucinate 'like and subscribe'-style text. Adds word timestamps (small extra compute). Used only with STT backend = whisper.",
                 );
-                text_help(
+                text_help_short(
                     ui,
-                    "Min recording seconds",
-                    &mut self.settings.min_record_seconds,
-                    "Discard recordings shorter than this (seconds) as accidental key taps before transcription. Clamped to a 0.3 s floor so even 0 keeps misfire protection. Helps avoid hallucinated subtitle/caption credits on quiet taps.",
+                    "Live preview seconds",
+                    &mut self.settings.preview_seconds,
+                    "While recording, transcribe the buffer this often (seconds) so the live card shows the sentence growing. 0 disables. LOCAL Whisper backend only — ignored for cloud STT and Parakeet. The final result at key release is unchanged.",
                 );
-                text_help(
+                text_help_short(
                     ui,
-                    "Max chars per second",
-                    &mut self.settings.max_chars_per_second,
-                    "Drop a transcript whose characters-per-second is humanly impossible (real speech is ~15-25; default 30). Catches hallucinated subtitle/caption credits on quiet input. 0 disables this guard.",
+                    "VAD threshold",
+                    &mut self.settings.vad_threshold,
+                    "Voice activity detection sensitivity (faster-whisper VAD). Lower is more sensitive, higher rejects more noise.",
                 );
-                text_enabled(
+                text_help_short(
+                    ui,
+                    "VAD min silence ms",
+                    &mut self.settings.vad_min_silence_ms,
+                    "Silence duration used by the faster-whisper VAD to split or end speech.",
+                );
+                text_help_short(
+                    ui,
+                    "VAD speech pad ms",
+                    &mut self.settings.vad_speech_pad_ms,
+                    "Audio padding kept around detected speech so soft first and last syllables are not trimmed.",
+                );
+            },
+        );
+
+        ui.add_space(10.0);
+
+        // --- Parakeet: the only Parakeet-specific quality knob.
+        scope_group(
+            ui,
+            palette,
+            ui_text(&language, UiTextKey::QualityGroupParakeet),
+            "quality_parakeet",
+            |ui| {
+                text_enabled_short(
                     ui,
                     parakeet,
                     "Parakeet min seconds",
                     &mut self.settings.parakeet_min_seconds,
                     "Minimum captured audio length before Parakeet transcription is attempted. Used only with STT backend = parakeet.",
                 );
-                text_help(
-                    ui,
-                    "Release tail ms",
-                    &mut self.settings.release_tail_ms,
-                    "Extra audio kept after releasing the hotkey so word endings are not clipped.",
-                );
-                text_help(
-                    ui,
-                    "Live preview seconds",
-                    &mut self.settings.preview_seconds,
-                    "While recording, transcribe the buffer this often (seconds) so the live card shows the sentence growing. 0 disables. LOCAL Whisper backend only — ignored for cloud STT and Parakeet. The final result at key release is unchanged.",
-                );
-                text_help(
-                    ui,
-                    "Max recording seconds",
-                    &mut self.settings.max_record_s,
-                    "Maximum recording length in seconds. If a key is held down longer than this, further audio is silently dropped and a warning is logged. 0 disables the cap.",
-                );
-                text_help(
-                    ui,
-                    "VAD threshold",
-                    &mut self.settings.vad_threshold,
-                    "Voice activity detection sensitivity. Lower is more sensitive, higher rejects more noise.",
-                );
-                text_help(
-                    ui,
-                    "VAD min silence ms",
-                    &mut self.settings.vad_min_silence_ms,
-                    "Silence duration used by VAD to split or end speech.",
-                );
-                text_help(
-                    ui,
-                    "VAD speech pad ms",
-                    &mut self.settings.vad_speech_pad_ms,
-                    "Audio padding kept around detected speech so soft first and last syllables are not trimmed.",
-                );
-                text_help(
-                    ui,
-                    "Target dBFS",
-                    &mut self.settings.target_dbfs,
-                    "Audio normalization target loudness before transcription.",
-                );
-                text_help(
-                    ui,
-                    "Min input dBFS",
-                    &mut self.settings.min_input_dbfs,
-                    "Minimum raw microphone loudness accepted as speech candidate.",
-                );
-                text_help(
-                    ui,
-                    "Min SNR dB",
-                    &mut self.settings.min_snr_db,
-                    "Minimum signal-to-noise ratio accepted before transcription.",
-                );
-                checkbox_help(
-                    ui,
-                    "Audio ducking",
-                    &mut self.settings.audio_ducking,
-                    "Windows-only: temporarily lowers other app audio while recording, then restores it.",
-                );
-                text_help(
-                    ui,
-                    "Audio ducking level",
-                    &mut self.settings.audio_ducking_level,
-                    "Target volume for other apps while recording. 0.25 means 25%.",
-                );
-            });
+            },
+        );
+
+        ui.add_space(12.0);
         let show_initial_prompt_help = label_with_help(
             ui,
             "Initial prompt",
-            "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately.",
+            "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately. It primarily affects Whisper decoding (passed as the faster-whisper `initial_prompt` kwarg) and also feeds dictionary-term matching.",
         );
-        inline_help(ui, show_initial_prompt_help, "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately.");
+        inline_help(ui, show_initial_prompt_help, "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately. It primarily affects Whisper decoding (passed as the faster-whisper `initial_prompt` kwarg) and also feeds dictionary-term matching.");
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.initial_prompt)
                 .desired_rows(4)

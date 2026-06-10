@@ -27,6 +27,9 @@ pub(in crate::ui) use runtime::{
     pipeline_progress_accent_color,
 };
 pub(in crate::ui) use shell::runtime_state_color;
+// The default-metrics-path helper is reused at app construction (ui.rs) to
+// prefill the empty Metrics JSONL field, so re-export it from the tabs root.
+pub(in crate::ui) use system::default_metrics_jsonl_path;
 // The hotkey-chord formatters are shared with the sidebar's key display
 // (`shell.rs`) and the sibling test modules.
 pub(in crate::ui) use runtime::{format_push_to_talk_keys, push_to_talk_badge_label};
@@ -46,6 +49,28 @@ fn settings_grid(id: &'static str) -> egui::Grid {
     egui::Grid::new(id)
         .num_columns(2)
         .spacing(egui::vec2(20.0, 10.0))
+}
+
+/// A thin outlined box grouping a set of settings under a small heading. Used by
+/// the Quality tab to separate "All backends" / "Whisper" / "Parakeet" scopes so
+/// it is obvious which engine each knob affects. The body runs inside its own
+/// 2-column settings grid (unique `grid_id`), keeping the labelled-row layout.
+fn scope_group(
+    ui: &mut egui::Ui,
+    palette: UiPalette,
+    heading: &str,
+    grid_id: &'static str,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::default()
+        .stroke(egui::Stroke::new(0.8, palette.border_soft))
+        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+        .show(ui, |ui| {
+            section_label(ui, heading, palette);
+            ui.add_space(6.0);
+            settings_grid(grid_id).show(ui, add_contents);
+        });
 }
 
 fn section_label(ui: &mut egui::Ui, label: &str, palette: UiPalette) {
@@ -84,39 +109,6 @@ fn theme_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette, raw_l
                 icon_text(icon, label).strong().color(palette.text)
             } else {
                 icon_text(icon, label).color(palette.text_muted)
-            };
-            if ui
-                .add_sized(
-                    egui::vec2(92.0, 30.0),
-                    egui::Button::new(text)
-                        .fill(fill)
-                        .stroke(egui::Stroke::new(0.8, palette.border_soft)),
-                )
-                .clicked()
-            {
-                *value = raw.to_owned();
-            }
-        }
-    });
-}
-
-fn language_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        for (raw, label) in [
-            ("en", ui_text(value.as_str(), UiTextKey::English)),
-            ("da", ui_text(value.as_str(), UiTextKey::Danish)),
-        ] {
-            let selected = value == raw;
-            let fill = if selected {
-                palette.accent_dark
-            } else {
-                palette.surface_bg
-            };
-            let text = if selected {
-                egui::RichText::new(label).strong().color(palette.text)
-            } else {
-                egui::RichText::new(label).color(palette.text_muted)
             };
             if ui
                 .add_sized(

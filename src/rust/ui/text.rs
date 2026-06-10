@@ -36,6 +36,7 @@ pub(in crate::ui) enum UiTextKey {
     SystemIntegration,
     DictationView,
     ConfigFile,
+    UseDefaultPath,
     PostOn,
     PostOff,
     Status,
@@ -74,6 +75,9 @@ pub(in crate::ui) enum UiTextKey {
     NoDictationOutputYet,
     PushToTalk,
     Toggle,
+    QualityGroupAllBackends,
+    QualityGroupWhisper,
+    QualityGroupParakeet,
 }
 
 impl UiTextKey {
@@ -96,6 +100,7 @@ impl UiTextKey {
                 UiTextKey::SystemIntegration => "Integration",
                 UiTextKey::DictationView => "Dictation view",
                 UiTextKey::ConfigFile => "Config file",
+                UiTextKey::UseDefaultPath => "Use default path",
                 UiTextKey::PostOn => "Post on",
                 UiTextKey::PostOff => "Post off",
                 UiTextKey::Status => "Status",
@@ -134,6 +139,9 @@ impl UiTextKey {
                 UiTextKey::NoDictationOutputYet => "No dictation output yet",
                 UiTextKey::PushToTalk => "Push-to-talk",
                 UiTextKey::Toggle => "Toggle key",
+                UiTextKey::QualityGroupAllBackends => "All backends",
+                UiTextKey::QualityGroupWhisper => "Whisper",
+                UiTextKey::QualityGroupParakeet => "Parakeet",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::SidebarSubtitle => "Rust kontrolflade",
@@ -152,6 +160,7 @@ impl UiTextKey {
                 UiTextKey::SystemIntegration => "Integration",
                 UiTextKey::DictationView => "Dikteringsvisning",
                 UiTextKey::ConfigFile => "Config-fil",
+                UiTextKey::UseDefaultPath => "Brug standardsti",
                 UiTextKey::PostOn => "Post til",
                 UiTextKey::PostOff => "Post fra",
                 UiTextKey::Status => "Status",
@@ -190,6 +199,9 @@ impl UiTextKey {
                 UiTextKey::NoDictationOutputYet => "Ingen diktering endnu",
                 UiTextKey::PushToTalk => "Tale-tast",
                 UiTextKey::Toggle => "Skiftetast",
+                UiTextKey::QualityGroupAllBackends => "Alle backends",
+                UiTextKey::QualityGroupWhisper => "Whisper",
+                UiTextKey::QualityGroupParakeet => "Parakeet",
             },
         }
     }

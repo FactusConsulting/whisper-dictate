@@ -7,10 +7,31 @@ use std::time::{Duration, Instant};
 
 const SETTINGS_LABEL_WIDTH: f32 = 190.0;
 const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
+/// Compact width for short numeric-ish fields (counts, seconds, thresholds) so a
+/// value like "2000" or "0.5" no longer stretches across the whole grid.
+const SETTINGS_SHORT_INPUT_WIDTH: f32 = 120.0;
+/// Width for path / longer free-text fields — narrower than the old full-width
+/// stretch but still roomy enough to read a file path at a glance.
+const SETTINGS_TEXT_INPUT_WIDTH: f32 = 360.0;
 
 pub(in crate::ui) fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
+    text_help_width(ui, label, value, help, SETTINGS_TEXT_INPUT_WIDTH);
+}
+
+/// Short-input variant for numeric/threshold fields. Same row/help machinery,
+/// just a compact fixed input width.
+pub(in crate::ui) fn text_help_short(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    text_help_width(ui, label, value, help, SETTINGS_SHORT_INPUT_WIDTH);
+}
+
+fn text_help_width(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str, width: f32) {
     let show_help = label_with_help(ui, label, help);
-    ui.add(egui::TextEdit::singleline(value).desired_width(settings_control_width(ui)));
+    ui.add(egui::TextEdit::singleline(value).desired_width(width));
     ui.end_row();
     grid_help_row(ui, show_help, help);
 }
@@ -22,9 +43,31 @@ pub(in crate::ui) fn text_enabled(
     value: &mut String,
     help: &str,
 ) {
+    text_enabled_width(ui, enabled, label, value, help, SETTINGS_TEXT_INPUT_WIDTH);
+}
+
+/// Short-input variant of [`text_enabled`] for numeric/threshold fields.
+pub(in crate::ui) fn text_enabled_short(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    text_enabled_width(ui, enabled, label, value, help, SETTINGS_SHORT_INPUT_WIDTH);
+}
+
+fn text_enabled_width(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    help: &str,
+    width: f32,
+) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
-        ui.add(egui::TextEdit::singleline(value).desired_width(settings_control_width(ui)));
+        ui.add(egui::TextEdit::singleline(value).desired_width(width));
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
@@ -393,6 +436,27 @@ fn settings_control_width(ui: &egui::Ui) -> f32 {
         .clamp(260.0, SETTINGS_CONTROL_MAX_WIDTH)
 }
 
+/// A standalone `?` help badge (outside the settings grid) that toggles an
+/// inline help block, persisting its open/closed state by `id`. Returns whether
+/// the help should currently show. Mirrors the grid rows' `?` affordance so help
+/// is discoverable on button clusters (e.g. the System maintenance actions).
+pub(in crate::ui) fn help_toggle_badge(ui: &mut egui::Ui, id: &str, help: &str) -> bool {
+    if help.is_empty() {
+        return false;
+    }
+    let persist_id = ui.make_persistent_id(("settings_help_toggle", id));
+    let mut show_help = ui
+        .data_mut(|data| data.get_persisted::<bool>(persist_id))
+        .unwrap_or(false);
+    let response = ui.small_button("?");
+    if response.clicked() {
+        show_help = !show_help;
+        ui.data_mut(|data| data.insert_persisted(persist_id, show_help));
+    }
+    let _ = response.on_hover_text(help);
+    show_help
+}
+
 fn help_badge(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
     if help.is_empty() {
         return false;
@@ -411,7 +475,7 @@ fn help_badge(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
     show_help
 }
 
-fn grid_help_row(ui: &mut egui::Ui, show_help: bool, help: &str) {
+pub(in crate::ui) fn grid_help_row(ui: &mut egui::Ui, show_help: bool, help: &str) {
     if show_help {
         ui.label("");
         inline_help(ui, true, help);

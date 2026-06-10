@@ -352,7 +352,10 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("enum UiLanguageMode", script)
         self.assertIn("enum UiTextKey", script)
         self.assertIn('UiTextKey::Speech => "Tale"', script)
-        self.assertIn("fn language_toggle(", script)
+        # UI language is now an extensible dropdown (ComboBox), replacing the old
+        # two-button language_toggle.
+        self.assertNotIn("fn language_toggle(", script)
+        self.assertIn('egui::ComboBox::from_id_salt("ui_language_select")', script)
         self.assertIn('"UI language"', script)
         self.assertIn('("", "Auto")', script)
         self.assertIn('("da", "Danish")', script)
@@ -362,4 +365,21 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("Dictation controls", script)
         self.assertIn("Applies to local and cloud speech engines.", script)
         self.assertIn('"Wayland ydotool/XKB layout used for direct text injection on Linux.', script)
+
+    def test_rust_quality_tab_has_scope_groups_and_text_scale_stepper(self):
+        """Quality tab must use three scope_group headings with the exact grid IDs
+        from quality.rs; a future regrouping regression should fail this test."""
+        script = rust_ui_source()
+
+        # Three scope_group headings driven by UiTextKey Quality group keys.
+        self.assertIn("UiTextKey::QualityGroupAllBackends", script)
+        self.assertIn("UiTextKey::QualityGroupWhisper", script)
+        self.assertIn("UiTextKey::QualityGroupParakeet", script)
+        # Exact grid id_salt values used by scope_group in quality.rs.
+        self.assertIn('"quality_all_backends"', script)
+        self.assertIn('"quality_whisper"', script)
+        self.assertIn('"quality_parakeet"', script)
+        # text_scale_stepper must exist in the UI source (lives in system.rs after
+        # the text_scale.rs refactor so it falls under the coverage exclusion).
+        self.assertIn("fn text_scale_stepper(", script)
 

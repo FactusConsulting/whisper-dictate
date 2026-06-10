@@ -43,6 +43,22 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     assert_eq!(ui_text("da", UiTextKey::Light), "Lys");
     assert_eq!(LogViewMode::Diagnostic.label("da"), "Diagnostik");
     assert_eq!(runtime_state_label(RuntimeState::Running, "da"), "Kører");
+    // Quality scope-group headings added by the metrics-default-path PR.
+    assert_eq!(
+        ui_text("en", UiTextKey::QualityGroupAllBackends),
+        "All backends"
+    );
+    assert_eq!(
+        ui_text("da", UiTextKey::QualityGroupAllBackends),
+        "Alle backends"
+    );
+    assert_eq!(ui_text("en", UiTextKey::QualityGroupWhisper), "Whisper");
+    assert_eq!(ui_text("da", UiTextKey::QualityGroupWhisper), "Whisper");
+    assert_eq!(ui_text("en", UiTextKey::QualityGroupParakeet), "Parakeet");
+    assert_eq!(ui_text("da", UiTextKey::QualityGroupParakeet), "Parakeet");
+    // UseDefaultPath key — used by the System tab "Use default path" button.
+    assert_eq!(ui_text("en", UiTextKey::UseDefaultPath), "Use default path");
+    assert_eq!(ui_text("da", UiTextKey::UseDefaultPath), "Brug standardsti");
 }
 
 #[test]

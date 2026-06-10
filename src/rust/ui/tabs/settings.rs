@@ -62,6 +62,12 @@ impl WhisperDictateApp {
         match tab {
             Tab::Speech => self.reload_stt_api_key(),
             Tab::Post => self.reload_post_api_key(),
+            // Re-apply the prefill so the Metrics JSONL field is never left blank
+            // after a reset — the schema default is "", but the UI always shows
+            // the suggested path next to config.json.
+            Tab::System if self.settings.metrics_jsonl.trim().is_empty() => {
+                self.settings.metrics_jsonl = default_metrics_jsonl_path(&self.config_path);
+            }
             _ => {}
         }
         self.settings_status = format!(

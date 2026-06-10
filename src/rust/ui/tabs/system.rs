@@ -72,12 +72,27 @@ impl WhisperDictateApp {
                     icons::ICON_INFO,
                     ui_text(&self.settings.ui_language, UiTextKey::ConfigFile),
                 ))
-                .on_hover_text(&self.config_path)
+                // Hover EXPLAINS the action, then shows the actual path so the
+                // user knows both what the button does and where it lands.
+                .on_hover_text(format!(
+                    "Opens the folder containing config.json.\n{}",
+                    self.config_path
+                ))
                 .clicked()
             {
                 self.open_config_folder();
             }
         });
+        // Discoverable help for the maintenance cluster: a `?` badge toggles a
+        // wrapped explanation of every action, mirroring the settings-grid rows.
+        const MAINTENANCE_HELP: &str = "Reload config: re-read config.json from disk (blocked while another background task runs). \
+            Doctor: run environment diagnostics and write the result to the log. \
+            Install/Repair: install or repair the local runtime environment (blocked while another task runs). \
+            Config file: open the folder containing config.json.";
+        let show_maintenance_help = ui
+            .horizontal(|ui| help_toggle_badge(ui, "system_maintenance", MAINTENANCE_HELP))
+            .inner;
+        inline_help(ui, show_maintenance_help, MAINTENANCE_HELP);
 
         ui.add_space(14.0);
         ui.separator();
@@ -103,7 +118,30 @@ impl WhisperDictateApp {
                 ui_text(&self.settings.ui_language, UiTextKey::UiLanguage),
                 palette,
             );
-            language_toggle(ui, &mut self.settings.ui_language, palette);
+            // A dropdown (rather than the old two-button toggle) so more UI
+            // languages can be added later without crowding the row. Writes the
+            // same raw "en"/"da" config values.
+            let language = self.settings.ui_language.clone();
+            let options = [
+                ("en", ui_text(&language, UiTextKey::English)),
+                ("da", ui_text(&language, UiTextKey::Danish)),
+            ];
+            let selected = options
+                .iter()
+                .find(|(raw, _)| *raw == self.settings.ui_language)
+                .map(|(_, display)| *display)
+                .unwrap_or_else(|| ui_text(&language, UiTextKey::English));
+            egui::ComboBox::from_id_salt("ui_language_select")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for (raw, display) in options {
+                        ui.selectable_value(
+                            &mut self.settings.ui_language,
+                            raw.to_owned(),
+                            display,
+                        );
+                    }
+                });
         });
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
@@ -121,11 +159,11 @@ impl WhisperDictateApp {
         });
         ui.add_space(12.0);
         settings_grid("system_appearance_settings").show(ui, |ui| {
-            text_help(
+            text_scale_stepper(
                 ui,
                 "UI text scale",
                 &mut self.settings.ui_text_scale,
-                "Scale all text in this settings UI. Use 1.0 for default, 1.15 for larger text, or 1.3 for high-DPI displays.",
+                "Scale all text in this settings UI. Use the −/+ buttons to step by 0.05 (clamped to 0.85–1.6). 1.0 is default, 1.15 is larger, 1.3 suits high-DPI displays.",
             );
         });
 
@@ -171,17 +209,32 @@ impl WhisperDictateApp {
                 ui,
                 "JSON stdout",
                 &mut self.settings.inject_json,
-                "Emit structured JSON events to stdout in addition to normal logs.",
+                "Emit structured JSON events to stdout in addition to normal logs. This also gates the Metrics JSONL file — metrics are only written while this is enabled.",
             );
             text_help(
                 ui,
                 "Metrics JSONL",
                 &mut self.settings.metrics_jsonl,
-                "Optional path for appending transcription metrics as JSONL.",
+                "Path for appending transcription metrics as JSONL. Metrics are only written while \"JSON stdout\" is enabled, so a prefilled path stays inert until you opt in.",
             );
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
+            // The field is already prefilled at load (and after "Reload config")
+            // with the suggested path next to config.json. This button restores
+            // that default after the user has edited the field. Metrics are still
+            // only written while "JSON stdout" is enabled, so a prefilled path
+            // stays inert until the user opts in.
+            if ui
+                .button(ui_text(
+                    &self.settings.ui_language,
+                    UiTextKey::UseDefaultPath,
+                ))
+                .on_hover_text(default_metrics_jsonl_path(&self.config_path))
+                .clicked()
+            {
+                self.settings.metrics_jsonl = default_metrics_jsonl_path(&self.config_path);
+            }
             if ui.button("Preview metrics").clicked() {
                 self.preview_metrics();
             }
@@ -219,4 +272,43 @@ impl WhisperDictateApp {
             Err(err) => self.settings_status = format!("Open config folder failed: {err}"),
         }
     }
+}
+
+/// Suggested metrics path: `metrics.jsonl` next to the config file (the
+/// app-data folder the user already knows). A relative config path with an
+/// empty parent suggests a bare `metrics.jsonl` in the working directory.
+/// Pure so it is unit-testable.
+pub(in crate::ui) fn default_metrics_jsonl_path(config_path: &str) -> String {
+    match std::path::Path::new(config_path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            parent.join("metrics.jsonl").to_string_lossy().into_owned()
+        }
+        _ => "metrics.jsonl".to_owned(),
+    }
+}
+
+/// A compact UI-text-scale row: short text input flanked by "−"/"+" stepper
+/// buttons that nudge the value by 0.05 within the theme's clamp range.
+/// Placed here (tabs/system.rs — its only consumer) so it falls under the
+/// `src/rust/ui/tabs/**` Sonar coverage exclusion for render code. The pure
+/// `step_text_scale` logic stays in `text_scale.rs` where it is unit-tested.
+pub(in crate::ui) fn text_scale_stepper(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    const STEP: f32 = 0.05;
+    let show_help = label_with_help(ui, label, help);
+    ui.horizontal(|ui| {
+        if ui.small_button("−").on_hover_text("Smaller text").clicked() {
+            *value = step_text_scale(value, -STEP);
+        }
+        ui.add(egui::TextEdit::singleline(value).desired_width(60.0));
+        if ui.small_button("+").on_hover_text("Larger text").clicked() {
+            *value = step_text_scale(value, STEP);
+        }
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
 }
