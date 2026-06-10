@@ -43,7 +43,7 @@ class _Target(vp_keys.KeyBackendMixin):
     def _stop_and_transcribe(self):
         self.stopped += 1
 
-    def _cancel_and_discard(self):
+    def _cancel_and_discard(self, epoch=None):
         self.cancelled += 1
 
 

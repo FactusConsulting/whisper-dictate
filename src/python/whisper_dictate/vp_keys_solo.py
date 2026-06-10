@@ -121,8 +121,11 @@ class SoloModifierGuard:
         """Refresh the timestamp of an already-held key (OS autorepeat).
 
         For evdev value==2 autorepeat events: keeps a genuinely-held foreign key
-        from expiring out of the held set. No-op if the key is not tracked.
+        from expiring out of the held set. No-op if the key is not tracked,
+        and inert (like every other method) when ``enabled`` is False.
         """
+        if not self.enabled:
+            return
         if key in self._held:
             self._held[key] = self._now()
 
