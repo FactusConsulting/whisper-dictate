@@ -204,6 +204,10 @@ impl WhisperDictateApp {
                 egui::vec2(left_width, ui.available_height()),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
+                    // egui does NOT clip child content to the allocated rect —
+                    // without an explicit clip the cards/indicator paint right
+                    // under the Start/Stop/compact controls at narrow widths.
+                    ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                     let display_state = self.display_runtime_state();
                     status_card(
                         ui,
@@ -230,7 +234,12 @@ impl WhisperDictateApp {
                         palette.accent_blue,
                         palette,
                     );
-                    self.post_indicator(ui, palette);
+                    // The indicator is the lowest-priority element: skip it
+                    // entirely when it cannot fit, instead of showing a
+                    // half-clipped pill.
+                    if ui.available_width() >= POST_INDICATOR_MIN_WIDTH {
+                        self.post_indicator(ui, palette);
+                    }
                     if let Some(label) = self.background_task_label {
                         status_card(
                             ui,
@@ -381,6 +390,10 @@ fn status_card_sized(
                 .on_hover_text(value);
         });
 }
+
+// Rough width of the post-indicator pill (icon + "Post on/off" + margins).
+// Below this remaining width the pill is skipped rather than half-clipped.
+pub(in crate::ui) const POST_INDICATOR_MIN_WIDTH: f32 = 120.0;
 
 pub(in crate::ui) fn top_status_controls_width() -> f32 {
     // Start (88) + Stop (78) + compact toggle (34) + inter-button spacing.
