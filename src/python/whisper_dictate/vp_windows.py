@@ -13,6 +13,7 @@ Public surface:
 """
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 
@@ -48,7 +49,9 @@ def windows_process_name(ctypes, wintypes, pid: int) -> str | None:
         size = wintypes.DWORD(32768)
         buf = ctypes.create_unicode_buffer(size.value)
         if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-            return os.path.basename(buf.value)
+            # ntpath, not os.path: these are Windows paths by definition, and
+            # the unit tests execute this code on POSIX CI runners too.
+            return ntpath.basename(buf.value)
         return str(pid)
     finally:
         kernel32.CloseHandle(handle)
@@ -61,7 +64,7 @@ def _is_self_window(title: str, process: str | None) -> bool:
         return True
     if process is None:
         return False
-    p = os.path.basename(process.strip()).lower()
+    p = ntpath.basename(process.strip()).lower()
     return p in SELF_INJECTION_PROCESSES
 
 
