@@ -220,7 +220,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "pub(in crate::ui) fn post_processing_tab", 1
         )[0]
 
-        self.assertIn('section_label(ui, "Log view", palette);', output_tab)
+        self.assertIn('section_label(ui, "Dictation view", palette);', output_tab)
         self.assertIn("self.log_mode_selector(ui, palette);", output_tab)
         self.assertIn("self.settings.ui_log_view = mode.id().to_owned();", script)
         self.assertIn("let ui_language = self.settings.ui_language.clone();", output_tab)
@@ -374,7 +374,12 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn('egui::Button::new(icon_text(icons::ICON_RESTART_ALT, "Restart"))', controls)
         self.assertNotIn("self.restart_runtime();", controls)
         self.assertIn("fn top_status_controls_width() -> f32", script)
-        self.assertIn("let controls_width = top_status_controls_width();", script)
+        # The live item_spacing gap between the two regions is reserved too —
+        # it scales with the UI text scale (Copilot finding on PR #167).
+        self.assertIn(
+            "let controls_width = top_status_controls_width() + ui.spacing().item_spacing.x;",
+            script,
+        )
         self.assertIn("fn status_card_wide(", script)
         self.assertIn("status_card_wide(", script)
         self.assertIn("ui.set_min_width(min_width);", script)

@@ -7,7 +7,7 @@ impl WhisperDictateApp {
         ui.heading("Output");
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            section_label(ui, "Log view", palette);
+            section_label(ui, "Dictation view", palette);
             self.log_mode_selector(ui, palette);
             ui.add_space(12.0);
             section_label(

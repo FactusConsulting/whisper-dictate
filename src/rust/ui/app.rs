@@ -441,7 +441,7 @@ pub(in crate::ui) fn crash_streak_advice(count: u32) -> Option<String> {
     if count == 3 {
         Some(
             "[ui] worker crashed 3 times in a row right after start — \
-run Doctor (sidebar) and check the log above for the cause"
+run Doctor (sidebar) and check the output above for the cause"
                 .to_owned(),
         )
     } else {

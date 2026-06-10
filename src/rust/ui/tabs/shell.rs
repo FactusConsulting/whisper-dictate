@@ -28,22 +28,10 @@ impl WhisperDictateApp {
         );
         ui.add_space(18.0);
 
-        for tab in Tab::ALL {
-            let selected = self.selected_tab == tab;
-            if nav_button(
-                ui,
-                selected,
-                tab.icon(),
-                tab.label(&self.settings.ui_language),
-                palette,
-            )
-            .clicked()
-            {
-                self.selected_tab = tab;
-            }
-            ui.add_space(5.0);
-        }
-
+        // Render the bottom block first inside a bottom_up layout so it always
+        // claims its space from the sidebar's bottom edge. The tab ScrollArea
+        // that follows fills only the space between the header and this block,
+        // preventing overlap when the window is short.
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.label(
                 egui::RichText::new(format!("v{}", self.app_version))
@@ -152,6 +140,30 @@ impl WhisperDictateApp {
                     "Hold to dictate. Change it in Speech → Hotkey."
                 }
             ));
+
+            // The tab list occupies the space remaining above the bottom block.
+            // Wrapping it in a ScrollArea means the tabs scroll instead of
+            // being painted over the bottom block when the window is short.
+            egui::ScrollArea::vertical()
+                .id_salt("sidebar_tab_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for tab in Tab::ALL {
+                        let selected = self.selected_tab == tab;
+                        if nav_button(
+                            ui,
+                            selected,
+                            tab.icon(),
+                            tab.label(&self.settings.ui_language),
+                            palette,
+                        )
+                        .clicked()
+                        {
+                            self.selected_tab = tab;
+                        }
+                        ui.add_space(5.0);
+                    }
+                });
         });
     }
 
@@ -216,13 +228,20 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn top_status_bar(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
-        let controls_width = top_status_controls_width();
+        // Allocate the right-pinned controls FIRST so they always get their
+        // reserved width. The status cards on the left then receive the
+        // remaining space and are clipped naturally — no `.max()` floor that
+        // would make the two regions overlap at narrow widths.
+        // Reserve the inter-region gap too: ui.horizontal inserts item_spacing
+        // between the left region and the controls, and that spacing scales
+        // with the UI text scale — without it the controls could still be
+        // squeezed at narrow widths on scaled-up UIs.
+        let controls_width = top_status_controls_width() + ui.spacing().item_spacing.x;
+        let total_width = ui.available_width();
+        let left_width = top_status_left_width(total_width, controls_width);
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
-                egui::vec2(
-                    (ui.available_width() - controls_width).max(300.0),
-                    ui.available_height(),
-                ),
+                egui::vec2(left_width, ui.available_height()),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     let display_state = self.display_runtime_state();
@@ -369,9 +388,22 @@ fn status_card_sized(
         });
 }
 
-fn top_status_controls_width() -> f32 {
+pub(in crate::ui) fn top_status_controls_width() -> f32 {
     // Start (88) + Stop (78) + compact toggle (34) + inter-button spacing.
+    // The caller adds the live item_spacing gap between the two regions.
     232.0
+}
+
+/// Width budget for the left (status-cards) portion of the top bar.
+///
+/// The right-pinned controls are allocated first and always get
+/// `controls_width` pixels. The status cards take whatever remains,
+/// with a floor of zero so the bar never forces an overflow/overlap —
+/// cards simply clip when the window is very narrow.
+///
+/// Pure function: easy to unit-test without an egui context.
+pub(in crate::ui) fn top_status_left_width(total_width: f32, controls_width: f32) -> f32 {
+    (total_width - controls_width).max(0.0)
 }
 
 pub(in crate::ui) fn runtime_state_color(state: RuntimeState, palette: UiPalette) -> egui::Color32 {
