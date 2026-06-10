@@ -40,6 +40,10 @@ def _fake_ctypes(windows: list[dict]):
             self.value = v
 
     wintypes_mod.DWORD = DWORD
+    # HWND and LPARAM are pointer-sized types; represent them as int in the
+    # stub so WINFUNCTYPE(..., wintypes.HWND, wintypes.LPARAM) resolves.
+    wintypes_mod.HWND = int
+    wintypes_mod.LPARAM = int
 
     _callbacks: list = []
 
@@ -185,6 +189,8 @@ def _run_list_with_stubs(windows_spec: list[dict]) -> list[dict]:
     # `from ctypes import wintypes` resolves to the "ctypes.wintypes" submodule.
     fake_ctypes_wintypes = _builtin_types.ModuleType("ctypes.wintypes")
     fake_ctypes_wintypes.DWORD = wintypes_mod.DWORD
+    fake_ctypes_wintypes.HWND = wintypes_mod.HWND
+    fake_ctypes_wintypes.LPARAM = wintypes_mod.LPARAM
     ctypes_mod.wintypes = fake_ctypes_wintypes
 
     with patch.dict(sys.modules, {

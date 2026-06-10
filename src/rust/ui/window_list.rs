@@ -17,9 +17,9 @@ pub(in crate::ui) struct WindowEntry {
 
 /// Parse the worker's `--list-windows` stdout into `(title, process)` pairs.
 ///
-/// Returns `None` when the output cannot be parsed or contains no JSON array.
-/// Tolerates surrounding log noise by extracting the first `[` .. last `]` span
-/// (same heuristic as `audio_devices.rs`).
+/// Returns `Err(String)` when the output cannot be parsed or contains no JSON
+/// array.  Tolerates surrounding log noise by extracting the first `[` .. last
+/// `]` span (same heuristic as `audio_devices.rs`).
 pub(in crate::ui) fn parse_windows_json(stdout: &str) -> Result<Vec<WindowEntry>, String> {
     let span = extract_json_array(stdout).ok_or_else(|| {
         if let Some(msg) = extract_error_message(stdout) {

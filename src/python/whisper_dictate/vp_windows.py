@@ -67,9 +67,11 @@ def _is_self_window(title: str, process: str | None) -> bool:
 def list_visible_windows() -> list[dict]:
     """Enumerate visible top-level windows on Windows via ctypes.
 
-    Returns a list of ``{"title": str, "process": str}`` dicts (both
-    non-empty).  Windows with an empty title or that belong to our own
-    process are silently skipped.
+    Returns a list of ``{"title": str, "process": str}`` dicts.  The
+    ``title`` field is always non-empty; ``process`` is the executable
+    basename when it can be resolved and ``""`` when the process handle
+    cannot be opened.  Windows with an empty title or that belong to our
+    own process are silently skipped.
 
     Raises ``RuntimeError`` on non-Windows platforms.
     """
@@ -83,10 +85,13 @@ def list_visible_windows() -> list[dict]:
     results: list[dict] = []
 
     # EnumWindows callback signature: BOOL CALLBACK(HWND, LPARAM)
+    # Use wintypes.HWND and wintypes.LPARAM so the callback ABI is
+    # correct on both 32-bit and 64-bit Windows (LPARAM is pointer-sized;
+    # c_long is always 32 bits and would truncate on 64-bit systems).
     EnumWindowsProc = ctypes.WINFUNCTYPE(
         ctypes.c_bool,
-        ctypes.c_void_p,   # HWND
-        ctypes.c_long,     # LPARAM
+        wintypes.HWND,   # HWND
+        wintypes.LPARAM, # LPARAM
     )
 
     def _cb(hwnd: int, _lparam: int) -> bool:

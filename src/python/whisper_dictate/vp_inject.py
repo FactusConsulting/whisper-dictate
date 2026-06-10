@@ -65,11 +65,6 @@ _LINUX_TERMINAL_TARGETS = (
     "gnome-console",
     "gnome-terminal",
 )
-# Re-export for any existing code that imports directly from this module.
-_SELF_INJECTION_PROCESSES = _SELF_INJECTION_PROCESSES  # noqa: PLW0127
-_SELF_INJECTION_TITLE_RE = _SELF_INJECTION_TITLE_RE  # noqa: PLW0127
-
-
 def ydotool_socket_path() -> str:
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     return os.environ.get("YDOTOOL_SOCKET") or os.path.join(runtime, ".ydotool_socket")

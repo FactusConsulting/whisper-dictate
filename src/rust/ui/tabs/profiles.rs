@@ -93,15 +93,16 @@ impl WhisperDictateApp {
         let visible = total.min(12);
         if total > visible {
             ui.label(
-                egui::RichText::new(format!(
-                    "Showing first {visible} of {total} windows — scroll or narrow by title."
-                ))
-                .color(palette.text_muted)
-                .text_style(egui::TextStyle::Small),
+                egui::RichText::new(format!("Showing first {visible} of {total} windows."))
+                    .color(palette.text_muted)
+                    .text_style(egui::TextStyle::Small),
             );
         }
 
-        let window_options = self.window_options.clone();
+        // Clone only the rendered slice (at most 12 entries) rather than the
+        // entire Vec every frame, which could be arbitrarily large.
+        let window_slice: Vec<(String, String)> =
+            self.window_options.iter().take(visible).cloned().collect();
         let profiles_json = &mut self.settings.profiles_json;
         // Set when an Insert click fails because the JSON is not a valid
         // array; applied to settings_status after the closure (which holds a
@@ -112,7 +113,7 @@ impl WhisperDictateApp {
             .max_height(260.0)
             .id_salt("window_picker_scroll")
             .show(ui, |ui| {
-                for (title, process) in window_options.iter().take(visible) {
+                for (title, process) in window_slice.iter() {
                     ui.horizontal(|ui| {
                         let display_title = compact_label(title, 60);
                         let row_label = if process.is_empty() {
