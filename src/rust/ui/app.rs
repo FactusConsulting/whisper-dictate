@@ -62,11 +62,29 @@ pub(in crate::ui) fn trim_runtime_log(log: &mut String) {
 
 impl eframe::App for WhisperDictateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Poll the worker + background tasks every frame BEFORE any mode branch so
+        // dictation keeps flowing (and the meter/log keep updating) whether the UI
+        // is in the full window or the compact strip.
         self.poll_runtime();
         self.poll_background_task();
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
+
+        // Compact mode: a single tiny CentralPanel with one control row — no
+        // sidebar, tabs, log, or message bars. The viewport is already resized /
+        // raised always-on-top by `set_compact_mode`; here we only render.
+        if self.compact_mode {
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::default()
+                        .fill(palette.panel_bg)
+                        .inner_margin(egui::Margin::symmetric(EDGE_MARGIN, EDGE_MARGIN)),
+                )
+                .show(ctx, |ui| self.compact_panel(ui, palette));
+            return;
+        }
+
         paint_sidebar_bridge(ctx, palette, &self.settings.ui_text_scale);
 
         egui::SidePanel::left("primary_navigation")

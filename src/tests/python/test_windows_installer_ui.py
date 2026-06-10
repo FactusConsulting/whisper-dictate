@@ -330,13 +330,37 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             .split("fn global_controls", 1)[1]
         )
 
-        self.assertIn("self.sidebar(ui, palette)", update_impl)
-        self.assertIn("self.top_status_bar(ui, palette)", update_impl)
+        # Compact mode is a session-only early branch: the runtime/background
+        # polls must run BEFORE it so dictation keeps flowing in the strip, and
+        # the branch renders ONLY a CentralPanel that calls compact_panel, then
+        # returns before the full-window chrome. Split at the early return so the
+        # full-window ordering assertions below see the real (post-branch) layout.
+        self.assertIn("if self.compact_mode {", update_impl)
         self.assertLess(
-            update_impl.index("self.top_status_bar(ui, palette)"),
-            update_impl.index("egui::CentralPanel::default()"),
+            update_impl.index("self.poll_runtime();"),
+            update_impl.index("if self.compact_mode {"),
         )
-        self.assertIn("top_status_bar_height(&self.settings.ui_text_scale)", update_impl)
+        self.assertLess(
+            update_impl.index("self.poll_background_task();"),
+            update_impl.index("if self.compact_mode {"),
+        )
+        compact_block, full_layout = update_impl.split("if self.compact_mode {", 1)[
+            1
+        ].split("return;", 1)
+        self.assertIn("egui::CentralPanel::default()", compact_block)
+        self.assertIn("self.compact_panel(ui, palette)", compact_block)
+        # The full layout must NOT be re-entered after the compact branch returns:
+        # sidebar / status bars only exist in the post-return portion.
+        self.assertNotIn("self.sidebar(ui, palette)", compact_block)
+        self.assertNotIn("self.top_status_bar(ui, palette)", compact_block)
+
+        self.assertIn("self.sidebar(ui, palette)", full_layout)
+        self.assertIn("self.top_status_bar(ui, palette)", full_layout)
+        self.assertLess(
+            full_layout.index("self.top_status_bar(ui, palette)"),
+            full_layout.index("egui::CentralPanel::default()"),
+        )
+        self.assertIn("top_status_bar_height(&self.settings.ui_text_scale)", full_layout)
         self.assertIn('egui::SidePanel::left("primary_navigation")', update_impl)
         self.assertIn('egui::TopBottomPanel::top("runtime_status")', update_impl)
         self.assertNotIn(".exact_height(76.0)", update_impl)
@@ -362,4 +386,62 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("UiTextKey::InstallRepair", controls)
         self.assertIn("fn top_status_bar_height(raw_scale: &str) -> f32", script)
         self.assertIn("fn sidebar_width(raw_scale: &str) -> f32", script)
+
+    def test_rust_compact_mode_is_session_only_always_on_top_strip(self):
+        script = rust_ui_source()
+        compact = Path("src/rust/ui/tabs/compact.rs").read_text(encoding="utf-8")
+        config = rust_config_source()
+        controls = (
+            Path("src/rust/ui/tabs/shell.rs")
+            .read_text(encoding="utf-8")
+            .split("fn global_controls", 1)[1]
+        )
+
+        # Session-only UI flag on the app state — never wired into config.
+        self.assertIn("compact_mode: bool", script)
+        self.assertNotIn("compact_mode", config)
+
+        # The top status bar's controls expose an icon-only enter-compact toggle.
+        self.assertIn("icons::ICON_PICTURE_IN_PICTURE_ALT", controls)
+        self.assertIn("Compact mode — small always-on-top strip", controls)
+        self.assertIn("self.set_compact_mode(ui.ctx(), true);", controls)
+
+        # Toggling sends viewport commands as a pure, testable data list and the
+        # method only flips state + replays them (no worker restart).
+        self.assertIn(
+            "fn compact_toggle_viewport_cmds(enter: bool) -> Vec<egui::ViewportCommand>",
+            compact,
+        )
+        self.assertIn(
+            "egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop)", compact
+        )
+        self.assertIn("egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal)", compact)
+        self.assertIn("egui::ViewportCommand::InnerSize(COMPACT_INNER_SIZE.into())", compact)
+        self.assertIn(
+            "egui::ViewportCommand::MinInnerSize(COMPACT_MIN_INNER_SIZE.into())", compact
+        )
+        self.assertIn("egui::ViewportCommand::Decorations(true)", compact)
+        self.assertIn("egui::ViewportCommand::InnerSize(FULL_INNER_SIZE.into())", compact)
+        self.assertIn(
+            "egui::ViewportCommand::MinInnerSize(FULL_MIN_INNER_SIZE.into())", compact
+        )
+        self.assertIn("ctx.send_viewport_cmd(cmd);", compact)
+        self.assertNotIn("self.start_runtime()", compact.split("fn set_compact_mode", 1)[1].split("\n    }", 1)[0])
+        self.assertNotIn("self.supervisor", compact)
+
+        # The restored full-window floor matches run()'s launch floor exactly.
+        self.assertIn("const FULL_MIN_INNER_SIZE: [f32; 2] = [1000.0, 640.0];", compact)
+        self.assertIn("const FULL_INNER_SIZE: [f32; 2] = [1080.0, 760.0];", compact)
+        self.assertIn(".with_min_inner_size([1000.0, 640.0])", script)
+        self.assertIn(".with_inner_size([1080.0, 760.0])", script)
+
+        # The compact panel reuses the shared Start/Stop lifecycle + level gauge
+        # and an exit-compact button, plus the live pipeline progress line.
+        self.assertIn("icons::ICON_OPEN_IN_FULL", compact)
+        self.assertIn("Leave compact mode", compact)
+        self.assertIn("self.set_compact_mode(ui.ctx(), false);", compact)
+        self.assertIn("self.start_runtime();", compact)
+        self.assertIn("self.stop_runtime();", compact)
+        self.assertIn("level_gauge(ui, palette, level, active, gauge_width)", compact)
+        self.assertIn("fn compact_stage_label(", compact)
 

@@ -275,6 +275,20 @@ impl WhisperDictateApp {
         {
             self.start_runtime();
         }
+        // Compact-mode toggle: a tiny always-on-top strip the user keeps visible
+        // while dictating into another app. Session-only UI state — not persisted.
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(icons::ICON_PICTURE_IN_PICTURE_ALT).color(palette.text),
+                )
+                .min_size(egui::vec2(34.0, 34.0)),
+            )
+            .on_hover_text("Compact mode — small always-on-top strip")
+            .clicked()
+        {
+            self.set_compact_mode(ui.ctx(), true);
+        }
     }
 }
 
@@ -324,10 +338,11 @@ fn status_card_sized(
 }
 
 fn top_status_controls_width() -> f32 {
-    186.0
+    // Start (88) + Stop (78) + compact toggle (34) + inter-button spacing.
+    232.0
 }
 
-fn runtime_state_color(state: RuntimeState, palette: UiPalette) -> egui::Color32 {
+pub(in crate::ui) fn runtime_state_color(state: RuntimeState, palette: UiPalette) -> egui::Color32 {
     match state {
         RuntimeState::Stopped => palette.text_muted,
         RuntimeState::Starting => palette.warn_text,

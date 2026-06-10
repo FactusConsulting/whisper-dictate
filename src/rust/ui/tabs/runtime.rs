@@ -379,7 +379,7 @@ fn runtime_log_frame(palette: UiPalette) -> egui::Frame {
         })
 }
 
-fn level_gauge(
+pub(in crate::ui) fn level_gauge(
     ui: &mut egui::Ui,
     palette: UiPalette,
     level: f32,

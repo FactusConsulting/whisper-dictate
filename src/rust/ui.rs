@@ -254,6 +254,12 @@ struct WhisperDictateApp {
     /// Number of consecutive fast non-zero exits since the last clean run.
     /// Reset when the worker reports ready, exits cleanly, or runs ≥ 10 s.
     fast_crash_count: u32,
+    /// Session-only UI flag: when set, `update()` renders the minimal always-on-top
+    /// compact strip (Start/Stop + mic) instead of the full window. NOT persisted
+    /// to config — it only resizes/levels the existing viewport; the worker keeps
+    /// running across the switch. Toggled from the top status bar and reset to
+    /// `false` on launch.
+    compact_mode: bool,
 }
 
 impl Default for WhisperDictateApp {
@@ -325,6 +331,7 @@ impl Default for WhisperDictateApp {
             worker_ready: false,
             worker_start_time: None,
             fast_crash_count: 0,
+            compact_mode: false,
         }
     }
 }

@@ -45,6 +45,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         worker_ready: false,
         worker_start_time: None,
         fast_crash_count: 0,
+        compact_mode: false,
     }
 }
 
