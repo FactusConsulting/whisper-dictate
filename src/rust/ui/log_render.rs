@@ -115,21 +115,38 @@ fn runtime_log_card_for_line(
 ) -> Option<RuntimeLogCard> {
     match mode {
         LogViewMode::Debug => None,
-        LogViewMode::Minimal => minimal_log_card(line),
+        LogViewMode::Minimal => minimal_log_card(line, has_structured_utterance),
         LogViewMode::Diagnostic => diagnostic_log_card(line, log, has_structured_utterance),
     }
 }
 
 /// Minimal mode shows only the final injected text, plus no-text feedback so
 /// a silent miss is visible even in the compact view.
-fn minimal_log_card(line: &str) -> Option<RuntimeLogCard> {
+fn minimal_log_card(line: &str, has_structured_utterance: bool) -> Option<RuntimeLogCard> {
     if let Some(card) = no_text_card(line) {
         return Some(card);
     }
     if let Some(card) = capture_lost_card(line) {
         return Some(card);
     }
+    // Prefer the FULL text from the structured `[utterance]` event: the
+    // `[inject]` log line is truncated to ~57 chars at the source, so cards
+    // (and Copy) built from it cut real sentences off no matter how wide the
+    // window is.
+    if let Some(text) = extract_utterance_full_text(line) {
+        return Some(RuntimeLogCard {
+            kind: RuntimeLogCardKind::FinalText,
+            title: text,
+            detail: String::new(),
+            badge: "Final".to_owned(),
+        });
+    }
     let text = extract_inject_preview(line)?;
+    if has_structured_utterance {
+        // The utterance card above already carries the full text — the
+        // truncated inject preview would only duplicate it, cut off.
+        return None;
+    }
     Some(RuntimeLogCard {
         kind: RuntimeLogCardKind::FinalText,
         title: text,
@@ -280,15 +297,18 @@ fn capture_lost_card(line: &str) -> Option<RuntimeLogCard> {
 }
 
 fn final_output_text(log: &str) -> String {
-    let injected = log
+    // Prefer the FULL text from `[utterance]` events — the `[inject]` preview
+    // line is truncated to ~57 chars at the source, so Copy built from it
+    // hands the user a cut-off sentence.
+    let utterances = log
         .lines()
-        .filter_map(extract_inject_preview)
+        .filter_map(extract_utterance_full_text)
         .collect::<Vec<_>>();
-    if !injected.is_empty() {
-        return injected.join("\n");
+    if !utterances.is_empty() {
+        return utterances.join("\n");
     }
     log.lines()
-        .filter_map(extract_utterance_text)
+        .filter_map(extract_inject_preview)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -315,7 +335,7 @@ fn is_diagnostic_detail_line(line: &str) -> bool {
 
 fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
     let payload = parse_utterance_payload(line)?;
-    let title = extract_utterance_text(line).unwrap_or_else(|| "Utterance".to_owned());
+    let title = extract_utterance_full_text(line).unwrap_or_else(|| "Utterance".to_owned());
     let mut details = Vec::new();
 
     let recording = format_metric_seconds(&payload, "recording_s", "recording");
@@ -377,7 +397,9 @@ fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
 
     Some(RuntimeLogCard {
         kind: RuntimeLogCardKind::Diagnostic,
-        title: compact_runtime_text(&title, 140),
+        // Full text, not a 140-char cut — the label wraps, and a dictated
+        // sentence must be readable to the end (and copyable in full).
+        title,
         // One group per line (audio / compute / backend / dictionary / post /
         // inject) so the card reads as a scannable summary instead of one
         // crammed run-on; the renderer prints each line separately.
@@ -390,10 +412,13 @@ fn parse_utterance_payload(line: &str) -> Option<serde_json::Value> {
     serde_json::from_str(line.strip_prefix("[utterance] ")?).ok()
 }
 
-fn extract_utterance_text(line: &str) -> Option<String> {
+/// The FULL dictated text of an `[utterance]` event — prefers the untruncated
+/// `text` field over the shortened `text_preview` so cards and Copy never hand
+/// out cut sentences.
+fn extract_utterance_full_text(line: &str) -> Option<String> {
     let payload = parse_utterance_payload(line)?;
-    worker_event_string(&payload, "text_preview")
-        .or_else(|| worker_event_string(&payload, "text"))
+    worker_event_string(&payload, "text")
+        .or_else(|| worker_event_string(&payload, "text_preview"))
         .filter(|value| !value.trim().is_empty())
 }
 

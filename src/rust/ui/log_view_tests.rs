@@ -135,6 +135,36 @@ fn diagnostic_log_cards_summarize_audio_and_stt_metrics() {
 }
 
 #[test]
+fn minimal_cards_and_copy_use_full_utterance_text_over_truncated_inject() {
+    // The [inject] log line truncates at ~57 chars at the source; the
+    // [utterance] event carries the full text. Cards and Copy must show the
+    // full sentence (and not duplicate the truncated inject preview).
+    let full = "Okay, det vil sige, at den burde tage og skrive ud, hvad det er, \
+                jeg dikterer, imens jeg dikterer det, hele vejen til punktum.";
+    let log = [
+        r#"[inject] -> "Okay, det vil sige, at den burde tage og skrive ud, hvad..."  (target: Word)"#.to_owned(),
+        format!(
+            r#"[utterance] {{"event":"utterance","text":"{full}","text_preview":"Okay, det vil sige, at den burde tage og skrive ud, hvad...","recording_s":12.0}}"#
+        ),
+    ]
+    .join("\n");
+
+    let cards = runtime_log_cards(&log, LogViewMode::Minimal);
+    assert_eq!(cards.len(), 1, "no truncated duplicate card: {cards:?}");
+    assert_eq!(cards[0].kind, RuntimeLogCardKind::FinalText);
+    assert_eq!(cards[0].title, full);
+    assert!(!cards[0].title.ends_with("..."));
+
+    // Copy (the Minimal view text) hands out the full sentence too.
+    assert_eq!(log_view_text(&log, LogViewMode::Minimal), full);
+
+    // Diagnostic's utterance card also carries the full text now.
+    let diag = runtime_log_cards(&log, LogViewMode::Diagnostic);
+    let utterance = diag.iter().find(|c| c.badge == "Utterance").unwrap();
+    assert_eq!(utterance.title, full);
+}
+
+#[test]
 fn diagnostic_log_cards_prefer_structured_utterance_events() {
     let log = [
         "[stt] dur=12.8s post-boost=-21dBFS compute=0.5s rtf=0.04 text='mellemtekst'",
