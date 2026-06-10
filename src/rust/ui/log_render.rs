@@ -120,8 +120,12 @@ fn runtime_log_card_for_line(
     }
 }
 
-/// Minimal mode shows only the final injected text.
+/// Minimal mode shows only the final injected text, plus no-text feedback so
+/// a silent miss is visible even in the compact view.
 fn minimal_log_card(line: &str) -> Option<RuntimeLogCard> {
+    if let Some(card) = no_text_card(line) {
+        return Some(card);
+    }
     let text = extract_inject_preview(line)?;
     Some(RuntimeLogCard {
         kind: RuntimeLogCardKind::FinalText,
@@ -158,6 +162,12 @@ fn diagnostic_log_card(
 
     if has_structured_utterance && (line.starts_with("[post]") || is_diagnostic_detail_line(line)) {
         return None;
+    }
+
+    // no_text lines get a dedicated friendly card in both modes; they must
+    // not be swallowed by the transient-state filter below.
+    if let Some(card) = no_text_card(line) {
+        return Some(card);
     }
 
     // Transient per-utterance worker states (opening/recording/transcribing/
@@ -218,6 +228,33 @@ fn status_card(line: &str) -> Option<RuntimeLogCard> {
         });
     }
     None
+}
+
+/// Parse `[worker] status=no_text reason=<token> …` into a friendly card.
+/// Returns `None` for any other line.
+fn no_text_card(line: &str) -> Option<RuntimeLogCard> {
+    let rest = line.strip_prefix("[worker] status=no_text")?;
+    // extract_metric_token returns the full "key=value" token; strip the prefix.
+    let reason_token = extract_metric_token(rest, "reason=").unwrap_or("reason=empty");
+    let reason = reason_token.strip_prefix("reason=").unwrap_or("empty");
+    let title = match reason {
+        "no_audio" => "No audio captured",
+        "too_short" => "Too short — hold the key while speaking",
+        "too_quiet" => "Too quiet — check the microphone level",
+        "no_speech" => "No speech detected",
+        _ => "No text produced",
+    };
+    let mut detail = format!("reason={reason}");
+    if let Some(rs_token) = extract_metric_token(rest, "recording_s=") {
+        detail.push_str("  ");
+        detail.push_str(rs_token);
+    }
+    Some(RuntimeLogCard {
+        kind: RuntimeLogCardKind::Status,
+        title: title.to_owned(),
+        detail,
+        badge: "No text".to_owned(),
+    })
 }
 
 fn final_output_text(log: &str) -> String {

@@ -197,7 +197,17 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fn worker_status_log_line(event: &WorkerEvent) -> Option<String>", script)
         self.assertIn('"startup_ms"', script)
         self.assertIn('"first_audio"', script)
-        self.assertIn('"opening" | "ready" | "transcribing" | "loading_model" | "failed" => Some(false)', script)
+        # Assert the full inactive arm INSIDE the function body — both the state
+        # list and that it maps to Some(false) — so an accidental behavior
+        # change (e.g. flipping the return) cannot slip past the guard.
+        capture_active_fn = script.split(
+            "fn audio_capture_active_for_worker_state", 1
+        )[1].split("\n}", 1)[0]
+        inactive_arm = capture_active_fn.split(
+            '"opening" | "ready" | "transcribing" | "loading_model" | "failed" | "no_text"', 1
+        )
+        self.assertEqual(len(inactive_arm), 2, "inactive state list missing")
+        self.assertIn("Some(false)", inactive_arm[1].split("=>", 2)[1])
         self.assertNotIn("fn latest_audio_peak", script)
         self.assertNotIn("parse_metric_f32(line", script)
         self.assertNotIn("fn audio_input_panel", script)

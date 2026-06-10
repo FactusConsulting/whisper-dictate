@@ -469,6 +469,80 @@ fn diagnostic_view_drops_transient_worker_step_cards() {
 }
 
 #[test]
+fn no_text_card_renders_friendly_title_in_diagnostic_and_minimal() {
+    // no_audio → shown in both modes
+    let line_no_audio = "[worker] status=no_text reason=no_audio";
+    let card_diag = runtime_log_cards(line_no_audio, LogViewMode::Diagnostic);
+    assert_eq!(card_diag.len(), 1);
+    assert_eq!(card_diag[0].badge, "No text");
+    assert_eq!(card_diag[0].title, "No audio captured");
+    assert_eq!(card_diag[0].kind, RuntimeLogCardKind::Status);
+
+    let card_min = runtime_log_cards(line_no_audio, LogViewMode::Minimal);
+    assert_eq!(card_min.len(), 1);
+    assert_eq!(card_min[0].badge, "No text");
+    assert_eq!(card_min[0].title, "No audio captured");
+
+    // too_short → correct title and recording_s surfaced
+    let line_too_short = "[worker] status=no_text reason=too_short recording_s=0.12";
+    let card_short = runtime_log_cards(line_too_short, LogViewMode::Diagnostic);
+    assert_eq!(card_short.len(), 1);
+    assert_eq!(
+        card_short[0].title,
+        "Too short — hold the key while speaking"
+    );
+    assert!(
+        card_short[0].detail.contains("recording_s=0.12"),
+        "detail should carry recording_s; got: {:?}",
+        card_short[0].detail
+    );
+
+    // too_quiet
+    let line_tq = "[worker] status=no_text reason=too_quiet recording_s=1.5";
+    let card_tq = runtime_log_cards(line_tq, LogViewMode::Minimal);
+    assert_eq!(card_tq[0].title, "Too quiet — check the microphone level");
+
+    // no_speech
+    let line_ns = "[worker] status=no_text reason=no_speech recording_s=2.0";
+    let card_ns = runtime_log_cards(line_ns, LogViewMode::Diagnostic);
+    assert_eq!(card_ns[0].title, "No speech detected");
+
+    // unknown reason falls back to generic title
+    let line_unk = "[worker] status=no_text reason=xyzzy";
+    let card_unk = runtime_log_cards(line_unk, LogViewMode::Diagnostic);
+    assert_eq!(card_unk[0].title, "No text produced");
+}
+
+#[test]
+fn no_text_card_not_swallowed_by_structured_utterance_suppression() {
+    // When a structured utterance IS present in the log, no_text cards from a
+    // different (failed) press must still appear — they are not [post]/detail lines.
+    let log = [
+        "[worker] status=no_text reason=too_short recording_s=0.05",
+        r#"[utterance] {"text":"hello","recording_s":2.0}"#,
+    ]
+    .join("\n");
+    let cards = runtime_log_cards(&log, LogViewMode::Diagnostic);
+    assert!(
+        cards.iter().any(|c| c.badge == "No text"),
+        "no_text card must survive structured-utterance suppression; cards={cards:?}"
+    );
+}
+
+#[test]
+fn worker_event_mappers_include_no_text_state() {
+    // no_text signals the worker has returned to ready (model still loaded).
+    assert_eq!(worker_ready_for_state("no_text"), Some(true));
+    // no_text means capture is no longer active.
+    assert_eq!(
+        audio_capture_active_for_worker_state("no_text"),
+        Some(false)
+    );
+    // no_text is NOT a pipeline stage (no live progress card).
+    assert_eq!(pipeline_stage_for_worker_state("no_text"), None);
+}
+
+#[test]
 fn diagnostic_utterance_detail_groups_onto_separate_lines() {
     let log = concat!(
         r#"[utterance] {"text":"hej","recording_s":2.0,"compute_s":0.5,"#,

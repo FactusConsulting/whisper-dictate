@@ -20,6 +20,7 @@ pub(in crate::ui) fn worker_status_log_line(event: &WorkerEvent) -> Option<Strin
         "startup_ms",
         "first_audio",
         "recording_s",
+        "reason",
     ] {
         if let Some(value) = worker_event_string(&event.payload, key) {
             line.push(' ');
@@ -71,7 +72,9 @@ pub(in crate::ui) fn worker_event_bool(payload: &serde_json::Value, key: &str) -
 pub(in crate::ui) fn audio_capture_active_for_worker_state(state: &str) -> Option<bool> {
     match state {
         "recording" | "listening" => Some(true),
-        "opening" | "ready" | "transcribing" | "loading_model" | "failed" => Some(false),
+        "opening" | "ready" | "transcribing" | "loading_model" | "failed" | "no_text" => {
+            Some(false)
+        }
         _ => None,
     }
 }
@@ -93,7 +96,9 @@ pub(in crate::ui) fn pipeline_stage_for_worker_state(state: &str) -> Option<&'st
 /// `None` for states that should leave the current readiness untouched.
 pub(in crate::ui) fn worker_ready_for_state(state: &str) -> Option<bool> {
     match state {
-        "ready" | "opening" | "recording" | "transcribing" | "post-processing" => Some(true),
+        "ready" | "opening" | "recording" | "transcribing" | "post-processing" | "no_text" => {
+            Some(true)
+        }
         "loading_model" | "failed" => Some(false),
         _ => None,
     }
