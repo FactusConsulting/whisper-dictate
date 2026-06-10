@@ -57,6 +57,17 @@ class ListInputDevicesTests(unittest.TestCase):
         sd = _fake_sd(_DEVICES, default_device=-1)
         self.assertFalse(any(d["default"] for d in vp_events.list_input_devices(sd)))
 
+    def test_blank_named_inputs_are_skipped(self):
+        # An empty name would collide with the UI's "" = "(System default)"
+        # combo value, so blank/whitespace names must be filtered out.
+        sd = _fake_sd([
+            {"name": "", "max_input_channels": 2},
+            {"name": "   ", "max_input_channels": 1},
+            {"name": "Real Mic", "max_input_channels": 1},
+        ])
+        devices = vp_events.list_input_devices(sd)
+        self.assertEqual([d["name"] for d in devices], ["Real Mic"])
+
 
 class PrintAudioDevicesTests(unittest.TestCase):
     def test_prints_json_array_and_returns_zero(self):

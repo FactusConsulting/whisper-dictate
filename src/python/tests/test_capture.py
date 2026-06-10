@@ -212,10 +212,41 @@ class StartArecordTests(unittest.TestCase):
         self.assertEqual(cmd[:3], ["arecord", "-D", "pipewire"])
         self.assertIn("S16_LE", cmd)
         self.assertIn(str(rt.SR), cmd)
+        # Default (probed) device → arecord chatter is suppressed.
+        self.assertIs(popen_calls[0][1]["stderr"], rt.subprocess.DEVNULL)
         # Reader thread is a daemon and (run synchronously here) filled frames.
         self.assertEqual(len(thread_calls), 1)
         self.assertTrue(thread_calls[0][2])  # daemon=True
         self.assertEqual(len(target.frames), 1)
+
+    def test_start_arecord_custom_device_keeps_stderr_visible(self):
+        # A user-configured -D value can be invalid; silencing stderr would make
+        # that failure undiagnosable, so it must flow to the worker's stderr.
+        rt = self.runtime
+        popen_calls = []
+
+        def fake_popen(cmd, **kwargs):
+            popen_calls.append((cmd, kwargs))
+            return _FakeProc([])
+
+        target = types.SimpleNamespace(
+            recording=False,
+            frames=[],
+            _arecord_proc=None,
+            _capture_backend="",
+            _audio_input_device="",
+            _capture_channels=0,
+        )
+        target._arecord_reader = lambda proc: None
+
+        with patch.object(rt, "_ARECORD_DEVICE", "pipewire"), \
+                patch.object(rt.subprocess, "Popen", fake_popen), \
+                _env(VOICEPI_AUDIO_DEVICE="hw:1,0"):
+            rt.CaptureMixin._start_arecord(target)
+
+        cmd, kwargs = popen_calls[0]
+        self.assertEqual(cmd[:3], ["arecord", "-D", "hw:1,0"])
+        self.assertIsNone(kwargs["stderr"])
 
 
 class StartSounddeviceTests(unittest.TestCase):

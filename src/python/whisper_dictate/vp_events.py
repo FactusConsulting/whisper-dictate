@@ -115,9 +115,14 @@ def list_input_devices(sd) -> list[dict]:
             channels = 0
         if channels <= 0:
             continue
+        name = str(info.get("name") or "").strip()
+        if not name:
+            # An empty name would collide with the UI's "" = "(System default)"
+            # combo value and make the selection ambiguous — skip the entry.
+            continue
         result.append({
             "index": index,
-            "name": str(info.get("name") or "").strip(),
+            "name": name,
             "max_input_channels": channels,
             "default": index == default_index,
         })

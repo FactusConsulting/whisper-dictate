@@ -206,13 +206,19 @@ class CaptureMixin:
 
     def _start_arecord(self) -> tuple[str, str]:
         self._capture_backend = "arecord"
+        custom_device = bool((_audio_device_setting() or "").strip())
         device = _arecord_device_arg(_ARECORD_DEVICE, _audio_device_setting())
         self._audio_input_device = f"arecord -D {device}"
         self._capture_channels = 1
+        # Suppress arecord's chatter only for the probed default device. A
+        # user-configured -D value can be invalid, and silencing stderr would
+        # make that failure undiagnosable (no frames, no error anywhere) — let
+        # it flow to the worker's stderr so it lands in the runtime log.
         self._arecord_proc = subprocess.Popen(
             ["arecord", "-D", device, "-f", "S16_LE",
              "-r", str(SR), "-c", "1", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            stdout=subprocess.PIPE,
+            stderr=None if custom_device else subprocess.DEVNULL,
         )
         threading.Thread(
             target=self._arecord_reader,
