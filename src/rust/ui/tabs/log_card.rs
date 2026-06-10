@@ -65,18 +65,18 @@ fn runtime_log_card_text(
     if !card.badge.is_empty() {
         ui.add_space(2.0);
         let pill = status_pill(ui, &card.badge, accent, palette);
-        if card.badge == DICTATION_BADGE_EN || card.badge == DICTATION_BADGE_DA {
+        // Match against the catalogue strings (both languages) instead of
+        // duplicating the translations here — a tweak in text.rs must not
+        // silently detach this hover.
+        if card.badge == ui_text("en", UiTextKey::Dictation)
+            || card.badge == ui_text("da", UiTextKey::Dictation)
+        {
             let _ = pill.on_hover_text(
                 "One complete dictation: from key down to key up, with its measurements.",
             );
         }
     }
 }
-
-/// The English and Danish visible labels for the Dictation badge (used to match
-/// the badge text when deciding whether to attach the hover).
-pub(in crate::ui) const DICTATION_BADGE_EN: &str = "Dictation";
-pub(in crate::ui) const DICTATION_BADGE_DA: &str = "Diktering";
 
 /// Return a plain-language hover for a structured-utterance detail line, or
 /// `None` when the line does not match any known group.
