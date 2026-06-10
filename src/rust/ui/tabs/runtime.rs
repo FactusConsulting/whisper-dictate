@@ -34,13 +34,8 @@ impl WhisperDictateApp {
                 palette,
                 &self.settings.ui_language,
             );
-            push_to_talk_badge(
-                ui,
-                &self.settings.key,
-                self.settings.toggle_mode,
-                palette,
-                &self.settings.ui_language,
-            );
+            // The hotkey chord moved to the sidebar (above Save settings) — the
+            // header keeps only status + mic so long previews get the width.
             let mic_width = (ui.available_width() - 10.0).clamp(0.0, MIC_INDICATOR_MAX_WIDTH);
             if mic_width >= MIC_INDICATOR_MIN_WIDTH {
                 ui.add_space(10.0);
@@ -539,39 +534,6 @@ fn runtime_status_badge(
 /// `shift_l+ctrl_l`) is rendered as a human-friendly chord (`Ctrl (right)`).
 /// When toggle mode is on the label reads "Toggle key" (press to start, press
 /// again to stop); otherwise the usual "Push-to-talk".
-fn push_to_talk_badge(
-    ui: &mut egui::Ui,
-    raw_keys: &str,
-    toggle_mode: bool,
-    palette: UiPalette,
-    raw_language: &str,
-) {
-    let hover = if toggle_mode {
-        "Press this key (or chord) to start, press again to stop. Change it in Speech → Hotkey."
-    } else {
-        "Hold this key (or chord) to dictate. Change it in Speech → Hotkey."
-    };
-    egui::Frame::default()
-        .fill(palette.surface_bg)
-        .stroke(egui::Stroke::new(0.8, palette.border))
-        .rounding(egui::Rounding::same(PILL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
-        .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(
-                    icon_text(
-                        icons::ICON_KEYBOARD,
-                        push_to_talk_badge_label(raw_keys, toggle_mode, raw_language),
-                    )
-                    .strong()
-                    .color(palette.text),
-                )
-                .selectable(false),
-            )
-            .on_hover_text(hover);
-        });
-}
-
 /// Build the badge label text: a "Push-to-talk: <chord>" (hold mode) or
 /// "Toggle key: <chord>" (toggle mode) string. Kept pure so it is unit-testable
 /// without an egui context.
