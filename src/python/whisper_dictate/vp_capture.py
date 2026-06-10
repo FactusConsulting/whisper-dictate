@@ -15,6 +15,7 @@ orchestrator agree on a single source of truth.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys  # noqa: F401 — patched by capture tests (sys.modules['sounddevice'])
 import threading
@@ -69,6 +70,97 @@ def _ensure_arecord_device() -> str | None:
     return _ARECORD_DEVICE
 
 
+def _audio_device_setting() -> str:
+    """The requested input device, read fresh from the env at stream-open time.
+
+    Empty/unset ⇒ system default. Read live (not at import) so a live-reloaded
+    VOICEPI_AUDIO_DEVICE takes effect on the next recording without a restart.
+    """
+    return (os.environ.get("VOICEPI_AUDIO_DEVICE") or "").strip()
+
+
+def _input_devices(sd) -> list[dict]:
+    """Return sounddevice input devices (max_input_channels > 0), index-tagged.
+
+    Pure-ish helper shared by device resolution and the ``--list-audio-devices``
+    CLI. Each entry carries its query_devices index so callers can match by
+    index or by (substring of) name. Devices without input channels are skipped.
+    """
+    try:
+        devices = sd.query_devices()
+    except Exception:
+        return []
+    result = []
+    for index, info in enumerate(devices):
+        if not isinstance(info, dict):
+            continue
+        try:
+            channels = int(info.get("max_input_channels") or 0)
+        except (TypeError, ValueError):
+            channels = 0
+        if channels <= 0:
+            continue
+        result.append({
+            "index": index,
+            "name": str(info.get("name") or "").strip(),
+            "max_input_channels": channels,
+        })
+    return result
+
+
+def _resolve_sounddevice_device(sd, value: str):
+    """Resolve a VOICEPI_AUDIO_DEVICE value to a sounddevice ``device=`` arg.
+
+    Value semantics:
+      * empty/unset       ⇒ ``None`` (sounddevice picks the system default)
+      * an integer string ⇒ that device index (int)
+      * otherwise         ⇒ case-insensitive substring match against input
+                            device names (first match wins); the matched index
+                            is returned. No match ⇒ warn + ``None`` (default).
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.lstrip("+-").isdigit():
+        return int(value)
+    needle = value.casefold()
+    for device in _input_devices(sd):
+        if needle in device["name"].casefold():
+            return device["index"]
+    print(
+        f"[cap] audio device {value!r} not found, using default",
+        file=sys.stderr,
+        flush=True,
+    )
+    return None
+
+
+def _selected_device_name(sd, device) -> str | None:
+    """Human label for a resolved sounddevice ``device=`` arg (or ``None``).
+
+    Used so the status/meter shows the explicitly chosen device's name rather
+    than the system default. Returns ``None`` when no specific device was chosen
+    or the name can't be resolved, leaving the default-name fallback in place.
+    """
+    if not isinstance(device, int):
+        return None
+    for entry in _input_devices(sd):
+        if entry["index"] == device:
+            return entry["name"] or None
+    return None
+
+
+def _arecord_device_arg(default_device: str | None, value: str) -> str | None:
+    """Pick the ALSA/PipeWire device string for the arecord backend.
+
+    A set VOICEPI_AUDIO_DEVICE value is treated as a raw ALSA/PipeWire device
+    string and used verbatim (``arecord -D <value>``); otherwise the probed
+    default route is kept.
+    """
+    value = (value or "").strip()
+    return value or default_device
+
+
 class CaptureMixin:
     def _cb(self, indata, frames, t, status):
         if self.recording:
@@ -114,10 +206,11 @@ class CaptureMixin:
 
     def _start_arecord(self) -> tuple[str, str]:
         self._capture_backend = "arecord"
-        self._audio_input_device = f"arecord -D {_ARECORD_DEVICE}"
+        device = _arecord_device_arg(_ARECORD_DEVICE, _audio_device_setting())
+        self._audio_input_device = f"arecord -D {device}"
         self._capture_channels = 1
         self._arecord_proc = subprocess.Popen(
-            ["arecord", "-D", _ARECORD_DEVICE, "-f", "S16_LE",
+            ["arecord", "-D", device, "-f", "S16_LE",
              "-r", str(SR), "-c", "1", "-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
@@ -131,11 +224,18 @@ class CaptureMixin:
     def _start_sounddevice(self) -> tuple[str, str]:
         import sounddevice as sd
         self._capture_backend = "sounddevice"
-        self._audio_input_device = _sounddevice_input_name(sd) or "sounddevice default input"
+        device = _resolve_sounddevice_device(sd, _audio_device_setting())
+        self._audio_input_device = (
+            _selected_device_name(sd, device)
+            or _sounddevice_input_name(sd)
+            or "sounddevice default input"
+        )
         last_error = None
         for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
             self._capture_channels = channels
             for kwargs in _sounddevice_stream_kwargs(self._capture_channels, self._cb):
+                if device is not None:
+                    kwargs["device"] = device
                 try:
                     self._stream = sd.InputStream(**kwargs)
                     break

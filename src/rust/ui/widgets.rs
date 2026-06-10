@@ -302,6 +302,45 @@ pub(in crate::ui) fn combo_model_vram(
     grid_help_row(ui, show_help, help);
 }
 
+/// A labelled combo over a dynamically built `(value, display)` list (owned
+/// strings), as opposed to the `&'static` tables `combo_help_labeled` takes.
+/// Used by the Microphone picker whose options come from the worker at runtime.
+pub(in crate::ui) fn combo_help_dynamic(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    options: &[(String, String)],
+    help: &str,
+) {
+    let show_help = label_with_help(ui, label, help);
+    egui::ComboBox::from_id_salt(label)
+        .width(settings_control_width(ui))
+        .selected_text(dynamic_selected_label(value, options))
+        .show_ui(ui, |ui| {
+            for (option, display) in options {
+                ui.selectable_value(value, option.clone(), display);
+            }
+        });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+}
+
+/// Selected-text label for a dynamic `(value, display)` combo: the matching
+/// display, else the raw value, else `(empty)`. Pure so it is unit-testable.
+pub(in crate::ui) fn dynamic_selected_label(value: &str, options: &[(String, String)]) -> String {
+    options
+        .iter()
+        .find(|(option, _)| option == value)
+        .map(|(_, display)| display.clone())
+        .unwrap_or_else(|| {
+            if value.is_empty() {
+                "(empty)".to_owned()
+            } else {
+                value.to_owned()
+            }
+        })
+}
+
 pub(in crate::ui) fn selected_option_label(value: &str, options: &[(&str, &str)]) -> String {
     options
         .iter()

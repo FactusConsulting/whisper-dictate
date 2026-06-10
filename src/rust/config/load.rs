@@ -54,6 +54,7 @@ impl AppSettings {
         self.parakeet_model = string_value(object, "parakeet_model", &defaults.parakeet_model);
         self.device = string_value(object, "device", &defaults.device);
         self.compute_type = string_value(object, "compute_type", "");
+        self.audio_device = string_value(object, "audio_device", "");
         self.lang = string_value(object, "lang", "");
         self.xkb_layout = string_value(object, "xkb_layout", "");
         self.initial_prompt = string_value(object, "initial_prompt", "");

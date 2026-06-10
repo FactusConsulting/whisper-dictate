@@ -4,9 +4,15 @@
 
 use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
-use crate::runtime::{doctor_command, install_command, run_capture, WorkerCommand};
+use crate::runtime::{
+    audio_devices_command, doctor_command, install_command, run_capture, WorkerCommand,
+};
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
+
+/// Background-task label for the worker's `--list-audio-devices` run. Matched in
+/// `poll_background_task` to parse stdout into the Microphone picker options.
+pub(in crate::ui) const LIST_AUDIO_DEVICES_LABEL: &str = "list audio devices";
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn run_doctor(&mut self) {
@@ -33,6 +39,13 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn run_install(&mut self) {
         self.run_background_command("install/repair", install_command());
+    }
+
+    /// Refresh the Microphone picker's device list by running the worker with
+    /// `--list-audio-devices` off-thread. The captured stdout is parsed in
+    /// `poll_background_task` once the run completes.
+    pub(in crate::ui) fn run_list_audio_devices(&mut self) {
+        self.run_background_command(LIST_AUDIO_DEVICES_LABEL, audio_devices_command());
     }
 
     pub(in crate::ui) fn run_cloud_api_check(&mut self) {
@@ -202,6 +215,10 @@ impl WhisperDictateApp {
                 "[ui] {} completed: {}",
                 result.label, result.command
             ));
+            if result.label == LIST_AUDIO_DEVICES_LABEL {
+                self.apply_audio_device_listing(&result);
+                return;
+            }
             self.append_runtime_output(result.stdout.trim_end());
             self.append_runtime_output(result.stderr.trim_end());
             if let Some(error) = result.error {
@@ -241,6 +258,46 @@ impl WhisperDictateApp {
             "cloud API check" => self.stt_api_key_status = message.to_owned(),
             "post API check" => self.post_api_key_status = message.to_owned(),
             _ => {}
+        }
+    }
+
+    /// Handle a finished `--list-audio-devices` run: parse stdout into the
+    /// Microphone combo options, or report the failure via the settings status
+    /// line and the runtime log without disturbing the saved device value.
+    fn apply_audio_device_listing(&mut self, result: &BackgroundTaskResult) {
+        if let Some(error) = &result.error {
+            let message = format!("Could not list audio devices: {error}");
+            self.settings_status = message.clone();
+            self.append_runtime_log(format!("[ERROR] {message}"));
+            return;
+        }
+        match parse_audio_devices_json(&result.stdout) {
+            Ok(options) => {
+                let count = options.len();
+                let labels = options
+                    .iter()
+                    .map(|d| d.label.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.audio_device_options = options.into_iter().map(|d| d.value).collect();
+                self.settings_status = format!("Found {count} input device(s).");
+                let detail = if labels.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {labels}")
+                };
+                self.append_runtime_log(format!(
+                    "[ui] microphone list refreshed: {count} device(s){detail}"
+                ));
+            }
+            Err(error) => {
+                let message = format!("Could not read audio device list: {error}");
+                self.settings_status = message.clone();
+                self.append_runtime_log(format!("[ERROR] {message}"));
+                if !result.stderr.trim().is_empty() {
+                    self.append_runtime_output(result.stderr.trim_end());
+                }
+            }
         }
     }
 }

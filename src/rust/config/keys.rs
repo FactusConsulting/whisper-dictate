@@ -24,6 +24,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "parakeet_model",
     "device",
     "compute_type",
+    "audio_device",
     "lang",
     "xkb_layout",
     "initial_prompt",

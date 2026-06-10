@@ -56,6 +56,12 @@
       "live": false
     },
     {
+      "env": "VOICEPI_AUDIO_DEVICE",
+      "key": "audio_device",
+      "default": null,
+      "live": true
+    },
+    {
       "env": "VOICEPI_LANG",
       "key": "lang",
       "default": null,

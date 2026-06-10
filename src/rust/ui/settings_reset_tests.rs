@@ -12,6 +12,7 @@ fn changed_settings() -> AppSettings {
         stt_timeout_ms: "12345".to_owned(),
         device: "cuda".to_owned(),
         compute_type: "int8_float16".to_owned(),
+        audio_device: "Yeti".to_owned(),
         lang: "da".to_owned(),
         xkb_layout: "dk".to_owned(),
         key: "shift_r+ctrl_r".to_owned(),
@@ -81,6 +82,7 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.stt_timeout_ms, defaults.stt_timeout_ms);
     assert_eq!(settings.device, defaults.device);
     assert_eq!(settings.compute_type, defaults.compute_type);
+    assert_eq!(settings.audio_device, defaults.audio_device);
     assert_eq!(settings.lang, defaults.lang);
     assert_eq!(settings.xkb_layout, defaults.xkb_layout);
     assert_eq!(settings.key, defaults.key);

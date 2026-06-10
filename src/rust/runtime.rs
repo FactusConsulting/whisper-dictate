@@ -732,6 +732,13 @@ pub fn doctor_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--doctor".to_owned()])
 }
 
+/// Worker command that lists input (microphone) devices as JSON and exits
+/// without loading a model or opening audio. Drives the Speech tab's "Refresh
+/// devices" action.
+pub fn audio_devices_command() -> WorkerCommand {
+    default_worker_command_with_args(vec!["--list-audio-devices".to_owned()])
+}
+
 pub fn install_command() -> WorkerCommand {
     install_command_from_exe(
         env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),

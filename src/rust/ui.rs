@@ -32,6 +32,7 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 
 mod api_keys;
 mod app;
+mod audio_devices;
 mod icon;
 mod log_render;
 mod platform;
@@ -46,6 +47,7 @@ mod widgets;
 mod worker_event;
 
 use self::api_keys::*;
+pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
 use self::icon::app_icon;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
 // resolve these items; non-test code reaches them through `api_keys`.
@@ -195,6 +197,11 @@ struct WhisperDictateApp {
     audio_meter_raw_dbfs: Option<f32>,
     audio_meter_peak: Option<f32>,
     active_audio_device: String,
+    /// Input devices offered by the Microphone picker, refreshed on demand via
+    /// the worker's `--list-audio-devices`. Holds the raw device names that map
+    /// to the persisted `settings.audio_device`; the combo always offers
+    /// "(System default)" → "" ahead of these.
+    audio_device_options: Vec<String>,
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
@@ -270,6 +277,7 @@ impl Default for WhisperDictateApp {
             audio_meter_raw_dbfs: None,
             audio_meter_peak: None,
             active_audio_device: String::new(),
+            audio_device_options: Vec::new(),
             config_path,
             saved_settings: settings.clone(),
             settings,
@@ -356,6 +364,8 @@ impl Tab {
 mod api_key_env_tests;
 #[cfg(test)]
 mod api_key_store_tests;
+#[cfg(test)]
+mod audio_device_picker_tests;
 #[cfg(test)]
 mod backend_option_tests;
 #[cfg(test)]
