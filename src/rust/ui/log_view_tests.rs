@@ -716,3 +716,21 @@ fn diagnostic_utterance_detail_groups_onto_separate_lines() {
     assert!(card.detail.contains("compute=0.5s"));
     assert!(card.detail.contains("backend=whisper"));
 }
+
+#[test]
+fn drag_overshoot_delta_follows_selection_past_the_edges() {
+    use crate::ui::tabs::drag_overshoot_delta;
+    // Inside the viewport: no auto-scroll.
+    assert_eq!(drag_overshoot_delta(100.0, 500.0, 300.0), 0.0);
+    assert_eq!(drag_overshoot_delta(100.0, 500.0, 100.0), 0.0);
+    assert_eq!(drag_overshoot_delta(100.0, 500.0, 500.0), 0.0);
+    // Below the bottom: scroll toward later content (negative), growing with
+    // the overshoot.
+    assert_eq!(drag_overshoot_delta(100.0, 500.0, 520.0), -10.0);
+    assert!(drag_overshoot_delta(100.0, 500.0, 540.0) < drag_overshoot_delta(100.0, 500.0, 520.0));
+    // Above the top: scroll toward earlier content (positive).
+    assert_eq!(drag_overshoot_delta(100.0, 500.0, 80.0), 10.0);
+    // Capped so a wild drag stays controllable.
+    assert_eq!(drag_overshoot_delta(100.0, 500.0, 5000.0), -30.0);
+    assert_eq!(drag_overshoot_delta(100.0, 500.0, -5000.0), 30.0);
+}
