@@ -86,15 +86,21 @@ fn whisper_model_hint(model: &str) -> (&'static str, u32) {
     }
 }
 
-/// Best total VRAM (MB) across detected NVIDIA GPUs, or `None` on CPU /
-/// non-NVIDIA. Detected once at startup and used to grey out Whisper models
-/// that can't fit the GPU.
-fn best_gpu_total_mb() -> Option<u32> {
-    crate::model_capacity::query_gpus()
-        .iter()
-        .map(|gpu| gpu.total_mb)
-        .max()
+/// Spawn a background thread that queries NVIDIA GPUs and sends the best total
+/// VRAM (or `None`) over the returned channel.  This keeps GPU detection off
+/// the startup / first-frame path so a missing nvidia-smi doesn't stall the UI.
+fn spawn_gpu_probe() -> Receiver<Option<u32>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = crate::model_capacity::query_gpus()
+            .iter()
+            .map(|gpu| gpu.total_mb)
+            .max();
+        let _ = tx.send(result);
+    });
+    rx
 }
+
 const GROQ_STT_MODELS: &[&str] = &[
     "whisper-large-v3-turbo",
     "whisper-large-v3",
@@ -221,8 +227,12 @@ struct WhisperDictateApp {
     background_task: Option<Receiver<BackgroundTaskResult>>,
     background_task_label: Option<&'static str>,
     /// Best total VRAM (MB) of the detected NVIDIA GPU, or None on CPU /
-    /// non-NVIDIA. Detected once at startup; gates the Whisper model picker.
+    /// non-NVIDIA. Populated asynchronously after startup via `gpu_probe`; gates
+    /// the Whisper model picker (no grey-out while still probing).
     gpu_total_mb: Option<u32>,
+    /// Background thread that computes `gpu_total_mb` (runs `nvidia-smi`).
+    /// Polled non-blockingly each frame; set to `None` once the result is adopted.
+    gpu_probe: Option<Receiver<Option<u32>>>,
     /// Current dictation pipeline stage from worker status events
     /// ("recording" / "transcribing" / "post-processing"), or None when idle.
     /// Drives the live progress card in the runtime log.
@@ -232,6 +242,12 @@ struct WhisperDictateApp {
     /// loading a local model takes time, so the status stays "Starting" until the
     /// worker reports `ready`. Reset on each start/restart and on exit/error.
     worker_ready: bool,
+    /// Instant at which the most recent `start_runtime` succeeded. Used to
+    /// detect fast crashes (exit within 10 s of start).
+    worker_start_time: Option<Instant>,
+    /// Number of consecutive fast non-zero exits since the last clean run.
+    /// Reset when the worker reports ready, exits cleanly, or runs ≥ 10 s.
+    fast_crash_count: u32,
 }
 
 impl Default for WhisperDictateApp {
@@ -296,9 +312,12 @@ impl Default for WhisperDictateApp {
             supervisor: RuntimeSupervisor::new(),
             background_task: None,
             background_task_label: None,
-            gpu_total_mb: best_gpu_total_mb(),
+            gpu_total_mb: None,
+            gpu_probe: Some(spawn_gpu_probe()),
             pipeline_stage: None,
             worker_ready: false,
+            worker_start_time: None,
+            fast_crash_count: 0,
         }
     }
 }
@@ -378,6 +397,8 @@ mod layout_tests;
 mod log_view_tests;
 #[cfg(test)]
 mod model_picker_tests;
+#[cfg(test)]
+mod robustness_tests;
 #[cfg(test)]
 mod runtime_status_tests;
 #[cfg(test)]
