@@ -35,21 +35,21 @@ impl WhisperDictateApp {
                     &mut self.settings.post_base_url,
                     "Base URL for the post-processing provider. Ollama normally uses http://localhost:11434; Groq/OpenAI use OpenAI-compatible HTTPS endpoints.",
                 );
-                text_enabled(
+                text_enabled_short(
                     ui,
                     post_enabled,
                     "Post timeout ms",
                     &mut self.settings.post_timeout_ms,
                     "Maximum time allowed for post-processing.",
                 );
-                text_enabled(
+                text_enabled_short(
                     ui,
                     post_enabled,
                     "Post max input chars",
                     &mut self.settings.post_max_input_chars,
                     "Maximum transcript length sent to the post-processor.",
                 );
-                text_enabled(
+                text_enabled_short(
                     ui,
                     post_enabled,
                     "Post max output chars",

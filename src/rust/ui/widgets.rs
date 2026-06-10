@@ -5,7 +5,13 @@
 use super::*;
 use std::time::{Duration, Instant};
 
-const SETTINGS_LABEL_WIDTH: f32 = 190.0;
+/// Minimum width for the label column in every settings grid.  Raised from 190
+/// to 220 to give the longest labels ("Skip silent hallucinations", ~26 chars +
+/// the "?" help badge) enough room without wrapping, while keeping every grid's
+/// value column starting at the same x for a consistent visual alignment.
+/// `pub(in crate::ui)` so the `settings_grid` helper in `tabs/mod.rs` can pass
+/// this same constant as the `min_col_width` floor for every Grid it creates.
+pub(in crate::ui) const SETTINGS_LABEL_WIDTH: f32 = 220.0;
 const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
 /// Compact width for short numeric-ish fields (counts, seconds, thresholds) so a
 /// value like "2000" or "0.5" no longer stretches across the whole grid.

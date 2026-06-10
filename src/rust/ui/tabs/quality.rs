@@ -103,7 +103,7 @@ impl WhisperDictateApp {
                     &mut self.settings.beam_size,
                     "Whisper beam search width. Higher can improve accuracy but costs more compute. Used only with STT backend = whisper.",
                 );
-                text_enabled(
+                text_enabled_short(
                     ui,
                     whisper,
                     "Temperature ladder",
