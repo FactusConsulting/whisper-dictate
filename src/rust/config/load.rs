@@ -66,6 +66,13 @@ impl AppSettings {
             string_value(object, "context_min_seconds", &defaults.context_min_seconds);
         self.hallucination_guard =
             bool_value(object, "hallucination_guard", defaults.hallucination_guard);
+        self.max_chars_per_second = string_value(
+            object,
+            "max_chars_per_second",
+            &defaults.max_chars_per_second,
+        );
+        self.min_record_seconds =
+            string_value(object, "min_record_seconds", &defaults.min_record_seconds);
         self.parakeet_min_seconds = string_value(
             object,
             "parakeet_min_seconds",

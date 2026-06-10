@@ -34,6 +34,8 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "temperature",
     "context_min_seconds",
     "hallucination_guard",
+    "max_chars_per_second",
+    "min_record_seconds",
     "parakeet_min_seconds",
     "release_tail_ms",
     "preview_seconds",

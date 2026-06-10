@@ -116,6 +116,18 @@
       "live": true
     },
     {
+      "env": "VOICEPI_MAX_CHARS_PER_SECOND",
+      "key": "max_chars_per_second",
+      "default": "30",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_MIN_RECORD_SECONDS",
+      "key": "min_record_seconds",
+      "default": "0.5",
+      "live": true
+    },
+    {
       "env": "VOICEPI_PARAKEET_MIN_SECONDS",
       "key": "parakeet_min_seconds",
       "default": "1.5",

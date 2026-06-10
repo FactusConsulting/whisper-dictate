@@ -125,6 +125,8 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.temperature = defaults.temperature;
             settings.context_min_seconds = defaults.context_min_seconds;
             settings.hallucination_guard = defaults.hallucination_guard;
+            settings.max_chars_per_second = defaults.max_chars_per_second;
+            settings.min_record_seconds = defaults.min_record_seconds;
             settings.parakeet_min_seconds = defaults.parakeet_min_seconds;
             settings.release_tail_ms = defaults.release_tail_ms;
             settings.preview_seconds = defaults.preview_seconds;

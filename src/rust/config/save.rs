@@ -38,6 +38,8 @@ impl AppSettings {
         set_string(object, "temperature", &self.temperature);
         set_string(object, "context_min_seconds", &self.context_min_seconds);
         set_bool(object, "hallucination_guard", self.hallucination_guard);
+        set_string(object, "max_chars_per_second", &self.max_chars_per_second);
+        set_string(object, "min_record_seconds", &self.min_record_seconds);
         set_string(object, "parakeet_min_seconds", &self.parakeet_min_seconds);
         set_string(object, "release_tail_ms", &self.release_tail_ms);
         set_string(object, "preview_seconds", &self.preview_seconds);

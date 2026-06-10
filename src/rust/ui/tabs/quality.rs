@@ -39,6 +39,18 @@ impl WhisperDictateApp {
                     &mut self.settings.hallucination_guard,
                     "Local Whisper only: skip long silent gaps where Whisper tends to hallucinate 'like and subscribe'-style text. Adds word timestamps (small extra compute). Used only with STT backend = whisper.",
                 );
+                text_help(
+                    ui,
+                    "Min recording seconds",
+                    &mut self.settings.min_record_seconds,
+                    "Discard recordings shorter than this (seconds) as accidental key taps before transcription. Clamped to a 0.3 s floor so even 0 keeps misfire protection. Helps avoid hallucinated subtitle/caption credits on quiet taps.",
+                );
+                text_help(
+                    ui,
+                    "Max chars per second",
+                    &mut self.settings.max_chars_per_second,
+                    "Drop a transcript whose characters-per-second is humanly impossible (real speech is ~15-25; default 30). Catches hallucinated subtitle/caption credits on quiet input. 0 disables this guard.",
+                );
                 text_enabled(
                     ui,
                     parakeet,

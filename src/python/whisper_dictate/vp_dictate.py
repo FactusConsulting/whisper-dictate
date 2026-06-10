@@ -86,6 +86,8 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self._effective_config = effective_config()
         self.parakeet_min_seconds = float(
             self._effective_config.get("parakeet_min_seconds", "1.5"))
+        self.min_record_seconds = float(
+            self._effective_config.get("min_record_seconds", "0.5"))
         self.release_tail_ms = int(float(
             self._effective_config.get("release_tail_ms", "200")))
         # Live partial-transcription preview interval (seconds); "0" disables.
@@ -198,6 +200,8 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         vp_transcribe.TEMPERATURES = vp_transcribe._parse_temperatures(after.get("temperature"))
         vp_transcribe.CONTEXT_MIN_SECONDS = float(after.get("context_min_seconds", "5"))
         self.parakeet_min_seconds = float(after.get("parakeet_min_seconds", "1.5"))
+        self.min_record_seconds = float(after.get("min_record_seconds", "0.5"))
+        vp_transcribe.MAX_CHARS_PER_SECOND = float(after.get("max_chars_per_second", "30"))
         self.release_tail_ms = int(float(after.get("release_tail_ms", "200")))
         self.preview_seconds = float(after.get("preview_seconds", "3"))
         vp_transcribe.VAD_THRESHOLD = float(after.get("vad_threshold", "0.3"))
@@ -222,7 +226,10 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         non-empty reason string when it should be skipped — so existing callers
         that just do ``if self._should_skip_pcm(...)`` continue to work.
         """
-        if len(pcm) < SR * 0.3:  # <0.3 s — almost certainly a misfire
+        # 0.3 s is the absolute misfire floor; a higher min_record_seconds raises
+        # it (a user setting 0 still gets the 0.3 s protection via max()).
+        min_seconds = max(0.3, getattr(self, "min_record_seconds", 0.5))
+        if len(pcm) < SR * min_seconds:  # too short — almost certainly a misfire
             print("  (too short — hold the key while you speak)", flush=True)
             return "too_short"
         if self.stt_backend == "parakeet" and recording_s < self.parakeet_min_seconds:
