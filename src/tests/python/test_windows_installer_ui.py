@@ -455,16 +455,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_runtime_controls_live_in_fixed_top_status_bar(self):
         script = rust_ui_source()
+        shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
             "impl WhisperDictateApp", 1
         )[0]
         # global_controls now lives in ui/tabs/shell.rs; scope to that file so the
         # assertNotIns aren't polluted by other tabs in the concatenated source.
-        controls = (
-            Path("src/rust/ui/tabs/shell.rs")
-            .read_text(encoding="utf-8")
-            .split("fn global_controls", 1)[1]
-        )
+        controls = shell.split("fn global_controls", 1)[1]
 
         # Compact mode is a session-only early branch: the runtime/background
         # polls must run BEFORE it so dictation keeps flowing in the strip, and
@@ -527,6 +524,28 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("UiTextKey::InstallRepair", controls)
         self.assertIn("fn top_status_bar_height(raw_scale: &str) -> f32", script)
         self.assertIn("fn sidebar_width(raw_scale: &str) -> f32", script)
+        # Priority-drop budget: pure function + call site in top_status_bar.
+        self.assertIn(
+            "pub(in crate::ui) fn top_status_cards_fit(",
+            shell,
+        )
+        # Signature may be wrapped by rustfmt across lines — check the pieces.
+        self.assertIn("fn top_status_cards_fit(", shell)
+        self.assertIn("left_width: f32,", shell)
+        self.assertIn("card_widths: &[f32],", shell)
+        self.assertIn("spacing: f32,", shell)
+        top_bar = shell.split("fn top_status_bar", 1)[1].split("fn global_controls", 1)[0]
+        self.assertIn("top_status_cards_fit(", top_bar)
+        self.assertIn("let fit_count = top_status_cards_fit(", top_bar)
+        # Scale-aware min-width helpers used in the budget computation.
+        self.assertIn("fn status_card_min_width(raw_scale: &str) -> f32", script)
+        self.assertIn("fn status_card_wide_min_width(raw_scale: &str) -> f32", script)
+        self.assertIn("status_card_min_width(", top_bar)
+        self.assertIn("status_card_wide_min_width(", top_bar)
+        # Cards are rendered in priority order, highest first; skips use fit_count.
+        self.assertIn("fit_count > 1", top_bar)
+        self.assertIn("fit_count > 2", top_bar)
+        self.assertIn("fit_count > 3", top_bar)
 
     def test_rust_compact_mode_is_session_only_always_on_top_strip(self):
         script = rust_ui_source()

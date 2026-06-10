@@ -204,6 +204,31 @@ impl WhisperDictateApp {
         let controls_width = top_status_controls_width() + ui.spacing().item_spacing.x;
         let total_width = ui.available_width();
         let left_width = top_status_left_width(total_width, controls_width);
+        let spacing = ui.spacing().item_spacing.x;
+        let raw_scale = &self.settings.ui_text_scale.clone();
+        // Build the ordered list of card widths (highest priority first):
+        //   0 – Status (always rendered; clip rect is the last resort)
+        //   1 – Backend
+        //   2 – Model/Compute (wide)
+        //   3 – Post indicator pill
+        //   4 – Background-task card (only when a task is active)
+        let card_min_widths: &[f32] = if self.background_task_label.is_some() {
+            &[
+                status_card_min_width(raw_scale),
+                status_card_min_width(raw_scale),
+                status_card_wide_min_width(raw_scale),
+                post_indicator_min_width(raw_scale),
+                status_card_min_width(raw_scale),
+            ]
+        } else {
+            &[
+                status_card_min_width(raw_scale),
+                status_card_min_width(raw_scale),
+                status_card_wide_min_width(raw_scale),
+                post_indicator_min_width(raw_scale),
+            ]
+        };
+        let fit_count = top_status_cards_fit(left_width, card_min_widths, spacing);
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(left_width, ui.available_height()),
@@ -212,8 +237,11 @@ impl WhisperDictateApp {
                     // egui does NOT clip child content to the allocated rect —
                     // without an explicit clip the cards/indicator paint right
                     // under the Start/Stop/compact controls at narrow widths.
+                    // The clip rect is kept as a backstop for the Status card
+                    // (which always renders) and for any rounding edge cases.
                     ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                     let display_state = self.display_runtime_state();
+                    // Card 0: Status — always rendered (clip rect is backstop).
                     status_card(
                         ui,
                         ui_text(&self.settings.ui_language, UiTextKey::Status),
@@ -221,42 +249,50 @@ impl WhisperDictateApp {
                         runtime_state_label(display_state, &self.settings.ui_language),
                         runtime_state_color(display_state, palette),
                         palette,
+                        raw_scale,
                     );
-                    status_card(
-                        ui,
-                        ui_text(&self.settings.ui_language, UiTextKey::Backend),
-                        icons::ICON_MODEL_TRAINING,
-                        self.backend_summary(),
-                        palette.accent_blue,
-                        palette,
-                    );
-                    let (detail_label, detail_icon, detail_value) = self.stt_detail_summary();
-                    status_card_wide(
-                        ui,
-                        detail_label,
-                        detail_icon,
-                        detail_value,
-                        palette.accent_blue,
-                        palette,
-                    );
-                    // The indicator is the lowest-priority element: skip it
-                    // entirely when it cannot fit, instead of showing a
-                    // half-clipped pill. The threshold scales with the UI
-                    // text scale, like the pill itself.
-                    if ui.available_width()
-                        >= post_indicator_min_width(&self.settings.ui_text_scale)
-                    {
-                        self.post_indicator(ui, palette);
-                    }
-                    if let Some(label) = self.background_task_label {
+                    // Card 1: Backend.
+                    if fit_count > 1 {
                         status_card(
                             ui,
-                            ui_text(&self.settings.ui_language, UiTextKey::Task),
-                            icons::ICON_PENDING_ACTIONS,
-                            label,
-                            palette.warn_text,
+                            ui_text(&self.settings.ui_language, UiTextKey::Backend),
+                            icons::ICON_MODEL_TRAINING,
+                            self.backend_summary(),
+                            palette.accent_blue,
                             palette,
+                            raw_scale,
                         );
+                    }
+                    // Card 2: Model/Compute (wide).
+                    if fit_count > 2 {
+                        let (detail_label, detail_icon, detail_value) = self.stt_detail_summary();
+                        status_card_wide(
+                            ui,
+                            detail_label,
+                            detail_icon,
+                            detail_value,
+                            palette.accent_blue,
+                            palette,
+                            raw_scale,
+                        );
+                    }
+                    // Card 3: Post indicator pill.
+                    if fit_count > 3 {
+                        self.post_indicator(ui, palette);
+                    }
+                    // Card 4: Background-task card (only when active).
+                    if fit_count > 4 {
+                        if let Some(label) = self.background_task_label {
+                            status_card(
+                                ui,
+                                ui_text(&self.settings.ui_language, UiTextKey::Task),
+                                icons::ICON_PENDING_ACTIONS,
+                                label,
+                                palette.warn_text,
+                                palette,
+                                raw_scale,
+                            );
+                        }
                     }
                 },
             );
@@ -361,8 +397,17 @@ fn status_card(
     value: impl AsRef<str>,
     accent: egui::Color32,
     palette: UiPalette,
+    raw_scale: &str,
 ) {
-    status_card_sized(ui, label, icon, value, accent, palette, 134.0);
+    status_card_sized(
+        ui,
+        label,
+        icon,
+        value,
+        accent,
+        palette,
+        status_card_min_width(raw_scale),
+    );
 }
 
 fn status_card_wide(
@@ -372,8 +417,17 @@ fn status_card_wide(
     value: impl AsRef<str>,
     accent: egui::Color32,
     palette: UiPalette,
+    raw_scale: &str,
 ) {
-    status_card_sized(ui, label, icon, value, accent, palette, 218.0);
+    status_card_sized(
+        ui,
+        label,
+        icon,
+        value,
+        accent,
+        palette,
+        status_card_wide_min_width(raw_scale),
+    );
 }
 
 fn status_card_sized(
@@ -397,6 +451,40 @@ fn status_card_sized(
             ui.label(egui::RichText::new(value).strong().color(accent))
                 .on_hover_text(value);
         });
+}
+
+/// Returns how many leading cards from `card_widths` fit within `left_width`
+/// when each card (after the first) is preceded by `spacing` pixels.
+///
+/// The first card always counts as fitting (it is rendered with the clip rect
+/// as backstop), so the return value is at least 1 when `card_widths` is
+/// non-empty. An empty slice returns 0.
+///
+/// Pure function — no egui context required — so it is directly unit-testable.
+pub(in crate::ui) fn top_status_cards_fit(
+    left_width: f32,
+    card_widths: &[f32],
+    spacing: f32,
+) -> usize {
+    if card_widths.is_empty() {
+        return 0;
+    }
+    // The Status card is always rendered (clip rect as backstop), so start the
+    // budget from 1 and accumulate the remaining cards.
+    let mut budget = left_width;
+    let mut count = 0usize;
+    for (i, &w) in card_widths.iter().enumerate() {
+        let cost = if i == 0 { w } else { spacing + w };
+        if count == 0 || budget >= cost {
+            budget -= cost;
+            count += 1;
+        } else {
+            // Once a card doesn't fit, stop — avoid weird gaps mid-bar.
+            break;
+        }
+    }
+    // Guarantee at least 1 (the Status card always renders).
+    count.max(1)
 }
 
 pub(in crate::ui) fn top_status_controls_width() -> f32 {

@@ -44,6 +44,10 @@ const TOP_STATUS_HEIGHT: f32 = 64.0;
 // Rough width of the post-indicator pill (icon + "Post on/off" + margins)
 // at scale 1.0.
 const POST_INDICATOR_MIN_WIDTH: f32 = 120.0;
+// Minimum width for a regular status card (Status / Backend / Task) at scale 1.0.
+const STATUS_CARD_MIN_WIDTH: f32 = 134.0;
+// Minimum width for the wide stt-detail card (Model/Compute) at scale 1.0.
+const STATUS_CARD_WIDE_MIN_WIDTH: f32 = 218.0;
 const BOTTOM_MESSAGE_BAR_HEIGHT: f32 = 30.0;
 pub(in crate::ui) const CONTROL_RADIUS: u8 = 8;
 pub(in crate::ui) const PANEL_RADIUS: u8 = 12;
@@ -302,6 +306,19 @@ pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
 /// must scale with it (Copilot finding on PR #170).
 pub(in crate::ui) fn post_indicator_min_width(raw_scale: &str) -> f32 {
     POST_INDICATOR_MIN_WIDTH * layout_scale(raw_scale)
+}
+
+/// Minimum width for a regular (narrow) status card — Status, Backend, Task.
+/// Scales with the UI text scale so the budget check uses the same number the
+/// card's `set_min_width` call actually requests.
+pub(in crate::ui) fn status_card_min_width(raw_scale: &str) -> f32 {
+    STATUS_CARD_MIN_WIDTH * layout_scale(raw_scale)
+}
+
+/// Minimum width for the wide stt-detail card (Model / Compute).
+/// Scales with the UI text scale.
+pub(in crate::ui) fn status_card_wide_min_width(raw_scale: &str) -> f32 {
+    STATUS_CARD_WIDE_MIN_WIDTH * layout_scale(raw_scale)
 }
 
 pub(in crate::ui) fn bottom_message_bar_height(raw_scale: &str) -> f32 {
