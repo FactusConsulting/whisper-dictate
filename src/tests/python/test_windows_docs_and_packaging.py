@@ -76,7 +76,8 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn('.config/autostart', runtime)
         self.assertIn('gtk-launch', runtime)
         self.assertIn('setsid', runtime)
-        self.assertIn('Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang da', script)
+        # The --lang value is now parameterised via $WD_LANG (default da).
+        self.assertIn('Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang ${WD_LANG}', script)
         self.assertNotIn('Exec=whisper-dictate --key shift_r+ctrl_r --lang da', script)
 
     def test_ubuntu_setup_uses_bash_conditionals_for_reliability(self):
