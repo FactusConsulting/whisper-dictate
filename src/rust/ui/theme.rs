@@ -44,6 +44,24 @@ const TOP_STATUS_HEIGHT: f32 = 64.0;
 // Rough width of the post-indicator pill (icon + "Post on/off" + margins)
 // at scale 1.0.
 const POST_INDICATOR_MIN_WIDTH: f32 = 120.0;
+// Minimum width for a regular status card (Status / Backend / Task) at scale 1.0.
+const STATUS_CARD_MIN_WIDTH: f32 = 134.0;
+// Minimum width for the wide stt-detail card (Model/Compute) at scale 1.0.
+const STATUS_CARD_WIDE_MIN_WIDTH: f32 = 218.0;
+// Frame geometry shared between the card/pill RENDER and the top-bar fit budget
+// so the two can never drift. `set_min_width` sizes the inner CONTENT; the card's
+// real OUTER width is `inner*scale + 2*H_MARGIN + 2*CARD_STROKE`. The margin and
+// stroke are UNSCALED literals (they come straight from the Frame builder), so
+// they are added AFTER the scale multiply. These MUST match the literals in
+// `status_card_sized`'s Frame (margin 14, stroke 0.8) and `post_indicator`'s
+// Frame (margin 12, stroke 0.8) — both reference these consts.
+pub(in crate::ui) const STATUS_CARD_H_MARGIN: f32 = 14.0;
+pub(in crate::ui) const POST_PILL_H_MARGIN: f32 = 12.0;
+pub(in crate::ui) const CARD_STROKE: f32 = 0.8;
+// Base horizontal item-spacing (scaled by the UI text scale in `apply_ui_theme`).
+// The top-bar fit budget separates cards by exactly this scaled value, so the
+// layout tests source it here instead of re-hardcoding the literal.
+pub(in crate::ui) const ITEM_SPACING_X: f32 = 9.0;
 const BOTTOM_MESSAGE_BAR_HEIGHT: f32 = 30.0;
 pub(in crate::ui) const CONTROL_RADIUS: u8 = 8;
 pub(in crate::ui) const PANEL_RADIUS: u8 = 12;
@@ -165,7 +183,7 @@ pub(in crate::ui) fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_th
         ),
     ]);
     let button_padding = egui::vec2(10.0 * scale, 5.0 * scale);
-    let item_spacing = egui::vec2(9.0 * scale, 7.0 * scale);
+    let item_spacing = egui::vec2(ITEM_SPACING_X * scale, 7.0 * scale);
     let mut style = (*ctx.style()).clone();
     style.text_styles = text_styles;
     style.spacing.button_padding = button_padding;
@@ -302,6 +320,41 @@ pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
 /// must scale with it (Copilot finding on PR #170).
 pub(in crate::ui) fn post_indicator_min_width(raw_scale: &str) -> f32 {
     POST_INDICATOR_MIN_WIDTH * layout_scale(raw_scale)
+}
+
+/// Minimum width for a regular (narrow) status card — Status, Backend, Task.
+/// Scales with the UI text scale so the budget check uses the same number the
+/// card's `set_min_width` call actually requests.
+pub(in crate::ui) fn status_card_min_width(raw_scale: &str) -> f32 {
+    STATUS_CARD_MIN_WIDTH * layout_scale(raw_scale)
+}
+
+/// Minimum width for the wide stt-detail card (Model / Compute).
+/// Scales with the UI text scale.
+pub(in crate::ui) fn status_card_wide_min_width(raw_scale: &str) -> f32 {
+    STATUS_CARD_WIDE_MIN_WIDTH * layout_scale(raw_scale)
+}
+
+/// The TRUE outer width a regular status card occupies in the bar: the scaled
+/// inner content min-width plus the Frame's symmetric horizontal inner margin
+/// (`2*STATUS_CARD_H_MARGIN`, unscaled) and both stroke edges (`2*CARD_STROKE`,
+/// unscaled). The top-bar fit budget MUST use this — `set_min_width` only sizes
+/// the inner content, so feeding it the bare inner width undercounts each card
+/// by the margin+stroke and the cards overflow and clip mid-card.
+pub(in crate::ui) fn status_card_outer_width(raw_scale: &str) -> f32 {
+    status_card_min_width(raw_scale) + 2.0 * STATUS_CARD_H_MARGIN + 2.0 * CARD_STROKE
+}
+
+/// Outer width of the wide stt-detail card (same margin/stroke as the narrow
+/// card; only the inner min-width differs).
+pub(in crate::ui) fn status_card_wide_outer_width(raw_scale: &str) -> f32 {
+    status_card_wide_min_width(raw_scale) + 2.0 * STATUS_CARD_H_MARGIN + 2.0 * CARD_STROKE
+}
+
+/// Outer width of the post-indicator pill. The pill's Frame uses a tighter
+/// horizontal margin (`POST_PILL_H_MARGIN`) than the cards, but the same stroke.
+pub(in crate::ui) fn post_indicator_outer_width(raw_scale: &str) -> f32 {
+    post_indicator_min_width(raw_scale) + 2.0 * POST_PILL_H_MARGIN + 2.0 * CARD_STROKE
 }
 
 pub(in crate::ui) fn bottom_message_bar_height(raw_scale: &str) -> f32 {

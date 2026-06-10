@@ -204,6 +204,40 @@ impl WhisperDictateApp {
         let controls_width = top_status_controls_width() + ui.spacing().item_spacing.x;
         let total_width = ui.available_width();
         let left_width = top_status_left_width(total_width, controls_width);
+        let spacing = ui.spacing().item_spacing.x;
+        // Own the scale string in a local: the render closure below needs
+        // `&mut self`, so borrowing `self.settings.ui_text_scale` across it
+        // would conflict. Bind the clone to a named local (not a borrowed
+        // temporary) and pass `&str` slices of it.
+        let raw_scale = self.settings.ui_text_scale.clone();
+        let raw_scale = raw_scale.as_str();
+        // Build the ordered list of card widths (highest priority first). These
+        // are the TRUE OUTER widths (inner content min-width + Frame margin +
+        // stroke), NOT the inner `set_min_width` values — feeding the bare inner
+        // widths here undercounts each card by ~30px and the cards overflow the
+        // left budget and get sliced by the clip rect.
+        //   0 – Status (always rendered; clip rect is the last resort)
+        //   1 – Backend
+        //   2 – Model/Compute (wide)
+        //   3 – Post indicator pill
+        //   4 – Background-task card (only when a task is active)
+        let card_outer_widths: &[f32] = if self.background_task_label.is_some() {
+            &[
+                status_card_outer_width(raw_scale),
+                status_card_outer_width(raw_scale),
+                status_card_wide_outer_width(raw_scale),
+                post_indicator_outer_width(raw_scale),
+                status_card_outer_width(raw_scale),
+            ]
+        } else {
+            &[
+                status_card_outer_width(raw_scale),
+                status_card_outer_width(raw_scale),
+                status_card_wide_outer_width(raw_scale),
+                post_indicator_outer_width(raw_scale),
+            ]
+        };
+        let fit_count = top_status_cards_fit(left_width, card_outer_widths, spacing);
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(left_width, ui.available_height()),
@@ -212,8 +246,11 @@ impl WhisperDictateApp {
                     // egui does NOT clip child content to the allocated rect —
                     // without an explicit clip the cards/indicator paint right
                     // under the Start/Stop/compact controls at narrow widths.
+                    // The clip rect is kept as a backstop for the Status card
+                    // (which always renders) and for any rounding edge cases.
                     ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                     let display_state = self.display_runtime_state();
+                    // Card 0: Status — always rendered (clip rect is backstop).
                     status_card(
                         ui,
                         ui_text(&self.settings.ui_language, UiTextKey::Status),
@@ -221,42 +258,50 @@ impl WhisperDictateApp {
                         runtime_state_label(display_state, &self.settings.ui_language),
                         runtime_state_color(display_state, palette),
                         palette,
+                        raw_scale,
                     );
-                    status_card(
-                        ui,
-                        ui_text(&self.settings.ui_language, UiTextKey::Backend),
-                        icons::ICON_MODEL_TRAINING,
-                        self.backend_summary(),
-                        palette.accent_blue,
-                        palette,
-                    );
-                    let (detail_label, detail_icon, detail_value) = self.stt_detail_summary();
-                    status_card_wide(
-                        ui,
-                        detail_label,
-                        detail_icon,
-                        detail_value,
-                        palette.accent_blue,
-                        palette,
-                    );
-                    // The indicator is the lowest-priority element: skip it
-                    // entirely when it cannot fit, instead of showing a
-                    // half-clipped pill. The threshold scales with the UI
-                    // text scale, like the pill itself.
-                    if ui.available_width()
-                        >= post_indicator_min_width(&self.settings.ui_text_scale)
-                    {
-                        self.post_indicator(ui, palette);
-                    }
-                    if let Some(label) = self.background_task_label {
+                    // Card 1: Backend.
+                    if fit_count > 1 {
                         status_card(
                             ui,
-                            ui_text(&self.settings.ui_language, UiTextKey::Task),
-                            icons::ICON_PENDING_ACTIONS,
-                            label,
-                            palette.warn_text,
+                            ui_text(&self.settings.ui_language, UiTextKey::Backend),
+                            icons::ICON_MODEL_TRAINING,
+                            self.backend_summary(),
+                            palette.accent_blue,
                             palette,
+                            raw_scale,
                         );
+                    }
+                    // Card 2: Model/Compute (wide).
+                    if fit_count > 2 {
+                        let (detail_label, detail_icon, detail_value) = self.stt_detail_summary();
+                        status_card_wide(
+                            ui,
+                            detail_label,
+                            detail_icon,
+                            detail_value,
+                            palette.accent_blue,
+                            palette,
+                            raw_scale,
+                        );
+                    }
+                    // Card 3: Post indicator pill.
+                    if fit_count > 3 {
+                        self.post_indicator(ui, palette);
+                    }
+                    // Card 4: Background-task card (only when active).
+                    if fit_count > 4 {
+                        if let Some(label) = self.background_task_label {
+                            status_card(
+                                ui,
+                                ui_text(&self.settings.ui_language, UiTextKey::Task),
+                                icons::ICON_PENDING_ACTIONS,
+                                label,
+                                palette.warn_text,
+                                palette,
+                                raw_scale,
+                            );
+                        }
                     }
                 },
             );
@@ -286,9 +331,9 @@ impl WhisperDictateApp {
         );
         egui::Frame::default()
             .fill(palette.surface_bg)
-            .stroke(egui::Stroke::new(0.8, palette.border_soft))
+            .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
             .rounding(egui::Rounding::same(PILL_RADIUS as f32))
-            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .inner_margin(egui::Margin::symmetric(POST_PILL_H_MARGIN, 9.0))
             .show(ui, |ui| {
                 ui.label(icon_text(icon, label).strong().color(color));
             })
@@ -361,8 +406,17 @@ fn status_card(
     value: impl AsRef<str>,
     accent: egui::Color32,
     palette: UiPalette,
+    raw_scale: &str,
 ) {
-    status_card_sized(ui, label, icon, value, accent, palette, 134.0);
+    status_card_sized(
+        ui,
+        label,
+        icon,
+        value,
+        accent,
+        palette,
+        status_card_min_width(raw_scale),
+    );
 }
 
 fn status_card_wide(
@@ -372,8 +426,17 @@ fn status_card_wide(
     value: impl AsRef<str>,
     accent: egui::Color32,
     palette: UiPalette,
+    raw_scale: &str,
 ) {
-    status_card_sized(ui, label, icon, value, accent, palette, 218.0);
+    status_card_sized(
+        ui,
+        label,
+        icon,
+        value,
+        accent,
+        palette,
+        status_card_wide_min_width(raw_scale),
+    );
 }
 
 fn status_card_sized(
@@ -388,78 +451,15 @@ fn status_card_sized(
     let value = value.as_ref();
     egui::Frame::default()
         .fill(palette.surface_bg)
-        .stroke(egui::Stroke::new(0.8, palette.border_soft))
+        .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
         .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(14.0, 9.0))
+        .inner_margin(egui::Margin::symmetric(STATUS_CARD_H_MARGIN, 9.0))
         .show(ui, |ui| {
             ui.set_min_width(min_width);
             ui.label(icon_text(icon, label).size(12.0).color(palette.text_muted));
             ui.label(egui::RichText::new(value).strong().color(accent))
                 .on_hover_text(value);
         });
-}
-
-pub(in crate::ui) fn top_status_controls_width() -> f32 {
-    // Start (88) + Stop (78) + compact toggle (34) + inter-button spacing.
-    // The caller adds the live item_spacing gap between the two regions.
-    232.0
-}
-
-/// Width budget for the left (status-cards) portion of the top bar.
-///
-/// The right-pinned controls are allocated first and always get
-/// `controls_width` pixels. The status cards take whatever remains,
-/// with a floor of zero so the bar never forces an overflow/overlap —
-/// cards simply clip when the window is very narrow.
-///
-/// Pure function: easy to unit-test without an egui context.
-pub(in crate::ui) fn top_status_left_width(total_width: f32, controls_width: f32) -> f32 {
-    (total_width - controls_width).max(0.0)
-}
-
-/// Whether post-processing is actually active, given the configured processor
-/// and mode. Mirrors the worker's gate (`vp_dictate`/`vp_postprocess`): the pass
-/// is skipped when the processor is `none`/empty OR the mode is `raw` — and the
-/// worker normalizes an EMPTY mode to `raw`, so an unset mode reads as off here
-/// too. Case-insensitive like the worker's normalization. Pure so the top-bar
-/// indicator's on/off decision is unit-testable.
-pub(in crate::ui) fn post_processing_enabled(processor: &str, mode: &str) -> bool {
-    let processor = processor.trim().to_ascii_lowercase();
-    let mode = mode.trim().to_ascii_lowercase();
-    !processor.is_empty() && processor != "none" && !mode.is_empty() && mode != "raw"
-}
-
-/// The compact label for the top-bar post indicator: "Post on" when active,
-/// "Post off" otherwise. Pure helper over `post_processing_enabled`.
-pub(in crate::ui) fn post_indicator_label(
-    processor: &str,
-    mode: &str,
-    raw_language: &str,
-) -> &'static str {
-    if post_processing_enabled(processor, mode) {
-        ui_text(raw_language, UiTextKey::PostOn)
-    } else {
-        ui_text(raw_language, UiTextKey::PostOff)
-    }
-}
-
-/// Hover text for the post indicator, naming the configured mode + processor so
-/// the user can see the details without leaving the current tab. Pure so it can
-/// be unit-tested without an egui context.
-pub(in crate::ui) fn post_indicator_hover(processor: &str, mode: &str) -> String {
-    let processor = processor.trim();
-    let processor = if processor.is_empty() {
-        "none"
-    } else {
-        processor
-    };
-    let mode = mode.trim();
-    let mode = if mode.is_empty() { "raw" } else { mode };
-    if post_processing_enabled(processor, mode) {
-        format!("Post-processing on — mode: {mode}, processor: {processor}")
-    } else {
-        format!("Post-processing off — mode: {mode}, processor: {processor}")
-    }
 }
 
 pub(in crate::ui) fn runtime_state_color(state: RuntimeState, palette: UiPalette) -> egui::Color32 {
