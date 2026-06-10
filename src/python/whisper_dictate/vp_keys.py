@@ -153,8 +153,11 @@ class _PynputListener:
         self._recording = False
         print(f"[keys] chord detected ({_chord_desc(self._targets, k)}) "
               f"— dictation cancelled", flush=True)
+        # Capture the recording generation NOW so a delayed cancel cannot discard
+        # a later recording (release + re-press before this thread runs).
+        epoch = getattr(self._owner, "_record_epoch", None)
         threading.Thread(target=self._owner._cancel_and_discard,
-                         daemon=True).start()
+                         args=(epoch,), daemon=True).start()
 
     def on_release(self, k):
         self._solo.note_release(k)
@@ -260,6 +263,12 @@ class KeyBackendMixin:
         if ev.value == evdev.KeyEvent.key_up:
             return self._evdev_key_up(ev, target_codes, pressed, recording,
                                       is_target, toggle_mode, latched, solo)
+        # value == 2: OS autorepeat. Refresh the guard timestamp for a tracked
+        # foreign key so a genuinely-held key does not expire out of the held set
+        # (phantom-key self-heal). Target-key autorepeat behaviour is unchanged.
+        if (solo is not None and ev.value == evdev.KeyEvent.key_hold
+                and not is_target):
+            solo.note_repeat(ev.code)
         return recording
 
     def _evdev_key_down(self, ev, target_codes, pressed, recording, is_target,
@@ -273,7 +282,11 @@ class KeyBackendMixin:
                 and ev.code not in target_codes):
             print(f"[keys] chord detected ({_chord_desc(target_codes, ev.code)}) "
                   f"— dictation cancelled", flush=True)
-            threading.Thread(target=self._cancel_and_discard, daemon=True).start()
+            # Capture the recording generation NOW so a delayed cancel cannot
+            # discard a later recording (release + re-press before this runs).
+            epoch = getattr(self, "_record_epoch", None)
+            threading.Thread(target=self._cancel_and_discard,
+                             args=(epoch,), daemon=True).start()
             return False
         if not is_target:
             return recording  # foreign keydown: tracked above, nothing else to do

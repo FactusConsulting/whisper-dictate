@@ -20,20 +20,50 @@ The guard tracks *every* key currently held (opaque tokens — pynput Key/str or
 evdev int codes), so it can tell whether a foreign key is present. Key-repeat
 (a held key re-firing) never counts as a new key; releases of keys never seen
 pressed are ignored.
+
+**Phantom-held-key self-healing.** Global hooks routinely miss key-ups: Alt+Tab
+eats the Alt-up, Win+L / secure-desktop / RDP focus loss drop events, pynput
+suppression can swallow them. A held entry that is never released would make
+``foreign_key_held()`` True forever, silently wedging bare-modifier PTT off
+until the app restarts. To self-heal, each held key carries a monotonic
+timestamp; entries older than ``FOREIGN_KEY_EXPIRY_S`` are ignored and pruned.
+A real chord press lands within ~1 s, so a phantom entry recovers after 10 s;
+a foreign key genuinely held for >10 s falsely allowing a start is rare and
+benign (recoverable), while a permanent PTT wedge is not. OS key-repeat (pynput
+press repeats, evdev value==2 autorepeat) refreshes the timestamp so a key
+that is *actually* still held keeps blocking past the nominal expiry.
 """
 from __future__ import annotations
 
-# pynput key names that are bare modifiers. A PTT key is "solo-guarded" only
-# when key_names is exactly one of these. Generic 'ctrl'/'shift'/'alt' aren't
-# normally produced by config, but are accepted for robustness.
+import time
+
+# A held foreign key with no observed key-up self-heals after this many seconds
+# (see module docstring). A real chord forms within ~1 s, so this is comfortably
+# above any genuine chord latency while still recovering from missed key-ups.
+FOREIGN_KEY_EXPIRY_S = 10.0
+
+# Key names that are bare modifiers AND resolvable to a real target by at least
+# one backend (so the bare-modifier guard can ever actually engage). The set is
+# the union of:
+#   * pynput Key enum members that are modifiers — generics ctrl/shift/alt/cmd
+#     plus the ctrl_l/ctrl_r, shift_l/shift_r, alt_l/alt_r, cmd_l/cmd_r and the
+#     alt_gr variants (all real ``pynput.keyboard.Key`` members), resolved via
+#     ``getattr(keyboard.Key, kn)`` in ``_pynput_targets``;
+#   * evdev names accepted by ``KeyBackendMixin._EVDEV_MAP``: ctrl_l/ctrl_r,
+#     shift_l/shift_r, alt_l/alt_r, super_l/super_r.
+# Names that NEITHER backend can resolve (win*, meta*, bare super, bare cmd on
+# evdev, etc.) are excluded: the target resolver would ``sys.exit`` on them long
+# before the guard runs, so advertising them here is misleading dead weight.
 _BARE_MODIFIER_NAMES = frozenset({
-    "ctrl", "ctrl_l", "ctrl_r",
-    "shift", "shift_l", "shift_r",
-    "alt", "alt_l", "alt_r", "alt_gr",
-    "cmd", "cmd_l", "cmd_r",
-    "win", "win_l", "win_r",
-    "super", "super_l", "super_r",
-    "meta", "meta_l", "meta_r",
+    # pynput generics (Key.ctrl / Key.shift / Key.alt / Key.cmd all exist)
+    "ctrl", "shift", "alt", "cmd",
+    # left/right variants resolvable by pynput and/or evdev
+    "ctrl_l", "ctrl_r",
+    "shift_l", "shift_r",
+    "alt_l", "alt_r", "alt_gr",
+    "cmd_l", "cmd_r",
+    # evdev-only super (KEY_LEFTMETA / KEY_RIGHTMETA)
+    "super_l", "super_r",
 })
 
 
@@ -56,32 +86,58 @@ class SoloModifierGuard:
 
     When ``enabled`` is False (PTT key is not a bare modifier) every method is a
     no-op that preserves the original behaviour.
+
+    Held keys are stored with a monotonic timestamp so stale entries from missed
+    key-ups self-heal (see module docstring). ``_now`` is injectable so tests can
+    drive the expiry clock deterministically.
     """
 
-    def __init__(self, target, *, enabled: bool) -> None:
+    def __init__(self, target, *, enabled: bool, _now=time.monotonic) -> None:
         self.enabled = enabled
         self._target = target
-        self._held: set = set()
+        # key token -> monotonic timestamp of the most recent press/repeat.
+        self._held: dict = {}
+        self._now = _now
 
     # --- press / release tracking -------------------------------------------------
     def note_press(self, key) -> bool:
         """Record ``key`` as held. Returns True if this is a *newly* held key.
 
         Key-repeat (the key is already in the held set) returns False so a held
-        key re-firing is never treated as a new keypress.
+        key re-firing is never treated as a new keypress — but it refreshes the
+        timestamp so a genuinely-held key does not expire out of the held set.
         """
         if key in self._held:
+            self._held[key] = self._now()  # OS key-repeat: refresh, still not new
             return False
-        self._held.add(key)
+        self._held[key] = self._now()
         return True
+
+    def note_repeat(self, key) -> None:
+        """Refresh the timestamp of an already-held key (OS autorepeat).
+
+        For evdev value==2 autorepeat events: keeps a genuinely-held foreign key
+        from expiring out of the held set. No-op if the key is not tracked.
+        """
+        if key in self._held:
+            self._held[key] = self._now()
 
     def note_release(self, key) -> None:
         """Record ``key`` as released. Releases of unknown keys are ignored."""
-        self._held.discard(key)
+        self._held.pop(key, None)
 
     # --- the two rules -------------------------------------------------------------
     def foreign_key_held(self) -> bool:
-        """True if any key other than the PTT target is currently held."""
+        """True if any *non-stale* key other than the PTT target is held.
+
+        Also prunes entries older than ``FOREIGN_KEY_EXPIRY_S`` so a missed
+        key-up cannot wedge bare-modifier PTT off permanently.
+        """
+        now = self._now()
+        stale = [k for k, ts in self._held.items()
+                 if now - ts > FOREIGN_KEY_EXPIRY_S]
+        for k in stale:
+            del self._held[k]
         return any(k != self._target for k in self._held)
 
     def may_start_on_target_down(self) -> bool:

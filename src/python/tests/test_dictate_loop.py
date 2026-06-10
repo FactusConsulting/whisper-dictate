@@ -216,6 +216,40 @@ class DictateLoopTests(unittest.TestCase):
         no_text = [e for e in events if e.get("state") == "no_text"]
         self.assertEqual(no_text, [], f"unexpected no_text events on success: {events}")
 
+    # ── chord-cancel epoch guard (Finding 2 / 4d) ─────────────────────────────
+
+    def test_cancel_matching_epoch_discards(self):
+        # A cancel dispatched for the CURRENT recording generation discards the
+        # in-flight audio (no transcribe/inject).
+        d = self._make_dictate()
+        d.frames = [self._pcm(16000)]
+        d._record_epoch = 7
+        d._discard_recording = False
+        with patch.object(self.dictate, "_transcribe_detail",
+                          lambda *_a, **_k: _fake_transcribe_result("should not")), \
+                patch.object(self.dictate, "postprocess_text",
+                             _passthrough_postprocess), \
+                patch.object(self.dictate, "is_hallucination", lambda _t: False), \
+                _capture_stdout():
+            self.dictate.Dictate._cancel_and_discard(d, 7)
+        self.assertEqual(self.injected, [])      # discarded, nothing injected
+        self.assertEqual(d.frames, [])           # audio dropped
+        self.assertFalse(d.recording)
+
+    def test_stale_cancel_for_old_epoch_noops(self):
+        # Finding 2/4d: a cancel dispatched for epoch N must NOT discard a NEW
+        # recording (epoch N+1) — release + re-press happened before the daemon
+        # thread ran. The new clip is preserved (recording stays active).
+        d = self._make_dictate()
+        d.frames = [self._pcm(16000)]
+        d._record_epoch = 8            # a NEW recording is active
+        d._discard_recording = False
+        with _capture_stdout():
+            self.dictate.Dictate._cancel_and_discard(d, 7)  # stale: epoch 7
+        self.assertTrue(d.recording)            # untouched
+        self.assertFalse(d._discard_recording)  # never armed the discard
+        self.assertEqual(self.injected, [])     # and never transcribed
+
 
 if __name__ == "__main__":
     unittest.main()

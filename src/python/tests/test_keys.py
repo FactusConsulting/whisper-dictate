@@ -382,11 +382,25 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
     def test_is_bare_modifier_key(self):
         self.assertTrue(vp_keys_solo.is_bare_modifier_key(["ctrl_l"]))
         self.assertTrue(vp_keys_solo.is_bare_modifier_key(["shift_r"]))
-        self.assertTrue(vp_keys_solo.is_bare_modifier_key(["win"]))
+        self.assertTrue(vp_keys_solo.is_bare_modifier_key(["super_l"]))
         # Non-modifier single key and multi-key chords are NOT guarded.
         self.assertFalse(vp_keys_solo.is_bare_modifier_key(["scroll_lock"]))
         self.assertFalse(vp_keys_solo.is_bare_modifier_key(["f9"]))
         self.assertFalse(vp_keys_solo.is_bare_modifier_key(["shift_r", "ctrl_r"]))
+
+    def test_bare_modifier_names_only_backend_resolvable(self):
+        # Finding 3: the advertised set must contain only names a backend can
+        # actually resolve to a target — names neither backend resolves (win*,
+        # meta*, bare super/cmd-on-evdev) would sys.exit before the guard runs.
+        names = vp_keys_solo._BARE_MODIFIER_NAMES
+        for unresolvable in ("win", "win_l", "win_r", "meta", "meta_l",
+                             "meta_r", "super"):
+            self.assertNotIn(unresolvable, names)
+        # pynput generics + l/r variants and evdev super_l/r ARE resolvable.
+        for resolvable in ("ctrl", "shift", "alt", "cmd", "ctrl_l", "ctrl_r",
+                           "shift_l", "shift_r", "alt_l", "alt_r", "alt_gr",
+                           "cmd_l", "cmd_r", "super_l", "super_r"):
+            self.assertIn(resolvable, names)
 
     def test_disabled_guard_is_noop(self):
         g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=False)
@@ -417,6 +431,48 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
         self.assertFalse(g.should_cancel_on_press("ctrl"))  # the PTT key itself
         self.assertTrue(g.should_cancel_on_press("c"))      # foreign → cancel
         self.assertFalse(g.should_cancel_on_press("c"))     # repeat → no re-cancel
+
+    def test_phantom_held_key_expires_and_allows_start(self):
+        # Finding 1 (a): a foreign key pressed but never released (missed key-up)
+        # must self-heal — once the monotonic clock advances past the expiry the
+        # phantom entry is ignored/pruned and a bare-modifier start is allowed.
+        clock = [1000.0]
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True,
+                                           _now=lambda: clock[0])
+        g.note_press("shift")               # foreign key down, never released
+        self.assertFalse(g.may_start_on_target_down())   # within expiry: blocked
+        clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S + 0.1
+        self.assertTrue(g.may_start_on_target_down())     # past expiry: allowed
+        self.assertNotIn("shift", g._held)                # and pruned
+
+    def test_foreign_key_within_expiry_still_blocks(self):
+        # Finding 1 (b): a foreign key held for less than the expiry keeps PTT
+        # blocked (a real chord forms within ~1 s).
+        clock = [1000.0]
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True,
+                                           _now=lambda: clock[0])
+        g.note_press("shift")
+        clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S - 0.5
+        self.assertFalse(g.may_start_on_target_down())
+
+    def test_repeat_refresh_keeps_held_key_blocking_past_expiry(self):
+        # Finding 1 (c): a genuinely-held foreign key keeps emitting OS repeats;
+        # each refresh resets the timestamp so it keeps blocking well past the
+        # nominal expiry window (it is NOT a phantom — it is really held).
+        clock = [1000.0]
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True,
+                                           _now=lambda: clock[0])
+        g.note_press("shift")
+        # Advance in sub-expiry steps, refreshing via repeat each time.
+        for _ in range(5):
+            clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S - 1.0
+            g.note_repeat("shift")          # autorepeat refresh
+        # Total elapsed >> expiry, but refreshes keep it live → still blocked.
+        self.assertFalse(g.may_start_on_target_down())
+        # note_press on an already-held key also refreshes (pynput repeat path).
+        clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S - 1.0
+        self.assertFalse(g.note_press("shift"))   # not newly held
+        self.assertFalse(g.may_start_on_target_down())
 
 
 class _SoloPynput:
