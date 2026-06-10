@@ -354,6 +354,6 @@ class CalibrationTests(RealNumpyAudioCase):
         after = script.index("except RuntimeError as e:", model_load)
 
         self.assertLess(before, model_load)
-        self.assertIn('_emit_worker_event("error"', script[model_load:after + 300])
-        self.assertIn("startup error", script[model_load:after + 300])
-        self.assertIn("raise SystemExit(1)", script[model_load:after + 300])
+        self.assertIn('_emit_worker_event("error"', script[model_load:after + 400])
+        self.assertIn("startup error", script[model_load:after + 400])
+        self.assertIn("raise SystemExit(1)", script[model_load:after + 400])

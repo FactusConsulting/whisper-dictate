@@ -79,6 +79,8 @@ requiring restart/model reload.
 | **VAD silence** | Quality | `VOICEPI_VAD_MIN_SILENCE_MS` | _none_ | `600` | integer ms | minimum silence gap used by VAD segmentation |
 | **VAD speech padding** | Quality | `VOICEPI_VAD_SPEECH_PAD_MS` | _none_ | `200` | integer ms | padding kept around detected speech so soft first/last syllables aren't trimmed |
 | **Skip syscheck** | — | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `packaging/linux/ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
+| **Feedback sounds** | Output | `VOICEPI_FEEDBACK_SOUNDS` | _none_ | _(unset)_ | truthy / falsey | play a short audio cue on record start/stop — useful when the console is hidden (headless/autostart with `Terminal=false`) |
+| **Feedback notifications** | Output | `VOICEPI_FEEDBACK_NOTIFY` | _none_ | _(unset)_ | truthy / falsey | show a desktop notification on errors (model load failure, capture lost, injection failure) — Linux via `notify-send`; Windows/macOS: no-op for now |
 | **Debug dump** | Output | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | log every effective setting at startup |
 | **UI theme** | Output | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 
@@ -153,6 +155,8 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_AUDIO_DUCKING` | *(unset)* | truthy / falsey | Windows-only optional audio ducking. While recording, other app audio sessions are lowered and restored before transcription starts. Disabled by default. |
 | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | float 0.0-1.0 | Target volume for other app sessions while recording when audio ducking is enabled. |
 | `VOICEPI_SKIP_SYSCHECK` | *(unset)* | any non-empty value | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt dependency check. Set automatically by the Homebrew/Nix wrappers; rarely set by hand. |
+| `VOICEPI_FEEDBACK_SOUNDS` | *(unset)* | truthy / falsey | Play a short audio cue when recording starts (high pitch) and stops (low pitch). On Windows, uses `winsound.Beep`; on Linux, plays a freedesktop sound file via `paplay` if available. Cues are non-blocking (Popen + DEVNULL) so they never add latency to dictation. Live-reloadable. Useful when whisper-dictate is launched as a headless autostart entry (`Terminal=false`) and all console output is swallowed. |
+| `VOICEPI_FEEDBACK_NOTIFY` | *(unset)* | truthy / falsey | Send a desktop notification on errors: model load failure, audio capture lost, and injection failure. On Linux, uses `notify-send --urgency=critical`. Windows and macOS are no-ops for now. Live-reloadable. Useful for headless/autostart usage where no console is visible. |
 | `VOICEPI_DEBUG` | *(unset)* | `1` / `true` / any truthy (empty, `0`, `false`, `no`, `off` = disabled) | At startup, prints a `[debug] effective settings:` block listing every setting + which env var supplied it. Useful for "is my `setx` actually arriving in the running process?" — run with `VOICEPI_DEBUG=1` and the first lines of the log show the truth. Zero runtime cost when unset. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR

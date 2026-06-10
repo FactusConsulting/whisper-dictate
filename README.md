@@ -97,6 +97,9 @@ membership, session env vars, and readable `/dev/input/event*` devices.
 
 To start the UI automatically at login, the setup script creates
 `~/.config/autostart/whisper-dictate.desktop`. No manual step needed.
+When running headless (`Terminal=false`), enable `VOICEPI_FEEDBACK_SOUNDS` and/or
+`VOICEPI_FEEDBACK_NOTIFY` in the Output tab so audio cues and desktop notifications
+replace the console diagnostics that would otherwise be swallowed.
 
 ---
 

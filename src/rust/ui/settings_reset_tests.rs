@@ -50,6 +50,8 @@ fn changed_settings() -> AppSettings {
         history_enabled: false,
         history_jsonl: "history.jsonl".to_owned(),
         local_only: true,
+        feedback_sounds: true,
+        feedback_notify: true,
         debug: true,
         stt_debug: true,
         toggle_mode: true,
@@ -162,6 +164,8 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.history_enabled, defaults.history_enabled);
     assert_eq!(settings.history_jsonl, defaults.history_jsonl);
     assert_eq!(settings.local_only, defaults.local_only);
+    assert_eq!(settings.feedback_sounds, defaults.feedback_sounds);
+    assert_eq!(settings.feedback_notify, defaults.feedback_notify);
     assert_eq!(settings.debug, defaults.debug);
     assert_eq!(settings.stt_debug, defaults.stt_debug);
     assert_eq!(settings.ui_language, defaults.ui_language);

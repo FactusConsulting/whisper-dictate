@@ -161,6 +161,8 @@ fn minimal_cards_and_copy_use_full_utterance_text_over_truncated_inject() {
     assert_eq!(cards[0].kind, RuntimeLogCardKind::FinalText);
     assert_eq!(cards[0].title, full);
     assert!(!cards[0].title.ends_with("..."));
+    // No post fields in the payload → the card states post-processing was off.
+    assert_eq!(cards[0].detail, "Post-processing off");
 
     // Copy (the Minimal view text) hands out the full sentence too.
     assert_eq!(log_view_text(&log, LogViewMode::Minimal), full);
@@ -169,6 +171,34 @@ fn minimal_cards_and_copy_use_full_utterance_text_over_truncated_inject() {
     let diag = runtime_log_cards(&log, LogViewMode::Diagnostic);
     let utterance = diag.iter().find(|c| c.badge == "Utterance").unwrap();
     assert_eq!(utterance.title, full);
+}
+
+#[test]
+fn final_card_shows_post_processing_mode_per_utterance() {
+    // Active post-processing → mode + provider under the Final card.
+    let active = serde_json::json!({
+        "event": "utterance", "text": "renset tekst",
+        "post_processor": "groq", "post_mode": "clean",
+    });
+    let cards = runtime_log_cards(&format!("[utterance] {active}"), LogViewMode::Minimal);
+    assert_eq!(cards[0].detail, "Post-processing: clean (groq)");
+
+    // Raw mode counts as off even with a provider configured.
+    let raw = serde_json::json!({
+        "event": "utterance", "text": "rå tekst",
+        "post_processor": "groq", "post_mode": "raw",
+    });
+    let cards = runtime_log_cards(&format!("[utterance] {raw}"), LogViewMode::Minimal);
+    assert_eq!(cards[0].detail, "Post-processing off");
+
+    // Provider present but mode missing (older/partial payloads): the worker
+    // default is raw, so the card must read off — never "?".
+    let no_mode = serde_json::json!({
+        "event": "utterance", "text": "tekst",
+        "post_processor": "groq",
+    });
+    let cards = runtime_log_cards(&format!("[utterance] {no_mode}"), LogViewMode::Minimal);
+    assert_eq!(cards[0].detail, "Post-processing off");
 }
 
 #[test]

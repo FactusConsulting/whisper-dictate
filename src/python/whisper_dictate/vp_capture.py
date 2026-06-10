@@ -26,6 +26,7 @@ from whisper_dictate.vp_events import (
     _sounddevice_capture_channel_candidates, _sounddevice_input_channels,
     _sounddevice_input_name, _sounddevice_stream_kwargs,
 )
+from whisper_dictate.vp_feedback import notify_error
 
 FIRST_AUDIO_WAIT_S = 0.35
 
@@ -212,6 +213,7 @@ class CaptureMixin:
                         print("[cap] capture lost: arecord EOF while recording", flush=True)
                         _emit_worker_event("status", state="capture_lost",
                                           reason="arecord_eof")
+                        notify_error("whisper-dictate", "Capture lost: audio device disconnected")
                     break
                 arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 1)
                 if not self._first_audio_event.is_set():
@@ -239,6 +241,7 @@ class CaptureMixin:
             # Fix 4: unexpected error in the reader (e.g. device unplugged).
             print(f"[cap] capture lost: {exc}", flush=True)
             _emit_worker_event("status", state="capture_lost", reason=str(exc))
+            notify_error("whisper-dictate", f"Capture lost: {exc}")
 
     def _emit_audio_level(self, pcm) -> None:
         now = time.monotonic()

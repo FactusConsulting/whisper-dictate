@@ -66,6 +66,8 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "post_max_output_chars",
     "post_redact",
     "post_redact_terms",
+    "feedback_sounds",
+    "feedback_notify",
     "debug",
     "stt_debug",
     "toggle_mode",

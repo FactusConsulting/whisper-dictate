@@ -12,9 +12,11 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 
+from whisper_dictate.vp_feedback import notify_error
 from whisper_dictate.vp_windows import (
     SELF_INJECTION_PROCESSES as _SELF_INJECTION_PROCESSES,
     SELF_INJECTION_TITLE_RE as _SELF_INJECTION_TITLE_RE,
@@ -483,7 +485,15 @@ class InjectMixin:
             print("[inject] skipped self-target", flush=True)
             return
 
-        if on_wayland:
-            self._inject_wayland(text)
-        else:
-            self._inject_other(text)
+        try:
+            if on_wayland:
+                self._inject_wayland(text)
+            else:
+                self._inject_other(text)
+        except Exception as exc:
+            # Full traceback to stderr — this catch keeps the worker alive, but
+            # a genuine injection bug must stay diagnosable, not a one-liner.
+            import traceback
+            print(f"[inject] injection failed: {exc}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            notify_error("whisper-dictate", f"Injection failed: {exc}")
