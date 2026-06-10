@@ -18,6 +18,27 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     );
     assert_eq!(ui_text("da", UiTextKey::Copy), "Kopier");
     assert_eq!(ui_text("da", UiTextKey::InstallRepair), "Installer/Reparer");
+    // System tab strings, both languages (also: Sonar new-code coverage).
+    assert_eq!(Tab::System.label("en"), "System");
+    assert_eq!(Tab::System.label("da"), "System");
+    assert_eq!(ui_text("en", UiTextKey::SystemMaintenance), "Maintenance");
+    assert_eq!(ui_text("da", UiTextKey::SystemMaintenance), "Vedligehold");
+    assert_eq!(ui_text("en", UiTextKey::SystemAppearance), "Appearance");
+    assert_eq!(ui_text("da", UiTextKey::SystemAppearance), "Udseende");
+    assert_eq!(ui_text("en", UiTextKey::SystemDisplay), "Display");
+    assert_eq!(ui_text("da", UiTextKey::SystemDisplay), "Visning");
+    assert_eq!(ui_text("en", UiTextKey::SystemFeedback), "Feedback");
+    assert_eq!(ui_text("da", UiTextKey::SystemFeedback), "Feedback");
+    assert_eq!(ui_text("en", UiTextKey::SystemIntegration), "Integration");
+    assert_eq!(ui_text("da", UiTextKey::SystemIntegration), "Integration");
+    assert_eq!(ui_text("en", UiTextKey::DictationView), "Dictation view");
+    assert_eq!(ui_text("da", UiTextKey::DictationView), "Dikteringsvisning");
+    assert_eq!(ui_text("en", UiTextKey::ConfigFile), "Config file");
+    assert_eq!(ui_text("da", UiTextKey::ConfigFile), "Config-fil");
+    assert_eq!(ui_text("en", UiTextKey::PostOn), "Post on");
+    assert_eq!(ui_text("da", UiTextKey::PostOn), "Post til");
+    assert_eq!(ui_text("en", UiTextKey::PostOff), "Post off");
+    assert_eq!(ui_text("da", UiTextKey::PostOff), "Post fra");
     assert_eq!(ui_text("da", UiTextKey::Doctor), "Diagnose");
     assert_eq!(ui_text("da", UiTextKey::Light), "Lys");
     assert_eq!(LogViewMode::Diagnostic.label("da"), "Diagnostik");

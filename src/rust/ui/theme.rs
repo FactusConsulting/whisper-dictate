@@ -224,15 +224,19 @@ pub(in crate::ui) fn nav_button(
     label: &str,
     palette: UiPalette,
 ) -> egui::Response {
+    // Inactive tabs get a subtle visible surface + soft border so they read as
+    // clickable affordances rather than bare text; the selected tab keeps the
+    // stronger accent fill + accent-blue outline. Hover highlight + a pointing
+    // hand cursor reinforce that every row is a button.
     let fill = if selected {
         palette.accent_dark
     } else {
-        egui::Color32::TRANSPARENT
+        palette.surface_bg
     };
     let stroke = if selected {
         egui::Stroke::new(1.0, palette.accent_blue)
     } else {
-        egui::Stroke::NONE
+        egui::Stroke::new(0.8, palette.border_soft)
     };
     let text = if selected {
         icon_text(icon, label)
@@ -242,10 +246,15 @@ pub(in crate::ui) fn nav_button(
     } else {
         icon_text(icon, label).size(15.0).color(palette.text_muted)
     };
-    ui.add_sized(
+    let response = ui.add_sized(
         egui::vec2(ui.available_width(), 38.0),
         egui::Button::new(text).fill(fill).stroke(stroke),
-    )
+    );
+    if selected {
+        response
+    } else {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
 }
 
 pub(in crate::ui) fn icon_text(icon: &str, label: impl AsRef<str>) -> egui::RichText {

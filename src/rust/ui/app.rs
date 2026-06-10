@@ -139,6 +139,7 @@ impl eframe::App for WhisperDictateApp {
                 Tab::Output => self.settings_panel(ui, Self::output_tab),
                 Tab::Post => self.settings_panel(ui, Self::post_processing_tab),
                 Tab::Profiles => self.settings_panel(ui, Self::profiles_tab),
+                Tab::System => self.settings_panel(ui, Self::system_tab),
             });
     }
 }

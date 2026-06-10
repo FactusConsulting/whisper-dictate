@@ -26,8 +26,11 @@ pub(in crate::ui) const FULL_MIN_INNER_SIZE: [f32; 2] = [1000.0, 640.0];
 
 /// Width budget for the mic level gauge + device label inside the compact strip.
 const COMPACT_MIC_WIDTH: f32 = 150.0;
-/// Characters of the active device name shown beside the gauge in compact mode.
-const COMPACT_DEVICE_LABEL_CHARS: usize = 16;
+/// Minimum characters of the active device name to keep legible even when the
+/// compact strip is dragged to its narrowest. Above this the budget grows with
+/// the actually-available label width so widening the window reveals the full
+/// device name.
+const COMPACT_DEVICE_LABEL_MIN_CHARS: usize = 8;
 /// Characters of live preview text shown on the optional progress line.
 const COMPACT_PREVIEW_CHARS: usize = 60;
 
@@ -160,12 +163,19 @@ impl WhisperDictateApp {
         let level = audio_meter_level(self.audio_meter_level, self.runtime_state, active);
         let gauge_width = (COMPACT_MIC_WIDTH * 0.5).clamp(70.0, 100.0);
         ui.spacing_mut().item_spacing.x = 6.0;
+        // The device label fills whatever space remains on the row after the
+        // gauge and the right-pinned exit button, minus the inter-item gaps. So
+        // widening the compact window grows the visible device name instead of
+        // truncating it at a fixed width.
+        let exit_button_width = 34.0;
+        let label_width = (ui.available_width() - gauge_width - exit_button_width - 18.0).max(0.0);
+        let device_chars = compact_mic_label_char_budget(label_width);
         level_gauge(ui, palette, level, active, gauge_width).on_hover_text(format!(
             "Audio input: {}\nLive: {}",
             full_audio_device_label(&self.active_audio_device),
             live_audio_level_summary(self.audio_meter_raw_dbfs, self.audio_meter_peak, active),
         ));
-        let device = audio_device_label(&self.active_audio_device, COMPACT_DEVICE_LABEL_CHARS);
+        let device = audio_device_label(&self.active_audio_device, device_chars);
         ui.label(
             icon_text(icons::ICON_MIC, device)
                 .size(12.0)
@@ -206,6 +216,16 @@ impl WhisperDictateApp {
             }
         });
     }
+}
+
+/// Characters of the device name the compact strip can show given the pixel
+/// width left for the label after the gauge + exit button. Derives the budget
+/// from the actually-available width (≈7px per glyph, matching the full runtime
+/// tab's `mic_label_char_budget`) so widening the compact window reveals the
+/// full device name; clamped to a legible minimum and the 34-char ceiling that
+/// `audio_device_label` itself enforces. Pure for unit testing.
+pub(in crate::ui) fn compact_mic_label_char_budget(width: f32) -> usize {
+    ((width / 7.0).floor() as usize).clamp(COMPACT_DEVICE_LABEL_MIN_CHARS, 34)
 }
 
 /// Map a pipeline stage to its compact label + accent colour, or `None` when no
@@ -315,6 +335,27 @@ mod tests {
             compact_stage_label(Some("post-processing"), palette).map(|(l, _)| l),
             Some("Post-processing…")
         );
+    }
+
+    #[test]
+    fn compact_mic_label_budget_grows_with_width_and_keeps_a_minimum() {
+        // Narrow / zero space falls back to the legible minimum, not 0.
+        assert_eq!(compact_mic_label_char_budget(0.0), 8);
+        assert_eq!(compact_mic_label_char_budget(40.0), 8);
+        // A wider strip reveals more of the device name (≈7px/glyph).
+        assert_eq!(compact_mic_label_char_budget(140.0), 20);
+        // Very wide is capped at the 34-char ceiling audio_device_label enforces,
+        // which is enough for full names like "Microphone (Yeti Classic)".
+        assert_eq!(compact_mic_label_char_budget(1000.0), 34);
+        // The wide budget must comfortably fit a typical full device name so
+        // widening actually shows it untruncated.
+        let full = "Microphone (Yeti Classic)";
+        assert_eq!(
+            audio_device_label(full, compact_mic_label_char_budget(400.0)),
+            full
+        );
+        // While a narrow strip truncates the same name.
+        assert!(audio_device_label(full, compact_mic_label_char_budget(60.0)).ends_with("..."));
     }
 
     #[test]

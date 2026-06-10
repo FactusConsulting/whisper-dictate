@@ -363,10 +363,11 @@ pub(in crate::ui) enum Tab {
     Output,
     Post,
     Profiles,
+    System,
 }
 
 impl Tab {
-    pub(in crate::ui) const ALL: [Tab; 7] = [
+    pub(in crate::ui) const ALL: [Tab; 8] = [
         Tab::Log,
         Tab::Speech,
         Tab::Quality,
@@ -374,6 +375,7 @@ impl Tab {
         Tab::Output,
         Tab::Post,
         Tab::Profiles,
+        Tab::System,
     ];
 
     pub(in crate::ui) fn label(self, raw_language: &str) -> &'static str {
@@ -385,6 +387,7 @@ impl Tab {
             Tab::Output => ui_text(raw_language, UiTextKey::Output),
             Tab::Post => ui_text(raw_language, UiTextKey::Post),
             Tab::Profiles => ui_text(raw_language, UiTextKey::Profiles),
+            Tab::System => ui_text(raw_language, UiTextKey::System),
         }
     }
 
@@ -397,6 +400,7 @@ impl Tab {
             Tab::Output => egui_material_icons::icons::ICON_OUTPUT,
             Tab::Post => egui_material_icons::icons::ICON_AUTO_FIX_HIGH,
             Tab::Profiles => egui_material_icons::icons::ICON_GROUP,
+            Tab::System => egui_material_icons::icons::ICON_SETTINGS,
         }
     }
 }

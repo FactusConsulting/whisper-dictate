@@ -138,7 +138,9 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         script = rust_ui_source()
         settings_panel = script.split("fn settings_panel", 1)[1].split("fn settings_actions", 1)[0]
 
-        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 72.0;", script)
+        # The footer slimmed to a single Reset-page row after Reload config + the
+        # config path moved to the System tab.
+        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 40.0;", script)
         self.assertIn("const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;", script)
         self.assertIn("pub(in crate::ui) const EDGE_MARGIN: f32 = 12.0;", script)
         self.assertIn("let footer_height = SETTINGS_FOOTER_HEIGHT;", settings_panel)
@@ -151,10 +153,12 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("fn settings_actions(&mut self, ui: &mut egui::Ui)", script)
         self.assertIn("ui.horizontal_wrapped(|ui|", script)
         self.assertIn("ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);", script)
-        self.assertIn('ui.label(egui::RichText::new("Config:").color(palette.text_muted));', script)
-        self.assertIn("egui::RichText::new(compact_label(&self.config_path, config_chars))", script)
-        self.assertIn(".on_hover_text(&self.config_path)", script)
-        self.assertNotIn('ui.label(format!("Config: {}", self.config_path));', script)
+        # The config path now lives on the System tab as a hover on the Config
+        # file button, not as a per-page "Config:" footer row.
+        actions = script.split("fn settings_actions", 1)[1].split("fn reset_current_tab_settings", 1)[0]
+        self.assertNotIn('ui.label(egui::RichText::new("Config:").color(palette.text_muted));', actions)
+        self.assertNotIn("compact_label(&self.config_path, config_chars)", actions)
+        self.assertNotIn("self.reload_settings();", actions)
         self.assertIn("fn panel_frame(palette: UiPalette) -> egui::Frame", script)
         self.assertIn(".rounding(egui::Rounding::same(PANEL_RADIUS as f32))", script)
         self.assertIn("egui::Margin::symmetric(16.0, 14.0)", script)

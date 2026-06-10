@@ -39,51 +39,11 @@ impl WhisperDictateApp {
                     .color(palette.text_muted),
             );
             ui.add_space(8.0);
-            if ui
-                .add_enabled_ui(self.background_task.is_none(), |ui| {
-                    ui.add_sized(
-                        [ui.available_width(), 34.0],
-                        egui::Button::new(icon_text(
-                            icons::ICON_BUILD,
-                            ui_text(&self.settings.ui_language, UiTextKey::InstallRepair),
-                        )),
-                    )
-                })
-                .inner
-                .on_hover_text("Install or repair the local runtime environment.")
-                .clicked()
-            {
-                self.run_install();
-            }
-            ui.add_space(6.0);
-            if ui
-                .add_sized(
-                    [ui.available_width(), 34.0],
-                    egui::Button::new(icon_text(
-                        icons::ICON_HEALTH_AND_SAFETY,
-                        ui_text(&self.settings.ui_language, UiTextKey::Doctor),
-                    )),
-                )
-                .clicked()
-            {
-                self.run_doctor();
-            }
-            if ui
-                .add_sized(
-                    [ui.available_width(), 34.0],
-                    egui::Button::new(icon_text(
-                        icons::ICON_REFRESH,
-                        ui_text(&self.settings.ui_language, UiTextKey::ReloadConfig),
-                    )),
-                )
-                .on_hover_text("Reload the config file from disk.")
-                .clicked()
-            {
-                self.reload_settings();
-            }
-            ui.add_space(6.0);
-            // Save lives here, next to Reload config and the saved/unsaved status,
-            // rather than repeated on every settings page.
+            // Reload config / Doctor / Install-Repair moved to the System tab so
+            // the sidebar stays a slim navigator. The bottom block now keeps only
+            // the PTT chord, Save settings, and the version.
+            // Save lives here, next to the saved/unsaved status, rather than
+            // repeated on every settings page.
             let is_dirty = self.has_unsaved_settings();
             let save_text = if is_dirty {
                 UiTextKey::SaveSettingsDirty
@@ -270,6 +230,7 @@ impl WhisperDictateApp {
                         palette.accent_blue,
                         palette,
                     );
+                    self.post_indicator(ui, palette);
                     if let Some(label) = self.background_task_label {
                         status_card(
                             ui,
@@ -286,6 +247,39 @@ impl WhisperDictateApp {
                 self.global_controls(ui, palette);
             });
         });
+    }
+
+    /// Compact post-processing indicator that lives WITH the left status cards
+    /// (so it shares their clipping budget and never overlaps the right-pinned
+    /// runtime controls). Muted "Post off" when inactive, accent-coloured
+    /// "Post on" when the worker would actually run a post pass; the hover names
+    /// the configured mode + processor.
+    fn post_indicator(&self, ui: &mut egui::Ui, palette: UiPalette) {
+        let enabled =
+            post_processing_enabled(&self.settings.post_processor, &self.settings.post_mode);
+        let (icon, color) = if enabled {
+            (icons::ICON_AUTO_FIX_HIGH, palette.accent_blue)
+        } else {
+            (icons::ICON_AUTO_FIX_HIGH, palette.text_muted)
+        };
+        let label = post_indicator_label(
+            &self.settings.post_processor,
+            &self.settings.post_mode,
+            &self.settings.ui_language,
+        );
+        egui::Frame::default()
+            .fill(palette.surface_bg)
+            .stroke(egui::Stroke::new(0.8, palette.border_soft))
+            .rounding(egui::Rounding::same(PILL_RADIUS as f32))
+            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .show(ui, |ui| {
+                ui.label(icon_text(icon, label).strong().color(color));
+            })
+            .response
+            .on_hover_text(post_indicator_hover(
+                &self.settings.post_processor,
+                &self.settings.post_mode,
+            ));
     }
 
     pub(in crate::ui) fn global_controls(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
@@ -404,6 +398,51 @@ pub(in crate::ui) fn top_status_controls_width() -> f32 {
 /// Pure function: easy to unit-test without an egui context.
 pub(in crate::ui) fn top_status_left_width(total_width: f32, controls_width: f32) -> f32 {
     (total_width - controls_width).max(0.0)
+}
+
+/// Whether post-processing is actually active, given the configured processor
+/// and mode. Mirrors the worker's gate (`vp_dictate`/`vp_postprocess`): the pass
+/// is skipped when the processor is `none`/empty OR the mode is `raw` — and the
+/// worker normalizes an EMPTY mode to `raw`, so an unset mode reads as off here
+/// too. Case-insensitive like the worker's normalization. Pure so the top-bar
+/// indicator's on/off decision is unit-testable.
+pub(in crate::ui) fn post_processing_enabled(processor: &str, mode: &str) -> bool {
+    let processor = processor.trim().to_ascii_lowercase();
+    let mode = mode.trim().to_ascii_lowercase();
+    !processor.is_empty() && processor != "none" && !mode.is_empty() && mode != "raw"
+}
+
+/// The compact label for the top-bar post indicator: "Post on" when active,
+/// "Post off" otherwise. Pure helper over `post_processing_enabled`.
+pub(in crate::ui) fn post_indicator_label(
+    processor: &str,
+    mode: &str,
+    raw_language: &str,
+) -> &'static str {
+    if post_processing_enabled(processor, mode) {
+        ui_text(raw_language, UiTextKey::PostOn)
+    } else {
+        ui_text(raw_language, UiTextKey::PostOff)
+    }
+}
+
+/// Hover text for the post indicator, naming the configured mode + processor so
+/// the user can see the details without leaving the current tab. Pure so it can
+/// be unit-tested without an egui context.
+pub(in crate::ui) fn post_indicator_hover(processor: &str, mode: &str) -> String {
+    let processor = processor.trim();
+    let processor = if processor.is_empty() {
+        "none"
+    } else {
+        processor
+    };
+    let mode = mode.trim();
+    let mode = if mode.is_empty() { "raw" } else { mode };
+    if post_processing_enabled(processor, mode) {
+        format!("Post-processing on — mode: {mode}, processor: {processor}")
+    } else {
+        format!("Post-processing off — mode: {mode}, processor: {processor}")
+    }
 }
 
 pub(in crate::ui) fn runtime_state_color(state: RuntimeState, palette: UiPalette) -> egui::Color32 {

@@ -12,6 +12,7 @@ mod runtime;
 mod settings;
 mod shell;
 mod speech;
+mod system;
 
 // Log-card render widgets used by the runtime tab; re-exported into the `tabs`
 // root so `runtime` (and any future tab) can reach them via `super::*`.
@@ -34,7 +35,10 @@ pub(in crate::ui) use runtime::{empty_as_auto, empty_as_disabled, mic_label_char
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
 #[cfg(test)]
-pub(in crate::ui) use shell::{top_status_controls_width, top_status_left_width};
+pub(in crate::ui) use shell::{
+    post_indicator_hover, post_indicator_label, post_processing_enabled, top_status_controls_width,
+    top_status_left_width,
+};
 
 fn settings_grid(id: &'static str) -> egui::Grid {
     egui::Grid::new(id)
