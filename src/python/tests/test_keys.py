@@ -708,6 +708,35 @@ class PynputSoloModifierChordTests(unittest.TestCase):
         self.assertEqual(ln._owner.started, 1)
         self.assertTrue(ln._recording)
 
+    def test_ctrl_then_shift_reversed_order_starts(self):
+        # Chord completion is order-independent: ctrl first, then shift.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.CTRL)
+            self.assertEqual(ln._owner.started, 0)
+            ln.on_press(self.SHIFT)
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_target_held_past_expiry_then_chord_completes(self):
+        # A TARGET held longer than the expiry (user thinks with shift down)
+        # must never block its own chord: targets are excluded from the
+        # foreign-key check even if pruned from the held set.
+        clock = [1000.0]
+        targets = {self.SHIFT, self.CTRL}
+        guard = vp_keys_solo.SoloModifierGuard(
+            targets, enabled=True, _now=lambda: clock[0])
+        ln = vp_keys._PynputListener(
+            _Target(), set(targets), "<esc>", toggle_mode=False, solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.SHIFT)
+            clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S + 5.0  # long think
+            ln.on_press(self.CTRL)        # chord completes → must start
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
 
 class EvdevSoloModifierTests(unittest.TestCase):
     TARGET = 29  # KEY_LEFTCTRL-ish code (opaque to the guard)
@@ -908,6 +937,34 @@ class EvdevSoloModifierChordTests(unittest.TestCase):
                           False, solo)
         rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
                           rec, solo)    # completes, phantom pruned → start
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_ctrl_then_shift_reversed_order_starts(self):
+        # Chord completion is order-independent: ctrl first, then shift.
+        targets = {self.SHIFT, self.CTRL}
+        pressed, solo = set(), self._guard(targets)
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)
+        self.assertFalse(rec)            # partial chord
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_target_held_past_expiry_then_chord_completes(self):
+        # A TARGET held past the expiry (user thinks with shift down) must not
+        # block its own chord. On evdev the held target self-prunes (note_repeat
+        # skips targets) — harmless, because the foreign check excludes targets.
+        clock = [1000.0]
+        targets = {self.SHIFT, self.CTRL}
+        pressed = set()
+        solo = self._guard(targets, now=lambda: clock[0])
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)
+        clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S + 5.0  # long think
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)     # completes → must start
         self.assertTrue(rec)
         self.assertEqual(self.t.started, 1)
 

@@ -273,7 +273,12 @@ class KeyBackendMixin:
                                       is_target, toggle_mode, latched, solo)
         # value == 2: OS autorepeat. Refresh the guard timestamp for a tracked
         # foreign key so a genuinely-held key does not expire out of the held set
-        # (phantom-key self-heal). Target-key autorepeat behaviour is unchanged.
+        # (phantom-key self-heal). Target-key autorepeat behaviour is unchanged —
+        # a held TARGET self-prunes after the expiry, which is intentionally
+        # harmless: foreign_key_held() only counts keys OUTSIDE the target set,
+        # so a pruned target can never block a start or trigger a cancel.
+        # (pynput differs — target repeats refresh via note_press — and that
+        # asymmetry is fine for the same reason.)
         if (solo is not None and ev.value == evdev.KeyEvent.key_hold
                 and not is_target):
             solo.note_repeat(ev.code)

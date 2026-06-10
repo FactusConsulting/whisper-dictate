@@ -41,6 +41,7 @@ that is *actually* still held keeps blocking past the nominal expiry.
 from __future__ import annotations
 
 import time
+from collections import abc as _abc
 
 # A held foreign key with no observed key-up self-heals after this many seconds
 # (see module docstring). A real chord forms within ~1 s, so this is comfortably
@@ -116,7 +117,11 @@ class SoloModifierGuard:
         # case, and the historical signature) is wrapped; ``None`` → empty set.
         if targets is None:
             self._targets: set = set()
-        elif isinstance(targets, (set, frozenset, list, tuple)):
+        elif isinstance(targets, str):
+            # str is iterable but always means ONE key token, never a set of
+            # one-character tokens.
+            self._targets = {targets}
+        elif isinstance(targets, _abc.Iterable):
             self._targets = set(targets)
         else:
             self._targets = {targets}
