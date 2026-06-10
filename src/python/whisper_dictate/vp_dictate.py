@@ -244,7 +244,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             print("  (heard nothing — speak a touch louder / mic closer)", flush=True)
             return None, reason
         if is_hallucination(result.text):
-            print(f"  (hallucination filtreret: {result.text!r})", flush=True)
+            print(f"  (hallucination filtered: {result.text!r})", flush=True)
             return None, "no_speech"
         return result, None
 
