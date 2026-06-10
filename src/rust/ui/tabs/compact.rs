@@ -214,21 +214,14 @@ pub(in crate::ui) fn compact_stage_label(
     stage: Option<&'static str>,
     palette: UiPalette,
 ) -> Option<(&'static str, egui::Color32)> {
-    match stage? {
-        "recording" => Some((
-            "Recording…",
-            pipeline_progress_accent_color("recording", palette),
-        )),
-        "transcribing" => Some((
-            "Transcribing…",
-            pipeline_progress_accent_color("transcribing", palette),
-        )),
-        "post-processing" => Some((
-            "Post-processing…",
-            pipeline_progress_accent_color("post-processing", palette),
-        )),
-        _ => None,
-    }
+    let stage = stage?;
+    let label = match stage {
+        "recording" => "Recording…",
+        "transcribing" => "Transcribing…",
+        "post-processing" => "Post-processing…",
+        _ => return None,
+    };
+    Some((label, pipeline_progress_accent_color(stage, palette)))
 }
 
 #[cfg(test)]

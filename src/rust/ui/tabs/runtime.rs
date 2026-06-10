@@ -132,18 +132,13 @@ impl WhisperDictateApp {
         let Some(stage) = self.pipeline_stage else {
             return;
         };
-        let (label, accent) = match stage {
-            "recording" => ("Recording…", pipeline_progress_accent_color(stage, palette)),
-            "transcribing" => (
-                "Transcribing…",
-                pipeline_progress_accent_color(stage, palette),
-            ),
-            "post-processing" => (
-                "Post-processing…",
-                pipeline_progress_accent_color(stage, palette),
-            ),
+        let label = match stage {
+            "recording" => "Recording…",
+            "transcribing" => "Transcribing…",
+            "post-processing" => "Post-processing…",
             _ => return,
         };
+        let accent = pipeline_progress_accent_color(stage, palette);
         egui::Frame::default()
             .fill(palette.surface_active_bg)
             .stroke(egui::Stroke::new(0.8, accent))
@@ -692,5 +687,37 @@ mod tests {
             light.ok_text,
             "light: recording accent must not be the same green used for finished cards"
         );
+    }
+
+    /// Every stage string produced by `pipeline_stage_for_worker_state` must map
+    /// to its expected NON-fallback colour.  This guards against a future rename
+    /// (e.g. "post_processing" instead of "post-processing") silently falling
+    /// through to the `_ => accent_blue` default without anyone noticing.
+    #[test]
+    fn pipeline_stage_for_worker_state_produces_non_fallback_accent_colors() {
+        let palette = ui_palette("dark");
+        let cases = [
+            ("recording", palette.error_text),
+            ("transcribing", palette.warn_text),
+            ("post-processing", palette.accent_blue),
+        ];
+        for (worker_state, expected_accent) in cases {
+            let stage = pipeline_stage_for_worker_state(worker_state)
+                .unwrap_or_else(|| panic!("worker state {worker_state:?} produced no stage"));
+            let actual = pipeline_progress_accent_color(stage, palette);
+            assert_eq!(
+                actual, expected_accent,
+                "worker state {worker_state:?} → stage {stage:?}: expected accent \
+                 {expected_accent:?}, got {actual:?}"
+            );
+            // Guard: the accent must not be the blue fallback for recording/transcribing
+            // (those have distinct colours; a typo would silently land on blue).
+            if worker_state != "post-processing" {
+                assert_ne!(
+                    actual, palette.accent_blue,
+                    "worker state {worker_state:?} must not fall back to accent_blue"
+                );
+            }
+        }
     }
 }
