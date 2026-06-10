@@ -240,8 +240,9 @@ begin
   end;
 
   // On upgrade, fully remove the previous version first so no orphaned
-  // files survive. The venv (%USERPROFILE%\voice-pi-venv) and the model
-  // cache live outside {app}, so they are preserved across upgrades.
+  // files survive. The venv (%USERPROFILE%\whisper-dictate-venv, or the
+  // legacy %USERPROFILE%\voice-pi-venv) and the model cache live outside
+  // {app}, so they are preserved across upgrades.
   UninstallPrevious();
   Result := '';
 end;

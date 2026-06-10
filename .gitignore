@@ -2,6 +2,7 @@
 .venv/
 .codex-test-venv/
 venv/
+whisper-dictate-venv/
 voice-pi-venv/
 
 # Python bytecode

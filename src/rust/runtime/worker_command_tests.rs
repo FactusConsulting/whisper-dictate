@@ -113,9 +113,10 @@ fn worker_command_honors_python_override() {
 fn worker_command_prefers_existing_project_venv_python() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
+    // Use the canonical post-rebrand name (new installs).
     let python = if cfg!(windows) {
         dir.path()
-            .join("voice-pi-venv")
+            .join("whisper-dictate-venv")
             .join("Scripts")
             .join("python.exe")
     } else {
@@ -124,6 +125,27 @@ fn worker_command_prefers_existing_project_venv_python() {
             .join("bin")
             .join("python")
     };
+    std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+    std::fs::write(&python, "").unwrap();
+
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let command = worker_command("/tmp/whisper-dictate");
+
+    assert_eq!(command.program, python);
+}
+
+#[test]
+#[cfg(windows)]
+fn worker_command_falls_back_to_legacy_venv_on_windows() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    // Only the pre-rebrand venv exists (existing install, not yet migrated).
+    let python = dir
+        .path()
+        .join("voice-pi-venv")
+        .join("Scripts")
+        .join("python.exe");
     std::fs::create_dir_all(python.parent().unwrap()).unwrap();
     std::fs::write(&python, "").unwrap();
 

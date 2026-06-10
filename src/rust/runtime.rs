@@ -918,9 +918,29 @@ fn default_venv_python() -> Option<PathBuf> {
 
 fn default_venv_dir(home: &Path, platform: Platform) -> PathBuf {
     match platform {
-        Platform::Windows => home.join("voice-pi-venv"),
+        Platform::Windows => windows_venv_dir(home),
         Platform::Unix => home.join(".venv-whisper-dictate"),
     }
+}
+
+/// Resolve the Windows venv directory with legacy-fallback logic.
+///
+/// Resolution order (no forced migration — existing installs keep working):
+/// 1. `<home>\whisper-dictate-venv` — the canonical post-rebrand name.
+/// 2. `<home>\voice-pi-venv`        — legacy pre-rebrand name; kept as-is.
+/// 3. `<home>\whisper-dictate-venv` — fresh-install default (neither exists).
+fn windows_venv_dir(home: &Path) -> PathBuf {
+    // is_dir(), not exists(): a stray FILE at either path must not be selected
+    // as the venv (python -m venv would then fail on the existing file).
+    let new_name = home.join("whisper-dictate-venv");
+    if new_name.is_dir() {
+        return new_name;
+    }
+    let legacy = home.join("voice-pi-venv");
+    if legacy.is_dir() {
+        return legacy;
+    }
+    new_name
 }
 
 fn venv_python_path(venv_dir: &Path, platform: Platform) -> PathBuf {

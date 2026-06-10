@@ -119,12 +119,49 @@ fn venv_paths_match_platform_conventions() {
         PathBuf::from("/home/person/.venv-whisper-dictate/bin/python")
     );
 
-    let home = PathBuf::from("C:/Users/Person");
+    // Fresh install: Windows resolution consults the real filesystem, so use a
+    // guaranteed-empty tempdir as home (a hard-coded C:\Users\... could flake
+    // on a machine where such a venv directory actually exists).
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().to_path_buf();
     assert_eq!(
         venv_python_path(
             &default_venv_dir(&home, Platform::Windows),
             Platform::Windows
         ),
-        PathBuf::from("C:/Users/Person/voice-pi-venv/Scripts/python.exe")
+        home.join("whisper-dictate-venv")
+            .join("Scripts")
+            .join("python.exe")
+    );
+}
+
+#[test]
+fn windows_venv_dir_prefers_new_name_when_it_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let new_venv = dir.path().join("whisper-dictate-venv");
+    std::fs::create_dir_all(&new_venv).unwrap();
+    // Also create the legacy dir to confirm new takes priority.
+    let legacy_venv = dir.path().join("voice-pi-venv");
+    std::fs::create_dir_all(&legacy_venv).unwrap();
+
+    assert_eq!(windows_venv_dir(dir.path()), new_venv);
+}
+
+#[test]
+fn windows_venv_dir_falls_back_to_legacy_when_only_legacy_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy_venv = dir.path().join("voice-pi-venv");
+    std::fs::create_dir_all(&legacy_venv).unwrap();
+
+    assert_eq!(windows_venv_dir(dir.path()), legacy_venv);
+}
+
+#[test]
+fn windows_venv_dir_returns_new_name_for_fresh_install() {
+    let dir = tempfile::tempdir().unwrap();
+    // Neither directory exists.
+    assert_eq!(
+        windows_venv_dir(dir.path()),
+        dir.path().join("whisper-dictate-venv")
     );
 }

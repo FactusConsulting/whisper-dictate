@@ -286,10 +286,13 @@ experimental on Windows because NeMo/PyTorch wheel compatibility depends on the
 local CUDA/Python combination:
 
 ```powershell
-& "$env:USERPROFILE\voice-pi-venv\Scripts\python.exe" -m pip install `
+& "$env:USERPROFILE\whisper-dictate-venv\Scripts\python.exe" -m pip install `
   -r "$env:LOCALAPPDATA\Programs\WhisperDictate\requirements\parakeet.txt"
 setx VOICEPI_STT_BACKEND parakeet
 ```
+
+(Older installs may have `voice-pi-venv` instead of `whisper-dictate-venv`; both
+names keep working — the runtime prefers `whisper-dictate-venv` and only falls back to the legacy `voice-pi-venv` when the new directory is absent.)
 
 `VOICEPI_STT_BACKEND=parakeet` loads NeMo only when transcription starts, so
 `--help`, `--doctor`, and the default Whisper backend do not require Parakeet
