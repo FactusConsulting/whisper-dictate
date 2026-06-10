@@ -23,13 +23,13 @@ pub(in crate::ui) use runtime::{
     audio_device_label, full_audio_device_label, level_gauge, live_audio_level_summary,
 };
 pub(in crate::ui) use shell::runtime_state_color;
+// The hotkey-chord formatters are shared with the sidebar's key display
+// (`shell.rs`) and the sibling test modules.
+pub(in crate::ui) use runtime::{format_push_to_talk_keys, push_to_talk_badge_label};
 
 // Free helpers consumed by sibling test modules through `ui::tabs::NAME`.
 #[cfg(test)]
-pub(in crate::ui) use runtime::{
-    empty_as_auto, empty_as_disabled, format_push_to_talk_keys, mic_label_char_budget,
-    push_to_talk_badge_label,
-};
+pub(in crate::ui) use runtime::{empty_as_auto, empty_as_disabled, mic_label_char_budget};
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
 

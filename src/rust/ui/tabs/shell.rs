@@ -120,6 +120,38 @@ impl WhisperDictateApp {
             {
                 self.save_settings();
             }
+            ui.add_space(10.0);
+            // The active hotkey chord, just above Save settings. Deliberately
+            // compact: the chord alone (no "Push-to-talk:" prefix — everyone
+            // knows what the key is for); the hover names the mode and where
+            // to change it. bottom_up layout, so adding it AFTER the save
+            // button places it visually above the button cluster.
+            ui.add(
+                egui::Label::new(
+                    icon_text(
+                        icons::ICON_KEYBOARD,
+                        format_push_to_talk_keys(&self.settings.key),
+                    )
+                    .text_style(egui::TextStyle::Small)
+                    .strong()
+                    .color(palette.text),
+                )
+                .wrap()
+                .selectable(false),
+            )
+            .on_hover_text(format!(
+                "{} — {}",
+                push_to_talk_badge_label(
+                    &self.settings.key,
+                    self.settings.toggle_mode,
+                    &self.settings.ui_language,
+                ),
+                if self.settings.toggle_mode {
+                    "Press to start, press again to stop. Change it in Speech → Hotkey."
+                } else {
+                    "Hold to dictate. Change it in Speech → Hotkey."
+                }
+            ));
         });
     }
 
