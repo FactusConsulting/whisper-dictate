@@ -164,3 +164,48 @@ pub(in crate::ui) fn metric_box(
             );
         });
 }
+
+/// Scroll the surrounding ScrollArea while the user drag-selects text past its
+/// vertical edges. egui never scrolls on its own during a drag selection, so a
+/// selection otherwise stops dead at the viewport edge. Only active while the
+/// primary button is down AND the drag STARTED inside this area.
+pub(in crate::ui) fn drag_autoscroll(ui: &mut egui::Ui) {
+    let clip = ui.clip_rect();
+    let (down, origin, pos) = ui.ctx().input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.pointer.press_origin(),
+            i.pointer.interact_pos(),
+        )
+    });
+    if !down {
+        return;
+    }
+    let (Some(origin), Some(pos)) = (origin, pos) else {
+        return;
+    };
+    if !clip.contains(origin) {
+        return;
+    }
+    let delta = drag_overshoot_delta(clip.top(), clip.bottom(), pos.y);
+    if delta != 0.0 {
+        ui.scroll_with_delta(egui::vec2(0.0, delta));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// Per-frame scroll delta for a drag past the [top, bottom] viewport edge.
+/// Positive scrolls toward earlier content (drag above the top), negative
+/// toward later content (drag below the bottom); speed grows with overshoot,
+/// capped so wild drags stay controllable. Pure for unit tests.
+pub(in crate::ui) fn drag_overshoot_delta(top: f32, bottom: f32, pointer_y: f32) -> f32 {
+    const SPEED: f32 = 0.5;
+    const MAX_STEP: f32 = 30.0;
+    if pointer_y < top {
+        ((top - pointer_y) * SPEED).min(MAX_STEP)
+    } else if pointer_y > bottom {
+        -(((pointer_y - bottom) * SPEED).min(MAX_STEP))
+    } else {
+        0.0
+    }
+}

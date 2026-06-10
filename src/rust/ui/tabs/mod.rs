@@ -16,7 +16,9 @@ mod system;
 
 // Log-card render widgets used by the runtime tab; re-exported into the `tabs`
 // root so `runtime` (and any future tab) can reach them via `super::*`.
-pub(in crate::ui) use log_card::{empty_log_state, metric_box, runtime_log_card};
+#[cfg(test)]
+pub(in crate::ui) use log_card::drag_overshoot_delta;
+pub(in crate::ui) use log_card::{drag_autoscroll, empty_log_state, metric_box, runtime_log_card};
 // The live mic gauge, runtime-state colour, pipeline-progress accent, and the
 // mic-label/audio-summary helpers are shared between the full runtime tab /
 // top status bar and the compact strip (`compact.rs`).

@@ -72,6 +72,10 @@ impl WhisperDictateApp {
                 .stick_to_bottom(true)
                 .max_height(log_height)
                 .show(ui, |ui| {
+                    // egui does not auto-scroll while drag-selecting text past
+                    // the viewport edge — without this, a selection stops dead
+                    // at the bottom/top of the box.
+                    drag_autoscroll(ui);
                     self.render_log_entries(ui, palette, &visible_log);
                 });
         });
