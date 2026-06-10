@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictate-app"
-version = "1.8.4"
+version = "1.8.5"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
