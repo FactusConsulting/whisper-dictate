@@ -1,11 +1,19 @@
 //! Reusable settings-grid form widgets: labelled text/combo/checkbox/password
 //! rows, the inline help-badge machinery, and small layout helpers shared by the
-//! settings tabs.
+//! settings tabs.  ComboBox helpers live in the sibling `widgets_combo` module
+//! (declared in `ui.rs`) and are re-exported from here so all existing call
+//! sites that import `super::*` are unaffected.
 
 use super::*;
 use std::time::{Duration, Instant};
 
-const SETTINGS_LABEL_WIDTH: f32 = 190.0;
+// Re-export combo helpers from the sibling module so the glob `use super::*`
+// in every settings tab keeps resolving them without any change at call sites.
+pub(in crate::ui) use super::widgets_combo::*;
+
+/// Minimum width for the label column in every settings grid at scale 1.0.
+/// Use `settings_label_width(ui)` for the scaled value at render time.
+pub(in crate::ui) const SETTINGS_LABEL_WIDTH: f32 = 220.0;
 const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
 /// Compact width for short numeric-ish fields (counts, seconds, thresholds) so a
 /// value like "2000" or "0.5" no longer stretches across the whole grid.
@@ -13,6 +21,32 @@ const SETTINGS_SHORT_INPUT_WIDTH: f32 = 120.0;
 /// Width for path / longer free-text fields — narrower than the old full-width
 /// stretch but still roomy enough to read a file path at a glance.
 const SETTINGS_TEXT_INPUT_WIDTH: f32 = 360.0;
+
+/// Pure scale-multiply for the label column width. Extracted so it can be
+/// unit-tested without an egui context.
+///
+/// `body_size` is the current `Body` font size in points (e.g. `14.0 * scale`).
+/// Returns `SETTINGS_LABEL_WIDTH * (body_size / 14.0)` so the column grows
+/// proportionally with the UI text-scale setting.
+pub(in crate::ui) fn scaled_label_width(body_size: f32) -> f32 {
+    SETTINGS_LABEL_WIDTH * (body_size / 14.0)
+}
+
+/// Returns the label-column min-width appropriate for the current UI text scale.
+/// Reads the live `Body` font size from the egui style so the column grows when
+/// the user raises `ui_text_scale`, preventing long labels from wrapping.
+///
+/// This is the single alignment anchor for every settings grid: the label cell's
+/// `set_min_width` pins column 0 across all grids (no grid-wide floor needed).
+pub(in crate::ui) fn settings_label_width(ui: &egui::Ui) -> f32 {
+    let body_size = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|f| f.size)
+        .unwrap_or(14.0);
+    scaled_label_width(body_size)
+}
 
 pub(in crate::ui) fn text_help(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str) {
     text_help_width(ui, label, value, help, SETTINGS_TEXT_INPUT_WIDTH);
@@ -187,187 +221,6 @@ pub(in crate::ui) fn checkbox_enabled(
     grid_help_row(ui, show_help, help);
 }
 
-pub(in crate::ui) fn combo_help(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &mut String,
-    options: &[&str],
-    help: &str,
-) {
-    let show_help = label_with_help(ui, label, help);
-    egui::ComboBox::from_id_salt(label)
-        .width(settings_control_width(ui))
-        .selected_text(if value.is_empty() {
-            "(empty)"
-        } else {
-            value.as_str()
-        })
-        .show_ui(ui, |ui| {
-            for option in options {
-                ui.selectable_value(
-                    value,
-                    (*option).to_owned(),
-                    if option.is_empty() { "(empty)" } else { option },
-                );
-            }
-        });
-    ui.end_row();
-    grid_help_row(ui, show_help, help);
-}
-
-pub(in crate::ui) fn combo_help_labeled(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &mut String,
-    options: &[(&str, &str)],
-    help: &str,
-) {
-    let show_help = label_with_help(ui, label, help);
-    egui::ComboBox::from_id_salt(label)
-        .width(settings_control_width(ui))
-        .selected_text(selected_option_label(value, options))
-        .show_ui(ui, |ui| {
-            for (option, display) in options {
-                ui.selectable_value(value, (*option).to_owned(), *display);
-            }
-        });
-    ui.end_row();
-    grid_help_row(ui, show_help, help);
-}
-
-pub(in crate::ui) fn combo_enabled(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    label: &str,
-    value: &mut String,
-    options: &[&str],
-    help: &str,
-) {
-    let show_help = label_with_help_enabled(ui, enabled, label, help);
-    ui.add_enabled_ui(enabled, |ui| {
-        egui::ComboBox::from_id_salt(label)
-            .selected_text(if value.is_empty() {
-                "(empty)"
-            } else {
-                value.as_str()
-            })
-            .show_ui(ui, |ui| {
-                for option in options {
-                    ui.selectable_value(
-                        value,
-                        (*option).to_owned(),
-                        if option.is_empty() { "(empty)" } else { option },
-                    );
-                }
-            });
-    });
-    ui.end_row();
-    grid_help_row(ui, show_help, help);
-}
-
-pub(in crate::ui) fn combo_enabled_labeled(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    label: &str,
-    value: &mut String,
-    options: &[(&str, &str)],
-    help: &str,
-) {
-    let show_help = label_with_help_enabled(ui, enabled, label, help);
-    ui.add_enabled_ui(enabled, |ui| {
-        egui::ComboBox::from_id_salt(label)
-            .selected_text(selected_option_label(value, options))
-            .show_ui(ui, |ui| {
-                for (option, display) in options {
-                    ui.selectable_value(value, (*option).to_owned(), *display);
-                }
-            });
-    });
-    ui.end_row();
-    grid_help_row(ui, show_help, help);
-}
-
-/// Model picker with accuracy/speed annotations and VRAM-aware grey-out.
-///
-/// `hint(value) -> (note, approx_mb)`. When `gpu_total_mb` is `Some`, options
-/// needing more VRAM than the GPU has total are disabled (they can't fit even
-/// with an idle GPU) and explain why on hover. With `None` (CPU / non-NVIDIA)
-/// nothing is greyed out — every model runs, large ones just slower.
-#[allow(clippy::too_many_arguments)] // a labelled, VRAM-gated form row genuinely needs them
-pub(in crate::ui) fn combo_model_vram(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    label: &str,
-    value: &mut String,
-    models: &[&str],
-    hint: fn(&str) -> (&'static str, u32),
-    gpu_total_mb: Option<u32>,
-    help: &str,
-) {
-    let show_help = label_with_help_enabled(ui, enabled, label, help);
-    let (cur_note, _) = hint(value);
-    let selected_text = if value.is_empty() {
-        "(empty)".to_owned()
-    } else if cur_note.is_empty() {
-        value.clone()
-    } else {
-        format!("{value} — {cur_note}")
-    };
-    ui.add_enabled_ui(enabled, |ui| {
-        egui::ComboBox::from_id_salt(label)
-            .selected_text(selected_text)
-            .width(settings_control_width(ui))
-            .show_ui(ui, |ui| {
-                for model in models {
-                    let (note, mb) = hint(model);
-                    let fits = gpu_total_mb.is_none_or(|total| mb <= total);
-                    let display = if note.is_empty() {
-                        (*model).to_owned()
-                    } else {
-                        format!("{model} — {note} (~{mb} MB)")
-                    };
-                    let selected = value.as_str() == *model;
-                    let response =
-                        ui.add_enabled(fits, egui::SelectableLabel::new(selected, display));
-                    let response = match gpu_total_mb {
-                        Some(total) if !fits => response.on_disabled_hover_text(format!(
-                            "Needs about {mb} MB VRAM; this GPU has {total} MB total."
-                        )),
-                        _ => response,
-                    };
-                    if response.clicked() {
-                        *value = (*model).to_owned();
-                    }
-                }
-            });
-    });
-    ui.end_row();
-    grid_help_row(ui, show_help, help);
-}
-
-/// A labelled combo over a dynamically built `(value, display)` list (owned
-/// strings), as opposed to the `&'static` tables `combo_help_labeled` takes.
-/// Used by the Microphone picker whose options come from the worker at runtime.
-pub(in crate::ui) fn combo_help_dynamic(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &mut String,
-    options: &[(String, String)],
-    help: &str,
-) {
-    let show_help = label_with_help(ui, label, help);
-    egui::ComboBox::from_id_salt(label)
-        .width(settings_control_width(ui))
-        .selected_text(dynamic_selected_label(value, options))
-        .show_ui(ui, |ui| {
-            for (option, display) in options {
-                ui.selectable_value(value, option.clone(), display);
-            }
-        });
-    ui.end_row();
-    grid_help_row(ui, show_help, help);
-}
-
 /// Selected-text label for a dynamic `(value, display)` combo: the matching
 /// display, else the raw value, else `(empty)`. Pure so it is unit-testable.
 pub(in crate::ui) fn dynamic_selected_label(value: &str, options: &[(String, String)]) -> String {
@@ -404,7 +257,9 @@ pub(in crate::ui) fn labeled_options_contain(options: &[(&str, &str)], value: &s
 
 pub(in crate::ui) fn label_with_help(ui: &mut egui::Ui, label: &str, help: &str) -> bool {
     ui.horizontal(|ui| {
-        ui.set_min_width(SETTINGS_LABEL_WIDTH);
+        // Label cell is the single alignment anchor for the settings grid: its
+        // scaled min_width pins column 0 across all grids without a grid-wide floor.
+        ui.set_min_width(settings_label_width(ui));
         let response = ui.label(label);
         if !help.is_empty() {
             response.on_hover_text(help);
@@ -421,7 +276,9 @@ pub(in crate::ui) fn label_with_help_enabled(
     help: &str,
 ) -> bool {
     ui.horizontal(|ui| {
-        ui.set_min_width(SETTINGS_LABEL_WIDTH);
+        // Label cell is the single alignment anchor for the settings grid: its
+        // scaled min_width pins column 0 across all grids without a grid-wide floor.
+        ui.set_min_width(settings_label_width(ui));
         let response = ui.add_enabled(enabled, egui::Label::new(label));
         if !help.is_empty() {
             response.on_hover_text(help);
@@ -431,7 +288,9 @@ pub(in crate::ui) fn label_with_help_enabled(
     .inner
 }
 
-fn settings_control_width(ui: &egui::Ui) -> f32 {
+/// Width for the combo/text value controls, clamped to a readable range.
+/// `pub(in crate::ui)` so `widgets_combo` (a sibling module) can use it.
+pub(in crate::ui) fn settings_control_width(ui: &egui::Ui) -> f32 {
     ui.available_width()
         .clamp(260.0, SETTINGS_CONTROL_MAX_WIDTH)
 }
@@ -489,5 +348,25 @@ pub(in crate::ui) fn inline_help(ui: &mut egui::Ui, show_help: bool, help: &str)
             egui::Label::new(egui::RichText::new(help).color(ui.visuals().weak_text_color()))
                 .wrap(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scaled_label_width_scales_proportionally_with_body_font_size() {
+        // At scale 1.0 (body = 14.0 pt) → base width 220.
+        let w = scaled_label_width(14.0);
+        assert!((w - 220.0).abs() < 0.01, "scale 1.0 → {w}");
+
+        // At scale 1.15 (body = 14.0 * 1.15 = 16.1 pt) → 220 * 1.15 = 253.
+        let w = scaled_label_width(14.0 * 1.15);
+        assert!((w - 253.0).abs() < 0.01, "scale 1.15 → {w}");
+
+        // At max scale 1.6 (body = 14.0 * 1.6 = 22.4 pt) → 220 * 1.6 = 352.
+        let w = scaled_label_width(14.0 * 1.6);
+        assert!((w - 352.0).abs() < 0.01, "scale 1.6 → {w}");
     }
 }

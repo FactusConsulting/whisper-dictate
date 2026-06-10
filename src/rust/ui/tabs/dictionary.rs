@@ -29,13 +29,13 @@ impl WhisperDictateApp {
                     &mut self.settings.dictionary_enabled,
                     "Enable prompt-term injection and replacement cleanup from the dictionary.",
                 );
-                text_help(
+                text_help_short(
                     ui,
                     "Max prompt terms",
                     &mut self.settings.dictionary_max_terms,
                     "Maximum number of dictionary terms included in the model prompt.",
                 );
-                text_help(
+                text_help_short(
                     ui,
                     "Prompt char cap",
                     &mut self.settings.dictionary_prompt_chars,

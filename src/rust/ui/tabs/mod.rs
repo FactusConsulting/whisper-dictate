@@ -50,6 +50,10 @@ pub(in crate::ui) use runtime::{empty_as_auto, empty_as_disabled, mic_label_char
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
 fn settings_grid(id: &'static str) -> egui::Grid {
+    // Alignment is anchored by the label cell's `set_min_width(settings_label_width(ui))`
+    // call inside `label_with_help` / `label_with_help_enabled` — no grid-wide
+    // column floor is needed, and omitting it avoids an unscaled floor on the
+    // value column.
     egui::Grid::new(id)
         .num_columns(2)
         .spacing(egui::vec2(20.0, 10.0))

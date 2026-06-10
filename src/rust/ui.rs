@@ -45,6 +45,7 @@ mod text;
 mod text_scale;
 mod theme;
 mod widgets;
+mod widgets_combo;
 mod window_list;
 mod worker_event;
 mod worker_json;
