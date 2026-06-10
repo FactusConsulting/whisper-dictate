@@ -5,6 +5,61 @@
 use super::*;
 use crate::runtime::{default_worker_command, RuntimeEvent, WorkerCommand, WorkerEvent};
 
+/// Maximum size (bytes) kept in `runtime_log`. When exceeded, the oldest whole
+/// lines are dropped until the log is under the cap, and a single marker line
+/// is prepended so the user knows the history was trimmed.
+pub(in crate::ui) const RUNTIME_LOG_MAX_CHARS: usize = 200_000;
+
+pub(in crate::ui) const TRIM_MARKER: &str = "[ui] \u{2026}older log trimmed\u{2026}";
+
+/// Drop the oldest whole lines from `log` until its length is under
+/// [`RUNTIME_LOG_MAX_CHARS`].  A single marker line is prepended to signal the
+/// truncation; if one is already at the top it is not duplicated.
+pub(in crate::ui) fn trim_runtime_log(log: &mut String) {
+    if log.len() <= RUNTIME_LOG_MAX_CHARS {
+        return;
+    }
+
+    // Reserve headroom for the marker + newline we will prepend.
+    let marker_overhead = TRIM_MARKER.len() + 1;
+    let target = RUNTIME_LOG_MAX_CHARS.saturating_sub(marker_overhead);
+
+    // Drop whole lines from the front until the body fits within `target`.
+    loop {
+        if log.len() <= target {
+            break;
+        }
+        // How many bytes we need to remove.
+        let excess = log.len().saturating_sub(target);
+        // Align to a UTF-8 character boundary.
+        let excess_aligned = (excess..=log.len())
+            .find(|&i| log.is_char_boundary(i))
+            .unwrap_or(log.len());
+        // Advance to the end of the current line (past the next '\n').
+        match log[excess_aligned..].find('\n') {
+            Some(nl) => {
+                log.drain(..excess_aligned + nl + 1);
+            }
+            None => {
+                // No newline: the entire remaining content is one long line.
+                log.clear();
+                break;
+            }
+        }
+    }
+
+    // Prepend the marker exactly once.
+    if !log.starts_with(TRIM_MARKER) {
+        let tail = log.clone();
+        log.clear();
+        log.push_str(TRIM_MARKER);
+        if !tail.is_empty() {
+            log.push('\n');
+            log.push_str(&tail);
+        }
+    }
+}
+
 impl eframe::App for WhisperDictateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_runtime();
@@ -82,6 +137,8 @@ impl WhisperDictateApp {
         self.append_runtime_log(format!("[ui] starting: {}", command.display()));
         if let Err(err) = self.supervisor.start(command) {
             self.append_runtime_log(format!("[ui] start failed: {err}"));
+        } else {
+            self.worker_start_time = Some(std::time::Instant::now());
         }
         self.runtime_state = self.supervisor.state();
     }
@@ -201,6 +258,7 @@ impl WhisperDictateApp {
                         "[ui] runtime exited with code {}",
                         code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
                     ));
+                    self.handle_exit_crash_streak(code);
                 }
                 RuntimeEvent::Error(message) => {
                     self.worker_ready = false;
@@ -209,7 +267,35 @@ impl WhisperDictateApp {
                 }
             }
         }
+        // Poll the background GPU probe and adopt the result once available.
+        if let Some(result) = self.gpu_probe.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.gpu_total_mb = result;
+            self.gpu_probe = None;
+        }
         self.runtime_state = self.supervisor.state();
+    }
+
+    /// Track fast-crash streaks: when a non-clean exit happens within 10 s of
+    /// start, increment the counter.  After 3 consecutive fast crashes, append
+    /// an actionable advice line (once per streak).
+    pub(in crate::ui) fn handle_exit_crash_streak(&mut self, code: Option<i32>) {
+        let elapsed = self
+            .worker_start_time
+            .take()
+            .map(|t| t.elapsed())
+            .unwrap_or(std::time::Duration::MAX);
+
+        if code == Some(0) || elapsed >= std::time::Duration::from_secs(10) {
+            // Clean or long-lived exit — reset the streak.
+            self.fast_crash_count = 0;
+            return;
+        }
+
+        self.fast_crash_count += 1;
+
+        if let Some(msg) = crash_streak_advice(self.fast_crash_count) {
+            self.append_runtime_log(msg);
+        }
     }
 
     fn handle_worker_event(&mut self, event: &WorkerEvent) {
@@ -238,6 +324,10 @@ impl WhisperDictateApp {
             self.audio_capture_opening = state == "opening";
             self.pipeline_stage = pipeline_stage_for_worker_state(state);
             if let Some(ready) = worker_ready_for_state(state) {
+                if ready {
+                    // Worker successfully loaded and is ready — clear any crash streak.
+                    self.fast_crash_count = 0;
+                }
                 self.worker_ready = ready;
             }
             if let Some(active) = audio_capture_active_for_worker_state(state) {
@@ -283,7 +373,12 @@ impl WhisperDictateApp {
                 }
             }
         } else {
-            self.audio_capture_active = true;
+            // No state field: treat as active only when the worker is actually
+            // running so a stale/malformed audio event can't linger the meter
+            // after capture has stopped.
+            if self.runtime_state == RuntimeState::Running {
+                self.audio_capture_active = true;
+            }
         }
     }
 
@@ -292,6 +387,7 @@ impl WhisperDictateApp {
             self.runtime_log.push('\n');
         }
         self.runtime_log.push_str(line.as_ref());
+        trim_runtime_log(&mut self.runtime_log);
         self.runtime_log_scroll_to_bottom = true;
     }
 
@@ -300,5 +396,22 @@ impl WhisperDictateApp {
             return;
         }
         self.append_runtime_log(output);
+    }
+}
+
+/// Returns an advice message when the crash streak count reaches the threshold
+/// (exactly 3), and `None` otherwise.  Pure function — easy to unit-test
+/// without constructing the full app.
+///
+/// `count` is the number of consecutive fast exits (<10 s, non-zero code).
+pub(in crate::ui) fn crash_streak_advice(count: u32) -> Option<String> {
+    if count == 3 {
+        Some(
+            "[ui] worker crashed 3 times in a row right after start — \
+run Doctor (sidebar) and check the log above for the cause"
+                .to_owned(),
+        )
+    } else {
+        None
     }
 }
