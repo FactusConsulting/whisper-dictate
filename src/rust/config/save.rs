@@ -28,6 +28,7 @@ impl AppSettings {
         }
         set_string(object, "device", &self.device);
         set_string(object, "compute_type", &self.compute_type);
+        set_string(object, "audio_device", &self.audio_device);
         set_string(object, "lang", &self.lang);
         set_string(object, "xkb_layout", &self.xkb_layout);
         set_string(object, "initial_prompt", &self.initial_prompt);

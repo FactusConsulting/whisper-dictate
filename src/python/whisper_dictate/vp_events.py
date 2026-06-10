@@ -78,6 +78,78 @@ def _sounddevice_input_info(sd) -> dict | None:
     return None
 
 
+def _default_input_index(sd) -> int | None:
+    """The index of sounddevice's default input device, or ``None``.
+
+    Mirrors the default-device resolution used elsewhere: ``sd.default.device``
+    is either ``(input, output)`` or a single int; a value of ``-1`` means "no
+    explicit default".
+    """
+    default_device = getattr(getattr(sd, "default", None), "device", None)
+    if isinstance(default_device, (list, tuple)) and default_device:
+        candidate = default_device[0]
+    elif isinstance(default_device, int):
+        candidate = default_device
+    else:
+        return None
+    if not isinstance(candidate, int) or candidate < 0:
+        return None
+    return candidate
+
+
+def list_input_devices(sd) -> list[dict]:
+    """Return input devices (max_input_channels > 0) for the device picker.
+
+    Each entry is ``{"index", "name", "max_input_channels", "default"}``. Pure
+    over an injected ``sd`` so it is unit-testable with a stubbed sounddevice.
+    """
+    default_index = _default_input_index(sd)
+    devices = sd.query_devices()
+    result: list[dict] = []
+    for index, info in enumerate(devices):
+        if not isinstance(info, dict):
+            continue
+        try:
+            channels = int(info.get("max_input_channels") or 0)
+        except (TypeError, ValueError):
+            channels = 0
+        if channels <= 0:
+            continue
+        name = str(info.get("name") or "").strip()
+        if not name:
+            # An empty name would collide with the UI's "" = "(System default)"
+            # combo value and make the selection ambiguous — skip the entry.
+            continue
+        result.append({
+            "index": index,
+            "name": name,
+            "max_input_channels": channels,
+            "default": index == default_index,
+        })
+    return result
+
+
+def print_audio_devices() -> int:
+    """Print the input-device list as JSON and return a process exit code.
+
+    Cheap: imports sounddevice lazily and never loads a model or opens a stream.
+    On success prints a JSON array and returns 0; if sounddevice is unavailable
+    (or querying fails) prints ``{"error": "..."}`` and returns 1.
+    """
+    try:
+        import sounddevice as sd
+    except Exception as exc:  # noqa: BLE001 - report cleanly to the caller
+        print(json.dumps({"error": f"sounddevice unavailable: {exc}"}), flush=True)
+        return 1
+    try:
+        devices = list_input_devices(sd)
+    except Exception as exc:  # noqa: BLE001 - report cleanly to the caller
+        print(json.dumps({"error": f"could not query audio devices: {exc}"}), flush=True)
+        return 1
+    print(json.dumps(devices, ensure_ascii=False), flush=True)
+    return 0
+
+
 def _sounddevice_input_name(sd) -> str | None:
     info = _sounddevice_input_info(sd)
     if not info:

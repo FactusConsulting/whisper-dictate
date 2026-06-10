@@ -144,6 +144,7 @@ impl WhisperDictateApp {
                 section_label(ui, "Dictation controls", palette);
                 ui.label("Applies to local and cloud speech engines.");
                 ui.end_row();
+                self.microphone_settings(ui);
                 combo_help_labeled(
                     ui,
                     "Language",
@@ -205,6 +206,58 @@ impl WhisperDictateApp {
                     "Maximum time window for consecutive quit-key presses.",
                 );
             });
+    }
+
+    /// The Microphone picker: a combo over "(System default)" + the refreshed
+    /// device list (with the saved value preserved even if absent), plus a
+    /// "Refresh devices" button that runs the worker's `--list-audio-devices`.
+    /// Visible on every speech backend — capture is backend-independent.
+    fn microphone_settings(&mut self, ui: &mut egui::Ui) {
+        const MIC_HELP: &str = "Input device for recording. (System default) uses the OS default \
+            microphone. Otherwise the worker matches your saved value against device names \
+            (case-insensitive substring) or treats a number as a device index. Refresh devices \
+            asks the worker to list the inputs it can see.";
+        let options = self.microphone_options();
+        combo_help_dynamic(
+            ui,
+            "Microphone",
+            &mut self.settings.audio_device,
+            &options,
+            MIC_HELP,
+        );
+
+        ui.label("");
+        if ui
+            .add_enabled(
+                self.background_task.is_none(),
+                egui::Button::new("Refresh devices"),
+            )
+            .on_hover_text(
+                "Run the worker to list available microphones. The result populates the picker; \
+                 it does not load a model or start dictation.",
+            )
+            .clicked()
+        {
+            self.run_list_audio_devices();
+        }
+        ui.end_row();
+    }
+
+    /// Build the Microphone combo entries: "(System default)" → "" first, then
+    /// the refreshed device names, and finally the saved value as an extra entry
+    /// when it is non-empty and not already listed (so a custom/offline device
+    /// is never silently dropped).
+    pub(in crate::ui) fn microphone_options(&self) -> Vec<(String, String)> {
+        let mut options: Vec<(String, String)> =
+            vec![(String::new(), "(System default)".to_owned())];
+        for name in &self.audio_device_options {
+            options.push((name.clone(), name.clone()));
+        }
+        let saved = self.settings.audio_device.trim();
+        if !saved.is_empty() && !options.iter().any(|(value, _)| value == saved) {
+            options.push((saved.to_owned(), format!("{saved} (saved)")));
+        }
+        options
     }
 
     fn cloud_stt_key_section(&mut self, ui: &mut egui::Ui, provider: CloudProvider) {

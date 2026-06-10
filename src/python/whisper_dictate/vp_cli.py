@@ -200,6 +200,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="run Linux/Wayland health checks and exit")
     ap.add_argument("--model-capacity", action="store_true",
                     help="show local GPU VRAM and which local models can fit, then exit")
+    ap.add_argument("--list-audio-devices", action="store_true",
+                    help="print available input (microphone) devices as JSON, then exit")
     ap.add_argument("--transcribe-file", metavar="PATH",
                     help="transcribe an audio file with the selected backend, "
                          "then exit. 16-bit WAV works natively; mp3/m4a and "

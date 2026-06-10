@@ -123,7 +123,8 @@ from whisper_dictate.vp_events import (  # noqa: E402,F401
     _print_model_capacity, _run_command_hook_and_annotate,
     _select_active_channel_pcm, _sounddevice_capture_channel_candidates,
     _sounddevice_input_channels, _sounddevice_input_info, _sounddevice_input_name,
-    _sounddevice_stream_kwargs, SOUNDDEVICE_START_BLOCK_MS,
+    _sounddevice_stream_kwargs, list_input_devices, print_audio_devices,
+    SOUNDDEVICE_START_BLOCK_MS,
 )
 from whisper_dictate.vp_format import (  # noqa: E402,F401
     FormatCommandResult, apply_format_commands, _format_command_set,
@@ -329,6 +330,8 @@ def _run_utility_subcommands(a, ap) -> None:
     """
     if a.doctor:
         raise SystemExit(run_doctor())
+    if a.list_audio_devices:
+        raise SystemExit(print_audio_devices())
     if a.model_capacity:
         _handle_model_capacity(a, ap)
         raise SystemExit(0)

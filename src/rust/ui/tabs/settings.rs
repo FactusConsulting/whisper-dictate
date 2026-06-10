@@ -111,6 +111,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.stt_timeout_ms = defaults.stt_timeout_ms;
             settings.device = defaults.device;
             settings.compute_type = defaults.compute_type;
+            settings.audio_device = defaults.audio_device;
             settings.lang = defaults.lang;
             settings.xkb_layout = defaults.xkb_layout;
             settings.key = defaults.key;
