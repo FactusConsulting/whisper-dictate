@@ -133,11 +133,16 @@ fn minimal_log_card(line: &str, has_structured_utterance: bool) -> Option<Runtim
     // `[inject]` log line is truncated to ~57 chars at the source, so cards
     // (and Copy) built from it cut real sentences off no matter how wide the
     // window is.
-    if let Some(text) = extract_utterance_full_text(line) {
+    if let Some(payload) = parse_utterance_payload(line) {
+        let text = worker_event_string(&payload, "text")
+            .or_else(|| worker_event_string(&payload, "text_preview"))
+            .filter(|value| !value.trim().is_empty())?;
         return Some(RuntimeLogCard {
             kind: RuntimeLogCardKind::FinalText,
             title: text,
-            detail: String::new(),
+            // Whether post-processing ran for THIS utterance, and in which
+            // mode — visible under every Final card.
+            detail: post_processing_summary(&payload),
             badge: "Final".to_owned(),
         });
     }
@@ -415,6 +420,23 @@ fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
 
 fn parse_utterance_payload(line: &str) -> Option<serde_json::Value> {
     serde_json::from_str(line.strip_prefix("[utterance] ")?).ok()
+}
+
+/// One-line post-processing status for an utterance payload: "Post-processing
+/// off" when the processor is none / mode raw, otherwise the active mode and
+/// provider, e.g. "Post-processing: clean (groq)".
+fn post_processing_summary(payload: &serde_json::Value) -> String {
+    let processor =
+        worker_event_string(payload, "post_processor").unwrap_or_else(|| "none".to_owned());
+    // A missing mode means the worker default ("raw" = pass-through), so a
+    // payload with a provider but no mode still reads as off — never "?".
+    let Some(mode) = worker_event_string(payload, "post_mode") else {
+        return "Post-processing off".to_owned();
+    };
+    if processor == "none" || mode == "raw" {
+        return "Post-processing off".to_owned();
+    }
+    format!("Post-processing: {mode} ({processor})")
 }
 
 /// The FULL dictated text of an `[utterance]` event — prefers the untruncated
