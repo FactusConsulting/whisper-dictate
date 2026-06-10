@@ -44,7 +44,7 @@ class _FakeProc:
     def terminate(self):
         self.terminated = True
 
-    def wait(self):
+    def wait(self, timeout=None):
         self.waited = True
 
 
@@ -61,7 +61,7 @@ class StopCaptureStreamsTests(unittest.TestCase):
     def test_stop_capture_streams_terminates_arecord_proc(self):
         rt = self.runtime
         proc = _FakeProc([])
-        target = types.SimpleNamespace(_arecord_proc=proc, _stream=None)
+        target = types.SimpleNamespace(_arecord_proc=proc, _stream=None, frames=[])
 
         rt.CaptureMixin._stop_capture_streams(target)
 
@@ -84,7 +84,7 @@ class StopCaptureStreamsTests(unittest.TestCase):
                 self.closed = True
 
         stream = Stream()
-        target = types.SimpleNamespace(_arecord_proc=None, _stream=stream)
+        target = types.SimpleNamespace(_arecord_proc=None, _stream=stream, frames=[])
 
         rt.CaptureMixin._stop_capture_streams(target)
 
@@ -107,7 +107,7 @@ class StopCaptureStreamsTests(unittest.TestCase):
                 self.closed = True
 
         stream = Stream()
-        target = types.SimpleNamespace(_arecord_proc=proc, _stream=stream)
+        target = types.SimpleNamespace(_arecord_proc=proc, _stream=stream, frames=[])
 
         rt.CaptureMixin._stop_capture_streams(target)
 
@@ -118,7 +118,7 @@ class StopCaptureStreamsTests(unittest.TestCase):
 
     def test_stop_capture_streams_is_noop_when_idle(self):
         rt = self.runtime
-        target = types.SimpleNamespace(_arecord_proc=None, _stream=None)
+        target = types.SimpleNamespace(_arecord_proc=None, _stream=None, frames=[])
 
         # Must not raise when nothing is active.
         rt.CaptureMixin._stop_capture_streams(target)

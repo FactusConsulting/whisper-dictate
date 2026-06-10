@@ -204,7 +204,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "fn audio_capture_active_for_worker_state", 1
         )[1].split("\n}", 1)[0]
         inactive_arm = capture_active_fn.split(
-            '"opening" | "ready" | "transcribing" | "loading_model" | "failed" | "no_text"', 1
+            '"opening" | "ready" | "transcribing" | "loading_model" | "failed" | "no_text"\n        | "capture_lost"', 1
         )
         self.assertEqual(len(inactive_arm), 2, "inactive state list missing")
         self.assertIn("Some(false)", inactive_arm[1].split("=>", 2)[1])

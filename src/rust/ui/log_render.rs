@@ -126,6 +126,9 @@ fn minimal_log_card(line: &str) -> Option<RuntimeLogCard> {
     if let Some(card) = no_text_card(line) {
         return Some(card);
     }
+    if let Some(card) = capture_lost_card(line) {
+        return Some(card);
+    }
     let text = extract_inject_preview(line)?;
     Some(RuntimeLogCard {
         kind: RuntimeLogCardKind::FinalText,
@@ -164,9 +167,12 @@ fn diagnostic_log_card(
         return None;
     }
 
-    // no_text lines get a dedicated friendly card in both modes; they must
-    // not be swallowed by the transient-state filter below.
+    // no_text and capture_lost lines get dedicated friendly cards in both modes;
+    // they must not be swallowed by the transient-state filter below.
     if let Some(card) = no_text_card(line) {
+        return Some(card);
+    }
+    if let Some(card) = capture_lost_card(line) {
         return Some(card);
     }
 
@@ -258,6 +264,18 @@ fn no_text_card(line: &str) -> Option<RuntimeLogCard> {
         title: title.to_owned(),
         detail,
         badge: "No text".to_owned(),
+    })
+}
+
+/// Parse `[worker] status=capture_lost …` into a friendly card.
+/// Returns `None` for any other line.
+fn capture_lost_card(line: &str) -> Option<RuntimeLogCard> {
+    line.strip_prefix("[worker] status=capture_lost")?;
+    Some(RuntimeLogCard {
+        kind: RuntimeLogCardKind::Status,
+        title: "Audio capture stopped unexpectedly — check the microphone".to_owned(),
+        detail: "capture_lost".to_owned(),
+        badge: "Capture lost".to_owned(),
     })
 }
 

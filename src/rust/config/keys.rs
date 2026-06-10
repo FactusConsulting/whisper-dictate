@@ -37,6 +37,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "parakeet_min_seconds",
     "release_tail_ms",
     "preview_seconds",
+    "max_record_s",
     "vad_threshold",
     "vad_min_silence_ms",
     "vad_speech_pad_ms",

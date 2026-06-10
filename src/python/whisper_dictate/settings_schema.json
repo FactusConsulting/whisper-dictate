@@ -134,6 +134,12 @@
       "live": true
     },
     {
+      "env": "VOICEPI_MAX_RECORD_S",
+      "key": "max_record_s",
+      "default": "120",
+      "live": true
+    },
+    {
       "env": "VOICEPI_VAD_THRESHOLD",
       "key": "vad_threshold",
       "default": "0.3",

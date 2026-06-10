@@ -60,6 +60,12 @@ impl WhisperDictateApp {
                 );
                 text_help(
                     ui,
+                    "Max recording seconds",
+                    &mut self.settings.max_record_s,
+                    "Maximum recording length in seconds. If a key is held down longer than this, further audio is silently dropped and a warning is logged. 0 disables the cap.",
+                );
+                text_help(
+                    ui,
                     "VAD threshold",
                     &mut self.settings.vad_threshold,
                     "Voice activity detection sensitivity. Lower is more sensitive, higher rejects more noise.",

@@ -79,6 +79,19 @@ def _audio_device_setting() -> str:
     return (os.environ.get("VOICEPI_AUDIO_DEVICE") or "").strip()
 
 
+def _max_record_s() -> float:
+    """Maximum recording length in seconds; 0 disables the cap.
+
+    Read live from the environment so a config reload takes effect on the next
+    recording without a restart (``live: true`` in the schema).
+    """
+    raw = (os.environ.get("VOICEPI_MAX_RECORD_S") or "120").strip()
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return 120.0
+
+
 def _input_devices(sd) -> list[dict]:
     """Return sounddevice input devices (max_input_channels > 0), index-tagged.
 
@@ -169,23 +182,63 @@ class CaptureMixin:
                 self._record_started = self._first_audio_at
                 self._first_audio_event.set()
             chunk = indata.copy()
+            # Fix 5: enforce max recording cap in the sounddevice callback.
+            cap = _max_record_s()
+            if cap > 0:
+                total_samples = sum(f.shape[0] for f in self.frames) + chunk.shape[0]
+                buffered_s = total_samples / SR
+                if buffered_s > cap:
+                    if not getattr(self, "_cap_warned", False):
+                        self._cap_warned = True
+                        print(
+                            f"[cap] max recording reached ({cap:.0f}s) — release the key",
+                            flush=True,
+                        )
+                        _emit_worker_event("status", state="recording", capped=True,
+                                          recording_s=round(buffered_s, 1))
+                    return
             self.frames.append(chunk)
             self._emit_audio_level(chunk)
 
     def _arecord_reader(self, proc):
         # Read raw S16_LE mono 16kHz from arecord stdout into self.frames
         chunk = SR * 2 * 1  # 1 second of S16 mono = SR*2 bytes
-        while self.recording:
-            data = proc.stdout.read(chunk // 8)  # read ~125ms chunks
-            if not data:
-                break
-            arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 1)
-            if not self._first_audio_event.is_set():
-                self._first_audio_at = time.monotonic()
-                self._record_started = self._first_audio_at
-                self._first_audio_event.set()
-            self.frames.append(arr)
-            self._emit_audio_level(arr)
+        try:
+            while self.recording:
+                data = proc.stdout.read(chunk // 8)  # read ~125ms chunks
+                if not data:
+                    # Fix 4: EOF while still recording means the device was lost.
+                    if self.recording:
+                        print("[cap] capture lost: arecord EOF while recording", flush=True)
+                        _emit_worker_event("status", state="capture_lost",
+                                          reason="arecord_eof")
+                    break
+                arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 1)
+                if not self._first_audio_event.is_set():
+                    self._first_audio_at = time.monotonic()
+                    self._record_started = self._first_audio_at
+                    self._first_audio_event.set()
+                # Fix 5: enforce max recording cap in the arecord reader.
+                cap = _max_record_s()
+                if cap > 0:
+                    total_samples = sum(f.shape[0] for f in self.frames) + arr.shape[0]
+                    buffered_s = total_samples / SR
+                    if buffered_s > cap:
+                        if not getattr(self, "_cap_warned", False):
+                            self._cap_warned = True
+                            print(
+                                f"[cap] max recording reached ({cap:.0f}s) — release the key",
+                                flush=True,
+                            )
+                            _emit_worker_event("status", state="recording", capped=True,
+                                              recording_s=round(buffered_s, 1))
+                        continue
+                self.frames.append(arr)
+                self._emit_audio_level(arr)
+        except Exception as exc:
+            # Fix 4: unexpected error in the reader (e.g. device unplugged).
+            print(f"[cap] capture lost: {exc}", flush=True)
+            _emit_worker_event("status", state="capture_lost", reason=str(exc))
 
     def _emit_audio_level(self, pcm) -> None:
         now = time.monotonic()
@@ -206,6 +259,7 @@ class CaptureMixin:
 
     def _start_arecord(self) -> tuple[str, str]:
         self._capture_backend = "arecord"
+        self._cap_warned = False
         custom_device = bool((_audio_device_setting() or "").strip())
         device = _arecord_device_arg(_ARECORD_DEVICE, _audio_device_setting())
         self._audio_input_device = f"arecord -D {device}"
@@ -230,6 +284,7 @@ class CaptureMixin:
     def _start_sounddevice(self) -> tuple[str, str]:
         import sounddevice as sd
         self._capture_backend = "sounddevice"
+        self._cap_warned = False
         device = _resolve_sounddevice_device(sd, _audio_device_setting())
         self._audio_input_device = (
             _selected_device_name(sd, device)
@@ -256,14 +311,50 @@ class CaptureMixin:
         return self._capture_backend, self._audio_input_device
 
     def _stop_capture_streams(self) -> None:
-        if self._arecord_proc:
-            self._arecord_proc.terminate()
-            self._arecord_proc.wait()
-            self._arecord_proc = None
-        if self._stream:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        # Fix 1: timeout on arecord wait; kill if it hangs.
+        # Fix 2: drain trailing bytes from arecord stdout after terminate/wait.
+        # Fix 3: always clear refs even when stop/terminate raises.
+        proc = self._arecord_proc
+        stream = self._stream
+        if proc is not None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                # Fix 2: drain any remaining bytes written before the pipe closed.
+                # Decision: drain always (not just on normal-stop), because
+                # _stop_and_transcribe snapshots self.frames after this call and
+                # any trailing whole samples should be included. Draining on abort
+                # is harmless since _stop_and_transcribe checks self.frames after.
+                try:
+                    tail = proc.stdout.read()
+                    if tail:
+                        # Only whole 2-byte int16 samples; drop trailing odd byte.
+                        if len(tail) % 2 != 0:
+                            tail = tail[:-1]
+                        if tail:
+                            arr = np.frombuffer(tail, dtype=np.int16).reshape(-1, 1)
+                            self.frames.append(arr)
+                except Exception as drain_exc:
+                    print(f"[cap] drain error (ignored): {drain_exc}", flush=True)
+            except Exception as exc:
+                print(f"[cap] stop error (ignored): {exc}", flush=True)
+            finally:
+                self._arecord_proc = None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as exc:
+                print(f"[cap] stream stop error (ignored): {exc}", flush=True)
+            finally:
+                self._stream = None
 
     def _recording_seconds(self, pcm) -> float:
         if self._record_started:

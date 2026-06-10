@@ -73,9 +73,8 @@ pub(in crate::ui) fn worker_event_bool(payload: &serde_json::Value, key: &str) -
 pub(in crate::ui) fn audio_capture_active_for_worker_state(state: &str) -> Option<bool> {
     match state {
         "recording" | "listening" => Some(true),
-        "opening" | "ready" | "transcribing" | "loading_model" | "failed" | "no_text" => {
-            Some(false)
-        }
+        "opening" | "ready" | "transcribing" | "loading_model" | "failed" | "no_text"
+        | "capture_lost" => Some(false),
         _ => None,
     }
 }
@@ -98,7 +97,7 @@ pub(in crate::ui) fn pipeline_stage_for_worker_state(state: &str) -> Option<&'st
 pub(in crate::ui) fn worker_ready_for_state(state: &str) -> Option<bool> {
     match state {
         "ready" | "opening" | "recording" | "transcribing" | "post-processing" | "no_text"
-        | "preview" => Some(true),
+        | "preview" | "capture_lost" => Some(true),
         "loading_model" | "failed" => Some(false),
         _ => None,
     }
@@ -176,6 +175,18 @@ mod tests {
         // Unknown states leave readiness untouched.
         assert_eq!(worker_ready_for_state("listening"), None);
         assert_eq!(worker_ready_for_state("whatever"), None);
+    }
+
+    #[test]
+    fn capture_lost_state_maps_to_inactive_capture_and_ready_worker() {
+        // capture_lost: the worker is still alive (model loaded) but capture stopped.
+        assert_eq!(
+            audio_capture_active_for_worker_state("capture_lost"),
+            Some(false)
+        );
+        assert_eq!(worker_ready_for_state("capture_lost"), Some(true));
+        // capture_lost is not a pipeline stage (no live-progress card).
+        assert_eq!(pipeline_stage_for_worker_state("capture_lost"), None);
     }
 
     #[test]
