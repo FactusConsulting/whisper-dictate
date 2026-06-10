@@ -41,16 +41,13 @@ class HallucinationFilterTests(unittest.TestCase):
     def test_subtitle_credit_patterns_filtered(self):
         # The motivating real-world repro plus other named-credit shapes the
         # exact-match blacklist can't enumerate. Anchored full-text match.
+        # Phrase-forms require a trailing 4-digit year; company names are
+        # specific enough to match without one.
         for phrase in (
             "Danske tekster af Jesper Buhl Scandinavian Text Service 2018",
-            "Undertekster af Jesper Buhl",
             "Undertekster af Jesper Buhl 2019.",
-            "Tekstet af en eller anden",
-            "Oversat af nogen",
-            "Subtitles by Someone",
-            "Subtitled by Someone Else",
-            "Captions by ACME",
-            "Translated by ACME Corp",
+            "Tekstet af Jesper Buhl 2020",
+            "Subtitles by John Doe 2019",
             "Scandinavian Text Service",
             "Scandinavian Text Service 2018",
             "Broadcast Text International 2020",
@@ -59,6 +56,30 @@ class HallucinationFilterTests(unittest.TestCase):
         ):
             self.assertTrue(self.t.is_hallucination(phrase),
                             f"{phrase!r} should match credit pattern")
+
+    def test_phrase_credit_without_year_not_filtered(self):
+        # Phrase-forms without a trailing year must NOT match — real dictation
+        # can legitimately start with these phrases.  Year-less short clips are
+        # caught by the speech-rate gate instead.
+        for phrase in (
+            "oversat af Google Translate",
+            "oversat af en professionel",
+            "tekster af sange er svære at huske",
+            "undertekster af denne film mangler",
+            "subtitles by the way are missing",
+            "translated by hand is better",
+            "captions by default are off",
+            "danske tekster af høj kvalitet",
+            "Undertekster af Jesper Buhl",
+            "Tekstet af en eller anden",
+            "Oversat af nogen",
+            "Subtitles by Someone",
+            "Subtitled by Someone Else",
+            "Captions by ACME",
+            "Translated by ACME Corp",
+        ):
+            self.assertFalse(self.t.is_hallucination(phrase),
+                             f"{phrase!r} should NOT match (no trailing year)")
 
     def test_credit_pattern_does_not_match_real_sentences(self):
         # A real dictation that merely CONTAINS a credit phrase mid-sentence must

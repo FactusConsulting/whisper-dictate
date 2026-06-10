@@ -348,26 +348,29 @@ HALLUCINATIONS: frozenset[str] = frozenset({
 # Subtitle-credit hallucinations Whisper emits on quiet input come in named
 # shapes the exact-match HALLUCINATIONS set can't enumerate (e.g. "Danske
 # tekster af Jesper Buhl Scandinavian Text Service 2018"). These ANCHORED
-# regexes match the WHOLE stripped/lowercased text (a trailing year and
-# surrounding punctuation are tolerated) so a real dictation that merely
-# CONTAINS a phrase like "tekster af" mid-sentence is never dropped.
+# regexes match the WHOLE stripped/lowercased text.
+#
+# DESIGN: phrase-forms ("tekster af …", "oversat af …", etc.) only match when
+# the utterance ends with a 4-digit year.  Real dictation can legitimately
+# START with these phrases (e.g. "oversat af Google Translate", "tekster af
+# sange er svære at huske") so dropping them without a year anchor would be the
+# worst outcome — false-positive speech loss.  Year-less short-clip credits are
+# independently caught by the speech-rate gate.  The bare company names
+# (scandinavian text service, etc.) are specific enough to match without a year.
+_CREDIT_PHRASE_YEAR = r".{0,60}\b(?:19|20)\d{2}"  # tail: some text, then a year
 _CREDIT_BODY = (
     r"(?:"
-    r"(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:).+"
-    r"|tekstet af .+"
-    r"|oversat af .+"
-    r"|subtitles? by .+"
-    r"|subtitled by .+"
-    r"|captions? by .+"
-    r"|translated by .+"
+    r"(?:(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)"
+    rf"|tekstet af |oversat af |subtitles? by |subtitled by "
+    rf"|captions? by |translated by ){_CREDIT_PHRASE_YEAR}"
     r"|scandinavian text service(?: \d{4})?"
     r"|broadcast text international(?: \d{4})?"
     r"|dansk video ?tekst(?: \d{4})?"
     r")"
 )
-# Optional trailing year + trailing punctuation/whitespace, anchored both ends.
+# Trailing punctuation/whitespace tolerated, anchored both ends.
 _CREDIT_RE = re.compile(
-    rf"^{_CREDIT_BODY}(?: \d{{4}})?[\s.!?]*$",
+    rf"^{_CREDIT_BODY}[\s.!?]*$",
     re.IGNORECASE,
 )
 
