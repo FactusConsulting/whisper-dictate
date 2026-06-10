@@ -38,6 +38,88 @@ class HallucinationFilterTests(unittest.TestCase):
             self.assertFalse(self.t.is_hallucination(phrase),
                              f"{phrase!r} should NOT match")
 
+    def test_subtitle_credit_patterns_filtered(self):
+        # The motivating real-world repro plus other named-credit shapes the
+        # exact-match blacklist can't enumerate. Anchored full-text match.
+        # Phrase-forms require a trailing 4-digit year; company names are
+        # specific enough to match without one.
+        for phrase in (
+            "Danske tekster af Jesper Buhl Scandinavian Text Service 2018",
+            "Undertekster af Jesper Buhl 2019.",
+            "Tekstet af Jesper Buhl 2020",
+            "Subtitles by John Doe 2019",
+            "Scandinavian Text Service",
+            "Scandinavian Text Service 2018",
+            "Broadcast Text International 2020",
+            "Dansk Videotekst",
+            "Dansk Video Tekst 2017",
+        ):
+            self.assertTrue(self.t.is_hallucination(phrase),
+                            f"{phrase!r} should match credit pattern")
+
+    def test_phrase_credit_without_year_not_filtered(self):
+        # Phrase-forms without a trailing year must NOT match — real dictation
+        # can legitimately start with these phrases.  Year-less short clips are
+        # caught by the speech-rate gate instead.
+        for phrase in (
+            "oversat af Google Translate",
+            "oversat af en professionel",
+            "tekster af sange er svære at huske",
+            "undertekster af denne film mangler",
+            "subtitles by the way are missing",
+            "translated by hand is better",
+            "captions by default are off",
+            "danske tekster af høj kvalitet",
+            "Undertekster af Jesper Buhl",
+            "Tekstet af en eller anden",
+            "Oversat af nogen",
+            "Subtitles by Someone",
+            "Subtitled by Someone Else",
+            "Captions by ACME",
+            "Translated by ACME Corp",
+        ):
+            self.assertFalse(self.t.is_hallucination(phrase),
+                             f"{phrase!r} should NOT match (no trailing year)")
+
+    def test_credit_pattern_does_not_match_real_sentences(self):
+        # A real dictation that merely CONTAINS a credit phrase mid-sentence must
+        # survive — the pattern is anchored to the WHOLE text.
+        for phrase in (
+            "jeg leverede tekster af høj kvalitet til kunden i dag",
+            "vi talte om hvem der har oversat af gammel litteratur",
+            "the subtitles by themselves were not the problem we discussed",
+            "scandinavian text service was a company i once worked with closely",
+        ):
+            self.assertFalse(self.t.is_hallucination(phrase),
+                             f"{phrase!r} should NOT match credit pattern")
+
+    def test_repro_string_dropped_by_pattern_filter(self):
+        # Guard 2 independently: the 0.31 s repro text is a credit match.
+        repro = "Danske tekster af Jesper Buhl Scandinavian Text Service 2018"
+        self.assertTrue(self.t.is_hallucination(repro))
+
+    def test_speech_rate_gate_drops_impossible_rate(self):
+        # Guard 3 independently: 60 chars in 0.31 s = ~193 chars/s >> 30.
+        repro = "Danske tekster af Jesper Buhl Scandinavian Text Service 2018"
+        self.t.MAX_CHARS_PER_SECOND = 30.0
+        with _capture_stdout() as out:
+            self.assertTrue(self.t._exceeds_speech_rate(repro, 0.31))
+        self.assertIn("chars/s", out.getvalue())
+        self.assertIn("hallucination guard", out.getvalue())
+
+    def test_speech_rate_gate_keeps_normal_speech(self):
+        self.t.MAX_CHARS_PER_SECOND = 30.0
+        # 8 chars on a 0.5 s clip = 16 chars/s — well under the cap.
+        self.assertFalse(self.t._exceeds_speech_rate("ja tak da", 0.5))
+        # A real long sentence at a plausible rate survives.
+        sentence = "dette er en helt almindelig sætning som jeg siger"
+        self.assertFalse(self.t._exceeds_speech_rate(sentence, 4.0))
+
+    def test_speech_rate_gate_disabled_at_zero(self):
+        self.t.MAX_CHARS_PER_SECOND = 0.0
+        repro = "Danske tekster af Jesper Buhl Scandinavian Text Service 2018"
+        self.assertFalse(self.t._exceeds_speech_rate(repro, 0.31))
+
     def test_drop_hallucinated_segments_removes_trailing_silence(self):
         real = types.SimpleNamespace(
             text=" real speech", start=0.0, end=34.6,

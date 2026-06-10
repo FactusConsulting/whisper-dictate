@@ -55,9 +55,10 @@ class ShouldSkipPcmTests(unittest.TestCase):
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         vp_dictate._load_runtime_modules()
 
-    def _target(self, backend="whisper", parakeet_min=1.5):
+    def _target(self, backend="whisper", parakeet_min=1.5, min_record=0.5):
         return types.SimpleNamespace(
-            stt_backend=backend, parakeet_min_seconds=parakeet_min)
+            stt_backend=backend, parakeet_min_seconds=parakeet_min,
+            min_record_seconds=min_record)
 
     def _pcm(self, samples):
         return self.np.zeros((samples, 1), dtype=self.np.int16)
@@ -87,6 +88,67 @@ class ShouldSkipPcmTests(unittest.TestCase):
         with _capture_stdout():
             skip = vp_dictate.Dictate._should_skip_pcm(t, self._pcm(32000), 2.0)
         self.assertFalse(skip)
+
+    def test_min_record_seconds_drops_clip_below_setting(self):
+        # 0.45 s clip (7200 samples @ 16 kHz) dropped at the default 0.5 floor.
+        t = self._target(min_record=0.5)
+        with _capture_stdout() as out:
+            skip = vp_dictate.Dictate._should_skip_pcm(t, self._pcm(7200), 0.45)
+        self.assertTrue(skip)
+        self.assertIn("too short", out.getvalue())
+
+    def test_min_record_seconds_passes_clip_at_lower_setting(self):
+        # Same 0.45 s clip passes when min_record_seconds is lowered to 0.3.
+        t = self._target(min_record=0.3)
+        with _capture_stdout():
+            skip = vp_dictate.Dictate._should_skip_pcm(t, self._pcm(7200), 0.45)
+        self.assertFalse(skip)
+
+    def test_min_record_seconds_floor_clamps_below_point_three(self):
+        # Setting 0 still enforces the 0.3 s misfire floor: a 0.25 s clip
+        # (4000 samples) is dropped, a 0.35 s clip (5600 samples) survives.
+        t = self._target(min_record=0.0)
+        with _capture_stdout():
+            self.assertTrue(
+                vp_dictate.Dictate._should_skip_pcm(t, self._pcm(4000), 0.25))
+            self.assertFalse(
+                vp_dictate.Dictate._should_skip_pcm(t, self._pcm(5600), 0.35))
+
+
+class LiveReloadGuardSettingsTests(unittest.TestCase):
+    """Both anti-hallucination guards live-reload via _apply_runtime_module_config."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            real_numpy()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        vp_dictate._load_runtime_modules()
+
+    def test_apply_runtime_module_config_reloads_both_guards(self):
+        from whisper_dictate import vp_transcribe
+
+        target = types.SimpleNamespace()
+        # Mutated config overlay (the dict apply_config_to_environ produces).
+        vp_dictate.Dictate._apply_runtime_module_config(
+            target,
+            {"min_record_seconds": "0.9", "max_chars_per_second": "12"},
+        )
+        # min_record_seconds is cached on the instance; the rate cap lands on the
+        # vp_transcribe module global the gate reads.
+        self.assertEqual(target.min_record_seconds, 0.9)
+        self.assertEqual(vp_transcribe.MAX_CHARS_PER_SECOND, 12.0)
+
+        # A new overlay takes effect without re-import.
+        vp_dictate.Dictate._apply_runtime_module_config(
+            target,
+            {"min_record_seconds": "0.4", "max_chars_per_second": "0"},
+        )
+        self.assertEqual(target.min_record_seconds, 0.4)
+        self.assertEqual(vp_transcribe.MAX_CHARS_PER_SECOND, 0.0)
+        # Reset to default so other tests see the shipped cap.
+        vp_transcribe.MAX_CHARS_PER_SECOND = 30.0
 
 
 class LoadRuntimeModulesTests(unittest.TestCase):

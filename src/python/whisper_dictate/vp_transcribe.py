@@ -89,6 +89,11 @@ HALLUCINATION_SILENCE_S = float(get_value("VOICEPI_HALLUCINATION_SILENCE_S", "2.
 NO_SPEECH_DROP = float(get_value("VOICEPI_NO_SPEECH_DROP", "0.6") or "0.6")
 NO_SPEECH_DROP_LOGPROB = float(get_value("VOICEPI_NO_SPEECH_DROP_LOGPROB", "-0.5") or "-0.5")
 SEGMENT_END_SLACK_S = 1.0
+# Speech-rate plausibility gate: a transcript whose chars-per-second exceeds
+# this is humanly impossible (real speech is 15-25 chars/s) and is almost
+# certainly a hallucinated credit/caption on quiet input. "0" disables the gate.
+# Live-reloadable (mirrored from config in Dictate._apply_runtime_module_config).
+MAX_CHARS_PER_SECOND = float(get_value("VOICEPI_MAX_CHARS_PER_SECOND", "30") or "30")
 STT_DEBUG = (get_value("VOICEPI_STT_DEBUG") or "").strip().lower() not in (
     "", "0", "false", "no", "off")
 VALID_STT_BACKENDS = ("whisper", "parakeet", "openai")
@@ -340,8 +345,43 @@ HALLUCINATIONS: frozenset[str] = frozenset({
 })
 
 
+# Subtitle-credit hallucinations Whisper emits on quiet input come in named
+# shapes the exact-match HALLUCINATIONS set can't enumerate (e.g. "Danske
+# tekster af Jesper Buhl Scandinavian Text Service 2018"). These ANCHORED
+# regexes match the WHOLE stripped/lowercased text.
+#
+# DESIGN: phrase-forms ("tekster af …", "oversat af …", etc.) only match when
+# the utterance ends with a 4-digit year.  Real dictation can legitimately
+# START with these phrases (e.g. "oversat af Google Translate", "tekster af
+# sange er svære at huske") so dropping them without a year anchor would be the
+# worst outcome — false-positive speech loss.  Year-less short-clip credits are
+# independently caught by the speech-rate gate.  The bare company names
+# (scandinavian text service, etc.) are specific enough to match without a year.
+_CREDIT_PHRASE_YEAR = r".{0,60}\b(?:19|20)\d{2}"  # tail: some text, then a year
+_CREDIT_BODY = (
+    r"(?:"
+    r"(?:(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)"
+    rf"|tekstet af |oversat af |subtitles? by |subtitled by "
+    rf"|captions? by |translated by ){_CREDIT_PHRASE_YEAR}"
+    r"|scandinavian text service(?: (?:19|20)\d{2})?"
+    r"|broadcast text international(?: (?:19|20)\d{2})?"
+    r"|dansk video ?tekst(?: (?:19|20)\d{2})?"
+    r")"
+)
+# Trailing punctuation/whitespace tolerated, anchored both ends.
+_CREDIT_RE = re.compile(
+    rf"^{_CREDIT_BODY}[\s.!?]*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_credit(text: str) -> bool:
+    """True when the WHOLE text is a subtitle/caption credit (anchored match)."""
+    return bool(_CREDIT_RE.match(text.strip().lower()))
+
+
 def is_hallucination(text: str) -> bool:
-    return text.lower().rstrip() in HALLUCINATIONS
+    return text.lower().rstrip() in HALLUCINATIONS or _looks_like_credit(text)
 
 
 def _drop_hallucinated_segments(segment_list, audio_duration_s):
@@ -367,6 +407,28 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
         )
         (dropped if (likely_silence or past_audio) else kept).append(segment)
     return kept, dropped
+
+
+def _exceeds_speech_rate(text: str, duration_s: float) -> bool:
+    """True when ``text`` packs more chars/second than humanly plausible.
+
+    Real speech runs ~15-25 chars/s; the default 30 cap leaves headroom. The
+    classic credit hallucination (60 chars from a 0.31 s tap = ~193 chars/s) is
+    far above any real rate. ``MAX_CHARS_PER_SECOND`` of 0 disables the gate.
+    Logs a clear line when it fires.
+    """
+    if MAX_CHARS_PER_SECOND <= 0:
+        return False
+    chars = len(text)
+    rate = chars / max(duration_s, 0.1)
+    if rate > MAX_CHARS_PER_SECOND:
+        print(
+            f"[stt] dropped: {chars} chars in {duration_s:.1f}s = "
+            f"{rate:.0f} chars/s > {MAX_CHARS_PER_SECOND:.0f} (hallucination guard)",
+            flush=True,
+        )
+        return True
+    return False
 
 
 def _segment_metric(segment) -> dict[str, Any]:
@@ -442,6 +504,12 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     # " ".join() drops that at segment joins -> "hørerdig". Join raw,
     # then collapse whitespace runs to one space.
     raw_text = re.sub(r"\s+", " ", "".join(s.text for s in segment_list)).strip()
+    if raw_text and _exceeds_speech_rate(raw_text, dur):
+        # Humanly impossible char rate -> hallucinated credit/caption. Drop the
+        # text (and its segments); downstream this surfaces as an empty result
+        # (reason="empty" -> state=no_text), not as an is_hallucination match.
+        raw_text = ""
+        segment_list = []
     dictionary_text = _dictionary_runtime(raw_text, INITIAL_PROMPT)
     text = dictionary_text.text
     replacements = dictionary_text.changes
