@@ -127,6 +127,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.parakeet_min_seconds = defaults.parakeet_min_seconds;
             settings.release_tail_ms = defaults.release_tail_ms;
             settings.preview_seconds = defaults.preview_seconds;
+            settings.max_record_s = defaults.max_record_s;
             settings.vad_threshold = defaults.vad_threshold;
             settings.vad_min_silence_ms = defaults.vad_min_silence_ms;
             settings.vad_speech_pad_ms = defaults.vad_speech_pad_ms;

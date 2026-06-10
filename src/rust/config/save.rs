@@ -41,6 +41,7 @@ impl AppSettings {
         set_string(object, "parakeet_min_seconds", &self.parakeet_min_seconds);
         set_string(object, "release_tail_ms", &self.release_tail_ms);
         set_string(object, "preview_seconds", &self.preview_seconds);
+        set_string(object, "max_record_s", &self.max_record_s);
         set_string(object, "vad_threshold", &self.vad_threshold);
         set_string(object, "vad_min_silence_ms", &self.vad_min_silence_ms);
         set_string(object, "vad_speech_pad_ms", &self.vad_speech_pad_ms);

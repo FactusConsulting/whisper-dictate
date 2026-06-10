@@ -73,6 +73,7 @@ impl AppSettings {
         );
         self.release_tail_ms = string_value(object, "release_tail_ms", &defaults.release_tail_ms);
         self.preview_seconds = string_value(object, "preview_seconds", &defaults.preview_seconds);
+        self.max_record_s = string_value(object, "max_record_s", &defaults.max_record_s);
     }
 
     /// Voice-activity-detection and audio level/ducking settings.

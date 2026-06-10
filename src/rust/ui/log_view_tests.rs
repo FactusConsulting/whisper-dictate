@@ -593,6 +593,45 @@ fn worker_event_mappers_include_no_text_state() {
 }
 
 #[test]
+fn capture_lost_card_renders_friendly_title_in_diagnostic_and_minimal() {
+    let line = "[worker] status=capture_lost reason=arecord_eof";
+
+    // Diagnostic mode.
+    let card_diag = runtime_log_cards(line, LogViewMode::Diagnostic);
+    assert_eq!(card_diag.len(), 1);
+    assert_eq!(card_diag[0].badge, "Capture lost");
+    assert_eq!(
+        card_diag[0].title,
+        "Audio capture stopped unexpectedly — check the microphone"
+    );
+    assert_eq!(card_diag[0].kind, RuntimeLogCardKind::Status);
+
+    // Minimal mode (also shows capture_lost).
+    let card_min = runtime_log_cards(line, LogViewMode::Minimal);
+    assert_eq!(card_min.len(), 1);
+    assert_eq!(card_min[0].badge, "Capture lost");
+    assert_eq!(
+        card_min[0].title,
+        "Audio capture stopped unexpectedly — check the microphone"
+    );
+}
+
+#[test]
+fn capture_lost_card_not_swallowed_by_transient_state_filter() {
+    // The transient-state filter in diagnostic_log_card must NOT drop capture_lost.
+    let log = [
+        "[worker] status=recording",
+        "[worker] status=capture_lost reason=arecord_eof",
+    ]
+    .join("\n");
+    let cards = runtime_log_cards(&log, LogViewMode::Diagnostic);
+    assert!(
+        cards.iter().any(|c| c.badge == "Capture lost"),
+        "capture_lost card must survive transient-state suppression; cards={cards:?}"
+    );
+}
+
+#[test]
 fn diagnostic_utterance_detail_groups_onto_separate_lines() {
     let log = concat!(
         r#"[utterance] {"text":"hej","recording_s":2.0,"compute_s":0.5,"#,

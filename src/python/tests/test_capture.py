@@ -375,3 +375,342 @@ class StartSounddeviceTests(unittest.TestCase):
         self.assertIsNone(target._stream)
 
 
+# ---------------------------------------------------------------------------
+# Fix 1+2+3: stop-stream robustness tests
+# ---------------------------------------------------------------------------
+
+class _FakeProcTimeout:
+    """arecord stub that hangs on wait() once, then succeeds on kill()/wait()."""
+
+    def __init__(self, chunks, *, hang_first_wait=True):
+        self.stdout = _FakeStdout(chunks)
+        self.terminated = False
+        self.killed = False
+        self._wait_calls = 0
+        self._hang_first = hang_first_wait
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        self._wait_calls += 1
+        if self._hang_first and self._wait_calls == 1:
+            import subprocess as _sp
+            raise _sp.TimeoutExpired("arecord", timeout)
+
+
+class _FakeProcRaisingTerminate:
+    """arecord stub whose terminate() raises an exception."""
+
+    def __init__(self):
+        self.stdout = _FakeStdout([])
+        self._null = None
+
+    def terminate(self):
+        raise OSError("terminate failed")
+
+    def wait(self, timeout=None):
+        pass
+
+
+class StopCaptureStreamsTests(unittest.TestCase):
+    """Tests for Fix 1 (timeout→kill), Fix 2 (drain), Fix 3 (always None)."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+        import numpy as np
+        cls.np = np
+
+    def _target(self, proc, stream=None):
+        return types.SimpleNamespace(
+            frames=[],
+            _arecord_proc=proc,
+            _stream=stream,
+        )
+
+    def test_wait_timeout_triggers_kill(self):
+        """Fix 1: when wait() times out, kill() is called and refs are cleared."""
+        proc = _FakeProcTimeout([], hang_first_wait=True)
+        target = self._target(proc)
+
+        self.rt.CaptureMixin._stop_capture_streams(target)
+
+        self.assertTrue(proc.terminated)
+        self.assertTrue(proc.killed)
+        self.assertIsNone(target._arecord_proc)
+
+    def test_drain_appends_whole_samples_drops_odd_byte(self):
+        """Fix 2: trailing bytes from stdout are drained; odd trailing byte dropped."""
+        np = self.np
+        # 5 int16 samples = 10 bytes, so the trailing odd byte (1 extra) is dropped.
+        trailing = np.array([10, 20, 30, 40, 50], dtype=np.int16).tobytes() + b"\xff"
+        # _FakeStdout returns chunks sequentially; we need it to return all at once.
+        # Override stdout to return the trailing bytes as a single read() call.
+        class _OneShot:
+            def __init__(self, data):
+                self._data = data
+                self._read = False
+            def read(self, n=-1):
+                if not self._read:
+                    self._read = True
+                    return self._data
+                return b""
+
+        proc = _FakeProcTimeout([], hang_first_wait=False)
+        proc.stdout = _OneShot(trailing)
+        target = self._target(proc)
+
+        self.rt.CaptureMixin._stop_capture_streams(target)
+
+        self.assertEqual(len(target.frames), 1)
+        self.assertEqual(target.frames[0].shape, (5, 1))
+        self.assertEqual(target.frames[0].dtype, np.int16)
+        self.assertEqual(list(target.frames[0][:, 0]), [10, 20, 30, 40, 50])
+        self.assertIsNone(target._arecord_proc)
+
+    def test_drain_empty_stdout_appends_nothing(self):
+        """Fix 2: empty stdout after terminate leaves frames unchanged."""
+        proc = _FakeProcTimeout([], hang_first_wait=False)
+        target = self._target(proc)
+
+        self.rt.CaptureMixin._stop_capture_streams(target)
+
+        self.assertEqual(target.frames, [])
+        self.assertIsNone(target._arecord_proc)
+
+    def test_cleanup_sets_refs_to_none_even_when_terminate_raises(self):
+        """Fix 3: refs are always cleared even when terminate() raises."""
+        proc = _FakeProcRaisingTerminate()
+        target = self._target(proc)
+
+        # Should not propagate the OSError
+        self.rt.CaptureMixin._stop_capture_streams(target)
+
+        self.assertIsNone(target._arecord_proc)
+        self.assertIsNone(target._stream)
+
+    def test_stream_ref_cleared_even_when_stream_stop_raises(self):
+        """Fix 3: _stream is always set to None even if stream.stop() raises."""
+        class _RaisingStream:
+            def stop(self):
+                raise RuntimeError("stream error")
+            def close(self):
+                pass
+
+        target = types.SimpleNamespace(
+            frames=[],
+            _arecord_proc=None,
+            _stream=_RaisingStream(),
+        )
+
+        self.rt.CaptureMixin._stop_capture_streams(target)
+
+        self.assertIsNone(target._stream)
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: capture_lost event on arecord EOF-while-recording
+# ---------------------------------------------------------------------------
+
+class ArecordReaderCaptureLostTests(unittest.TestCase):
+    """Fix 4: reader emits capture_lost when arecord EOF arrives mid-recording."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+        import numpy as np
+        cls.np = np
+
+    def _reader_target(self):
+        return types.SimpleNamespace(
+            recording=True,
+            frames=[],
+            _first_audio_event=self.rt.threading.Event(),
+            _first_audio_at=0.0,
+            _record_started=0.0,
+            _emit_audio_level=lambda _chunk: None,
+            _cap_warned=False,
+        )
+
+    def test_eof_while_recording_emits_capture_lost(self):
+        """Immediate EOF with recording=True → capture_lost event fired once."""
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        proc = _FakeProc([])  # empty → immediate EOF
+        target = self._reader_target()
+
+        with patch.object(self.rt, "_emit_worker_event", fake_emit):
+            self.rt.CaptureMixin._arecord_reader(target, proc)
+
+        capture_lost = [e for e in events if e.get("state") == "capture_lost"]
+        self.assertEqual(len(capture_lost), 1,
+                         f"expected exactly one capture_lost event; got {events!r}")
+        self.assertIn("reason", capture_lost[0])
+
+    def test_eof_after_recording_stopped_does_not_emit_capture_lost(self):
+        """EOF after recording flag cleared → no capture_lost (normal stop)."""
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        np = self.np
+        chunks = [np.zeros(2000, dtype=np.int16).tobytes()]
+        proc = _FakeProc(chunks)
+        target = self._reader_target()
+
+        # Flip recording=False after the first (and only) chunk so EOF on the
+        # next read is the normal end-of-recording case, not a device failure.
+        def _flip(_chunk):
+            target.recording = False
+
+        target._emit_audio_level = _flip
+
+        with patch.object(self.rt, "_emit_worker_event", fake_emit):
+            self.rt.CaptureMixin._arecord_reader(target, proc)
+
+        capture_lost = [e for e in events if e.get("state") == "capture_lost"]
+        self.assertEqual(capture_lost, [],
+                         f"no capture_lost expected on normal stop; got {events!r}")
+
+    def test_reader_exception_emits_capture_lost(self):
+        """Exception in the reader loop → capture_lost event with reason."""
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        class _BrokenStdout:
+            def read(self, _n):
+                raise IOError("device unplugged")
+
+        class _BrokenProc:
+            def __init__(self):
+                self.stdout = _BrokenStdout()
+
+        target = self._reader_target()
+
+        with patch.object(self.rt, "_emit_worker_event", fake_emit):
+            self.rt.CaptureMixin._arecord_reader(target, _BrokenProc())
+
+        capture_lost = [e for e in events if e.get("state") == "capture_lost"]
+        self.assertEqual(len(capture_lost), 1,
+                         f"expected exactly one capture_lost event; got {events!r}")
+        self.assertIn("device unplugged", capture_lost[0].get("reason", ""))
+
+
+# ---------------------------------------------------------------------------
+# Fix 5: max recording cap
+# ---------------------------------------------------------------------------
+
+class MaxRecordCapTests(unittest.TestCase):
+    """Fix 5: cap stops appending frames and emits exactly one warning event."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+        import numpy as np
+        cls.np = np
+
+    def _reader_target(self, cap_warned=False):
+        return types.SimpleNamespace(
+            recording=True,
+            frames=[],
+            _first_audio_event=self.rt.threading.Event(),
+            _first_audio_at=0.0,
+            _record_started=0.0,
+            _emit_audio_level=lambda _chunk: None,
+            _cap_warned=cap_warned,
+        )
+
+    def test_cap_stops_appending_and_emits_once(self):
+        """When buffer exceeds cap, no more frames are appended and one warning fires."""
+        np = self.np
+        rt = self.rt
+        # SR=16000; 2000 samples = 0.125s. Set cap to 0.1s so any chunk exceeds it.
+        rt.SR = 16000
+        # Three chunks worth of audio.
+        chunks = [np.zeros(2000, dtype=np.int16).tobytes() for _ in range(3)]
+        proc = _FakeProc(chunks)
+        target = self._reader_target()
+
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        with patch.object(rt, "_emit_worker_event", fake_emit), \
+                _env(VOICEPI_MAX_RECORD_S="0.1"):
+            rt.CaptureMixin._arecord_reader(target, proc)
+
+        # The cap should have triggered after the very first chunk.
+        # Frames must be empty (cap hit immediately, nothing appended).
+        self.assertEqual(len(target.frames), 0,
+                         f"no frames should be appended past cap; got {len(target.frames)}")
+        # Exactly one cap warning event (state=recording, capped=True).
+        cap_events = [e for e in events if e.get("capped") is True]
+        self.assertEqual(len(cap_events), 1,
+                         f"expected exactly one cap event; got {events!r}")
+
+    def test_cap_disabled_when_zero(self):
+        """VOICEPI_MAX_RECORD_S=0 disables the cap entirely."""
+        np = self.np
+        rt = self.rt
+        rt.SR = 16000
+        chunks = [np.zeros(2000, dtype=np.int16).tobytes() for _ in range(3)]
+        proc = _FakeProc(chunks)
+        target = self._reader_target()
+
+        with _env(VOICEPI_MAX_RECORD_S="0"):
+            rt.CaptureMixin._arecord_reader(target, proc)
+
+        self.assertEqual(len(target.frames), 3)
+
+    def test_cap_already_warned_does_not_emit_again(self):
+        """If _cap_warned is already True, no further cap events are emitted."""
+        np = self.np
+        rt = self.rt
+        rt.SR = 16000
+        chunks = [np.zeros(2000, dtype=np.int16).tobytes() for _ in range(3)]
+        proc = _FakeProc(chunks)
+        # Pre-set _cap_warned so the reader knows it already fired.
+        target = self._reader_target(cap_warned=True)
+
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        with patch.object(rt, "_emit_worker_event", fake_emit), \
+                _env(VOICEPI_MAX_RECORD_S="0.1"):
+            rt.CaptureMixin._arecord_reader(target, proc)
+
+        cap_events = [e for e in events if e.get("capped") is True]
+        self.assertEqual(cap_events, [],
+                         f"no cap event expected when already warned; got {events!r}")
+
