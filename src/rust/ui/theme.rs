@@ -41,6 +41,9 @@ const UI_LIGHT_ERROR_TEXT: egui::Color32 = egui::Color32::from_rgb(190, 18, 60);
 
 const SIDEBAR_WIDTH: f32 = 164.0;
 const TOP_STATUS_HEIGHT: f32 = 64.0;
+// Rough width of the post-indicator pill (icon + "Post on/off" + margins)
+// at scale 1.0.
+const POST_INDICATOR_MIN_WIDTH: f32 = 120.0;
 const BOTTOM_MESSAGE_BAR_HEIGHT: f32 = 30.0;
 pub(in crate::ui) const CONTROL_RADIUS: u8 = 8;
 pub(in crate::ui) const PANEL_RADIUS: u8 = 12;
@@ -292,6 +295,13 @@ pub(in crate::ui) fn paint_sidebar_bridge(
 
 pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
     TOP_STATUS_HEIGHT * layout_scale(raw_scale)
+}
+
+/// Minimum remaining width before the top-bar post pill is drawn at all.
+/// The pill's rendered size grows with the UI text scale, so the threshold
+/// must scale with it (Copilot finding on PR #170).
+pub(in crate::ui) fn post_indicator_min_width(raw_scale: &str) -> f32 {
+    POST_INDICATOR_MIN_WIDTH * layout_scale(raw_scale)
 }
 
 pub(in crate::ui) fn bottom_message_bar_height(raw_scale: &str) -> f32 {

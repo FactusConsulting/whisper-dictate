@@ -241,8 +241,11 @@ impl WhisperDictateApp {
                     );
                     // The indicator is the lowest-priority element: skip it
                     // entirely when it cannot fit, instead of showing a
-                    // half-clipped pill.
-                    if ui.available_width() >= POST_INDICATOR_MIN_WIDTH {
+                    // half-clipped pill. The threshold scales with the UI
+                    // text scale, like the pill itself.
+                    if ui.available_width()
+                        >= post_indicator_min_width(&self.settings.ui_text_scale)
+                    {
                         self.post_indicator(ui, palette);
                     }
                     if let Some(label) = self.background_task_label {
@@ -395,10 +398,6 @@ fn status_card_sized(
                 .on_hover_text(value);
         });
 }
-
-// Rough width of the post-indicator pill (icon + "Post on/off" + margins).
-// Below this remaining width the pill is skipped rather than half-clipped.
-pub(in crate::ui) const POST_INDICATOR_MIN_WIDTH: f32 = 120.0;
 
 pub(in crate::ui) fn top_status_controls_width() -> f32 {
     // Start (88) + Stop (78) + compact toggle (34) + inter-button spacing.
