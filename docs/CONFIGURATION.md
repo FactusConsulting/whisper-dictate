@@ -63,8 +63,8 @@ requiring restart/model reload.
 | **Audio min input** | Quality | `VOICEPI_MIN_INPUT_DBFS` | _none_ | `-55` | float dBFS | reject input quieter than this |
 | **Audio min SNR** | Quality | `VOICEPI_MIN_SNR_DB` | _none_ | `6` | float dB | reject input below this speech-vs-noise contrast |
 | **XKB layout (Wayland)** | Speech | `VOICEPI_XKB_LAYOUT` (highest), `XKB_DEFAULT_LAYOUT` (fallback) | _none_ | _(auto-detect)_ | `dk`, `se`, `de`, `fi`, `no`, `es`, `pt`, `br`, `pl`, `ua`, … | force keycode layout for special-char injection |
-| **JSON output** | Output | `VOICEPI_JSON` | `--json` | _(unset)_ | truthy / falsey | print one structured JSON event per accepted utterance |
-| **Metrics file** | Output | `VOICEPI_METRICS_JSONL` | _none_ | _(unset)_ | file path | append one structured JSON event per accepted utterance |
+| **JSON output** | Output | `VOICEPI_JSON` | `--json` | _(unset)_ | truthy / falsey | print one structured JSON event per accepted utterance; also enables the metrics file (`VOICEPI_METRICS_JSONL`) |
+| **Metrics file** | Output | `VOICEPI_METRICS_JSONL` | _none_ | _(unset)_ | file path | append one structured JSON event per accepted utterance — **only written while JSON output is enabled** |
 | **Command hook** | Output | `VOICEPI_COMMAND_HOOK` | _none_ | _(unset)_ | command string or JSON string array | Advanced opt-in automation hook. Receives one utterance JSON event on stdin and is executed without shell interpolation. |
 | **Command hook timeout** | Output | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | _none_ | `2000` | integer ms | Maximum wait for the command hook. Timeout/failure is logged and recorded but does not block injection success. |
 | **Local history** | Output | `VOICEPI_HISTORY_ENABLED` | _none_ | `1` | truthy / falsey | store accepted live dictations locally for copy/reinject/debug recovery |
@@ -126,8 +126,8 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_MIN_SNR_DB` | `6` | float (dB) | Reject utterances with SNR below this ("no speech contrast"). |
 | `VOICEPI_XKB_LAYOUT` | *(unset)* | XKB layout name: `dk se de fi no es pt br pl ua` … | **Wayland only.** Force the keycode layout for special-char injection, overriding auto-detection (highest priority). |
 | `XKB_DEFAULT_LAYOUT` | *(unset)* | XKB layout name | **Wayland only.** Also consulted (2nd priority, after `VOICEPI_XKB_LAYOUT`). `--lang` auto-sets it if unset. |
-| `VOICEPI_JSON` | *(unset)* | `1` / `true` / any truthy | Print one structured JSON event per accepted utterance to stdout. Also `--json`. |
-| `VOICEPI_METRICS_JSONL` | *(unset)* | file path | Append one JSON object per accepted utterance. Includes recording duration, STT compute time, real-time factor, model/device, injection strategy, target title/process, language confidence, text preview, and segment metadata. |
+| `VOICEPI_JSON` | *(unset)* | `1` / `true` / any truthy | Print one structured JSON event per accepted utterance to stdout. Also `--json`. Also gates `VOICEPI_METRICS_JSONL`: the metrics file is only written while this is truthy. |
+| `VOICEPI_METRICS_JSONL` | *(unset)* | file path | Append one JSON object per accepted utterance. **Only written while `VOICEPI_JSON` is truthy** — a configured path stays inert until JSON output is enabled. Includes recording duration, STT compute time, real-time factor, model/device, injection strategy, target title/process, language confidence, text preview, and segment metadata. |
 | `VOICEPI_HISTORY_ENABLED` | `1` | truthy / falsey | Store accepted live dictations in local history. Set `0`, `false`, `no`, or `off` to disable. |
 | `VOICEPI_HISTORY_JSONL` | user state path | file path | Override the local history JSONL location. Default is `%APPDATA%\WhisperDictate\history.jsonl` on Windows and `${XDG_STATE_HOME:-~/.local/state}/whisper-dictate/history.jsonl` elsewhere. |
 | `VOICEPI_LOCAL_ONLY` | *(unset)* | truthy / falsey | Privacy lock. Blocks cloud/BYOK backends and sets `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_DATASETS_OFFLINE=1`, `HF_HUB_DISABLE_TELEMETRY=1`, and Weights & Biases offline/disabled defaults before models load. Local models must already be downloaded. This is a library/runtime guard, not an OS firewall rule. |

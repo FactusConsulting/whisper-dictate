@@ -42,6 +42,7 @@ mod settings_state;
 mod tabs;
 mod tasks;
 mod text;
+mod text_scale;
 mod theme;
 mod widgets;
 mod window_list;
@@ -59,6 +60,7 @@ pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
 use self::secret_store::*;
 pub(in crate::ui) use self::text::*;
+pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
 pub(in crate::ui) use self::widgets::*;
 pub(in crate::ui) use self::worker_event::*;
@@ -271,7 +273,7 @@ struct WhisperDictateApp {
 
 impl Default for WhisperDictateApp {
     fn default() -> Self {
-        let (settings, settings_status) = match config::load_settings() {
+        let (mut settings, settings_status) = match config::load_settings() {
             Ok(settings) => (settings, String::new()),
             Err(err) => (
                 AppSettings::default(),
@@ -296,6 +298,14 @@ impl Default for WhisperDictateApp {
                 )
             });
         let config_path = config::config_path().display().to_string();
+        // Prefill the Metrics JSONL field with the default path next to config.json
+        // when it is empty, so the field shows a real, copyable location. This is
+        // applied to BOTH `settings` and the `saved_settings` baseline below, so it
+        // never flags the form as having unsaved changes. Metrics are still only
+        // written while "JSON stdout" is enabled, so a prefilled path is harmless.
+        if settings.metrics_jsonl.trim().is_empty() {
+            settings.metrics_jsonl = tabs::default_metrics_jsonl_path(&config_path);
+        }
         let runtime_log = format!(
             "Rust UI ready. Start launches the Python dictation worker directly.\n[ui] config: {config_path}\n[ui] cloud API key load: {stt_api_key_status}\n[ui] post API key load: {post_api_key_status}"
         );

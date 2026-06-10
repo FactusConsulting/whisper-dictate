@@ -199,6 +199,46 @@ class RuntimeAudioDeviceTests(RealNumpyAudioCase):
         self.assertEqual(payload["post_processor"], "groq")
         self.assertEqual(payload["dictionary_terms"], ["Sara"])
 
+    def _run_record_utterance_event(self, *, json_output, metrics_jsonl):
+        """Drive _record_utterance_event with side effects stubbed, returning the
+        list of (path, event) tuples passed to _append_jsonl so callers can assert
+        whether the metrics file would have been written."""
+        from whisper_dictate import vp_dictate
+
+        event = {"event": "utterance", "text": "hello"}
+        fake = types.SimpleNamespace(
+            metrics_jsonl=metrics_jsonl, json_output=json_output
+        )
+        jsonl_calls = []
+        with _env(VOICEPI_WORKER_EVENTS="1"):
+            stderr = io.StringIO()
+            with patch.object(vp_dictate, "_run_command_hook_and_annotate", lambda _e: None):
+                with patch.object(
+                    vp_dictate,
+                    "_append_jsonl",
+                    lambda path, ev: jsonl_calls.append((path, ev)),
+                ):
+                    with patch.object(vp_dictate, "_append_history", lambda _e: None):
+                        with redirect_stderr(stderr):
+                            self.runtime.Dictate._record_utterance_event(fake, event)
+        return jsonl_calls
+
+    def test_metrics_written_when_json_output_on_and_path_set(self):
+        # JSON stdout enabled + a path -> the metrics file IS appended to.
+        calls = self._run_record_utterance_event(
+            json_output=True, metrics_jsonl="/tmp/metrics.jsonl"
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "/tmp/metrics.jsonl")
+        self.assertEqual(calls[0][1]["text"], "hello")
+
+    def test_metrics_not_written_when_json_output_off(self):
+        # JSON stdout disabled -> NO metrics write even with a path set.
+        calls = self._run_record_utterance_event(
+            json_output=False, metrics_jsonl="/tmp/metrics.jsonl"
+        )
+        self.assertEqual(calls, [])
+
     def test_first_audio_callback_sets_recording_start_event_and_time(self):
         np = self.np
         fake = types.SimpleNamespace(

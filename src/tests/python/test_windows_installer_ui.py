@@ -267,16 +267,19 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("UiTextKey::InstallRepair", system_tab)
         # The install/reload buttons keep the "another task running" guard.
         self.assertIn("let idle = self.background_task.is_none();", system_tab)
-        # Config-file shortcut: hover shows the path, click opens the folder via
-        # the console-guarded helper (not a reimplemented shell call).
+        # Config-file shortcut: hover EXPLAINS the action and shows the path,
+        # click opens the folder via the console-guarded helper (not a
+        # reimplemented shell call).
         self.assertIn("UiTextKey::ConfigFile", system_tab)
-        self.assertIn(".on_hover_text(&self.config_path)", system_tab)
+        self.assertIn("Opens the folder containing config.json.", system_tab)
+        self.assertIn("self.config_path", system_tab)
         self.assertIn("self.open_config_folder();", system_tab)
         self.assertIn("config::open_existing_path(&folder)", script)
 
         # Appearance + Display + Feedback + Integration settings moved here.
         self.assertIn("theme_toggle(ui, &mut self.settings.ui_theme, palette, &ui_language);", system_tab)
-        self.assertIn("language_toggle(ui, &mut self.settings.ui_language, palette);", system_tab)
+        # UI language is an extensible dropdown now, not the old two-button toggle.
+        self.assertIn('egui::ComboBox::from_id_salt("ui_language_select")', system_tab)
         self.assertIn("self.log_mode_selector(ui, palette);", system_tab)
         self.assertIn("&mut self.settings.ui_text_scale", system_tab)
         self.assertIn("&mut self.settings.feedback_sounds", system_tab)

@@ -387,7 +387,13 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             "utterance",
             **{key: value for key, value in event.items() if key != "event"},
         )
-        _append_jsonl(self.metrics_jsonl, event)
+        # Metrics JSONL is gated on JSON stdout: the metrics file is part of the
+        # machine-readable integration surface, so it is only written when the
+        # user has opted into structured output. A prefilled-but-unused path (the
+        # UI suggests metrics.jsonl next to config.json) therefore stays inert
+        # until "JSON stdout" is enabled.
+        if self.json_output:
+            _append_jsonl(self.metrics_jsonl, event)
         try:
             _append_history(event)
         except OSError as e:

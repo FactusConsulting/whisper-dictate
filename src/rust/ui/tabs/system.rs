@@ -72,12 +72,27 @@ impl WhisperDictateApp {
                     icons::ICON_INFO,
                     ui_text(&self.settings.ui_language, UiTextKey::ConfigFile),
                 ))
-                .on_hover_text(&self.config_path)
+                // Hover EXPLAINS the action, then shows the actual path so the
+                // user knows both what the button does and where it lands.
+                .on_hover_text(format!(
+                    "Opens the folder containing config.json.\n{}",
+                    self.config_path
+                ))
                 .clicked()
             {
                 self.open_config_folder();
             }
         });
+        // Discoverable help for the maintenance cluster: a `?` badge toggles a
+        // wrapped explanation of every action, mirroring the settings-grid rows.
+        const MAINTENANCE_HELP: &str = "Reload config: re-read config.json from disk (blocked while another background task runs). \
+            Doctor: run environment diagnostics and write the result to the log. \
+            Install/Repair: install or repair the local runtime environment (blocked while another task runs). \
+            Config file: open the folder containing config.json.";
+        let show_maintenance_help = ui
+            .horizontal(|ui| help_toggle_badge(ui, "system_maintenance", MAINTENANCE_HELP))
+            .inner;
+        inline_help(ui, show_maintenance_help, MAINTENANCE_HELP);
 
         ui.add_space(14.0);
         ui.separator();
@@ -103,7 +118,30 @@ impl WhisperDictateApp {
                 ui_text(&self.settings.ui_language, UiTextKey::UiLanguage),
                 palette,
             );
-            language_toggle(ui, &mut self.settings.ui_language, palette);
+            // A dropdown (rather than the old two-button toggle) so more UI
+            // languages can be added later without crowding the row. Writes the
+            // same raw "en"/"da" config values.
+            let language = self.settings.ui_language.clone();
+            let options = [
+                ("en", ui_text(&language, UiTextKey::English)),
+                ("da", ui_text(&language, UiTextKey::Danish)),
+            ];
+            let selected = options
+                .iter()
+                .find(|(raw, _)| *raw == self.settings.ui_language)
+                .map(|(_, display)| *display)
+                .unwrap_or_else(|| ui_text(&language, UiTextKey::English));
+            egui::ComboBox::from_id_salt("ui_language_select")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for (raw, display) in options {
+                        ui.selectable_value(
+                            &mut self.settings.ui_language,
+                            raw.to_owned(),
+                            display,
+                        );
+                    }
+                });
         });
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
@@ -121,11 +159,11 @@ impl WhisperDictateApp {
         });
         ui.add_space(12.0);
         settings_grid("system_appearance_settings").show(ui, |ui| {
-            text_help(
+            text_scale_stepper(
                 ui,
                 "UI text scale",
                 &mut self.settings.ui_text_scale,
-                "Scale all text in this settings UI. Use 1.0 for default, 1.15 for larger text, or 1.3 for high-DPI displays.",
+                "Scale all text in this settings UI. Use the −/+ buttons to step by 0.05 (clamped to 0.85–1.6). 1.0 is default, 1.15 is larger, 1.3 suits high-DPI displays.",
             );
         });
 
@@ -171,13 +209,13 @@ impl WhisperDictateApp {
                 ui,
                 "JSON stdout",
                 &mut self.settings.inject_json,
-                "Emit structured JSON events to stdout in addition to normal logs.",
+                "Emit structured JSON events to stdout in addition to normal logs. This also gates the Metrics JSONL file — metrics are only written while this is enabled.",
             );
             text_help(
                 ui,
                 "Metrics JSONL",
                 &mut self.settings.metrics_jsonl,
-                "Optional path for appending transcription metrics as JSONL.",
+                "Path for appending transcription metrics as JSONL. Metrics are only written while \"JSON stdout\" is enabled, so a prefilled path stays inert until you opt in.",
             );
         });
         ui.add_space(8.0);
@@ -186,7 +224,10 @@ impl WhisperDictateApp {
             // a button, not a default — an actual default value would silently
             // enable metrics logging for everyone.
             if ui
-                .button(ui_text(&self.settings.ui_language, UiTextKey::UseDefaultPath))
+                .button(ui_text(
+                    &self.settings.ui_language,
+                    UiTextKey::UseDefaultPath,
+                ))
                 .on_hover_text(default_metrics_jsonl_path(&self.config_path))
                 .clicked()
             {

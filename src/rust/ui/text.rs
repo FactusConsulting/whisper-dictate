@@ -75,6 +75,9 @@ pub(in crate::ui) enum UiTextKey {
     NoDictationOutputYet,
     PushToTalk,
     Toggle,
+    QualityGroupAllBackends,
+    QualityGroupWhisper,
+    QualityGroupParakeet,
 }
 
 impl UiTextKey {
@@ -136,6 +139,9 @@ impl UiTextKey {
                 UiTextKey::NoDictationOutputYet => "No dictation output yet",
                 UiTextKey::PushToTalk => "Push-to-talk",
                 UiTextKey::Toggle => "Toggle key",
+                UiTextKey::QualityGroupAllBackends => "All backends",
+                UiTextKey::QualityGroupWhisper => "Whisper",
+                UiTextKey::QualityGroupParakeet => "Parakeet",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::SidebarSubtitle => "Rust kontrolflade",
@@ -193,6 +199,9 @@ impl UiTextKey {
                 UiTextKey::NoDictationOutputYet => "Ingen diktering endnu",
                 UiTextKey::PushToTalk => "Tale-tast",
                 UiTextKey::Toggle => "Skiftetast",
+                UiTextKey::QualityGroupAllBackends => "Alle backends",
+                UiTextKey::QualityGroupWhisper => "Whisper",
+                UiTextKey::QualityGroupParakeet => "Parakeet",
             },
         }
     }

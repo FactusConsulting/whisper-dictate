@@ -352,7 +352,10 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("enum UiLanguageMode", script)
         self.assertIn("enum UiTextKey", script)
         self.assertIn('UiTextKey::Speech => "Tale"', script)
-        self.assertIn("fn language_toggle(", script)
+        # UI language is now an extensible dropdown (ComboBox), replacing the old
+        # two-button language_toggle.
+        self.assertNotIn("fn language_toggle(", script)
+        self.assertIn('egui::ComboBox::from_id_salt("ui_language_select")', script)
         self.assertIn('"UI language"', script)
         self.assertIn('("", "Auto")', script)
         self.assertIn('("da", "Danish")', script)

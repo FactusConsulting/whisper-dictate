@@ -90,7 +90,7 @@ impl WhisperDictateApp {
                     &mut self.settings.stt_base_url,
                     "Base URL for the selected cloud transcription provider.",
                 );
-                text_enabled(
+                text_enabled_short(
                     ui,
                     backend == SttBackendMode::Cloud,
                     "Cloud STT timeout ms",
@@ -199,13 +199,13 @@ impl WhisperDictateApp {
                     &mut self.settings.quit_key,
                     "Global key used to quit the worker after Quit count presses. Examples: esc, f12, q.",
                 );
-                text_help(
+                text_help_short(
                     ui,
                     "Quit count",
                     &mut self.settings.quit_count,
                     "Number of consecutive quit-key presses required to stop the worker. 0 disables it.",
                 );
-                text_help(
+                text_help_short(
                     ui,
                     "Quit window ms",
                     &mut self.settings.quit_window_ms,
