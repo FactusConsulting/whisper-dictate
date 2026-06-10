@@ -1,6 +1,7 @@
 use super::*;
 use egui_material_icons::icons;
 
+mod compact;
 mod dictionary;
 mod log_card;
 mod output;
@@ -15,12 +16,18 @@ mod speech;
 // Log-card render widgets used by the runtime tab; re-exported into the `tabs`
 // root so `runtime` (and any future tab) can reach them via `super::*`.
 pub(in crate::ui) use log_card::{empty_log_state, metric_box, runtime_log_card};
+// The live mic gauge, runtime-state colour, and the mic-label/audio-summary
+// helpers are shared between the full runtime tab / top status bar and the
+// compact strip (`compact.rs`).
+pub(in crate::ui) use runtime::{
+    audio_device_label, full_audio_device_label, level_gauge, live_audio_level_summary,
+};
+pub(in crate::ui) use shell::runtime_state_color;
 
 // Free helpers consumed by sibling test modules through `ui::tabs::NAME`.
 #[cfg(test)]
 pub(in crate::ui) use runtime::{
-    audio_device_label, empty_as_auto, empty_as_disabled, format_push_to_talk_keys,
-    full_audio_device_label, live_audio_level_summary, mic_label_char_budget,
+    empty_as_auto, empty_as_disabled, format_push_to_talk_keys, mic_label_char_budget,
     push_to_talk_badge_label,
 };
 #[cfg(test)]
