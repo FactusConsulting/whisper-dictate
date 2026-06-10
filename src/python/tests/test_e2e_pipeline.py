@@ -8,25 +8,29 @@ in-memory recording.  The contract under test is the full utterance pipeline:
     history/metrics/worker events
 
 What is STUBBED (bottom-most OS boundaries only):
-  - ``faster_whisper`` is absent from sys.modules and never called; instead
+  - the model: the test helpers (``load_voice_pi_realnp``) install a stub
+    ``faster_whisper`` module that is never invoked, because
     ``_transcribe_detail`` (the vp_dictate module-level function that wraps it)
     is patched to return a known ``TranscribeResult``.  The real gate/boost
     logic inside ``_transcribe_detail`` is BYPASSED by this approach — so the
     e2e test exercises the orchestration wiring, not the DSP internals (those
     are covered by AudioDspTests and TranscribeDetailTests).
+  - ``is_hallucination`` is pinned to False so the scrub never rejects the
+    known stub text (the scrub itself is covered by HallucinationFilterTests).
   - ``postprocess_text`` is stubbed with a no-op pass-through for the
     "processor=none" scenario.
   - ``_inject`` is captured (same pattern as test_dictate_loop.py).
   - ``_record_utterance_event`` is captured to inspect the utterance payload.
   - ``_emit_worker_event`` is captured via ``VOICEPI_WORKER_EVENTS=1`` + stderr
     redirect (same pattern as test_dictate_loop.py) to verify event ordering.
-  - ``VOICEPI_RUST_INJECTOR`` is unset, forcing the pure-Python fallback for the
-    dictionary/privacy/command-hook Rust helpers throughout.
+  - ``VOICEPI_RUST_INJECTOR`` is unset (pure-Python fallback for the
+    dictionary/privacy/command-hook Rust helpers) and
+    ``VOICEPI_FORMAT_COMMANDS`` is forced off, so a developer's environment
+    cannot make the format pass call a Rust helper mid-test.
 
 What RUNS FOR REAL:
   - Frame concatenation + channel selection (``_select_active_channel_pcm``).
   - ``_should_skip_pcm`` duration/backend gate.
-  - Hallucination scrub (``is_hallucination``).
   - Dictionary wiring: ``_transcribe_detail`` stub returns a ``TranscribeResult``
     whose ``text`` carries the already-corrected phrase and whose
     ``dictionary_replacements`` records the rewrite — the test asserts the
@@ -204,7 +208,8 @@ class E2EPipelineTests(unittest.TestCase):
             patch.object(rt, "postprocess_text", postprocess),
             patch.object(rt, "is_hallucination", lambda _t: False),
             _capture_stdout(),
-            _env(VOICEPI_WORKER_EVENTS="1", VOICEPI_RUST_INJECTOR=None),
+            _env(VOICEPI_WORKER_EVENTS="1", VOICEPI_RUST_INJECTOR=None,
+                 VOICEPI_FORMAT_COMMANDS=None),
             redirect_stderr(stderr_buf),
         ]
         if transcribe_fn is not None:
