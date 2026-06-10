@@ -46,6 +46,7 @@ mod theme;
 mod widgets;
 mod window_list;
 mod worker_event;
+mod worker_json;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
