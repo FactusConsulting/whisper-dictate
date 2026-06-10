@@ -182,6 +182,16 @@ impl WhisperDictateApp {
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
+            // One-click prefill: metrics.jsonl next to config.json. Deliberately
+            // a button, not a default — an actual default value would silently
+            // enable metrics logging for everyone.
+            if ui
+                .button(ui_text(&self.settings.ui_language, UiTextKey::UseDefaultPath))
+                .on_hover_text(default_metrics_jsonl_path(&self.config_path))
+                .clicked()
+            {
+                self.settings.metrics_jsonl = default_metrics_jsonl_path(&self.config_path);
+            }
             if ui.button("Preview metrics").clicked() {
                 self.preview_metrics();
             }
@@ -218,5 +228,18 @@ impl WhisperDictateApp {
             Ok(path) => self.settings_status = format!("Opened config folder: {}", path.display()),
             Err(err) => self.settings_status = format!("Open config folder failed: {err}"),
         }
+    }
+}
+
+/// Suggested metrics path: `metrics.jsonl` next to the config file (the
+/// app-data folder the user already knows). A relative config path with an
+/// empty parent suggests a bare `metrics.jsonl` in the working directory.
+/// Pure so it is unit-testable.
+pub(in crate::ui) fn default_metrics_jsonl_path(config_path: &str) -> String {
+    match std::path::Path::new(config_path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            parent.join("metrics.jsonl").to_string_lossy().into_owned()
+        }
+        _ => "metrics.jsonl".to_owned(),
     }
 }
