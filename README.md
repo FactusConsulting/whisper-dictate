@@ -678,9 +678,10 @@ dev container — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Releasing
 
-Bump the four version files atomically (VERSION, `src/rust/Cargo.toml`,
-`src/rust/Cargo.lock`, `nix/package.nix` — they must always agree), merge that
-as a PR, then push a version tag:
+Bump the four version files together (VERSION, `src/rust/Cargo.toml`,
+`src/rust/Cargo.lock`, `nix/package.nix` — they must always agree; the script
+validates every file before writing anything and re-verifies after), merge
+that as a PR, then push a version tag:
 
 ```bash
 python scripts/dev/bump_version.py X.Y.Z   # or --check to verify consistency

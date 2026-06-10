@@ -9,7 +9,10 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT = pathlib.Path("scripts/dev/bump_version.py").resolve()
+# Location-independent: derive the repo root from this file's position so the
+# suite works no matter what CWD pytest is invoked from (IDEs vary).
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+SCRIPT = REPO_ROOT / "scripts" / "dev" / "bump_version.py"
 
 
 def _make_tree(root: pathlib.Path, version: str) -> None:
@@ -30,7 +33,7 @@ def _make_tree(root: pathlib.Path, version: str) -> None:
 def _run(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
-        capture_output=True, text=True, encoding="utf-8")
+        capture_output=True, text=True, encoding="utf-8", cwd=str(REPO_ROOT))
 
 
 class BumpVersionScriptTests(unittest.TestCase):
@@ -60,6 +63,34 @@ class BumpVersionScriptTests(unittest.TestCase):
             result = _run("1.8.6", "--root", str(root))
             self.assertEqual(result.returncode, 1)
             self.assertIn("INCONSISTENT", result.stderr)
+
+    def test_missing_file_reports_not_found_instead_of_crashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _make_tree(root, "1.8.5")
+            (root / "nix" / "package.nix").unlink()
+            result = _run("--check", "--root", str(root))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("NOT FOUND", result.stdout)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_pattern_drift_writes_nothing(self):
+        # If one file's format drifted, NO file may be touched (no half-bump).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _make_tree(root, "1.8.5")
+            # Single-quoted version: still "a version" to a human, but it no
+            # longer matches the expected pattern — the bump must refuse and
+            # leave every file untouched.
+            (root / "nix" / "package.nix").write_text(
+                "{ version ? '1.8.5' }: {}\n", encoding="utf-8")
+            result = _run("1.8.6", "--root", str(root))
+            self.assertEqual(result.returncode, 1)
+            # Nothing was written anywhere.
+            self.assertEqual((root / "VERSION").read_text(encoding="utf-8"),
+                             "1.8.5\n")
+            self.assertIn('version = "1.8.5"',
+                          (root / "src/rust/Cargo.toml").read_text(encoding="utf-8"))
 
     def test_rejects_bad_version_string(self):
         with tempfile.TemporaryDirectory() as tmp:

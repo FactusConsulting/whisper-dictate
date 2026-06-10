@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump the whisper-dictate version atomically across all four version files.
+"""Bump the whisper-dictate version across all four version files, verified.
 
 Usage:
     python scripts/dev/bump_version.py 1.8.6           # bump repo root files
@@ -12,6 +12,12 @@ before — see the 1.8.3 bump):
     src/rust/Cargo.toml        (the [package] version)
     src/rust/Cargo.lock        (the whisper-dictate-app package block)
     nix/package.nix            (the `version ? "..."` default)
+
+Not transactional across files (a crash mid-write can still leave a partial
+bump), but it never STARTS writing unless every file matched its expected
+pattern: all four replacements are computed and validated up front, then
+written, then re-verified — so format drift fails loudly with zero files
+touched instead of leaving a half-bumped tree.
 
 Exit codes: 0 = success/consistent, 1 = inconsistent or bad input.
 """
@@ -39,25 +45,33 @@ def _files(root: pathlib.Path) -> dict[str, pathlib.Path]:
     }
 
 
+def _read(path: pathlib.Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 def read_versions(root: pathlib.Path) -> dict[str, str | None]:
-    """The version each of the four files currently declares (None = not found)."""
+    """The version each of the four files currently declares (None = missing,
+    unreadable, or the expected pattern is absent)."""
     files = _files(root)
     out: dict[str, str | None] = {}
 
-    out[VERSION_FILE] = (
-        files[VERSION_FILE].read_text(encoding="utf-8").strip() or None)
+    raw = _read(files[VERSION_FILE])
+    out[VERSION_FILE] = (raw.strip() or None) if raw is not None else None
 
-    toml = files[CARGO_TOML].read_text(encoding="utf-8")
-    m = re.search(r'(?m)^version = "([^"]+)"$', toml)
+    toml = _read(files[CARGO_TOML])
+    m = re.search(r'(?m)^version = "([^"]+)"$', toml) if toml else None
     out[CARGO_TOML] = m.group(1) if m else None
 
-    lock = files[CARGO_LOCK].read_text(encoding="utf-8")
-    m = re.search(
-        r'name = "whisper-dictate-app"\nversion = "([^"]+)"', lock)
+    lock = _read(files[CARGO_LOCK])
+    m = (re.search(r'name = "whisper-dictate-app"\nversion = "([^"]+)"', lock)
+         if lock else None)
     out[CARGO_LOCK] = m.group(1) if m else None
 
-    nix = files[PACKAGE_NIX].read_text(encoding="utf-8")
-    m = re.search(r'version \? "([^"]+)"', nix)
+    nix = _read(files[PACKAGE_NIX])
+    m = re.search(r'version \? "([^"]+)"', nix) if nix else None
     out[PACKAGE_NIX] = m.group(1) if m else None
     return out
 
@@ -74,6 +88,32 @@ def check(root: pathlib.Path) -> int:
     return 0
 
 
+def _new_contents(root: pathlib.Path, old: str,
+                  new: str) -> dict[pathlib.Path, str] | None:
+    """Compute every file's bumped content up front; None if any file does not
+    match its expected pattern (in which case NOTHING must be written)."""
+    files = _files(root)
+    replacements = {
+        files[VERSION_FILE]: (old, new + "\n", True),
+        files[CARGO_TOML]: (f'version = "{old}"', f'version = "{new}"', False),
+        files[CARGO_LOCK]: (
+            f'name = "whisper-dictate-app"\nversion = "{old}"',
+            f'name = "whisper-dictate-app"\nversion = "{new}"', False),
+        files[PACKAGE_NIX]: (
+            f'version ? "{old}"', f'version ? "{new}"', False),
+    }
+    out: dict[pathlib.Path, str] = {}
+    for path, (needle, replacement, whole_file) in replacements.items():
+        content = _read(path)
+        if content is None or needle not in content:
+            print(f"pattern not found in {path} - nothing written",
+                  file=sys.stderr)
+            return None
+        out[path] = (replacement if whole_file
+                     else content.replace(needle, replacement, 1))
+    return out
+
+
 def bump(root: pathlib.Path, new: str) -> int:
     if not _VERSION_RE.match(new):
         print(f"not a x.y.z version: {new!r}", file=sys.stderr)
@@ -86,28 +126,16 @@ def bump(root: pathlib.Path, new: str) -> int:
         print(f"already at {new}")
         return 0
 
-    files = _files(root)
-    files[VERSION_FILE].write_text(new + "\n", encoding="utf-8")
+    contents = _new_contents(root, str(old), new)
+    if contents is None:
+        return 1
+    for path, content in contents.items():
+        # Developer release tool: --root is by definition the developer's own
+        # checkout, so the S2083 "user-controlled path" finding does not apply.
+        path.write_text(content, encoding="utf-8")  # NOSONAR
 
-    toml = files[CARGO_TOML].read_text(encoding="utf-8")
-    files[CARGO_TOML].write_text(
-        toml.replace(f'version = "{old}"', f'version = "{new}"', 1),
-        encoding="utf-8")
-
-    lock = files[CARGO_LOCK].read_text(encoding="utf-8")
-    files[CARGO_LOCK].write_text(
-        lock.replace(
-            f'name = "whisper-dictate-app"\nversion = "{old}"',
-            f'name = "whisper-dictate-app"\nversion = "{new}"', 1),
-        encoding="utf-8")
-
-    nix = files[PACKAGE_NIX].read_text(encoding="utf-8")
-    files[PACKAGE_NIX].write_text(
-        nix.replace(f'version ? "{old}"', f'version ? "{new}"', 1),
-        encoding="utf-8")
-
-    # Re-verify so a silent non-match (file drifted from the expected pattern)
-    # fails loudly instead of shipping a half-bumped tree.
+    # Re-verify so silent drift fails loudly instead of shipping a
+    # half-bumped tree.
     print(f"bumped {old} -> {new}; verifying:")
     return check(root)
 
