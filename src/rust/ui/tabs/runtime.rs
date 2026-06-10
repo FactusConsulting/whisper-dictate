@@ -50,7 +50,10 @@ impl WhisperDictateApp {
         });
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(ui_text(&self.settings.ui_language, UiTextKey::LogOutput));
+            ui.label(ui_text(
+                &self.settings.ui_language,
+                UiTextKey::DictationOutput,
+            ));
             self.log_mode_selector(ui, palette);
             self.runtime_log_actions(ui);
         });

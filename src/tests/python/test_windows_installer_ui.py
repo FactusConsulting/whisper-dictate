@@ -220,7 +220,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "pub(in crate::ui) fn post_processing_tab", 1
         )[0]
 
-        self.assertIn('section_label(ui, "Log view", palette);', output_tab)
+        self.assertIn('section_label(ui, "Dictation view", palette);', output_tab)
         self.assertIn("self.log_mode_selector(ui, palette);", output_tab)
         self.assertIn("self.settings.ui_log_view = mode.id().to_owned();", script)
         self.assertIn("let ui_language = self.settings.ui_language.clone();", output_tab)
