@@ -63,6 +63,18 @@ class PlayCueOffTests(unittest.TestCase):
 # play_cue — Windows path
 # ---------------------------------------------------------------------------
 
+class _InlineThread:
+    """Run the target synchronously — the Windows beep runs on a daemon thread
+    (winsound.Beep is synchronous), so tests must not race the scheduler."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        if self._target is not None:
+            self._target()
+
+
 class PlayCueWindowsTests(unittest.TestCase):
     def test_start_plays_880hz_beep(self):
         fb = _import_feedback()

@@ -35,7 +35,7 @@ from whisper_dictate.vp_history import _append_history, _append_jsonl
 from whisper_dictate.vp_inject import InjectMixin
 from whisper_dictate.vp_keymap import _detect_xkb_layout
 from whisper_dictate.vp_keys import KeyBackendMixin
-from whisper_dictate.vp_feedback import notify_error, play_cue
+from whisper_dictate.vp_feedback import play_cue
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text
 from whisper_dictate.vp_preview import PreviewEngine, preview_enabled
 

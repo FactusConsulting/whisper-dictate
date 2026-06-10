@@ -510,5 +510,9 @@ class InjectMixin:
             else:
                 self._inject_other(text)
         except Exception as exc:
+            # Full traceback to stderr — this catch keeps the worker alive, but
+            # a genuine injection bug must stay diagnosable, not a one-liner.
+            import traceback
             print(f"[inject] injection failed: {exc}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
             notify_error("whisper-dictate", f"Injection failed: {exc}")
