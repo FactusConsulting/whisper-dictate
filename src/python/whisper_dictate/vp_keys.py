@@ -19,7 +19,10 @@ import time
 
 from whisper_dictate.vp_cli import QUIT_COUNT, QUIT_KEY, QUIT_WINDOW_MS
 from whisper_dictate.vp_config import get_value
-from whisper_dictate.vp_keys_solo import SoloModifierGuard, is_bare_modifier_key
+from whisper_dictate.vp_keys_solo import (
+    SoloModifierGuard,
+    is_bare_modifier_binding,
+)
 
 
 def _truthy(value: str | None) -> bool:
@@ -91,11 +94,11 @@ class _PynputListener:
         self._chord_latched = False
         self._quit_count = 0
         self._quit_last = 0.0
-        # Bare-modifier "press alone" guard. Disabled (no-op) unless the PTT key
-        # is a single bare modifier — see vp_keys_solo. Tracks ALL held keys so
-        # it can detect a foreign key forming a chord.
-        target = next(iter(targets)) if len(targets) == 1 else None
-        self._solo = solo_guard or SoloModifierGuard(target, enabled=False)
+        # Bare-modifier "press alone" guard. Disabled (no-op) unless the PTT
+        # binding is made entirely of bare modifiers — see vp_keys_solo. Tracks
+        # ALL held keys so it can detect a foreign key forming a larger chord.
+        # The whole target set is non-foreign (solo modifier OR modifier chord).
+        self._solo = solo_guard or SoloModifierGuard(targets, enabled=False)
 
     def _quit_chord(self, k) -> bool:
         # Track the consecutive quit-key streak; True once it reaches
@@ -270,7 +273,12 @@ class KeyBackendMixin:
                                       is_target, toggle_mode, latched, solo)
         # value == 2: OS autorepeat. Refresh the guard timestamp for a tracked
         # foreign key so a genuinely-held key does not expire out of the held set
-        # (phantom-key self-heal). Target-key autorepeat behaviour is unchanged.
+        # (phantom-key self-heal). Target-key autorepeat behaviour is unchanged —
+        # a held TARGET self-prunes after the expiry, which is intentionally
+        # harmless: foreign_key_held() only counts keys OUTSIDE the target set,
+        # so a pruned target can never block a start or trigger a cancel.
+        # (pynput differs — target repeats refresh via note_press — and that
+        # asymmetry is fine for the same reason.)
         if (solo is not None and ev.value == evdev.KeyEvent.key_hold
                 and not is_target):
             solo.note_repeat(ev.code)
@@ -358,8 +366,7 @@ class KeyBackendMixin:
         toggle_mode = _toggle_mode_enabled()
         latched = [False]  # rising-edge guard shared across events
         solo = SoloModifierGuard(
-            next(iter(target_codes)) if len(target_codes) == 1 else None,
-            enabled=is_bare_modifier_key(key_names))
+            target_codes, enabled=is_bare_modifier_binding(key_names))
 
         verb = "Press" if toggle_mode else "Hold"
         suffix = (" Press again to stop." if toggle_mode else " to talk.")
@@ -423,8 +430,7 @@ class KeyBackendMixin:
               f"[{self.key}]{suffix} {quit_hint} to quit.", flush=True)
 
         solo = SoloModifierGuard(
-            next(iter(targets)) if len(targets) == 1 else None,
-            enabled=is_bare_modifier_key(key_names))
+            targets, enabled=is_bare_modifier_binding(key_names))
         state = _PynputListener(self, targets, quit_key, toggle_mode=toggle_mode,
                                 solo_guard=solo)
         ln = keyboard.Listener(on_press=state.on_press, on_release=state.on_release)

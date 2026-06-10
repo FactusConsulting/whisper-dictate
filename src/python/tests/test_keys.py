@@ -400,14 +400,26 @@ class PynputListenerTests(unittest.TestCase):
 class SoloModifierGuardUnitTests(unittest.TestCase):
     """Backend-agnostic state machine in vp_keys_solo."""
 
-    def test_is_bare_modifier_key(self):
+    def test_is_bare_modifier_binding(self):
+        # Single bare modifier → guarded.
+        self.assertTrue(vp_keys_solo.is_bare_modifier_binding(["ctrl_l"]))
+        self.assertTrue(vp_keys_solo.is_bare_modifier_binding(["shift_r"]))
+        self.assertTrue(vp_keys_solo.is_bare_modifier_binding(["super_l"]))
+        # All-bare-modifier CHORDS → now guarded too (the chord extension).
+        self.assertTrue(vp_keys_solo.is_bare_modifier_binding(["shift_r", "ctrl_r"]))
+        self.assertTrue(vp_keys_solo.is_bare_modifier_binding(["alt_l", "shift_l"]))
+        # Any non-modifier in the binding → NOT guarded (unchanged behaviour).
+        self.assertFalse(vp_keys_solo.is_bare_modifier_binding(["scroll_lock"]))
+        self.assertFalse(vp_keys_solo.is_bare_modifier_binding(["f9"]))
+        self.assertFalse(vp_keys_solo.is_bare_modifier_binding(["ctrl_r", "f9"]))
+        # Empty binding is never guarded.
+        self.assertFalse(vp_keys_solo.is_bare_modifier_binding([]))
+
+    def test_is_bare_modifier_key_backcompat_alias(self):
+        # The old single-key predicate name remains a working alias.
+        self.assertIs(vp_keys_solo.is_bare_modifier_key,
+                      vp_keys_solo.is_bare_modifier_binding)
         self.assertTrue(vp_keys_solo.is_bare_modifier_key(["ctrl_l"]))
-        self.assertTrue(vp_keys_solo.is_bare_modifier_key(["shift_r"]))
-        self.assertTrue(vp_keys_solo.is_bare_modifier_key(["super_l"]))
-        # Non-modifier single key and multi-key chords are NOT guarded.
-        self.assertFalse(vp_keys_solo.is_bare_modifier_key(["scroll_lock"]))
-        self.assertFalse(vp_keys_solo.is_bare_modifier_key(["f9"]))
-        self.assertFalse(vp_keys_solo.is_bare_modifier_key(["shift_r", "ctrl_r"]))
 
     def test_bare_modifier_names_only_backend_resolvable(self):
         # Finding 3: the advertised set must contain only names a backend can
@@ -470,6 +482,26 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
         self.assertFalse(g.should_cancel_on_press("ctrl"))  # the PTT key itself
         self.assertTrue(g.should_cancel_on_press("c"))      # foreign → cancel
         self.assertFalse(g.should_cancel_on_press("c"))     # repeat → no re-cancel
+
+    def test_target_set_chord_treats_all_targets_as_non_foreign(self):
+        # Chord generalisation: a SET of targets — none of them count as foreign.
+        g = vp_keys_solo.SoloModifierGuard({"shift", "ctrl"}, enabled=True)
+        g.note_press("shift")                       # one target held
+        self.assertFalse(g.foreign_key_held())      # still no foreign
+        g.note_press("ctrl")                        # chord complete (both targets)
+        self.assertTrue(g.may_start_on_target_down())
+        # A real foreign key joining the chord must cancel.
+        self.assertFalse(g.should_cancel_on_press("shift"))  # target, no cancel
+        self.assertFalse(g.should_cancel_on_press("ctrl"))   # target, no cancel
+        self.assertTrue(g.should_cancel_on_press("x"))       # foreign → cancel
+
+    def test_target_set_blocks_start_when_foreign_held(self):
+        # Chord binding: a foreign key held when the chord completes blocks start.
+        g = vp_keys_solo.SoloModifierGuard({"shift", "ctrl"}, enabled=True)
+        g.note_press("x")                           # foreign held first
+        g.note_press("shift")
+        g.note_press("ctrl")                        # chord complete, but foreign held
+        self.assertFalse(g.may_start_on_target_down())
 
     def test_phantom_held_key_expires_and_allows_start(self):
         # Finding 1 (a): a foreign key pressed but never released (missed key-up)
@@ -597,6 +629,115 @@ class PynputSoloModifierTests(unittest.TestCase):
         self.assertEqual(ln._owner.started, 1)
 
 
+class PynputSoloModifierChordTests(unittest.TestCase):
+    """Chord extension: an all-bare-modifier CHORD (shift+ctrl) is press-alone
+    guarded just like a solo modifier — it must start only on that exact combo."""
+
+    SHIFT = "<shift_l>"
+    CTRL = "<ctrl_l>"
+
+    def _ln(self, enabled=True):
+        targets = {self.SHIFT, self.CTRL}
+        guard = vp_keys_solo.SoloModifierGuard(targets, enabled=enabled)
+        return vp_keys._PynputListener(
+            _Target(), set(targets), "<esc>", toggle_mode=False, solo_guard=guard)
+
+    def test_shift_then_ctrl_chord_starts(self):
+        # (a) Press shift, then ctrl (both targets) → starts.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.SHIFT)       # partial chord: nothing yet
+            self.assertEqual(ln._owner.started, 0)
+            ln.on_press(self.CTRL)        # chord complete (no foreign held) → start
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_foreign_then_chord_does_not_start(self):
+        # (b) Hold X, then press shift+ctrl → no start (foreign key present).
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press("x")              # foreign key held first
+            ln.on_press(self.SHIFT)
+            ln.on_press(self.CTRL)        # chord complete but X is held → blocked
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
+    def test_foreign_key_during_chord_hold_cancels(self):
+        # (c) Recording on shift+ctrl, press C during hold → cancel + discard.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.SHIFT)
+            ln.on_press(self.CTRL)        # chord complete → start
+            self.assertEqual(ln._owner.started, 1)
+            ln.on_press("c")              # foreign key joins → cancel + discard
+            self.assertEqual(ln._owner.cancelled, 1)
+            self.assertEqual(ln._owner.stopped, 0)
+            self.assertFalse(ln._recording)
+
+    def test_release_one_chord_key_is_normal_stop(self):
+        # (d) Recording on shift+ctrl, release ONE chord key → normal stop.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.SHIFT)
+            ln.on_press(self.CTRL)        # start
+            self.assertEqual(ln._owner.started, 1)
+            ln.on_release(self.CTRL)      # one chord key up → normal stop/transcribe
+        self.assertEqual(ln._owner.stopped, 1)
+        self.assertEqual(ln._owner.cancelled, 0)
+        self.assertFalse(ln._recording)
+
+    def test_phantom_foreign_key_expiry_allows_chord_start(self):
+        # (f) A phantom (never-released) foreign key self-heals past the expiry,
+        # then the shift+ctrl chord can start.
+        clock = [1000.0]
+        targets = {self.SHIFT, self.CTRL}
+        guard = vp_keys_solo.SoloModifierGuard(
+            targets, enabled=True, _now=lambda: clock[0])
+        ln = vp_keys._PynputListener(
+            _Target(), set(targets), "<esc>", toggle_mode=False, solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press("x")              # phantom foreign key, never released
+            clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S + 0.1  # expire it
+            ln.on_press(self.SHIFT)
+            ln.on_press(self.CTRL)        # chord completes, phantom pruned → start
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_ctrl_then_shift_reversed_order_starts(self):
+        # Chord completion is order-independent: ctrl first, then shift.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.CTRL)
+            self.assertEqual(ln._owner.started, 0)
+            ln.on_press(self.SHIFT)
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_target_held_past_expiry_then_chord_completes(self):
+        # A TARGET held longer than the expiry (user thinks with shift down)
+        # must never block its own chord: targets are excluded from the
+        # foreign-key check even if pruned from the held set.
+        clock = [1000.0]
+        targets = {self.SHIFT, self.CTRL}
+        guard = vp_keys_solo.SoloModifierGuard(
+            targets, enabled=True, _now=lambda: clock[0])
+        ln = vp_keys._PynputListener(
+            _Target(), set(targets), "<esc>", toggle_mode=False, solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.SHIFT)
+            clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S + 5.0  # long think
+            ln.on_press(self.CTRL)        # chord completes → must start
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+
 class EvdevSoloModifierTests(unittest.TestCase):
     TARGET = 29  # KEY_LEFTCTRL-ish code (opaque to the guard)
     SHIFT = 42
@@ -679,6 +820,151 @@ class EvdevSoloModifierTests(unittest.TestCase):
         rec = self._apply(self.C, self.ev.KeyEvent.key_up, pressed, False, solo)
         self.assertFalse(rec)
         rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+
+class EvdevSoloModifierChordTests(unittest.TestCase):
+    """Chord extension for the evdev backend: a shift+ctrl modifier chord is
+    press-alone guarded (target SET); ctrl+f9 (mixed) stays unguarded."""
+
+    SHIFT = 42
+    CTRL = 29
+    C = 46
+    F9 = 67
+
+    def setUp(self):
+        self.ev = _fake_evdev()
+        self.t = _Target()
+
+    def _guard(self, targets, enabled=True, now=None):
+        kw = {} if now is None else {"_now": now}
+        return vp_keys_solo.SoloModifierGuard(set(targets), enabled=enabled, **kw)
+
+    def _apply(self, code, value, target_codes, pressed, rec, solo):
+        return self.t._evdev_apply_event(
+            _event(1, code, value), self.ev, set(target_codes), pressed, rec,
+            solo=solo)
+
+    def test_shift_then_ctrl_chord_starts(self):
+        # (a) shift+ctrl binding: shift down, then ctrl → starts.
+        targets = {self.SHIFT, self.CTRL}
+        pressed, solo = set(), self._guard(targets)
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)
+        self.assertFalse(rec)            # partial chord
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_foreign_then_chord_does_not_start(self):
+        # (b) Hold X, press shift+ctrl → no start.
+        targets = {self.SHIFT, self.CTRL}
+        pressed, solo = set(), self._guard(targets)
+        rec = self._apply(self.C, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)   # foreign key held first
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)
+        self.assertFalse(rec)
+        self.assertEqual(self.t.started, 0)
+
+    def test_foreign_key_during_chord_hold_cancels(self):
+        # (c) Recording on shift+ctrl, press C during hold → cancel + discard.
+        targets = {self.SHIFT, self.CTRL}
+        pressed, solo = set(), self._guard(targets)
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets,
+                              pressed, False, solo)
+            rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets,
+                              pressed, rec, solo)
+            self.assertTrue(rec)
+            rec = self._apply(self.C, self.ev.KeyEvent.key_down, targets, pressed,
+                              rec, solo)
+            self.assertFalse(rec)
+            self.assertEqual(self.t.cancelled, 1)
+            self.assertEqual(self.t.stopped, 0)
+
+    def test_release_one_chord_key_is_normal_stop(self):
+        # (d) Recording on shift+ctrl, release one chord key → normal stop.
+        targets = {self.SHIFT, self.CTRL}
+        pressed, solo = set(), self._guard(targets)
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets,
+                              pressed, False, solo)
+            rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets,
+                              pressed, rec, solo)
+            self.assertTrue(rec)
+            rec = self._apply(self.CTRL, self.ev.KeyEvent.key_up, targets, pressed,
+                              rec, solo)   # one chord key up → normal stop
+            self.assertFalse(rec)
+            self.assertEqual(self.t.stopped, 1)
+            self.assertEqual(self.t.cancelled, 0)
+
+    def test_mixed_binding_with_foreign_held_still_starts(self):
+        # (e) ctrl+f9 mixed binding (guard disabled) with a foreign key held →
+        # still starts, unchanged behaviour.
+        targets = {self.CTRL, self.F9}
+        # is_bare_modifier_binding(["ctrl_l", "f9"]) is False → guard disabled.
+        self.assertFalse(
+            vp_keys_solo.is_bare_modifier_binding(["ctrl_l", "f9"]))
+        pressed, solo = set(), self._guard(targets, enabled=False)
+        # Foreign key held first — but a disabled guard ignores it entirely. The
+        # evdev loop only tracks foreign keys when the guard is enabled, so the
+        # chord completes and starts normally.
+        rec = self._apply(self.C, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)
+        rec = self._apply(self.F9, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_phantom_foreign_key_expiry_allows_chord_start(self):
+        # (f) Phantom foreign key (never released) self-heals past the expiry,
+        # then the shift+ctrl chord starts.
+        clock = [1000.0]
+        targets = {self.SHIFT, self.CTRL}
+        pressed = set()
+        solo = self._guard(targets, now=lambda: clock[0])
+        self._apply(self.C, self.ev.KeyEvent.key_down, targets, pressed, False,
+                    solo)               # phantom foreign key
+        clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S + 0.1
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)    # completes, phantom pruned → start
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_ctrl_then_shift_reversed_order_starts(self):
+        # Chord completion is order-independent: ctrl first, then shift.
+        targets = {self.SHIFT, self.CTRL}
+        pressed, solo = set(), self._guard(targets)
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)
+        self.assertFalse(rec)            # partial chord
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_target_held_past_expiry_then_chord_completes(self):
+        # A TARGET held past the expiry (user thinks with shift down) must not
+        # block its own chord. On evdev the held target self-prunes (note_repeat
+        # skips targets) — harmless, because the foreign check excludes targets.
+        clock = [1000.0]
+        targets = {self.SHIFT, self.CTRL}
+        pressed = set()
+        solo = self._guard(targets, now=lambda: clock[0])
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, targets, pressed,
+                          False, solo)
+        clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S + 5.0  # long think
+        rec = self._apply(self.CTRL, self.ev.KeyEvent.key_down, targets, pressed,
+                          rec, solo)     # completes → must start
         self.assertTrue(rec)
         self.assertEqual(self.t.started, 1)
 
