@@ -102,6 +102,14 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self._active_profile_name: str | None = None
         self.frames: list[np.ndarray] = []
         self.recording = False
+        # Monotonic generation counter, bumped on every _start. A chord-cancel
+        # is dispatched on a daemon thread that may be delayed past a release +
+        # re-press; it captures the epoch at chord-detection time so a stale
+        # cancel cannot discard the NEW recording (see _cancel_and_discard).
+        self._record_epoch = 0
+        # Set by the key backend when a chord forms on a bare-modifier PTT key
+        # (e.g. Ctrl held, then C): the next stop discards audio, no transcribe.
+        self._discard_recording = False
         self._record_started = 0.0
         self._record_keydown_at = 0.0
         self._first_audio_at = 0.0
@@ -400,6 +408,9 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self._first_audio_at = 0.0
         self._last_audio_level_event = 0.0
         self.recording = True
+        # Bump the recording generation (getattr keeps object.__new__ test-bypass
+        # instances, which skip __init__, working — like _discard_recording below).
+        self._record_epoch = getattr(self, "_record_epoch", 0) + 1
         self._record_keydown_at = time.monotonic()
         self._record_started = 0.0
         self.audio_ducker.enter()
@@ -447,13 +458,38 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self._preview.start()
         print(f"[preview] live preview every {self.preview_seconds:g}s", flush=True)
 
+    def _cancel_and_discard(self, epoch=None):
+        """Abort the in-flight recording, discarding audio (chord on PTT key).
+
+        Stops capture and drops the frames so nothing is transcribed or
+        injected — mirrors a skip-reason exit but triggered by a foreign key
+        joining a bare-modifier PTT key. Kept tiny; the key-state tracking lives
+        in vp_keys. Safe to call when not recording (no-op).
+
+        Runs on a daemon thread that may be delayed past a release + re-press.
+        ``epoch`` is the recording generation captured by the key backend at
+        chord-detection time: if a NEW recording has since started (epoch bumped
+        in _start), this cancel is stale and must NOT discard the new clip, so we
+        no-op unless it matches the current ``_record_epoch``.
+        """
+        if not self.recording:
+            return
+        if epoch is not None and epoch != getattr(self, "_record_epoch", epoch):
+            return  # stale cancel for an already-finished recording
+        self._discard_recording = True
+        self._stop_and_transcribe()
+
     def _stop_and_transcribe(self):
         if not self.recording:
             return
         self._reload_live_config_if_changed()
         try:
             tail_s = max(0, self.release_tail_ms) / 1000.0
-            if tail_s:
+            # On a chord-cancel we discard the clip, so skip the release-tail
+            # wait — there is nothing to capture. getattr keeps the object.__new__
+            # test-bypass instances (which skip __init__) working.
+            discard = getattr(self, "_discard_recording", False)
+            if tail_s and not discard:
                 time.sleep(tail_s)
             self.recording = False
             # Signal the live-preview thread to exit before the final pass so it
@@ -467,6 +503,21 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             play_cue("stop")
         finally:
             self.audio_ducker.exit()
+        if discard:
+            # Chord formed on a bare-modifier PTT key: drop the audio entirely —
+            # no transcription, no injection. Reset the flag for the next press.
+            self._discard_recording = False
+            self.frames = []
+            _emit_worker_event("status", state="cancelled", reason="chord")
+            print("[stt] dictation cancelled (chord)", flush=True)
+            _emit_worker_event(
+                "status",
+                state="ready",
+                capture_backend=self._capture_backend,
+                audio_device=self._audio_input_device,
+                capture_channels=self._capture_channels,
+            )
+            return
         _emit_worker_event(
             "status",
             state="transcribing",
