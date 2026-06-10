@@ -232,7 +232,11 @@ impl WhisperDictateApp {
         // reserved width. The status cards on the left then receive the
         // remaining space and are clipped naturally — no `.max()` floor that
         // would make the two regions overlap at narrow widths.
-        let controls_width = top_status_controls_width();
+        // Reserve the inter-region gap too: ui.horizontal inserts item_spacing
+        // between the left region and the controls, and that spacing scales
+        // with the UI text scale — without it the controls could still be
+        // squeezed at narrow widths on scaled-up UIs.
+        let controls_width = top_status_controls_width() + ui.spacing().item_spacing.x;
         let total_width = ui.available_width();
         let left_width = top_status_left_width(total_width, controls_width);
         ui.horizontal(|ui| {
@@ -384,8 +388,9 @@ fn status_card_sized(
         });
 }
 
-fn top_status_controls_width() -> f32 {
+pub(in crate::ui) fn top_status_controls_width() -> f32 {
     // Start (88) + Stop (78) + compact toggle (34) + inter-button spacing.
+    // The caller adds the live item_spacing gap between the two regions.
     232.0
 }
 

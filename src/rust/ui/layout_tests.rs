@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::tabs::top_status_left_width;
+use crate::ui::tabs::{top_status_controls_width, top_status_left_width};
 
 #[test]
 fn shell_chrome_dimensions_scale_with_ui_text() {
@@ -13,7 +13,9 @@ fn shell_chrome_dimensions_scale_with_ui_text() {
 
 #[test]
 fn top_status_left_width_gives_controls_priority_and_never_goes_negative() {
-    let controls = 232.0_f32;
+    // Pin the REAL production budget so a future change to the controls
+    // width is caught here, not by a stale hardcoded copy.
+    let controls = top_status_controls_width();
 
     // Normal window: left side gets the surplus.
     assert!((top_status_left_width(1000.0, controls) - 768.0).abs() < 0.001);

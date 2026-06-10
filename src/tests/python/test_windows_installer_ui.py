@@ -374,7 +374,12 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn('egui::Button::new(icon_text(icons::ICON_RESTART_ALT, "Restart"))', controls)
         self.assertNotIn("self.restart_runtime();", controls)
         self.assertIn("fn top_status_controls_width() -> f32", script)
-        self.assertIn("let controls_width = top_status_controls_width();", script)
+        # The live item_spacing gap between the two regions is reserved too —
+        # it scales with the UI text scale (Copilot finding on PR #167).
+        self.assertIn(
+            "let controls_width = top_status_controls_width() + ui.spacing().item_spacing.x;",
+            script,
+        )
         self.assertIn("fn status_card_wide(", script)
         self.assertIn("status_card_wide(", script)
         self.assertIn("ui.set_min_width(min_width);", script)

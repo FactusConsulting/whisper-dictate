@@ -34,7 +34,7 @@ pub(in crate::ui) use runtime::{empty_as_auto, empty_as_disabled, mic_label_char
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
 #[cfg(test)]
-pub(in crate::ui) use shell::top_status_left_width;
+pub(in crate::ui) use shell::{top_status_controls_width, top_status_left_width};
 
 fn settings_grid(id: &'static str) -> egui::Grid {
     egui::Grid::new(id)
