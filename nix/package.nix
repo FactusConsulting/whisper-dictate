@@ -11,7 +11,7 @@
 , wl-clipboard     # Wayland clipboard (future --paste path)
 , alsa-utils       # arecord PipeWire capture path
 , src ? null          # overridden by flake to use repo root
-, version ? "1.8.7"
+, version ? "1.8.8"
 }:
 
 let
