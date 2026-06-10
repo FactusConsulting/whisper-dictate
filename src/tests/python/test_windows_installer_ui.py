@@ -214,21 +214,80 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("self.audio_input_panel(ui, palette)", runtime_tab)
         self.assertNotIn("let active = self.runtime_state != RuntimeState::Stopped;", script)
 
-    def test_rust_output_tab_owns_logging_and_session_controls(self):
+    def test_rust_output_tab_is_pure_speech_output(self):
         script = rust_ui_source()
         output_tab = script.split("pub(in crate::ui) fn output_tab", 1)[1].split(
             "pub(in crate::ui) fn post_processing_tab", 1
         )[0]
 
-        self.assertIn('section_label(ui, "Dictation view", palette);', output_tab)
-        self.assertIn("self.log_mode_selector(ui, palette);", output_tab)
-        self.assertIn("self.settings.ui_log_view = mode.id().to_owned();", script)
-        self.assertIn("let ui_language = self.settings.ui_language.clone();", output_tab)
-        self.assertIn("theme_toggle(ui, &mut self.settings.ui_theme, palette, &ui_language);", output_tab)
-        self.assertIn("language_toggle(ui, &mut self.settings.ui_language, palette);", output_tab)
+        # Speech-output controls stay on the Output tab.
         self.assertIn("self.session_panel(ui, palette);", output_tab)
-        self.assertIn("UiTextKey::UiTheme", output_tab)
-        self.assertIn("UiTextKey::UiLanguage", output_tab)
+        self.assertIn('"Inject mode"', output_tab)
+        self.assertIn('"Format commands"', output_tab)
+        self.assertIn('"Command hook"', output_tab)
+        self.assertIn('"Command hook timeout ms"', output_tab)
+        self.assertIn("&mut self.settings.history_enabled", output_tab)
+        self.assertIn("&mut self.settings.local_only", output_tab)
+        self.assertIn("self.preview_history();", output_tab)
+        self.assertIn("self.open_history();", output_tab)
+
+        # App-level chrome + machine-readable outputs MOVED to the System tab and
+        # must no longer appear on Output. This encodes the new IA so a regression
+        # that re-adds them to Output fails here.
+        self.assertNotIn("theme_toggle(", output_tab)
+        self.assertNotIn("language_toggle(", output_tab)
+        self.assertNotIn("self.log_mode_selector(ui, palette);", output_tab)
+        self.assertNotIn('"Dictation view"', output_tab)
+        self.assertNotIn("UiTextKey::UiTheme", output_tab)
+        self.assertNotIn("UiTextKey::UiLanguage", output_tab)
+        self.assertNotIn("UiTextKey::DictationView", output_tab)
+        self.assertNotIn("&mut self.settings.ui_text_scale", output_tab)
+        self.assertNotIn("&mut self.settings.inject_json", output_tab)
+        self.assertNotIn("&mut self.settings.metrics_jsonl", output_tab)
+        self.assertNotIn("&mut self.settings.feedback_sounds", output_tab)
+        self.assertNotIn("&mut self.settings.feedback_notify", output_tab)
+
+    def test_rust_system_tab_owns_maintenance_and_app_settings(self):
+        script = rust_ui_source()
+        system_tab = script.split("pub(in crate::ui) fn system_tab", 1)[1].split(
+            "fn open_config_folder", 1
+        )[0]
+
+        # The System tab exists and is wired into the tab enum + dispatch.
+        self.assertIn("Tab::System", script)
+        self.assertIn("Tab::System => self.settings_panel(ui, Self::system_tab)", script)
+        self.assertIn("Tab::System => egui_material_icons::icons::ICON_SETTINGS", script)
+
+        # Maintenance: the three sidebar actions moved here, same handlers.
+        self.assertIn("self.reload_settings();", system_tab)
+        self.assertIn("self.run_doctor();", system_tab)
+        self.assertIn("self.run_install();", system_tab)
+        self.assertIn("UiTextKey::ReloadConfig", system_tab)
+        self.assertIn("UiTextKey::Doctor", system_tab)
+        self.assertIn("UiTextKey::InstallRepair", system_tab)
+        # The install/reload buttons keep the "another task running" guard.
+        self.assertIn("let idle = self.background_task.is_none();", system_tab)
+        # Config-file shortcut: hover shows the path, click opens the folder via
+        # the console-guarded helper (not a reimplemented shell call).
+        self.assertIn("UiTextKey::ConfigFile", system_tab)
+        self.assertIn(".on_hover_text(&self.config_path)", system_tab)
+        self.assertIn("self.open_config_folder();", system_tab)
+        self.assertIn("config::open_existing_path(&folder)", script)
+
+        # Appearance + Display + Feedback + Integration settings moved here.
+        self.assertIn("theme_toggle(ui, &mut self.settings.ui_theme, palette, &ui_language);", system_tab)
+        self.assertIn("language_toggle(ui, &mut self.settings.ui_language, palette);", system_tab)
+        self.assertIn("self.log_mode_selector(ui, palette);", system_tab)
+        self.assertIn("&mut self.settings.ui_text_scale", system_tab)
+        self.assertIn("&mut self.settings.feedback_sounds", system_tab)
+        self.assertIn("&mut self.settings.feedback_notify", system_tab)
+        self.assertIn("&mut self.settings.inject_json", system_tab)
+        self.assertIn("&mut self.settings.metrics_jsonl", system_tab)
+        self.assertIn("UiTextKey::SystemMaintenance", system_tab)
+        self.assertIn("UiTextKey::SystemAppearance", system_tab)
+        self.assertIn("UiTextKey::SystemDisplay", system_tab)
+        self.assertIn("UiTextKey::SystemFeedback", system_tab)
+        self.assertIn("UiTextKey::SystemIntegration", system_tab)
 
     def test_rust_runtime_log_can_be_copied(self):
         script = rust_ui_source()
@@ -303,19 +362,81 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             1
         ].split(".show(ctx, |ui| self.sidebar(ui, palette))", 1)[0]
         self.assertIn(".stroke(egui::Stroke::NONE)", navigation_frame)
-        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 72.0;", script)
+        # The footer slimmed to a single Reset-page action row after Reload config
+        # + the config path moved to the System tab.
+        self.assertIn("const SETTINGS_FOOTER_HEIGHT: f32 = 40.0;", script)
         self.assertIn("pub(in crate::ui) const EDGE_MARGIN: f32 = 12.0;", script)
         self.assertNotIn("SETTINGS_MESSAGES_BOTTOM_GAP", script)
         # Status messages moved out of the footer into the global bottom bar.
         self.assertIn('egui::TopBottomPanel::bottom("status_message_bar")', update_impl)
         self.assertNotIn("SETTINGS_MESSAGES_MAX_HEIGHT", script)
         self.assertNotIn("fn settings_messages", script)
-        self.assertIn('ui.label(egui::RichText::new("Config:").color(palette.text_muted));', settings_panel)
-        self.assertIn("let config_chars = ((ui.available_width() / 8.0).floor() as usize).clamp(38, 92);", settings_panel)
-        self.assertIn("egui::RichText::new(compact_label(&self.config_path, config_chars))", settings_panel)
-        self.assertIn(".monospace()", settings_panel)
-        self.assertIn(".on_hover_text(&self.config_path)", settings_panel)
+        # The per-page footer keeps only Reset page; the Reload config button and
+        # the "Config:" path row are gone (the path now lives on the System tab).
+        self.assertIn("UiTextKey::ResetPage", settings_panel)
+        self.assertNotIn('ui.label(egui::RichText::new("Config:").color(palette.text_muted));', settings_panel)
+        self.assertNotIn("compact_label(&self.config_path, config_chars)", settings_panel)
+        self.assertNotIn("self.reload_settings();", settings_panel)
         self.assertNotIn('ui.label(format!("Config: {}", self.config_path));', settings_panel)
+
+    def test_rust_sidebar_bottom_block_is_slim(self):
+        # The sidebar bottom block keeps only the PTT chord, Save settings, and
+        # the version. Reload config / Doctor / Install-Repair moved to System.
+        sidebar = (
+            Path("src/rust/ui/tabs/shell.rs")
+            .read_text(encoding="utf-8")
+            .split("fn sidebar", 1)[1]
+            .split("fn status_message_bar", 1)[0]
+        )
+        # Kept affordances.
+        self.assertIn("UiTextKey::SaveSettings", sidebar)
+        self.assertIn("format_push_to_talk_keys(&self.settings.key)", sidebar)
+        self.assertIn('format!("v{}", self.app_version)', sidebar)
+        self.assertIn("self.save_settings();", sidebar)
+        # Maintenance actions are NOT in the sidebar anymore.
+        self.assertNotIn("self.run_install();", sidebar)
+        self.assertNotIn("self.run_doctor();", sidebar)
+        self.assertNotIn("self.reload_settings();", sidebar)
+        self.assertNotIn("UiTextKey::InstallRepair", sidebar)
+        self.assertNotIn("UiTextKey::Doctor", sidebar)
+        self.assertNotIn("UiTextKey::ReloadConfig", sidebar)
+
+    def test_rust_top_status_bar_shows_post_processing_indicator(self):
+        script = rust_ui_source()
+        shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")
+
+        # The indicator is rendered inside the left status-card region (so it
+        # shares the clipping budget), before the right-pinned controls.
+        top_bar = shell.split("fn top_status_bar", 1)[1].split("fn global_controls", 1)[0]
+        self.assertIn("self.post_indicator(ui, palette);", top_bar)
+        # On/off decision + label + hover are pure, testable functions mirroring
+        # the worker gate (processor != none/empty AND mode != raw).
+        self.assertIn("fn post_processing_enabled(processor: &str, mode: &str) -> bool", shell)
+        self.assertIn('processor != "none" && mode != "raw"', shell)
+        self.assertIn("fn post_indicator_label(", shell)
+        self.assertIn("fn post_indicator_hover(", shell)
+        self.assertIn("UiTextKey::PostOn", shell)
+        self.assertIn("UiTextKey::PostOff", shell)
+
+    def test_rust_nav_button_inactive_tabs_look_clickable(self):
+        theme = Path("src/rust/ui/theme.rs").read_text(encoding="utf-8")
+        nav = theme.split("fn nav_button", 1)[1].split("fn icon_text", 1)[0]
+        # Inactive tabs get a visible surface + soft border (not transparent /
+        # no-stroke) plus a pointing-hand cursor so they read as buttons.
+        self.assertIn("egui::CursorIcon::PointingHand", nav)
+        self.assertIn("palette.surface_bg", nav)
+        self.assertIn("egui::Stroke::new(0.8, palette.border_soft)", nav)
+        self.assertNotIn("egui::Color32::TRANSPARENT", nav)
+        self.assertNotIn("egui::Stroke::NONE", nav)
+
+    def test_rust_compact_mic_label_derives_budget_from_width(self):
+        compact = Path("src/rust/ui/tabs/compact.rs").read_text(encoding="utf-8")
+        # The fixed character budget is gone; the budget now derives from the
+        # available label width so widening the strip reveals the full name.
+        self.assertNotIn("COMPACT_DEVICE_LABEL_CHARS", compact)
+        self.assertIn("fn compact_mic_label_char_budget(width: f32) -> usize", compact)
+        self.assertIn("let device_chars = compact_mic_label_char_budget(label_width);", compact)
+        self.assertIn("ui.available_width()", compact.split("fn compact_mic", 1)[1])
 
     def test_rust_runtime_controls_live_in_fixed_top_status_bar(self):
         script = rust_ui_source()

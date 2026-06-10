@@ -1,6 +1,51 @@
-use super::tabs::{compact_label, empty_as_auto, empty_as_disabled};
+use super::tabs::{
+    compact_label, empty_as_auto, empty_as_disabled, post_indicator_hover, post_indicator_label,
+    post_processing_enabled,
+};
 use super::test_support::test_app;
 use super::*;
+
+#[test]
+fn post_processing_enabled_matches_worker_gate() {
+    // Active only when a real processor is chosen AND the mode is not raw —
+    // mirrors vp_dictate/vp_postprocess (`processor == "none" || mode == "raw"`).
+    assert!(post_processing_enabled("groq", "clean"));
+    assert!(post_processing_enabled("ollama", "prompt"));
+    // Disabled processor is off regardless of mode.
+    assert!(!post_processing_enabled("none", "clean"));
+    assert!(!post_processing_enabled("", "clean"));
+    // raw mode is off even with a processor selected (it bypasses the model).
+    assert!(!post_processing_enabled("groq", "raw"));
+    // Whitespace is tolerated like the worker's trims.
+    assert!(post_processing_enabled("  groq  ", "  clean  "));
+    assert!(!post_processing_enabled("  none  ", "clean"));
+}
+
+#[test]
+fn post_indicator_label_reflects_enabled_state() {
+    assert_eq!(post_indicator_label("groq", "clean", "en"), "Post on");
+    assert_eq!(post_indicator_label("none", "clean", "en"), "Post off");
+    assert_eq!(post_indicator_label("groq", "raw", "en"), "Post off");
+    // Localized into Danish.
+    assert_eq!(post_indicator_label("groq", "clean", "da"), "Post til");
+    assert_eq!(post_indicator_label("none", "raw", "da"), "Post fra");
+}
+
+#[test]
+fn post_indicator_hover_names_mode_and_processor() {
+    let on = post_indicator_hover("groq", "clean");
+    assert!(on.contains("on"));
+    assert!(on.contains("mode: clean"));
+    assert!(on.contains("processor: groq"));
+    let off = post_indicator_hover("none", "raw");
+    assert!(off.contains("off"));
+    assert!(off.contains("mode: raw"));
+    assert!(off.contains("processor: none"));
+    // Empty values surface as the effective defaults the worker would use.
+    let empty = post_indicator_hover("", "");
+    assert!(empty.contains("processor: none"));
+    assert!(empty.contains("mode: raw"));
+}
 
 #[test]
 fn compact_label_truncates_with_ellipsis_only_past_the_budget() {

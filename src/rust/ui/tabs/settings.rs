@@ -2,9 +2,10 @@ use super::super::*;
 use super::*;
 use egui_material_icons::icons;
 
-// The footer now only holds the actions row (Reload / Reset / Config path);
-// status messages moved to the global bottom message bar.
-const SETTINGS_FOOTER_HEIGHT: f32 = 72.0;
+// The footer now only holds the single per-page Reset action row; Reload config
+// + the config path moved to the System tab and status messages moved to the
+// global bottom message bar.
+const SETTINGS_FOOTER_HEIGHT: f32 = 40.0;
 const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;
 
 impl WhisperDictateApp {
@@ -33,18 +34,9 @@ impl WhisperDictateApp {
         let is_dirty = self.has_unsaved_settings();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            // Save now lives in the sidebar (next to Reload config + status), so
-            // it isn't repeated on every page. Reload + Reset stay page-local.
-            if ui
-                .button(icon_text(
-                    icons::ICON_REFRESH,
-                    ui_text(&self.settings.ui_language, UiTextKey::ReloadConfig),
-                ))
-                .on_hover_text("Reload the config file from disk.")
-                .clicked()
-            {
-                self.reload_settings();
-            }
+            // Save lives in the sidebar; Reload config + the config path moved to
+            // the System tab. Only the per-page Reset stays here, so each settings
+            // page keeps just the action that is scoped to that page.
             if ui
                 .button(icon_text(
                     icons::ICON_REFRESH,
@@ -61,24 +53,6 @@ impl WhisperDictateApp {
                     ui_text(&self.settings.ui_language, UiTextKey::UnsavedChanges),
                 );
             }
-        });
-        ui.add_space(10.0);
-        ui.horizontal_wrapped(|ui| {
-            // Claim the full width so the "Config:" row tracks the window on
-            // resize, matching the messages card below it.
-            ui.set_min_width(ui.available_width());
-            let palette = ui_palette(&self.settings.ui_theme);
-            let config_chars = ((ui.available_width() / 8.0).floor() as usize).clamp(38, 92);
-            ui.label(egui::RichText::new("Config:").color(palette.text_muted));
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(compact_label(&self.config_path, config_chars))
-                        .monospace()
-                        .color(palette.text),
-                )
-                .wrap(),
-            )
-            .on_hover_text(&self.config_path);
         });
     }
 
@@ -148,23 +122,25 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.dictionary_prompt_chars = defaults.dictionary_prompt_chars;
         }
         Tab::Output => {
-            settings.ui_theme = defaults.ui_theme;
-            settings.ui_language = defaults.ui_language;
-            settings.ui_log_view = defaults.ui_log_view;
             settings.inject_mode = defaults.inject_mode;
             settings.format_commands = defaults.format_commands;
-            settings.inject_json = defaults.inject_json;
-            settings.metrics_jsonl = defaults.metrics_jsonl;
             settings.command_hook = defaults.command_hook;
             settings.command_hook_timeout_ms = defaults.command_hook_timeout_ms;
             settings.history_enabled = defaults.history_enabled;
             settings.history_jsonl = defaults.history_jsonl;
             settings.local_only = defaults.local_only;
-            settings.feedback_sounds = defaults.feedback_sounds;
-            settings.feedback_notify = defaults.feedback_notify;
             settings.debug = defaults.debug;
             settings.stt_debug = defaults.stt_debug;
+        }
+        Tab::System => {
+            settings.ui_theme = defaults.ui_theme;
+            settings.ui_language = defaults.ui_language;
+            settings.ui_log_view = defaults.ui_log_view;
             settings.ui_text_scale = defaults.ui_text_scale;
+            settings.inject_json = defaults.inject_json;
+            settings.metrics_jsonl = defaults.metrics_jsonl;
+            settings.feedback_sounds = defaults.feedback_sounds;
+            settings.feedback_notify = defaults.feedback_notify;
         }
         Tab::Post => {
             settings.post_processor = defaults.post_processor;
