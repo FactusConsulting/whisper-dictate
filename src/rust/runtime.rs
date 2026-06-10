@@ -739,6 +739,12 @@ pub fn audio_devices_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--list-audio-devices".to_owned()])
 }
 
+/// Worker command that lists visible top-level windows as JSON and exits.
+/// Drives the Profiles tab's "List open windows" action.
+pub fn windows_command() -> WorkerCommand {
+    default_worker_command_with_args(vec!["--list-windows".to_owned()])
+}
+
 pub fn install_command() -> WorkerCommand {
     install_command_from_exe(
         env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),

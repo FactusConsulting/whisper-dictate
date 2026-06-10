@@ -367,6 +367,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_preview.py",
             "vp_rust.py",
             "vp_transcribe.py",
+            "vp_windows.py",
         }
 
         self.assertEqual([], root_modules)

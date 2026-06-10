@@ -629,7 +629,10 @@ Target profiles can be added to `%APPDATA%\WhisperDictate\config.json` under a
 `profiles` array. Profiles match active window title/process substrings and
 override settings for that utterance, for example using paste mode and an
 English technical prompt in Claude Code/Codex terminals while keeping defaults
-elsewhere.
+elsewhere. On Windows, the Profiles tab's **List open windows** button fetches
+the live list of visible windows so you can pick one and insert a matching
+profile without hand-typing the match values. Window enumeration is Windows
+only — Wayland cannot enumerate windows.
 
 Spoken formatting commands are deterministic and opt-in. Set
 `VOICEPI_FORMAT_COMMANDS=en`, `da`, or `both` globally or in a target profile.
