@@ -46,15 +46,12 @@ pub(in crate::ui) use shell::{
 };
 
 fn settings_grid(id: &'static str) -> egui::Grid {
-    // `min_col_width` sets the floor for every column in the grid.  For a
-    // 2-column label/control layout this pins the label column to at least
-    // SETTINGS_LABEL_WIDTH so all grids on a tab (including each scope_group's
-    // inner grid) start their value column at the same x — the "align tal" fix.
-    // The control column is always wider than the label floor, so its minimum
-    // has no visible effect.
+    // Alignment is anchored by the label cell's `set_min_width(settings_label_width(ui))`
+    // call inside `label_with_help` / `label_with_help_enabled` — no grid-wide
+    // column floor is needed, and omitting it avoids an unscaled floor on the
+    // value column.
     egui::Grid::new(id)
         .num_columns(2)
-        .min_col_width(SETTINGS_LABEL_WIDTH)
         .spacing(egui::vec2(20.0, 10.0))
 }
 
