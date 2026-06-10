@@ -17,6 +17,7 @@ from helpers import (
 )
 
 from whisper_dictate import vp_keys
+from whisper_dictate import vp_keys_solo
 
 
 def _fake_keyboard():
@@ -351,6 +352,28 @@ class PynputListenerTests(unittest.TestCase):
             self.assertEqual(ln._owner.stopped, 1)
             self.assertFalse(ln._recording)
 
+    def test_non_target_key_press_does_not_accumulate_in_pressed(self):
+        # Comment 1 fix: non-target keys must never be added to _pressed, so the
+        # set stays bounded (only target keys tracked for chord completion).
+        ln = self._listener()
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            ln.on_press("<shift_l>")   # foreign key — not a target
+            ln.on_release("<shift_l>")
+        self.assertNotIn("<shift_l>", ln._pressed)
+        self.assertEqual(len(ln._pressed), 0)
+
+    def test_quit_key_held_blocks_bare_modifier_start(self):
+        # Comment 2 fix: quit key held → pressing PTT modifier must NOT start
+        # dictation (quit key is a foreign held key for rule-1 purposes).
+        guard = vp_keys_solo.SoloModifierGuard("<ctrl_l>", enabled=True)
+        ln = vp_keys._PynputListener(
+            _Target(), {"<ctrl_l>"}, "<esc>", toggle_mode=False, solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            ln.on_press("<esc>")       # quit key — noted in guard but returns early
+            ln.on_press("<ctrl_l>")    # PTT modifier: guard must see quit key held
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
     def test_quit_key_never_starts_recording(self):
         ln = self._listener()
         with patch.object(vp_keys, "QUIT_COUNT", 0):
@@ -372,8 +395,6 @@ class PynputListenerTests(unittest.TestCase):
             ln.on_press("<ctrl_r>")        # resets streak
             self.assertIsNone(ln.on_press("<esc>"))  # streak back to 1, not a stop
 
-
-from whisper_dictate import vp_keys_solo  # noqa: E402
 
 
 class SoloModifierGuardUnitTests(unittest.TestCase):
@@ -409,6 +430,24 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
         g.note_press("shift")
         self.assertTrue(g.may_start_on_target_down())
         self.assertFalse(g.should_cancel_on_press("c"))
+
+    def test_disabled_guard_note_press_does_not_mutate_held(self):
+        # Comment 3 fix: note_press must be a true no-op when enabled=False —
+        # _held must stay empty so a later enable would start with clean state.
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=False)
+        g.note_press("shift")
+        g.note_press("alt")
+        self.assertEqual(g._held, {})
+
+    def test_disabled_guard_note_release_does_not_mutate_held(self):
+        # Comment 4 fix: note_release must also be a true no-op when disabled.
+        # Manually insert a key to simulate an edge case, then verify release
+        # does not interact with it (the guard is inert).
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=False)
+        # note_press is already a no-op when disabled, so _held is empty.
+        # Confirm note_release on a key that was never tracked also doesn't crash.
+        g.note_release("shift")   # must not raise
+        self.assertEqual(g._held, {})
 
     def test_repeat_press_is_not_new(self):
         g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)

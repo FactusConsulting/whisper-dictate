@@ -106,7 +106,11 @@ class SoloModifierGuard:
         Key-repeat (the key is already in the held set) returns False so a held
         key re-firing is never treated as a new keypress — but it refreshes the
         timestamp so a genuinely-held key does not expire out of the held set.
+
+        No-op (returns False) when ``enabled`` is False — the guard is inert.
         """
+        if not self.enabled:
+            return False
         if key in self._held:
             self._held[key] = self._now()  # OS key-repeat: refresh, still not new
             return False
@@ -123,7 +127,12 @@ class SoloModifierGuard:
             self._held[key] = self._now()
 
     def note_release(self, key) -> None:
-        """Record ``key`` as released. Releases of unknown keys are ignored."""
+        """Record ``key`` as released. Releases of unknown keys are ignored.
+
+        No-op when ``enabled`` is False — the guard is inert.
+        """
+        if not self.enabled:
+            return
         self._held.pop(key, None)
 
     # --- the two rules -------------------------------------------------------------

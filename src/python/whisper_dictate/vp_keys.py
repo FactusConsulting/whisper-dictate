@@ -124,9 +124,14 @@ class _PynputListener:
             self._cancel_chord(k)
             return None
         if k == self._quit_key:
+            # Treat the quit key as a foreign held key for rule-1 purposes so
+            # holding it then pressing a bare-modifier PTT key does not start
+            # dictation (the guard would never have seen it as held otherwise).
+            self._solo.note_press(k)
             return None  # quit key never joins the PTT-key set
         self._solo.note_press(k)
-        self._pressed.add(k)
+        if k in self._targets:
+            self._pressed.add(k)
         chord_complete = self._targets.issubset(self._pressed)
         # Rising edge only: a held key repeats press events, so act exactly once
         # when the chord first becomes complete and re-arm only after it breaks.
