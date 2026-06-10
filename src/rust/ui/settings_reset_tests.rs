@@ -25,6 +25,7 @@ fn changed_settings() -> AppSettings {
         hallucination_guard: false,
         parakeet_min_seconds: "2.5".to_owned(),
         release_tail_ms: "350".to_owned(),
+        preview_seconds: "5".to_owned(),
         vad_threshold: "0.42".to_owned(),
         vad_min_silence_ms: "900".to_owned(),
         vad_speech_pad_ms: "450".to_owned(),
@@ -105,6 +106,7 @@ fn quality_page_reset_restores_only_quality_settings() {
     assert_eq!(settings.context_min_seconds, defaults.context_min_seconds);
     assert_eq!(settings.parakeet_min_seconds, defaults.parakeet_min_seconds);
     assert_eq!(settings.release_tail_ms, defaults.release_tail_ms);
+    assert_eq!(settings.preview_seconds, defaults.preview_seconds);
     assert_eq!(settings.vad_threshold, defaults.vad_threshold);
     assert_eq!(settings.vad_min_silence_ms, defaults.vad_min_silence_ms);
     assert_eq!(settings.vad_speech_pad_ms, defaults.vad_speech_pad_ms);

@@ -173,12 +173,16 @@ fn diagnostic_log_card(
     // Transient per-utterance worker states (opening/recording/transcribing/
     // post-processing) are shown live by the pipeline-progress card and then
     // summarized in the utterance card, so a card each would only clutter the
-    // history. The lifecycle states (loading_model/ready/failed) still surface.
+    // history. The high-frequency live "preview" ticks are suppressed the same
+    // way — they would flood the card view with one card per partial; the
+    // growing text already shows live in the recording card, and the Debug
+    // (raw) view still shows the underlying lines. The lifecycle states
+    // (loading_model/ready/failed) still surface.
     if let Some(rest) = line.strip_prefix("[worker] status=") {
         let state = rest.split_whitespace().next().unwrap_or("");
         if matches!(
             state,
-            "opening" | "recording" | "transcribing" | "post-processing"
+            "opening" | "recording" | "transcribing" | "post-processing" | "preview"
         ) {
             return None;
         }

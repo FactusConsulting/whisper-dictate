@@ -41,6 +41,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         gpu_total_mb: None,
         gpu_probe: None,
         pipeline_stage: None,
+        pipeline_preview: None,
         worker_ready: false,
         worker_start_time: None,
         fast_crash_count: 0,

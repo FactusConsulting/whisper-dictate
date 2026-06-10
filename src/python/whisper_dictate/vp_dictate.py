@@ -36,6 +36,7 @@ from whisper_dictate.vp_inject import InjectMixin
 from whisper_dictate.vp_keymap import _detect_xkb_layout
 from whisper_dictate.vp_keys import KeyBackendMixin
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text
+from whisper_dictate.vp_preview import PreviewEngine, preview_enabled
 
 # Populated lazily by _load_runtime_modules() (numpy + transcribe backend).
 np = None
@@ -60,6 +61,8 @@ def _load_runtime_modules() -> None:
         SR, STT_BACKEND, _transcribe_detail, is_hallucination,
     )
     vp_capture._load_runtime_modules()
+    from whisper_dictate import vp_preview
+    vp_preview._load_runtime_modules()
 
 
 class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
@@ -84,6 +87,11 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             self._effective_config.get("parakeet_min_seconds", "1.5"))
         self.release_tail_ms = int(float(
             self._effective_config.get("release_tail_ms", "200")))
+        # Live partial-transcription preview interval (seconds); "0" disables.
+        # Read live at recording start (in _start), not cached here.
+        self.preview_seconds = float(
+            self._effective_config.get("preview_seconds", "3"))
+        self._preview: PreviewEngine | None = None
         self.postprocess_settings = load_postprocess_settings()
         self.audio_ducker = register_active_ducker(AudioDucker.from_config())
         self.model_load_s = model_load_s
@@ -190,6 +198,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         vp_transcribe.CONTEXT_MIN_SECONDS = float(after.get("context_min_seconds", "5"))
         self.parakeet_min_seconds = float(after.get("parakeet_min_seconds", "1.5"))
         self.release_tail_ms = int(float(after.get("release_tail_ms", "200")))
+        self.preview_seconds = float(after.get("preview_seconds", "3"))
         vp_transcribe.VAD_THRESHOLD = float(after.get("vad_threshold", "0.3"))
         vp_transcribe.VAD_MIN_SILENCE_MS = int(after.get("vad_min_silence_ms", "600"))
         vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))
@@ -412,6 +421,22 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             flush=True,
         )
         print("● listening…", flush=True)
+        self._start_preview()
+
+    def _start_preview(self) -> None:
+        """Begin the live partial-transcription preview for this recording.
+
+        Only for the LOCAL whisper backend and a positive preview interval; the
+        cloud ("openai") backend would spam a paid API and Parakeet is skipped
+        for now. Read live (preview_seconds is refreshed by the live-config
+        reload that runs at the top of _start). Any failure here is non-fatal —
+        the preview is purely cosmetic.
+        """
+        if not preview_enabled(self.preview_seconds, self.stt_backend):
+            return
+        self._preview = PreviewEngine(self, self.preview_seconds)
+        self._preview.start()
+        print(f"[preview] live preview every {self.preview_seconds:g}s", flush=True)
 
     def _stop_and_transcribe(self):
         if not self.recording:
@@ -422,6 +447,13 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             if tail_s:
                 time.sleep(tail_s)
             self.recording = False
+            # Signal the live-preview thread to exit before the final pass so it
+            # is not still holding TRANSCRIBE_LOCK. The final pass acquires the
+            # lock blocking and MAY wait for at most one in-flight (bounded)
+            # preview chunk to finish — acceptable.
+            if self._preview is not None:
+                self._preview.stop()
+                self._preview = None
             self._stop_capture_streams()
         finally:
             self.audio_ducker.exit()

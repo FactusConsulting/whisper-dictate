@@ -237,6 +237,12 @@ struct WhisperDictateApp {
     /// ("recording" / "transcribing" / "post-processing"), or None when idle.
     /// Drives the live progress card in the runtime log.
     pipeline_stage: Option<&'static str>,
+    /// Live partial-transcription preview text emitted while recording
+    /// (worker `state="preview"`). Shown as a muted second line in the recording
+    /// card so the user watches the sentence grow; cleared when the utterance
+    /// settles. Display-only — the final injected text comes from the utterance
+    /// event, never from this.
+    pipeline_preview: Option<String>,
     /// Whether the worker has finished loading the model and is ready to receive
     /// speech. The OS process spawns near-instantly (RuntimeState::Running), but
     /// loading a local model takes time, so the status stays "Starting" until the
@@ -315,6 +321,7 @@ impl Default for WhisperDictateApp {
             gpu_total_mb: None,
             gpu_probe: Some(spawn_gpu_probe()),
             pipeline_stage: None,
+            pipeline_preview: None,
             worker_ready: false,
             worker_start_time: None,
             fast_crash_count: 0,

@@ -128,6 +128,12 @@
       "live": true
     },
     {
+      "env": "VOICEPI_PREVIEW_SECONDS",
+      "key": "preview_seconds",
+      "default": "3",
+      "live": true
+    },
+    {
       "env": "VOICEPI_VAD_THRESHOLD",
       "key": "vad_threshold",
       "default": "0.3",

@@ -21,6 +21,7 @@ pub(in crate::ui) fn worker_status_log_line(event: &WorkerEvent) -> Option<Strin
         "first_audio",
         "recording_s",
         "reason",
+        "text_preview",
     ] {
         if let Some(value) = worker_event_string(&event.payload, key) {
             line.push(' ');
@@ -96,9 +97,8 @@ pub(in crate::ui) fn pipeline_stage_for_worker_state(state: &str) -> Option<&'st
 /// `None` for states that should leave the current readiness untouched.
 pub(in crate::ui) fn worker_ready_for_state(state: &str) -> Option<bool> {
     match state {
-        "ready" | "opening" | "recording" | "transcribing" | "post-processing" | "no_text" => {
-            Some(true)
-        }
+        "ready" | "opening" | "recording" | "transcribing" | "post-processing" | "no_text"
+        | "preview" => Some(true),
         "loading_model" | "failed" => Some(false),
         _ => None,
     }
@@ -171,9 +171,29 @@ mod tests {
         assert_eq!(worker_ready_for_state("recording"), Some(true));
         assert_eq!(worker_ready_for_state("transcribing"), Some(true));
         assert_eq!(worker_ready_for_state("post-processing"), Some(true));
+        // The live-preview tick also means the model is loaded + ready.
+        assert_eq!(worker_ready_for_state("preview"), Some(true));
         // Unknown states leave readiness untouched.
         assert_eq!(worker_ready_for_state("listening"), None);
         assert_eq!(worker_ready_for_state("whatever"), None);
+    }
+
+    #[test]
+    fn preview_state_keeps_pipeline_stage_and_capture_untouched() {
+        // "preview" is a mid-recording, display-only signal: it must NOT map to
+        // a pipeline stage (that would clear the live "recording" spinner) and
+        // must leave audio-capture-active untouched (capture is still on).
+        assert_eq!(pipeline_stage_for_worker_state("preview"), None);
+        assert_eq!(audio_capture_active_for_worker_state("preview"), None);
+        // For contrast, "recording" stays a real pipeline stage + active capture.
+        assert_eq!(
+            pipeline_stage_for_worker_state("recording"),
+            Some("recording")
+        );
+        assert_eq!(
+            audio_capture_active_for_worker_state("recording"),
+            Some(true)
+        );
     }
 
     #[test]

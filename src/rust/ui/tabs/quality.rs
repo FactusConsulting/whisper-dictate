@@ -54,6 +54,12 @@ impl WhisperDictateApp {
                 );
                 text_help(
                     ui,
+                    "Live preview seconds",
+                    &mut self.settings.preview_seconds,
+                    "While recording, transcribe the buffer this often (seconds) so the live card shows the sentence growing. 0 disables. LOCAL Whisper backend only — ignored for cloud STT and Parakeet. The final result at key release is unchanged.",
+                );
+                text_help(
+                    ui,
                     "VAD threshold",
                     &mut self.settings.vad_threshold,
                     "Voice activity detection sensitivity. Lower is more sensitive, higher rejects more noise.",

@@ -72,6 +72,7 @@ impl AppSettings {
             &defaults.parakeet_min_seconds,
         );
         self.release_tail_ms = string_value(object, "release_tail_ms", &defaults.release_tail_ms);
+        self.preview_seconds = string_value(object, "preview_seconds", &defaults.preview_seconds);
     }
 
     /// Voice-activity-detection and audio level/ducking settings.

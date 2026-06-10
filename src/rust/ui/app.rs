@@ -308,8 +308,9 @@ impl WhisperDictateApp {
             self.update_worker_audio(event);
         } else if event.event == "utterance" {
             // The dictation finished and settles into a Final card — clear the
-            // live pipeline-progress card.
+            // live pipeline-progress card and its growing preview text.
             self.pipeline_stage = None;
+            self.pipeline_preview = None;
             if let Some(line) = worker_utterance_log_line(event) {
                 self.append_runtime_log(line);
             }
@@ -322,7 +323,21 @@ impl WhisperDictateApp {
         }
         if let Some(state) = event.state.as_deref() {
             self.audio_capture_opening = state == "opening";
-            self.pipeline_stage = pipeline_stage_for_worker_state(state);
+            // "preview" is a mid-recording, display-only signal: it must NOT
+            // overwrite pipeline_stage (which would clear the live "recording"
+            // spinner), so special-case it before the stage assignment and just
+            // capture the growing preview text. Every other known state updates
+            // the stage as before; a stage that is no longer "recording" drops
+            // the stale preview text.
+            if state == "preview" {
+                self.pipeline_preview =
+                    worker_event_string(&event.payload, "text_preview").filter(|t| !t.is_empty());
+            } else {
+                self.pipeline_stage = pipeline_stage_for_worker_state(state);
+                if self.pipeline_stage != Some("recording") {
+                    self.pipeline_preview = None;
+                }
+            }
             if let Some(ready) = worker_ready_for_state(state) {
                 if ready {
                     // Worker successfully loaded and is ready — clear any crash streak.

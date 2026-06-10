@@ -90,6 +90,7 @@ impl AppSettings {
         validate_f32("min_input_dbfs", &self.min_input_dbfs)?;
         validate_f32("min_snr_db", &self.min_snr_db)?;
         validate_f32("release_tail_ms", &self.release_tail_ms)?;
+        validate_f32("preview_seconds", &self.preview_seconds)?;
         validate_f32("context_min_seconds", &self.context_min_seconds)?;
         validate_f32("parakeet_min_seconds", &self.parakeet_min_seconds)?;
         validate_f32("audio_ducking_level", &self.audio_ducking_level)?;
