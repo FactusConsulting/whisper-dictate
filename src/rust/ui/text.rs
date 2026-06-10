@@ -79,6 +79,10 @@ pub(in crate::ui) enum UiTextKey {
     QualityGroupWhisper,
     QualityGroupParakeet,
     Dictation,
+    SpeechGroupWhisper,
+    SpeechGroupParakeet,
+    SpeechGroupOnline,
+    SpeechGroupGeneral,
 }
 
 impl UiTextKey {
@@ -144,6 +148,10 @@ impl UiTextKey {
                 UiTextKey::QualityGroupWhisper => "Whisper",
                 UiTextKey::QualityGroupParakeet => "Parakeet",
                 UiTextKey::Dictation => "Dictation",
+                UiTextKey::SpeechGroupWhisper => "Local Whisper",
+                UiTextKey::SpeechGroupParakeet => "Local NVIDIA Parakeet",
+                UiTextKey::SpeechGroupOnline => "Cloud STT",
+                UiTextKey::SpeechGroupGeneral => "General",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::SidebarSubtitle => "Rust kontrolflade",
@@ -205,6 +213,10 @@ impl UiTextKey {
                 UiTextKey::QualityGroupWhisper => "Whisper",
                 UiTextKey::QualityGroupParakeet => "Parakeet",
                 UiTextKey::Dictation => "Diktering",
+                UiTextKey::SpeechGroupWhisper => "Lokal Whisper",
+                UiTextKey::SpeechGroupParakeet => "Lokal NVIDIA Parakeet",
+                UiTextKey::SpeechGroupOnline => "Cloud STT",
+                UiTextKey::SpeechGroupGeneral => "Generelt",
             },
         }
     }

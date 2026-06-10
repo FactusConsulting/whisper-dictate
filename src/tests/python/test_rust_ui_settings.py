@@ -361,10 +361,70 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('("da", "Danish")', script)
         self.assertIn('if !cfg!(windows) {', script)
         self.assertIn('"Linux keyboard layout"', script)
-        self.assertIn("Local runtime", script)
-        self.assertIn("Dictation controls", script)
-        self.assertIn("Applies to local and cloud speech engines.", script)
+        # Old flat section labels replaced by scope_group boxes.
+        self.assertNotIn('"Local runtime"', script)
+        self.assertNotIn('"Dictation controls"', script)
+        self.assertNotIn("Applies to local and cloud speech engines.", script)
+        # New Speech tab scope-group structure (headings via UiTextKey, unique grid IDs).
+        self.assertIn("UiTextKey::SpeechGroupWhisper", script)
+        self.assertIn("UiTextKey::SpeechGroupParakeet", script)
+        self.assertIn("UiTextKey::SpeechGroupOnline", script)
+        self.assertIn("UiTextKey::SpeechGroupGeneral", script)
+        self.assertIn('"speech_whisper"', script)
+        self.assertIn('"speech_parakeet"', script)
+        self.assertIn('"speech_online"', script)
+        self.assertIn('"speech_general"', script)
+        # Device + Compute type are in the General group (shared by Whisper and Parakeet).
+        self.assertIn("backend != SttBackendMode::Cloud", script)
+        # Microphone + Refresh devices remain in the General group.
+        self.assertIn('"Refresh devices"', script)
         self.assertIn('"Wayland ydotool/XKB layout used for direct text injection on Linux.', script)
+
+    def test_rust_speech_tab_scope_groups_field_placement(self):
+        """Encode the per-group field assignment so a future regrouping is caught."""
+        script = rust_ui_source()
+
+        # Whisper group contains the Whisper model picker.
+        whisper_group = script.split('"speech_whisper"', 1)[1].split('"speech_parakeet"', 1)[0]
+        self.assertIn('"Whisper model"', whisper_group)
+        self.assertIn("SttBackendMode::Whisper", whisper_group)
+
+        # Parakeet group contains the Parakeet model picker.
+        parakeet_group = script.split('"speech_parakeet"', 1)[1].split('"speech_online"', 1)[0]
+        self.assertIn('"Parakeet model"', parakeet_group)
+        self.assertIn("SttBackendMode::Parakeet", parakeet_group)
+
+        # Online group contains cloud provider, model, URL, timeout, API key.
+        # The key action buttons live in cloud_stt_key_section (a helper called
+        # from inside the online group closure), so check them in full script.
+        online_group = script.split('"speech_online"', 1)[1].split('"speech_general"', 1)[0]
+        self.assertIn('"Cloud STT provider"', online_group)
+        self.assertIn('"Cloud STT model"', online_group)
+        self.assertIn('"Cloud STT API URL"', online_group)
+        self.assertIn('"Cloud STT timeout ms"', online_group)
+        self.assertIn('"Cloud STT API key"', online_group)
+        # cloud_stt_key_section is called from the online group closure.
+        self.assertIn("self.cloud_stt_key_section(ui, provider)", online_group)
+        # The buttons are defined in the helper method itself (present in script).
+        self.assertIn('"Save API key"', script)
+        self.assertIn('"Test cloud API"', script)
+        self.assertIn("SttBackendMode::Cloud", online_group)
+
+        # General group contains Device, Compute type, Microphone, Language,
+        # Hotkey, Toggle mode, Quit key, Quit count, Quit window ms.
+        general_group = script.split('"speech_general"', 1)[1]
+        self.assertIn('"Device"', general_group)
+        self.assertIn('"Compute type"', general_group)
+        self.assertIn('"Microphone"', general_group)
+        self.assertIn('"Refresh devices"', general_group)
+        self.assertIn('"Language"', general_group)
+        self.assertIn('"Hotkey"', general_group)
+        self.assertIn('"Toggle mode"', general_group)
+        self.assertIn('"Quit key"', general_group)
+        self.assertIn('"Quit count"', general_group)
+        self.assertIn('"Quit window ms"', general_group)
+        # Device and Compute type are greyed when cloud backend is active.
+        self.assertIn("backend != SttBackendMode::Cloud", general_group)
 
     def test_rust_quality_tab_has_scope_groups_and_text_scale_stepper(self):
         """Quality tab must use three scope_group headings with the exact grid IDs

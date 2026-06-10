@@ -62,6 +62,27 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     // UseDefaultPath key — used by the System tab "Use default path" button.
     assert_eq!(ui_text("en", UiTextKey::UseDefaultPath), "Use default path");
     assert_eq!(ui_text("da", UiTextKey::UseDefaultPath), "Brug standardsti");
+    // Speech-tab scope-group headings, both languages.
+    assert_eq!(
+        ui_text("en", UiTextKey::SpeechGroupWhisper),
+        "Local Whisper"
+    );
+    assert_eq!(
+        ui_text("da", UiTextKey::SpeechGroupWhisper),
+        "Lokal Whisper"
+    );
+    assert_eq!(
+        ui_text("en", UiTextKey::SpeechGroupParakeet),
+        "Local NVIDIA Parakeet"
+    );
+    assert_eq!(
+        ui_text("da", UiTextKey::SpeechGroupParakeet),
+        "Lokal NVIDIA Parakeet"
+    );
+    assert_eq!(ui_text("en", UiTextKey::SpeechGroupOnline), "Cloud STT");
+    assert_eq!(ui_text("da", UiTextKey::SpeechGroupOnline), "Cloud STT");
+    assert_eq!(ui_text("en", UiTextKey::SpeechGroupGeneral), "General");
+    assert_eq!(ui_text("da", UiTextKey::SpeechGroupGeneral), "Generelt");
 }
 
 #[test]
