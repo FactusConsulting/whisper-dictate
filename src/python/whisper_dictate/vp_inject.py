@@ -9,7 +9,6 @@ suite importing Dictate, and smoke-tested on Linux.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import socket
 import subprocess

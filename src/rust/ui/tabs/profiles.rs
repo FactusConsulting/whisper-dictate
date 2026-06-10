@@ -103,6 +103,10 @@ impl WhisperDictateApp {
 
         let window_options = self.window_options.clone();
         let profiles_json = &mut self.settings.profiles_json;
+        // Set when an Insert click fails because the JSON is not a valid
+        // array; applied to settings_status after the closure (which holds a
+        // mutable borrow of profiles_json, so we cannot touch self here).
+        let mut insert_error: Option<&'static str> = None;
 
         egui::ScrollArea::vertical()
             .max_height(260.0)
@@ -125,16 +129,25 @@ impl WhisperDictateApp {
                             )
                             .clicked()
                         {
-                            let new_json = insert_window_profile(profiles_json, title, process);
-                            if let Some(updated) = new_json {
-                                *profiles_json = updated;
+                            match insert_window_profile(profiles_json, title, process) {
+                                Some(updated) => *profiles_json = updated,
+                                None => insert_error = Some(INSERT_INVALID_JSON_MESSAGE),
                             }
                         }
                     });
                 }
             });
+
+        if let Some(message) = insert_error {
+            self.settings_status = message.to_owned();
+        }
     }
 }
+
+/// Status message shown when Insert is clicked but the Profiles JSON cannot be
+/// parsed as an array (so we refuse to overwrite it with partial content).
+pub(in crate::ui) const INSERT_INVALID_JSON_MESSAGE: &str =
+    "Cannot insert: profiles JSON is not a valid array — fix it first";
 
 /// Append a profile entry for *(title, process)* to *profiles_json*.
 ///
@@ -150,10 +163,7 @@ pub(in crate::ui) fn insert_window_profile(
     let mut arr: Vec<serde_json::Value> = serde_json::from_str(profiles_json.trim()).ok()?;
 
     // Derive a readable profile name from the process stem (strip extension).
-    let basename = process
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(process);
+    let basename = process.rsplit(['/', '\\']).next().unwrap_or(process);
     // Strip the file extension (last `.xxx`) to get a clean name.
     let stem = if let Some(dot_pos) = basename.rfind('.') {
         &basename[..dot_pos]
@@ -238,5 +248,29 @@ mod profiles_helper_tests {
         let arr: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         let name = arr[0]["name"].as_str().unwrap();
         assert!(!name.is_empty());
+    }
+
+    /// Pure mirror of the Insert click's status-message decision: a failed
+    /// insert (`None`) surfaces the invalid-array message; a success surfaces
+    /// nothing. egui painting is not testable, so the decision lives here.
+    fn insert_status(profiles_json: &str, title: &str, process: &str) -> Option<&'static str> {
+        match insert_window_profile(profiles_json, title, process) {
+            Some(_) => None,
+            None => Some(INSERT_INVALID_JSON_MESSAGE),
+        }
+    }
+
+    #[test]
+    fn insert_surfaces_error_for_non_array_json() {
+        assert_eq!(
+            insert_status(r#"{"not": "an array"}"#, "Title", "proc.exe"),
+            Some(INSERT_INVALID_JSON_MESSAGE),
+        );
+        assert!(INSERT_INVALID_JSON_MESSAGE.contains("not a valid array"));
+    }
+
+    #[test]
+    fn insert_surfaces_no_error_on_success() {
+        assert_eq!(insert_status("[]", "Notepad", "notepad.exe"), None);
     }
 }

@@ -10,14 +10,12 @@ Covers:
 from __future__ import annotations
 
 import types as _types
-import os
 
 from helpers import (
     _capture_stdout,
     json,
     patch,
     sys,
-    types,
     unittest,
 )
 
@@ -79,14 +77,16 @@ def _fake_ctypes(windows: list[dict]):
                 if not callback(hwnd, lparam):
                     break
 
-    class _Kernel32:
-        def OpenProcess(self, _access, _inherit, _pid):
-            return 1  # non-zero = success
+    # kernel32 stub: return each window's pid as the OpenProcess "handle" so
+    # QueryFullProcessImageNameW can look the exe up by pid.
+    pid_to_exe = {w.get("pid", 1): w.get("exe", "C:\\notepad.exe") for w in windows}
 
-        def QueryFullProcessImageNameW(self, _handle, _flags, buf, size):
-            # Find the matching window by pid
-            current_pid = size.value  # abused; see below
-            buf.value = "C:\\notepad.exe"
+    class _Kernel32:
+        def OpenProcess(self, _access, _inherit, pid):
+            return pid  # return pid as the "handle" so we can look it up
+
+        def QueryFullProcessImageNameW(self, handle, _flags, buf, _size):
+            buf.value = pid_to_exe.get(handle, "C:\\unknown.exe")
             return 1
 
         def CloseHandle(self, _h):
@@ -104,22 +104,6 @@ def _fake_ctypes(windows: list[dict]):
     ctypes_mod.byref = byref
     ctypes_mod.WINFUNCTYPE = WINFUNCTYPE
 
-    # Make the kernel32 stub return the right exe for each window's pid
-    pid_to_exe = {w.get("pid", 1): w.get("exe", "C:\\notepad.exe") for w in windows}
-
-    class _Kernel32WithPid:
-        def OpenProcess(self, _access, _inherit, pid):
-            return pid  # return pid as the "handle" so we can look it up
-
-        def QueryFullProcessImageNameW(self, handle, _flags, buf, _size):
-            buf.value = pid_to_exe.get(handle, "C:\\unknown.exe")
-            return 1
-
-        def CloseHandle(self, _h):
-            pass
-
-    ctypes_mod.windll.kernel32 = _Kernel32WithPid()
-
     return ctypes_mod, wintypes_mod
 
 
@@ -128,32 +112,6 @@ def _fake_ctypes(windows: list[dict]):
 # ---------------------------------------------------------------------------
 
 class ListVisibleWindowsTests(unittest.TestCase):
-    def _run(self, windows_spec):
-        from whisper_dictate import vp_windows
-        ctypes_mod, wintypes_mod = _fake_ctypes(windows_spec)
-
-        original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
-
-        import builtins
-        original_builtins_import = builtins.__import__
-
-        def _fake_import(name, *args, **kwargs):
-            if name == "ctypes":
-                return ctypes_mod
-            if name == "ctypes.wintypes" or (args and args[0] and "wintypes" in str(args[0])):
-                return ctypes_mod
-            return original_builtins_import(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=_fake_import):
-            # We need to temporarily set os.name to "nt" and inject ctypes
-            with patch.dict(sys.modules, {"ctypes": ctypes_mod}):
-                with patch.object(vp_windows, "os") as mock_os:
-                    mock_os.name = "nt"
-                    mock_os.path = os.path
-                    # Re-import the function with our stubs
-                    result = _run_list_with_stubs(windows_spec)
-        return result
-
     def test_returns_visible_windows_with_title_and_process(self):
         windows_spec = [
             {"title": "Notepad", "pid": 10, "exe": "C:\\Windows\\notepad.exe"},
@@ -211,67 +169,30 @@ class ListVisibleWindowsTests(unittest.TestCase):
 
 
 def _run_list_with_stubs(windows_spec: list[dict]) -> list[dict]:
-    """Run list_visible_windows with a fully-stubbed ctypes/os.name=nt."""
+    """Call the REAL ``vp_windows.list_visible_windows`` under a stubbed
+    ``ctypes`` / ``ctypes.wintypes`` and ``os.name == "nt"``.
+
+    The production function does ``import ctypes`` / ``from ctypes import
+    wintypes`` at call time, so injecting both into ``sys.modules`` makes the
+    real callback logic run against our fakes. Crucially this exercises
+    production code: if ``list_visible_windows`` is broken, these tests fail.
+    """
     import types as _builtin_types
     from whisper_dictate import vp_windows
 
     ctypes_mod, wintypes_mod = _fake_ctypes(windows_spec)
 
-    # Build a fake "ctypes.wintypes" sub-module
+    # `from ctypes import wintypes` resolves to the "ctypes.wintypes" submodule.
     fake_ctypes_wintypes = _builtin_types.ModuleType("ctypes.wintypes")
     fake_ctypes_wintypes.DWORD = wintypes_mod.DWORD
     ctypes_mod.wintypes = fake_ctypes_wintypes
 
-    original_fn = vp_windows.list_visible_windows
-
-    def _patched():
-        # Temporarily set os.name to "nt" inside vp_windows and inject ctypes
-        with patch.dict(sys.modules, {
-            "ctypes": ctypes_mod,
-            "ctypes.wintypes": fake_ctypes_wintypes,
-        }):
-            with patch.object(vp_windows.os, "name", "nt"):
-                # Re-execute the body of list_visible_windows with our stubs
-                import ctypes  # noqa: F811 - intentional override in scope
-                from ctypes import wintypes  # noqa: F811
-                user32 = ctypes.windll.user32
-                kernel32 = ctypes.windll.kernel32
-                results = []
-                EnumWindowsProc = ctypes.WINFUNCTYPE(
-                    ctypes.c_bool,
-                    ctypes.c_void_p,
-                    ctypes.c_long,
-                )
-
-                def _cb(hwnd, _lparam):
-                    try:
-                        if not user32.IsWindowVisible(hwnd):
-                            return True
-                        length = user32.GetWindowTextLengthW(hwnd)
-                        if not length:
-                            return True
-                        buf = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buf, length + 1)
-                        title = buf.value
-                        if not title or not title.strip():
-                            return True
-                        pid = wintypes.DWORD()
-                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                        proc = None
-                        if pid.value:
-                            proc = vp_windows.windows_process_name(
-                                ctypes, wintypes, pid.value)
-                        if vp_windows._is_self_window(title, proc):
-                            return True
-                        results.append({"title": title, "process": proc or ""})
-                    except Exception:
-                        pass
-                    return True
-
-                user32.EnumWindows(EnumWindowsProc(_cb), 0)
-                return results
-
-    return _patched()
+    with patch.dict(sys.modules, {
+        "ctypes": ctypes_mod,
+        "ctypes.wintypes": fake_ctypes_wintypes,
+    }):
+        with patch.object(vp_windows.os, "name", "nt"):
+            return vp_windows.list_visible_windows()
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +233,6 @@ class PrintWindowsTests(unittest.TestCase):
 
     def test_enumeration_exception_prints_error_and_returns_one(self):
         from whisper_dictate import vp_events, vp_windows
-
-        def _boom():
-            raise RuntimeError("access denied")
 
         with _capture_stdout() as out:
             with patch.object(vp_events.os, "name", "nt"):
