@@ -104,25 +104,30 @@ impl WhisperDictateApp {
             // The tab list occupies the space remaining above the bottom block.
             // Wrapping it in a ScrollArea means the tabs scroll instead of
             // being painted over the bottom block when the window is short.
+            // The ScrollArea content INHERITS the surrounding bottom_up layout,
+            // which rendered the tabs in reverse (System on top) — force
+            // top_down so Dictation stays first, as in Tab::ALL order.
             egui::ScrollArea::vertical()
                 .id_salt("sidebar_tab_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for tab in Tab::ALL {
-                        let selected = self.selected_tab == tab;
-                        if nav_button(
-                            ui,
-                            selected,
-                            tab.icon(),
-                            tab.label(&self.settings.ui_language),
-                            palette,
-                        )
-                        .clicked()
-                        {
-                            self.selected_tab = tab;
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        for tab in Tab::ALL {
+                            let selected = self.selected_tab == tab;
+                            if nav_button(
+                                ui,
+                                selected,
+                                tab.icon(),
+                                tab.label(&self.settings.ui_language),
+                                palette,
+                            )
+                            .clicked()
+                            {
+                                self.selected_tab = tab;
+                            }
+                            ui.add_space(5.0);
                         }
-                        ui.add_space(5.0);
-                    }
+                    });
                 });
         });
     }
