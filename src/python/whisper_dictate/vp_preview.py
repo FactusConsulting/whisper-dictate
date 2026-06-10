@@ -47,9 +47,11 @@ transcribe_preview = None
 # re-transcribing an essentially unchanged buffer.
 MIN_NEW_AUDIO_S = 1.5
 
-# The preview text emitted to the UI is truncated to this many chars; the live
-# card only needs the growing tail, not the whole essay.
-PREVIEW_TEXT_CHARS = 140
+# The preview text emitted to the UI is truncated to this many chars. Generous
+# on purpose: the live card wraps over multiple lines so the user can read the
+# whole sentence while still speaking (140 was far too tight for real
+# dictation); the cap only guards the event payload against runaway essays.
+PREVIEW_TEXT_CHARS = 600
 
 # faster-whisper / CTranslate2 give "whisper"; the cloud + Parakeet backends do
 # not run a local model we can cheaply re-decode mid-recording.

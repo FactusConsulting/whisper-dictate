@@ -157,7 +157,7 @@ class PreviewEngineTests(unittest.TestCase):
         engine = self._make_engine(owner)
         events, emit = self._events()
         lock = _CapturingLock()
-        long_text = "word " * 100  # ~500 chars → must be truncated to ~140
+        long_text = "word " * 200  # ~1000 chars → must be truncated to the cap
 
         with patch.object(self.preview, "transcribe_preview",
                           lambda *_a, **_k: long_text), \
