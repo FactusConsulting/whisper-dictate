@@ -534,9 +534,9 @@ fn runtime_status_badge(
 /// `shift_l+ctrl_l`) is rendered as a human-friendly chord (`Ctrl (right)`).
 /// When toggle mode is on the label reads "Toggle key" (press to start, press
 /// again to stop); otherwise the usual "Push-to-talk".
-/// Build the badge label text: a "Push-to-talk: <chord>" (hold mode) or
-/// "Toggle key: <chord>" (toggle mode) string. Kept pure so it is unit-testable
-/// without an egui context.
+/// Mode-labelled chord text — "Push-to-talk: <chord>" (hold mode) or
+/// "Toggle key: <chord>" (toggle mode). Used for the sidebar key display's
+/// hover text; kept pure so it is unit-testable without an egui context.
 pub(in crate::ui) fn push_to_talk_badge_label(
     raw_keys: &str,
     toggle_mode: bool,

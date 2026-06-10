@@ -147,9 +147,9 @@ impl WhisperDictateApp {
                     &self.settings.ui_language,
                 ),
                 if self.settings.toggle_mode {
-                    "press to start, press again to stop. Change it in Speech → Hotkey."
+                    "Press to start, press again to stop. Change it in Speech → Hotkey."
                 } else {
-                    "hold to dictate. Change it in Speech → Hotkey."
+                    "Hold to dictate. Change it in Speech → Hotkey."
                 }
             ));
         });
