@@ -92,7 +92,7 @@ SEGMENT_END_SLACK_S = 1.0
 # Speech-rate plausibility gate: a transcript whose chars-per-second exceeds
 # this is humanly impossible (real speech is 15-25 chars/s) and is almost
 # certainly a hallucinated credit/caption on quiet input. "0" disables the gate.
-# Live-reloadable (mirrored from config in _apply_live_session_settings).
+# Live-reloadable (mirrored from config in Dictate._apply_runtime_module_config).
 MAX_CHARS_PER_SECOND = float(get_value("VOICEPI_MAX_CHARS_PER_SECOND", "30") or "30")
 STT_DEBUG = (get_value("VOICEPI_STT_DEBUG") or "").strip().lower() not in (
     "", "0", "false", "no", "off")
@@ -363,9 +363,9 @@ _CREDIT_BODY = (
     r"(?:(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)"
     rf"|tekstet af |oversat af |subtitles? by |subtitled by "
     rf"|captions? by |translated by ){_CREDIT_PHRASE_YEAR}"
-    r"|scandinavian text service(?: \d{4})?"
-    r"|broadcast text international(?: \d{4})?"
-    r"|dansk video ?tekst(?: \d{4})?"
+    r"|scandinavian text service(?: (?:19|20)\d{2})?"
+    r"|broadcast text international(?: (?:19|20)\d{2})?"
+    r"|dansk video ?tekst(?: (?:19|20)\d{2})?"
     r")"
 )
 # Trailing punctuation/whitespace tolerated, anchored both ends.
@@ -506,8 +506,8 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     raw_text = re.sub(r"\s+", " ", "".join(s.text for s in segment_list)).strip()
     if raw_text and _exceeds_speech_rate(raw_text, dur):
         # Humanly impossible char rate -> hallucinated credit/caption. Drop the
-        # text (and its segments) so it flows through the same empty-result path
-        # an is_hallucination match takes downstream.
+        # text (and its segments); downstream this surfaces as an empty result
+        # (reason="empty" -> state=no_text), not as an is_hallucination match.
         raw_text = ""
         segment_list = []
     dictionary_text = _dictionary_runtime(raw_text, INITIAL_PROMPT)
