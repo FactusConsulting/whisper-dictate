@@ -71,7 +71,7 @@ impl UiTextKey {
         match language {
             UiLanguageMode::English => match self {
                 UiTextKey::SidebarSubtitle => "Rust control surface",
-                UiTextKey::Log => "Log",
+                UiTextKey::Log => "Dictation",
                 UiTextKey::Speech => "Speech",
                 UiTextKey::Quality => "Quality",
                 UiTextKey::Dictionary => "Dictionary",
@@ -117,7 +117,7 @@ impl UiTextKey {
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::SidebarSubtitle => "Rust kontrolflade",
-                UiTextKey::Log => "Log",
+                UiTextKey::Log => "Diktering",
                 UiTextKey::Speech => "Tale",
                 UiTextKey::Quality => "Kvalitet",
                 UiTextKey::Dictionary => "Ordbog",

@@ -56,7 +56,7 @@ After that, start it from the Ubuntu launcher or run:
 whisper-dictate ui
 ```
 
-Then press **Start** in the Runtime tab. Hold **right Shift + right Ctrl**,
+Then press **Start** in the Dictation tab. Hold **right Shift + right Ctrl**,
 speak, release.
 
 ### One-time system setup details
@@ -360,7 +360,7 @@ whisper-dictate.exe run --key ctrl_r --lang en
 With the `.exe` installer, use the Start-menu **whisper-dictate** shortcut to
 run dictation and settings from one UI. The normal **whisper-dictate** shortcut
 runs the Rust UI and starts the Python worker hidden underneath it, with logs
-streamed into the Runtime tab.
+streamed into the Dictation tab.
 
 After first-time setup, launch directly:
 

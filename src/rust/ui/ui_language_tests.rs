@@ -2,6 +2,8 @@ use super::*;
 
 #[test]
 fn ui_language_translates_primary_navigation_and_runtime_status() {
+    assert_eq!(Tab::Log.label("en"), "Dictation");
+    assert_eq!(Tab::Log.label("da"), "Diktering");
     assert_eq!(Tab::Speech.label("en"), "Speech");
     assert_eq!(Tab::Speech.label("da"), "Tale");
     assert_eq!(Tab::Dictionary.label("da"), "Ordbog");

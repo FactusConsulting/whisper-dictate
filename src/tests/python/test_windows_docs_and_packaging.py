@@ -128,7 +128,7 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
             self.assertIn("whisper-dictate setup-ubuntu", doc)
             self.assertIn("Whisper Dictate", doc)
             self.assertIn("whisper-dictate ui", doc)
-        self.assertIn("Then press **Start** in the Runtime tab", readme)
+        self.assertIn("Then press **Start** in the Dictation tab", readme)
 
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("packaging/windows/inno/whisper-dictate.iss", encoding="utf-8") as f:

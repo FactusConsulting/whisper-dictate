@@ -33,6 +33,8 @@ pub(in crate::ui) use runtime::{format_push_to_talk_keys, push_to_talk_badge_lab
 pub(in crate::ui) use runtime::{empty_as_auto, empty_as_disabled, mic_label_char_budget};
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
+#[cfg(test)]
+pub(in crate::ui) use shell::top_status_left_width;
 
 fn settings_grid(id: &'static str) -> egui::Grid {
     egui::Grid::new(id)
