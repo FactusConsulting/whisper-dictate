@@ -1,7 +1,7 @@
-//! The UI text-scale stepper widget and its pure `step_text_scale` helper, split
-//! out of `widgets.rs` to keep that file under the module size budget.
-
-use super::*;
+//! The pure `step_text_scale` helper and its unit tests. The egui widget
+//! `text_scale_stepper` (its only consumer) lives in `tabs/system.rs` so it
+//! falls under the `src/rust/ui/tabs/**` Sonar coverage exclusion — render
+//! code cannot be unit-tested in isolation.
 
 /// The UI text-scale clamp range, kept in lockstep with `theme::layout_scale` /
 /// `apply_ui_theme` (which clamp the parsed scale to the same bounds). Stepper
@@ -28,29 +28,6 @@ pub(in crate::ui) fn step_text_scale(raw: &str, delta: f32) -> String {
         text.pop();
     }
     text
-}
-
-/// A compact UI-text-scale row: short text input flanked by "−"/"+" stepper
-/// buttons that nudge the value by 0.05 within the theme's clamp range.
-pub(in crate::ui) fn text_scale_stepper(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &mut String,
-    help: &str,
-) {
-    const STEP: f32 = 0.05;
-    let show_help = label_with_help(ui, label, help);
-    ui.horizontal(|ui| {
-        if ui.small_button("−").on_hover_text("Smaller text").clicked() {
-            *value = step_text_scale(value, -STEP);
-        }
-        ui.add(egui::TextEdit::singleline(value).desired_width(60.0));
-        if ui.small_button("+").on_hover_text("Larger text").clicked() {
-            *value = step_text_scale(value, STEP);
-        }
-    });
-    ui.end_row();
-    grid_help_row(ui, show_help, help);
 }
 
 #[cfg(test)]

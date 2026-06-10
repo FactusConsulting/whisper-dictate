@@ -174,9 +174,9 @@ impl WhisperDictateApp {
         let show_initial_prompt_help = label_with_help(
             ui,
             "Initial prompt",
-            "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately.",
+            "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately. It primarily affects Whisper decoding (passed as the faster-whisper `initial_prompt` kwarg) and also feeds dictionary-term matching.",
         );
-        inline_help(ui, show_initial_prompt_help, "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately.");
+        inline_help(ui, show_initial_prompt_help, "Optional prompt sent to Whisper for vocabulary and style hints. Keep it short; dictionary terms are capped separately. It primarily affects Whisper decoding (passed as the faster-whisper `initial_prompt` kwarg) and also feeds dictionary-term matching.");
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.initial_prompt)
                 .desired_rows(4)

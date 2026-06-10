@@ -220,9 +220,11 @@ impl WhisperDictateApp {
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            // One-click prefill: metrics.jsonl next to config.json. Deliberately
-            // a button, not a default — an actual default value would silently
-            // enable metrics logging for everyone.
+            // The field is already prefilled at load (and after "Reload config")
+            // with the suggested path next to config.json. This button restores
+            // that default after the user has edited the field. Metrics are still
+            // only written while "JSON stdout" is enabled, so a prefilled path
+            // stays inert until the user opts in.
             if ui
                 .button(ui_text(
                     &self.settings.ui_language,
@@ -283,4 +285,30 @@ pub(in crate::ui) fn default_metrics_jsonl_path(config_path: &str) -> String {
         }
         _ => "metrics.jsonl".to_owned(),
     }
+}
+
+/// A compact UI-text-scale row: short text input flanked by "−"/"+" stepper
+/// buttons that nudge the value by 0.05 within the theme's clamp range.
+/// Placed here (tabs/system.rs — its only consumer) so it falls under the
+/// `src/rust/ui/tabs/**` Sonar coverage exclusion for render code. The pure
+/// `step_text_scale` logic stays in `text_scale.rs` where it is unit-tested.
+pub(in crate::ui) fn text_scale_stepper(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    const STEP: f32 = 0.05;
+    let show_help = label_with_help(ui, label, help);
+    ui.horizontal(|ui| {
+        if ui.small_button("−").on_hover_text("Smaller text").clicked() {
+            *value = step_text_scale(value, -STEP);
+        }
+        ui.add(egui::TextEdit::singleline(value).desired_width(60.0));
+        if ui.small_button("+").on_hover_text("Larger text").clicked() {
+            *value = step_text_scale(value, STEP);
+        }
+    });
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
 }

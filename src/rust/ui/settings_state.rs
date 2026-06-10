@@ -69,7 +69,12 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn reload_settings(&mut self) {
         match config::load_settings() {
-            Ok(settings) => {
+            Ok(mut settings) => {
+                // Re-apply the same metrics_jsonl prefill used at app construction
+                // so the field never goes blank after "Reload config".
+                if settings.metrics_jsonl.trim().is_empty() {
+                    settings.metrics_jsonl = tabs::default_metrics_jsonl_path(&self.config_path);
+                }
                 self.saved_settings = settings.clone();
                 self.runtime_log_view = LogViewMode::from_raw(&settings.ui_log_view);
                 self.settings = settings;
