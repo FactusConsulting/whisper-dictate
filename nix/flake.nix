@@ -47,7 +47,6 @@ in {
               pyperclip
             ] ++ nixpkgs.lib.optionals stdenv.isLinux [
               evdev
-              scipy
             ]))
         ];
       };

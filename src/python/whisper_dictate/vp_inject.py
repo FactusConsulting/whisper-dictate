@@ -13,7 +13,17 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import time
+
+# Seconds to wait before restoring the clipboard after a paste injection.
+# The delay is intentional: paste targets (especially on Wayland where
+# wl-copy serves content at request time) may read the clipboard lazily.
+# Restoring instantly would race against the very paste we just triggered.
+_CLIPBOARD_RESTORE_DELAY_S: float = 2.0
+
+# Set to False in tests to prevent background restore threads from spawning.
+_CLIPBOARD_RESTORE_ENABLED: bool = True
 
 _WINDOWS_PASTE_TARGETS = (
     "windows terminal",
@@ -105,6 +115,31 @@ def unix_socket_connect_ready(path: str) -> bool:
             sock.close()
     except OSError:
         return False
+
+
+def _restore_clipboard_after_delay(pyperclip_mod, injected: str, previous: str,
+                                   delay_s: float = _CLIPBOARD_RESTORE_DELAY_S) -> None:
+    """Restore ``previous`` to the clipboard after ``delay_s`` seconds.
+
+    Runs on a daemon thread spawned by ``_paste``. Restores ONLY if the
+    clipboard still holds ``injected`` — never clobber something the user
+    copied in the meantime. Clipboard quirks must never break injection, so
+    every failure is swallowed. Module-level (not a closure) so tests can
+    drive each branch directly with a stubbed pyperclip.
+    """
+    try:
+        time.sleep(delay_s)
+        try:
+            current = pyperclip_mod.paste()
+        except Exception:
+            return  # clipboard unreadable — leave it alone
+        if current == injected:
+            try:
+                pyperclip_mod.copy(previous)
+            except Exception:
+                pass
+    except Exception:
+        pass  # clipboard quirks must never break injection
 
 
 class InjectMixin:
@@ -350,7 +385,24 @@ class InjectMixin:
         try:
             import pyperclip
 
+            # Save the current clipboard so we can restore it after the paste
+            # target has had time to read our injected text.
+            previous: str | None = None
+            try:
+                previous = pyperclip.paste()
+            except Exception:
+                pass  # clipboard unavailable — nothing to restore
+
             pyperclip.copy(text)
+
+            if _CLIPBOARD_RESTORE_ENABLED and previous is not None:
+                t = threading.Thread(
+                    target=_restore_clipboard_after_delay,
+                    args=(pyperclip, text, previous),
+                    daemon=True,
+                )
+                t.start()
+
             if os.environ.get("WAYLAND_DISPLAY") and self._wayland_paste_shortcut():
                 return True
 

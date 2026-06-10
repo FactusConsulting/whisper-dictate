@@ -4,6 +4,11 @@
 #
 #   bash packaging/linux/ubuntu26.04/setup.sh
 #
+# Environment variables (optional — defaults shown):
+#   WD_LANG   spoken-language code for whisper-dictate (default: da)
+#   WD_XKB    XKB keyboard layout for ydotoold / GNOME input source
+#             (default: derived from WD_LANG — da→dk, otherwise WD_LANG)
+#
 # What this does:
 #   1. Installs whisper-dictate via Homebrew (brew must be installed first)
 #   2. Creates gcc-12 symlink needed to build the evdev Python package
@@ -14,6 +19,19 @@
 #   7. When run directly, creates GNOME launcher/autostart entries and starts the UI
 #      (when run by `whisper-dictate setup-ubuntu`, Rust owns this final step)
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Language / keyboard layout configuration
+# ---------------------------------------------------------------------------
+WD_LANG="${WD_LANG:-da}"
+# Derive XKB layout from language: da → dk, otherwise use the language code.
+if [[ -z "${WD_XKB:-}" ]]; then
+    if [[ "$WD_LANG" == "da" ]]; then
+        WD_XKB="dk"
+    else
+        WD_XKB="$WD_LANG"
+    fi
+fi
 
 STEP=0
 step() { STEP=$((STEP+1)); echo; echo "[$STEP] $*"; }
@@ -72,17 +90,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "GNOME: tastaturlayout dk"
+step "GNOME: tastaturlayout $WD_XKB"
 # ---------------------------------------------------------------------------
 # GNOME bruger "us"-layout for uinput-enheder (whisper-dictates virtuelle tastatur)
-# selv om det fysiske tastatur virker korrekt. Sæt input source til dk eksplicit
-# så compositor fortolker KEY_LEFTBRACE → å i stedet for [.
+# selv om det fysiske tastatur virker korrekt. Tilføj WD_XKB-layout til input
+# sources (bevarer eksisterende layouts) så compositor fortolker KEY_LEFTBRACE
+# → å i stedet for [.
 current_sources=$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || echo "")
-if echo "$current_sources" | grep -q "'dk'"; then
-    ok "GNOME input source er allerede dk"
+if echo "$current_sources" | grep -q "'${WD_XKB}'"; then
+    ok "GNOME input source indeholder allerede $WD_XKB"
 else
-    gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'dk')]"
-    ok "GNOME input source sat til dk (påkrævet for æøå via ydotool type)"
+    # Append the wanted layout rather than overwriting the whole list.
+    # gsettings returns either "@a(ss) []" (empty) or "[('xkb', 'a'), ...]";
+    # an empty string means the gsettings call itself failed — treat both as
+    # "no existing layouts" so we never build an invalid ", (...)]" list.
+    if [[ -z "$current_sources" ]] || echo "$current_sources" | grep -q '@a(ss) \[\]'; then
+        # Empty list — start fresh with just our layout.
+        new_sources="[('xkb', '${WD_XKB}')]"
+    else
+        # Strip the trailing "]" and append our entry.
+        new_sources="${current_sources%]}, ('xkb', '${WD_XKB}')]"
+    fi
+    gsettings set org.gnome.desktop.input-sources sources "$new_sources"
+    ok "GNOME input source $WD_XKB tilføjet (påkrævet for specialtegn via ydotool type)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -110,17 +140,17 @@ fi
 # ---------------------------------------------------------------------------
 step "ydotoold: systemd user-service"
 # ---------------------------------------------------------------------------
-# XKB_DEFAULT_LAYOUT=dk i daemonen er afgørende: det er ydotoold der
+# XKB_DEFAULT_LAYOUT i daemonen er afgørende: det er ydotoold der
 # konverterer tegn (æøå) til keycodes — klient-processens env har ingen effekt.
 mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/ydotoold.service << 'SVCEOF'
+cat > ~/.config/systemd/user/ydotoold.service << SVCEOF
 [Unit]
 Description=ydotool daemon (Wayland input injection)
 After=graphical-session.target
 
 [Service]
 ExecStart=/usr/bin/ydotoold
-Environment=XKB_DEFAULT_LAYOUT=dk
+Environment=XKB_DEFAULT_LAYOUT=${WD_XKB}
 Restart=on-failure
 RestartSec=2
 
@@ -150,7 +180,7 @@ fi
 systemctl --user restart ydotoold.service 2>/dev/null || systemctl --user start ydotoold.service 2>/dev/null || true
 sleep 1
 if systemctl --user is-active ydotoold.service &>/dev/null; then
-    ok "ydotoold kører (XKB_DEFAULT_LAYOUT=dk)"
+    ok "ydotoold kører (XKB_DEFAULT_LAYOUT=${WD_XKB})"
 elif pgrep -x ydotoold &>/dev/null; then
     ok "ydotoold kører (manuel start)"
 else
@@ -232,6 +262,6 @@ else
     echo "  Teksten indsættes i det vindue der havde fokus da du trykkede."
     echo
     echo "  Start manuelt: whisper-dictate ui"
-    echo "  Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang da"
+    echo "  Terminal-runtime: whisper-dictate run --key shift_r+ctrl_r --lang ${WD_LANG}"
 fi
 echo

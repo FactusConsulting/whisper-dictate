@@ -6,6 +6,9 @@ drive the lower-level paste + focus paths with the OS backends stubbed:
   - _paste internals (NOT stubbed): pyperclip.copy + the Ctrl+V key sequence
     via a fake pynput Controller, the Wayland ydotool branch, and the
     paste-failure path.
+  - clipboard save/restore: saves before copy, restores after delay (only if
+    clipboard unchanged), skips restore when clipboard changed in between,
+    survives pyperclip exceptions.
   - focus/target capture + restore (_capture_target_window on Windows via a
     fake ctypes, _restore_target_focus via xdotool).
   - fallbacks: paste falling back to direct typing when _paste fails, and
@@ -57,11 +60,16 @@ class _RecordingKb:
 
 
 class _FakeClip:
-    def __init__(self):
+    def __init__(self, initial: str = ""):
         self.copied = []
+        self._current = initial
 
-    def copy(self, text):
+    def copy(self, text: str) -> None:
         self.copied.append(text)
+        self._current = text
+
+    def paste(self) -> str:
+        return self._current
 
 
 class _InjectBase(unittest.TestCase):
@@ -192,6 +200,172 @@ class PasteInternalsTests(_InjectBase):
         self.assertFalse(ok)
         self.assertIn("paste fejlede", out.getvalue())
         self.assertEqual(t._kb.events, [])
+
+
+class ClipboardRestoreTests(_InjectBase):
+    """Clipboard save-and-restore logic in _paste (delay and guard tests).
+
+    These tests disable the background thread via the module flag and instead
+    invoke the internal restore closure synchronously, so they are
+    deterministic and thread-free.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Replace the fake clip with one that has an initial value.
+        self.clip = _FakeClip(initial="previous content")
+        pynput = _types.ModuleType("pynput")
+        pynput.keyboard = self.kbmod
+        # Re-patch with the updated clip (includes paste()).
+        self._modpatch.stop()
+        self._modpatch = patch.dict(sys.modules, {
+            "pynput": pynput,
+            "pynput.keyboard": self.kbmod,
+            "pyperclip": self.clip,
+        })
+        self._modpatch.start()
+
+    def _run_paste_sync(self, text: str, *, restore_enabled: bool = True):
+        """Run _paste with the background thread disabled; return (ok, restore_fn).
+
+        The restore thread is replaced with a direct call holder so tests can
+        trigger the restore synchronously without sleeping.
+        """
+        from whisper_dictate import vp_inject
+        restore_calls = []
+
+        import threading as _threading
+
+        class _CapturingThread:
+            """Capture the restore target callable instead of spawning a thread."""
+            def __init__(self, target=None, args=(), daemon=None):
+                self._target = target
+                self._args = tuple(args)
+
+            def start(self):
+                if self._target is not None:
+                    target, args = self._target, self._args
+                    restore_calls.append(lambda: target(*args))
+
+        with patch.object(vp_inject, "_CLIPBOARD_RESTORE_ENABLED", restore_enabled), \
+                patch.object(
+                    sys.modules.get("threading") or _threading,
+                    "Thread",
+                    _CapturingThread,
+                ):
+            t = self._target()
+            with _env(WAYLAND_DISPLAY=None):
+                ok = vp_inject.InjectMixin._paste(t, text)
+        return ok, restore_calls
+
+    def test_clipboard_is_saved_before_copy_and_restore_scheduled(self):
+        ok, restore_calls = self._run_paste_sync("injected")
+
+        self.assertTrue(ok)
+        # Our text was written to clipboard.
+        self.assertIn("injected", self.clip.copied)
+        # A restore callback was scheduled.
+        self.assertEqual(len(restore_calls), 1)
+
+    def test_restore_reverts_clipboard_when_unchanged(self):
+        """Restore fn writes previous content when clipboard still holds injected text."""
+        from whisper_dictate import vp_inject
+        _ok, restore_calls = self._run_paste_sync("injected text")
+
+        # At this point clipboard == "injected text" (set by copy).
+        self.assertEqual(self.clip._current, "injected text")
+
+        # Run restore synchronously (bypass the sleep).
+        restore_fn = restore_calls[0]
+        with patch.object(vp_inject.time, "sleep", lambda _s: None):
+            restore_fn()
+
+        # Clipboard restored to previous value.
+        self.assertEqual(self.clip._current, "previous content")
+
+    def test_restore_skipped_when_clipboard_changed_in_between(self):
+        """If the user copied something else, restore must NOT clobber it."""
+        from whisper_dictate import vp_inject
+        _ok, restore_calls = self._run_paste_sync("injected text")
+
+        # Simulate user copying something in between.
+        self.clip.copy("user copied this")
+
+        restore_fn = restore_calls[0]
+        with patch.object(vp_inject.time, "sleep", lambda _s: None):
+            restore_fn()
+
+        # Clipboard must stay with the user's content.
+        self.assertEqual(self.clip._current, "user copied this")
+
+    def test_restore_returns_when_clipboard_unreadable(self):
+        """paste() raising during restore leaves the clipboard untouched."""
+        from whisper_dictate import vp_inject
+
+        class _Boom:
+            def paste(self):
+                raise RuntimeError("clipboard locked")
+
+            def copy(self, _value):  # pragma: no cover - must not be reached
+                raise AssertionError("copy must not run when paste() fails")
+
+        # Direct call with delay 0 — covers the unreadable-clipboard return arm.
+        vp_inject._restore_clipboard_after_delay(_Boom(), "injected", "prev", delay_s=0)
+
+    def test_restore_swallows_copy_exception(self):
+        """copy() raising during restore is swallowed (injection already done)."""
+        from whisper_dictate import vp_inject
+
+        class _CopyBoom:
+            def paste(self):
+                return "injected"
+
+            def copy(self, _value):
+                raise RuntimeError("clipboard write blocked")
+
+        vp_inject._restore_clipboard_after_delay(
+            _CopyBoom(), "injected", "prev", delay_s=0)
+
+    def test_restore_swallows_unexpected_outer_exception(self):
+        """Even a failing sleep must never propagate out of the restore thread."""
+        from whisper_dictate import vp_inject
+
+        with patch.object(vp_inject.time, "sleep",
+                          side_effect=RuntimeError("interrupted")):
+            vp_inject._restore_clipboard_after_delay(self.clip, "injected", "prev")
+
+    def test_restore_skipped_when_previous_was_none(self):
+        """No restore thread is started when pyperclip.paste() raises (nothing saved)."""
+        boom = _types.ModuleType("pyperclip")
+
+        def _raise():
+            raise RuntimeError("no clipboard")
+
+        boom.paste = _raise
+        boom.copy = self.clip.copy
+
+        with patch.dict(sys.modules, {"pyperclip": boom}):
+            _ok, restore_calls = self._run_paste_sync("injected text")
+
+        # paste() raised — nothing to restore, so no thread started.
+        self.assertEqual(restore_calls, [])
+
+    def test_paste_survives_pyperclip_paste_exception(self):
+        """pyperclip.paste() raising must never break the injection itself."""
+        boom = _types.ModuleType("pyperclip")
+
+        def _raise():
+            raise RuntimeError("no clipboard")
+
+        boom.paste = _raise
+        boom.copy = self.clip.copy
+
+        with patch.dict(sys.modules, {"pyperclip": boom}), \
+                _env(WAYLAND_DISPLAY=None):
+            t = self._target()
+            ok = self.inject.InjectMixin._paste(t, "text")
+
+        self.assertTrue(ok)
 
 
 class FocusCaptureRestoreTests(_InjectBase):

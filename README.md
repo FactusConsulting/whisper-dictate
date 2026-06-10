@@ -71,6 +71,11 @@ whisper-dictate setup-ubuntu
 
 Log out and back in after this runs (required for the `input` group to activate).
 
+The setup script defaults to Danish (`WD_LANG=da`, XKB layout `dk`). For other
+languages pass `WD_LANG` (and optionally `WD_XKB` if the layout code differs from
+the language code) before running the setup command — for example
+`WD_LANG=de bash packaging/linux/ubuntu26.04/setup.sh`.
+
 ### Terminal start
 
 ```bash
