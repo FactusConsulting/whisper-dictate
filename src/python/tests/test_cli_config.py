@@ -362,6 +362,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_inject.py",
             "vp_keymap.py",
             "vp_keys.py",
+            "vp_keys_solo.py",
             "vp_parakeet.py",
             "vp_postprocess.py",
             "vp_preview.py",

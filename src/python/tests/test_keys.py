@@ -34,12 +34,16 @@ class _Target(vp_keys.KeyBackendMixin):
         self.lang = lang
         self.started = 0
         self.stopped = 0
+        self.cancelled = 0
 
     def _start(self):
         self.started += 1
 
     def _stop_and_transcribe(self):
         self.stopped += 1
+
+    def _cancel_and_discard(self):
+        self.cancelled += 1
 
 
 class PynputTargetTests(unittest.TestCase):
@@ -367,6 +371,221 @@ class PynputListenerTests(unittest.TestCase):
             ln.on_press("<esc>")          # streak = 1
             ln.on_press("<ctrl_r>")        # resets streak
             self.assertIsNone(ln.on_press("<esc>"))  # streak back to 1, not a stop
+
+
+from whisper_dictate import vp_keys_solo  # noqa: E402
+
+
+class SoloModifierGuardUnitTests(unittest.TestCase):
+    """Backend-agnostic state machine in vp_keys_solo."""
+
+    def test_is_bare_modifier_key(self):
+        self.assertTrue(vp_keys_solo.is_bare_modifier_key(["ctrl_l"]))
+        self.assertTrue(vp_keys_solo.is_bare_modifier_key(["shift_r"]))
+        self.assertTrue(vp_keys_solo.is_bare_modifier_key(["win"]))
+        # Non-modifier single key and multi-key chords are NOT guarded.
+        self.assertFalse(vp_keys_solo.is_bare_modifier_key(["scroll_lock"]))
+        self.assertFalse(vp_keys_solo.is_bare_modifier_key(["f9"]))
+        self.assertFalse(vp_keys_solo.is_bare_modifier_key(["shift_r", "ctrl_r"]))
+
+    def test_disabled_guard_is_noop(self):
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=False)
+        # Even with a foreign key noted, a disabled guard always allows start and
+        # never cancels.
+        g.note_press("shift")
+        self.assertTrue(g.may_start_on_target_down())
+        self.assertFalse(g.should_cancel_on_press("c"))
+
+    def test_repeat_press_is_not_new(self):
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
+        self.assertTrue(g.note_press("ctrl"))
+        self.assertFalse(g.note_press("ctrl"))  # key-repeat
+
+    def test_unknown_release_is_ignored(self):
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
+        g.note_release("never_pressed")  # must not raise / miscount
+        self.assertFalse(g.foreign_key_held())
+
+    def test_may_start_blocked_when_foreign_held(self):
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
+        g.note_press("shift")  # shift already down
+        self.assertFalse(g.may_start_on_target_down())
+
+    def test_cancel_only_on_new_foreign_key(self):
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
+        g.note_press("ctrl")
+        self.assertFalse(g.should_cancel_on_press("ctrl"))  # the PTT key itself
+        self.assertTrue(g.should_cancel_on_press("c"))      # foreign → cancel
+        self.assertFalse(g.should_cancel_on_press("c"))     # repeat → no re-cancel
+
+
+class _SoloPynput:
+    """Helper to drive a solo-guarded _PynputListener with simple str tokens."""
+
+    @staticmethod
+    def listener(target="<ctrl_l>", enabled=True):
+        guard = vp_keys_solo.SoloModifierGuard(target, enabled=enabled)
+        return vp_keys._PynputListener(
+            _Target(), {target}, "<esc>", toggle_mode=False, solo_guard=guard)
+
+
+class PynputSoloModifierTests(unittest.TestCase):
+    TARGET = "<ctrl_l>"
+
+    def _ln(self, enabled=True):
+        return _SoloPynput.listener(self.TARGET, enabled=enabled)
+
+    def test_shift_then_ctrl_does_not_start(self):
+        # (a) Reported bug: Shift held first, then the PTT modifier → no start.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press("<shift_l>")     # foreign key first
+            ln.on_press(self.TARGET)      # PTT modifier joins a chord
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
+    def test_ctrl_alone_starts(self):
+        # (b) part 1: PTT modifier pressed alone → start.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.TARGET)
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_chord_during_hold_cancels_and_discards(self):
+        # (b) part 2: Ctrl alone → start; then C down → cancel + discard.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.TARGET)
+            self.assertEqual(ln._owner.started, 1)
+            ln.on_press("c")              # foreign key → Ctrl+C, cancel
+            self.assertEqual(ln._owner.cancelled, 1)
+            self.assertEqual(ln._owner.stopped, 0)  # no normal transcribe
+            self.assertFalse(ln._recording)
+            ln.on_release("c")
+            ln.on_release(self.TARGET)    # release must NOT re-stop/transcribe
+            self.assertEqual(ln._owner.stopped, 0)
+
+    def test_solo_press_release_normal_transcribe(self):
+        # (c) Ctrl alone → release → normal stop/transcribe path.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.TARGET)
+            ln.on_release(self.TARGET)
+        self.assertEqual(ln._owner.started, 1)
+        self.assertEqual(ln._owner.stopped, 1)
+        self.assertEqual(ln._owner.cancelled, 0)
+
+    def test_key_repeat_of_ptt_key_does_not_cancel(self):
+        # (e) Auto-repeat of the held PTT modifier must not be seen as a chord.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.TARGET)
+            ln.on_press(self.TARGET)   # key-repeat
+            ln.on_press(self.TARGET)   # key-repeat
+        self.assertEqual(ln._owner.started, 1)
+        self.assertEqual(ln._owner.cancelled, 0)
+        self.assertTrue(ln._recording)
+
+    def test_release_of_unseen_key_does_not_crash(self):
+        # (f) Releasing a key never pressed (e.g. held before listener start).
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_release("<f7>")      # unknown release
+            ln.on_press(self.TARGET)    # still starts cleanly afterwards
+        self.assertEqual(ln._owner.started, 1)
+
+
+class EvdevSoloModifierTests(unittest.TestCase):
+    TARGET = 29  # KEY_LEFTCTRL-ish code (opaque to the guard)
+    SHIFT = 42
+    C = 46
+
+    def setUp(self):
+        self.ev = _fake_evdev()
+        self.t = _Target()
+
+    def _guard(self, enabled=True):
+        return vp_keys_solo.SoloModifierGuard(self.TARGET, enabled=enabled)
+
+    def _apply(self, code, value, pressed, rec, solo):
+        return self.t._evdev_apply_event(
+            _event(1, code, value), self.ev, {self.TARGET}, pressed, rec, solo=solo)
+
+    def test_shift_then_ctrl_does_not_start(self):
+        # (a) Shift down (foreign) → Ctrl down → no start.
+        pressed, solo = set(), self._guard()
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, pressed, False, solo)
+        rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, rec, solo)
+        self.assertFalse(rec)
+        self.assertEqual(self.t.started, 0)
+
+    def test_ctrl_alone_starts(self):
+        # (b) part 1.
+        pressed, solo = set(), self._guard()
+        rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, False, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_chord_during_hold_cancels_and_discards(self):
+        # (b) part 2: Ctrl alone → C down → cancel + discard.
+        pressed, solo = set(), self._guard()
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, False, solo)
+            self.assertTrue(rec)
+            rec = self._apply(self.C, self.ev.KeyEvent.key_down, pressed, rec, solo)
+            self.assertFalse(rec)
+            self.assertEqual(self.t.cancelled, 1)
+            self.assertEqual(self.t.stopped, 0)
+            # Releasing C then the modifier must not start a normal transcribe.
+            rec = self._apply(self.C, self.ev.KeyEvent.key_up, pressed, rec, solo)
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_up, pressed, rec, solo)
+            self.assertEqual(self.t.stopped, 0)
+
+    def test_solo_press_release_normal_transcribe(self):
+        # (c).
+        pressed, solo = set(), self._guard()
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, False, solo)
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_up, pressed, rec, solo)
+        self.assertFalse(rec)
+        self.assertEqual(self.t.started, 1)
+        self.assertEqual(self.t.stopped, 1)
+        self.assertEqual(self.t.cancelled, 0)
+
+    def test_non_modifier_key_with_shift_held_still_activates(self):
+        # (d) Non-modifier PTT key (solo disabled) with Shift held → unchanged.
+        pressed, solo = set(), self._guard(enabled=False)
+        # Shift held first (foreign), then the PTT key — must still start.
+        rec = self._apply(self.SHIFT, self.ev.KeyEvent.key_down, pressed, False, solo)
+        rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_key_repeat_of_ptt_key_does_not_cancel(self):
+        # (e) value-2 autorepeat of the held PTT key never cancels.
+        pressed, solo = set(), self._guard()
+        rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, False, solo)
+        rec = self._apply(self.TARGET, self.ev.KeyEvent.key_hold, pressed, rec, solo)
+        rec = self._apply(self.TARGET, self.ev.KeyEvent.key_hold, pressed, rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+        self.assertEqual(self.t.cancelled, 0)
+
+    def test_release_of_unseen_key_does_not_crash(self):
+        # (f) Release of a key never pressed.
+        pressed, solo = set(), self._guard()
+        rec = self._apply(self.C, self.ev.KeyEvent.key_up, pressed, False, solo)
+        self.assertFalse(rec)
+        rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
 
 
 if __name__ == "__main__":
