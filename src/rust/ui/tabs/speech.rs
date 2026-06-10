@@ -4,22 +4,31 @@ use super::*;
 impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
+        let language = self.settings.ui_language.clone();
         ui.heading("Speech recognition");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
-        let mut provider_id = self.current_cloud_provider().id().to_owned();
-        settings_grid("core_settings")
-            .show(ui, |ui| {
-                combo_help_labeled(
-                    ui,
-                    "Speech engine",
-                    &mut self.settings.stt_backend,
-                    STT_BACKEND_OPTIONS,
-                    "Choose the transcription engine. Cloud STT can use either Groq or OpenAI; the saved config value is still openai for compatibility with OpenAI-compatible APIs.",
-                );
-                ui.end_row();
-                section_label(ui, "Local Whisper", palette);
-                ui.label("Used only when STT backend is whisper.");
-                ui.end_row();
+
+        // Speech engine selector stays above all groups — it is the switch that
+        // decides which group is active, so it must be visible unconditionally.
+        settings_grid("speech_engine_selector").show(ui, |ui| {
+            combo_help_labeled(
+                ui,
+                "Speech engine",
+                &mut self.settings.stt_backend,
+                STT_BACKEND_OPTIONS,
+                "Choose the transcription engine. Cloud STT can use either Groq or OpenAI; the saved config value is still openai for compatibility with OpenAI-compatible APIs.",
+            );
+        });
+
+        ui.add_space(6.0);
+
+        // --- Whisper group -----------------------------------------------
+        scope_group(
+            ui,
+            palette,
+            ui_text(&language, UiTextKey::SpeechGroupWhisper),
+            "speech_whisper",
+            |ui| {
                 let gpu_total_mb = self.gpu_total_mb;
                 combo_model_vram(
                     ui,
@@ -32,12 +41,20 @@ impl WhisperDictateApp {
                     "Larger models are more accurate but slower and use more VRAM. On a CUDA GPU, \
                      models that don't fit your VRAM are greyed out; on CPU every model runs (large \
                      ones just slower). The ~MB figure is the approximate VRAM at the int8_float16 \
-                     GPU default.",
+                     GPU default. Used only when STT backend is whisper.",
                 );
-                ui.end_row();
-                section_label(ui, "Local NVIDIA Parakeet", palette);
-                ui.label("Used only when STT backend is parakeet.");
-                ui.end_row();
+            },
+        );
+
+        ui.add_space(6.0);
+
+        // --- Parakeet group ----------------------------------------------
+        scope_group(
+            ui,
+            palette,
+            ui_text(&language, UiTextKey::SpeechGroupParakeet),
+            "speech_parakeet",
+            |ui| {
                 combo_enabled(
                     ui,
                     backend == SttBackendMode::Parakeet,
@@ -46,10 +63,19 @@ impl WhisperDictateApp {
                     PARAKEET_MODELS,
                     "Local NVIDIA NeMo Parakeet model used only with STT backend = parakeet.",
                 );
-                ui.end_row();
-                section_label(ui, "Cloud STT", palette);
-                ui.label("Used only when Speech engine is Cloud STT.");
-                ui.end_row();
+            },
+        );
+
+        ui.add_space(6.0);
+
+        // --- Online / Cloud STT group ------------------------------------
+        let mut provider_id = self.current_cloud_provider().id().to_owned();
+        scope_group(
+            ui,
+            palette,
+            ui_text(&language, UiTextKey::SpeechGroupOnline),
+            "speech_online",
+            |ui| {
                 combo_enabled_labeled(
                     ui,
                     backend == SttBackendMode::Cloud,
@@ -58,13 +84,8 @@ impl WhisperDictateApp {
                     CLOUD_PROVIDER_OPTIONS,
                     "Cloud transcription provider. Groq and OpenAI both use OpenAI-compatible API shapes, but each has its own URL, API key and model list.",
                 );
-                if let Some(provider) = CloudProvider::from_raw(&provider_id) {
-                    if provider != self.current_cloud_provider() {
-                        self.set_cloud_provider(provider);
-                    }
-                }
-                ui.end_row();
-                let provider = self.current_cloud_provider();
+                let provider = CloudProvider::from_raw(&provider_id)
+                    .unwrap_or_else(|| self.current_cloud_provider());
                 if provider == CloudProvider::Custom {
                     text_enabled(
                         ui,
@@ -108,42 +129,60 @@ impl WhisperDictateApp {
                 if backend == SttBackendMode::Cloud {
                     self.cloud_stt_key_section(ui, provider);
                 }
-                section_label(ui, "Local runtime", palette);
-                ui.label("Used only by local Whisper and Parakeet.");
-                ui.end_row();
+            },
+        );
+        // Commit the provider change outside the closure (borrow-checker).
+        if let Some(provider) = CloudProvider::from_raw(&provider_id) {
+            if provider != self.current_cloud_provider() {
+                self.set_cloud_provider(provider);
+            }
+        }
+
+        ui.add_space(6.0);
+
+        // --- General group -----------------------------------------------
+        // Device and Compute type are passed to BOTH WhisperModel and
+        // ParakeetModel (see vp_transcribe.py load_stt_model), so they span
+        // both local backends and belong here rather than in either
+        // engine-specific group.
+        scope_group(
+            ui,
+            palette,
+            ui_text(&language, UiTextKey::SpeechGroupGeneral),
+            "speech_general",
+            |ui| {
                 combo_enabled(
                     ui,
                     backend != SttBackendMode::Cloud,
                     "Device",
                     &mut self.settings.device,
                     &["auto", "cuda", "cpu"],
-                    "Local inference device. auto chooses CUDA when available, otherwise CPU.",
+                    "Local inference device. auto chooses CUDA when available, otherwise CPU. Used by Whisper and Parakeet.",
                 );
                 combo_enabled_labeled(
                     ui,
                     backend != SttBackendMode::Cloud,
                     "Compute type",
                     &mut self.settings.compute_type,
-                    // Ordered most → least accurate. The numeric precision the
-                    // local Whisper model runs at: higher precision = more
-                    // accurate but slower and more memory; lower = faster and
-                    // lighter with a small accuracy cost.
                     &[
                         ("", "Auto — best precision for your device (recommended)"),
                         ("float32", "float32 — most accurate, slowest, most memory"),
                         ("bfloat16", "bfloat16 — near-float32 accuracy (newer GPUs)"),
                         ("float16", "float16 — high accuracy, ~half the VRAM (GPU)"),
-                        ("int8_float16", "int8_float16 — fast, low VRAM (good GPU default)"),
-                        ("int8", "int8 — fastest, least memory, slight accuracy loss (CPU)"),
+                        (
+                            "int8_float16",
+                            "int8_float16 — fast, low VRAM (good GPU default)",
+                        ),
+                        (
+                            "int8",
+                            "int8 — fastest, least memory, slight accuracy loss (CPU)",
+                        ),
                     ],
                     "Numeric precision the local Whisper model runs at. Higher precision is more \
                      accurate but slower and uses more VRAM/RAM; lower is faster and lighter for a \
                      small accuracy cost. Auto picks a sensible default per device (GPU vs CPU). \
                      Parakeet ignores this — it always uses its own precision.",
                 );
-                section_label(ui, "Dictation controls", palette);
-                ui.label("Applies to local and cloud speech engines.");
-                ui.end_row();
                 self.microphone_settings(ui);
                 combo_help_labeled(
                     ui,
@@ -211,7 +250,8 @@ impl WhisperDictateApp {
                     &mut self.settings.quit_window_ms,
                     "Maximum time window for consecutive quit-key presses.",
                 );
-            });
+            },
+        );
     }
 
     /// The Microphone picker: a combo over "(System default)" + the refreshed
