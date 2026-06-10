@@ -104,25 +104,30 @@ impl WhisperDictateApp {
             // The tab list occupies the space remaining above the bottom block.
             // Wrapping it in a ScrollArea means the tabs scroll instead of
             // being painted over the bottom block when the window is short.
+            // The ScrollArea content INHERITS the surrounding bottom_up layout,
+            // which rendered the tabs in reverse (System on top) — force
+            // top_down so Dictation stays first, as in Tab::ALL order.
             egui::ScrollArea::vertical()
                 .id_salt("sidebar_tab_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for tab in Tab::ALL {
-                        let selected = self.selected_tab == tab;
-                        if nav_button(
-                            ui,
-                            selected,
-                            tab.icon(),
-                            tab.label(&self.settings.ui_language),
-                            palette,
-                        )
-                        .clicked()
-                        {
-                            self.selected_tab = tab;
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        for tab in Tab::ALL {
+                            let selected = self.selected_tab == tab;
+                            if nav_button(
+                                ui,
+                                selected,
+                                tab.icon(),
+                                tab.label(&self.settings.ui_language),
+                                palette,
+                            )
+                            .clicked()
+                            {
+                                self.selected_tab = tab;
+                            }
+                            ui.add_space(5.0);
                         }
-                        ui.add_space(5.0);
-                    }
+                    });
                 });
         });
     }
@@ -204,6 +209,10 @@ impl WhisperDictateApp {
                 egui::vec2(left_width, ui.available_height()),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
+                    // egui does NOT clip child content to the allocated rect —
+                    // without an explicit clip the cards/indicator paint right
+                    // under the Start/Stop/compact controls at narrow widths.
+                    ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                     let display_state = self.display_runtime_state();
                     status_card(
                         ui,
@@ -230,7 +239,15 @@ impl WhisperDictateApp {
                         palette.accent_blue,
                         palette,
                     );
-                    self.post_indicator(ui, palette);
+                    // The indicator is the lowest-priority element: skip it
+                    // entirely when it cannot fit, instead of showing a
+                    // half-clipped pill. The threshold scales with the UI
+                    // text scale, like the pill itself.
+                    if ui.available_width()
+                        >= post_indicator_min_width(&self.settings.ui_text_scale)
+                    {
+                        self.post_indicator(ui, palette);
+                    }
                     if let Some(label) = self.background_task_label {
                         status_card(
                             ui,

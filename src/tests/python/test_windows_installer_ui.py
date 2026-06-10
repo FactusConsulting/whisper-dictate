@@ -397,6 +397,14 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("self.run_install();", sidebar)
         self.assertNotIn("self.run_doctor();", sidebar)
         self.assertNotIn("self.reload_settings();", sidebar)
+        # The tab ScrollArea sits inside the bottom_up block, whose layout the
+        # ScrollArea content INHERITS — without an explicit top_down wrapper the
+        # tabs render reversed (System on top; 1.8.10 regression).
+        self.assertIn('.id_salt("sidebar_tab_scroll")', sidebar)
+        self.assertIn(
+            "ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {",
+            sidebar,
+        )
         self.assertNotIn("UiTextKey::InstallRepair", sidebar)
         self.assertNotIn("UiTextKey::Doctor", sidebar)
         self.assertNotIn("UiTextKey::ReloadConfig", sidebar)
