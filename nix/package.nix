@@ -32,7 +32,6 @@ let
     pyperclip
   ] ++ lib.optionals stdenv.isLinux [
     evdev
-    scipy
   ]);
 
   # External CLI tools the Python runtime shells out to. The X11 vs Wayland
