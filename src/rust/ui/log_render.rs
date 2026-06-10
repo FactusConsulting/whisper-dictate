@@ -335,7 +335,12 @@ fn is_diagnostic_detail_line(line: &str) -> bool {
 
 fn structured_utterance_card(line: &str) -> Option<RuntimeLogCard> {
     let payload = parse_utterance_payload(line)?;
-    let title = extract_utterance_full_text(line).unwrap_or_else(|| "Utterance".to_owned());
+    // Full text from the already-parsed payload (don't re-parse the JSON):
+    // prefer the untruncated `text` over the shortened `text_preview`.
+    let title = worker_event_string(&payload, "text")
+        .or_else(|| worker_event_string(&payload, "text_preview"))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Utterance".to_owned());
     let mut details = Vec::new();
 
     let recording = format_metric_seconds(&payload, "recording_s", "recording");

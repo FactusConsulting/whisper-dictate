@@ -139,13 +139,20 @@ fn minimal_cards_and_copy_use_full_utterance_text_over_truncated_inject() {
     // The [inject] log line truncates at ~57 chars at the source; the
     // [utterance] event carries the full text. Cards and Copy must show the
     // full sentence (and not duplicate the truncated inject preview).
-    let full = "Okay, det vil sige, at den burde tage og skrive ud, hvad det er, \
-                jeg dikterer, imens jeg dikterer det, hele vejen til punktum.";
+    // Includes a quoted word so the fixture exercises real-world JSON escaping
+    // (built via serde_json so the log line is always valid JSON).
+    let full = "Okay, det vil sige, at den burde tage og skrive \"helt\" ud, hvad \
+                det er, jeg dikterer, imens jeg dikterer det, hele vejen til punktum.";
+    let payload = serde_json::json!({
+        "event": "utterance",
+        "text": full,
+        "text_preview": "Okay, det vil sige, at den burde tage og skrive...",
+        "recording_s": 12.0,
+    });
     let log = [
-        r#"[inject] -> "Okay, det vil sige, at den burde tage og skrive ud, hvad..."  (target: Word)"#.to_owned(),
-        format!(
-            r#"[utterance] {{"event":"utterance","text":"{full}","text_preview":"Okay, det vil sige, at den burde tage og skrive ud, hvad...","recording_s":12.0}}"#
-        ),
+        r#"[inject] -> "Okay, det vil sige, at den burde tage og skrive..."  (target: Word)"#
+            .to_owned(),
+        format!("[utterance] {payload}"),
     ]
     .join("\n");
 
