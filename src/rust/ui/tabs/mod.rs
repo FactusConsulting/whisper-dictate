@@ -16,11 +16,12 @@ mod speech;
 // Log-card render widgets used by the runtime tab; re-exported into the `tabs`
 // root so `runtime` (and any future tab) can reach them via `super::*`.
 pub(in crate::ui) use log_card::{empty_log_state, metric_box, runtime_log_card};
-// The live mic gauge, runtime-state colour, and the mic-label/audio-summary
-// helpers are shared between the full runtime tab / top status bar and the
-// compact strip (`compact.rs`).
+// The live mic gauge, runtime-state colour, pipeline-progress accent, and the
+// mic-label/audio-summary helpers are shared between the full runtime tab /
+// top status bar and the compact strip (`compact.rs`).
 pub(in crate::ui) use runtime::{
     audio_device_label, full_audio_device_label, level_gauge, live_audio_level_summary,
+    pipeline_progress_accent_color,
 };
 pub(in crate::ui) use shell::runtime_state_color;
 // The hotkey-chord formatters are shared with the sidebar's key display

@@ -133,9 +133,15 @@ impl WhisperDictateApp {
             return;
         };
         let (label, accent) = match stage {
-            "recording" => ("Recording…", palette.accent_blue),
-            "transcribing" => ("Transcribing…", palette.warn_text),
-            "post-processing" => ("Post-processing…", palette.accent_blue),
+            "recording" => ("Recording…", pipeline_progress_accent_color(stage, palette)),
+            "transcribing" => (
+                "Transcribing…",
+                pipeline_progress_accent_color(stage, palette),
+            ),
+            "post-processing" => (
+                "Post-processing…",
+                pipeline_progress_accent_color(stage, palette),
+            ),
             _ => return,
         };
         egui::Frame::default()
@@ -600,5 +606,91 @@ fn capitalize_ascii(token: &str) -> String {
     match chars.next() {
         Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
         None => token.to_owned(),
+    }
+}
+
+/// Accent colour for the live pipeline-progress card.
+///
+/// The card is red while the microphone is actively capturing audio
+/// ("recording") so the user gets immediate visual feedback that their key
+/// press is live. Once the audio has been handed to the model the card turns
+/// the calmer warn/blue colours used for the processing stages.
+pub(in crate::ui) fn pipeline_progress_accent_color(
+    stage: &str,
+    palette: UiPalette,
+) -> egui::Color32 {
+    match stage {
+        "recording" => palette.error_text,
+        "transcribing" => palette.warn_text,
+        _ => palette.accent_blue,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::theme::ui_palette;
+
+    #[test]
+    fn pipeline_progress_accent_recording_is_red() {
+        let dark = ui_palette("dark");
+        let light = ui_palette("light");
+        // "recording" must use the error/red colour in both themes.
+        assert_eq!(
+            pipeline_progress_accent_color("recording", dark),
+            dark.error_text
+        );
+        assert_eq!(
+            pipeline_progress_accent_color("recording", light),
+            light.error_text
+        );
+        // Red must differ from the ok/green colour so the visual distinction is real.
+        assert_ne!(dark.error_text, dark.ok_text);
+        assert_ne!(light.error_text, light.ok_text);
+    }
+
+    #[test]
+    fn pipeline_progress_accent_transcribing_is_warn() {
+        let palette = ui_palette("dark");
+        assert_eq!(
+            pipeline_progress_accent_color("transcribing", palette),
+            palette.warn_text
+        );
+    }
+
+    #[test]
+    fn pipeline_progress_accent_post_processing_is_blue() {
+        let palette = ui_palette("dark");
+        assert_eq!(
+            pipeline_progress_accent_color("post-processing", palette),
+            palette.accent_blue
+        );
+    }
+
+    #[test]
+    fn pipeline_progress_accent_unknown_stage_falls_back_to_blue() {
+        let palette = ui_palette("dark");
+        assert_eq!(
+            pipeline_progress_accent_color("unknown-stage", palette),
+            palette.accent_blue
+        );
+    }
+
+    #[test]
+    fn pipeline_progress_accent_recording_differs_from_finished_card_color() {
+        // The finished card (FinalText kind) uses ok_text/green; the in-progress
+        // recording card must use a visually distinct red.
+        let dark = ui_palette("dark");
+        let light = ui_palette("light");
+        assert_ne!(
+            pipeline_progress_accent_color("recording", dark),
+            dark.ok_text,
+            "dark: recording accent must not be the same green used for finished cards"
+        );
+        assert_ne!(
+            pipeline_progress_accent_color("recording", light),
+            light.ok_text,
+            "light: recording accent must not be the same green used for finished cards"
+        );
     }
 }
