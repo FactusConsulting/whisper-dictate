@@ -930,12 +930,14 @@ fn default_venv_dir(home: &Path, platform: Platform) -> PathBuf {
 /// 2. `<home>\voice-pi-venv`        — legacy pre-rebrand name; kept as-is.
 /// 3. `<home>\whisper-dictate-venv` — fresh-install default (neither exists).
 fn windows_venv_dir(home: &Path) -> PathBuf {
+    // is_dir(), not exists(): a stray FILE at either path must not be selected
+    // as the venv (python -m venv would then fail on the existing file).
     let new_name = home.join("whisper-dictate-venv");
-    if new_name.exists() {
+    if new_name.is_dir() {
         return new_name;
     }
     let legacy = home.join("voice-pi-venv");
-    if legacy.exists() {
+    if legacy.is_dir() {
         return legacy;
     }
     new_name

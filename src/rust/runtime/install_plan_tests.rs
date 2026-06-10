@@ -119,14 +119,19 @@ fn venv_paths_match_platform_conventions() {
         PathBuf::from("/home/person/.venv-whisper-dictate/bin/python")
     );
 
-    // Fresh install: neither directory exists → canonical new name.
-    let home = PathBuf::from("C:/Users/Person");
+    // Fresh install: Windows resolution consults the real filesystem, so use a
+    // guaranteed-empty tempdir as home (a hard-coded C:\Users\... could flake
+    // on a machine where such a venv directory actually exists).
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().to_path_buf();
     assert_eq!(
         venv_python_path(
             &default_venv_dir(&home, Platform::Windows),
             Platform::Windows
         ),
-        PathBuf::from("C:/Users/Person/whisper-dictate-venv/Scripts/python.exe")
+        home.join("whisper-dictate-venv")
+            .join("Scripts")
+            .join("python.exe")
     );
 }
 
