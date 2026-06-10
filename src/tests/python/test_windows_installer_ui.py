@@ -410,9 +410,13 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         top_bar = shell.split("fn top_status_bar", 1)[1].split("fn global_controls", 1)[0]
         self.assertIn("self.post_indicator(ui, palette);", top_bar)
         # On/off decision + label + hover are pure, testable functions mirroring
-        # the worker gate (processor != none/empty AND mode != raw).
+        # the worker gate (processor != none/empty AND mode != raw, where the
+        # worker normalizes an EMPTY mode to raw — so unset mode reads as off).
         self.assertIn("fn post_processing_enabled(processor: &str, mode: &str) -> bool", shell)
-        self.assertIn('processor != "none" && mode != "raw"', shell)
+        self.assertIn(
+            '!processor.is_empty() && processor != "none" && !mode.is_empty() && mode != "raw"',
+            shell,
+        )
         self.assertIn("fn post_indicator_label(", shell)
         self.assertIn("fn post_indicator_hover(", shell)
         self.assertIn("UiTextKey::PostOn", shell)

@@ -402,12 +402,14 @@ pub(in crate::ui) fn top_status_left_width(total_width: f32, controls_width: f32
 
 /// Whether post-processing is actually active, given the configured processor
 /// and mode. Mirrors the worker's gate (`vp_dictate`/`vp_postprocess`): the pass
-/// is skipped when the processor is `none`/empty OR the mode is `raw`. Pure so
-/// the top-bar indicator's on/off decision is unit-testable.
+/// is skipped when the processor is `none`/empty OR the mode is `raw` — and the
+/// worker normalizes an EMPTY mode to `raw`, so an unset mode reads as off here
+/// too. Case-insensitive like the worker's normalization. Pure so the top-bar
+/// indicator's on/off decision is unit-testable.
 pub(in crate::ui) fn post_processing_enabled(processor: &str, mode: &str) -> bool {
-    let processor = processor.trim();
-    let mode = mode.trim();
-    !processor.is_empty() && processor != "none" && mode != "raw"
+    let processor = processor.trim().to_ascii_lowercase();
+    let mode = mode.trim().to_ascii_lowercase();
+    !processor.is_empty() && processor != "none" && !mode.is_empty() && mode != "raw"
 }
 
 /// The compact label for the top-bar post indicator: "Post on" when active,

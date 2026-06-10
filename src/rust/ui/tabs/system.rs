@@ -26,8 +26,10 @@ impl WhisperDictateApp {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            // Reload config + Install/Repair share the "another background task is
-            // running" guard, matching their old sidebar enabled-state logic.
+            // Reload config + Install/Repair share the "another background task
+            // is running" guard. For Install that matches its old sidebar logic;
+            // Reload was unguarded in the sidebar and deliberately GAINS the
+            // guard here (reloading mid-install/doctor would race the task).
             let idle = self.background_task.is_none();
             if ui
                 .add_enabled(
@@ -203,10 +205,15 @@ impl WhisperDictateApp {
     /// the user lands in a place where they can inspect/back up the JSON. Reuses
     /// the console-window-guarded `open_existing_path` helper.
     fn open_config_folder(&mut self) {
-        let folder = std::path::Path::new(&self.config_path)
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from(&self.config_path));
+        // A relative VOICEPI_CONFIG like "config.json" has an EMPTY parent —
+        // fall back to the current directory instead of failing exists().
+        let folder = match std::path::Path::new(&self.config_path).parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => std::path::PathBuf::from("."),
+        };
+        // First run: the config directory may not exist until the first save —
+        // create it so the button works from a fresh install too.
+        let _ = std::fs::create_dir_all(&folder);
         match config::open_existing_path(&folder) {
             Ok(path) => self.settings_status = format!("Opened config folder: {}", path.display()),
             Err(err) => self.settings_status = format!("Open config folder failed: {err}"),
