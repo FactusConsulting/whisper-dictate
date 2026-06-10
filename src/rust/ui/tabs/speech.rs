@@ -84,8 +84,17 @@ impl WhisperDictateApp {
                     CLOUD_PROVIDER_OPTIONS,
                     "Cloud transcription provider. Groq and OpenAI both use OpenAI-compatible API shapes, but each has its own URL, API key and model list.",
                 );
-                let provider = CloudProvider::from_raw(&provider_id)
-                    .unwrap_or_else(|| self.current_cloud_provider());
+                // Commit the provider change immediately (not after the closure)
+                // so the dependent model/URL/key widgets AND the Save/Test action
+                // buttons below all operate on the just-selected provider in the
+                // same frame — `provider_id` is a local String, so this borrows
+                // self only transiently between widget calls.
+                if let Some(selected) = CloudProvider::from_raw(&provider_id) {
+                    if selected != self.current_cloud_provider() {
+                        self.set_cloud_provider(selected);
+                    }
+                }
+                let provider = self.current_cloud_provider();
                 if provider == CloudProvider::Custom {
                     text_enabled(
                         ui,
@@ -131,12 +140,6 @@ impl WhisperDictateApp {
                 }
             },
         );
-        // Commit the provider change outside the closure (borrow-checker).
-        if let Some(provider) = CloudProvider::from_raw(&provider_id) {
-            if provider != self.current_cloud_provider() {
-                self.set_cloud_provider(provider);
-            }
-        }
 
         ui.add_space(6.0);
 
