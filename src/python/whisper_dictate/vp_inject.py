@@ -13,7 +13,17 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import time
+
+# Seconds to wait before restoring the clipboard after a paste injection.
+# The delay is intentional: paste targets (especially on Wayland where
+# wl-copy serves content at request time) may read the clipboard lazily.
+# Restoring instantly would race against the very paste we just triggered.
+_CLIPBOARD_RESTORE_DELAY_S: float = 2.0
+
+# Set to False in tests to prevent background restore threads from spawning.
+_CLIPBOARD_RESTORE_ENABLED: bool = True
 
 _WINDOWS_PASTE_TARGETS = (
     "windows terminal",
@@ -350,7 +360,38 @@ class InjectMixin:
         try:
             import pyperclip
 
+            # Save the current clipboard so we can restore it after the paste
+            # target has had time to read our injected text.
+            previous: str | None = None
+            try:
+                previous = pyperclip.paste()
+            except Exception:
+                pass  # clipboard unavailable — nothing to restore
+
             pyperclip.copy(text)
+
+            def _restore_clipboard() -> None:
+                """Restore clipboard on a daemon thread after a short delay."""
+                try:
+                    time.sleep(_CLIPBOARD_RESTORE_DELAY_S)
+                    # Only restore if the clipboard still contains our text —
+                    # don't clobber something the user copied in between.
+                    try:
+                        current = pyperclip.paste()
+                    except Exception:
+                        return
+                    if current == text:
+                        try:
+                            pyperclip.copy(previous)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass  # clipboard quirks must never break injection
+
+            if _CLIPBOARD_RESTORE_ENABLED and previous is not None:
+                t = threading.Thread(target=_restore_clipboard, daemon=True)
+                t.start()
+
             if os.environ.get("WAYLAND_DISPLAY") and self._wayland_paste_shortcut():
                 return True
 
