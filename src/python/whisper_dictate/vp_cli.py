@@ -189,8 +189,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="force direct keyboard typing; env VOICEPI_INJECT_MODE")
     g.add_argument("--paste", action="store_const", dest="mode",
                    const="paste",
-                   help="force clipboard + Ctrl+V on X11/Windows "
-                        "(on Wayland direct evdev keycodes are always used)")
+                   help="force clipboard paste: pyperclip copies the text, "
+                        "then a ydotool key shortcut (Ctrl+V or Ctrl+Shift+V) "
+                        "triggers the paste on Wayland; on X11/Windows pynput "
+                        "sends the Ctrl+V chord")
     g.add_argument("--no-type", action="store_const", dest="mode",
                    const="print", help="just print, don't inject")
     ap.add_argument("--json", action="store_true", default=_truthy_env("VOICEPI_JSON"),
