@@ -62,7 +62,7 @@ impl WhisperDictateApp {
         ui.label(
             egui::RichText::new(
                 "List open windows and insert a profile entry for the one you want to target. \
-                 Windows only — window enumeration is not available on Wayland or macOS.",
+                 Windows only — window enumeration is not available on Linux or macOS.",
             )
             .color(palette.text_muted)
             .text_style(egui::TextStyle::Small),

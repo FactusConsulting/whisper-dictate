@@ -36,7 +36,8 @@ def windows_process_name(ctypes, wintypes, pid: int) -> str | None:
     """Return the basename of the executable for Windows process *pid*.
 
     Pure-ctypes, unit-testable with a stubbed ctypes/wintypes pair.
-    Returns ``None`` when the handle cannot be opened.
+    Returns ``None`` when the handle cannot be opened, and ``str(pid)``
+    when the handle opens but the image name cannot be queried.
     """
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     kernel32 = ctypes.windll.kernel32
@@ -69,9 +70,10 @@ def list_visible_windows() -> list[dict]:
 
     Returns a list of ``{"title": str, "process": str}`` dicts.  The
     ``title`` field is always non-empty; ``process`` is the executable
-    basename when it can be resolved and ``""`` when the process handle
-    cannot be opened.  Windows with an empty title or that belong to our
-    own process are silently skipped.
+    basename when it can be resolved, the PID as a string when the image
+    name cannot be queried, and ``""`` when the process handle cannot be
+    opened.  Windows with an empty title or that belong to our own
+    process are silently skipped.
 
     Raises ``RuntimeError`` on non-Windows platforms.
     """
