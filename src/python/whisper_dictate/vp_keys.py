@@ -18,23 +18,51 @@ import threading
 import time
 
 from whisper_dictate.vp_cli import QUIT_COUNT, QUIT_KEY, QUIT_WINDOW_MS
+from whisper_dictate.vp_config import get_value
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _toggle_mode_enabled() -> bool:
+    """Whether toggle dictation mode is enabled (VOICEPI_TOGGLE / toggle_mode).
+
+    Read once when a listener is constructed — the listeners capture the chosen
+    behaviour at startup, so this is a restart-only setting (see RESTART_KEYS).
+    """
+    return _truthy(get_value("VOICEPI_TOGGLE"))
 
 
 class _PynputListener:
-    """Push-to-talk state machine for the pynput backend.
+    """Push-to-talk / toggle state machine for the pynput backend.
 
     Holds the mutable press / recording / quit-streak state so the listener
     callbacks stay tiny (the previous nested closures pushed _run_pynput's
     cognitive complexity well past the limit). ``owner`` is the Dictate
     instance providing ``_start`` / ``_stop_and_transcribe``.
+
+    ``toggle_mode`` selects the behaviour, captured once at construction:
+      * hold-to-talk (default): start on chord press, stop on chord release.
+      * toggle: the chord PRESS starts recording; pressing it again stops and
+        transcribes. The release event is ignored for recording purposes (it
+        still updates ``_pressed`` so chord tracking stays correct).
+
+    Both modes act on the *rising edge* only: a held key repeats press events
+    on most platforms, so we latch when the chord is complete and re-arm only
+    once it is no longer fully held — repeats never re-trigger.
     """
 
-    def __init__(self, owner, targets: set, quit_key) -> None:
+    def __init__(self, owner, targets: set, quit_key, toggle_mode: bool = False) -> None:
         self._owner = owner
         self._targets = targets
         self._quit_key = quit_key
+        self._toggle_mode = toggle_mode
         self._pressed: set = set()
         self._recording = False
+        # True while the chord is fully held; reset when it breaks. Guards
+        # against key-repeat re-firing the toggle while the key stays down.
+        self._chord_latched = False
         self._quit_count = 0
         self._quit_last = 0.0
 
@@ -61,19 +89,46 @@ class _PynputListener:
         if k == self._quit_key:
             return None  # quit key never joins the PTT-key set
         self._pressed.add(k)
-        if self._targets.issubset(self._pressed) and not self._recording:
-            self._recording = True
-            self._owner._start()
+        chord_complete = self._targets.issubset(self._pressed)
+        # Rising edge only: a held key repeats press events, so act exactly once
+        # when the chord first becomes complete and re-arm only after it breaks.
+        rising_edge = chord_complete and not self._chord_latched
+        if chord_complete:
+            self._chord_latched = True
+        if rising_edge:
+            if self._toggle_mode:
+                self._toggle_recording()
+            elif not self._recording:
+                self._recording = True
+                self._owner._start()
         return None
 
     def on_release(self, k):
         if k in self._targets:
             self._pressed.discard(k)
-            if self._recording and not self._targets.issubset(self._pressed):
-                self._recording = False
-                threading.Thread(target=self._owner._stop_and_transcribe,
-                                 daemon=True).start()
+            if not self._targets.issubset(self._pressed):
+                # Chord broken: re-arm the rising-edge latch for the next press.
+                self._chord_latched = False
+                # Hold-to-talk stops on release; toggle mode ignores the release
+                # entirely (it only acts on the press) but still tracks _pressed
+                # above so the chord state stays correct.
+                if not self._toggle_mode and self._recording:
+                    self._recording = False
+                    threading.Thread(target=self._owner._stop_and_transcribe,
+                                     daemon=True).start()
         return None
+
+    def _toggle_recording(self) -> None:
+        # Toggle-mode press: start if idle, otherwise stop and transcribe. The
+        # stop runs on a thread exactly like the hold-mode release handler so the
+        # transcription pass never blocks the keyboard listener.
+        if self._recording:
+            self._recording = False
+            threading.Thread(target=self._owner._stop_and_transcribe,
+                             daemon=True).start()
+        else:
+            self._recording = True
+            self._owner._start()
 
 
 class KeyBackendMixin:
@@ -122,24 +177,55 @@ class KeyBackendMixin:
                 pass
 
     def _evdev_apply_event(self, ev, evdev, target_codes: set[int],
-                           pressed: set[int], recording: bool) -> bool:
-        # PTT state machine for a single evdev event. Mutates ``pressed`` and
-        # returns the (possibly updated) recording flag. Pure given a fake evdev,
-        # which is what the unit tests exercise.
+                           pressed: set[int], recording: bool, *,
+                           toggle_mode: bool = False,
+                           latched: list[bool] | None = None) -> bool:
+        # PTT / toggle state machine for a single evdev event. Mutates ``pressed``
+        # (and the ``latched`` rising-edge guard, when provided) and returns the
+        # (possibly updated) recording flag. Pure given a fake evdev, which is
+        # what the unit tests exercise.
+        #
+        # evdev key values: 1 = down, 2 = autorepeat (held), 0 = up. We act only
+        # on the down (value 1) transition and ignore repeats (value 2 is neither
+        # key_down nor key_up here), so a held key never re-triggers.
         if ev.type != evdev.ecodes.EV_KEY or ev.code not in target_codes:
             return recording
         if ev.value == evdev.KeyEvent.key_down:
             pressed.add(ev.code)
-            if target_codes.issubset(pressed) and not recording:
+            chord_complete = target_codes.issubset(pressed)
+            # Rising edge: chord just became complete. ``latched`` carries the
+            # arm/disarm state across calls (toggle mode); without it we fall
+            # back to the legacy ``not recording`` guard (hold-mode callers).
+            already_latched = latched is not None and latched[0]
+            if chord_complete and latched is not None:
+                latched[0] = True
+            rising_edge = chord_complete and not already_latched
+            if toggle_mode:
+                if rising_edge:
+                    return self._evdev_toggle(recording)
+            elif chord_complete and not recording:
                 self._start()
                 return True
         elif ev.value == evdev.KeyEvent.key_up:
             pressed.discard(ev.code)
-            if recording and not target_codes.issubset(pressed):
-                threading.Thread(target=self._stop_and_transcribe,
-                                 daemon=True).start()
-                return False
+            if not target_codes.issubset(pressed):
+                if latched is not None:
+                    latched[0] = False  # re-arm the rising-edge guard
+                if not toggle_mode and recording:
+                    threading.Thread(target=self._stop_and_transcribe,
+                                     daemon=True).start()
+                    return False
         return recording
+
+    def _evdev_toggle(self, recording: bool) -> bool:
+        # Toggle-mode chord press: start if idle, else stop+transcribe on a
+        # thread (mirrors the hold-mode release dispatch). Returns the new flag.
+        if recording:
+            threading.Thread(target=self._stop_and_transcribe,
+                             daemon=True).start()
+            return False
+        self._start()
+        return True
 
     def _run_evdev(self, key_names: list[str]):
         # Global hotkey detection via evdev — reads /dev/input/event* directly.
@@ -155,9 +241,13 @@ class KeyBackendMixin:
 
         pressed: set[int] = set()
         recording = False
+        toggle_mode = _toggle_mode_enabled()
+        latched = [False]  # rising-edge guard shared across events
 
-        print(f"whisper-dictate [lang={self.lang or 'auto'}] (evdev). Hold "
-              f"[{self.key}] to talk. Ctrl+C to quit.", flush=True)
+        verb = "Press" if toggle_mode else "Hold"
+        suffix = (" Press again to stop." if toggle_mode else " to talk.")
+        print(f"whisper-dictate [lang={self.lang or 'auto'}] (evdev). {verb} "
+              f"[{self.key}]{suffix} Ctrl+C to quit.", flush=True)
 
         try:
             while True:
@@ -169,7 +259,8 @@ class KeyBackendMixin:
                         continue
                     for ev in events:
                         recording = self._evdev_apply_event(
-                            ev, evdev, target_codes, pressed, recording)
+                            ev, evdev, target_codes, pressed, recording,
+                            toggle_mode=toggle_mode, latched=latched)
         except KeyboardInterrupt:
             pass
         finally:
@@ -206,12 +297,15 @@ class KeyBackendMixin:
 
         targets = self._pynput_targets(keyboard, key_names)
         quit_key = self._pynput_quit_key(keyboard)
+        toggle_mode = _toggle_mode_enabled()
 
         quit_hint = f"{QUIT_COUNT}× {QUIT_KEY} or Ctrl+C" if QUIT_COUNT > 0 else "Ctrl+C"
-        print(f"whisper-dictate [lang={self.lang or 'auto'}] (pynput). Hold "
-              f"[{self.key}] to talk. {quit_hint} to quit.", flush=True)
+        verb = "Press" if toggle_mode else "Hold"
+        suffix = (" Press again to stop." if toggle_mode else " to talk.")
+        print(f"whisper-dictate [lang={self.lang or 'auto'}] (pynput). {verb} "
+              f"[{self.key}]{suffix} {quit_hint} to quit.", flush=True)
 
-        state = _PynputListener(self, targets, quit_key)
+        state = _PynputListener(self, targets, quit_key, toggle_mode=toggle_mode)
         ln = keyboard.Listener(on_press=state.on_press, on_release=state.on_release)
         ln.start()
         try:

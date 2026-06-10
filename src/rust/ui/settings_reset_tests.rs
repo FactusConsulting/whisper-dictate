@@ -52,6 +52,7 @@ fn changed_settings() -> AppSettings {
         local_only: true,
         debug: true,
         stt_debug: true,
+        toggle_mode: true,
         ui_text_scale: "1.35".to_owned(),
         ui_log_view: "debug".to_owned(),
         post_processor: "groq".to_owned(),
@@ -91,6 +92,7 @@ fn speech_page_reset_restores_only_speech_settings() {
     assert_eq!(settings.quit_key, defaults.quit_key);
     assert_eq!(settings.quit_count, defaults.quit_count);
     assert_eq!(settings.quit_window_ms, defaults.quit_window_ms);
+    assert_eq!(settings.toggle_mode, defaults.toggle_mode);
     assert_eq!(settings.vad_threshold, "0.42");
     assert_eq!(settings.post_processor, "groq");
 }

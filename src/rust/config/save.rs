@@ -80,6 +80,7 @@ impl AppSettings {
         set_string(object, "post_redact_terms", &self.post_redact_terms);
         set_bool(object, "debug", self.debug);
         set_bool(object, "stt_debug", self.stt_debug);
+        set_bool(object, "toggle_mode", self.toggle_mode);
         set_string(object, "quit_key", &self.quit_key);
         set_string(object, "quit_count", &self.quit_count);
         set_string(object, "quit_window_ms", &self.quit_window_ms);

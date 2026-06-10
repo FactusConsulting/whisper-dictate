@@ -148,6 +148,7 @@ impl AppSettings {
         self.local_only = bool_value(object, "local_only", defaults.local_only);
         self.debug = bool_value(object, "debug", defaults.debug);
         self.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
+        self.toggle_mode = bool_value(object, "toggle_mode", defaults.toggle_mode);
         self.quit_key = string_value(object, "quit_key", &defaults.quit_key);
         self.quit_count = string_value(object, "quit_count", &defaults.quit_count);
         self.quit_window_ms = string_value(object, "quit_window_ms", &defaults.quit_window_ms);

@@ -187,6 +187,12 @@ impl WhisperDictateApp {
                     &mut self.settings.key,
                     "Hold-to-talk key or chord, for example ctrl_r or shift_l+ctrl_l.",
                 );
+                checkbox_help(
+                    ui,
+                    "Toggle mode",
+                    &mut self.settings.toggle_mode,
+                    "Toggle mode: press the hotkey to start recording, press again to stop and transcribe — instead of holding it.",
+                );
                 text_help(
                     ui,
                     "Quit key",

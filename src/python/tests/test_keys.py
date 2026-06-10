@@ -75,6 +75,32 @@ class PynputTargetTests(unittest.TestCase):
                 vp_keys.KeyBackendMixin._pynput_quit_key(t, kb)
 
 
+class ToggleModeEnabledTests(unittest.TestCase):
+    """``_toggle_mode_enabled`` reads VOICEPI_TOGGLE via get_value. Patch the
+    config loader to {} so the env var is the sole source (no machine config)."""
+
+    def setUp(self):
+        self._cfg = patch("whisper_dictate.vp_config.load_config", return_value={})
+        self._cfg.start()
+        self.addCleanup(self._cfg.stop)
+
+    def test_defaults_off(self):
+        with _env(VOICEPI_TOGGLE=None):
+            self.assertFalse(vp_keys._toggle_mode_enabled())
+
+    def test_truthy_env_enables(self):
+        for value in ("1", "true", "True", "yes", "on"):
+            with _env(VOICEPI_TOGGLE=value):
+                self.assertTrue(
+                    vp_keys._toggle_mode_enabled(), f"expected {value!r} truthy")
+
+    def test_falsey_env_disables(self):
+        for value in ("0", "false", "False", "no", "off", ""):
+            with _env(VOICEPI_TOGGLE=value):
+                self.assertFalse(
+                    vp_keys._toggle_mode_enabled(), f"expected {value!r} falsey")
+
+
 class HaveEvdevTests(unittest.TestCase):
     def test_have_evdev_true_when_importable(self):
         t = _Target()
@@ -127,7 +153,8 @@ class RunDispatchTests(unittest.TestCase):
 def _fake_evdev():
     ev = _types.ModuleType("evdev")
     ev.ecodes = types.SimpleNamespace(EV_KEY=1)
-    ev.KeyEvent = types.SimpleNamespace(key_down=1, key_up=0)
+    # value 1 = down, 2 = autorepeat (held), 0 = up — matches real evdev.
+    ev.KeyEvent = types.SimpleNamespace(key_down=1, key_hold=2, key_up=0)
     return ev
 
 
@@ -185,10 +212,71 @@ class EvdevApplyEventTests(unittest.TestCase):
         self.assertTrue(rec)
         self.assertEqual(self.t.started, 1)
 
+    def test_autorepeat_value_2_is_ignored_in_hold_mode(self):
+        # A held key emits value-2 autorepeat events; hold mode must not act on
+        # them (start happens once on the value-1 down, stop on the value-0 up).
+        pressed = set()
+        rec = self.t._evdev_apply_event(
+            _event(1, 30, self.ev.KeyEvent.key_down), self.ev, {30}, pressed, False)
+        self.assertTrue(rec)
+        rec = self.t._evdev_apply_event(
+            _event(1, 30, self.ev.KeyEvent.key_hold), self.ev, {30}, pressed, rec)
+        rec = self.t._evdev_apply_event(
+            _event(1, 30, self.ev.KeyEvent.key_hold), self.ev, {30}, pressed, rec)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+        self.assertEqual(self.t.stopped, 0)
+
+
+class EvdevToggleTests(unittest.TestCase):
+    def setUp(self):
+        self.ev = _fake_evdev()
+        self.t = _Target()
+
+    def _down(self, code, pressed, rec, latched):
+        return self.t._evdev_apply_event(
+            _event(1, code, self.ev.KeyEvent.key_down), self.ev, {30},
+            pressed, rec, toggle_mode=True, latched=latched)
+
+    def _hold(self, code, pressed, rec, latched):
+        return self.t._evdev_apply_event(
+            _event(1, code, self.ev.KeyEvent.key_hold), self.ev, {30},
+            pressed, rec, toggle_mode=True, latched=latched)
+
+    def _up(self, code, pressed, rec, latched):
+        return self.t._evdev_apply_event(
+            _event(1, code, self.ev.KeyEvent.key_up), self.ev, {30},
+            pressed, rec, toggle_mode=True, latched=latched)
+
+    def test_toggle_first_press_starts_second_press_stops(self):
+        pressed, latched = set(), [False]
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._down(30, pressed, False, latched)
+            self.assertTrue(rec)
+            self.assertEqual(self.t.started, 1)
+            rec = self._up(30, pressed, rec, latched)   # release: no stop
+            self.assertTrue(rec)
+            self.assertEqual(self.t.stopped, 0)
+            rec = self._down(30, pressed, rec, latched)  # second press: stop
+            self.assertFalse(rec)
+            self.assertEqual(self.t.stopped, 1)
+
+    def test_toggle_autorepeat_does_not_double_trigger(self):
+        # value-2 repeats while the key is held must never flip recording.
+        pressed, latched = set(), [False]
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._down(30, pressed, False, latched)
+            rec = self._hold(30, pressed, rec, latched)
+            rec = self._hold(30, pressed, rec, latched)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+        self.assertEqual(self.t.stopped, 0)
+
 
 class PynputListenerTests(unittest.TestCase):
-    def _listener(self, targets={"<ctrl_r>"}, quit_key="<esc>"):
-        return vp_keys._PynputListener(_Target(), set(targets), quit_key)
+    def _listener(self, targets={"<ctrl_r>"}, quit_key="<esc>", toggle_mode=False):
+        return vp_keys._PynputListener(
+            _Target(), set(targets), quit_key, toggle_mode=toggle_mode)
 
     def test_press_and_release_toggle_recording(self):
         ln = self._listener()
@@ -197,6 +285,65 @@ class PynputListenerTests(unittest.TestCase):
             self.assertEqual(ln._owner.started, 1)
             self.assertTrue(ln._recording)
             ln.on_release("<ctrl_r>")
+            self.assertEqual(ln._owner.stopped, 1)
+            self.assertFalse(ln._recording)
+
+    def test_hold_mode_key_repeat_does_not_restart(self):
+        # A held key emits repeated press events; hold mode must start once and
+        # never re-start while the key stays down.
+        ln = self._listener()
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press("<ctrl_r>")
+            ln.on_press("<ctrl_r>")   # key-repeat
+            ln.on_press("<ctrl_r>")   # key-repeat
+        self.assertEqual(ln._owner.started, 1)
+        self.assertEqual(ln._owner.stopped, 0)
+        self.assertTrue(ln._recording)
+
+    def test_toggle_mode_first_press_starts_second_press_stops(self):
+        ln = self._listener(toggle_mode=True)
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            # First press: start.
+            self.assertIsNone(ln.on_press("<ctrl_r>"))
+            self.assertEqual(ln._owner.started, 1)
+            self.assertTrue(ln._recording)
+            # Release does NOT stop in toggle mode.
+            ln.on_release("<ctrl_r>")
+            self.assertEqual(ln._owner.stopped, 0)
+            self.assertTrue(ln._recording)
+            # Second press: stop and transcribe.
+            self.assertIsNone(ln.on_press("<ctrl_r>"))
+            self.assertEqual(ln._owner.stopped, 1)
+            self.assertFalse(ln._recording)
+
+    def test_toggle_mode_key_repeat_does_not_double_trigger(self):
+        # While the chord is held, repeated press events must not flip recording
+        # back and forth — only the rising edge (first complete press) acts.
+        ln = self._listener(toggle_mode=True)
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press("<ctrl_r>")   # rising edge: start
+            ln.on_press("<ctrl_r>")   # repeat: ignored
+            ln.on_press("<ctrl_r>")   # repeat: ignored
+        self.assertEqual(ln._owner.started, 1)
+        self.assertEqual(ln._owner.stopped, 0)
+        self.assertTrue(ln._recording)
+
+    def test_toggle_mode_chord_requires_all_keys(self):
+        # Chord toggle: only fires once BOTH keys are held, and re-arms after the
+        # chord breaks so the next complete press toggles again.
+        ln = self._listener(targets={"<shift_r>", "<ctrl_r>"}, toggle_mode=True)
+        with patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press("<shift_r>")   # partial chord: nothing
+            self.assertEqual(ln._owner.started, 0)
+            ln.on_press("<ctrl_r>")     # chord complete: start
+            self.assertEqual(ln._owner.started, 1)
+            self.assertTrue(ln._recording)
+            ln.on_release("<ctrl_r>")   # chord breaks (re-arm), no stop
+            ln.on_release("<shift_r>")
+            self.assertEqual(ln._owner.stopped, 0)
+            self.assertTrue(ln._recording)
+            ln.on_press("<shift_r>")
+            ln.on_press("<ctrl_r>")     # chord complete again: stop
             self.assertEqual(ln._owner.stopped, 1)
             self.assertFalse(ln._recording)
 

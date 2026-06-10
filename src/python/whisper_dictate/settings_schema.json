@@ -320,6 +320,12 @@
       "live": true
     },
     {
+      "env": "VOICEPI_TOGGLE",
+      "key": "toggle_mode",
+      "default": null,
+      "live": false
+    },
+    {
       "env": "VOICEPI_QUIT_KEY",
       "key": "quit_key",
       "default": "esc",
