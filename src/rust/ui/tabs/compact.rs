@@ -214,12 +214,14 @@ pub(in crate::ui) fn compact_stage_label(
     stage: Option<&'static str>,
     palette: UiPalette,
 ) -> Option<(&'static str, egui::Color32)> {
-    match stage? {
-        "recording" => Some(("Recording…", palette.accent_blue)),
-        "transcribing" => Some(("Transcribing…", palette.warn_text)),
-        "post-processing" => Some(("Post-processing…", palette.accent_blue)),
-        _ => None,
-    }
+    let stage = stage?;
+    let label = match stage {
+        "recording" => "Recording…",
+        "transcribing" => "Transcribing…",
+        "post-processing" => "Post-processing…",
+        _ => return None,
+    };
+    Some((label, pipeline_progress_accent_color(stage, palette)))
 }
 
 #[cfg(test)]
@@ -313,5 +315,20 @@ mod tests {
             compact_stage_label(Some("post-processing"), palette).map(|(l, _)| l),
             Some("Post-processing…")
         );
+    }
+
+    #[test]
+    fn compact_stage_label_recording_accent_is_red() {
+        // The compact strip uses the same accent-colour logic as the full log
+        // card: red while recording, calmer colours once the audio is gone.
+        let palette = ui_palette("dark");
+        let (_, recording_color) = compact_stage_label(Some("recording"), palette).unwrap();
+        assert_eq!(
+            recording_color, palette.error_text,
+            "recording accent must be red (error_text)"
+        );
+        // The transcribing and post-processing stages must NOT be red.
+        let (_, transcribing_color) = compact_stage_label(Some("transcribing"), palette).unwrap();
+        assert_ne!(transcribing_color, palette.error_text);
     }
 }
