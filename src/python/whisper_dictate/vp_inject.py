@@ -13,8 +13,11 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
+
+from whisper_dictate.vp_feedback import notify_error
 
 # Seconds to wait before restoring the clipboard after a paste injection.
 # The delay is intentional: paste targets (especially on Wayland where
@@ -501,7 +504,11 @@ class InjectMixin:
             print("[inject] skipped self-target", flush=True)
             return
 
-        if on_wayland:
-            self._inject_wayland(text)
-        else:
-            self._inject_other(text)
+        try:
+            if on_wayland:
+                self._inject_wayland(text)
+            else:
+                self._inject_other(text)
+        except Exception as exc:
+            print(f"[inject] injection failed: {exc}", file=sys.stderr, flush=True)
+            notify_error("whisper-dictate", f"Injection failed: {exc}")

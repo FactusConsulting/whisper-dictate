@@ -308,6 +308,18 @@
       "live": true
     },
     {
+      "env": "VOICEPI_FEEDBACK_SOUNDS",
+      "key": "feedback_sounds",
+      "default": null,
+      "live": true
+    },
+    {
+      "env": "VOICEPI_FEEDBACK_NOTIFY",
+      "key": "feedback_notify",
+      "default": null,
+      "live": true
+    },
+    {
       "env": "VOICEPI_DEBUG",
       "key": "debug",
       "default": null,
