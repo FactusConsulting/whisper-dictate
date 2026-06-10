@@ -78,6 +78,7 @@ pub(in crate::ui) enum UiTextKey {
     QualityGroupAllBackends,
     QualityGroupWhisper,
     QualityGroupParakeet,
+    Dictation,
 }
 
 impl UiTextKey {
@@ -142,6 +143,7 @@ impl UiTextKey {
                 UiTextKey::QualityGroupAllBackends => "All backends",
                 UiTextKey::QualityGroupWhisper => "Whisper",
                 UiTextKey::QualityGroupParakeet => "Parakeet",
+                UiTextKey::Dictation => "Dictation",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::SidebarSubtitle => "Rust kontrolflade",
@@ -202,6 +204,7 @@ impl UiTextKey {
                 UiTextKey::QualityGroupAllBackends => "Alle backends",
                 UiTextKey::QualityGroupWhisper => "Whisper",
                 UiTextKey::QualityGroupParakeet => "Parakeet",
+                UiTextKey::Dictation => "Diktering",
             },
         }
     }
