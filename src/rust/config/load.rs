@@ -146,6 +146,8 @@ impl AppSettings {
     /// Debug flags and quit-shortcut settings.
     fn apply_misc(&mut self, object: &Map<String, Value>, defaults: &Self) {
         self.local_only = bool_value(object, "local_only", defaults.local_only);
+        self.feedback_sounds = bool_value(object, "feedback_sounds", defaults.feedback_sounds);
+        self.feedback_notify = bool_value(object, "feedback_notify", defaults.feedback_notify);
         self.debug = bool_value(object, "debug", defaults.debug);
         self.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
         self.toggle_mode = bool_value(object, "toggle_mode", defaults.toggle_mode);

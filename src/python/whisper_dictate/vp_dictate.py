@@ -35,6 +35,7 @@ from whisper_dictate.vp_history import _append_history, _append_jsonl
 from whisper_dictate.vp_inject import InjectMixin
 from whisper_dictate.vp_keymap import _detect_xkb_layout
 from whisper_dictate.vp_keys import KeyBackendMixin
+from whisper_dictate.vp_feedback import play_cue
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text
 from whisper_dictate.vp_preview import PreviewEngine, preview_enabled
 
@@ -421,6 +422,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             flush=True,
         )
         print("● listening…", flush=True)
+        play_cue("start")
         self._start_preview()
 
     def _start_preview(self) -> None:
@@ -455,6 +457,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 self._preview.stop()
                 self._preview = None
             self._stop_capture_streams()
+            play_cue("stop")
         finally:
             self.audio_ducker.exit()
         _emit_worker_event(

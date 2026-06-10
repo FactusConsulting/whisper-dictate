@@ -143,6 +143,7 @@ from whisper_dictate.vp_keymap import (  # noqa: E402,F401
 from whisper_dictate.vp_capture import CaptureMixin  # noqa: E402,F401
 from whisper_dictate.vp_dictate import Dictate, FIRST_AUDIO_WAIT_S  # noqa: E402,F401
 from whisper_dictate import vp_dictate  # noqa: E402
+from whisper_dictate.vp_feedback import notify_error  # noqa: E402
 
 
 def _truthy(value: str | None) -> bool:
@@ -418,6 +419,7 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
         message = str(e)
         _emit_worker_event("error", state="failed", backend=backend, model=loaded_model_name, message=message)
         print(f"  x startup error: {message}", flush=True)
+        notify_error("whisper-dictate", f"Model load failed: {message}")
         raise SystemExit(1)
     _model_load_s = time.monotonic() - _t
     _emit_worker_event(
