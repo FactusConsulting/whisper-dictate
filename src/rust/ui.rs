@@ -34,6 +34,7 @@ mod api_keys;
 mod app;
 mod audio_devices;
 mod diagnostics_level;
+mod hotkey;
 mod icon;
 mod log_render;
 mod platform;
@@ -55,6 +56,7 @@ mod worker_json;
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
 pub(in crate::ui) use self::diagnostics_level::*;
+pub(in crate::ui) use self::hotkey::*;
 use self::icon::app_icon;
 pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)

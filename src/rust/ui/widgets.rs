@@ -344,6 +344,90 @@ fn eye_icon_button(ui: &mut egui::Ui, active: bool, height: f32) -> egui::Respon
     response
 }
 
+/// Hotkey chord field with inline valid/invalid feedback and an accepted-key
+/// reference. Renders like [`text_help`] (label + text field + the usual `?`
+/// help row) and then adds:
+///   * a status row: a green check + "Valid hotkey" when the chord parses, or a
+///     warning icon + the specific reason (unknown/duplicate/empty token) when
+///     it does not — reusing the theme's `ok_text`/`warn_text` colours and the
+///     material check/warning icons already used elsewhere in the app;
+///   * a reference row listing the accepted modifier tokens and key-name rule,
+///     so the user can see what to type without leaving the field.
+///
+/// Pure validation lives in `super::hotkey`; this only renders its result.
+pub(in crate::ui) fn hotkey_help(
+    ui: &mut egui::Ui,
+    lang: &str,
+    palette: UiPalette,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    let show_help = label_with_help(ui, label, help);
+    ui.add(egui::TextEdit::singleline(value).desired_width(SETTINGS_TEXT_INPUT_WIDTH));
+    ui.end_row();
+    grid_help_row(ui, show_help, help);
+
+    let validation = crate::ui::validate_hotkey(value);
+    let (icon, color, message) = hotkey_status_parts(lang, palette, &validation);
+    ui.label("");
+    ui.label(egui::RichText::new(format!("{icon}  {message}")).color(color));
+    ui.end_row();
+
+    // Accepted-key reference (always shown — it is the "what can I type" answer
+    // the user needs right next to the field, and it is two short weak-text lines).
+    ui.label("");
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!(
+                "{}: {}\n{}: {}",
+                ui_text(lang, UiTextKey::HotkeyRefModifiers),
+                crate::ui::REFERENCE_MODIFIERS,
+                ui_text(lang, UiTextKey::HotkeyRefKeys),
+                crate::ui::REFERENCE_KEYS,
+            ))
+            .color(ui.visuals().weak_text_color()),
+        )
+        .wrap(),
+    );
+    ui.end_row();
+}
+
+/// Map a validation result to (icon, colour, localized message) for the status
+/// row. Pure aside from the localization lookup so the branching is unit-testable
+/// at the message level via the text keys it selects.
+fn hotkey_status_parts(
+    lang: &str,
+    palette: UiPalette,
+    validation: &crate::ui::HotkeyValidation,
+) -> (&'static str, egui::Color32, String) {
+    use crate::ui::{HotkeyError, HotkeyValidation};
+    match validation {
+        HotkeyValidation::Valid => (
+            egui_material_icons::icons::ICON_CHECK_CIRCLE,
+            palette.ok_text,
+            ui_text(lang, UiTextKey::HotkeyValid).to_owned(),
+        ),
+        HotkeyValidation::Invalid(err) => {
+            let icon = egui_material_icons::icons::ICON_WARNING;
+            let message = match err {
+                HotkeyError::Empty => ui_text(lang, UiTextKey::HotkeyEmpty).to_owned(),
+                HotkeyError::EmptyToken => ui_text(lang, UiTextKey::HotkeyEmptyToken).to_owned(),
+                HotkeyError::UnknownToken(token) => {
+                    format!("{}: {token}", ui_text(lang, UiTextKey::HotkeyUnknownToken))
+                }
+                HotkeyError::DuplicateToken(token) => {
+                    format!(
+                        "{}: {token}",
+                        ui_text(lang, UiTextKey::HotkeyDuplicateToken)
+                    )
+                }
+            };
+            (icon, palette.warn_text, message)
+        }
+    }
+}
+
 pub(in crate::ui) fn checkbox_help(ui: &mut egui::Ui, label: &str, value: &mut bool, help: &str) {
     let show_help = label_with_help(ui, label, help);
     ui.checkbox(value, "");

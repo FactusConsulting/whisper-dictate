@@ -232,11 +232,14 @@ impl WhisperDictateApp {
                         "Wayland ydotool/XKB layout used for direct text injection on Linux. Auto detects GNOME layout when possible.",
                     );
                 }
-                text_help(
+                hotkey_help(
                     ui,
+                    &language,
+                    palette,
                     "Hotkey",
                     &mut self.settings.key,
-                    "Hold-to-talk key or chord, for example ctrl_r or shift_l+ctrl_l.",
+                    "Hold-to-talk key or chord, for example ctrl_r or shift_l+ctrl_l. \
+                     Join keys with '+'. Tokens are pynput key names (modifiers and named keys).",
                 );
                 checkbox_help(
                     ui,
