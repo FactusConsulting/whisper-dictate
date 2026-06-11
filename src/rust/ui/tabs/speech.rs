@@ -10,15 +10,22 @@ impl WhisperDictateApp {
 
         // Speech engine selector stays above all groups — it is the switch that
         // decides which group is active, so it must be visible unconditionally.
-        settings_grid("speech_engine_selector").show(ui, |ui| {
-            combo_help_labeled(
-                ui,
-                "Speech engine",
-                &mut self.settings.stt_backend,
-                STT_BACKEND_OPTIONS,
-                "Choose the transcription engine. Cloud STT can use either Groq or OpenAI; the saved config value is still openai for compatibility with OpenAI-compatible APIs.",
-            );
-        });
+        // Wrapped in a frameless inset that matches scope_group's horizontal
+        // inner margin so the dropdown value column aligns with the fields
+        // inside the boxed groups below (approach B — inset without a box).
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(SCOPE_GROUP_INNER_MARGIN_H, 0.0))
+            .show(ui, |ui| {
+                settings_grid("speech_engine_selector").show(ui, |ui| {
+                    combo_help_labeled(
+                        ui,
+                        "Speech engine",
+                        &mut self.settings.stt_backend,
+                        STT_BACKEND_OPTIONS,
+                        "Choose the transcription engine. Cloud STT can use either Groq or OpenAI; the saved config value is still openai for compatibility with OpenAI-compatible APIs.",
+                    );
+                });
+            });
 
         ui.add_space(6.0);
 

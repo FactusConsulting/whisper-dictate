@@ -63,6 +63,12 @@ fn settings_grid(id: &'static str) -> egui::Grid {
         .spacing(egui::vec2(20.0, 10.0))
 }
 
+/// Horizontal and vertical inner margin used by [`scope_group`] frames.
+/// Referenced here AND in `speech.rs` so the standalone Speech-engine selector
+/// gets the identical left inset without drawing a box (approach B).
+pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_H: f32 = 12.0;
+pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_V: f32 = 10.0;
+
 /// A thin outlined box grouping a set of settings under a small heading. Used by
 /// the Quality tab to separate "All backends" / "Whisper" / "Parakeet" scopes so
 /// it is obvious which engine each knob affects. The body runs inside its own
@@ -77,7 +83,10 @@ fn scope_group(
     egui::Frame::default()
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
         .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+        .inner_margin(egui::Margin::symmetric(
+            SCOPE_GROUP_INNER_MARGIN_H,
+            SCOPE_GROUP_INNER_MARGIN_V,
+        ))
         .show(ui, |ui| {
             section_label(ui, heading, palette);
             ui.add_space(6.0);
