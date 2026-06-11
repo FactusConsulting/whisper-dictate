@@ -45,6 +45,7 @@ mod tasks;
 mod text;
 mod text_scale;
 mod theme;
+mod update_check;
 mod widgets;
 mod widgets_combo;
 mod window_list;
@@ -65,6 +66,7 @@ use self::secret_store::*;
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
+pub(in crate::ui) use self::update_check::*;
 pub(in crate::ui) use self::widgets::*;
 pub(in crate::ui) use self::worker_event::*;
 
@@ -105,6 +107,30 @@ fn spawn_gpu_probe() -> Receiver<Option<u32>> {
             .map(|gpu| gpu.total_mb)
             .max();
         let _ = tx.send(result);
+    });
+    rx
+}
+
+/// Spawn a background thread that fetches the public version feed and computes
+/// whether a strictly-newer version exists, sending an [`UpdateCheckOutcome`]
+/// over the returned channel exactly once. Mirrors `spawn_gpu_probe`'s one-shot
+/// channel discipline but is dispatched periodically by the app `update()` loop.
+///
+/// Three outcomes are distinguished so the caller can react correctly:
+/// - `Newer(v)` — feed reachable, newer version found.
+/// - `UpToDate`  — feed reachable, no newer version.
+/// - `Failed`    — fetch / parse error; caller must NOT clear a prior badge.
+fn spawn_update_check(current_version: String) -> Receiver<UpdateCheckOutcome> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = match update_check::fetch_published_versions() {
+            Ok(versions) => match update_check::latest_newer_version(&versions, &current_version) {
+                Some(v) => UpdateCheckOutcome::Newer(v),
+                None => UpdateCheckOutcome::UpToDate,
+            },
+            Err(_) => UpdateCheckOutcome::Failed,
+        };
+        let _ = tx.send(outcome);
     });
     rx
 }
@@ -284,6 +310,19 @@ struct WhisperDictateApp {
     /// running across the switch. Toggled from the top status bar and reset to
     /// `false` on launch.
     compact_mode: bool,
+    /// The newest published version when it is strictly newer than the running
+    /// one, driving the discreet sidebar "update available" badge. `None` when up
+    /// to date, when the check is disabled/local-only, or before the first poll.
+    /// Populated only from the background poll's channel — never blocks the UI.
+    update_available: Option<String>,
+    /// Monotonic timestamp of the last completed/started update poll. Drives the
+    /// "elapsed >= interval" gate. `Instant` (not wall-clock) so clock changes /
+    /// sleep can't skew the cadence. `None` until the first poll is dispatched.
+    last_update_check: Option<Instant>,
+    /// Receiver for the in-flight background update check. `Some` while a single
+    /// poll thread is running (the one-shot-per-cycle guard), `None` otherwise.
+    /// The thread sends an [`UpdateCheckOutcome`] exactly once.
+    update_check_rx: Option<Receiver<UpdateCheckOutcome>>,
 }
 
 impl Default for WhisperDictateApp {
@@ -368,6 +407,9 @@ impl Default for WhisperDictateApp {
             worker_start_time: None,
             fast_crash_count: 0,
             compact_mode: false,
+            update_available: None,
+            last_update_check: None,
+            update_check_rx: None,
         }
     }
 }
@@ -463,3 +505,5 @@ mod tab_helpers_tests;
 mod test_support;
 #[cfg(test)]
 mod ui_language_tests;
+#[cfg(test)]
+mod update_check_tests;

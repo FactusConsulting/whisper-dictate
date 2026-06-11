@@ -161,6 +161,12 @@ impl AppSettings {
         self.quit_key = string_value(object, "quit_key", &defaults.quit_key);
         self.quit_count = string_value(object, "quit_count", &defaults.quit_count);
         self.quit_window_ms = string_value(object, "quit_window_ms", &defaults.quit_window_ms);
+        self.update_check = bool_value(object, "update_check", defaults.update_check);
+        self.update_check_interval_minutes = string_value(
+            object,
+            "update_check_interval_minutes",
+            &defaults.update_check_interval_minutes,
+        );
     }
 
     /// UI-only presentation settings (theme, language, log view, text scale).

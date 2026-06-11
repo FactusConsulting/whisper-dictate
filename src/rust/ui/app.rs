@@ -68,6 +68,7 @@ impl eframe::App for WhisperDictateApp {
         self.poll_runtime();
         self.poll_background_task();
         self.ensure_audio_devices_loaded();
+        self.poll_update_check();
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -278,6 +279,59 @@ impl WhisperDictateApp {
         }
         self.audio_devices_loaded = true;
         self.run_list_audio_devices();
+    }
+
+    /// Periodic, non-blocking "update available" poll.
+    ///
+    /// PRIVACY: when it runs, the spawned thread only does an anonymous GET on
+    /// the public GitHub Pages version feed and sends NO data anywhere.
+    ///
+    /// Behaviour:
+    /// - When the `update_check` setting is OFF, or `local_only` is ON, the check
+    ///   is skipped entirely and any stale `update_available` badge is cleared
+    ///   (an in-flight poll is also abandoned so its late result is ignored).
+    /// - Otherwise, if no poll is in flight and we've never checked OR the clamped
+    ///   interval has elapsed (measured with `Instant`, not wall-clock), one — and
+    ///   only one — background thread is spawned and `last_update_check` recorded.
+    /// - A completed poll applies [`apply_update_outcome`]:
+    ///   `Newer(v)` → badge shown; `UpToDate` → badge cleared;
+    ///   `Failed` → badge untouched (transient network error must not wipe a
+    ///   previously-found update). `last_update_check` is recorded in all cases so
+    ///   the normal interval applies before the next retry.
+    pub(in crate::ui) fn poll_update_check(&mut self) {
+        // Adopt a finished poll's result first (whether or not we still want to
+        // poll), then drop the receiver so the next cycle can start fresh.
+        if let Some(outcome) = self
+            .update_check_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.update_available = apply_update_outcome(self.update_available.take(), outcome);
+            self.update_check_rx = None;
+        }
+
+        // Disabled or local-only: skip and clear any stale badge / in-flight poll.
+        if !self.settings.update_check || self.settings.local_only {
+            self.update_available = None;
+            self.update_check_rx = None;
+            return;
+        }
+
+        // Never run more than one check at a time.
+        if self.update_check_rx.is_some() {
+            return;
+        }
+
+        let interval = poll_interval(&self.settings.update_check_interval_minutes);
+        let due = self
+            .last_update_check
+            .is_none_or(|last| last.elapsed() >= interval);
+        if !due {
+            return;
+        }
+
+        self.last_update_check = Some(std::time::Instant::now());
+        self.update_check_rx = Some(spawn_update_check(self.app_version.clone()));
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {

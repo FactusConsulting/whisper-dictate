@@ -81,3 +81,34 @@ fn recording_indicator_translations_present() {
     assert_eq!(ui_text("en", UiTextKey::Ready), "Ready");
     assert_eq!(ui_text("da", UiTextKey::Ready), "Klar");
 }
+
+#[test]
+fn update_available_strings_present_in_both_languages() {
+    // Every new user-visible update-check string must be localized.
+    for key in [
+        UiTextKey::UpdateAvailable,
+        UiTextKey::UpdateAvailableHover,
+        UiTextKey::SystemUpdates,
+        UiTextKey::UpdateCheck,
+        UiTextKey::UpdateCheckHelp,
+        UiTextKey::UpdateCheckInterval,
+        UiTextKey::UpdateCheckIntervalHelp,
+    ] {
+        assert!(!ui_text("en", key).is_empty(), "EN missing for {key:?}");
+        assert!(!ui_text("da", key).is_empty(), "DA missing for {key:?}");
+    }
+    // The privacy guarantee must be spelled out in the toggle help text in both
+    // languages: GitHub-only fetch + no data sent.
+    let en_help = ui_text("en", UiTextKey::UpdateCheckHelp);
+    assert!(en_help.contains("github.io"), "EN help must name github.io");
+    assert!(
+        en_help.contains("NO data"),
+        "EN help must state no data is sent"
+    );
+    let da_help = ui_text("da", UiTextKey::UpdateCheckHelp);
+    assert!(da_help.contains("github.io"), "DA help must name github.io");
+    assert!(
+        da_help.contains("INGEN data"),
+        "DA help must state no data is sent"
+    );
+}

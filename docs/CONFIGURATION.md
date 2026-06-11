@@ -86,6 +86,8 @@ requiring restart/model reload.
 | **Diagnostics (Basic)** | Output | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | print one concise per-utterance `[health]` line (mic level/SNR + model confidence + warnings). The startup config dump now requires `VOICEPI_STT_DEBUG` too (Verbose). |
 | **Diagnostics (Verbose)** | Output | `VOICEPI_STT_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | with `VOICEPI_DEBUG`: adds the startup effective-settings dump and per-segment STT/dictionary detail |
 | **UI theme** | Output | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
+| **Update check** | System | `VOICEPI_UPDATE_CHECK` | _none_ | `1` (on) | truthy / falsey | Periodically check whether a newer version has been published and show a discreet "update available" badge next to the version in the sidebar. **PRIVACY:** only fetches the public version list from GitHub (`github.io`) and sends **NO** data, telemetry, or identifiers anywhere. UI-only (does not affect the Python worker). Automatically skipped when **Local only** is enabled. |
+| **Update check interval** | System | `VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES` | _none_ | `15` | integer minutes (clamped to ≥ 5) | How often the in-app update check polls the public version list. Values below 5 are clamped up to 5. UI-only. |
 
 The detailed tables below are the same knobs split by surface (env vars
 vs flags) with the longer prose. Most users only need the cheat sheet +

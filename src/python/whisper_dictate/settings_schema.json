@@ -366,6 +366,18 @@
       "key": "quit_window_ms",
       "default": "1500",
       "live": false
+    },
+    {
+      "env": "VOICEPI_UPDATE_CHECK",
+      "key": "update_check",
+      "default": "1",
+      "live": true
+    },
+    {
+      "env": "VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES",
+      "key": "update_check_interval_minutes",
+      "default": "15",
+      "live": true
     }
   ]
 }

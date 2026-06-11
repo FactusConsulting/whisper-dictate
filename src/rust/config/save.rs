@@ -88,6 +88,12 @@ impl AppSettings {
         set_string(object, "quit_key", &self.quit_key);
         set_string(object, "quit_count", &self.quit_count);
         set_string(object, "quit_window_ms", &self.quit_window_ms);
+        set_bool(object, "update_check", self.update_check);
+        set_string(
+            object,
+            "update_check_interval_minutes",
+            &self.update_check_interval_minutes,
+        );
         set_string(object, "ui_theme", &self.ui_theme);
         set_string(object, "ui_language", &self.ui_language);
         set_string(object, "ui_log_view", &self.ui_log_view);
