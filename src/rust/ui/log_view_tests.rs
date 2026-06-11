@@ -763,6 +763,28 @@ fn health_card_flags_warnings_with_distinct_badge() {
 }
 
 #[test]
+fn health_card_warn_detection_is_structural_not_substring() {
+    // A field that merely contains the substring "WARN" (e.g. a provider/model
+    // name) must NOT trigger the warning badge — only a genuine `| WARN ...`
+    // segment should.
+    let no_warn_line =
+        "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/WARNer-llm";
+    let cards = runtime_log_cards(no_warn_line, LogViewMode::Minimal);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(
+        cards[0].badge, "Health",
+        "WARN inside a field value must not trigger the warning badge"
+    );
+
+    // But a real `| WARN ...` segment must still fire.
+    let warn_line =
+        "[health] mic -38dBFS SNR 56dB good | confidence low (-0.82) | post off | WARN low confidence";
+    let warn_cards = runtime_log_cards(warn_line, LogViewMode::Minimal);
+    assert_eq!(warn_cards.len(), 1);
+    assert_eq!(warn_cards[0].badge, "Health!");
+}
+
+#[test]
 fn health_line_kept_in_diagnostic_text_view() {
     let log = "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post off\n\
         [cap] raw=-38dBFS peak=0.100 input=good gain=2.0x noise=-90dBFS snr=56dB";

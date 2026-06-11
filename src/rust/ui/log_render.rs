@@ -281,7 +281,10 @@ fn health_card(line: &str) -> Option<RuntimeLogCard> {
     if body.is_empty() {
         return None;
     }
-    let has_warning = body.contains("WARN");
+    // Warnings are emitted as distinct `| WARN ...` segments; detect them
+    // structurally rather than as a substring so a future provider/model name
+    // that happens to contain "WARN" does not trigger the warning badge.
+    let has_warning = body.split(" | ").any(|seg| seg.trim().starts_with("WARN"));
     let detail = if has_warning {
         "Microphone + model health (warnings)"
     } else {

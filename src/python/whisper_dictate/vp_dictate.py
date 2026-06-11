@@ -578,7 +578,21 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 )
                 # Transcription ran but produced nothing (hallucination gate /
                 # empty / too-quiet) — a "we're off" signal worth a health line.
-                self._emit_health_line({"no_text": True})
+                # Pass the audio metrics available at this point so the health
+                # line shows mic level, SNR and input status (was it too quiet?
+                # too noisy?) instead of all-? placeholders.
+                no_text_health: dict = {"no_text": True}
+                try:
+                    from whisper_dictate import vp_audio
+                    audio_metrics = vp_audio.compute_audio_metrics(pcm)
+                    no_text_health["audio_raw_dbfs"] = audio_metrics.raw_dbfs
+                    no_text_health["audio_snr_db"] = audio_metrics.snr_db
+                    no_text_health["audio_input_status"] = audio_metrics.input_status
+                    if audio_metrics.gain > 1.0:
+                        no_text_health["audio_gain"] = audio_metrics.gain
+                except Exception:  # noqa: BLE001 — metrics are best-effort
+                    pass
+                self._emit_health_line(no_text_health)
                 print(f"[stt] no text ({no_text_reason}, {recording_s:.1f}s)", flush=True)
                 return
             text = result.text

@@ -163,6 +163,23 @@ class HealthLineWarnTests(unittest.TestCase):
         line = format_health_line({"no_text": True})
         self.assertIn("WARN no text", line)
 
+    def test_no_text_with_mic_metrics_renders_numbers(self):
+        # When audio metrics are available at the no_text emit point the health
+        # line must show the real mic level/SNR/status (not "mic ?dBFS SNR ?dB
+        # n/a") so the user can diagnose why (was the input too quiet/noisy?).
+        line = format_health_line({
+            "no_text": True,
+            "audio_raw_dbfs": -44.0,
+            "audio_snr_db": 56.0,
+            "audio_input_status": "quiet",
+        })
+        self.assertIn("mic -44dBFS", line)
+        self.assertIn("SNR 56dB", line)
+        self.assertIn("quiet", line)
+        self.assertIn("WARN no text", line)
+        self.assertNotIn("?dBFS", line)
+        self.assertNotIn("SNR ?dB", line)
+
 
 class HealthLinePostTests(unittest.TestCase):
     def test_post_on(self):

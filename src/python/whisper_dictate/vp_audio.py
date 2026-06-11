@@ -117,6 +117,19 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
     return _boost_quiet_detail(a)[0]
 
 
+def compute_audio_metrics(pcm: np.ndarray) -> AudioCaptureMetrics:
+    """Public wrapper: compute audio capture metrics for ``pcm`` (int16 mono).
+
+    Converts int16 → float32 (as the transcription path does) and delegates
+    to ``_capture_metrics``.  Safe to call after the recording has finished —
+    used by the dictation loop to populate the ``[health]`` line when the
+    transcription produced no text so the user can see whether the input was
+    too quiet or too noisy.
+    """
+    raw_audio = pcm.reshape(-1).astype(np.float32) / 32768.0
+    return _capture_metrics(raw_audio)
+
+
 def _looks_like_speech(a: np.ndarray) -> tuple[bool, str]:
     rms = float(np.sqrt(np.mean(a**2)) or 1e-9)
     raw_dbfs = 20 * np.log10(rms)
