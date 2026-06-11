@@ -35,7 +35,10 @@
       "env": "VOICEPI_STT_TIMEOUT_MS",
       "key": "stt_timeout_ms",
       "default": "30000",
-      "live": false
+      "live": false,
+      "min": 100,
+      "max": 600000,
+      "step": 100
     },
     {
       "env": "VOICEPI_PARAKEET_MODEL",
@@ -95,7 +98,10 @@
       "env": "VOICEPI_BEAM_SIZE",
       "key": "beam_size",
       "default": "1",
-      "live": true
+      "live": true,
+      "min": 1,
+      "max": 10,
+      "step": 1
     },
     {
       "env": "VOICEPI_TEMPERATURE",
@@ -107,7 +113,10 @@
       "env": "VOICEPI_CONTEXT_MIN_SECONDS",
       "key": "context_min_seconds",
       "default": "5",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 60,
+      "step": 1
     },
     {
       "env": "VOICEPI_HALLUCINATION_GUARD",
@@ -119,55 +128,82 @@
       "env": "VOICEPI_MAX_CHARS_PER_SECOND",
       "key": "max_chars_per_second",
       "default": "30",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 100,
+      "step": 1
     },
     {
       "env": "VOICEPI_MIN_RECORD_SECONDS",
       "key": "min_record_seconds",
       "default": "0.5",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 5,
+      "step": 0.1
     },
     {
       "env": "VOICEPI_PARAKEET_MIN_SECONDS",
       "key": "parakeet_min_seconds",
       "default": "1.5",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 10,
+      "step": 0.1
     },
     {
       "env": "VOICEPI_RELEASE_TAIL_MS",
       "key": "release_tail_ms",
       "default": "200",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 2000,
+      "step": 50
     },
     {
       "env": "VOICEPI_PREVIEW_SECONDS",
       "key": "preview_seconds",
       "default": "3",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 30,
+      "step": 1
     },
     {
       "env": "VOICEPI_MAX_RECORD_S",
       "key": "max_record_s",
       "default": "120",
-      "live": true
+      "live": true,
+      "min": 5,
+      "max": 600,
+      "step": 5
     },
     {
       "env": "VOICEPI_VAD_THRESHOLD",
       "key": "vad_threshold",
       "default": "0.3",
-      "live": true
+      "live": true,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05
     },
     {
       "env": "VOICEPI_VAD_MIN_SILENCE_MS",
       "key": "vad_min_silence_ms",
       "default": "600",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 5000,
+      "step": 50
     },
     {
       "env": "VOICEPI_VAD_SPEECH_PAD_MS",
       "key": "vad_speech_pad_ms",
       "default": "200",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 2000,
+      "step": 50
     },
     {
       "env": "VOICEPI_TARGET_DBFS",
@@ -215,13 +251,19 @@
       "env": "VOICEPI_DICTIONARY_MAX_TERMS",
       "key": "dictionary_max_terms",
       "default": "80",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 1000,
+      "step": 1
     },
     {
       "env": "VOICEPI_DICTIONARY_PROMPT_CHARS",
       "key": "dictionary_prompt_chars",
       "default": "1200",
-      "live": true
+      "live": true,
+      "min": 0,
+      "max": 20000,
+      "step": 100
     },
     {
       "env": "VOICEPI_JSON",
@@ -245,7 +287,10 @@
       "env": "VOICEPI_COMMAND_HOOK_TIMEOUT_MS",
       "key": "command_hook_timeout_ms",
       "default": "2000",
-      "live": true
+      "live": true,
+      "min": 100,
+      "max": 600000,
+      "step": 100
     },
     {
       "env": "VOICEPI_HISTORY_ENABLED",
@@ -293,19 +338,28 @@
       "env": "VOICEPI_POST_TIMEOUT_MS",
       "key": "post_timeout_ms",
       "default": "2000",
-      "live": true
+      "live": true,
+      "min": 100,
+      "max": 600000,
+      "step": 100
     },
     {
       "env": "VOICEPI_POST_MAX_INPUT_CHARS",
       "key": "post_max_input_chars",
       "default": "4000",
-      "live": true
+      "live": true,
+      "min": 100,
+      "max": 100000,
+      "step": 100
     },
     {
       "env": "VOICEPI_POST_MAX_OUTPUT_CHARS",
       "key": "post_max_output_chars",
       "default": "4000",
-      "live": true
+      "live": true,
+      "min": 100,
+      "max": 100000,
+      "step": 100
     },
     {
       "env": "VOICEPI_POST_REDACT",
@@ -377,7 +431,10 @@
       "env": "VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES",
       "key": "update_check_interval_minutes",
       "default": "15",
-      "live": true
+      "live": true,
+      "min": 5,
+      "max": 1440,
+      "step": 5
     }
   ]
 }

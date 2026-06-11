@@ -32,8 +32,9 @@ impl WhisperDictateApp {
                     &mut self.settings.command_hook,
                     "Optional command run after accepted utterances for advanced automation.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    "command_hook_timeout_ms",
                     "Command hook timeout ms",
                     &mut self.settings.command_hook_timeout_ms,
                     "Maximum time the command hook may run before it is treated as timed out.",

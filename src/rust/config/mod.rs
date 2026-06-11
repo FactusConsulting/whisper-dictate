@@ -31,7 +31,7 @@ pub use io::{
     open_dictionary, open_existing_path, save_settings, save_settings_to_path,
 };
 pub use keys::restart_required_keys;
-pub use schema::{effective_runtime_env, worker_env_overrides};
+pub use schema::{effective_runtime_env, numeric_bounds, worker_env_overrides, NumericBounds};
 pub use settings::AppSettings;
 
 /// Test-only utilities shared across the config submodules.

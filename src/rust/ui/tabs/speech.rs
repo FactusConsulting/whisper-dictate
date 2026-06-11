@@ -120,9 +120,10 @@ impl WhisperDictateApp {
                     &mut self.settings.stt_base_url,
                     "Base URL for the selected cloud transcription provider.",
                 );
-                text_enabled_short(
+                numeric_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
+                    "stt_timeout_ms",
                     "Cloud STT timeout ms",
                     &mut self.settings.stt_timeout_ms,
                     "Network timeout for cloud transcription requests.",

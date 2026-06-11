@@ -70,11 +70,147 @@ pub(in crate::ui) fn text_help_short(
     text_help_width(ui, label, value, help, SETTINGS_SHORT_INPUT_WIDTH);
 }
 
+/// Clamp a raw numeric settings string into `[min, max]`, returning the
+/// canonical string the rest of the settings pipeline stores.
+///
+/// Pure (no egui) so it is unit-testable. Behaviour:
+/// - in-range value → re-formatted canonically (unchanged numerically),
+/// - above `max` → `max`, below `min` → `min`,
+/// - unparseable garbage → clamp the schema `default` into range; if the
+///   default is itself unparseable, fall back to `min`,
+/// - integer fields format without a decimal point; float fields keep the
+///   value as typed when already valid, otherwise format compactly.
+pub(in crate::ui) fn clamp_numeric_setting(
+    raw: &str,
+    min: f64,
+    max: f64,
+    is_int: bool,
+    default: &str,
+) -> String {
+    let parsed = raw
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .or_else(|| default.trim().parse::<f64>().ok().filter(|v| v.is_finite()));
+    let value = match parsed {
+        Some(v) => v.clamp(min, max),
+        None => min,
+    };
+    format_numeric(value, is_int)
+}
+
+/// Format a clamped numeric value back to its canonical string. Integers drop
+/// the fractional part; floats trim trailing zeros so `0.30` shows as `0.3`.
+fn format_numeric(value: f64, is_int: bool) -> String {
+    if is_int {
+        return (value.round() as i64).to_string();
+    }
+    // Format with enough precision, then trim trailing zeros / dot so a value
+    // like 0.3 doesn't become "0.300000".
+    let mut s = format!("{value:.6}");
+    if s.contains('.') {
+        s = s.trim_end_matches('0').trim_end_matches('.').to_owned();
+    }
+    if s == "-0" {
+        s = "0".to_owned();
+    }
+    s
+}
+
 fn text_help_width(ui: &mut egui::Ui, label: &str, value: &mut String, help: &str, width: f32) {
     let show_help = label_with_help(ui, label, help);
     ui.add(egui::TextEdit::singleline(value).desired_width(width));
     ui.end_row();
     grid_help_row(ui, show_help, help);
+}
+
+/// Format the inclusive range for a hover/help hint, e.g. `1–10` or `0.0–1.0`.
+/// Pure so it is unit-testable.
+pub(in crate::ui) fn range_hint(bounds: &crate::config::NumericBounds) -> String {
+    format!(
+        "{}–{}",
+        format_numeric(bounds.min, bounds.is_int),
+        format_numeric(bounds.max, bounds.is_int)
+    )
+}
+
+/// Edit-commit detection shared by the numeric fields: clamp the value to its
+/// schema bounds only when the user actually finished editing (the field lost
+/// focus — egui fires this after Enter or when focus moves elsewhere), never on
+/// mere render. Mirrors the diagnostics combo's "only mutate on real user
+/// change" discipline so it doesn't fight Save's dirty-state tracking: the
+/// value is rewritten only when the clamped form differs from what's stored.
+fn clamp_on_commit(
+    response: &egui::Response,
+    value: &mut String,
+    bounds: &crate::config::NumericBounds,
+) {
+    if !response.lost_focus() {
+        return;
+    }
+    let clamped = clamp_numeric_setting(
+        value,
+        bounds.min,
+        bounds.max,
+        bounds.is_int,
+        &bounds_default(bounds),
+    );
+    if clamped != *value {
+        *value = clamped;
+    }
+}
+
+/// Fallback string for unparseable input: the field's min as a canonical
+/// string. (We don't thread the schema default through the widget; `clamp` uses
+/// this as the "garbage → in-range" anchor, which always lies within bounds.)
+fn bounds_default(bounds: &crate::config::NumericBounds) -> String {
+    format_numeric(bounds.min, bounds.is_int)
+}
+
+/// Numeric settings field (always-enabled). Looks up the schema bounds for
+/// `key`, renders a compact text input, appends the range to the help text,
+/// and clamps the value into `[min, max]` on edit-commit. Falls back to a plain
+/// short text field if the key has no schema bounds (should not happen for the
+/// wired numeric settings).
+pub(in crate::ui) fn numeric_help(
+    ui: &mut egui::Ui,
+    key: &str,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    numeric_enabled(ui, true, key, label, value, help);
+}
+
+/// Enabled-gated numeric settings field (see [`numeric_help`]). The field is
+/// greyed out when `enabled` is false (e.g. an engine-specific knob whose
+/// backend is not active), matching the existing `*_enabled` widgets.
+pub(in crate::ui) fn numeric_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    key: &str,
+    label: &str,
+    value: &mut String,
+    help: &str,
+) {
+    let bounds = crate::config::numeric_bounds(key);
+    let help_text = match &bounds {
+        Some(b) => format!("{help} Range: {}.", range_hint(b)),
+        None => help.to_owned(),
+    };
+    let show_help = label_with_help_enabled(ui, enabled, label, &help_text);
+    let mut response = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        response = Some(
+            ui.add(egui::TextEdit::singleline(value).desired_width(SETTINGS_SHORT_INPUT_WIDTH)),
+        );
+    });
+    if let (Some(response), Some(bounds)) = (response, bounds) {
+        clamp_on_commit(&response, value, &bounds);
+    }
+    ui.end_row();
+    grid_help_row(ui, show_help, &help_text);
 }
 
 pub(in crate::ui) fn text_enabled(
@@ -391,5 +527,72 @@ mod tests {
         // At max scale 1.6 (body = 14.0 * 1.6 = 22.4 pt) → 220 * 1.6 = 352.
         let w = scaled_label_width(14.0 * 1.6);
         assert!((w - 352.0).abs() < 0.01, "scale 1.6 → {w}");
+    }
+
+    #[test]
+    fn clamp_numeric_int_in_range_is_canonicalized_unchanged() {
+        assert_eq!(clamp_numeric_setting("5", 1.0, 10.0, true, "1"), "5");
+        // A typed float on an int field rounds to the canonical integer string.
+        assert_eq!(clamp_numeric_setting("5.0", 1.0, 10.0, true, "1"), "5");
+        assert_eq!(clamp_numeric_setting(" 7 ", 1.0, 10.0, true, "1"), "7");
+    }
+
+    #[test]
+    fn clamp_numeric_above_max_clamps_to_max() {
+        // The motivating case: beam size 3000 -> 10.
+        assert_eq!(clamp_numeric_setting("3000", 1.0, 10.0, true, "1"), "10");
+        assert_eq!(clamp_numeric_setting("999", 0.0, 100.0, true, "30"), "100");
+    }
+
+    #[test]
+    fn clamp_numeric_below_min_clamps_to_min() {
+        assert_eq!(clamp_numeric_setting("0", 1.0, 10.0, true, "1"), "1");
+        assert_eq!(clamp_numeric_setting("-50", 5.0, 600.0, true, "120"), "5");
+    }
+
+    #[test]
+    fn clamp_numeric_garbage_falls_back_to_default_then_min() {
+        // Unparseable input clamps the (parseable) default into range.
+        assert_eq!(clamp_numeric_setting("abc", 1.0, 10.0, true, "1"), "1");
+        // A default itself out of range is clamped too.
+        assert_eq!(clamp_numeric_setting("xyz", 1.0, 10.0, true, "999"), "10");
+        // Garbage with garbage default falls back to min.
+        assert_eq!(clamp_numeric_setting("???", 1.0, 10.0, true, "???"), "1");
+    }
+
+    #[test]
+    fn clamp_numeric_float_formatting_trims_zeros() {
+        // Float field keeps decimals but trims trailing zeros.
+        assert_eq!(clamp_numeric_setting("0.30", 0.0, 1.0, false, "0.3"), "0.3");
+        assert_eq!(clamp_numeric_setting("0.5", 0.0, 5.0, false, "0.5"), "0.5");
+        // Above max on a float clamps to the float max.
+        assert_eq!(clamp_numeric_setting("9", 0.0, 1.0, false, "0.3"), "1");
+        // A whole-valued float formats without a spurious ".0".
+        assert_eq!(clamp_numeric_setting("3", 0.0, 30.0, false, "3"), "3");
+    }
+
+    #[test]
+    fn clamp_numeric_rejects_non_finite() {
+        // inf/NaN are not finite -> treated as garbage -> default.
+        assert_eq!(clamp_numeric_setting("inf", 0.0, 1.0, false, "0.3"), "0.3");
+        assert_eq!(clamp_numeric_setting("NaN", 1.0, 10.0, true, "1"), "1");
+    }
+
+    #[test]
+    fn range_hint_formats_int_and_float_bounds() {
+        let int_b = crate::config::NumericBounds {
+            min: 1.0,
+            max: 10.0,
+            step: 1.0,
+            is_int: true,
+        };
+        assert_eq!(range_hint(&int_b), "1–10");
+        let float_b = crate::config::NumericBounds {
+            min: 0.0,
+            max: 1.0,
+            step: 0.05,
+            is_int: false,
+        };
+        assert_eq!(range_hint(&float_b), "0–1");
     }
 }
