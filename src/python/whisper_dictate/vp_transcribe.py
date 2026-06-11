@@ -395,11 +395,15 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
     * its end timestamp runs past the captured audio (a hallucination beyond the
       recording, e.g. a 30 s "like and subscribe" tail on a 35 s clip); or
     * its OWN text is a known subtitle/caption credit (``is_hallucination`` —
-      the exact-match blacklist plus the year-anchored credit regex). This
-      catches a credit emitted as a SEPARATE trailing segment appended to a long
-      real utterance — the whole assembled text is then not a credit, so the
-      whole-text ``is_hallucination`` check downstream never sees it. Anchored /
-      year-required, so it cannot match a real speech segment; or
+      the exact-match blacklist plus the year-anchored credit regex) AND the
+      model corroborates non-speech via a high ``no_speech_prob``
+      (``>= NO_SPEECH_DROP``). This catches a credit emitted as a SEPARATE
+      segment appended to a long real utterance — the whole assembled text is
+      then not a credit, so the whole-text ``is_hallucination`` check downstream
+      never sees it. The silence gate is required: the credit regex is loose
+      enough (year-anchored, up to 60 leading chars) to match confident real
+      dictation like "oversat af Google i 2023", so text shape alone must never
+      drop a segment; or
     * it is the TRAILING segment with high ``no_speech_prob`` AND a credit-shaped
       text — drops even when ``avg_logprob`` is not low enough for the plain
       silence gate (the real repro: no_speech 0.63 but logprob -0.43). Kept tied
@@ -434,7 +438,7 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
             reason = "no_speech+logprob"
         elif past_audio:
             reason = "end_past_audio"
-        elif is_credit:
+        elif is_credit and no_speech >= NO_SPEECH_DROP:
             reason = "credit_pattern"
         elif trailing_silent_credit:
             reason = "trailing_no_speech_credit"

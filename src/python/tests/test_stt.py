@@ -184,19 +184,56 @@ class HallucinationFilterTests(unittest.TestCase):
         self.assertNotIn("Scandinavian Text Service", assembled)
         self.assertNotIn("2018", assembled)
 
-    def test_drop_per_segment_credit_with_good_logprob(self):
-        # A credit-shaped segment with HEALTHY metrics (low no_speech, decent
-        # logprob) — e.g. Whisper confidently transcribing a baked-in caption —
-        # is still dropped purely on the anchored credit-pattern match.
+    def test_drop_per_segment_credit_with_high_no_speech(self):
+        # A credit-shaped segment the model also flags as non-speech (high
+        # no_speech_prob >= NO_SPEECH_DROP) is dropped, even when avg_logprob is
+        # not low enough for the plain silence gate. The credit-pattern drop is
+        # gated on the corroborating silence signal.
         real = types.SimpleNamespace(
             text="dette er en helt almindelig sætning",
             start=0.0, end=5.0, avg_logprob=-0.15, no_speech_prob=0.01)
         credit = types.SimpleNamespace(
             text="Undertekster af Jesper Buhl 2019",
-            start=5.0, end=7.0, avg_logprob=-0.15, no_speech_prob=0.02)
+            start=5.0, end=7.0, avg_logprob=-0.15, no_speech_prob=0.65)
         kept, dropped = self.t._drop_hallucinated_segments([real, credit], 7.5)
         self.assertEqual([s.text for s in kept], [real.text])
         self.assertEqual([s.text for s in dropped], [credit.text])
+
+    def test_drop_per_segment_credit_shape_with_low_no_speech_survives(self):
+        # FALSE-POSITIVE GUARD: a credit-SHAPED segment the model is confident
+        # is real speech (low no_speech_prob, healthy logprob) must NOT be
+        # dropped. Text shape alone must never drop a segment.
+        real = types.SimpleNamespace(
+            text="dette er en helt almindelig sætning",
+            start=0.0, end=5.0, avg_logprob=-0.15, no_speech_prob=0.01)
+        credit_shaped = types.SimpleNamespace(
+            text="Undertekster af Jesper Buhl 2019",
+            start=5.0, end=7.0, avg_logprob=-0.1, no_speech_prob=0.05)
+        kept, dropped = self.t._drop_hallucinated_segments(
+            [real, credit_shaped], 7.5)
+        self.assertEqual(
+            [s.text for s in kept], [real.text, credit_shaped.text])
+        self.assertEqual(dropped, [])
+
+    def test_drop_per_segment_keeps_confident_year_dictation_da(self):
+        # FALSE-POSITIVE REPRO: real, confident Danish dictation that happens to
+        # match the year-anchored credit shape must survive.
+        seg = types.SimpleNamespace(
+            text="oversat af Google i 2023",
+            start=0.0, end=3.0, avg_logprob=-0.1, no_speech_prob=0.05)
+        kept, dropped = self.t._drop_hallucinated_segments([seg], 3.5)
+        self.assertEqual([s.text for s in kept], [seg.text])
+        self.assertEqual(dropped, [])
+
+    def test_drop_per_segment_keeps_confident_year_dictation_en(self):
+        # FALSE-POSITIVE REPRO (English): confident speech matching the credit
+        # shape survives.
+        seg = types.SimpleNamespace(
+            text="translated by the committee in 2020",
+            start=0.0, end=3.0, avg_logprob=-0.1, no_speech_prob=0.05)
+        kept, dropped = self.t._drop_hallucinated_segments([seg], 3.5)
+        self.assertEqual([s.text for s in kept], [seg.text])
+        self.assertEqual(dropped, [])
 
     def test_drop_per_segment_keeps_segment_containing_credit_phrase(self):
         # A real speech segment that merely CONTAINS "tekster af" mid-text (no
