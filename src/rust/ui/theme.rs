@@ -9,6 +9,13 @@ pub(in crate::ui) const DEFAULT_UI_TEXT_SCALE: f32 = 1.15;
 const UI_BG: egui::Color32 = egui::Color32::from_rgb(13, 18, 24);
 const UI_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(18, 25, 33);
 const UI_HEADER_BG: egui::Color32 = egui::Color32::from_rgb(16, 24, 32);
+// Dedicated fill for the top-bar readout cards (Status / Backend / Model /
+// Post pill). Slightly darker than UI_PANEL_BG (18,25,33) so the cards read as
+// a subtle recess instead of blending flush with the panel background. Must NOT
+// be the same value as UI_HEADER_BG because the header is the top panel's own
+// fill; keeping them distinct lets the readouts and the surrounding bar have
+// visually separate surfaces. Aim: perceptible but flat — not a raised button.
+const UI_READOUT_BG: egui::Color32 = egui::Color32::from_rgb(12, 18, 25);
 const UI_SURFACE_BG: egui::Color32 = egui::Color32::from_rgb(24, 34, 45);
 const UI_SURFACE_HOVER_BG: egui::Color32 = egui::Color32::from_rgb(31, 45, 59);
 const UI_SURFACE_ACTIVE_BG: egui::Color32 = egui::Color32::from_rgb(35, 56, 72);
@@ -40,7 +47,24 @@ const UI_LIGHT_WARN_TEXT: egui::Color32 = egui::Color32::from_rgb(180, 83, 9);
 const UI_LIGHT_ERROR_TEXT: egui::Color32 = egui::Color32::from_rgb(190, 18, 60);
 
 const SIDEBAR_WIDTH: f32 = 164.0;
-const TOP_STATUS_HEIGHT: f32 = 64.0;
+// Base (scale-1.0) text sizes used by the two-line status card. These mirror the
+// `apply_ui_theme` text styles (Small = 12, Body = 14) and the vertical
+// item-spacing (7) so the panel-height math below tracks the real rendered card
+// instead of a hand-tuned magic number. (The legacy fixed `TOP_STATUS_HEIGHT = 64`
+// constant is gone — the panel height is now derived from the real card content;
+// see `top_status_bar_height`.)
+const SMALL_FONT_SIZE: f32 = 12.0;
+const BODY_FONT_SIZE: f32 = 14.0;
+pub(in crate::ui) const ITEM_SPACING_Y: f32 = 7.0;
+// Vertical inner margins (UNSCALED literals, like the horizontal ones): the top
+// panel's frame margin (`app.rs`) and each card/pill's frame margin. The panel
+// height is derived from these so the rounded card bottom is never clipped.
+pub(in crate::ui) const TOP_PANEL_V_MARGIN: f32 = 10.0;
+pub(in crate::ui) const STATUS_CARD_V_MARGIN: f32 = 9.0;
+// A little extra breathing room below the card so its rounded corners sit clear
+// of the panel's bottom edge at every scale. Exposed to the ui module so the
+// layout tests can reference it instead of a raw literal.
+pub(in crate::ui) const TOP_STATUS_V_HEADROOM: f32 = 4.0;
 // Rough width of the post-indicator pill (icon + "Post on/off" + margins)
 // at scale 1.0.
 const POST_INDICATOR_MIN_WIDTH: f32 = 120.0;
@@ -53,11 +77,14 @@ const STATUS_CARD_WIDE_MIN_WIDTH: f32 = 218.0;
 // real OUTER width is `inner*scale + 2*H_MARGIN + 2*CARD_STROKE`. The margin and
 // stroke are UNSCALED literals (they come straight from the Frame builder), so
 // they are added AFTER the scale multiply. These MUST match the literals in
-// `status_card_sized`'s Frame (margin 14, stroke 0.8) and `post_indicator`'s
-// Frame (margin 12, stroke 0.8) — both reference these consts.
+// `status_card_sized`'s Frame (margin 14) and `post_indicator`'s Frame
+// (margin 12) — both reference these consts. The status cards/pill are flat
+// READOUTS (no border) so people don't mistake them for the Start/Stop buttons,
+// hence `CARD_STROKE = 0.0`; it stays in the outer-width budget so the geometry
+// source-of-truth is preserved if a border is ever reintroduced.
 pub(in crate::ui) const STATUS_CARD_H_MARGIN: f32 = 14.0;
 pub(in crate::ui) const POST_PILL_H_MARGIN: f32 = 12.0;
-pub(in crate::ui) const CARD_STROKE: f32 = 0.8;
+pub(in crate::ui) const CARD_STROKE: f32 = 0.0;
 // Base horizontal item-spacing (scaled by the UI text scale in `apply_ui_theme`).
 // The top-bar fit budget separates cards by exactly this scaled value, so the
 // layout tests source it here instead of re-hardcoding the literal.
@@ -66,6 +93,10 @@ const BOTTOM_MESSAGE_BAR_HEIGHT: f32 = 30.0;
 pub(in crate::ui) const CONTROL_RADIUS: u8 = 8;
 pub(in crate::ui) const PANEL_RADIUS: u8 = 12;
 pub(in crate::ui) const PILL_RADIUS: u8 = 14;
+// Top-bar status READOUTS (cards + post pill). Deliberately a tighter, nearly
+// flat corner than the buttons' `CONTROL_RADIUS` (8) so the readouts don't read
+// as the raised, clickable Start/Stop/compact buttons next to them.
+pub(in crate::ui) const READOUT_RADIUS: u8 = 4;
 
 /// Uniform inset between content and the surrounding panel/window edges. Used as
 /// the CentralPanel margin and reused for the settings footer card so the gap is
@@ -92,6 +123,12 @@ pub(in crate::ui) struct UiPalette {
     pub(in crate::ui) bg: egui::Color32,
     pub(in crate::ui) panel_bg: egui::Color32,
     pub(in crate::ui) header_bg: egui::Color32,
+    /// Fill for the top-bar status readout cards and post-indicator pill.
+    /// Kept separate from `header_bg` so the two surfaces can be tuned
+    /// independently — in dark mode this is slightly darker than `panel_bg`
+    /// (recessed feel); in light mode it mirrors `header_bg` which is already
+    /// distinctly lighter than the panel.
+    pub(in crate::ui) readout_bg: egui::Color32,
     pub(in crate::ui) surface_bg: egui::Color32,
     pub(in crate::ui) surface_hover_bg: egui::Color32,
     pub(in crate::ui) surface_active_bg: egui::Color32,
@@ -113,6 +150,7 @@ pub(in crate::ui) fn ui_palette(raw_theme: &str) -> UiPalette {
             bg: UI_BG,
             panel_bg: UI_PANEL_BG,
             header_bg: UI_HEADER_BG,
+            readout_bg: UI_READOUT_BG,
             surface_bg: UI_SURFACE_BG,
             surface_hover_bg: UI_SURFACE_HOVER_BG,
             surface_active_bg: UI_SURFACE_ACTIVE_BG,
@@ -131,6 +169,9 @@ pub(in crate::ui) fn ui_palette(raw_theme: &str) -> UiPalette {
             bg: UI_LIGHT_BG,
             panel_bg: UI_LIGHT_PANEL_BG,
             header_bg: UI_LIGHT_HEADER_BG,
+            // Light-mode readouts use the same header_bg — it's already
+            // distinctly lighter than the panel so cards have natural shape.
+            readout_bg: UI_LIGHT_HEADER_BG,
             surface_bg: UI_LIGHT_SURFACE_BG,
             surface_hover_bg: UI_LIGHT_SURFACE_HOVER_BG,
             surface_active_bg: UI_LIGHT_SURFACE_ACTIVE_BG,
@@ -148,14 +189,24 @@ pub(in crate::ui) fn ui_palette(raw_theme: &str) -> UiPalette {
     }
 }
 
+/// Parse a raw scale string into a clamped `f32` multiplier.
+///
+/// Single source of truth shared by `apply_ui_theme` (text rendering) and
+/// `layout_scale` (panel/card sizing). Both paths MUST return the same value
+/// for any input so text and layout always agree — the clipping bug this PR
+/// fixed was caused by the two paths using different fallbacks for garbage
+/// input (1.0 vs DEFAULT_UI_TEXT_SCALE).
+fn parse_ui_scale(raw: &str) -> f32 {
+    raw.trim()
+        .parse::<f32>()
+        .unwrap_or(DEFAULT_UI_TEXT_SCALE)
+        .clamp(0.85, 1.6)
+}
+
 pub(in crate::ui) fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_theme: &str) {
     let theme = UiThemeMode::from_raw(raw_theme);
     let palette = ui_palette(raw_theme);
-    let scale = raw_scale
-        .trim()
-        .parse::<f32>()
-        .unwrap_or(DEFAULT_UI_TEXT_SCALE)
-        .clamp(0.85, 1.6);
+    let scale = parse_ui_scale(raw_scale);
     // Single source of truth for font sizes/weights. Headers go through
     // `ui.heading()` / `section_label` (Heading / Small), body text and labels
     // through Body, code/paths through Monospace, buttons through Button. Avoid
@@ -167,7 +218,7 @@ pub(in crate::ui) fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_th
         ),
         (
             egui::TextStyle::Body,
-            egui::FontId::proportional(14.0 * scale),
+            egui::FontId::proportional(BODY_FONT_SIZE * scale),
         ),
         (
             egui::TextStyle::Monospace,
@@ -179,11 +230,11 @@ pub(in crate::ui) fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_th
         ),
         (
             egui::TextStyle::Small,
-            egui::FontId::proportional(12.0 * scale),
+            egui::FontId::proportional(SMALL_FONT_SIZE * scale),
         ),
     ]);
     let button_padding = egui::vec2(10.0 * scale, 5.0 * scale);
-    let item_spacing = egui::vec2(ITEM_SPACING_X * scale, 7.0 * scale);
+    let item_spacing = egui::vec2(ITEM_SPACING_X * scale, ITEM_SPACING_Y * scale);
     let mut style = (*ctx.style()).clone();
     style.text_styles = text_styles;
     style.spacing.button_padding = button_padding;
@@ -282,14 +333,12 @@ pub(in crate::ui) fn icon_text(icon: &str, label: impl AsRef<str>) -> egui::Rich
     egui::RichText::new(format!("{icon}  {}", label.as_ref()))
 }
 
-/// Parse a user scale string into the clamped layout multiplier (default 1.0).
-/// Trims surrounding whitespace to match `apply_ui_theme`'s scale parsing.
+/// Parse a user scale string into the clamped layout multiplier.
+/// Delegates to `parse_ui_scale` so text rendering (`apply_ui_theme`) and
+/// panel/card sizing always use the same value — including the same fallback
+/// (`DEFAULT_UI_TEXT_SCALE`) on garbage input.
 fn layout_scale(raw_scale: &str) -> f32 {
-    raw_scale
-        .trim()
-        .parse::<f32>()
-        .unwrap_or(1.0)
-        .clamp(0.85, 1.6)
+    parse_ui_scale(raw_scale)
 }
 
 pub(in crate::ui) fn sidebar_width(raw_scale: &str) -> f32 {
@@ -311,8 +360,23 @@ pub(in crate::ui) fn paint_sidebar_bridge(
         .rect_filled(bridge, 0.0, palette.panel_bg);
 }
 
+/// Height of a two-line status card's rendered content + its own frame margin,
+/// at the given UI scale. The card stacks a Small label, the vertical
+/// item-spacing, and a Body value (all scaled), wrapped in the card's symmetric
+/// vertical inner margin (unscaled). Pure so the panel-height fit is unit-testable
+/// without an egui context.
+pub(in crate::ui) fn status_card_height(raw_scale: &str) -> f32 {
+    let scale = layout_scale(raw_scale);
+    let text = (SMALL_FONT_SIZE + ITEM_SPACING_Y + BODY_FONT_SIZE) * scale;
+    text + 2.0 * STATUS_CARD_V_MARGIN
+}
+
+/// Exact height of the top status panel. Derived from the actual two-line card
+/// height plus the panel's own vertical frame margin and a little headroom, so
+/// the card's rounded bottom is fully visible (never clipped) at every scale —
+/// the unscaled card/panel margins no longer fall behind the scaled text.
 pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
-    TOP_STATUS_HEIGHT * layout_scale(raw_scale)
+    status_card_height(raw_scale) + 2.0 * TOP_PANEL_V_MARGIN + TOP_STATUS_V_HEADROOM
 }
 
 /// Minimum remaining width before the top-bar post pill is drawn at all.
@@ -402,10 +466,54 @@ mod tests {
     fn layout_scale_trims_clamps_and_defaults() {
         // Surrounding whitespace is trimmed before parsing (matches apply_ui_theme).
         assert!((layout_scale(" 1.2 ") - 1.2).abs() < 0.001);
-        // Unparseable input falls back to 1.0.
-        assert!((layout_scale("nonsense") - 1.0).abs() < 0.001);
+        // Unparseable input now falls back to DEFAULT_UI_TEXT_SCALE (same as
+        // apply_ui_theme) so text rendering and panel sizing agree on every input.
+        assert!(
+            (layout_scale("nonsense") - DEFAULT_UI_TEXT_SCALE).abs() < 0.001,
+            "layout_scale fallback must equal DEFAULT_UI_TEXT_SCALE"
+        );
         // Out-of-range values are clamped to [0.85, 1.6].
         assert!((layout_scale("99") - 1.6).abs() < 0.001);
         assert!((layout_scale("0.1") - 0.85).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_ui_scale_and_apply_ui_theme_agree_on_fallback() {
+        // The clipping bug this PR fixed was caused by layout_scale and
+        // apply_ui_theme using DIFFERENT fallbacks for garbage input (1.0 vs
+        // DEFAULT_UI_TEXT_SCALE). Verify both paths now return the same value
+        // for garbage, valid, and clamped inputs so text and layout never drift.
+        let ctx = egui::Context::default();
+
+        // Garbage input: parse_ui_scale (= layout_scale) must return exactly
+        // DEFAULT_UI_TEXT_SCALE, and apply_ui_theme must set Body to that scale.
+        let fallback_scale = parse_ui_scale("garbage");
+        assert!(
+            (fallback_scale - DEFAULT_UI_TEXT_SCALE).abs() < 0.001,
+            "parse_ui_scale fallback {fallback_scale} != DEFAULT_UI_TEXT_SCALE {DEFAULT_UI_TEXT_SCALE}"
+        );
+        apply_ui_theme(&ctx, "garbage", "dark");
+        let body_on_garbage = ctx.style().text_styles[&egui::TextStyle::Body].size;
+        assert!(
+            (body_on_garbage - BODY_FONT_SIZE * DEFAULT_UI_TEXT_SCALE).abs() < 0.001,
+            "apply_ui_theme set body size {body_on_garbage} but expected {}",
+            BODY_FONT_SIZE * DEFAULT_UI_TEXT_SCALE
+        );
+        assert!(
+            (body_on_garbage - BODY_FONT_SIZE * fallback_scale).abs() < 0.001,
+            "text scale {body_on_garbage} and layout scale {} disagree on garbage input",
+            BODY_FONT_SIZE * fallback_scale
+        );
+
+        // Valid input and clamped input: both paths must agree.
+        for raw in ["1.0", "1.15", " 1.3 ", "0.1", "99"] {
+            let layout = parse_ui_scale(raw);
+            apply_ui_theme(&ctx, raw, "dark");
+            let text = ctx.style().text_styles[&egui::TextStyle::Body].size / BODY_FONT_SIZE;
+            assert!(
+                (text - layout).abs() < 0.001,
+                "text scale {text} and layout scale {layout} disagree for input {raw:?}"
+            );
+        }
     }
 }

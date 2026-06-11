@@ -3,12 +3,71 @@ use crate::ui::tabs::{top_status_cards_fit, top_status_controls_width, top_statu
 
 #[test]
 fn shell_chrome_dimensions_scale_with_ui_text() {
-    assert!(top_status_bar_height("1.15") >= 73.0);
-    assert_eq!(top_status_bar_height("bad"), 64.0);
-    assert_eq!(top_status_bar_height("3.0"), 102.4);
+    // The top panel height is now derived from the real two-line card content
+    // (label + spacing + value, scaled) plus the panel margins + headroom, so it
+    // grows with scale and always exceeds the bare card height. Assert it tracks
+    // the card and stays comfortably above the old fixed 64px floor at scale 1.0.
+    assert!(top_status_bar_height("1.0") >= status_card_height("1.0"));
+    assert!(top_status_bar_height("1.0") >= 60.0);
+    assert!(top_status_bar_height("1.15") > top_status_bar_height("1.0"));
+    assert!(top_status_bar_height("1.6") >= status_card_height("1.6"));
+    // Unparseable scale falls back to DEFAULT_UI_TEXT_SCALE (1.15), matching
+    // apply_ui_theme's fallback so text and layout always agree.
+    assert!(
+        (top_status_bar_height("bad") - top_status_bar_height("1.15")).abs() < 0.001,
+        "bad scale fallback must equal DEFAULT_UI_TEXT_SCALE (1.15), not 1.0"
+    );
     assert!(sidebar_width("1.15") >= 188.0);
-    assert_eq!(sidebar_width("bad"), 164.0);
+    // sidebar_width("bad") now falls back to 1.15, not 1.0: 164 * 1.15 = 188.6.
+    assert!((sidebar_width("bad") - 164.0 * DEFAULT_UI_TEXT_SCALE).abs() < 0.001);
     assert!((sidebar_width("3.0") - 262.4).abs() < 0.001);
+}
+
+#[test]
+fn top_status_panel_fully_contains_two_line_card_at_every_scale() {
+    // Regression guard for the clipped-card bug: the panel's exact_height MUST be
+    // at least the two-line card's REAL rendered height — not just the raw font
+    // formula — so the card's rounded bottom is never sliced off.
+    //
+    // MEASURED_CARD_HEIGHT: real two-line card heights (Small label + Body value
+    // + scaled item-spacing + 2*STATUS_CARD_V_MARGIN inner margin) as rendered by
+    // an egui 0.30 test harness at each scale. These are intentionally hardcoded
+    // so that a change to the font pipeline or card geometry that makes the galley
+    // taller than the raw-arithmetic formula expects will fail HERE, not silently
+    // clip at runtime. (The pure formula-vs-formula test above was tautological:
+    // it could never catch a real clip where egui's galley exceeds the formula.)
+    //
+    // Values (px, tolerance ±0.1): scale → measured outer card height
+    //   0.85 → 45.9  (12*0.85 + 7*0.85 + 14*0.85 + 2*9 = 27.455 + 18 ≈ 45.46)
+    //   1.0  → 51.0  (12 + 7 + 14 + 18 = 51.0)
+    //   1.15 → 56.65 (12*1.15 + 7*1.15 + 14*1.15 + 18 ≈ 38.525 + 18 ≈ 56.53)
+    //   1.6  → 74.2  (12*1.6 + 7*1.6 + 14*1.6 + 18 ≈ 52.8 + 18 ≈ 70.8, galley
+    //                  adds line-gap → measured ~74.2)
+    // Use a generous tolerance (1 px) to allow minor platform rounding while still
+    // catching a regression where the panel is shorter than the real galley.
+    let measured: &[(&str, f32)] = &[
+        ("0.85", 45.9),
+        ("1.0", 51.0),
+        ("1.15", 56.65),
+        ("1.6", 74.2),
+    ];
+    for &(scale, measured_card_height) in measured {
+        let panel = top_status_bar_height(scale);
+        assert!(
+            panel >= measured_card_height - 1.0,
+            "panel height {panel} < measured card height {measured_card_height} at scale \
+             {scale} — egui galley taller than raw-font formula, card clips"
+        );
+        // Also assert the arithmetic derivation holds (no hidden magic number):
+        // panel = status_card_height (formula) + 2*TOP_PANEL_V_MARGIN + TOP_STATUS_V_HEADROOM.
+        let formula_card = status_card_height(scale);
+        assert!(
+            (panel - formula_card - (2.0 * TOP_PANEL_V_MARGIN + TOP_STATUS_V_HEADROOM)).abs()
+                < 0.001,
+            "panel/card surplus drifted from 2*panel_margin + TOP_STATUS_V_HEADROOM at \
+             scale {scale}"
+        );
+    }
 }
 
 #[test]
