@@ -329,11 +329,13 @@ impl WhisperDictateApp {
             &self.settings.post_mode,
             &self.settings.ui_language,
         );
-        // Same flat readout treatment as the status cards: recessed `header_bg`
-        // tint, no border, barely-rounded corner — distinct from the rounded,
-        // raised Start/Stop/compact buttons to its right.
+        // Same flat readout treatment as the status cards: recessed `readout_bg`
+        // tint (slightly darker than panel_bg in dark mode so cards read as a
+        // subtle recess rather than flush with the background), no border,
+        // barely-rounded corner — distinct from the rounded, raised
+        // Start/Stop/compact buttons to its right.
         egui::Frame::default()
-            .fill(palette.header_bg)
+            .fill(palette.readout_bg)
             .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
             .rounding(egui::Rounding::same(READOUT_RADIUS as f32))
             .inner_margin(egui::Margin::symmetric(
@@ -455,12 +457,13 @@ fn status_card_sized(
     min_width: f32,
 ) {
     let value = value.as_ref();
-    // Flat READOUT, not a button: a recessed `header_bg` tint (buttons use
+    // Flat READOUT, not a button: a recessed `readout_bg` tint (slightly darker
+    // than panel_bg in dark mode so cards have a faint recess; buttons use
     // `surface_bg`), no border, and a barely-rounded corner so the status strip
     // reads as a passive readout rather than a clickable control. The muted Small
     // label sits above the strong, colour-coded value (full value on hover).
     egui::Frame::default()
-        .fill(palette.header_bg)
+        .fill(palette.readout_bg)
         .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
         .rounding(egui::Rounding::same(READOUT_RADIUS as f32))
         .inner_margin(egui::Margin::symmetric(

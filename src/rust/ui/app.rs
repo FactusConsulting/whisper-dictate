@@ -106,7 +106,7 @@ impl eframe::App for WhisperDictateApp {
                 egui::Frame::default()
                     .fill(palette.panel_bg)
                     .stroke(egui::Stroke::new(0.8, palette.border_soft))
-                    .inner_margin(egui::Margin::symmetric(16.0, 10.0)),
+                    .inner_margin(egui::Margin::symmetric(16.0, TOP_PANEL_V_MARGIN)),
             )
             .show(ctx, |ui| self.top_status_bar(ui, palette));
 

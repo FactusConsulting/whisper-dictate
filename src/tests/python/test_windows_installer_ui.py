@@ -566,19 +566,25 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         theme = Path("src/rust/ui/theme.rs").read_text(encoding="utf-8")
         # Scope to the two readout renderers: the post_indicator pill (between
         # top_status_bar and global_controls) and the status_card_sized Frame
-        # (after global_controls). Concatenate both so the style assertions cover
-        # the pill AND the cards but never the actual buttons in global_controls.
+        # body (scoped to its own function so unrelated additions later in
+        # shell.rs cannot pollute the assertions). Concatenate both so the style
+        # assertions cover the pill AND the cards but never the actual buttons
+        # in global_controls.
         pill = shell.split("fn post_indicator", 1)[1].split("fn global_controls", 1)[0]
-        cards = shell.split("fn status_card_sized", 1)[1]
+        # Scope status_card_sized to just its own function body: split at the
+        # fn header, then cut off at the next fn definition so later helpers
+        # (fn runtime_state_color, etc.) can't accidentally satisfy an assertIn.
+        cards = shell.split("fn status_card_sized", 1)[1].split("\nfn ", 1)[0]
         readouts = pill + cards
 
         # Status cards + post pill must read as flat READOUTS, not the raised,
         # clickable Start/Stop/compact buttons next to them:
-        #  - a recessed header_bg tint (buttons use surface_bg), NOT surface_bg
+        #  - a recessed readout_bg tint (darker than panel_bg in dark mode so
+        #    cards read as a faint recess; buttons use surface_bg), NOT surface_bg
         #  - no border tell (CARD_STROKE is 0.0)
         #  - a barely-rounded READOUT_RADIUS corner, not the buttons' radius
         self.assertNotIn("palette.surface_bg", readouts)
-        self.assertIn("palette.header_bg", readouts)
+        self.assertIn("palette.readout_bg", readouts)
         self.assertIn("READOUT_RADIUS", readouts)
         self.assertNotIn("PANEL_RADIUS", readouts)
         self.assertNotIn("PILL_RADIUS", readouts)
