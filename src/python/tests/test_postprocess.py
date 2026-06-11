@@ -442,6 +442,98 @@ class PostprocessTests(unittest.TestCase):
         self.assertIn("unchanged", script)
         self.assertIn("post_result.changed", script)
 
+    def test_effective_timeout_scales_with_length_and_clamps(self):
+        from whisper_dictate import vp_postprocess
+
+        base = 4000
+        # 0 chars -> exactly the base (acts as floor).
+        self.assertEqual(vp_postprocess.effective_timeout_ms(base, 0), 4000)
+        # 60 chars -> 4000 + 60*20 = 5200.
+        self.assertEqual(vp_postprocess.effective_timeout_ms(base, 60), 5200)
+        # 444 chars (the bug repro) -> 4000 + 444*20 = 12880.
+        self.assertEqual(vp_postprocess.effective_timeout_ms(base, 444), 12880)
+        # 1000 chars -> 24000, but clamped to the 30000 ceiling? 4000+20000=24000
+        # is below ceiling; 1300 chars -> 30000, anything beyond stays at ceiling.
+        self.assertEqual(vp_postprocess.effective_timeout_ms(base, 1300), 30000)
+        self.assertEqual(vp_postprocess.effective_timeout_ms(base, 100000), 30000)
+        # The base is the floor: negative/zero length never drops below base.
+        self.assertEqual(vp_postprocess.effective_timeout_ms(base, -5), 4000)
+        self.assertEqual(vp_postprocess.PER_CHAR_MS, 20)
+        self.assertEqual(vp_postprocess.CEILING_MS, 30000)
+
+    def test_cleanup_call_gets_length_scaled_timeout(self):
+        from whisper_dictate import vp_postprocess
+
+        captured = {}
+
+        def fake_chat(*, base_url, api_key, model, prompt, timeout_ms):
+            captured.setdefault("timeouts", []).append(timeout_ms)
+            return "cleaned", 5
+
+        def rust_json(command, *_a, **_k):
+            return {"ok": True} if command == "privacy" else None
+
+        def run(text):
+            settings = vp_postprocess.PostprocessSettings(
+                processor="groq",
+                mode="clean",
+                model="llama-3.1-8b-instant",
+                base_url="https://api.groq.com/openai/v1",
+                api_key="k",
+                timeout_ms=4000,
+            )
+            with patch("whisper_dictate.vp_postprocess.openai_chat_completion",
+                       side_effect=fake_chat), \
+                    patch("whisper_dictate.vp_postprocess._rust_json",
+                          side_effect=rust_json):
+                vp_postprocess.postprocess_text(text, settings)
+
+        run("x" * 10)
+        run("x" * 500)
+        short, long = captured["timeouts"]
+        # Floor at base for tiny input, and the budget grows with length.
+        self.assertEqual(short, 4000 + 10 * vp_postprocess.PER_CHAR_MS)
+        self.assertEqual(long, 4000 + 500 * vp_postprocess.PER_CHAR_MS)
+        self.assertGreater(long, short)
+
+    def test_ollama_cleanup_call_gets_length_scaled_timeout(self):
+        from whisper_dictate import vp_postprocess
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured.setdefault("timeouts", []).append(timeout)
+            import io
+            import json as _json
+            data = _json.dumps({"response": "cleaned"}).encode("utf-8")
+            resp = io.BytesIO(data)
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda s, *a: None
+            resp.read = lambda: data
+            return resp
+
+        def run(text):
+            settings = vp_postprocess.PostprocessSettings(
+                processor="ollama",
+                mode="clean",
+                model="qwen2.5:3b",
+                base_url="http://127.0.0.1:11434",
+                timeout_ms=4000,
+            )
+            with patch("whisper_dictate.vp_postprocess.urllib.request.urlopen",
+                       side_effect=fake_urlopen):
+                vp_postprocess.postprocess_text(text, settings)
+
+        run("x" * 10)
+        run("x" * 500)
+        short_s, long_s = captured["timeouts"]
+        # Convert seconds back to ms for comparison with scaling formula.
+        short_ms = round(short_s * 1000)
+        long_ms = round(long_s * 1000)
+        self.assertEqual(short_ms, 4000 + 10 * vp_postprocess.PER_CHAR_MS)
+        self.assertEqual(long_ms, 4000 + 500 * vp_postprocess.PER_CHAR_MS)
+        self.assertGreater(long_ms, short_ms)
+
 class FormatCommandTests(unittest.TestCase):
     def setUp(self):
         sys.modules.pop("whisper_dictate.runtime", None)

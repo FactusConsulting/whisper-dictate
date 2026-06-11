@@ -130,7 +130,7 @@ impl PostApiCheck {
             model: model.to_owned(),
             api_key: api_key.to_owned(),
             mode: settings.post_mode.trim().to_owned(),
-            timeout_ms: parse_timeout_ms(&settings.post_timeout_ms, 2_000),
+            timeout_ms: parse_timeout_ms(&settings.post_timeout_ms, 4_000),
         })
     }
 }

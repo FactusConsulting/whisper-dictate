@@ -135,7 +135,7 @@ impl Default for AppSettings {
             post_mode: "raw".to_owned(),
             post_model: "qwen2.5:3b".to_owned(),
             post_base_url: "http://localhost:11434".to_owned(),
-            post_timeout_ms: "2000".to_owned(),
+            post_timeout_ms: "4000".to_owned(),
             post_max_input_chars: "4000".to_owned(),
             post_max_output_chars: "4000".to_owned(),
             post_redact: false,

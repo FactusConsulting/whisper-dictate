@@ -25,6 +25,26 @@ MODE_ALIASES = {
 }
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
+# Length-scaled post-processing timeout. The configured ``post_timeout_ms`` is
+# the BASE/floor wall-clock budget; the effective timeout grows with the length
+# of the text being cleaned (longer text => more tokens => more model time) up to
+# a hard ceiling, so a long dictation no longer silently times out and falls back
+# to raw, uncleaned text. These are intentionally Python-only constants (not
+# user settings) — only the base/floor is configurable.
+PER_CHAR_MS = 20
+CEILING_MS = 30000
+
+
+def effective_timeout_ms(base_ms: int, text_chars: int) -> int:
+    """Length-scaled HTTP timeout for a cleanup call (pure, unit-testable).
+
+    ``clamp(base_ms + text_chars * PER_CHAR_MS, base_ms, CEILING_MS)``: the
+    configured ``base_ms`` is the floor, every character adds ``PER_CHAR_MS`` to
+    the budget, and the result is capped at ``CEILING_MS``.
+    """
+    scaled = base_ms + max(0, int(text_chars)) * PER_CHAR_MS
+    return max(base_ms, min(scaled, CEILING_MS))
+
 
 @dataclass(frozen=True)
 class Redaction:
@@ -61,7 +81,7 @@ class PostprocessSettings:
     mode: str = "raw"
     model: str = DEFAULT_OLLAMA_POST_MODEL
     base_url: str = DEFAULT_OLLAMA_BASE_URL
-    timeout_ms: int = 2000
+    timeout_ms: int = 4000
     max_input_chars: int = 4000
     max_output_chars: int = 4000
     api_key: str = ""
@@ -141,7 +161,7 @@ def load_postprocess_settings() -> PostprocessSettings:
         mode=mode,
         model=_normalized_model(processor, raw_model),
         base_url=_normalized_base_url(processor, raw_base_url),
-        timeout_ms=_int_setting("VOICEPI_POST_TIMEOUT_MS", 2000, 100),
+        timeout_ms=_int_setting("VOICEPI_POST_TIMEOUT_MS", 4000, 100),
         max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100),
         max_output_chars=_int_setting("VOICEPI_POST_MAX_OUTPUT_CHARS", 4000, 100),
         api_key=_postprocess_api_key(),
@@ -289,7 +309,7 @@ def _ollama_generate(settings: PostprocessSettings, text: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=settings.timeout_ms / 1000.0) as resp:
+    with urllib.request.urlopen(req, timeout=effective_timeout_ms(settings.timeout_ms, len(text)) / 1000.0) as resp:
         obj = json.loads(resp.read().decode("utf-8", errors="replace"))
     output = str(obj.get("response", "")).strip()
     return output or text
@@ -352,12 +372,16 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             out = _ollama_generate(settings, clipped)
             latency_ms = int((time.monotonic() - t0) * 1000)
         elif settings.processor in ("openai", "groq"):
+            # The configured timeout is the BASE/floor; scale the effective HTTP
+            # budget with the length of the text being cleaned so longer
+            # dictations get proportionally more time (up to CEILING_MS) instead
+            # of silently timing out and falling back to raw text.
             out, latency_ms = openai_chat_completion(
                 base_url=settings.base_url,
                 api_key=settings.api_key,
                 model=settings.model,
                 prompt=build_prompt(prompt_text, mode),
-                timeout_ms=settings.timeout_ms,
+                timeout_ms=effective_timeout_ms(settings.timeout_ms, len(prompt_text)),
             )
         else:
             raise ValueError(f"unsupported post processor: {settings.processor}")

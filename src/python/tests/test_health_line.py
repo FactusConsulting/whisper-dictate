@@ -202,6 +202,31 @@ class HealthLinePostTests(unittest.TestCase):
         line = format_health_line({"segments": _segments(-0.1)})
         self.assertIn("post off", line)
 
+    def test_post_fallback_emits_warn_segment(self):
+        line = format_health_line({
+            "post_mode": "clean",
+            "post_processor": "groq",
+            "post_fallback": True,
+            "post_latency_ms": 4012,
+            "segments": _segments(-0.1),
+        })
+        # A WARN segment is appended so the Rust health card turns amber.
+        self.assertIn("WARN post timeout->raw (4s)", line)
+        self.assertTrue(line.split(" | ")[-1].strip().startswith("WARN"))
+        # The clean "post clean/groq" stage text is still present (provenance).
+        self.assertIn("post clean/groq", line)
+
+    def test_post_success_has_no_warn_segment(self):
+        line = format_health_line({
+            "post_mode": "clean",
+            "post_processor": "groq",
+            "post_fallback": False,
+            "post_latency_ms": 800,
+            "segments": _segments(-0.1),
+        })
+        self.assertIn("post clean/groq", line)
+        self.assertNotIn("WARN", line)
+
 
 if __name__ == "__main__":
     unittest.main()
