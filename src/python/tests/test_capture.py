@@ -267,13 +267,23 @@ class StartSounddeviceTests(unittest.TestCase):
         cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
 
     def _fake_target(self):
-        return types.SimpleNamespace(
+        rt = self.runtime
+        target = types.SimpleNamespace(
             _capture_backend="",
             _audio_input_device="",
             _capture_channels=0,
+            _capture_dtype="int16",
+            _capture_rate=16000,
             _stream=None,
             _cb=lambda *_a: None,
         )
+        # _start_sounddevice calls self._bind_stream / self._note_device_swap;
+        # bind the real mixin methods so the namespace target drives them.
+        target._bind_stream = (
+            lambda *a, **k: rt.CaptureMixin._bind_stream(target, *a, **k))
+        target._note_device_swap = (
+            lambda *a, **k: rt.CaptureMixin._note_device_swap(target, *a, **k))
+        return target
 
     def test_start_sounddevice_uses_first_working_channel_count(self):
         rt = self.runtime
@@ -554,10 +564,17 @@ class StreamStartFailureTests(unittest.TestCase):
         cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
 
     def _fake_target(self):
-        return types.SimpleNamespace(
+        rt = self.runtime
+        target = types.SimpleNamespace(
             _capture_backend="", _audio_input_device="", _capture_channels=0,
+            _capture_dtype="int16", _capture_rate=16000,
             _stream=None, _cb=lambda *_a: None,
         )
+        target._bind_stream = (
+            lambda *a, **k: rt.CaptureMixin._bind_stream(target, *a, **k))
+        target._note_device_swap = (
+            lambda *a, **k: rt.CaptureMixin._note_device_swap(target, *a, **k))
+        return target
 
     def test_start_failure_at_16k_falls_back_to_native_rate(self):
         # The 16k open succeeds but start() raises (WASAPI rejects 16k on start);
@@ -784,10 +801,11 @@ class NativeRateOpenTests(unittest.TestCase):
             default=types.SimpleNamespace(device=(3, 0)),
         )
 
-        stream, channels, rate, exc = rt._open_native_rate_stream(
+        stream, channels, dtype, rate, exc = rt._open_native_rate_stream(
             fake_sd, 3, lambda *_a: None)
         self.assertIsNotNone(stream)
         self.assertEqual(rate, 44100)
+        self.assertEqual(dtype, "int16")
         self.assertIsNone(exc)
         self.assertTrue(all(k["samplerate"] == 44100 for k in opened))
 
@@ -801,10 +819,11 @@ class NativeRateOpenTests(unittest.TestCase):
                 "default_samplerate": 16000.0},
             default=types.SimpleNamespace(device=(1, 0)),
         )
-        stream, channels, rate, exc = rt._open_native_rate_stream(
+        stream, channels, dtype, rate, exc = rt._open_native_rate_stream(
             fake_sd, 1, lambda *_a: None)
         self.assertIsNone(stream)
         self.assertEqual(rate, 0)
+        self.assertEqual(dtype, "")
         self.assertIsNone(exc)
 
 
@@ -1146,4 +1165,353 @@ class MaxRecordCapTests(unittest.TestCase):
         cap_events = [e for e in events if e.get("capped") is True]
         self.assertEqual(cap_events, [],
                          f"no cap event expected when already warned; got {events!r}")
+
+
+# ---------------------------------------------------------------------------
+# Format negotiation: int16 → float32 dtype fallback (Blue Yeti repro)
+# ---------------------------------------------------------------------------
+
+def _bound_target(rt):
+    """A namespace 'self' for _start_sounddevice with the mixin methods bound."""
+    target = types.SimpleNamespace(
+        _capture_backend="", _audio_input_device="", _capture_channels=0,
+        _capture_dtype="int16", _capture_rate=16000, _stream=None,
+        _cb=lambda *_a: None,
+    )
+    target._bind_stream = lambda *a, **k: rt.CaptureMixin._bind_stream(target, *a, **k)
+    target._note_device_swap = (
+        lambda *a, **k: rt.CaptureMixin._note_device_swap(target, *a, **k))
+    return target
+
+
+def _yeti_fake_sd(stream_cls, *, default_samplerate=48000.0, default_input=5):
+    """A fake sounddevice exposing a WASAPI Yeti at index 5 (48k float32).
+
+    ``default_input`` is the system-default INPUT device index used when capture
+    falls back to ``device=None`` (set it to a NON-Yeti index to exercise the
+    device-swap honesty path, where the default resolves to a different mic).
+    Index 1 is a separate "Jabra-like" input below.
+    """
+    devices = [
+        {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+        {"name": "Headset Microphone (Jabra Evolve 65 TE)", "hostapi": 2,
+         "max_input_channels": 2, "default_samplerate": 16000.0},
+        {"name": "Other", "hostapi": 1, "max_input_channels": 2},
+        {"name": "Other", "hostapi": 2, "max_input_channels": 2},
+        {"name": "Filler", "hostapi": 0, "max_input_channels": 0},
+        {"name": "Microphone (Yeti Classic)", "hostapi": 2,
+         "max_input_channels": 2, "default_samplerate": default_samplerate},
+    ]
+    hostapis = [
+        {"name": "MME", "default_input_device": 0},
+        {"name": "Windows DirectSound", "default_input_device": default_input},
+        {"name": "Windows WASAPI", "default_input_device": default_input},
+    ]
+
+    def query_devices(device=None, kind=None):
+        if device is None and kind is None:
+            return devices
+        if isinstance(device, int):
+            return devices[device]
+        return {"name": devices[default_input]["name"], "max_input_channels": 2,
+                "default_samplerate": default_samplerate}
+
+    return types.SimpleNamespace(
+        InputStream=stream_cls,
+        default=types.SimpleNamespace(device=(default_input, 0)),
+        query_devices=query_devices, query_hostapis=lambda: hostapis)
+
+
+class Float32FallbackTests(unittest.TestCase):
+    """A device that rejects int16 but accepts float32 must bind on float32 and
+    NOT swap to the system default; the callback converts float32 → int16."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+        import numpy as np
+        cls.np = np
+
+    def test_int16_rejected_float32_accepted_binds_float32_no_swap(self):
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # int16 is rejected at any rate (Yeti shared mixformat=float32);
+                # float32 at 16k succeeds so no native-rate / default fallback.
+                if kwargs["dtype"] == "int16":
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT PaErrorCode -9999")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_fake_sd(Stream)
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertTrue(getattr(target._stream, "started", False))
+        # Bound on the float32 candidate, at 16k (no native-rate needed)...
+        self.assertEqual(target._capture_dtype, "float32")
+        self.assertEqual(target._capture_rate, 16000)
+        # ...on the CONFIGURED device (index 5), never dropping to the default.
+        self.assertTrue(all(k.get("device") == 5 for k in opened))
+        # int16 was attempted (and exhausted) before float32 on the same device.
+        self.assertTrue(any(k["dtype"] == "int16" for k in opened))
+        # No device-swap WARN: still the Yeti.
+        self.assertNotIn("WARN", target._audio_input_device)
+        self.assertIn("Yeti", target._audio_input_device)
+
+    def test_int16_first_for_native_16k_device_is_unchanged_happy_path(self):
+        # REGRESSION: a 16k int16 device (Jabra-like) binds on the FIRST candidate
+        # (int16, max channels, low latency) with NO float32 / native attempt.
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        devices = [
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Headset Microphone (Jabra Evolve 65 TE)", "hostapi": 2,
+             "max_input_channels": 2, "default_samplerate": 16000.0},
+        ]
+        hostapis = [
+            {"name": "MME", "default_input_device": 0},
+            {"name": "Windows DirectSound", "default_input_device": 1},
+            {"name": "Windows WASAPI", "default_input_device": 1},
+        ]
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream, default=types.SimpleNamespace(device=(1, 0)),
+            query_devices=lambda device=None, kind=None: (
+                devices if device is None and kind is None
+                else (devices[device] if isinstance(device, int)
+                      else {"name": "default", "max_input_channels": 2,
+                            "default_samplerate": 16000.0})),
+            query_hostapis=lambda: hostapis)
+        target = _bound_target(rt)
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Headset Microphone (Jabra Evolve 65 TE)"):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        # Exactly ONE open: the very first candidate worked.
+        self.assertEqual(len(opened), 1)
+        first = opened[0]
+        self.assertEqual(first["dtype"], "int16")
+        self.assertEqual(first["samplerate"], 16000)
+        self.assertEqual(first["channels"], 2)  # native max channels
+        self.assertEqual(first["latency"], "low")  # low-latency candidate
+        self.assertEqual(target._capture_dtype, "int16")
+        self.assertEqual(target._capture_rate, 16000)
+        self.assertNotIn("WARN", target._audio_input_device)
+
+    def test_native_rate_float32_resamples_to_16k_mono_int16(self):
+        # Yeti at 48000/float32: int16 rejected at every rate, float32 rejected at
+        # 16k, float32 accepted at the native 48k → buffer resampled to 16k.
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                self._dtype = kwargs["dtype"]
+                self._rate = kwargs["samplerate"]
+                if self._dtype == "int16":
+                    raise RuntimeError("int16 unsupported")
+                if self._rate == 16000:  # float32 @16k still rejected
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_fake_sd(Stream)
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(target._capture_dtype, "float32")
+        self.assertEqual(target._capture_rate, 48000)
+        self.assertTrue(all(k.get("device") == 5 for k in opened))
+        self.assertNotIn("WARN", target._audio_input_device)
+
+        # The float32-frame → int16 → resample chain produces mono int16 at 16k.
+        np = self.np
+        frame_48k = np.full((48000, 1), 0.25, dtype=np.float32)
+        chunk = rt._capture_frame_to_int16(frame_48k, target._capture_dtype)
+        self.assertEqual(chunk.dtype, np.int16)
+        out = rt._resample_capture_buffer(chunk, target._capture_rate)
+        self.assertEqual(out.dtype, np.int16)
+        self.assertEqual(out.shape[1], 1)
+        self.assertTrue(abs(out.shape[0] - 16000) <= 1)
+
+
+class CaptureFrameToInt16Tests(unittest.TestCase):
+    """float32 → int16 conversion correctness, including ±1.0 clipping."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+        import numpy as np
+        cls.np = np
+
+    def test_float32_frame_converts_to_expected_int16_with_clipping(self):
+        np = self.np
+        frame = np.array([[0.0], [0.5], [-0.5], [1.0], [-1.0], [2.0], [-3.0]],
+                         dtype=np.float32)
+        out = self.rt._capture_frame_to_int16(frame, "float32")
+        self.assertEqual(out.dtype, np.int16)
+        # 0.5*32767=16383 (trunc), 1.0→32767, clip 2.0→1.0→32767, -3.0→-1.0→-32767.
+        self.assertEqual(list(out[:, 0]), [0, 16383, -16383, 32767, -32767, 32767, -32767])
+
+    def test_int16_frame_is_bit_identical_copy(self):
+        np = self.np
+        frame = np.array([[10], [-20], [30000], [-30000]], dtype=np.int16)
+        out = self.rt._capture_frame_to_int16(frame, "int16")
+        self.assertEqual(out.dtype, np.int16)
+        self.assertTrue(np.array_equal(out, frame))
+        self.assertIsNot(out, frame)  # a copy, not the same object
+
+    def test_float32_dtype_inferred_from_array_when_dtype_arg_int16(self):
+        # Defensive: even if the tracked dtype says int16, a float32 array frame
+        # is still converted (never stored raw float into the int16 buffer).
+        np = self.np
+        frame = np.full((4, 1), 0.5, dtype=np.float32)
+        out = self.rt._capture_frame_to_int16(frame, "int16")
+        self.assertEqual(out.dtype, np.int16)
+        self.assertEqual(list(out[:, 0]), [16383, 16383, 16383, 16383])
+
+
+class DeviceSwapHonestyTests(unittest.TestCase):
+    """When the chosen device fails ALL formats and capture falls back to a
+    DIFFERENT default device, the swap must NOT be silent (WARN + status)."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+
+    def test_fallback_to_different_device_emits_warn_and_marks_audio_device(self):
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # The Yeti (index 5) fails EVERY format/rate; the default
+                # (device kwarg absent) succeeds → a swap to a different mic.
+                if kwargs.get("device") == 5:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        # The system default resolves to a DIFFERENT mic (the Jabra at index 1).
+        fake_sd = _yeti_fake_sd(Stream, default_input=1)
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.object(rt, "_emit_worker_event", fake_emit), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_WORKER_EVENTS="1",
+                     VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertTrue(getattr(target._stream, "started", False))
+        # Bound on the default (no device= kwarg) after the Yeti exhausted formats.
+        self.assertTrue(any("device" not in k for k in opened))
+        # NOT silent: the audio_device label carries a WARN naming the selection.
+        self.assertIn("WARN", target._audio_input_device)
+        self.assertIn("Yeti", target._audio_input_device)
+        # A status event surfaced the swap with a device_swap note.
+        swap_events = [e for e in events if "device_swap" in e]
+        self.assertTrue(swap_events, f"expected a device-swap event; got {events!r}")
+        self.assertIn("WARN", swap_events[0]["device_swap"])
+
+    def test_no_warn_when_no_explicit_device_was_chosen(self):
+        # An empty selection (system default) that needs a native-rate fallback is
+        # NOT a swap — nothing the user chose was abandoned, so no WARN.
+        rt = self.rt
+        rt.SR = 16000
+
+        class Stream:
+            def __init__(self, **kwargs):
+                if kwargs["samplerate"] == 16000:
+                    raise RuntimeError("Invalid sample rate PaErrorCode -9997")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream, default=types.SimpleNamespace(device=(2, 0)),
+            query_devices=lambda device=None, kind=None: {
+                "name": "Default In", "max_input_channels": 2,
+                "default_samplerate": 44100.0})
+        target = _bound_target(rt)
+
+        with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(target._capture_rate, 44100)
+        self.assertNotIn("WARN", target._audio_input_device)
 

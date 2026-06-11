@@ -104,13 +104,20 @@ class RuntimeAudioDeviceTests(RealNumpyAudioCase):
                 "max_input_channels": 2,
             },
         )
+        rt = self.runtime
         fake = types.SimpleNamespace(
             _capture_backend="",
             _audio_input_device="",
             _capture_channels=0,
+            _capture_dtype="int16",
+            _capture_rate=16000,
             _stream=None,
             _cb=lambda *_args: None,
         )
+        fake._bind_stream = (
+            lambda *a, **k: rt.CaptureMixin._bind_stream(fake, *a, **k))
+        fake._note_device_swap = (
+            lambda *a, **k: rt.CaptureMixin._note_device_swap(fake, *a, **k))
 
         with patch.dict(sys.modules, {"sounddevice": fake_sd}):
             backend, device = self.runtime.Dictate._start_sounddevice(fake)
