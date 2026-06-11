@@ -358,6 +358,38 @@ class PreviewEngineTests(unittest.TestCase):
                 self.assertFalse(thread.is_alive(), "preview thread did not exit promptly")
         self.assertEqual(events, [], "no preview while recording is false")
 
+    # ── native-rate capture is resampled in the preview path too ──────────────
+
+    def test_native_rate_preview_input_is_resampled_to_16k(self):
+        # When the owner captures at 48k (a Yeti opened after a 16k open was
+        # rejected) the preview must resample to 16k before the cheap decode —
+        # 3 s of 48k audio (144000 samples) becomes ~48000 samples (3 s @ 16k),
+        # NOT the raw 144000. The window is in CAPTURE-rate samples so 3 s < the
+        # 15 s window and the whole buffer is decoded.
+        owner = self._owner(frames=[self.np.zeros((48000 * 3, 1), dtype=self.np.int16)])
+        owner._capture_rate = 48000
+        engine = self._make_engine(owner)
+        events, emit = self._events()
+        lock = _CapturingLock()
+        seen = []
+
+        def _fake_transcribe(model, pcm, lang):
+            seen.append(len(pcm))
+            return "native preview"
+
+        with patch.object(self.preview, "transcribe_preview", _fake_transcribe), \
+                patch.object(self.preview, "TRANSCRIBE_LOCK", lock), \
+                patch.object(self.preview, "_emit_worker_event", emit):
+            engine._tick()
+
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(abs(seen[0] - 48000) <= 2,
+                        f"expected ~48000 samples at 16k, got {seen[0]}")
+        # recording_s reflects real elapsed audio (3 s), computed via capture rate.
+        prev = [e for e in events if e.get("state") == "preview"]
+        self.assertEqual(len(prev), 1)
+        self.assertAlmostEqual(prev[0]["recording_s"], 3.0, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()

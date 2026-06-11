@@ -121,6 +121,11 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self._capture_backend = ""
         self._audio_input_device = ""
         self._capture_channels = 1
+        # Actual capture sample rate. SR (16k) for arecord and 16k-native
+        # sounddevice opens; set to the device default rate by _start_sounddevice
+        # when a 16k open is rejected (the buffer is then resampled to SR at
+        # consumption — see vp_capture._resample_capture_buffer).
+        self._capture_rate = SR
         from pynput import keyboard
         self._kb = keyboard.Controller()
         self._inject_target_xwin: str | None = None   # XID captured at record start
@@ -441,10 +446,20 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self._record_started = 0.0
         self.audio_ducker.enter()
         _emit_worker_event("status", state="opening")
-        if vp_capture._arecord_device():
-            self._capture_backend, self._audio_input_device = self._start_arecord()
-        else:
-            self._capture_backend, self._audio_input_device = self._start_sounddevice()
+        try:
+            if vp_capture._arecord_device():
+                self._capture_backend, self._audio_input_device = self._start_arecord()
+            else:
+                self._capture_backend, self._audio_input_device = self._start_sounddevice()
+        except (Exception,) as exc:  # noqa: BLE001 — must never escape the PTT listener
+            # CRITICAL: this runs on the pynput on_press listener thread (see
+            # vp_keys.on_press → _start). An unguarded open/start failure here
+            # (e.g. a mic that rejects a 16k WASAPI open, PaErrorCode -9997/-9999)
+            # would propagate out of the listener callback and KILL THE WHOLE
+            # WORKER. Swallow it, emit an actionable error event, and leave the
+            # session idle + usable so the next PTT press can try again.
+            self._handle_capture_start_failure(exc)
+            return
         first_audio_ready = self._first_audio_event.wait(timeout=FIRST_AUDIO_WAIT_S)
         startup_ms = int((time.monotonic() - self._record_keydown_at) * 1000)
         if not first_audio_ready:
@@ -468,6 +483,46 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         print("● listening…", flush=True)
         play_cue("start")
         self._start_preview()
+
+    def _handle_capture_start_failure(self, exc: BaseException) -> None:
+        """Recover from an open/start failure on the capture path (never raise).
+
+        Tears the half-started recording down so the worker stays alive and the
+        next PTT press can try again, then emits a single ``status=error`` event
+        with an ACTIONABLE message naming the device and cause. Best-effort: any
+        cleanup failure here is swallowed too — the whole point is that NOTHING
+        escapes back to the pynput listener.
+        """
+        device = getattr(self, "_audio_input_device", "") or "the selected microphone"
+        print(f"[cap] capture start failed on {device!r}: {exc}",
+              file=sys.stderr, flush=True)
+        self.recording = False
+        try:
+            self._stop_capture_streams()
+        except Exception:  # noqa: BLE001 — cleanup must not re-raise
+            pass
+        try:
+            self.audio_ducker.exit()
+        except Exception:  # noqa: BLE001
+            pass
+        message = (
+            f"Could not open {device} at 16 kHz (format unsupported: {exc}). "
+            "Try another microphone or check Windows sound settings."
+        )
+        _emit_worker_event(
+            "status",
+            state="error",
+            reason="capture_open_failed",
+            audio_device=device,
+            error=message,
+        )
+        _emit_worker_event(
+            "status",
+            state="ready",
+            capture_backend=self._capture_backend,
+            audio_device=self._audio_input_device,
+            capture_channels=self._capture_channels,
+        )
 
     def _start_preview(self) -> None:
         """Begin the live partial-transcription preview for this recording.
@@ -562,6 +617,13 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 return
             pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
             pcm = _select_active_channel_pcm(pcm).astype(np.int16)
+            # Resample native-rate capture (e.g. a 48k Yeti opened after a 16k
+            # open was rejected) down to the model's 16k rate. No-op + bit-
+            # identical when capture_rate == SR (16k-native devices). Done here,
+            # at buffer consumption on the full mono buffer, not per-chunk — so
+            # there are no chunk-boundary resample artifacts.
+            capture_rate = getattr(self, "_capture_rate", SR)
+            pcm = vp_capture._resample_capture_buffer(pcm, capture_rate)
             recording_s = self._recording_seconds(pcm)
             skip_reason = self._should_skip_pcm(pcm, recording_s)
             if skip_reason:
