@@ -96,11 +96,8 @@ impl WhisperDictateApp {
     /// the dirty-dot and Save behave exactly as the old checkboxes did.
     fn diagnostics_combo(&mut self, ui: &mut egui::Ui) {
         let label = ui_text(&self.settings.ui_language, UiTextKey::Diagnostics);
-        const HELP: &str = "How much diagnostic output the worker prints. \
-            Basic = the effective-configuration dump at startup. \
-            Verbose = Basic plus per-utterance speech-to-text and dictionary-helper detail. \
-            Set the Dictation view to \"Debug\" to see the raw lines in the log.";
-        let show_help = label_with_help(ui, label, HELP);
+        let help = ui_text(&self.settings.ui_language, UiTextKey::DiagnosticsHelp);
+        let show_help = label_with_help(ui, label, help);
         let current = diagnostics_level(self.settings.debug, self.settings.stt_debug);
         let language = self.settings.ui_language.clone();
         let level_label = |level: DiagnosticsLevel| -> &'static str {
@@ -128,6 +125,6 @@ impl WhisperDictateApp {
             self.settings.stt_debug = stt_debug;
         }
         ui.end_row();
-        grid_help_row(ui, show_help, HELP);
+        grid_help_row(ui, show_help, help);
     }
 }

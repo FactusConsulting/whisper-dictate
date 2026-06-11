@@ -31,6 +31,7 @@ from whisper_dictate.vp_events import (
     _select_active_channel_pcm,
 )
 from whisper_dictate.vp_format import apply_format_commands
+from whisper_dictate.vp_health import format_health_line
 from whisper_dictate.vp_history import _append_history, _append_jsonl
 from whisper_dictate.vp_inject import InjectMixin
 from whisper_dictate.vp_keymap import _detect_xkb_layout
@@ -379,6 +380,20 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             "format_commands_applied": format_result.applied,
         }
 
+    @staticmethod
+    def _emit_health_line(metrics: dict) -> None:
+        """Print the concise per-utterance ``[health]`` line at Basic+ verbosity.
+
+        Gated on VOICEPI_DEBUG being truthy — both Basic (debug:on) and Verbose
+        (debug:on,stt_debug:on) enable it, Off (debug:off) suppresses it. Read
+        live from the env so a runtime Diagnostics-level change takes effect
+        without restart (apply_config_to_environ runs on each live reload).
+        """
+        if (os.environ.get("VOICEPI_DEBUG") or "").strip().lower() in (
+                "", "0", "false", "no", "off"):
+            return
+        print(format_health_line(metrics), flush=True)
+
     def _record_utterance_event(self, event: dict) -> None:
         _run_command_hook_and_annotate(event)
         if event.get("command_hook_error"):
@@ -561,6 +576,9 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                     reason=no_text_reason,
                     recording_s=round(recording_s, 2),
                 )
+                # Transcription ran but produced nothing (hallucination gate /
+                # empty / too-quiet) — a "we're off" signal worth a health line.
+                self._emit_health_line({"no_text": True})
                 print(f"[stt] no text ({no_text_reason}, {recording_s:.1f}s)", flush=True)
                 return
             text = result.text
@@ -592,6 +610,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 post_result=post_result,
                 format_result=format_result,
             )
+            self._emit_health_line(event)
             self._record_utterance_event(event)
         finally:
             _emit_worker_event(

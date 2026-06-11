@@ -123,6 +123,9 @@ fn runtime_log_card_for_line(
 /// Minimal mode shows only the final injected text, plus no-text feedback so
 /// a silent miss is visible even in the compact view.
 fn minimal_log_card(line: &str, has_structured_utterance: bool) -> Option<RuntimeLogCard> {
+    if let Some(card) = health_card(line) {
+        return Some(card);
+    }
     if let Some(card) = no_text_card(line) {
         return Some(card);
     }
@@ -168,6 +171,9 @@ fn diagnostic_log_card(
     log: &str,
     has_structured_utterance: bool,
 ) -> Option<RuntimeLogCard> {
+    if let Some(card) = health_card(line) {
+        return Some(card);
+    }
     if let Some(card) = structured_utterance_card(line) {
         return Some(card);
     }
@@ -262,6 +268,33 @@ fn status_card(line: &str) -> Option<RuntimeLogCard> {
     None
 }
 
+/// Parse the concise per-utterance `[health]` line (Basic diagnostics) into a
+/// first-class card so the user sees it without switching to the Debug view.
+///
+/// The worker emits, e.g.:
+///   `[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq`
+/// with terse `| WARN ...` flags appended only when something looks off. We show
+/// the whole body as the card title and surface whether any warning fired in the
+/// detail/badge so a "we're off" utterance stands out at a glance.
+fn health_card(line: &str) -> Option<RuntimeLogCard> {
+    let body = line.strip_prefix("[health] ")?.trim();
+    if body.is_empty() {
+        return None;
+    }
+    let has_warning = body.contains("WARN");
+    let detail = if has_warning {
+        "Microphone + model health (warnings)"
+    } else {
+        "Microphone + model health"
+    };
+    Some(RuntimeLogCard {
+        kind: RuntimeLogCardKind::Status,
+        title: body.to_owned(),
+        detail: detail.to_owned(),
+        badge: if has_warning { "Health!" } else { "Health" }.to_owned(),
+    })
+}
+
 /// Parse `[worker] status=no_text reason=<token> …` into a friendly card.
 /// Returns `None` for any other line.
 fn no_text_card(line: &str) -> Option<RuntimeLogCard> {
@@ -322,6 +355,7 @@ fn is_diagnostic_status_line(line: &str) -> bool {
     line.starts_with("[worker] status=")
         || line.starts_with("[post]")
         || line.starts_with("[inject]")
+        || line.starts_with("[health]")
         || line.starts_with("[OK]")
         || line.starts_with("[ERROR]")
 }
