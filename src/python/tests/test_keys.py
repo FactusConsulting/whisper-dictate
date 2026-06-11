@@ -20,6 +20,24 @@ from whisper_dictate import vp_keys
 from whisper_dictate import vp_keys_solo
 
 
+class _FakeMediaKey:
+    """Hashable stand-in for a pynput ``Key`` enum member (real Key members are
+    hashable). Exposes ``.name`` like ``Key.media_volume_up`` so the solo guard's
+    ``is_ignored_foreign_key`` predicate matches on the ``media_`` prefix."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        return isinstance(other, _FakeMediaKey) and other.name == self.name
+
+    def __repr__(self):
+        return f"<Key.{self.name}>"
+
+
 def _fake_keyboard():
     keyboard = _types.ModuleType("keyboard")
     keyboard.Key = types.SimpleNamespace(
@@ -483,6 +501,50 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
         self.assertTrue(g.should_cancel_on_press("c"))      # foreign → cancel
         self.assertFalse(g.should_cancel_on_press("c"))     # repeat → no re-cancel
 
+    def test_is_ignored_foreign_key_media_and_consumer(self):
+        # (d) Predicate: True for media/consumer keys, False for letters/mods.
+        # pynput Key enum members expose a ``.name`` attribute.
+        for name in ("media_volume_up", "media_volume_down", "media_volume_mute",
+                     "media_play_pause", "media_next", "media_previous"):
+            k = _FakeMediaKey(name)
+            self.assertTrue(vp_keys_solo.is_ignored_foreign_key(k),
+                            f"{name} should be ignored")
+        # Real modifiers / letters / function keys are NOT ignored.
+        self.assertFalse(vp_keys_solo.is_ignored_foreign_key(_FakeMediaKey("ctrl_l")))
+        self.assertFalse(vp_keys_solo.is_ignored_foreign_key(_FakeMediaKey("shift")))
+        self.assertFalse(vp_keys_solo.is_ignored_foreign_key("c"))   # pynput char
+        self.assertFalse(vp_keys_solo.is_ignored_foreign_key("a"))
+
+    def test_is_ignored_foreign_key_evdev_codes(self):
+        # (d) evdev int codes: patch the lazily-resolved code set so the test
+        # does not depend on evdev being importable in CI.
+        with patch.object(vp_keys_solo, "_IGNORED_EVDEV_CODES",
+                          frozenset({115, 114, 113, 164})):  # VOLUP/DN/MUTE/PLAYPAUSE
+            self.assertTrue(vp_keys_solo.is_ignored_foreign_key(115))
+            self.assertTrue(vp_keys_solo.is_ignored_foreign_key(164))
+            self.assertFalse(vp_keys_solo.is_ignored_foreign_key(46))  # 'c' code
+            self.assertFalse(vp_keys_solo.is_ignored_foreign_key(29))  # ctrl code
+
+    def test_media_key_does_not_cancel_or_track(self):
+        # (a)+(d) at the guard level: holding the PTT modifier, a media key down
+        # must NOT cancel and must NOT enter the held set.
+        media = _FakeMediaKey("media_volume_up")
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
+        g.note_press("ctrl")
+        self.assertFalse(g.should_cancel_on_press(media))   # no cancel
+        self.assertFalse(g.note_press(media))               # not newly held
+        self.assertNotIn(media, g._held)                    # never tracked
+        self.assertFalse(g.foreign_key_held())              # not foreign
+
+    def test_media_key_held_does_not_block_start(self):
+        # (b) A media key "held" must not block a bare-modifier start (rule 1).
+        media = _FakeMediaKey("media_play_pause")
+        g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
+        g.note_press(media)                          # media event arrives first
+        self.assertTrue(g.may_start_on_target_down())  # still allowed to start
+        g.note_press("ctrl")
+        self.assertTrue(g.may_start_on_target_down())
+
     def test_target_set_chord_treats_all_targets_as_non_foreign(self):
         # Chord generalisation: a SET of targets — none of them count as foreign.
         g = vp_keys_solo.SoloModifierGuard({"shift", "ctrl"}, enabled=True)
@@ -627,6 +689,44 @@ class PynputSoloModifierTests(unittest.TestCase):
             ln.on_release("<f7>")      # unknown release
             ln.on_press(self.TARGET)    # still starts cleanly afterwards
         self.assertEqual(ln._owner.started, 1)
+
+    def test_media_key_during_hold_does_not_cancel(self):
+        # (a) Real repro: PTT=ctrl_l recording, headset emits media_volume_up →
+        # must NOT cancel; recording continues.
+        media = _FakeMediaKey("media_volume_up")
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.TARGET)
+            self.assertEqual(ln._owner.started, 1)
+            ln.on_press(media)            # headset media key → ignored
+            ln.on_release(media)
+            self.assertEqual(ln._owner.cancelled, 0)
+            self.assertTrue(ln._recording)
+            ln.on_release(self.TARGET)    # normal stop/transcribe
+            self.assertEqual(ln._owner.stopped, 1)
+
+    def test_media_key_held_does_not_block_start(self):
+        # (b) Headset media event arrives, then PTT modifier pressed → still
+        # starts (media key must not be treated as a foreign held key).
+        media = _FakeMediaKey("media_play_pause")
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(media)            # media key first
+            ln.on_press(self.TARGET)      # PTT modifier alone → start
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_genuine_foreign_letter_still_cancels(self):
+        # (c) Regression guard: a real foreign key (letter) STILL cancels.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(self.TARGET)
+            ln.on_press("c")              # genuine foreign key → cancel
+            self.assertEqual(ln._owner.cancelled, 1)
+            self.assertFalse(ln._recording)
 
 
 class PynputSoloModifierChordTests(unittest.TestCase):
@@ -822,6 +922,48 @@ class EvdevSoloModifierTests(unittest.TestCase):
         rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, rec, solo)
         self.assertTrue(rec)
         self.assertEqual(self.t.started, 1)
+
+    # evdev consumer-control media code (KEY_VOLUMEUP == 115 on Linux). The
+    # predicate's code set is patched so the test never needs real evdev.
+    VOLUP = 115
+
+    def test_media_key_during_hold_does_not_cancel(self):
+        # (a) Recording on ctrl, KEY_VOLUMEUP down (headset) → no cancel, still
+        # recording; then ctrl up → normal transcribe.
+        pressed, solo = set(), self._guard()
+        with patch.object(vp_keys_solo, "_IGNORED_EVDEV_CODES",
+                          frozenset({self.VOLUP})), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, False, solo)
+            self.assertTrue(rec)
+            rec = self._apply(self.VOLUP, self.ev.KeyEvent.key_down, pressed, rec, solo)
+            self.assertTrue(rec)                       # not cancelled
+            self.assertEqual(self.t.cancelled, 0)
+            self.assertNotIn(self.VOLUP, pressed)
+            rec = self._apply(self.VOLUP, self.ev.KeyEvent.key_up, pressed, rec, solo)
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_up, pressed, rec, solo)
+            self.assertEqual(self.t.stopped, 1)
+
+    def test_media_key_held_does_not_block_start(self):
+        # (b) KEY_VOLUMEUP arrives first, then ctrl → still starts.
+        pressed, solo = set(), self._guard()
+        with patch.object(vp_keys_solo, "_IGNORED_EVDEV_CODES",
+                          frozenset({self.VOLUP})):
+            rec = self._apply(self.VOLUP, self.ev.KeyEvent.key_down, pressed, False, solo)
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, rec, solo)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_genuine_foreign_letter_still_cancels(self):
+        # (c) Regression: a real foreign key (letter) STILL cancels on evdev.
+        pressed, solo = set(), self._guard()
+        with patch.object(vp_keys_solo, "_IGNORED_EVDEV_CODES",
+                          frozenset({self.VOLUP})), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            rec = self._apply(self.TARGET, self.ev.KeyEvent.key_down, pressed, False, solo)
+            rec = self._apply(self.C, self.ev.KeyEvent.key_down, pressed, rec, solo)
+            self.assertFalse(rec)
+            self.assertEqual(self.t.cancelled, 1)
 
 
 class EvdevSoloModifierChordTests(unittest.TestCase):
