@@ -157,6 +157,7 @@ impl AppSettings {
         self.feedback_notify = bool_value(object, "feedback_notify", defaults.feedback_notify);
         self.debug = bool_value(object, "debug", defaults.debug);
         self.stt_debug = bool_value(object, "stt_debug", defaults.stt_debug);
+        self.trace = bool_value(object, "trace", defaults.trace);
         self.toggle_mode = bool_value(object, "toggle_mode", defaults.toggle_mode);
         self.quit_key = string_value(object, "quit_key", &defaults.quit_key);
         self.quit_count = string_value(object, "quit_count", &defaults.quit_count);

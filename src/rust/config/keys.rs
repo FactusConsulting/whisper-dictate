@@ -72,6 +72,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "feedback_notify",
     "debug",
     "stt_debug",
+    "trace",
     "toggle_mode",
     "quit_key",
     "quit_count",

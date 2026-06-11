@@ -322,7 +322,11 @@ impl WhisperDictateApp {
         let label = ui_text(&self.settings.ui_language, UiTextKey::Diagnostics);
         let help = ui_text(&self.settings.ui_language, UiTextKey::DiagnosticsHelp);
         let show_help = label_with_help(ui, label, help);
-        let current = diagnostics_level(self.settings.debug, self.settings.stt_debug);
+        let current = diagnostics_level(
+            self.settings.debug,
+            self.settings.stt_debug,
+            self.settings.trace,
+        );
         let language = self.settings.ui_language.clone();
         let level_label = |level: DiagnosticsLevel| -> &'static str {
             ui_text(
@@ -331,6 +335,7 @@ impl WhisperDictateApp {
                     DiagnosticsLevel::Off => UiTextKey::DiagnosticsOff,
                     DiagnosticsLevel::Basic => UiTextKey::DiagnosticsBasic,
                     DiagnosticsLevel::Verbose => UiTextKey::DiagnosticsVerbose,
+                    DiagnosticsLevel::Trace => UiTextKey::DiagnosticsTrace,
                 },
             )
         };
@@ -344,9 +349,10 @@ impl WhisperDictateApp {
                 }
             });
         if selected != current {
-            let (debug, stt_debug) = apply_diagnostics_level(selected);
+            let (debug, stt_debug, trace) = apply_diagnostics_level(selected);
             self.settings.debug = debug;
             self.settings.stt_debug = stt_debug;
+            self.settings.trace = trace;
         }
         ui.end_row();
         grid_help_row(ui, show_help, help);

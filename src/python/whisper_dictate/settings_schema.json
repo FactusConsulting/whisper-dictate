@@ -401,6 +401,12 @@
       "live": true
     },
     {
+      "env": "VOICEPI_TRACE",
+      "key": "trace",
+      "default": null,
+      "live": true
+    },
+    {
       "env": "VOICEPI_TOGGLE",
       "key": "toggle_mode",
       "default": null,

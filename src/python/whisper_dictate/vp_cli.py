@@ -352,6 +352,7 @@ def _debug_rows(args, dev: str, ctype: str) -> list[tuple[str, str]]:
         ("post redaction",   f"enabled={post.redact}  "
                              f"terms={'set' if post.redact_terms else 'unset'}"),
         ("stt debug",        f"{_env_preview('VOICEPI_STT_DEBUG')}  (env VOICEPI_STT_DEBUG)"),
+        ("trace",            f"{_env_preview('VOICEPI_TRACE')}  (env VOICEPI_TRACE)"),
     ]
 
 

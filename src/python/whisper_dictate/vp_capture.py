@@ -74,6 +74,19 @@ def _ensure_arecord_device() -> str | None:
     return _ARECORD_DEVICE
 
 
+def _trace_enabled() -> bool:
+    """Whether maximal ``Trace`` diagnostics are on (env ``VOICEPI_TRACE``).
+
+    Read live (not at import) so a live-reloaded VOICEPI_TRACE takes effect on
+    the next recording without a restart — the same pattern as
+    :func:`_audio_device_setting` / :func:`_max_record_s`. Trace is purely
+    additive: when off, none of the ``[trace]`` lines below are emitted and the
+    existing Basic/Verbose output is byte-for-byte unchanged.
+    """
+    return (os.environ.get("VOICEPI_TRACE") or "").strip().lower() not in (
+        "", "0", "false", "no", "off")
+
+
 def _audio_device_setting() -> str:
     """The requested input device, read fresh from the env at stream-open time.
 
@@ -139,6 +152,64 @@ def _safe_query_hostapis(sd):
         return sd.query_hostapis()
     except Exception:
         return []
+
+
+def trace_dump_audio_devices() -> None:
+    """Log the FULL audio-device enumeration (maximal ``Trace`` diagnostics).
+
+    For every INPUT device prints one ``[trace][devices] …`` line carrying the
+    query index, name, host-API name, max_input_channels and default_samplerate,
+    so a "why won't my mic open" can be cross-referenced against every capture
+    attempt (which host APIs even exist, what rate each device runs at) from the
+    log alone. Also prints a one-line host-API summary.
+
+    Called once at startup ONLY when ``VOICEPI_TRACE`` is on (the caller gates).
+    Fully guarded: any import / query failure is logged and swallowed so it can
+    never raise or block worker startup — a missing audio stack must not stop the
+    worker from coming up.
+    """
+    try:
+        import sounddevice as sd
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        print(f"[trace][devices] sounddevice unavailable (ignored): {exc}",
+              file=sys.stderr, flush=True)
+        return
+    try:
+        devices = _safe_query_devices(sd)
+        hostapis = _safe_query_hostapis(sd)
+        api_names = [
+            str(a.get("name") or "?") if isinstance(a, dict) else "?"
+            for a in hostapis
+        ]
+        print(
+            f"[trace][devices] host-apis: {api_names or '(none)'}",
+            file=sys.stderr, flush=True)
+        printed = 0
+        for index, info in enumerate(devices):
+            if not isinstance(info, dict):
+                continue
+            try:
+                channels = int(info.get("max_input_channels") or 0)
+            except (TypeError, ValueError):
+                channels = 0
+            if channels <= 0:
+                continue
+            api_index = info.get("hostapi")
+            api = (api_names[api_index]
+                   if isinstance(api_index, int) and 0 <= api_index < len(api_names)
+                   else "?")
+            print(
+                f"[trace][devices] in dev={index} name={str(info.get('name') or '').strip()!r} "
+                f"host={api} max_in_ch={channels} "
+                f"default_sr={info.get('default_samplerate')}",
+                file=sys.stderr, flush=True)
+            printed += 1
+        if printed == 0:
+            print("[trace][devices] no input devices found",
+                  file=sys.stderr, flush=True)
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        print(f"[trace][devices] enumeration failed (ignored): {exc}",
+              file=sys.stderr, flush=True)
 
 
 def _resolve_sounddevice_device(sd, value: str):
@@ -322,8 +393,37 @@ def _capture_frame_to_int16(chunk, dtype):
     return chunk.copy()
 
 
+def _device_hostapi_name(sd, device) -> str:
+    """Best-effort host-API name for a resolved ``device=`` arg (Trace only).
+
+    Returns e.g. ``"Windows WASAPI"`` / ``"MME"`` / ``"ALSA"`` so a Trace line
+    makes the host API that rejected the format obvious — the key insight when a
+    mic won't open (if WASAPI fails every format, the log shows it so we know to
+    try MME/DirectSound). Never raises: any query failure yields ``"?"`` and the
+    default device (``device is None``) reports the default input's host API.
+    """
+    try:
+        if device is None:
+            info = sd.query_devices(kind="input")
+        else:
+            info = sd.query_devices(device)
+        if not isinstance(info, dict):
+            return "?"
+        api_index = info.get("hostapi")
+        if api_index is None:
+            return "?"
+        hostapis = _safe_query_hostapis(sd)
+        if 0 <= int(api_index) < len(hostapis):
+            api = hostapis[int(api_index)]
+            if isinstance(api, dict):
+                return str(api.get("name") or "?").strip() or "?"
+    except Exception:
+        return "?"
+    return "?"
+
+
 def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
-                             samplerate=None):
+                             samplerate=None, trace=False):
     """Open an ``InputStream`` for ``device``, trying dtype/channel/latency fallbacks.
 
     Returns ``(stream, channels, dtype, last_error)``: ``(stream, channels,
@@ -360,10 +460,20 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
     Module-level (not a method) so it stays unit-testable and so the caller can
     invoke it multiple times — preferred device, WASAPI auto-convert, default
     fallback — without duplicating the fallback loop.
+
+    ``trace`` (maximal ``Trace`` diagnostics) logs ONE ``[trace][cap] attempt …``
+    line per candidate — host-API, device index+name, samplerate, channels,
+    dtype, auto_convert flag and the per-attempt result (``ok`` or the exact
+    exception message) — and the finally-bound candidate, so a "why won't my mic
+    open" is diagnosable from the log alone. Off by default: every existing
+    Basic/Verbose code path is byte-for-byte unchanged.
     """
     last_error = None
     channel_candidates = _sounddevice_capture_channel_candidates(
         _sounddevice_input_channels(sd))
+    hostapi = _device_hostapi_name(sd, device) if trace else None
+    dev_label = "default" if device is None else device
+    autoconv = 1 if extra_settings is not None else 0
     for dtype in _CAPTURE_DTYPES:
         for channels in channel_candidates:
             for kwargs in _sounddevice_stream_kwargs(channels, callback, samplerate, dtype):
@@ -371,12 +481,31 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
                     kwargs["device"] = device
                 if extra_settings is not None:
                     kwargs["extra_settings"] = extra_settings
+                rate = kwargs.get("samplerate")
+                latency = kwargs.get("latency", "base")
                 try:
                     stream = sd.InputStream(**kwargs)
                     stream.start()
+                    if trace:
+                        print(
+                            f"[trace][cap] attempt host={hostapi} dev={dev_label} "
+                            f"rate={rate} ch={channels} dtype={dtype} "
+                            f"latency={latency} autoconv={autoconv} -> ok",
+                            file=sys.stderr, flush=True)
+                        print(
+                            f"[trace][cap] BOUND host={hostapi} dev={dev_label} "
+                            f"rate={rate} ch={channels} dtype={dtype} "
+                            f"latency={latency} autoconv={autoconv}",
+                            file=sys.stderr, flush=True)
                     return stream, channels, dtype, None
                 except Exception as exc:
                     last_error = exc
+                    if trace:
+                        print(
+                            f"[trace][cap] attempt host={hostapi} dev={dev_label} "
+                            f"rate={rate} ch={channels} dtype={dtype} "
+                            f"latency={latency} autoconv={autoconv} -> {exc}",
+                            file=sys.stderr, flush=True)
                     # A stream that opened but failed to start must be closed so
                     # the device is released before the next candidate is tried.
                     try:
@@ -402,7 +531,7 @@ def _open_native_rate_stream(sd, device, callback):
     if not native or native == SR:
         return None, 0, "", 0, None
     stream, channels, dtype, exc = _open_sounddevice_stream(
-        sd, device, callback, samplerate=native)
+        sd, device, callback, samplerate=native, trace=_trace_enabled())
     if stream is not None:
         return stream, channels, dtype, native, None
     return None, 0, "", 0, exc
@@ -577,7 +706,8 @@ class CaptureMixin:
                     file=sys.stderr, flush=True)
             return exc
         stream, channels, dtype, exc = _open_sounddevice_stream(
-            sd, device, self._cb, extra_settings=extra_settings)
+            sd, device, self._cb, extra_settings=extra_settings,
+            trace=_trace_enabled())
         if stream is not None:
             self._stream = stream
             self._capture_channels = channels

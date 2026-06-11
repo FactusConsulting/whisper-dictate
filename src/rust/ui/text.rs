@@ -88,6 +88,7 @@ pub(in crate::ui) enum UiTextKey {
     DiagnosticsOff,
     DiagnosticsBasic,
     DiagnosticsVerbose,
+    DiagnosticsTrace,
     DiagnosticsHelp,
     UpdateAvailable,
     UpdateAvailableHover,
@@ -192,6 +193,7 @@ impl UiTextKey {
                 UiTextKey::DiagnosticsOff => "Off",
                 UiTextKey::DiagnosticsBasic => "Basic",
                 UiTextKey::DiagnosticsVerbose => "Verbose",
+                UiTextKey::DiagnosticsTrace => "Trace",
                 UiTextKey::DiagnosticsHelp => {
                     "How much diagnostic output the worker prints. \
                     Off = none. \
@@ -199,6 +201,10 @@ impl UiTextKey {
                     + model confidence + warnings when something looks off). \
                     Verbose = Basic plus the startup effective-configuration dump and \
                     per-segment speech-to-text/dictionary detail. \
+                    Trace = Verbose plus the full audio-device enumeration at startup and \
+                    a line for EVERY capture-open attempt (host-API, samplerate, channels, \
+                    dtype, auto-convert, and why each failed). High volume — use it only to \
+                    troubleshoot a microphone that won't open. \
                     Set the Dictation view to \"Debug\" to see the raw lines in the log."
                 }
                 UiTextKey::UpdateAvailable => "available",
@@ -302,6 +308,7 @@ impl UiTextKey {
                 UiTextKey::DiagnosticsOff => "Fra",
                 UiTextKey::DiagnosticsBasic => "Basis",
                 UiTextKey::DiagnosticsVerbose => "Udførlig",
+                UiTextKey::DiagnosticsTrace => "Trace",
                 UiTextKey::DiagnosticsHelp => {
                     "Hvor meget diagnostik arbejderen skriver. \
                     Fra = ingen. \
@@ -309,6 +316,10 @@ impl UiTextKey {
                     + modellens sikkerhed + advarsler hvis noget ser galt ud). \
                     Udførlig = Basis plus konfigurationsdump ved opstart og \
                     detaljer pr. segment for tale-til-tekst/ordbog. \
+                    Trace = Udførlig plus den fulde liste over lydenheder ved opstart og \
+                    en linje for HVERT forsøg på at åbne optagelsen (host-API, samplerate, \
+                    kanaler, dtype, auto-konvertering, og hvorfor hvert forsøg fejlede). \
+                    Meget output — brug kun ved fejlfinding af en mikrofon der ikke kan åbnes. \
                     Sæt Dikterings-visningen til \"Debug\" for at se de rå linjer i loggen."
                 }
                 UiTextKey::UpdateAvailable => "tilgængelig",
