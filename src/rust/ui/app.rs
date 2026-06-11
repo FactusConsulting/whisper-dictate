@@ -67,6 +67,7 @@ impl eframe::App for WhisperDictateApp {
         // is in the full window or the compact strip.
         self.poll_runtime();
         self.poll_background_task();
+        self.ensure_audio_devices_loaded();
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -250,6 +251,21 @@ impl WhisperDictateApp {
             self.stt_api_key_status = message.clone();
             self.append_runtime_log(format!("[ui] {message}"));
         }
+    }
+
+    /// Auto-populate the Microphone picker once, early in the app's life, so the
+    /// user sees their real input devices without first clicking "Refresh
+    /// devices". Fires exactly once (guarded by `audio_devices_loaded`) and only
+    /// when no other background task is running, mirroring the one-shot discipline
+    /// used for the GPU probe. A failed worker run just leaves the list empty —
+    /// the guard still flips, so we never spam, and the manual button stays as the
+    /// re-scan path (e.g. after plugging in a mic).
+    fn ensure_audio_devices_loaded(&mut self) {
+        if self.audio_devices_loaded || self.background_task.is_some() {
+            return;
+        }
+        self.audio_devices_loaded = true;
+        self.run_list_audio_devices();
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {
