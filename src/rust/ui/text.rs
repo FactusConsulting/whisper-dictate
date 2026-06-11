@@ -100,6 +100,20 @@ pub(in crate::ui) enum UiTextKey {
     /// (e.g. "Range: 1–10."). Localized so a Danish help string isn't followed
     /// by an English "Range:".
     Range,
+    /// Inline feedback when the typed hotkey chord is accepted.
+    HotkeyValid,
+    /// Inline feedback prefix when the hotkey chord is empty.
+    HotkeyEmpty,
+    /// Inline feedback prefix when a `+`-separated token is blank.
+    HotkeyEmptyToken,
+    /// Inline feedback prefix for an unknown token; followed by the token.
+    HotkeyUnknownToken,
+    /// Inline feedback prefix for a repeated token; followed by the token.
+    HotkeyDuplicateToken,
+    /// Expandable reference line: label for the accepted modifier tokens.
+    HotkeyRefModifiers,
+    /// Expandable reference line: label for the accepted named/function keys.
+    HotkeyRefKeys,
 }
 
 impl UiTextKey {
@@ -205,6 +219,13 @@ impl UiTextKey {
                     minimum 5). Also settable via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
                 UiTextKey::Range => "Range",
+                UiTextKey::HotkeyValid => "Valid hotkey",
+                UiTextKey::HotkeyEmpty => "Hotkey is empty",
+                UiTextKey::HotkeyEmptyToken => "Empty key between '+' separators",
+                UiTextKey::HotkeyUnknownToken => "Unknown key",
+                UiTextKey::HotkeyDuplicateToken => "Duplicate key",
+                UiTextKey::HotkeyRefModifiers => "Modifiers",
+                UiTextKey::HotkeyRefKeys => "Keys",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -306,6 +327,13 @@ impl UiTextKey {
                     minimum 5). Kan også sættes via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
                 UiTextKey::Range => "Interval",
+                UiTextKey::HotkeyValid => "Gyldig genvejstast",
+                UiTextKey::HotkeyEmpty => "Genvejstast er tom",
+                UiTextKey::HotkeyEmptyToken => "Tom tast mellem '+'-skilletegn",
+                UiTextKey::HotkeyUnknownToken => "Ukendt tast",
+                UiTextKey::HotkeyDuplicateToken => "Gentaget tast",
+                UiTextKey::HotkeyRefModifiers => "Modifikatorer",
+                UiTextKey::HotkeyRefKeys => "Taster",
             },
         }
     }
