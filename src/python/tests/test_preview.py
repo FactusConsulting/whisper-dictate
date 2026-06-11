@@ -99,6 +99,90 @@ class PreviewEngineTests(unittest.TestCase):
         self.assertEqual(len(transcribe_calls), 1, "second tick re-transcribed unchanged buffer")
         self.assertEqual(len([e for e in events if e.get("state") == "preview"]), 1)
 
+    # ── sliding-window cap on the preview decode input ─────────────────────────
+
+    def test_long_buffer_is_capped_to_window(self):
+        # A buffer far longer than PREVIEW_MAX_AUDIO_S must hand transcribe_preview
+        # only the most recent window of samples (bounded cost), NOT the whole
+        # buffer-so-far. Capture the array the fake decode receives and assert its
+        # length is <= PREVIEW_MAX_AUDIO_S * SR.
+        window_s = self.preview.PREVIEW_MAX_AUDIO_S
+        owner = self._owner(frames=[self._pcm_seconds(window_s * 4)])  # 60s vs 15s
+        engine = self._make_engine(owner)
+        events, emit = self._events()
+        lock = _CapturingLock()
+        seen = []
+
+        def _fake_transcribe(model, pcm, lang):
+            seen.append(len(pcm))
+            return "rolling window"
+
+        with patch.object(self.preview, "transcribe_preview", _fake_transcribe), \
+                patch.object(self.preview, "TRANSCRIBE_LOCK", lock), \
+                patch.object(self.preview, "_emit_worker_event", emit):
+            engine._tick()
+
+        max_samples = int(window_s * self.SR)
+        self.assertEqual(len(seen), 1)
+        self.assertLessEqual(seen[0], max_samples,
+                             "preview decode input exceeded the sliding window")
+        self.assertEqual(seen[0], max_samples,
+                         "a far-longer buffer should fill exactly the window")
+
+    def test_short_buffer_passed_in_full(self):
+        # A buffer SHORTER than the window is decoded in full (no trimming) —
+        # unchanged behavior for short utterances.
+        window_s = self.preview.PREVIEW_MAX_AUDIO_S
+        short_s = window_s / 3.0  # 5s < 15s window
+        owner = self._owner(frames=[self._pcm_seconds(short_s)])
+        engine = self._make_engine(owner)
+        events, emit = self._events()
+        lock = _CapturingLock()
+        seen = []
+
+        def _fake_transcribe(model, pcm, lang):
+            seen.append(len(pcm))
+            return "short"
+
+        with patch.object(self.preview, "transcribe_preview", _fake_transcribe), \
+                patch.object(self.preview, "TRANSCRIBE_LOCK", lock), \
+                patch.object(self.preview, "_emit_worker_event", emit):
+            engine._tick()
+
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0], int(self.SR * short_s),
+                         "short buffer must be passed in full (no trimming)")
+
+    def test_window_does_not_freeze_gate_or_recording_s(self):
+        # Once the buffer EXCEEDS the window the decode length is pinned to the
+        # window, but the fresh-audio gate / recording_s track the TOTAL captured
+        # length — so a second tick with another window+ of fresh audio still
+        # previews, and recording_s reflects real elapsed time (not the cap).
+        window_s = self.preview.PREVIEW_MAX_AUDIO_S
+        owner = self._owner(frames=[self._pcm_seconds(window_s + 2)])  # 17s
+        engine = self._make_engine(owner)
+        events, emit = self._events()
+        lock = _CapturingLock()
+        seen = []
+
+        def _fake_transcribe(model, pcm, lang):
+            seen.append(len(pcm))
+            return "still going"
+
+        with patch.object(self.preview, "transcribe_preview", _fake_transcribe), \
+                patch.object(self.preview, "TRANSCRIBE_LOCK", lock), \
+                patch.object(self.preview, "_emit_worker_event", emit):
+            engine._tick()  # first preview at 17s
+            owner.frames = [self._pcm_seconds(window_s * 2 + 4)]  # grow to 34s
+            engine._tick()  # plenty of fresh audio → must preview again
+
+        self.assertEqual(len(seen), 2, "gate froze: second tick did not preview")
+        preview_events = [e for e in events if e.get("state") == "preview"]
+        self.assertEqual(len(preview_events), 2)
+        # recording_s tracks TOTAL elapsed audio, not the capped decode length.
+        self.assertAlmostEqual(preview_events[0]["recording_s"], window_s + 2, places=1)
+        self.assertAlmostEqual(preview_events[1]["recording_s"], window_s * 2 + 4, places=1)
+
     def test_below_min_new_audio_skips(self):
         # A buffer under the minimum fresh-audio threshold (1.5s) never previews.
         owner = self._owner(frames=[self._pcm_seconds(1.0)])
