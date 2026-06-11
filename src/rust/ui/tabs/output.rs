@@ -12,14 +12,14 @@ impl WhisperDictateApp {
         ui.add_space(8.0);
         settings_grid("output_settings")
             .show(ui, |ui| {
-                combo_help(
+                combo_help_short(
                     ui,
                     "Inject mode",
                     &mut self.settings.inject_mode,
                     &["auto", "type", "paste", "print"],
                     "How text is inserted into the focused app. auto chooses the safest available strategy.",
                 );
-                combo_help(
+                combo_help_short(
                     ui,
                     "Format commands",
                     &mut self.settings.format_commands,
@@ -56,7 +56,6 @@ impl WhisperDictateApp {
                     &mut self.settings.local_only,
                     "Block network-backed STT/post-processing providers when enabled.",
                 );
-                self.diagnostics_combo(ui);
             });
         ui.separator();
         ui.horizontal(|ui| {
@@ -85,46 +84,5 @@ impl WhisperDictateApp {
                 self.scroll_to_history_preview = false;
             }
         }
-    }
-
-    /// One "Diagnostics" dropdown standing in for the two raw debug toggles.
-    ///
-    /// The persisted `debug` / `stt_debug` bools (and their env vars + the
-    /// worker) are unchanged — this is a pure UI affordance over them via
-    /// [`diagnostics_level`] / [`apply_diagnostics_level`]. The level is read
-    /// from the current bools each frame; on change both bools are written so
-    /// the dirty-dot and Save behave exactly as the old checkboxes did.
-    fn diagnostics_combo(&mut self, ui: &mut egui::Ui) {
-        let label = ui_text(&self.settings.ui_language, UiTextKey::Diagnostics);
-        let help = ui_text(&self.settings.ui_language, UiTextKey::DiagnosticsHelp);
-        let show_help = label_with_help(ui, label, help);
-        let current = diagnostics_level(self.settings.debug, self.settings.stt_debug);
-        let language = self.settings.ui_language.clone();
-        let level_label = |level: DiagnosticsLevel| -> &'static str {
-            ui_text(
-                &language,
-                match level {
-                    DiagnosticsLevel::Off => UiTextKey::DiagnosticsOff,
-                    DiagnosticsLevel::Basic => UiTextKey::DiagnosticsBasic,
-                    DiagnosticsLevel::Verbose => UiTextKey::DiagnosticsVerbose,
-                },
-            )
-        };
-        let mut selected = current;
-        egui::ComboBox::from_id_salt("diagnostics_level")
-            .width(settings_control_width(ui))
-            .selected_text(level_label(current))
-            .show_ui(ui, |ui| {
-                for level in DiagnosticsLevel::ALL {
-                    ui.selectable_value(&mut selected, level, level_label(level));
-                }
-            });
-        if selected != current {
-            let (debug, stt_debug) = apply_diagnostics_level(selected);
-            self.settings.debug = debug;
-            self.settings.stt_debug = stt_debug;
-        }
-        ui.end_row();
-        grid_help_row(ui, show_help, help);
     }
 }

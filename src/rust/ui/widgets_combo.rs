@@ -4,7 +4,34 @@
 
 use super::*;
 
-pub(in crate::ui) fn combo_help(
+/// Width policy for a settings combo. WIDE combos stretch to fill the row (good
+/// for long descriptive option labels like model pickers / compute type); SHORT
+/// combos use a fixed narrow width so a three-token dropdown
+/// (auto/type/paste, Off/Basic/Verbose) doesn't sprawl across the whole grid.
+#[derive(Clone, Copy)]
+pub(in crate::ui) enum ComboWidth {
+    Wide,
+    Short,
+}
+
+impl ComboWidth {
+    fn px(self, ui: &egui::Ui) -> f32 {
+        match self {
+            ComboWidth::Wide => settings_control_width(ui),
+            ComboWidth::Short => settings_short_control_width(ui),
+        }
+    }
+}
+
+/// Narrow combo over a flat `&[&str]` option list, for short-enum values such as
+/// Inject mode (auto/type/paste) or Format commands (off/en/da/both). Use this
+/// ONLY when every option is a short token. Flat `&[&str]` lists with LONG
+/// values (e.g. the `PARAKEET_MODELS` / `OPENAI_POST_MODELS` model pickers) must
+/// keep a wide combo — they render via `combo_enabled` (which sets the wide
+/// width), not this helper. Long descriptive labels use the `*_labeled` helpers.
+/// Note: egui's `.width()` is a minimum, so a short combo still auto-grows to fit
+/// an occasional longer value — but pick the width that matches the common case.
+pub(in crate::ui) fn combo_help_short(
     ui: &mut egui::Ui,
     label: &str,
     value: &mut String,
@@ -13,7 +40,7 @@ pub(in crate::ui) fn combo_help(
 ) {
     let show_help = label_with_help(ui, label, help);
     egui::ComboBox::from_id_salt(label)
-        .width(settings_control_width(ui))
+        .width(ComboWidth::Short.px(ui))
         .selected_text(if value.is_empty() {
             "(empty)"
         } else {
@@ -39,9 +66,31 @@ pub(in crate::ui) fn combo_help_labeled(
     options: &[(&str, &str)],
     help: &str,
 ) {
+    combo_help_labeled_w(ui, label, value, options, help, ComboWidth::Wide);
+}
+
+/// Narrow variant of [`combo_help_labeled`] for short display labels.
+pub(in crate::ui) fn combo_help_labeled_short(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+) {
+    combo_help_labeled_w(ui, label, value, options, help, ComboWidth::Short);
+}
+
+fn combo_help_labeled_w(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+    width: ComboWidth,
+) {
     let show_help = label_with_help(ui, label, help);
     egui::ComboBox::from_id_salt(label)
-        .width(settings_control_width(ui))
+        .width(width.px(ui))
         .selected_text(selected_option_label(value, options))
         .show_ui(ui, |ui| {
             for (option, display) in options {
@@ -60,9 +109,35 @@ pub(in crate::ui) fn combo_enabled(
     options: &[&str],
     help: &str,
 ) {
+    combo_enabled_w(ui, enabled, label, value, options, help, ComboWidth::Wide);
+}
+
+/// Narrow variant of [`combo_enabled`] for short-enum options.
+pub(in crate::ui) fn combo_enabled_short(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[&str],
+    help: &str,
+) {
+    combo_enabled_w(ui, enabled, label, value, options, help, ComboWidth::Short);
+}
+
+#[allow(clippy::too_many_arguments)] // a labelled, enabled, width-policy form row needs them
+fn combo_enabled_w(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[&str],
+    help: &str,
+    width: ComboWidth,
+) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(label)
+            .width(width.px(ui))
             .selected_text(if value.is_empty() {
                 "(empty)"
             } else {
@@ -90,9 +165,35 @@ pub(in crate::ui) fn combo_enabled_labeled(
     options: &[(&str, &str)],
     help: &str,
 ) {
+    combo_enabled_labeled_w(ui, enabled, label, value, options, help, ComboWidth::Wide);
+}
+
+/// Narrow variant of [`combo_enabled_labeled`] for short display labels.
+pub(in crate::ui) fn combo_enabled_labeled_short(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+) {
+    combo_enabled_labeled_w(ui, enabled, label, value, options, help, ComboWidth::Short);
+}
+
+#[allow(clippy::too_many_arguments)] // a labelled, enabled, width-policy form row needs them
+fn combo_enabled_labeled_w(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &mut String,
+    options: &[(&str, &str)],
+    help: &str,
+    width: ComboWidth,
+) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
     ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(label)
+            .width(width.px(ui))
             .selected_text(selected_option_label(value, options))
             .show_ui(ui, |ui| {
                 for (option, display) in options {

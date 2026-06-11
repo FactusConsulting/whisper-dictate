@@ -17,7 +17,7 @@ impl WhisperDictateApp {
                     POST_PROCESSOR_OPTIONS,
                     "Optional second text pass after speech recognition, dictionary replacements and before final injection. none disables it; ollama uses a local chat model; groq/openai send the dictated text to a cloud chat model for cleanup or rewriting.",
                 );
-                combo_enabled(
+                combo_enabled_short(
                     ui,
                     post_enabled,
                     "Post mode",
