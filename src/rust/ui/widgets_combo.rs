@@ -24,9 +24,13 @@ impl ComboWidth {
 }
 
 /// Narrow combo over a flat `&[&str]` option list, for short-enum values such as
-/// Inject mode (auto/type/paste) or Format commands (off/en/da/both). The plain
-/// `&[&str]` combos in this codebase are all short tokens, so this is the only
-/// public flavour; long descriptive option labels use the `*_labeled` helpers.
+/// Inject mode (auto/type/paste) or Format commands (off/en/da/both). Use this
+/// ONLY when every option is a short token. Flat `&[&str]` lists with LONG
+/// values (e.g. the `PARAKEET_MODELS` / `OPENAI_POST_MODELS` model pickers) must
+/// keep a wide combo — they render via `combo_enabled` (which sets the wide
+/// width), not this helper. Long descriptive labels use the `*_labeled` helpers.
+/// Note: egui's `.width()` is a minimum, so a short combo still auto-grows to fit
+/// an occasional longer value — but pick the width that matches the common case.
 pub(in crate::ui) fn combo_help_short(
     ui: &mut egui::Ui,
     label: &str,
