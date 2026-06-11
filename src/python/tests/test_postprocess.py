@@ -496,6 +496,44 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(long, 4000 + 500 * vp_postprocess.PER_CHAR_MS)
         self.assertGreater(long, short)
 
+    def test_ollama_cleanup_call_gets_length_scaled_timeout(self):
+        from whisper_dictate import vp_postprocess
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured.setdefault("timeouts", []).append(timeout)
+            import io
+            import json as _json
+            data = _json.dumps({"response": "cleaned"}).encode("utf-8")
+            resp = io.BytesIO(data)
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda s, *a: None
+            resp.read = lambda: data
+            return resp
+
+        def run(text):
+            settings = vp_postprocess.PostprocessSettings(
+                processor="ollama",
+                mode="clean",
+                model="qwen2.5:3b",
+                base_url="http://127.0.0.1:11434",
+                timeout_ms=4000,
+            )
+            with patch("whisper_dictate.vp_postprocess.urllib.request.urlopen",
+                       side_effect=fake_urlopen):
+                vp_postprocess.postprocess_text(text, settings)
+
+        run("x" * 10)
+        run("x" * 500)
+        short_s, long_s = captured["timeouts"]
+        # Convert seconds back to ms for comparison with scaling formula.
+        short_ms = round(short_s * 1000)
+        long_ms = round(long_s * 1000)
+        self.assertEqual(short_ms, 4000 + 10 * vp_postprocess.PER_CHAR_MS)
+        self.assertEqual(long_ms, 4000 + 500 * vp_postprocess.PER_CHAR_MS)
+        self.assertGreater(long_ms, short_ms)
+
 class FormatCommandTests(unittest.TestCase):
     def setUp(self):
         sys.modules.pop("whisper_dictate.runtime", None)

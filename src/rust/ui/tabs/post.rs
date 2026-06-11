@@ -43,7 +43,7 @@ impl WhisperDictateApp {
                     "post_timeout_ms",
                     "Post timeout ms",
                     &mut self.settings.post_timeout_ms,
-                    "Base (floor) time for post-processing. The effective timeout scales with the transcript length (longer text gets more time) up to a 30s ceiling, then falls back to the un-cleaned text.",
+                    "Base (floor) time for post-processing. The effective timeout scales with the transcript length (longer text gets more time) up to a 30 seconds ceiling, then falls back to the uncleaned text.",
                 );
                 numeric_enabled(
                     ui,

@@ -309,7 +309,7 @@ def _ollama_generate(settings: PostprocessSettings, text: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=settings.timeout_ms / 1000.0) as resp:
+    with urllib.request.urlopen(req, timeout=effective_timeout_ms(settings.timeout_ms, len(text)) / 1000.0) as resp:
         obj = json.loads(resp.read().decode("utf-8", errors="replace"))
     output = str(obj.get("response", "")).strip()
     return output or text
