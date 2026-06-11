@@ -166,6 +166,7 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn stop_runtime(&mut self) {
         self.worker_ready = false;
         self.clear_audio_meter();
+        self.clear_pipeline_progress();
         self.append_runtime_log("[ui] stopping runtime");
         if let Err(err) = self.supervisor.stop() {
             self.append_runtime_log(format!("[ui] stop failed: {err}"));
@@ -181,6 +182,7 @@ impl WhisperDictateApp {
         let command = self.worker_command();
         self.worker_ready = false;
         self.clear_audio_meter_and_device();
+        self.clear_pipeline_progress();
         self.append_runtime_log(format!("[ui] restarting: {}", command.display()));
         if let Err(err) = self.supervisor.restart(command) {
             self.append_runtime_log(format!("[ui] restart failed: {err}"));
@@ -221,6 +223,16 @@ impl WhisperDictateApp {
         self.audio_capture_opening = false;
         self.audio_capture_active = false;
         self.clear_audio_meter_readings();
+    }
+
+    /// Drop the live pipeline-progress card state (stage + growing preview text).
+    /// Called whenever the worker is no longer running a dictation — on
+    /// stop/restart and on Exited/Error — so the sidebar recording indicator and
+    /// the `render_pipeline_progress` card can't stick on a stale "recording"
+    /// stage after the worker is gone.
+    pub(in crate::ui) fn clear_pipeline_progress(&mut self) {
+        self.pipeline_stage = None;
+        self.pipeline_preview = None;
     }
 
     /// Blank the live meter readings (level / dBFS / peak) without touching the
@@ -289,6 +301,7 @@ impl WhisperDictateApp {
                 RuntimeEvent::Exited { code } => {
                     self.worker_ready = false;
                     self.clear_audio_meter();
+                    self.clear_pipeline_progress();
                     self.append_runtime_log(format!(
                         "[ui] runtime exited with code {}",
                         code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
@@ -298,6 +311,7 @@ impl WhisperDictateApp {
                 RuntimeEvent::Error(message) => {
                     self.worker_ready = false;
                     self.clear_audio_meter();
+                    self.clear_pipeline_progress();
                     self.append_runtime_log(format!("[ui] runtime error: {message}"));
                 }
             }
@@ -344,8 +358,7 @@ impl WhisperDictateApp {
         } else if event.event == "utterance" {
             // The dictation finished and settles into a Final card — clear the
             // live pipeline-progress card and its growing preview text.
-            self.pipeline_stage = None;
-            self.pipeline_preview = None;
+            self.clear_pipeline_progress();
             if let Some(line) = worker_utterance_log_line(event) {
                 self.append_runtime_log(line);
             }

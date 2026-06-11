@@ -110,6 +110,23 @@ fn preview_status_captures_text_without_clearing_recording_stage() {
 }
 
 #[test]
+fn stop_runtime_clears_stale_pipeline_progress() {
+    // Root-cause guard: stopping the worker mid-recording must clear the live
+    // pipeline-progress state so the sidebar indicator and the progress card
+    // can't stick on a stale "recording" stage after the worker is gone.
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    app.update_worker_status(&status_event("recording"));
+    assert_eq!(app.pipeline_stage, Some("recording"));
+    app.pipeline_preview = Some("partial text".to_owned());
+
+    app.stop_runtime();
+
+    assert_eq!(app.pipeline_stage, None);
+    assert_eq!(app.pipeline_preview, None);
+}
+
+#[test]
 fn push_to_talk_keys_render_as_friendly_chord() {
     assert_eq!(format_push_to_talk_keys("ctrl_r"), "Ctrl (right)");
     assert_eq!(

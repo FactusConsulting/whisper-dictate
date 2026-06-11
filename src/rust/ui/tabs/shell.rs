@@ -18,14 +18,22 @@ impl WhisperDictateApp {
                     .color(palette.accent_blue),
             );
         });
-        ui.label(
-            icon_text(
-                icons::ICON_TUNE,
-                ui_text(&self.settings.ui_language, UiTextKey::SidebarSubtitle),
-            )
-            .text_style(egui::TextStyle::Small)
-            .color(palette.text_muted),
-        );
+        // Recording indicator: a coloured dot + bold label. Visible even when
+        // the window is minimised or only its top-left corner is showing.
+        let (label_key, slot) =
+            recording_indicator_style(self.pipeline_stage, self.display_runtime_state());
+        let color = slot.resolve(palette);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(dot.center(), 5.0, color);
+            ui.label(
+                egui::RichText::new(ui_text(&self.settings.ui_language, label_key))
+                    .text_style(egui::TextStyle::Small)
+                    .strong()
+                    .color(color),
+            );
+        });
         ui.add_space(18.0);
 
         // Render the bottom block first inside a bottom_up layout so it always
