@@ -741,8 +741,8 @@ fn health_card_shown_in_minimal_and_diagnostic() {
     for mode in [LogViewMode::Minimal, LogViewMode::Diagnostic] {
         let cards = runtime_log_cards(line, mode);
         assert_eq!(cards.len(), 1, "expected one health card in {mode:?}");
-        assert_eq!(cards[0].kind, RuntimeLogCardKind::Status);
-        assert_eq!(cards[0].badge, "Health");
+        assert_eq!(cards[0].kind, RuntimeLogCardKind::HealthOk);
+        assert_eq!(cards[0].badge, "HealthOk");
         assert_eq!(
             cards[0].title,
             "mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq"
@@ -757,7 +757,8 @@ fn health_card_flags_warnings_with_distinct_badge() {
         | post off | WARN low confidence | WARN quiet input";
     let cards = runtime_log_cards(line, LogViewMode::Minimal);
     assert_eq!(cards.len(), 1);
-    assert_eq!(cards[0].badge, "Health!");
+    assert_eq!(cards[0].kind, RuntimeLogCardKind::HealthWarn);
+    assert_eq!(cards[0].badge, "HealthWarn");
     assert!(cards[0].detail.contains("warnings"));
     assert!(cards[0].title.contains("WARN low confidence"));
 }
@@ -772,7 +773,12 @@ fn health_card_warn_detection_is_structural_not_substring() {
     let cards = runtime_log_cards(no_warn_line, LogViewMode::Minimal);
     assert_eq!(cards.len(), 1);
     assert_eq!(
-        cards[0].badge, "Health",
+        cards[0].kind,
+        RuntimeLogCardKind::HealthOk,
+        "WARN inside a field value must not trigger the warning card kind"
+    );
+    assert_eq!(
+        cards[0].badge, "HealthOk",
         "WARN inside a field value must not trigger the warning badge"
     );
 
@@ -781,7 +787,8 @@ fn health_card_warn_detection_is_structural_not_substring() {
         "[health] mic -38dBFS SNR 56dB good | confidence low (-0.82) | post off | WARN low confidence";
     let warn_cards = runtime_log_cards(warn_line, LogViewMode::Minimal);
     assert_eq!(warn_cards.len(), 1);
-    assert_eq!(warn_cards[0].badge, "Health!");
+    assert_eq!(warn_cards[0].kind, RuntimeLogCardKind::HealthWarn);
+    assert_eq!(warn_cards[0].badge, "HealthWarn");
 }
 
 #[test]
