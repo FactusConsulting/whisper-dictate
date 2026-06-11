@@ -11,8 +11,12 @@
 //! | Level   | `debug` | `stt_debug` | meaning                                  |
 //! |---------|---------|-------------|------------------------------------------|
 //! | Off     | false   | false       | no diagnostics                           |
-//! | Basic   | true    | false       | startup effective-settings dump          |
-//! | Verbose | true    | true        | + per-utterance STT + dictionary detail  |
+//! | Basic   | true    | false       | concise per-utterance `[health]` line    |
+//! | Verbose | true    | true        | + startup config dump + per-segment STT  |
+//!
+//! Basic (`debug:on`) emits one plain-language `[health]` line per utterance
+//! (mic level/SNR + model confidence + terse warnings). Verbose adds the startup
+//! effective-settings dump and the per-segment STT/dictionary detail on top.
 //!
 //! The fourth raw combo (`debug:false, stt_debug:true`) is *impossible* via the
 //! dropdown but can occur in a hand-edited config. Any `stt_debug` implies at
@@ -24,9 +28,10 @@
 pub(in crate::ui) enum DiagnosticsLevel {
     /// No diagnostics: `debug:off, stt_debug:off`.
     Off,
-    /// Startup effective-settings dump: `debug:on, stt_debug:off`.
+    /// Concise per-utterance `[health]` line: `debug:on, stt_debug:off`.
     Basic,
-    /// Startup dump + per-utterance STT/dictionary detail: `debug:on, stt_debug:on`.
+    /// Health line + startup config dump + per-segment STT/dictionary detail:
+    /// `debug:on, stt_debug:on`.
     Verbose,
 }
 

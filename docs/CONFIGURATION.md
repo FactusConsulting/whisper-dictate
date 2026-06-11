@@ -83,7 +83,8 @@ requiring restart/model reload.
 | **Skip syscheck** | — | `VOICEPI_SKIP_SYSCHECK` | _none_ | _(unset)_ | any non-empty | skip `packaging/linux/ubuntu26.04/setup.sh` apt-dep check (auto-set by brew/nix) |
 | **Feedback sounds** | Output | `VOICEPI_FEEDBACK_SOUNDS` | _none_ | _(unset)_ | truthy / falsey | play a short audio cue on record start/stop — useful when the console is hidden (headless/autostart with `Terminal=false`) |
 | **Feedback notifications** | Output | `VOICEPI_FEEDBACK_NOTIFY` | _none_ | _(unset)_ | truthy / falsey | show a desktop notification on errors (model load failure, capture lost, injection failure) — Linux via `notify-send`; Windows/macOS: no-op for now |
-| **Debug dump** | Output | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | log every effective setting at startup |
+| **Diagnostics (Basic)** | Output | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | print one concise per-utterance `[health]` line (mic level/SNR + model confidence + warnings). The startup config dump now requires `VOICEPI_STT_DEBUG` too (Verbose). |
+| **Diagnostics (Verbose)** | Output | `VOICEPI_STT_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | with `VOICEPI_DEBUG`: adds the startup effective-settings dump and per-segment STT/dictionary detail |
 | **UI theme** | Output | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 
 The detailed tables below are the same knobs split by surface (env vars
@@ -161,7 +162,8 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_SKIP_SYSCHECK` | *(unset)* | any non-empty value | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt dependency check. Set automatically by the Homebrew/Nix wrappers; rarely set by hand. |
 | `VOICEPI_FEEDBACK_SOUNDS` | *(unset)* | truthy / falsey | Play a short audio cue when recording starts (high pitch) and stops (low pitch). On Windows, uses `winsound.Beep`; on Linux, plays a freedesktop sound file via `paplay` if available. Cues are non-blocking (Popen + DEVNULL) so they never add latency to dictation. Live-reloadable. Useful when whisper-dictate is launched as a headless autostart entry (`Terminal=false`) and all console output is swallowed. |
 | `VOICEPI_FEEDBACK_NOTIFY` | *(unset)* | truthy / falsey | Send a desktop notification on errors: model load failure, audio capture lost, and injection failure. On Linux, uses `notify-send --urgency=critical`. Windows and macOS are no-ops for now. Live-reloadable. Useful for headless/autostart usage where no console is visible. |
-| `VOICEPI_DEBUG` | *(unset)* | `1` / `true` / any truthy (empty, `0`, `false`, `no`, `off` = disabled) | At startup, prints a `[debug] effective settings:` block listing every setting + which env var supplied it. Useful for "is my `setx` actually arriving in the running process?" — run with `VOICEPI_DEBUG=1` and the first lines of the log show the truth. Zero runtime cost when unset. |
+| `VOICEPI_DEBUG` | *(unset)* | `1` / `true` / any truthy (empty, `0`, `false`, `no`, `off` = disabled) | **Basic diagnostics.** Prints one concise `[health]` line per utterance — mic level (dBFS), SNR + input status, model confidence (a plain `high`/`ok`/`low` band over the segments' mean `avg_logprob`), the active post-processor, and terse `WARN` flags when something looks off (low confidence, quiet-and-noisy input, no text). The line shows in the Minimal and Diagnostic log views (no need to switch to Debug). As of the health-line change this no longer triggers the startup config dump on its own — see `VOICEPI_STT_DEBUG`. |
+| `VOICEPI_STT_DEBUG` | *(unset)* | `1` / `true` / any truthy | **Verbose diagnostics** (set alongside `VOICEPI_DEBUG`). Restores the startup `[debug] effective settings:` block (every setting + which env var supplied it — useful for "is my `setx` actually arriving in the running process?") and adds the per-segment `[stt-debug]` STT/dictionary detail. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR
 numbers mean in practice.
@@ -196,15 +198,40 @@ delivering), `2` = events arrived but the full chord was never held
 together, `3` = unknown key name. The script needs no install beyond
 pynput (which whisper-dictate already depends on).
 
-### Debugging "is my `setx` arriving?" — `VOICEPI_DEBUG=1`
+### Diagnostics levels — Basic `[health]` line vs. Verbose config dump
+
+The UI **Diagnostics** dropdown maps to two env-named bools:
+
+- **Off** (`VOICEPI_DEBUG` unset, `VOICEPI_STT_DEBUG` unset): no diagnostics.
+- **Basic** (`VOICEPI_DEBUG=1`): one concise `[health]` line per utterance, e.g.
+
+  ```
+  [health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq
+  ```
+
+  and, when something looks off, terse warnings:
+
+  ```
+  [health] mic -55dBFS SNR 3dB too_quiet | confidence low (-0.82) | post off | WARN low confidence | WARN quiet input
+  ```
+
+  The `confidence` band is a plain read of the segments' mean `avg_logprob`
+  (`high >= -0.35`, `ok -0.35..-0.60`, `low < -0.60`). Quiet-but-clean input
+  is fine and does **not** warn; only quiet **and** low-SNR input does.
+- **Verbose** (`VOICEPI_DEBUG=1` **and** `VOICEPI_STT_DEBUG=1`): Basic plus the
+  startup `[debug] effective settings:` config dump and per-segment
+  `[stt-debug]` detail.
+
+### Debugging "is my `setx` arriving?" — Verbose diagnostics
 
 A common confusion on Windows is that `setx` writes to the user registry,
 but **only new processes inherit it** — a whisper-dictate launched from a
 stale Start-menu shortcut or tray-restart may still see the old values.
 
-To verify what the running process actually sees, set `VOICEPI_DEBUG=1`
-and restart. The first lines of the log will print every effective
-setting + the env var that supplied it:
+To verify what the running process actually sees, set **Verbose**
+diagnostics (`VOICEPI_DEBUG=1` and `VOICEPI_STT_DEBUG=1`) and restart. The
+first lines of the log will print every effective setting + the env var that
+supplied it:
 
 ```
 [debug] effective settings:
@@ -226,8 +253,10 @@ loading Whisper large-v3 on cuda (float16)…
 
 If a value shows `(unset)` where you expected one, your `setx` didn't
 reach this process — log out + back in, or launch from a fresh PowerShell
-where `$env:VOICEPI_X` shows the value. Leave `VOICEPI_DEBUG` unset for
-normal use; the dump adds ~10 lines on startup and zero runtime cost.
+where `$env:VOICEPI_X` shows the value. Set Diagnostics to **Off** for
+normal use; **Basic** if you want the lightweight per-utterance `[health]`
+line; **Verbose** adds the config dump (~10 lines on startup) and per-segment
+detail. All have zero runtime cost when their level is not selected.
 
 ## CLI flags
 

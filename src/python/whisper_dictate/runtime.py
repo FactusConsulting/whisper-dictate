@@ -151,6 +151,17 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
 
 
+def _config_dump_enabled() -> bool:
+    """Whether to print the startup ``[debug] effective settings:`` dump.
+
+    Moved from Basic to Verbose: Basic (debug:on, stt_debug:off) now shows the
+    concise per-utterance ``[health]`` line instead, so the heavy config dump
+    requires BOTH VOICEPI_DEBUG and VOICEPI_STT_DEBUG (i.e. Verbose).
+    """
+    return _truthy(os.environ.get("VOICEPI_DEBUG")) and _truthy(
+        os.environ.get("VOICEPI_STT_DEBUG"))
+
+
 def _version_from_files(start: Path) -> str | None:
     """Find the nearest VERSION file at or above ``start`` (max 5 levels up).
 
@@ -492,8 +503,7 @@ def main() -> None:
 
     backend, dev, ctype = _resolve_backend_and_device(a, ap)
 
-    if (os.environ.get("VOICEPI_DEBUG") or "").strip().lower() not in (
-            "", "0", "false", "no", "off"):
+    if _config_dump_enabled():
         _print_effective_config(a, dev, ctype)
 
     model, loaded_model_name, model_load_s = _load_model(a, backend, dev, ctype)

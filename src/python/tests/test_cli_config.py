@@ -359,6 +359,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_external_api.py",
             "vp_feedback.py",
             "vp_format.py",
+            "vp_health.py",
             "vp_history.py",
             "vp_inject.py",
             "vp_keymap.py",
