@@ -150,10 +150,14 @@ def select_input_devices(devices, hostapis, *, is_windows: bool, default_index: 
       * ``max_input_channels > 0``,
       * non-empty name (blank names collide with the UI's "(System default)").
 
-    The returned ``index`` stays the real ``query_devices`` index so capture's
-    device resolution (which matches by index/name) keeps working. ``default`` is
-    set on the entry whose index == ``default_index`` (sounddevice's default
-    input). Kept pure so it is unit-testable with stubbed sequences.
+    The returned ``index`` is preserved only for the JSON contract / manual
+    numeric entry: the Rust picker discards it and persists the device NAME, and
+    capture (``vp_capture._resolve_sounddevice_device``) resolves that name by
+    substring across ALL host APIs — so the cleaned WASAPI-sourced list only
+    changes which names are shown, not how capture binds the physical device.
+    ``default`` is set on the entry whose index == ``default_index``
+    (sounddevice's default input). Kept pure so it is unit-testable with stubbed
+    sequences.
     """
     chosen = _select_host_api_index(hostapis, is_windows=is_windows)
     result: list[dict] = []
