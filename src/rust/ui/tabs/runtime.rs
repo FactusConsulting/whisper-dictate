@@ -197,15 +197,22 @@ impl WhisperDictateApp {
             return;
         }
         let dictation_badge = ui_text(&self.settings.ui_language, UiTextKey::Dictation).to_owned();
+        let health_ok_badge = ui_text(&self.settings.ui_language, UiTextKey::HealthOk).to_owned();
+        let health_warn_badge =
+            ui_text(&self.settings.ui_language, UiTextKey::HealthWarn).to_owned();
         for mut card in cards {
             if card.title.trim().is_empty() {
                 continue;
             }
-            // Translate the internal "Utterance" marker to the user-visible
-            // localized badge ("Dictation" / "Diktering") at render time so the
-            // log-parsing layer stays language-agnostic and tests remain stable.
+            // Translate internal marker strings to user-visible localized badges
+            // at render time so the log-parsing layer stays language-agnostic
+            // and tests remain stable.
             if card.badge == "Utterance" {
                 card.badge = dictation_badge.clone();
+            } else if card.badge == "HealthOk" {
+                card.badge = health_ok_badge.clone();
+            } else if card.badge == "HealthWarn" {
+                card.badge = health_warn_badge.clone();
             }
             runtime_log_card(ui, &card, palette);
             ui.add_space(8.0);

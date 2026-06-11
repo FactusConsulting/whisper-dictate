@@ -100,6 +100,10 @@ pub(in crate::ui) enum UiTextKey {
     /// (e.g. "Range: 1–10."). Localized so a Danish help string isn't followed
     /// by an English "Range:".
     Range,
+    /// Badge label for the per-utterance health card when all checks pass.
+    HealthOk,
+    /// Badge label for the per-utterance health card when at least one warning fired.
+    HealthWarn,
 }
 
 impl UiTextKey {
@@ -205,6 +209,8 @@ impl UiTextKey {
                     minimum 5). Also settable via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
                 UiTextKey::Range => "Range",
+                UiTextKey::HealthOk => "Healthy",
+                UiTextKey::HealthWarn => "Warning",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -306,6 +312,8 @@ impl UiTextKey {
                     minimum 5). Kan også sættes via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
                 UiTextKey::Range => "Interval",
+                UiTextKey::HealthOk => "God",
+                UiTextKey::HealthWarn => "Advarsel",
             },
         }
     }
