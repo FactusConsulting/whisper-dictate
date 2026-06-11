@@ -182,6 +182,48 @@ def _resolve_sounddevice_device(sd, value: str):
     return index, name
 
 
+def resolve_startup_audio_device() -> str:
+    """Resolve the active input-device LABEL at startup WITHOUT opening a stream.
+
+    Called once the worker is ready (before the first recording) so the UI shows
+    the active mic from ``status=ready`` instead of a blank "Input pending" until
+    the first recording opens the capture stream. Mirrors ``_start``'s backend
+    pick: an available PipeWire arecord route yields ``arecord -D <device>`` (as
+    ``_start_arecord`` does); otherwise ``VOICEPI_AUDIO_DEVICE`` is resolved via
+    :func:`resolve_capture_device` (the SAME pure resolver capture uses — it only
+    queries devices, opens no stream) and the full name returned.
+
+    Never raises/blocks: any import/resolve failure degrades to "System default"
+    (also used when nothing is configured / nothing resolves). The truly-bound
+    device is re-derived when a recording opens the stream (``_start_*``), so a
+    "System default" startup label is corrected on the first recording.
+    """
+    requested = _audio_device_setting()
+    arecord_device = _ensure_arecord_device()
+    if arecord_device:
+        device = _arecord_device_arg(arecord_device, requested)
+        return f"arecord -D {device}"
+    try:
+        import sounddevice as sd
+        _index, name = _resolve_sounddevice_device(sd, requested)
+        if name:
+            return name
+        if _index is not None:
+            label = _selected_device_name(sd, _index)
+            if label:
+                return label
+            return _sounddevice_input_name(sd) or "System default"
+        # No explicit device and nothing resolved → the OS default input.
+        return _sounddevice_input_name(sd) or "System default"
+    except Exception as exc:
+        print(
+            f"[cap] could not resolve startup audio device (ignored): {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return "System default"
+
+
 def _wasapi_autoconvert_settings(sd):
     """Return ``sd.WasapiSettings(auto_convert=True)`` or ``None`` if unavailable.
 

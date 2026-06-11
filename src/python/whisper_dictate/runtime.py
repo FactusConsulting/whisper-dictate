@@ -141,7 +141,9 @@ from whisper_dictate.vp_audio_file import (  # noqa: E402,F401
 from whisper_dictate.vp_keymap import (  # noqa: E402,F401
     _detect_xkb_layout, _normalize_xkb_layout, _LANG_TO_XKB, _SUPPORTED_XKB_LAYOUTS,
 )
-from whisper_dictate.vp_capture import CaptureMixin  # noqa: E402,F401
+from whisper_dictate.vp_capture import (  # noqa: E402,F401
+    CaptureMixin, resolve_startup_audio_device,
+)
 from whisper_dictate.vp_dictate import Dictate, FIRST_AUDIO_WAIT_S  # noqa: E402,F401
 from whisper_dictate import vp_dictate  # noqa: E402
 from whisper_dictate.vp_feedback import notify_error  # noqa: E402
@@ -436,6 +438,12 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
         notify_error("whisper-dictate", f"Model load failed: {message}")
         raise SystemExit(1)
     _model_load_s = time.monotonic() - _t
+    # Resolve the active input device WITHOUT opening a stream so the UI can show
+    # the microphone from `ready` (not blank "Input pending" until the first
+    # recording opens the capture stream). Degrades to "System default" on any
+    # failure; the truly-bound device is re-derived when the first recording opens
+    # the stream, so a default label is corrected if reality differs.
+    audio_device = resolve_startup_audio_device()
     _emit_worker_event(
         "status",
         state="ready",
@@ -444,6 +452,7 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
         device=dev,
         compute_type=ctype,
         model_load_s=round(_model_load_s, 3),
+        audio_device=audio_device,
     )
     if backend == "openai":
         print(f"api ready in {_model_load_s:.1f}s", flush=True)
