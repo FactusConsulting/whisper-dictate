@@ -340,7 +340,7 @@
     {
       "env": "VOICEPI_POST_TIMEOUT_MS",
       "key": "post_timeout_ms",
-      "default": "2000",
+      "default": "4000",
       "live": true,
       "min": 100,
       "max": 600000,

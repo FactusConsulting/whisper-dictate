@@ -74,7 +74,7 @@ requiring restart/model reload.
 | **Post mode** | Post | `VOICEPI_POST_MODE` | _none_ | `raw` | `raw`, `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets` (`bullet-list` alias) | rewrite style for the optional second pass |
 | **Post model** | Post | `VOICEPI_POST_MODEL` | _none_ | `qwen2.5:3b` | Ollama model name | local text model used by the post processor |
 | **Post base URL** | Post | `VOICEPI_POST_BASE_URL` | _none_ | `http://localhost:11434` | URL | local Ollama endpoint |
-| **Post timeout** | Post | `VOICEPI_POST_TIMEOUT_MS` | _none_ | `2000` | integer ms | fallback to dictionary-final text if local rewrite is too slow |
+| **Post timeout** | Post | `VOICEPI_POST_TIMEOUT_MS` | _none_ | `4000` | integer ms | base/floor wall-clock; the effective timeout scales with transcript length (+20 ms/char) up to a 30 s ceiling, then falls back to dictionary-final text if the rewrite is still too slow |
 | **STT segment debug** | Output | `VOICEPI_STT_DEBUG` | _none_ | _(unset)_ | truthy / falsey | print Whisper segment metadata (`avg_logprob`, `no_speech_prob`, `compression_ratio` when available) |
 | **Disable terminal color** | — | `VOICEPI_NO_COLOR` / `NO_COLOR` | _none_ | _(unset)_ | any non-empty | keep terminal status lines plain even when stdout is interactive |
 | **VAD threshold** | Quality | `VOICEPI_VAD_THRESHOLD` | _none_ | `0.3` | float | Silero VAD speech threshold passed to faster-whisper |
@@ -139,7 +139,7 @@ the **GPU VRAM sizing** table further down.
 | `VOICEPI_POST_MODEL` | `qwen2.5:3b` | Ollama model name or OpenAI-compatible chat model | Text model used by the selected post processor. On 10 GB GPUs running Parakeet locally, 3B is the practical Ollama starting point. |
 | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` for Ollama, `https://api.openai.com/v1` for OpenAI | URL | Post-processing endpoint. With `VOICEPI_LOCAL_ONLY=1`, external providers are blocked. |
 | `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence for post-processing. The Rust UI Output tab can store a separate post-processing key in the OS credential store; if none is saved, the worker can fall back to the loaded Cloud STT key. |
-| `VOICEPI_POST_TIMEOUT_MS` | `2000` | integer ms | Maximum wait for the rewrite before falling back to the dictionary-final text. |
+| `VOICEPI_POST_TIMEOUT_MS` | `4000` | integer ms | Base/floor wall-clock budget for the rewrite. The effective timeout scales with the length of the text being cleaned (`base + 20 ms/char`, capped at a 30 s ceiling) so long dictations are not cut short; if the rewrite still exceeds the budget the worker falls back to the dictionary-final text. |
 | `VOICEPI_POST_MAX_INPUT_CHARS` | `4000` | integer chars | Maximum text sent to the local post-processor. |
 | `VOICEPI_POST_MAX_OUTPUT_CHARS` | `4000` | integer chars | Maximum rewritten text accepted from the local post-processor. |
 | `VOICEPI_POST_REDACT` | *(unset)* | truthy / falsey | Opt-in local redaction before `VOICEPI_POST_PROCESSOR=openai`. Emails, phone numbers and common API tokens are replaced with placeholders before the cloud request and restored afterward when possible. |

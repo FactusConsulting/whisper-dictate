@@ -105,6 +105,13 @@ def _warn_flags(metrics: dict[str, Any], band: str) -> list[str]:
         flags.append("WARN quiet input")
     if metrics.get("no_text"):
         flags.append("WARN no text")
+    # Post-processing silently fell back to raw, uncleaned text (most often a
+    # timeout). Surface it as a WARN segment so the Rust health card turns amber
+    # and the user knows the rewrite did not run. ASCII-safe (no arrow glyph).
+    if metrics.get("post_fallback"):
+        latency = _round_int(metrics.get("post_latency_ms", 0)) or 0
+        secs = max(0, latency // 1000)
+        flags.append(f"WARN post timeout->raw ({secs}s)")
     return flags
 
 
@@ -114,8 +121,10 @@ def format_health_line(metrics: dict[str, Any]) -> str:
     Expected keys (all optional; missing ones degrade gracefully):
       ``audio_raw_dbfs``, ``audio_snr_db``, ``audio_input_status``,
       ``audio_gain``, ``segments`` (list of dicts with ``avg_logprob``),
-      ``post_mode``, ``post_processor``, ``no_text`` (truthy when the
-      transcript was empty/dropped).
+      ``post_mode``, ``post_processor``, ``post_fallback`` (truthy when
+      post-processing fell back to raw text, e.g. on timeout), with optional
+      ``post_latency_ms`` for the elapsed wall-clock, ``no_text`` (truthy when
+      the transcript was empty/dropped).
     """
     avg_logprob = _mean_avg_logprob(metrics.get("segments"))
     band = _confidence_band(avg_logprob)
