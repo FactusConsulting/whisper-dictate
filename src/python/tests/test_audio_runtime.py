@@ -142,6 +142,35 @@ class RuntimeAudioDeviceTests(RealNumpyAudioCase):
         self.assertIn("level=round(level, 3)", capture)
         self.assertIn("raw_dbfs=round(raw_dbfs, 1)", capture)
 
+    def test_load_model_ready_event_carries_resolved_audio_device(self):
+        # The startup `ready` event must include the active input device so the
+        # UI shows the mic from Ready (not blank "Input pending" until the first
+        # recording). The device is resolved WITHOUT opening a stream.
+        from whisper_dictate import runtime
+
+        a = types.SimpleNamespace(model="small", json=False)
+        with _env(VOICEPI_WORKER_EVENTS="1"):
+            stderr = io.StringIO()
+            with patch.object(runtime, "_resolve_model_name",
+                              lambda _a, _b: ("Whisper", "small")):
+                with patch.object(runtime, "load_stt_model",
+                                  lambda *_a, **_k: object()):
+                    with patch.object(runtime, "resolve_startup_audio_device",
+                                      lambda: "Yeti Classic"):
+                        with redirect_stderr(stderr):
+                            runtime._load_model(a, "faster-whisper", "cpu", "int8")
+
+        ready = None
+        for raw in stderr.getvalue().splitlines():
+            raw = raw.strip()
+            if not raw.startswith("[worker-event] "):
+                continue
+            payload = json.loads(raw.removeprefix("[worker-event] "))
+            if payload.get("event") == "status" and payload.get("state") == "ready":
+                ready = payload
+        self.assertIsNotNone(ready, "no ready status event emitted")
+        self.assertEqual(ready["audio_device"], "Yeti Classic")
+
     def test_worker_event_emits_structured_ascii_stderr_without_helper_process(self):
         with _env(VOICEPI_WORKER_EVENTS="1"):
             stderr = io.StringIO()

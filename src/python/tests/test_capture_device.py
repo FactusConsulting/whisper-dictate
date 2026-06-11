@@ -6,7 +6,10 @@ plumbing that moved out of ``Dictate.__init__``: the one-shot arecord-device
 probe + its caching, and the lazy-global materialisation that lets the capture
 methods resolve ``np`` / ``SR`` / ``_find_arecord_device`` from this module.
 """
+import sys
+
 from helpers import (
+    _env,
     io,
     patch,
     real_numpy,
@@ -210,6 +213,85 @@ class ResolveCaptureDeviceWindowsTests(unittest.TestCase):
                 devices, hostapis, "", is_windows=False, default_index=1),
             (1, "Internal Mic"),
         )
+
+
+class ResolveStartupAudioDeviceTests(unittest.TestCase):
+    """The startup device-label resolver: shows the active mic from ``ready``.
+
+    Resolves the configured device LABEL without opening a stream so the UI
+    stops showing a blank "Input pending" until the first recording. Tests both
+    backends (arecord route + sounddevice) and the never-crash fallback.
+    """
+
+    def setUp(self):
+        # Control the cached arecord device per-test (None ⇒ sounddevice path).
+        self._saved = vp_capture._ARECORD_DEVICE
+        vp_capture._ARECORD_DEVICE = None
+
+    def tearDown(self):
+        vp_capture._ARECORD_DEVICE = self._saved
+        sys.modules.pop("sounddevice", None)
+
+    def test_arecord_route_labels_arecord_device(self):
+        # PipeWire arecord route available → label mirrors _start_arecord, no
+        # sounddevice import needed.
+        vp_capture._ARECORD_DEVICE = "pipewire"
+        with _env(VOICEPI_AUDIO_DEVICE=None):
+            self.assertEqual(
+                vp_capture.resolve_startup_audio_device(), "arecord -D pipewire"
+            )
+
+    def test_arecord_route_uses_configured_value_verbatim(self):
+        vp_capture._ARECORD_DEVICE = "pipewire"
+        with _env(VOICEPI_AUDIO_DEVICE="hw:1,0"):
+            self.assertEqual(
+                vp_capture.resolve_startup_audio_device(), "arecord -D hw:1,0"
+            )
+
+    def test_sounddevice_resolves_configured_device_name(self):
+        # No arecord route → sounddevice path resolves the configured name to its
+        # full device name WITHOUT opening a stream.
+        sys.modules["sounddevice"] = _fake_sd(_DEVICES)
+        with _env(VOICEPI_AUDIO_DEVICE="yeti"):
+            self.assertEqual(
+                vp_capture.resolve_startup_audio_device(), "Yeti Classic"
+            )
+
+    def test_sounddevice_no_config_falls_back_to_default_label(self):
+        # Nothing configured and no resolvable default → a sensible label, never
+        # blank/"Input pending".
+        sys.modules["sounddevice"] = _fake_sd(_DEVICES)
+        with _env(VOICEPI_AUDIO_DEVICE=None):
+            self.assertEqual(
+                vp_capture.resolve_startup_audio_device(), "System default"
+            )
+
+    def test_query_failure_degrades_to_system_default(self):
+        # A sounddevice that raises on every query must never crash startup; the
+        # label degrades to "System default" rather than propagating.
+        def _boom(*args, **kwargs):
+            raise RuntimeError("PortAudio not initialized")
+
+        sys.modules["sounddevice"] = types.SimpleNamespace(
+            query_devices=_boom, query_hostapis=_boom,
+        )
+        stderr = io.StringIO()
+        with _env(VOICEPI_AUDIO_DEVICE="yeti"), redirect_stderr(stderr):
+            self.assertEqual(
+                vp_capture.resolve_startup_audio_device(), "System default"
+            )
+
+    def test_import_failure_degrades_to_system_default(self):
+        # sounddevice not importable at all → never crash, fall back to default.
+        sys.modules.pop("sounddevice", None)
+        with _env(VOICEPI_AUDIO_DEVICE="yeti"), patch.dict(
+            sys.modules, {"sounddevice": None}
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.assertEqual(
+                    vp_capture.resolve_startup_audio_device(), "System default"
+                )
 
 
 class InputDevicesTests(unittest.TestCase):

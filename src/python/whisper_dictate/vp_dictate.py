@@ -138,6 +138,11 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             print(f"[audio] using arecord -D {arecord_device} (PipeWire route)", flush=True)
         else:
             print("[audio] using sounddevice (direct ALSA)", flush=True)
+        # Resolve the active input device early (no stream opened) so the field
+        # is known before the first recording — keeps the UI's mic name shown
+        # from `ready` rather than blank "Input pending". The truly-bound device
+        # is re-derived when a recording opens the stream (_start_*).
+        self._audio_input_device = vp_capture.resolve_startup_audio_device()
 
     def _profiled_config(self, base: dict[str, str]) -> dict[str, str]:
         data = load_config()
