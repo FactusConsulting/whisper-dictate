@@ -23,8 +23,11 @@ const VERSIONS_FEED_URL: &str =
 /// background poll for long. The poll runs off the UI thread regardless.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-const USER_AGENT: &str =
-    "whisper-dictate/0.3 (+https://github.com/FactusConsulting/whisper-dictate)";
+const USER_AGENT: &str = concat!(
+    "whisper-dictate/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/FactusConsulting/whisper-dictate)"
+);
 
 /// Parse a `major.minor.patch` version string into a comparable tuple.
 ///
@@ -53,14 +56,15 @@ pub(in crate::ui) const MIN_INTERVAL_MINUTES: u64 = 5;
 /// Resolve the configured interval string into a clamped poll [`Duration`].
 ///
 /// Parses the raw minutes, falls back to the 15-minute default when unparseable,
-/// then clamps to a `>= MIN_INTERVAL_MINUTES` floor. Pure / unit-tested.
+/// then clamps to a `>= MIN_INTERVAL_MINUTES` floor. A huge/hostile value is
+/// saturated via [`u64::saturating_mul`] so it never overflows. Pure / unit-tested.
 pub(in crate::ui) fn poll_interval(raw_minutes: &str) -> Duration {
     let minutes = raw_minutes
         .trim()
         .parse::<u64>()
         .unwrap_or(15)
         .max(MIN_INTERVAL_MINUTES);
-    Duration::from_secs(minutes * 60)
+    Duration::from_secs(minutes.saturating_mul(60))
 }
 
 /// Return the highest published version IF it is strictly newer than `current`,
@@ -69,8 +73,8 @@ pub(in crate::ui) fn poll_interval(raw_minutes: &str) -> Duration {
 /// Pure and unit-tested. Unparseable / pre-release / non-numeric entries are
 /// ignored. When `current` itself is unparseable, no update is reported (we
 /// can't reason about "newer", so stay silent rather than nag). The returned
-/// string is the original feed entry (preserving its exact text), not a
-/// reformatted version.
+/// string is derived from the original feed entry with surrounding whitespace
+/// trimmed.
 pub(in crate::ui) fn latest_newer_version(versions: &[String], current: &str) -> Option<String> {
     let current_parsed = parse_version(current)?;
     versions
@@ -79,6 +83,43 @@ pub(in crate::ui) fn latest_newer_version(versions: &[String], current: &str) ->
         .filter(|(parsed, _)| *parsed > current_parsed)
         .max_by_key(|(parsed, _)| *parsed)
         .map(|(_, raw)| raw.trim().to_owned())
+}
+
+/// Outcome of one background update-check cycle.
+///
+/// Using a typed enum (rather than collapsing everything into `Option<String>`)
+/// lets the caller distinguish three cases:
+/// - `Newer(v)` — feed was reachable AND a newer version was found.
+/// - `UpToDate`  — feed was reachable AND no newer version exists.
+/// - `Failed`    — the fetch failed (network error, bad JSON, …).
+///
+/// Only `Failed` must NOT clear an already-visible badge; the other two cases
+/// set `update_available` definitively.
+#[derive(Debug, PartialEq)]
+pub(in crate::ui) enum UpdateCheckOutcome {
+    Newer(String),
+    UpToDate,
+    Failed,
+}
+
+/// Pure helper: given the previous `update_available` state and a new poll
+/// outcome, return the next state.
+///
+/// - `Newer(v)` → `Some(v)`
+/// - `UpToDate`  → `None`  (we checked and there is nothing new)
+/// - `Failed`    → `prev`  (transient error: leave badge untouched)
+///
+/// Factored out of `poll_update_check` so it can be driven directly in tests
+/// without constructing the full app state.
+pub(in crate::ui) fn apply_update_outcome(
+    prev: Option<String>,
+    outcome: UpdateCheckOutcome,
+) -> Option<String> {
+    match outcome {
+        UpdateCheckOutcome::Newer(v) => Some(v),
+        UpdateCheckOutcome::UpToDate => None,
+        UpdateCheckOutcome::Failed => prev,
+    }
 }
 
 /// Fetch the published version list from the public feed.
@@ -218,6 +259,61 @@ mod tests {
         assert_eq!(
             latest_newer_version(&versions, "v1.8.14"),
             Some("1.8.15".to_owned())
+        );
+    }
+
+    // ── poll_interval overflow safety ────────────────────────────────────────
+
+    #[test]
+    fn poll_interval_huge_value_does_not_overflow_or_panic() {
+        // u64::MAX minutes would overflow minutes * 60 without saturating_mul.
+        // We just assert no panic and that the result is >= the floor.
+        let floor = Duration::from_secs(MIN_INTERVAL_MINUTES * 60);
+        assert!(poll_interval(&u64::MAX.to_string()) >= floor);
+        // A value just below u64::MAX / 60 also must not overflow.
+        let near_max = (u64::MAX / 60).to_string();
+        assert!(poll_interval(&near_max) >= floor);
+    }
+
+    // ── apply_update_outcome (Finding 4) ─────────────────────────────────────
+
+    #[test]
+    fn fetch_error_does_not_clear_prior_badge() {
+        // A transient failure must leave the previously-found version in place.
+        let prev = Some("1.9.0".to_owned());
+        assert_eq!(
+            apply_update_outcome(prev.clone(), UpdateCheckOutcome::Failed),
+            prev
+        );
+    }
+
+    #[test]
+    fn fetch_error_when_no_prior_badge_stays_none() {
+        assert_eq!(apply_update_outcome(None, UpdateCheckOutcome::Failed), None);
+    }
+
+    #[test]
+    fn up_to_date_clears_badge() {
+        let prev = Some("1.9.0".to_owned());
+        assert_eq!(
+            apply_update_outcome(prev, UpdateCheckOutcome::UpToDate),
+            None
+        );
+    }
+
+    #[test]
+    fn newer_outcome_sets_badge() {
+        assert_eq!(
+            apply_update_outcome(None, UpdateCheckOutcome::Newer("2.0.0".to_owned())),
+            Some("2.0.0".to_owned())
+        );
+        // Also replaces an older badge.
+        assert_eq!(
+            apply_update_outcome(
+                Some("1.9.0".to_owned()),
+                UpdateCheckOutcome::Newer("2.0.0".to_owned())
+            ),
+            Some("2.0.0".to_owned())
         );
     }
 }

@@ -293,18 +293,20 @@ impl WhisperDictateApp {
     /// - Otherwise, if no poll is in flight and we've never checked OR the clamped
     ///   interval has elapsed (measured with `Instant`, not wall-clock), one — and
     ///   only one — background thread is spawned and `last_update_check` recorded.
-    /// - A completed poll adopts its result: `Some(version)` shows the badge;
-    ///   `None` means "up to date / fetch failed" and leaves no badge. A fetch
-    ///   error maps to `None` upstream, so it never spams and never blocks the UI.
-    fn poll_update_check(&mut self) {
+    /// - A completed poll applies [`apply_update_outcome`]:
+    ///   `Newer(v)` → badge shown; `UpToDate` → badge cleared;
+    ///   `Failed` → badge untouched (transient network error must not wipe a
+    ///   previously-found update). `last_update_check` is recorded in all cases so
+    ///   the normal interval applies before the next retry.
+    pub(in crate::ui) fn poll_update_check(&mut self) {
         // Adopt a finished poll's result first (whether or not we still want to
         // poll), then drop the receiver so the next cycle can start fresh.
-        if let Some(result) = self
+        if let Some(outcome) = self
             .update_check_rx
             .as_ref()
             .and_then(|rx| rx.try_recv().ok())
         {
-            self.update_available = result;
+            self.update_available = apply_update_outcome(self.update_available.take(), outcome);
             self.update_check_rx = None;
         }
 

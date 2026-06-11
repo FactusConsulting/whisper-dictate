@@ -112,20 +112,25 @@ fn spawn_gpu_probe() -> Receiver<Option<u32>> {
 }
 
 /// Spawn a background thread that fetches the public version feed and computes
-/// whether a strictly-newer version exists, sending the `Option<version>` over
-/// the returned channel exactly once. Mirrors `spawn_gpu_probe`'s one-shot
+/// whether a strictly-newer version exists, sending an [`UpdateCheckOutcome`]
+/// over the returned channel exactly once. Mirrors `spawn_gpu_probe`'s one-shot
 /// channel discipline but is dispatched periodically by the app `update()` loop.
-/// A fetch error sends `None` (treated as "no change") so a flaky network never
-/// clears a previously-found update — the caller keeps its prior state on `None`
-/// only when the fetch failed; see `poll_update_check`.
-fn spawn_update_check(current_version: String) -> Receiver<Option<String>> {
+///
+/// Three outcomes are distinguished so the caller can react correctly:
+/// - `Newer(v)` — feed reachable, newer version found.
+/// - `UpToDate`  — feed reachable, no newer version.
+/// - `Failed`    — fetch / parse error; caller must NOT clear a prior badge.
+fn spawn_update_check(current_version: String) -> Receiver<UpdateCheckOutcome> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = match update_check::fetch_published_versions() {
-            Ok(versions) => update_check::latest_newer_version(&versions, &current_version),
-            Err(_) => None,
+        let outcome = match update_check::fetch_published_versions() {
+            Ok(versions) => match update_check::latest_newer_version(&versions, &current_version) {
+                Some(v) => UpdateCheckOutcome::Newer(v),
+                None => UpdateCheckOutcome::UpToDate,
+            },
+            Err(_) => UpdateCheckOutcome::Failed,
         };
-        let _ = tx.send(result);
+        let _ = tx.send(outcome);
     });
     rx
 }
@@ -316,8 +321,8 @@ struct WhisperDictateApp {
     last_update_check: Option<Instant>,
     /// Receiver for the in-flight background update check. `Some` while a single
     /// poll thread is running (the one-shot-per-cycle guard), `None` otherwise.
-    /// The thread sends the computed `Option<newer_version>` exactly once.
-    update_check_rx: Option<Receiver<Option<String>>>,
+    /// The thread sends an [`UpdateCheckOutcome`] exactly once.
+    update_check_rx: Option<Receiver<UpdateCheckOutcome>>,
 }
 
 impl Default for WhisperDictateApp {
@@ -500,3 +505,5 @@ mod tab_helpers_tests;
 mod test_support;
 #[cfg(test)]
 mod ui_language_tests;
+#[cfg(test)]
+mod update_check_tests;

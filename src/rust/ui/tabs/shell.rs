@@ -49,7 +49,7 @@ impl WhisperDictateApp {
             // Discreet "update available" badge, placed just ABOVE the version
             // label (bottom_up layout renders later items higher). Subtle accent
             // line only — no popup; the hover gives the upgrade command.
-            if let Some(version) = self.update_available.clone() {
+            if let Some(version) = &self.update_available {
                 ui.add(
                     egui::Label::new(
                         icon_text(
