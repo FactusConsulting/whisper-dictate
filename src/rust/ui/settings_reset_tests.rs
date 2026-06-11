@@ -56,6 +56,7 @@ fn changed_settings() -> AppSettings {
         feedback_notify: true,
         debug: true,
         stt_debug: true,
+        trace: true,
         toggle_mode: true,
         update_check: false,
         update_check_interval_minutes: "30".to_owned(),
@@ -170,6 +171,7 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.local_only, defaults.local_only);
     assert_eq!(settings.debug, defaults.debug);
     assert_eq!(settings.stt_debug, defaults.stt_debug);
+    assert_eq!(settings.trace, defaults.trace);
     // App-level settings that moved to the System tab must NOT reset here.
     assert_eq!(settings.ui_theme, "light");
     assert_eq!(settings.ui_language, "da");
@@ -213,6 +215,7 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(settings.command_hook, "hook.exe");
     assert!(!settings.history_enabled);
     assert!(settings.debug);
+    assert!(settings.trace);
     // Unrelated pages are untouched.
     assert_eq!(settings.stt_backend, "openai");
     assert_eq!(settings.vad_threshold, "0.42");

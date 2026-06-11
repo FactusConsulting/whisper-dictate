@@ -84,6 +84,7 @@ impl AppSettings {
         set_bool(object, "feedback_notify", self.feedback_notify);
         set_bool(object, "debug", self.debug);
         set_bool(object, "stt_debug", self.stt_debug);
+        set_bool(object, "trace", self.trace);
         set_bool(object, "toggle_mode", self.toggle_mode);
         set_string(object, "quit_key", &self.quit_key);
         set_string(object, "quit_count", &self.quit_count);

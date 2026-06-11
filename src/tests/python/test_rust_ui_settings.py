@@ -270,14 +270,22 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertNotIn('"VOICEPI_STT_DEBUG"', ui)
         self.assertIn("fn diagnostics_combo(", ui)
         self.assertIn("enum DiagnosticsLevel", ui)
-        self.assertIn("fn diagnostics_level(debug: bool, stt_debug: bool)", ui)
+        # The level→bools mapping now spans THREE persisted bools (debug,
+        # stt_debug, trace) so the dropdown can offer a 4th "Trace" level; match
+        # each parameter independently (rustfmt may wrap the signature).
+        self.assertIn("fn diagnostics_level(", ui)
+        self.assertIn("debug: bool,", ui)
+        self.assertIn("stt_debug: bool,", ui)
+        self.assertIn("trace: bool,", ui)
         self.assertIn("fn apply_diagnostics_level(", ui)
+        self.assertIn("DiagnosticsLevel::Trace", ui)
         self.assertIn("UiTextKey::Diagnostics", ui)
         self.assertIn('from_id_salt("diagnostics_level")', ui)
         # The underlying persisted fields are untouched (config + worker + env vars
-        # keep working), so both bools must still be written by the combo.
+        # keep working), so all three bools must still be written by the combo.
         self.assertIn("self.settings.debug = debug;", ui)
         self.assertIn("self.settings.stt_debug = stt_debug;", ui)
+        self.assertIn("self.settings.trace = trace;", ui)
 
         # Diagnostics is an APP-LEVEL concern, so the combo now lives on the
         # System tab (next to Integration), NOT on the Output tab which is pure

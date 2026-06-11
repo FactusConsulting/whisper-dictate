@@ -85,6 +85,7 @@ requiring restart/model reload.
 | **Feedback notifications** | Output | `VOICEPI_FEEDBACK_NOTIFY` | _none_ | _(unset)_ | truthy / falsey | show a desktop notification on errors (model load failure, capture lost, injection failure) — Linux via `notify-send`; Windows/macOS: no-op for now |
 | **Diagnostics (Basic)** | Output | `VOICEPI_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | print one concise per-utterance `[health]` line (mic level/SNR + model confidence + warnings). The startup config dump now requires `VOICEPI_STT_DEBUG` too (Verbose). |
 | **Diagnostics (Verbose)** | Output | `VOICEPI_STT_DEBUG` | _none_ | _(unset)_ | `1` / `true` / any truthy | with `VOICEPI_DEBUG`: adds the startup effective-settings dump and per-segment STT/dictionary detail |
+| **Diagnostics (Trace)** | System | `VOICEPI_TRACE` | _none_ | _(unset)_ | `1` / `true` / any truthy | with `VOICEPI_DEBUG`+`VOICEPI_STT_DEBUG`: adds the full audio-device enumeration at startup and a `[trace][cap]` line for **every** capture-open attempt (host-API, samplerate, channels, dtype, auto-convert, and why each failed). High volume — for troubleshooting a mic that won't open. Live-reloadable. |
 | **UI theme** | Output | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 | **Update check** | System | `VOICEPI_UPDATE_CHECK` | _none_ | `1` (on) | truthy / falsey | Periodically check whether a newer version has been published and show a discreet "update available" badge next to the version in the sidebar. **PRIVACY:** only fetches the public version list from GitHub (`github.io`) and sends **NO** data, telemetry, or identifiers anywhere. UI-only (does not affect the Python worker). Automatically skipped when **Local only** is enabled. |
 | **Update check interval** | System | `VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES` | _none_ | `15` | integer minutes (clamped to ≥ 5) | How often the in-app update check polls the public version list. Values below 5 are clamped up to 5. UI-only. |
@@ -202,9 +203,9 @@ pynput (which whisper-dictate already depends on).
 
 ### Diagnostics levels — Basic `[health]` line vs. Verbose config dump
 
-The UI **Diagnostics** dropdown maps to two env-named bools:
+The UI **Diagnostics** dropdown maps to three env-named bools:
 
-- **Off** (`VOICEPI_DEBUG` unset, `VOICEPI_STT_DEBUG` unset): no diagnostics.
+- **Off** (`VOICEPI_DEBUG` unset, `VOICEPI_STT_DEBUG` unset, `VOICEPI_TRACE` unset): no diagnostics.
 - **Basic** (`VOICEPI_DEBUG=1`): one concise `[health]` line per utterance, e.g.
 
   ```
@@ -223,6 +224,31 @@ The UI **Diagnostics** dropdown maps to two env-named bools:
 - **Verbose** (`VOICEPI_DEBUG=1` **and** `VOICEPI_STT_DEBUG=1`): Basic plus the
   startup `[debug] effective settings:` config dump and per-segment
   `[stt-debug]` detail.
+- **Trace** (`VOICEPI_DEBUG=1` **and** `VOICEPI_STT_DEBUG=1` **and**
+  `VOICEPI_TRACE=1`): the maximal level. Verbose plus the full audio-device
+  enumeration at startup and a line for **every** capture-open attempt — so a
+  microphone that won't open is diagnosable from the log alone, without an
+  external probe script. At startup, every input device is listed:
+
+  ```
+  [trace][devices] host-apis: ['MME', 'Windows DirectSound', 'Windows WASAPI']
+  [trace][devices] in dev=1 name='Microphone (Yeti Stereo Micro)' host=MME max_in_ch=2 default_sr=44100.0
+  [trace][devices] in dev=51 name='Microphone (Yeti Stereo Microphone)' host=Windows WASAPI max_in_ch=2 default_sr=48000.0
+  ```
+
+  Then every capture-open attempt (host-API × samplerate × channels × dtype ×
+  auto-convert) is logged with its result, plus the finally-bound candidate:
+
+  ```
+  [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=int16 latency=low autoconv=0 -> Error opening InputStream: Unanticipated host error [PaErrorCode -9999]: 'Undefined external error.' [AUDCLNT_E_UNSUPPORTED_FORMAT]
+  [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0 -> ok
+  [trace][cap] BOUND host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0
+  ```
+
+  The **host-API coverage is the key insight**: if WASAPI rejects every format
+  for a device, the log makes that obvious, so the fix (try MME/DirectSound, or
+  the WASAPI auto-convert / native-rate fallbacks) is clear. Trace is high
+  volume — use it only while troubleshooting, then return to **Off**/**Basic**.
 
 ### Debugging "is my `setx` arriving?" — Verbose diagnostics
 
@@ -258,7 +284,9 @@ reach this process — log out + back in, or launch from a fresh PowerShell
 where `$env:VOICEPI_X` shows the value. Set Diagnostics to **Off** for
 normal use; **Basic** if you want the lightweight per-utterance `[health]`
 line; **Verbose** adds the config dump (~10 lines on startup) and per-segment
-detail. All have zero runtime cost when their level is not selected.
+detail; **Trace** adds the full audio-device enumeration and a line per
+capture-open attempt (for diagnosing a mic that won't open). All have zero
+runtime cost when their level is not selected.
 
 ## CLI flags
 

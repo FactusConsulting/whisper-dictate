@@ -142,7 +142,7 @@ from whisper_dictate.vp_keymap import (  # noqa: E402,F401
     _detect_xkb_layout, _normalize_xkb_layout, _LANG_TO_XKB, _SUPPORTED_XKB_LAYOUTS,
 )
 from whisper_dictate.vp_capture import (  # noqa: E402,F401
-    CaptureMixin, resolve_startup_audio_device,
+    CaptureMixin, resolve_startup_audio_device, trace_dump_audio_devices,
 )
 from whisper_dictate.vp_dictate import Dictate, FIRST_AUDIO_WAIT_S  # noqa: E402,F401
 from whisper_dictate import vp_dictate  # noqa: E402
@@ -162,6 +162,16 @@ def _config_dump_enabled() -> bool:
     """
     return _truthy(os.environ.get("VOICEPI_DEBUG")) and _truthy(
         os.environ.get("VOICEPI_STT_DEBUG"))
+
+
+def _trace_enabled() -> bool:
+    """Whether maximal ``Trace`` diagnostics are on (env ``VOICEPI_TRACE``).
+
+    Trace is purely additive on top of Verbose: it gates the startup
+    full-audio-device enumeration dump and the per-attempt capture logging in
+    vp_capture, so normal users never see the high-volume ``[trace]`` lines.
+    """
+    return _truthy(os.environ.get("VOICEPI_TRACE"))
 
 
 def _version_from_files(start: Path) -> str | None:
@@ -438,6 +448,12 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
         notify_error("whisper-dictate", f"Model load failed: {message}")
         raise SystemExit(1)
     _model_load_s = time.monotonic() - _t
+    # Trace: log the FULL audio-device enumeration once at startup so a mic that
+    # won't open is diagnosable from the log alone (every capture attempt below
+    # can be cross-referenced against which devices/host-APIs even exist). Gated
+    # on VOICEPI_TRACE; the dump itself never raises / never blocks startup.
+    if _trace_enabled():
+        trace_dump_audio_devices()
     # Resolve the active input device WITHOUT opening a stream so the UI can show
     # the microphone from `ready` (not blank "Input pending" until the first
     # recording opens the capture stream). Degrades to "System default" on any

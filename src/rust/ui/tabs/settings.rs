@@ -137,6 +137,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.local_only = defaults.local_only;
             settings.debug = defaults.debug;
             settings.stt_debug = defaults.stt_debug;
+            settings.trace = defaults.trace;
         }
         Tab::System => {
             settings.ui_theme = defaults.ui_theme;
