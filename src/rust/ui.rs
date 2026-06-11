@@ -240,10 +240,11 @@ struct WhisperDictateApp {
     dictionary_preview: String,
     history_preview: String,
     metrics_preview: String,
-    /// One-shot flags: set when a preview is (re)loaded so the next frame
+    /// One-shot flags: set when a preview is (re)loaded so its next render
     /// scrolls the freshly rendered preview into view (it would otherwise land
     /// below the settings ScrollArea fold and read as "the button did nothing").
-    /// Cleared after the scroll. Mirrors `runtime_log_scroll_to_bottom`.
+    /// In egui's immediate mode this usually happens within the same UI pass as
+    /// the click. Cleared after the scroll. Mirrors `runtime_log_scroll_to_bottom`.
     scroll_to_history_preview: bool,
     scroll_to_metrics_preview: bool,
     supervisor: RuntimeSupervisor,

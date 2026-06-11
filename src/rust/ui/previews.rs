@@ -47,8 +47,8 @@ impl WhisperDictateApp {
                     preview.text
                 );
                 self.settings_status = format!("Loaded history preview: {}", path.display());
-                // Scroll the just-loaded preview into view next frame (it
-                // renders below the settings ScrollArea fold otherwise).
+                // Scroll the just-loaded preview into view on its next render
+                // (it sits below the settings ScrollArea fold otherwise).
                 self.scroll_to_history_preview = true;
             }
             Err(err) => {
@@ -84,8 +84,8 @@ impl WhisperDictateApp {
                     preview.text
                 );
                 self.settings_status = format!("Loaded metrics preview: {}", path.display());
-                // Scroll the just-loaded preview into view next frame (it
-                // renders below the settings ScrollArea fold otherwise).
+                // Scroll the just-loaded preview into view on its next render
+                // (it sits below the settings ScrollArea fold otherwise).
                 self.scroll_to_metrics_preview = true;
             }
             Err(err) => {
