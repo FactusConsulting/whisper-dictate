@@ -149,6 +149,44 @@ class ResolveCaptureDeviceWindowsTests(unittest.TestCase):
         self.assertEqual(index, 5)
         self.assertEqual(name, _JABRA_FULL)
 
+    def test_exact_name_wins_over_longer_sibling_prefix(self):
+        # Regression: a saved value that is a clean PREFIX of a longer sibling
+        # in the SAME host API ("Microphone" vs "Microphone Array") must bind
+        # the EXACT device, not the longer sibling that longest-substring would
+        # otherwise win.
+        from whisper_dictate import vp_events
+        devices = [
+            {"name": "Microphone", "hostapi": 2, "max_input_channels": 2},        # 0
+            {"name": "Microphone Array", "hostapi": 2, "max_input_channels": 2},  # 1
+        ]
+        index, name = vp_events.resolve_capture_device(
+            devices, _WIN_HOSTAPIS, "Microphone", is_windows=True, default_index=None,
+        )
+        self.assertEqual(index, 0)
+        self.assertEqual(name, "Microphone")
+
+    def test_exact_match_is_case_insensitive_over_sibling_prefix(self):
+        # The exact-match precedence is case-insensitive (casefold), and still
+        # beats a longer sibling regardless of candidate order.
+        from whisper_dictate import vp_events
+        devices = [
+            {"name": "Microphone Array", "hostapi": 2, "max_input_channels": 2},  # 0
+            {"name": "Microphone", "hostapi": 2, "max_input_channels": 2},        # 1
+        ]
+        index, name = vp_events.resolve_capture_device(
+            devices, _WIN_HOSTAPIS, "microphone", is_windows=True, default_index=None,
+        )
+        self.assertEqual(index, 1)
+        self.assertEqual(name, "Microphone")
+
+    def test_truncated_prefix_still_resolves_when_no_exact_match(self):
+        # The MME-truncation tolerance is preserved: with NO exact match, the
+        # 31-char truncated saved value still resolves (longest-substring) to
+        # the single full-name WASAPI device.
+        index, name = self._resolve(_JABRA_MME)
+        self.assertEqual(index, 5)
+        self.assertEqual(name, _JABRA_FULL)
+
     def test_integer_value_is_used_verbatim(self):
         self.assertEqual(self._resolve("5"), (5, None))
 

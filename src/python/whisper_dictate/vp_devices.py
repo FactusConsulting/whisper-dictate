@@ -88,6 +88,31 @@ def _select_host_api_index(hostapis, *, is_windows: bool) -> int | None:
     return 0
 
 
+def _is_wasapi_device(devices, hostapis, device) -> bool:
+    """True if ``device`` (a query_devices index) belongs to a WASAPI host API.
+
+    Used to decide whether a WASAPI ``auto_convert`` stream candidate is worth
+    trying (so the device can resample 16k internally on machines that reject
+    16k shared-mode). Defensive against stub/legacy sequences and non-int
+    devices — returns ``False`` whenever WASAPI membership can't be established.
+    """
+    if not isinstance(device, int):
+        return False
+    if not isinstance(devices, (list, tuple)) or not (0 <= device < len(devices)):
+        return False
+    info = devices[device]
+    if not isinstance(info, dict):
+        return False
+    hostapi = info.get("hostapi")
+    apis = list(hostapis or [])
+    if not isinstance(hostapi, int) or not (0 <= hostapi < len(apis)):
+        return False
+    api = apis[hostapi]
+    if not isinstance(api, dict):
+        return False
+    return "wasapi" in str(api.get("name") or "").casefold()
+
+
 def _name_matches(needle: str, name: str) -> bool:
     """True if a saved device value and a candidate name refer to each other.
 
@@ -131,9 +156,12 @@ def resolve_capture_device(
         any host API; ``(None, None)`` when nothing matches (caller warns + uses
         default).
 
-    Name matching is bidirectional-substring (see :func:`_name_matches`) so an
-    old truncated saved name still resolves to the full WASAPI device, and we
-    prefer the longest (fullest) matching name within the chosen host API.
+    Name matching prefers a case-insensitive EXACT match first (so a saved name
+    that is a clean prefix of a longer sibling — "Microphone" vs "Microphone
+    Array" — binds the exact device, not the sibling). Failing an exact hit it
+    falls back to a bidirectional-substring match (see :func:`_name_matches`) so
+    an old MME-truncated saved name still resolves to the full WASAPI device,
+    preferring the longest (fullest) matching name within the chosen host API.
 
     Returns ``(index, full_name)``. ``full_name`` may be ``None`` when only an
     index is known (explicit numeric value); the caller then resolves the label
@@ -191,12 +219,20 @@ def resolve_capture_device(
                 return default_index, (name or None)
         return None, None
 
-    # Named value: prefer a match within the chosen host API (full name); among
-    # several, take the longest name (the fullest, e.g. WASAPI over a truncated
-    # filler). Fall back to any host-API match so behaviour never regresses.
+    # Named value: a case-insensitive EXACT name match wins immediately, so a
+    # saved value that is a clean prefix of a longer sibling (e.g. "Microphone"
+    # vs "Microphone Array" in the same host API) can never be hijacked by the
+    # longest-substring rule below. Only when no exact match exists do we fall
+    # back to the longest (fullest) bidirectional-substring match — that still
+    # resolves an MME-truncated saved value to its single full WASAPI name.
+    # Fall back to any host-API match so behaviour never regresses.
+    folded = value.casefold()
+
     def _best_match(candidates):
         best = None
         for index, name in candidates:
+            if name.casefold() == folded:
+                return (index, name)
             if _name_matches(value, name):
                 if best is None or len(name) > len(best[1]):
                     best = (index, name)
