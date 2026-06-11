@@ -15,6 +15,7 @@ impl WhisperDictateApp {
                 self.preview_dictionary();
             }
         });
+        let language = self.settings.ui_language.clone();
         settings_grid("dictionary_settings")
             .show(ui, |ui| {
                 text_help(
@@ -31,6 +32,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "dictionary_max_terms",
                     "Max prompt terms",
                     &mut self.settings.dictionary_max_terms,
@@ -38,6 +40,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "dictionary_prompt_chars",
                     "Prompt char cap",
                     &mut self.settings.dictionary_prompt_chars,

@@ -122,6 +122,7 @@ impl WhisperDictateApp {
                 );
                 numeric_enabled(
                     ui,
+                    &language,
                     backend == SttBackendMode::Cloud,
                     "stt_timeout_ms",
                     "Cloud STT timeout ms",
@@ -242,14 +243,18 @@ impl WhisperDictateApp {
                     &mut self.settings.quit_key,
                     "Global key used to quit the worker after Quit count presses. Examples: esc, f12, q.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "quit_count",
                     "Quit count",
                     &mut self.settings.quit_count,
                     "Number of consecutive quit-key presses required to stop the worker. 0 disables it.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "quit_window_ms",
                     "Quit window ms",
                     &mut self.settings.quit_window_ms,
                     "Maximum time window for consecutive quit-key presses.",

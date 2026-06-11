@@ -27,6 +27,7 @@ impl WhisperDictateApp {
             |ui| {
                 numeric_help(
                     ui,
+                    &language,
                     "min_record_seconds",
                     "Min recording seconds",
                     &mut self.settings.min_record_seconds,
@@ -34,6 +35,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "max_chars_per_second",
                     "Max chars per second",
                     &mut self.settings.max_chars_per_second,
@@ -41,6 +43,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "release_tail_ms",
                     "Release tail ms",
                     &mut self.settings.release_tail_ms,
@@ -48,6 +51,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "max_record_s",
                     "Max recording seconds",
                     &mut self.settings.max_record_s,
@@ -77,8 +81,10 @@ impl WhisperDictateApp {
                     &mut self.settings.audio_ducking,
                     "Windows-only: temporarily lowers other app audio while recording, then restores it.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "audio_ducking_level",
                     "Audio ducking level",
                     &mut self.settings.audio_ducking_level,
                     "Target volume for other apps while recording. 0.25 means 25%.",
@@ -102,6 +108,7 @@ impl WhisperDictateApp {
             |ui| {
                 numeric_enabled(
                     ui,
+                    &language,
                     whisper,
                     "beam_size",
                     "Beam size",
@@ -117,6 +124,7 @@ impl WhisperDictateApp {
                 );
                 numeric_enabled(
                     ui,
+                    &language,
                     whisper,
                     "context_min_seconds",
                     "Context min seconds",
@@ -132,6 +140,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "preview_seconds",
                     "Live preview seconds",
                     &mut self.settings.preview_seconds,
@@ -139,6 +148,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "vad_threshold",
                     "VAD threshold",
                     &mut self.settings.vad_threshold,
@@ -146,6 +156,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "vad_min_silence_ms",
                     "VAD min silence ms",
                     &mut self.settings.vad_min_silence_ms,
@@ -153,6 +164,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "vad_speech_pad_ms",
                     "VAD speech pad ms",
                     &mut self.settings.vad_speech_pad_ms,
@@ -172,6 +184,7 @@ impl WhisperDictateApp {
             |ui| {
                 numeric_enabled(
                     ui,
+                    &language,
                     parakeet,
                     "parakeet_min_seconds",
                     "Parakeet min seconds",

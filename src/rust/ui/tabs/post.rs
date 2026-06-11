@@ -8,6 +8,7 @@ impl WhisperDictateApp {
         // Everything below the "Post processor" selector only applies once a
         // processor is chosen — grey it out and lock it while post is disabled.
         let post_enabled = self.settings.post_processor != "none";
+        let language = self.settings.ui_language.clone();
         settings_grid("post_processing_settings")
             .show(ui, |ui| {
                 combo_help_labeled(
@@ -37,6 +38,7 @@ impl WhisperDictateApp {
                 );
                 numeric_enabled(
                     ui,
+                    &language,
                     post_enabled,
                     "post_timeout_ms",
                     "Post timeout ms",
@@ -45,6 +47,7 @@ impl WhisperDictateApp {
                 );
                 numeric_enabled(
                     ui,
+                    &language,
                     post_enabled,
                     "post_max_input_chars",
                     "Post max input chars",
@@ -53,6 +56,7 @@ impl WhisperDictateApp {
                 );
                 numeric_enabled(
                     ui,
+                    &language,
                     post_enabled,
                     "post_max_output_chars",
                     "Post max output chars",

@@ -78,8 +78,8 @@ pub(in crate::ui) fn text_help_short(
 /// - above `max` → `max`, below `min` → `min`,
 /// - unparseable garbage → clamp the schema `default` into range; if the
 ///   default is itself unparseable, fall back to `min`,
-/// - integer fields format without a decimal point; float fields keep the
-///   value as typed when already valid, otherwise format compactly.
+/// - integer fields format without a decimal point; float fields are
+///   canonicalized (trailing zeros trimmed, e.g. `0.30` → `0.3`).
 pub(in crate::ui) fn clamp_numeric_setting(
     raw: &str,
     min: f64,
@@ -125,8 +125,9 @@ fn text_help_width(ui: &mut egui::Ui, label: &str, value: &mut String, help: &st
     grid_help_row(ui, show_help, help);
 }
 
-/// Format the inclusive range for a hover/help hint, e.g. `1–10` or `0.0–1.0`.
-/// Pure so it is unit-testable.
+/// Format the inclusive range for a hover/help hint, e.g. `1–10` or `0–1`
+/// (floats trim trailing zeros via `format_numeric`, so `0.0`/`1.0` render as
+/// `0`/`1`). Pure so it is unit-testable.
 pub(in crate::ui) fn range_hint(bounds: &crate::config::NumericBounds) -> String {
     format!(
         "{}–{}",
@@ -154,18 +155,11 @@ fn clamp_on_commit(
         bounds.min,
         bounds.max,
         bounds.is_int,
-        &bounds_default(bounds),
+        &bounds.default,
     );
     if clamped != *value {
         *value = clamped;
     }
-}
-
-/// Fallback string for unparseable input: the field's min as a canonical
-/// string. (We don't thread the schema default through the widget; `clamp` uses
-/// this as the "garbage → in-range" anchor, which always lies within bounds.)
-fn bounds_default(bounds: &crate::config::NumericBounds) -> String {
-    format_numeric(bounds.min, bounds.is_int)
 }
 
 /// Numeric settings field (always-enabled). Looks up the schema bounds for
@@ -175,12 +169,13 @@ fn bounds_default(bounds: &crate::config::NumericBounds) -> String {
 /// wired numeric settings).
 pub(in crate::ui) fn numeric_help(
     ui: &mut egui::Ui,
+    lang: &str,
     key: &str,
     label: &str,
     value: &mut String,
     help: &str,
 ) {
-    numeric_enabled(ui, true, key, label, value, help);
+    numeric_enabled(ui, lang, true, key, label, value, help);
 }
 
 /// Enabled-gated numeric settings field (see [`numeric_help`]). The field is
@@ -188,6 +183,7 @@ pub(in crate::ui) fn numeric_help(
 /// backend is not active), matching the existing `*_enabled` widgets.
 pub(in crate::ui) fn numeric_enabled(
     ui: &mut egui::Ui,
+    lang: &str,
     enabled: bool,
     key: &str,
     label: &str,
@@ -196,7 +192,13 @@ pub(in crate::ui) fn numeric_enabled(
 ) {
     let bounds = crate::config::numeric_bounds(key);
     let help_text = match &bounds {
-        Some(b) => format!("{help} Range: {}.", range_hint(b)),
+        // The "Range" word is localized so a Danish help string isn't followed
+        // by an English suffix; the numbers themselves are language-neutral.
+        Some(b) => format!(
+            "{help} {}: {}.",
+            ui_text(lang, UiTextKey::Range),
+            range_hint(b)
+        ),
         None => help.to_owned(),
     };
     let show_help = label_with_help_enabled(ui, enabled, label, &help_text);
@@ -579,12 +581,34 @@ mod tests {
     }
 
     #[test]
+    fn clamp_with_schema_default_snaps_garbage_to_default_not_min() {
+        // FINDING 1 regression guard: garbage must clamp to the field's SCHEMA
+        // DEFAULT (threaded via NumericBounds.default), not to its min. For
+        // max_chars_per_second the default (30) differs from the min (0), so a
+        // min-fallback would be the wrong, observable behaviour.
+        let b = crate::config::numeric_bounds("max_chars_per_second")
+            .expect("max_chars_per_second has bounds");
+        assert_eq!(b.default, "30");
+        assert_eq!(
+            clamp_numeric_setting("garbage", b.min, b.max, b.is_int, &b.default),
+            "30",
+            "unparseable input should fall back to the schema default, not min"
+        );
+        // And a valid in-range value is still honoured (not overridden by default).
+        assert_eq!(
+            clamp_numeric_setting("12", b.min, b.max, b.is_int, &b.default),
+            "12"
+        );
+    }
+
+    #[test]
     fn range_hint_formats_int_and_float_bounds() {
         let int_b = crate::config::NumericBounds {
             min: 1.0,
             max: 10.0,
             step: 1.0,
             is_int: true,
+            default: "5".to_owned(),
         };
         assert_eq!(range_hint(&int_b), "1–10");
         let float_b = crate::config::NumericBounds {
@@ -592,6 +616,7 @@ mod tests {
             max: 1.0,
             step: 0.05,
             is_int: false,
+            default: "0.3".to_owned(),
         };
         assert_eq!(range_hint(&float_b), "0–1");
     }

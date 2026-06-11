@@ -174,7 +174,7 @@
       "key": "max_record_s",
       "default": "120",
       "live": true,
-      "min": 5,
+      "min": 0,
       "max": 600,
       "step": 5
     },
@@ -233,7 +233,10 @@
       "env": "VOICEPI_AUDIO_DUCKING_LEVEL",
       "key": "audio_ducking_level",
       "default": "0.25",
-      "live": true
+      "live": true,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05
     },
     {
       "env": "VOICEPI_DICTIONARY",
@@ -413,13 +416,19 @@
       "env": "VOICEPI_QUIT_COUNT",
       "key": "quit_count",
       "default": "3",
-      "live": false
+      "live": false,
+      "min": 0,
+      "max": 10,
+      "step": 1
     },
     {
       "env": "VOICEPI_QUIT_WINDOW_MS",
       "key": "quit_window_ms",
       "default": "1500",
-      "live": false
+      "live": false,
+      "min": 200,
+      "max": 5000,
+      "step": 50
     },
     {
       "env": "VOICEPI_UPDATE_CHECK",

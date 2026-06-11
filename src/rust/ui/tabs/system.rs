@@ -215,6 +215,7 @@ impl WhisperDictateApp {
             // Interval is only meaningful while the check is enabled.
             numeric_enabled(
                 ui,
+                &language,
                 self.settings.update_check,
                 "update_check_interval_minutes",
                 ui_text(&language, UiTextKey::UpdateCheckInterval),

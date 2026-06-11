@@ -96,6 +96,10 @@ pub(in crate::ui) enum UiTextKey {
     UpdateCheckHelp,
     UpdateCheckInterval,
     UpdateCheckIntervalHelp,
+    /// The word "Range" used as the prefix of the numeric-field range hint
+    /// (e.g. "Range: 1–10."). Localized so a Danish help string isn't followed
+    /// by an English "Range:".
+    Range,
 }
 
 impl UiTextKey {
@@ -200,6 +204,7 @@ impl UiTextKey {
                     "How often to poll the public version list, in minutes (default 15, \
                     minimum 5). Also settable via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
+                UiTextKey::Range => "Range",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -300,6 +305,7 @@ impl UiTextKey {
                     "Hvor ofte den offentlige versionsliste tjekkes, i minutter (standard 15, \
                     minimum 5). Kan også sættes via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
+                UiTextKey::Range => "Interval",
             },
         }
     }

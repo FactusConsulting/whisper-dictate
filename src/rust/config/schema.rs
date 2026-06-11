@@ -37,13 +37,17 @@ pub(crate) struct RuntimeSetting {
 /// Inclusive numeric bounds for a settings field, surfaced from the schema so
 /// the UI is the single enforcement point while the schema stays the single
 /// source of truth.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NumericBounds {
     pub min: f64,
     pub max: f64,
     pub step: f64,
     /// Whether the field is integer-valued (formatted without a decimal point).
     pub is_int: bool,
+    /// The schema-declared default value (raw string), threaded through so the
+    /// UI can clamp unparseable input to the field's *default* (not its min).
+    /// Empty when the schema has no default for the field.
+    pub default: String,
 }
 
 /// Look up the schema-defined numeric bounds for a settings key, if any.
@@ -71,6 +75,7 @@ pub fn numeric_bounds(key: &str) -> Option<NumericBounds> {
                     max,
                     step,
                     is_int,
+                    default: s.default.clone().unwrap_or_default(),
                 })
             }
             _ => None,
@@ -235,6 +240,11 @@ mod tests {
         assert_eq!(beam.min, 1.0);
         assert_eq!(beam.max, 10.0);
         assert!(beam.is_int, "beam_size should be integer");
+        // The schema default is threaded through so the UI clamps garbage to the
+        // field's default (not its min); see clamp_on_commit / FINDING 1.
+        assert_eq!(beam.default, "1");
+        let mcps = numeric_bounds("max_chars_per_second").expect("max_chars_per_second has bounds");
+        assert_eq!(mcps.default, "30", "default differs from min (0)");
 
         // min_record_seconds: whole bounds but fractional default/step -> float.
         let mrs = numeric_bounds("min_record_seconds").expect("min_record_seconds has bounds");

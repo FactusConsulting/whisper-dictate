@@ -10,6 +10,7 @@ impl WhisperDictateApp {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(8.0);
+        let language = self.settings.ui_language.clone();
         settings_grid("output_settings")
             .show(ui, |ui| {
                 combo_help_short(
@@ -34,6 +35,7 @@ impl WhisperDictateApp {
                 );
                 numeric_help(
                     ui,
+                    &language,
                     "command_hook_timeout_ms",
                     "Command hook timeout ms",
                     &mut self.settings.command_hook_timeout_ms,
