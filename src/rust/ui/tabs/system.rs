@@ -197,6 +197,35 @@ impl WhisperDictateApp {
         ui.separator();
         ui.add_space(8.0);
 
+        // --- Updates: the in-app "update available" check.
+        section_label(
+            ui,
+            ui_text(&self.settings.ui_language, UiTextKey::SystemUpdates),
+            palette,
+        );
+        ui.add_space(6.0);
+        settings_grid("system_updates_settings").show(ui, |ui| {
+            let language = self.settings.ui_language.clone();
+            checkbox_help(
+                ui,
+                ui_text(&language, UiTextKey::UpdateCheck),
+                &mut self.settings.update_check,
+                ui_text(&language, UiTextKey::UpdateCheckHelp),
+            );
+            // Interval is only meaningful while the check is enabled.
+            text_enabled_short(
+                ui,
+                self.settings.update_check,
+                ui_text(&language, UiTextKey::UpdateCheckInterval),
+                &mut self.settings.update_check_interval_minutes,
+                ui_text(&language, UiTextKey::UpdateCheckIntervalHelp),
+            );
+        });
+
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         // --- Integration: machine-readable outputs moved out of Output.
         section_label(
             ui,

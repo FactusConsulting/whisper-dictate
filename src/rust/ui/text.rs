@@ -89,6 +89,13 @@ pub(in crate::ui) enum UiTextKey {
     DiagnosticsBasic,
     DiagnosticsVerbose,
     DiagnosticsHelp,
+    UpdateAvailable,
+    UpdateAvailableHover,
+    SystemUpdates,
+    UpdateCheck,
+    UpdateCheckHelp,
+    UpdateCheckInterval,
+    UpdateCheckIntervalHelp,
 }
 
 impl UiTextKey {
@@ -172,6 +179,27 @@ impl UiTextKey {
                     per-segment speech-to-text/dictionary detail. \
                     Set the Dictation view to \"Debug\" to see the raw lines in the log."
                 }
+                UiTextKey::UpdateAvailable => "available",
+                UiTextKey::UpdateAvailableHover => {
+                    "A newer version has been published. Update with:\n\
+                    choco upgrade whisper-dictate --source=whisper-dictate -y\n\
+                    or update via winget / the installer from the project releases."
+                }
+                UiTextKey::SystemUpdates => "Updates",
+                UiTextKey::UpdateCheck => "Check for updates",
+                UiTextKey::UpdateCheckHelp => {
+                    "Periodically check whether a newer version has been published and show a \
+                    discreet \"update available\" badge next to the version in the sidebar. \
+                    PRIVACY: this only fetches the public version list from GitHub (github.io) \
+                    and sends NO data, telemetry, or identifiers anywhere. \
+                    Also settable via the VOICEPI_UPDATE_CHECK environment variable. \
+                    Skipped automatically when \"Local only\" is enabled."
+                }
+                UiTextKey::UpdateCheckInterval => "Update check interval (minutes)",
+                UiTextKey::UpdateCheckIntervalHelp => {
+                    "How often to poll the public version list, in minutes (default 15, \
+                    minimum 5). Also settable via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
+                }
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -250,6 +278,27 @@ impl UiTextKey {
                     Udførlig = Basis plus konfigurationsdump ved opstart og \
                     detaljer pr. segment for tale-til-tekst/ordbog. \
                     Sæt Dikterings-visningen til \"Debug\" for at se de rå linjer i loggen."
+                }
+                UiTextKey::UpdateAvailable => "tilgængelig",
+                UiTextKey::UpdateAvailableHover => {
+                    "En nyere version er udgivet. Opdater med:\n\
+                    choco upgrade whisper-dictate --source=whisper-dictate -y\n\
+                    eller opdater via winget / installeren fra projektets releases."
+                }
+                UiTextKey::SystemUpdates => "Opdateringer",
+                UiTextKey::UpdateCheck => "Søg efter opdateringer",
+                UiTextKey::UpdateCheckHelp => {
+                    "Tjek med jævne mellemrum om en nyere version er udgivet, og vis et \
+                    diskret \"opdatering tilgængelig\"-mærke ved versionen i sidepanelet. \
+                    PRIVATLIV: dette henter kun den offentlige versionsliste fra GitHub \
+                    (github.io) og sender INGEN data, telemetri eller identifikatorer nogen \
+                    steder. Kan også sættes via miljøvariablen VOICEPI_UPDATE_CHECK. \
+                    Springes automatisk over når \"Kun lokalt\" er slået til."
+                }
+                UiTextKey::UpdateCheckInterval => "Interval for opdateringstjek (minutter)",
+                UiTextKey::UpdateCheckIntervalHelp => {
+                    "Hvor ofte den offentlige versionsliste tjekkes, i minutter (standard 15, \
+                    minimum 5). Kan også sættes via VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES."
                 }
             },
         }
