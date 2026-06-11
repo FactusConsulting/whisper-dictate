@@ -239,7 +239,7 @@ impl WhisperDictateApp {
                     "Hotkey",
                     &mut self.settings.key,
                     "Hold-to-talk key or chord, for example ctrl_r or shift_l+ctrl_l. \
-                     Join keys with '+'. Tokens are pynput key names (modifiers and named keys).",
+                     Join keys with '+'. Tokens are key names (modifiers and named keys).",
                 );
                 checkbox_help(
                     ui,
