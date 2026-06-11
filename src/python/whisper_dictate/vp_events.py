@@ -22,6 +22,18 @@ import sys
 import time
 
 from whisper_dictate.vp_rust import _rust_helper, _rust_json
+# Input-device selection (host-API preference) lives in vp_devices and is shared
+# by the picker (here, via print_audio_devices) and capture
+# (vp_capture._resolve_sounddevice_device). Re-exported so existing
+# ``vp_events.<name>`` references keep resolving.
+from whisper_dictate.vp_devices import (  # noqa: F401
+    _default_input_index,
+    _name_matches,
+    _select_host_api_index,
+    list_input_devices,
+    resolve_capture_device,
+    select_input_devices,
+)
 
 SOUNDDEVICE_START_BLOCK_MS = 20
 
@@ -76,140 +88,6 @@ def _sounddevice_input_info(sd) -> dict | None:
     except Exception:
         return None
     return None
-
-
-def _default_input_index(sd) -> int | None:
-    """The index of sounddevice's default input device, or ``None``.
-
-    Mirrors the default-device resolution used elsewhere: ``sd.default.device``
-    is either ``(input, output)`` or a single int; a value of ``-1`` means "no
-    explicit default".
-    """
-    default_device = getattr(getattr(sd, "default", None), "device", None)
-    if isinstance(default_device, (list, tuple)) and default_device:
-        candidate = default_device[0]
-    elif isinstance(default_device, int):
-        candidate = default_device
-    else:
-        return None
-    if not isinstance(candidate, int) or candidate < 0:
-        return None
-    return candidate
-
-
-def _select_host_api_index(hostapis, *, is_windows: bool) -> int | None:
-    """Pick the single host API to enumerate input devices from.
-
-    On Windows, PortAudio exposes every physical mic up to four times — once per
-    host API (MME, DirectSound, WASAPI, WDM-KS) — and MME truncates names to 31
-    chars while WDM-KS/Sound-Mapper add pseudo-device noise. We collapse that by
-    enumerating exactly one host API:
-
-      * Windows: prefer the WASAPI host API (modern, full names, each device
-        once); fall back to DirectSound; else the PortAudio default host API.
-      * Non-Windows (Linux/macOS): use the PortAudio default host API
-        (ALSA / CoreAudio) — never hardcode WASAPI.
-
-    ``hostapis`` is ``sd.query_hostapis()`` (a sequence of dicts). Returns the
-    chosen host API's *index* (its position in that sequence), or ``None`` only
-    when the list is EMPTY (older sounddevice without a host-API table) so the
-    caller falls back to enumerating every device. A non-empty list always
-    yields an index — a preferred API if matched, else the first with a default
-    input, else ``0``.
-    """
-    apis = list(hostapis or [])
-    if not apis:
-        return None
-
-    def _name(api) -> str:
-        return str((api or {}).get("name") or "") if isinstance(api, dict) else ""
-
-    if is_windows:
-        for needle in ("wasapi", "directsound"):
-            for index, api in enumerate(apis):
-                if needle in _name(api).casefold():
-                    return index
-
-    # Default host API: PortAudio marks it via the per-API ``default_input_device``
-    # being a real device, but the simplest portable signal is the first API whose
-    # ``default_input_device`` is set; otherwise fall back to host API 0.
-    for index, api in enumerate(apis):
-        if not isinstance(api, dict):
-            continue
-        default_input = api.get("default_input_device")
-        if isinstance(default_input, int) and default_input >= 0:
-            return index
-    return 0
-
-
-def select_input_devices(devices, hostapis, *, is_windows: bool, default_index: int | None) -> list[dict]:
-    """Pure host-API selection + filtering for the microphone picker.
-
-    Given ``sd.query_devices()`` (``devices``) and ``sd.query_hostapis()``
-    (``hostapis``), choose ONE host API (see :func:`_select_host_api_index`) and
-    return each of its real input devices once:
-
-      * ``hostapi`` == the chosen host-API index,
-      * ``max_input_channels > 0``,
-      * non-empty name (blank names collide with the UI's "(System default)").
-
-    The returned ``index`` is preserved only for the JSON contract / manual
-    numeric entry: the Rust picker discards it and persists the device NAME, and
-    capture (``vp_capture._resolve_sounddevice_device``) resolves that name by
-    substring across ALL host APIs — so the cleaned WASAPI-sourced list only
-    changes which names are shown, not how capture binds the physical device.
-    ``default`` is set on the entry whose index == ``default_index``
-    (sounddevice's default input). Kept pure so it is unit-testable with stubbed
-    sequences.
-    """
-    chosen = _select_host_api_index(hostapis, is_windows=is_windows)
-    result: list[dict] = []
-    for index, info in enumerate(devices):
-        if not isinstance(info, dict):
-            continue
-        if chosen is not None and info.get("hostapi") != chosen:
-            continue
-        try:
-            channels = int(info.get("max_input_channels") or 0)
-        except (TypeError, ValueError):
-            channels = 0
-        if channels <= 0:
-            continue
-        name = str(info.get("name") or "").strip()
-        if not name:
-            # An empty name would collide with the UI's "" = "(System default)"
-            # combo value and make the selection ambiguous — skip the entry.
-            continue
-        result.append({
-            "index": index,
-            "name": name,
-            "max_input_channels": channels,
-            "default": index == default_index,
-        })
-    return result
-
-
-def list_input_devices(sd) -> list[dict]:
-    """Return input devices for the picker, enumerated from a single host API.
-
-    Each entry is ``{"index", "name", "max_input_channels", "default"}``. The
-    real work (host-API selection + filtering) lives in
-    :func:`select_input_devices`; this just reads the live sounddevice tables and
-    delegates. Pure over an injected ``sd`` so it is unit-testable with a stubbed
-    sounddevice.
-    """
-    default_index = _default_input_index(sd)
-    devices = sd.query_devices()
-    try:
-        hostapis = sd.query_hostapis()
-    except Exception:
-        hostapis = []
-    return select_input_devices(
-        devices,
-        hostapis,
-        is_windows=(os.name == "nt"),
-        default_index=default_index,
-    )
 
 
 def print_windows() -> int:

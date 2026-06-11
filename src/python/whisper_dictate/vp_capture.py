@@ -21,6 +21,7 @@ import sys  # noqa: F401 — patched by capture tests (sys.modules['sounddevice'
 import threading
 import time
 
+from whisper_dictate.vp_devices import _default_input_index, resolve_capture_device
 from whisper_dictate.vp_events import (
     _audio_level_metrics, _emit_worker_event,
     _sounddevice_capture_channel_candidates, _sounddevice_input_channels,
@@ -123,30 +124,78 @@ def _input_devices(sd) -> list[dict]:
 
 
 def _resolve_sounddevice_device(sd, value: str):
-    """Resolve a VOICEPI_AUDIO_DEVICE value to a sounddevice ``device=`` arg.
+    """Resolve a VOICEPI_AUDIO_DEVICE value to a ``(device, name)`` pair.
+
+    Resolution prefers the WASAPI→DirectSound→default host API (the SAME rule
+    the microphone picker uses, via :func:`vp_devices.resolve_capture_device`) so
+    on Windows capture binds the full-name WASAPI device instead of MME's
+    31-char-truncated, low-fidelity entry. Linux/macOS expose a single host API,
+    so behaviour there is unchanged.
 
     Value semantics:
-      * empty/unset       ⇒ ``None`` (sounddevice picks the system default)
-      * an integer string ⇒ that device index (int)
-      * otherwise         ⇒ case-insensitive substring match against input
-                            device names (first match wins); the matched index
-                            is returned. No match ⇒ warn + ``None`` (default).
+      * empty/unset       ⇒ the preferred host API's DEFAULT input device (full
+                            name) — never the global MME default — or ``None``.
+      * an integer string ⇒ that device index (int), used verbatim.
+      * otherwise         ⇒ the matching input device in the preferred host API
+                            (full name), tolerating an old MME-truncated saved
+                            name (bidirectional-substring match). No match ⇒
+                            warn + ``None`` (sounddevice picks the default).
+
+    Returns ``(device, name)`` where ``device`` is an int index or ``None`` and
+    ``name`` is the resolved full device name or ``None`` (caller derives a
+    label otherwise).
     """
     value = (value or "").strip()
-    if not value:
-        return None
-    if value.lstrip("+-").isdigit():
-        return int(value)
-    needle = value.casefold()
-    for device in _input_devices(sd):
-        if needle in device["name"].casefold():
-            return device["index"]
-    print(
-        f"[cap] audio device {value!r} not found, using default",
-        file=sys.stderr,
-        flush=True,
+    try:
+        devices = sd.query_devices()
+    except Exception:
+        devices = []
+    try:
+        hostapis = sd.query_hostapis()
+    except Exception:
+        hostapis = []
+    index, name = resolve_capture_device(
+        devices,
+        hostapis,
+        value,
+        is_windows=(os.name == "nt"),
+        default_index=_default_input_index(sd),
     )
-    return None
+    if value and not value.lstrip("+-").isdigit() and index is None:
+        print(
+            f"[cap] audio device {value!r} not found, using default",
+            file=sys.stderr,
+            flush=True,
+        )
+    return index, name
+
+
+def _open_sounddevice_stream(sd, device, callback):
+    """Open an ``InputStream`` for ``device``, trying channel/latency fallbacks.
+
+    Returns ``(stream, channels)`` on success (the stream is NOT yet started) or
+    ``(None, 0)`` if every channel-candidate × kwargs combination raised. The
+    per-channel fallback (``_sounddevice_capture_channel_candidates``) and the
+    low-latency→base kwargs fallback (``_sounddevice_stream_kwargs``) are
+    preserved exactly as before. ``device=None`` opens the system default.
+
+    Module-level (not a method) so it stays unit-testable and so the caller can
+    invoke it twice — once for the preferred device, once for the default
+    fallback — without duplicating the channel-fallback loop.
+    """
+    last_error = None
+    for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
+        for kwargs in _sounddevice_stream_kwargs(channels, callback):
+            if device is not None:
+                kwargs["device"] = device
+            try:
+                stream = sd.InputStream(**kwargs)
+                return stream, channels
+            except Exception as exc:
+                last_error = exc
+    if last_error is not None:
+        print(f"[cap] stream open failed: {last_error}", file=sys.stderr, flush=True)
+    return None, 0
 
 
 def _selected_device_name(sd, device) -> str | None:
@@ -288,28 +337,34 @@ class CaptureMixin:
         import sounddevice as sd
         self._capture_backend = "sounddevice"
         self._cap_warned = False
-        device = _resolve_sounddevice_device(sd, _audio_device_setting())
+        device, device_name = _resolve_sounddevice_device(sd, _audio_device_setting())
         self._audio_input_device = (
-            _selected_device_name(sd, device)
+            device_name
+            or _selected_device_name(sd, device)
             or _sounddevice_input_name(sd)
             or "sounddevice default input"
         )
-        last_error = None
-        for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
-            self._capture_channels = channels
-            for kwargs in _sounddevice_stream_kwargs(self._capture_channels, self._cb):
-                if device is not None:
-                    kwargs["device"] = device
-                try:
-                    self._stream = sd.InputStream(**kwargs)
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    self._stream = None
+
+        # Try the preferred (WASAPI-resolved) device first. WASAPI selection can
+        # fail on some machines/devices, so if opening the explicitly resolved
+        # device raises, fall back to the system default (device=None) rather
+        # than letting dictation break. Only fall back when an explicit device
+        # was chosen — a None device is already the default path.
+        self._stream, self._capture_channels = _open_sounddevice_stream(sd, device, self._cb)
+        if self._stream is None and device is not None:
+            print(
+                f"[cap] device {device!r} ({self._audio_input_device!r}) failed to open, "
+                "falling back to system default",
+                file=sys.stderr,
+                flush=True,
+            )
+            self._stream, self._capture_channels = _open_sounddevice_stream(sd, None, self._cb)
             if self._stream is not None:
-                break
+                self._audio_input_device = (
+                    _sounddevice_input_name(sd) or "sounddevice default input"
+                )
         if self._stream is None:
-            raise last_error
+            raise RuntimeError("could not open any sounddevice input stream")
         self._stream.start()
         return self._capture_backend, self._audio_input_device
 
