@@ -40,7 +40,23 @@ const UI_LIGHT_WARN_TEXT: egui::Color32 = egui::Color32::from_rgb(180, 83, 9);
 const UI_LIGHT_ERROR_TEXT: egui::Color32 = egui::Color32::from_rgb(190, 18, 60);
 
 const SIDEBAR_WIDTH: f32 = 164.0;
-const TOP_STATUS_HEIGHT: f32 = 64.0;
+// Base (scale-1.0) text sizes used by the two-line status card. These mirror the
+// `apply_ui_theme` text styles (Small = 12, Body = 14) and the vertical
+// item-spacing (7) so the panel-height math below tracks the real rendered card
+// instead of a hand-tuned magic number. (The legacy fixed `TOP_STATUS_HEIGHT = 64`
+// constant is gone — the panel height is now derived from the real card content;
+// see `top_status_bar_height`.)
+const SMALL_FONT_SIZE: f32 = 12.0;
+const BODY_FONT_SIZE: f32 = 14.0;
+pub(in crate::ui) const ITEM_SPACING_Y: f32 = 7.0;
+// Vertical inner margins (UNSCALED literals, like the horizontal ones): the top
+// panel's frame margin (`app.rs`) and each card/pill's frame margin. The panel
+// height is derived from these so the rounded card bottom is never clipped.
+pub(in crate::ui) const TOP_PANEL_V_MARGIN: f32 = 10.0;
+pub(in crate::ui) const STATUS_CARD_V_MARGIN: f32 = 9.0;
+// A little extra breathing room below the card so its rounded corners sit clear
+// of the panel's bottom edge at every scale.
+const TOP_STATUS_V_HEADROOM: f32 = 4.0;
 // Rough width of the post-indicator pill (icon + "Post on/off" + margins)
 // at scale 1.0.
 const POST_INDICATOR_MIN_WIDTH: f32 = 120.0;
@@ -53,11 +69,14 @@ const STATUS_CARD_WIDE_MIN_WIDTH: f32 = 218.0;
 // real OUTER width is `inner*scale + 2*H_MARGIN + 2*CARD_STROKE`. The margin and
 // stroke are UNSCALED literals (they come straight from the Frame builder), so
 // they are added AFTER the scale multiply. These MUST match the literals in
-// `status_card_sized`'s Frame (margin 14, stroke 0.8) and `post_indicator`'s
-// Frame (margin 12, stroke 0.8) — both reference these consts.
+// `status_card_sized`'s Frame (margin 14) and `post_indicator`'s Frame
+// (margin 12) — both reference these consts. The status cards/pill are flat
+// READOUTS (no border) so people don't mistake them for the Start/Stop buttons,
+// hence `CARD_STROKE = 0.0`; it stays in the outer-width budget so the geometry
+// source-of-truth is preserved if a border is ever reintroduced.
 pub(in crate::ui) const STATUS_CARD_H_MARGIN: f32 = 14.0;
 pub(in crate::ui) const POST_PILL_H_MARGIN: f32 = 12.0;
-pub(in crate::ui) const CARD_STROKE: f32 = 0.8;
+pub(in crate::ui) const CARD_STROKE: f32 = 0.0;
 // Base horizontal item-spacing (scaled by the UI text scale in `apply_ui_theme`).
 // The top-bar fit budget separates cards by exactly this scaled value, so the
 // layout tests source it here instead of re-hardcoding the literal.
@@ -66,6 +85,10 @@ const BOTTOM_MESSAGE_BAR_HEIGHT: f32 = 30.0;
 pub(in crate::ui) const CONTROL_RADIUS: u8 = 8;
 pub(in crate::ui) const PANEL_RADIUS: u8 = 12;
 pub(in crate::ui) const PILL_RADIUS: u8 = 14;
+// Top-bar status READOUTS (cards + post pill). Deliberately a tighter, nearly
+// flat corner than the buttons' `CONTROL_RADIUS` (8) so the readouts don't read
+// as the raised, clickable Start/Stop/compact buttons next to them.
+pub(in crate::ui) const READOUT_RADIUS: u8 = 4;
 
 /// Uniform inset between content and the surrounding panel/window edges. Used as
 /// the CentralPanel margin and reused for the settings footer card so the gap is
@@ -167,7 +190,7 @@ pub(in crate::ui) fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_th
         ),
         (
             egui::TextStyle::Body,
-            egui::FontId::proportional(14.0 * scale),
+            egui::FontId::proportional(BODY_FONT_SIZE * scale),
         ),
         (
             egui::TextStyle::Monospace,
@@ -179,11 +202,11 @@ pub(in crate::ui) fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_th
         ),
         (
             egui::TextStyle::Small,
-            egui::FontId::proportional(12.0 * scale),
+            egui::FontId::proportional(SMALL_FONT_SIZE * scale),
         ),
     ]);
     let button_padding = egui::vec2(10.0 * scale, 5.0 * scale);
-    let item_spacing = egui::vec2(ITEM_SPACING_X * scale, 7.0 * scale);
+    let item_spacing = egui::vec2(ITEM_SPACING_X * scale, ITEM_SPACING_Y * scale);
     let mut style = (*ctx.style()).clone();
     style.text_styles = text_styles;
     style.spacing.button_padding = button_padding;
@@ -311,8 +334,23 @@ pub(in crate::ui) fn paint_sidebar_bridge(
         .rect_filled(bridge, 0.0, palette.panel_bg);
 }
 
+/// Height of a two-line status card's rendered content + its own frame margin,
+/// at the given UI scale. The card stacks a Small label, the vertical
+/// item-spacing, and a Body value (all scaled), wrapped in the card's symmetric
+/// vertical inner margin (unscaled). Pure so the panel-height fit is unit-testable
+/// without an egui context.
+pub(in crate::ui) fn status_card_height(raw_scale: &str) -> f32 {
+    let scale = layout_scale(raw_scale);
+    let text = (SMALL_FONT_SIZE + ITEM_SPACING_Y + BODY_FONT_SIZE) * scale;
+    text + 2.0 * STATUS_CARD_V_MARGIN
+}
+
+/// Exact height of the top status panel. Derived from the actual two-line card
+/// height plus the panel's own vertical frame margin and a little headroom, so
+/// the card's rounded bottom is fully visible (never clipped) at every scale —
+/// the unscaled card/panel margins no longer fall behind the scaled text.
 pub(in crate::ui) fn top_status_bar_height(raw_scale: &str) -> f32 {
-    TOP_STATUS_HEIGHT * layout_scale(raw_scale)
+    status_card_height(raw_scale) + 2.0 * TOP_PANEL_V_MARGIN + TOP_STATUS_V_HEADROOM
 }
 
 /// Minimum remaining width before the top-bar post pill is drawn at all.

@@ -561,6 +561,53 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("fit_count > 2", top_bar)
         self.assertIn("fit_count > 3", top_bar)
 
+    def test_rust_top_status_cards_are_flat_readouts_not_buttons(self):
+        shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")
+        theme = Path("src/rust/ui/theme.rs").read_text(encoding="utf-8")
+        # Scope to the two readout renderers: the post_indicator pill (between
+        # top_status_bar and global_controls) and the status_card_sized Frame
+        # (after global_controls). Concatenate both so the style assertions cover
+        # the pill AND the cards but never the actual buttons in global_controls.
+        pill = shell.split("fn post_indicator", 1)[1].split("fn global_controls", 1)[0]
+        cards = shell.split("fn status_card_sized", 1)[1]
+        readouts = pill + cards
+
+        # Status cards + post pill must read as flat READOUTS, not the raised,
+        # clickable Start/Stop/compact buttons next to them:
+        #  - a recessed header_bg tint (buttons use surface_bg), NOT surface_bg
+        #  - no border tell (CARD_STROKE is 0.0)
+        #  - a barely-rounded READOUT_RADIUS corner, not the buttons' radius
+        self.assertNotIn("palette.surface_bg", readouts)
+        self.assertIn("palette.header_bg", readouts)
+        self.assertIn("READOUT_RADIUS", readouts)
+        self.assertNotIn("PANEL_RADIUS", readouts)
+        self.assertNotIn("PILL_RADIUS", readouts)
+        self.assertIn("pub(in crate::ui) const READOUT_RADIUS: u8 = 4;", theme)
+        self.assertIn("pub(in crate::ui) const CARD_STROKE: f32 = 0.0;", theme)
+
+        # The label no longer uses a hardcoded 12.0 size — it goes through the
+        # centralized Small text style so it scales with the UI like the value.
+        self.assertNotIn(".size(12.0)", cards)
+        self.assertIn("egui::TextStyle::Small", cards)
+        # Value still shows full text on hover.
+        self.assertIn(".on_hover_text(value);", cards)
+
+        # The buttons themselves STAY buttons: surface/accent fills live in
+        # global_controls, untouched.
+        controls = shell.split("fn global_controls", 1)[1].split("fn status_card", 1)[0]
+        self.assertIn("egui::Button::new", controls)
+
+    def test_rust_top_status_panel_height_derives_from_card_content(self):
+        theme = Path("src/rust/ui/theme.rs").read_text(encoding="utf-8")
+        # The fixed 64px panel height is gone; the height is derived from the real
+        # two-line card content so the rounded card bottom is never clipped at any
+        # scale (the unscaled margins no longer fall behind the scaled text).
+        self.assertNotIn("const TOP_STATUS_HEIGHT", theme)
+        self.assertIn("fn status_card_height(raw_scale: &str) -> f32", theme)
+        height = theme.split("fn top_status_bar_height", 1)[1].split("\n}", 1)[0]
+        self.assertIn("status_card_height(raw_scale)", height)
+        self.assertIn("TOP_PANEL_V_MARGIN", height)
+
     def test_rust_compact_mode_is_session_only_always_on_top_strip(self):
         script = rust_ui_source()
         compact = Path("src/rust/ui/tabs/compact.rs").read_text(encoding="utf-8")

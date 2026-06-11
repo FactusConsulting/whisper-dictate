@@ -3,12 +3,41 @@ use crate::ui::tabs::{top_status_cards_fit, top_status_controls_width, top_statu
 
 #[test]
 fn shell_chrome_dimensions_scale_with_ui_text() {
-    assert!(top_status_bar_height("1.15") >= 73.0);
-    assert_eq!(top_status_bar_height("bad"), 64.0);
-    assert_eq!(top_status_bar_height("3.0"), 102.4);
+    // The top panel height is now derived from the real two-line card content
+    // (label + spacing + value, scaled) plus the panel margins + headroom, so it
+    // grows with scale and always exceeds the bare card height. Assert it tracks
+    // the card and stays comfortably above the old fixed 64px floor at scale 1.0.
+    assert!(top_status_bar_height("1.0") >= status_card_height("1.0"));
+    assert!(top_status_bar_height("1.0") >= 60.0);
+    assert!(top_status_bar_height("1.15") > top_status_bar_height("1.0"));
+    assert!(top_status_bar_height("1.6") >= status_card_height("1.6"));
+    // Unparseable scale falls back to 1.0.
+    assert!((top_status_bar_height("bad") - top_status_bar_height("1.0")).abs() < 0.001);
     assert!(sidebar_width("1.15") >= 188.0);
     assert_eq!(sidebar_width("bad"), 164.0);
     assert!((sidebar_width("3.0") - 262.4).abs() < 0.001);
+}
+
+#[test]
+fn top_status_panel_fully_contains_two_line_card_at_every_scale() {
+    // Regression guard for the clipped-card bug: the panel's exact_height MUST be
+    // at least the two-line card's full height (Small label + scaled item-spacing
+    // + Body value + card margins) so the card's rounded bottom is never sliced
+    // off. Checked across the production scales 1.0 / 1.15 / 1.6.
+    for scale in ["1.0", "1.15", "1.6"] {
+        let panel = top_status_bar_height(scale);
+        let card = status_card_height(scale);
+        assert!(
+            panel >= card,
+            "panel height {panel} < card height {card} at scale {scale} — card clips"
+        );
+        // And the surplus must equal exactly the panel's own vertical margins plus
+        // the headroom, proving the derivation (no hidden magic number).
+        assert!(
+            (panel - card - (2.0 * TOP_PANEL_V_MARGIN + 4.0)).abs() < 0.001,
+            "panel/card surplus drifted from 2*panel_margin + headroom at scale {scale}"
+        );
+    }
 }
 
 #[test]
