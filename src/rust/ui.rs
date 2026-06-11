@@ -214,6 +214,11 @@ struct WhisperDictateApp {
     /// to the persisted `settings.audio_device`; the combo always offers
     /// "(System default)" → "" ahead of these.
     audio_device_options: Vec<String>,
+    /// One-shot guard for the automatic microphone-list load. Starts `false` and
+    /// flips to `true` the first time the worker's `--list-audio-devices` run is
+    /// dispatched at startup, so the picker is populated without the user having
+    /// to click "Refresh devices". The manual button still re-scans on demand.
+    audio_devices_loaded: bool,
     /// Visible top-level windows refreshed on demand via `--list-windows`.
     /// Each entry is `(title, process)`. Shown in the Profiles tab so the user
     /// can pick a window and insert a matching profile object.
@@ -324,6 +329,7 @@ impl Default for WhisperDictateApp {
             audio_meter_peak: None,
             active_audio_device: String::new(),
             audio_device_options: Vec::new(),
+            audio_devices_loaded: false,
             window_options: Vec::new(),
             config_path,
             saved_settings: settings.clone(),
