@@ -349,7 +349,7 @@ class StartSounddeviceTests(unittest.TestCase):
         self.assertEqual([k["channels"] for k in opened][-1], 1)
         self.assertIn(4, [k["channels"] for k in opened])
 
-    def test_start_sounddevice_reraises_last_error_when_all_fail(self):
+    def test_start_sounddevice_raises_when_all_fail(self):
         rt = self.runtime
         rt.SR = 16000
 
@@ -371,8 +371,166 @@ class StartSounddeviceTests(unittest.TestCase):
         with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
             with self.assertRaises(RuntimeError) as ctx:
                 rt.CaptureMixin._start_sounddevice(target)
-        self.assertIn("device busy", str(ctx.exception))
+        # No explicit device resolved here (empty setting) so there is no
+        # default fallback to try; the open simply fails for every combo.
+        self.assertIn("could not open", str(ctx.exception))
         self.assertIsNone(target._stream)
+
+    def test_start_sounddevice_falls_back_to_default_when_wasapi_open_fails(self):
+        # A configured device resolves to an explicit index whose open RAISES
+        # (WASAPI can fail on some machines). Capture must fall back to the
+        # system default (device=None) rather than break dictation.
+        rt = self.runtime
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # The explicitly-resolved device (index 5) fails to open;
+                # the default (no device= kwarg) succeeds.
+                if kwargs.get("device") == 5:
+                    raise RuntimeError("WASAPI open failed")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        class Default:
+            device = (5, 0)
+
+        devices = [
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Other", "hostapi": 0, "max_input_channels": 2},
+            {"name": "Other", "hostapi": 1, "max_input_channels": 2},
+            {"name": "Other", "hostapi": 2, "max_input_channels": 2},
+            {"name": "Filler", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Headset Microphone (Jabra Evolve 65 TE)", "hostapi": 2,
+             "max_input_channels": 2},
+        ]
+        hostapis = [
+            {"name": "MME", "default_input_device": 0},
+            {"name": "Windows DirectSound", "default_input_device": 2},
+            {"name": "Windows WASAPI", "default_input_device": 5},
+        ]
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream,
+            default=Default(),
+            query_devices=lambda device=None, kind=None: (
+                devices if device is None and kind is None
+                else (devices[device] if isinstance(device, int)
+                      else {"name": "default", "max_input_channels": 2})
+            ),
+            query_hostapis=lambda: hostapis,
+        )
+        target = self._fake_target()
+
+        with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
+            with _env(VOICEPI_AUDIO_DEVICE="Headset Microphone (Jabra Evolve 65 TE)"):
+                backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertTrue(target._stream.started)
+        # The WASAPI device (index 5) was tried first and failed...
+        self.assertTrue(any(k.get("device") == 5 for k in opened))
+        # ...then a fallback open with NO explicit device (default) succeeded.
+        self.assertTrue(any("device" not in k for k in opened))
+
+    def test_wasapi_autoconvert_retried_before_default_fallback(self):
+        # WASAPI robustness: a WASAPI device that rejects a raw 16k open must be
+        # retried with WasapiSettings(auto_convert=True) BEFORE dropping to the
+        # system default. Here the plain open fails but the auto_convert open
+        # succeeds, so capture stays on the configured WASAPI device.
+        rt = self.runtime
+        rt.SR = 16000
+        opened = []
+
+        class _WasapiSettings:
+            def __init__(self, auto_convert=False):
+                self.auto_convert = auto_convert
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # The WASAPI device (index 5) only opens with auto_convert on.
+                if kwargs.get("device") == 5 and "extra_settings" not in kwargs:
+                    raise RuntimeError("16k shared-mode rejected")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        class Default:
+            device = (5, 0)
+
+        devices = [
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Other", "hostapi": 0, "max_input_channels": 2},
+            {"name": "Other", "hostapi": 1, "max_input_channels": 2},
+            {"name": "Other", "hostapi": 2, "max_input_channels": 2},
+            {"name": "Filler", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Headset Microphone (Jabra Evolve 65 TE)", "hostapi": 2,
+             "max_input_channels": 2},
+        ]
+        hostapis = [
+            {"name": "MME", "default_input_device": 0},
+            {"name": "Windows DirectSound", "default_input_device": 2},
+            {"name": "Windows WASAPI", "default_input_device": 5},
+        ]
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream,
+            WasapiSettings=_WasapiSettings,
+            default=Default(),
+            query_devices=lambda device=None, kind=None: (
+                devices if device is None and kind is None
+                else (devices[device] if isinstance(device, int)
+                      else {"name": "default", "max_input_channels": 2})
+            ),
+            query_hostapis=lambda: hostapis,
+        )
+        target = self._fake_target()
+
+        with patch.object(rt.os, "name", "nt"):
+            with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
+                with _env(VOICEPI_AUDIO_DEVICE="Headset Microphone (Jabra Evolve 65 TE)"):
+                    backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertTrue(target._stream.started)
+        # The auto_convert candidate (extra_settings set, still device=5) was the
+        # one that opened — NOT a default (device-absent) fallback.
+        win = [k for k in opened if k.get("device") == 5 and "extra_settings" in k]
+        self.assertTrue(win)
+        self.assertTrue(win[-1]["extra_settings"].auto_convert)
+        self.assertFalse(any("device" not in k for k in opened))
+
+    def test_total_failure_threads_last_error_into_message(self):
+        # Diagnosability: when EVERY open fails the raised RuntimeError must
+        # carry the underlying PortAudio error, not just a generic string.
+        rt = self.runtime
+        rt.SR = 16000
+
+        class Stream:
+            def __init__(self, **kwargs):
+                raise RuntimeError("PaErrorCode -9996 device unavailable")
+
+        class Default:
+            device = (0, 0)
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream,
+            default=Default(),
+            query_devices=lambda device=None, kind=None: {
+                "name": "Busy", "max_input_channels": 1},
+        )
+        target = self._fake_target()
+
+        with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
+            with self.assertRaises(RuntimeError) as ctx:
+                rt.CaptureMixin._start_sounddevice(target)
+        msg = str(ctx.exception)
+        self.assertIn("could not open", msg)
+        self.assertIn("PaErrorCode -9996 device unavailable", msg)
 
 
 # ---------------------------------------------------------------------------

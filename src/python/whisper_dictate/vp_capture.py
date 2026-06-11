@@ -21,6 +21,9 @@ import sys  # noqa: F401 — patched by capture tests (sys.modules['sounddevice'
 import threading
 import time
 
+from whisper_dictate.vp_devices import (
+    _default_input_index, _is_wasapi_device, resolve_capture_device,
+)
 from whisper_dictate.vp_events import (
     _audio_level_metrics, _emit_worker_event,
     _sounddevice_capture_channel_candidates, _sounddevice_input_channels,
@@ -122,31 +125,115 @@ def _input_devices(sd) -> list[dict]:
     return result
 
 
+def _safe_query_devices(sd):
+    """``sd.query_devices()`` or ``[]`` — never raises (legacy/stub safe)."""
+    try:
+        return sd.query_devices()
+    except Exception:
+        return []
+
+
+def _safe_query_hostapis(sd):
+    """``sd.query_hostapis()`` or ``[]`` — never raises (legacy/stub safe)."""
+    try:
+        return sd.query_hostapis()
+    except Exception:
+        return []
+
+
 def _resolve_sounddevice_device(sd, value: str):
-    """Resolve a VOICEPI_AUDIO_DEVICE value to a sounddevice ``device=`` arg.
+    """Resolve a VOICEPI_AUDIO_DEVICE value to a ``(device, name)`` pair.
+
+    Resolution prefers the WASAPI→DirectSound→default host API (the SAME rule
+    the microphone picker uses, via :func:`vp_devices.resolve_capture_device`) so
+    on Windows capture binds the full-name WASAPI device instead of MME's
+    31-char-truncated, low-fidelity entry. Linux/macOS expose a single host API,
+    so behaviour there is unchanged.
 
     Value semantics:
-      * empty/unset       ⇒ ``None`` (sounddevice picks the system default)
-      * an integer string ⇒ that device index (int)
-      * otherwise         ⇒ case-insensitive substring match against input
-                            device names (first match wins); the matched index
-                            is returned. No match ⇒ warn + ``None`` (default).
+      * empty/unset       ⇒ the preferred host API's DEFAULT input device (full
+                            name) — never the global MME default — or ``None``.
+      * an integer string ⇒ that device index (int), used verbatim.
+      * otherwise         ⇒ the matching input device in the preferred host API
+                            (full name), tolerating an old MME-truncated saved
+                            name (bidirectional-substring match). No match ⇒
+                            warn + ``None`` (sounddevice picks the default).
+
+    Returns ``(device, name)`` where ``device`` is an int index or ``None`` and
+    ``name`` is the resolved full device name or ``None`` (caller derives a
+    label otherwise).
     """
     value = (value or "").strip()
-    if not value:
-        return None
-    if value.lstrip("+-").isdigit():
-        return int(value)
-    needle = value.casefold()
-    for device in _input_devices(sd):
-        if needle in device["name"].casefold():
-            return device["index"]
-    print(
-        f"[cap] audio device {value!r} not found, using default",
-        file=sys.stderr,
-        flush=True,
+    devices = _safe_query_devices(sd)
+    hostapis = _safe_query_hostapis(sd)
+    index, name = resolve_capture_device(
+        devices,
+        hostapis,
+        value,
+        is_windows=(os.name == "nt"),
+        default_index=_default_input_index(sd),
     )
-    return None
+    if value and not value.lstrip("+-").isdigit() and index is None:
+        print(
+            f"[cap] audio device {value!r} not found, using default",
+            file=sys.stderr,
+            flush=True,
+        )
+    return index, name
+
+
+def _wasapi_autoconvert_settings(sd):
+    """Return ``sd.WasapiSettings(auto_convert=True)`` or ``None`` if unavailable.
+
+    Lets a WASAPI device resample our requested 16k internally on machines whose
+    shared-mode native rate is 48k and that reject a raw 16k open. Older
+    sounddevice builds lack ``WasapiSettings`` (and a non-WASAPI device would
+    reject the setting), so this is fully guarded — any failure yields ``None``
+    and the caller simply skips the auto-convert candidate.
+    """
+    factory = getattr(sd, "WasapiSettings", None)
+    if factory is None:
+        return None
+    try:
+        return factory(auto_convert=True)
+    except Exception:
+        return None
+
+
+def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None):
+    """Open an ``InputStream`` for ``device``, trying channel/latency fallbacks.
+
+    Returns ``(stream, channels, last_error)``: ``(stream, channels, None)`` on
+    success (the stream is NOT yet started) or ``(None, 0, exc)`` with the last
+    PortAudio error if every channel-candidate × kwargs combination raised
+    (``None`` error only when there were no candidates). The per-channel fallback
+    (``_sounddevice_capture_channel_candidates``) and the low-latency→base kwargs
+    fallback (``_sounddevice_stream_kwargs``) are preserved exactly as before.
+    ``device=None`` opens the system default.
+
+    ``extra_settings`` (e.g. ``sd.WasapiSettings(auto_convert=True)``) is passed
+    to every candidate when not ``None`` so the WASAPI auto-convert attempt
+    reuses the same channel/latency fallback matrix.
+
+    Module-level (not a method) so it stays unit-testable and so the caller can
+    invoke it multiple times — preferred device, WASAPI auto-convert, default
+    fallback — without duplicating the channel-fallback loop.
+    """
+    last_error = None
+    for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
+        for kwargs in _sounddevice_stream_kwargs(channels, callback):
+            if device is not None:
+                kwargs["device"] = device
+            if extra_settings is not None:
+                kwargs["extra_settings"] = extra_settings
+            try:
+                stream = sd.InputStream(**kwargs)
+                return stream, channels, None
+            except Exception as exc:
+                last_error = exc
+    if last_error is not None:
+        print(f"[cap] stream open failed: {last_error}", file=sys.stderr, flush=True)
+    return None, 0, last_error
 
 
 def _selected_device_name(sd, device) -> str | None:
@@ -288,28 +375,54 @@ class CaptureMixin:
         import sounddevice as sd
         self._capture_backend = "sounddevice"
         self._cap_warned = False
-        device = _resolve_sounddevice_device(sd, _audio_device_setting())
+        device, device_name = _resolve_sounddevice_device(sd, _audio_device_setting())
         self._audio_input_device = (
-            _selected_device_name(sd, device)
+            device_name
+            or _selected_device_name(sd, device)
             or _sounddevice_input_name(sd)
             or "sounddevice default input"
         )
-        last_error = None
-        for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
-            self._capture_channels = channels
-            for kwargs in _sounddevice_stream_kwargs(self._capture_channels, self._cb):
-                if device is not None:
-                    kwargs["device"] = device
-                try:
-                    self._stream = sd.InputStream(**kwargs)
-                    break
-                except Exception as exc:
+
+        # Try the preferred (WASAPI-resolved) device first. WASAPI selection can
+        # fail on some machines/devices, so if opening the explicitly resolved
+        # device raises, fall back to the system default (device=None) rather
+        # than letting dictation break. Only fall back when an explicit device
+        # was chosen — a None device is already the default path.
+        self._stream, self._capture_channels, last_error = _open_sounddevice_stream(
+            sd, device, self._cb)
+        if self._stream is None and device is not None:
+            # WASAPI robustness: some WASAPI devices natively run at 48k and
+            # reject a raw 16k shared-mode open. Before dropping to the system
+            # default (which on Windows is the low-fidelity MME path), let WASAPI
+            # resample 16k internally via auto_convert. Windows-only and guarded
+            # so it's a no-op where WasapiSettings is missing or the device is
+            # not WASAPI.
+            if os.name == "nt" and _is_wasapi_device(_safe_query_devices(sd),
+                                                      _safe_query_hostapis(sd), device):
+                extra = _wasapi_autoconvert_settings(sd)
+                if extra is not None:
+                    self._stream, self._capture_channels, exc = _open_sounddevice_stream(
+                        sd, device, self._cb, extra_settings=extra)
+                    if exc is not None:
+                        last_error = exc
+            if self._stream is None:
+                print(
+                    f"[cap] device {device!r} ({self._audio_input_device!r}) failed to open, "
+                    "falling back to system default",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self._stream, self._capture_channels, exc = _open_sounddevice_stream(
+                    sd, None, self._cb)
+                if exc is not None:
                     last_error = exc
-                    self._stream = None
-            if self._stream is not None:
-                break
+                if self._stream is not None:
+                    self._audio_input_device = (
+                        _sounddevice_input_name(sd) or "sounddevice default input"
+                    )
         if self._stream is None:
-            raise last_error
+            detail = f": {last_error}" if last_error is not None else ""
+            raise RuntimeError(f"could not open any sounddevice input stream{detail}")
         self._stream.start()
         return self._capture_backend, self._audio_input_device
 
