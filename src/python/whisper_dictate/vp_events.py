@@ -111,8 +111,11 @@ def _select_host_api_index(hostapis, *, is_windows: bool) -> int | None:
         (ALSA / CoreAudio) — never hardcode WASAPI.
 
     ``hostapis`` is ``sd.query_hostapis()`` (a sequence of dicts). Returns the
-    chosen host API's *index* (its position in that sequence), or ``None`` when
-    the list is empty/unusable so the caller can fall back to every device.
+    chosen host API's *index* (its position in that sequence), or ``None`` only
+    when the list is EMPTY (older sounddevice without a host-API table) so the
+    caller falls back to enumerating every device. A non-empty list always
+    yields an index — a preferred API if matched, else the first with a default
+    input, else ``0``.
     """
     apis = list(hostapis or [])
     if not apis:
