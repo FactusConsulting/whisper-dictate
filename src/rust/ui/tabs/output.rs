@@ -10,6 +10,7 @@ impl WhisperDictateApp {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(8.0);
+        let language = self.settings.ui_language.clone();
         settings_grid("output_settings")
             .show(ui, |ui| {
                 combo_help_short(
@@ -32,8 +33,10 @@ impl WhisperDictateApp {
                     &mut self.settings.command_hook,
                     "Optional command run after accepted utterances for advanced automation.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "command_hook_timeout_ms",
                     "Command hook timeout ms",
                     &mut self.settings.command_hook_timeout_ms,
                     "Maximum time the command hook may run before it is treated as timed out.",

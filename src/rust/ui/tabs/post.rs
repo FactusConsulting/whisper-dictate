@@ -8,6 +8,7 @@ impl WhisperDictateApp {
         // Everything below the "Post processor" selector only applies once a
         // processor is chosen — grey it out and lock it while post is disabled.
         let post_enabled = self.settings.post_processor != "none";
+        let language = self.settings.ui_language.clone();
         settings_grid("post_processing_settings")
             .show(ui, |ui| {
                 combo_help_labeled(
@@ -35,23 +36,29 @@ impl WhisperDictateApp {
                     &mut self.settings.post_base_url,
                     "Base URL for the post-processing provider. Ollama normally uses http://localhost:11434; Groq/OpenAI use OpenAI-compatible HTTPS endpoints.",
                 );
-                text_enabled_short(
+                numeric_enabled(
                     ui,
+                    &language,
                     post_enabled,
+                    "post_timeout_ms",
                     "Post timeout ms",
                     &mut self.settings.post_timeout_ms,
                     "Maximum time allowed for post-processing.",
                 );
-                text_enabled_short(
+                numeric_enabled(
                     ui,
+                    &language,
                     post_enabled,
+                    "post_max_input_chars",
                     "Post max input chars",
                     &mut self.settings.post_max_input_chars,
                     "Maximum transcript length sent to the post-processor.",
                 );
-                text_enabled_short(
+                numeric_enabled(
                     ui,
+                    &language,
                     post_enabled,
+                    "post_max_output_chars",
                     "Post max output chars",
                     &mut self.settings.post_max_output_chars,
                     "Maximum accepted length of post-processed output.",

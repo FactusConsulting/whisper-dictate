@@ -25,26 +25,34 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::QualityGroupAllBackends),
             "quality_all_backends",
             |ui| {
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "min_record_seconds",
                     "Min recording seconds",
                     &mut self.settings.min_record_seconds,
                     "Discard recordings shorter than this (seconds) as accidental key taps before transcription. Clamped to a 0.3 s floor so even 0 keeps misfire protection. Helps avoid hallucinated subtitle/caption credits on quiet taps.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "max_chars_per_second",
                     "Max chars per second",
                     &mut self.settings.max_chars_per_second,
                     "Drop a transcript whose characters-per-second is humanly impossible (real speech is ~15-25; default 30). Catches hallucinated subtitle/caption credits on quiet input. 0 disables this guard.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "release_tail_ms",
                     "Release tail ms",
                     &mut self.settings.release_tail_ms,
                     "Extra audio kept after releasing the hotkey so word endings are not clipped.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "max_record_s",
                     "Max recording seconds",
                     &mut self.settings.max_record_s,
                     "Maximum recording length in seconds. If a key is held down longer than this, further audio is silently dropped and a warning is logged. 0 disables the cap.",
@@ -73,8 +81,10 @@ impl WhisperDictateApp {
                     &mut self.settings.audio_ducking,
                     "Windows-only: temporarily lowers other app audio while recording, then restores it.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "audio_ducking_level",
                     "Audio ducking level",
                     &mut self.settings.audio_ducking_level,
                     "Target volume for other apps while recording. 0.25 means 25%.",
@@ -96,9 +106,11 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::QualityGroupWhisper),
             "quality_whisper",
             |ui| {
-                text_enabled_short(
+                numeric_enabled(
                     ui,
+                    &language,
                     whisper,
+                    "beam_size",
                     "Beam size",
                     &mut self.settings.beam_size,
                     "Whisper beam search width. Higher can improve accuracy but costs more compute. Used only with STT backend = whisper.",
@@ -110,9 +122,11 @@ impl WhisperDictateApp {
                     &mut self.settings.temperature,
                     "Comma-separated Whisper fallback temperatures, for example 0.0,0.2. Used only with STT backend = whisper.",
                 );
-                text_enabled_short(
+                numeric_enabled(
                     ui,
+                    &language,
                     whisper,
+                    "context_min_seconds",
                     "Context min seconds",
                     &mut self.settings.context_min_seconds,
                     "Minimum utterance length before passing previous context/prompt hints to Whisper. Used only with STT backend = whisper.",
@@ -124,26 +138,34 @@ impl WhisperDictateApp {
                     &mut self.settings.hallucination_guard,
                     "Local Whisper only: skip long silent gaps where Whisper tends to hallucinate 'like and subscribe'-style text. Adds word timestamps (small extra compute). Used only with STT backend = whisper.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "preview_seconds",
                     "Live preview seconds",
                     &mut self.settings.preview_seconds,
                     "While recording, transcribe the buffer this often (seconds) so the live card shows the sentence growing. 0 disables. LOCAL Whisper backend only — ignored for cloud STT and Parakeet. The final result at key release is unchanged.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "vad_threshold",
                     "VAD threshold",
                     &mut self.settings.vad_threshold,
                     "Voice activity detection sensitivity (faster-whisper VAD). Lower is more sensitive, higher rejects more noise.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "vad_min_silence_ms",
                     "VAD min silence ms",
                     &mut self.settings.vad_min_silence_ms,
                     "Silence duration used by the faster-whisper VAD to split or end speech.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "vad_speech_pad_ms",
                     "VAD speech pad ms",
                     &mut self.settings.vad_speech_pad_ms,
                     "Audio padding kept around detected speech so soft first and last syllables are not trimmed.",
@@ -160,9 +182,11 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::QualityGroupParakeet),
             "quality_parakeet",
             |ui| {
-                text_enabled_short(
+                numeric_enabled(
                     ui,
+                    &language,
                     parakeet,
+                    "parakeet_min_seconds",
                     "Parakeet min seconds",
                     &mut self.settings.parakeet_min_seconds,
                     "Minimum captured audio length before Parakeet transcription is attempted. Used only with STT backend = parakeet.",

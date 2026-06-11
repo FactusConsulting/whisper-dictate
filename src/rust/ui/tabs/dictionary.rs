@@ -15,6 +15,7 @@ impl WhisperDictateApp {
                 self.preview_dictionary();
             }
         });
+        let language = self.settings.ui_language.clone();
         settings_grid("dictionary_settings")
             .show(ui, |ui| {
                 text_help(
@@ -29,14 +30,18 @@ impl WhisperDictateApp {
                     &mut self.settings.dictionary_enabled,
                     "Enable prompt-term injection and replacement cleanup from the dictionary.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "dictionary_max_terms",
                     "Max prompt terms",
                     &mut self.settings.dictionary_max_terms,
                     "Maximum number of dictionary terms included in the model prompt.",
                 );
-                text_help_short(
+                numeric_help(
                     ui,
+                    &language,
+                    "dictionary_prompt_chars",
                     "Prompt char cap",
                     &mut self.settings.dictionary_prompt_chars,
                     "Maximum characters used by dictionary prompt terms to avoid over-steering the model.",
