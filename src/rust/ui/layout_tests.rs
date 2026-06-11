@@ -29,27 +29,33 @@ fn top_status_panel_fully_contains_two_line_card_at_every_scale() {
     // at least the two-line card's REAL rendered height — not just the raw font
     // formula — so the card's rounded bottom is never sliced off.
     //
-    // MEASURED_CARD_HEIGHT: real two-line card heights (Small label + Body value
-    // + scaled item-spacing + 2*STATUS_CARD_V_MARGIN inner margin) as rendered by
-    // an egui 0.30 test harness at each scale. These are intentionally hardcoded
-    // so that a change to the font pipeline or card geometry that makes the galley
-    // taller than the raw-arithmetic formula expects will fail HERE, not silently
-    // clip at runtime. (The pure formula-vs-formula test above was tautological:
-    // it could never catch a real clip where egui's galley exceeds the formula.)
+    // MEASURED_CARD_HEIGHT: real two-line card heights as rendered by an egui
+    // 0.30 test harness (mesh_bounds diagnostics) at each scale. The card uses
+    // asymmetric vertical inner margins — (STATUS_CARD_V_MARGIN -
+    // STATUS_CARD_V_TOP_REDUCTION) at top, STATUS_CARD_V_MARGIN at bottom — to
+    // optically centre the ink inside the fill (see STATUS_CARD_V_TOP_REDUCTION
+    // in theme.rs). Total margin = 7 + 9 = 16 px (unscaled).
     //
-    // Values (px, tolerance ±0.1): scale → measured outer card height
-    //   0.85 → 45.9  (12*0.85 + 7*0.85 + 14*0.85 + 2*9 = 27.455 + 18 ≈ 45.46)
-    //   1.0  → 51.0  (12 + 7 + 14 + 18 = 51.0)
-    //   1.15 → 56.65 (12*1.15 + 7*1.15 + 14*1.15 + 18 ≈ 38.525 + 18 ≈ 56.53)
-    //   1.6  → 74.2  (12*1.6 + 7*1.6 + 14*1.6 + 18 ≈ 52.8 + 18 ≈ 70.8, galley
-    //                  adds line-gap → measured ~74.2)
+    // Egui's galley row heights are larger than the raw em-size: at scale 1.0
+    // the Small (12px) row renders as 14px and Body (14px) as 16px; at scale 1.6
+    // they are 22px and 26px respectively. These values are hardcoded so that a
+    // change to the font pipeline or card geometry that makes the galley taller
+    // than the formula expects will fail HERE, not silently clip at runtime.
+    //
+    // Values (px; the assertion below allows the panel to be up to 1px SHORTER
+    // than these measured heights — a one-sided floor, not a symmetric ±):
+    // scale → measured outer card height
+    //   0.85 → 47.95  (galley: 12+5.95+14=31.95, margins: 7+9=16  → 47.95)
+    //   1.0  → 53.0   (galley: 14+7+16=37,        margins: 16      → 53.0)
+    //   1.15 → 58.05  (galley: 16+8.05+18=42.05,  margins: 16      → 58.05)
+    //   1.6  → 75.2   (galley: 22+11.2+26=59.2,   margins: 16      → 75.2)
     // Use a generous tolerance (1 px) to allow minor platform rounding while still
     // catching a regression where the panel is shorter than the real galley.
     let measured: &[(&str, f32)] = &[
-        ("0.85", 45.9),
-        ("1.0", 51.0),
-        ("1.15", 56.65),
-        ("1.6", 74.2),
+        ("0.85", 47.95),
+        ("1.0", 53.0),
+        ("1.15", 58.05),
+        ("1.6", 75.2),
     ];
     for &(scale, measured_card_height) in measured {
         let panel = top_status_bar_height(scale);

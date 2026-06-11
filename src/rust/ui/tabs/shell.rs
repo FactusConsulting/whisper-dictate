@@ -337,19 +337,19 @@ impl WhisperDictateApp {
             &self.settings.post_mode,
             &self.settings.ui_language,
         );
-        // Same flat readout treatment as the status cards: recessed `readout_bg`
-        // tint (slightly darker than panel_bg in dark mode so cards read as a
-        // subtle recess rather than flush with the background), no border,
-        // barely-rounded corner — distinct from the rounded, raised
-        // Start/Stop/compact buttons to its right.
+        // Same flat readout treatment as the status cards (recessed tint, no
+        // border, barely-rounded corner). Asymmetric top margin: same
+        // STATUS_CARD_V_TOP_REDUCTION optical-centering as the two-line cards.
         egui::Frame::default()
             .fill(palette.readout_bg)
             .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
             .rounding(egui::Rounding::same(READOUT_RADIUS as f32))
-            .inner_margin(egui::Margin::symmetric(
-                POST_PILL_H_MARGIN,
-                STATUS_CARD_V_MARGIN,
-            ))
+            .inner_margin(egui::Margin {
+                left: POST_PILL_H_MARGIN,
+                right: POST_PILL_H_MARGIN,
+                top: STATUS_CARD_V_MARGIN - STATUS_CARD_V_TOP_REDUCTION,
+                bottom: STATUS_CARD_V_MARGIN,
+            })
             .show(ui, |ui| {
                 ui.label(icon_text(icon, label).strong().color(color));
             })
@@ -465,19 +465,20 @@ fn status_card_sized(
     min_width: f32,
 ) {
     let value = value.as_ref();
-    // Flat READOUT, not a button: a recessed `readout_bg` tint (slightly darker
-    // than panel_bg in dark mode so cards have a faint recess; buttons use
-    // `surface_bg`), no border, and a barely-rounded corner so the status strip
-    // reads as a passive readout rather than a clickable control. The muted Small
-    // label sits above the strong, colour-coded value (full value on hover).
+    // Flat READOUT: recessed tint, no border, barely-rounded corner.
+    // Asymmetric top margin (STATUS_CARD_V_TOP_REDUCTION) optically centres the
+    // ink: egui adds ~2-4px of leading above the first pixel but not below the
+    // last, so symmetric margins read top-heavy. See theme.rs for the derivation.
     egui::Frame::default()
         .fill(palette.readout_bg)
         .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
         .rounding(egui::Rounding::same(READOUT_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(
-            STATUS_CARD_H_MARGIN,
-            STATUS_CARD_V_MARGIN,
-        ))
+        .inner_margin(egui::Margin {
+            left: STATUS_CARD_H_MARGIN,
+            right: STATUS_CARD_H_MARGIN,
+            top: STATUS_CARD_V_MARGIN - STATUS_CARD_V_TOP_REDUCTION,
+            bottom: STATUS_CARD_V_MARGIN,
+        })
         .show(ui, |ui| {
             ui.set_min_width(min_width);
             ui.label(

@@ -61,6 +61,23 @@ pub(in crate::ui) const ITEM_SPACING_Y: f32 = 7.0;
 // height is derived from these so the rounded card bottom is never clipped.
 pub(in crate::ui) const TOP_PANEL_V_MARGIN: f32 = 10.0;
 pub(in crate::ui) const STATUS_CARD_V_MARGIN: f32 = 9.0;
+// Optical-centering correction for the two-line status card.
+//
+// Diagnosis (egui 0.30 font metrics): the first-line galley's `mesh_bounds`
+// start ~2-4px BELOW the galley rect top (a fixed per-line leading offset
+// that egui adds to the ink position but not the layout rect), while the last
+// line's ink is flush with the galley bottom.  This creates a persistent
+// asymmetry: with symmetric V_MARGIN, the VISIBLE air above the text is always
+// 2-4px more than the air below.
+//
+// Fix: reduce the top inner margin by this constant so the content block
+// shifts upward by REDUCTION px, bringing the visible ink optically centred.
+// REDUCTION=2 (unscaled, like the other margin constants) perfectly balances
+// the gap at scales 0.85-1.0 (imbalance 2px → 0px) and halves the residual
+// at scales 1.15-1.6 (imbalance 4px → 2px).  Total card height =
+// (V_MARGIN - REDUCTION) + content + V_MARGIN which is 2px less than the
+// previous symmetric layout — panel-height headroom absorbs the difference.
+pub(in crate::ui) const STATUS_CARD_V_TOP_REDUCTION: f32 = 2.0;
 // A little extra breathing room below the card so its rounded corners sit clear
 // of the panel's bottom edge at every scale. Exposed to the ui module so the
 // layout tests can reference it instead of a raw literal.
@@ -362,13 +379,16 @@ pub(in crate::ui) fn paint_sidebar_bridge(
 
 /// Height of a two-line status card's rendered content + its own frame margin,
 /// at the given UI scale. The card stacks a Small label, the vertical
-/// item-spacing, and a Body value (all scaled), wrapped in the card's symmetric
-/// vertical inner margin (unscaled). Pure so the panel-height fit is unit-testable
-/// without an egui context.
+/// item-spacing, and a Body value (all scaled), wrapped in the card's asymmetric
+/// vertical inner margin: `(V_MARGIN - TOP_REDUCTION)` at top and `V_MARGIN` at
+/// bottom (unscaled), where the top reduction optically centres the ink inside
+/// the card fill (see `STATUS_CARD_V_TOP_REDUCTION`). Pure so the panel-height
+/// fit is unit-testable without an egui context.
 pub(in crate::ui) fn status_card_height(raw_scale: &str) -> f32 {
     let scale = layout_scale(raw_scale);
     let text = (SMALL_FONT_SIZE + ITEM_SPACING_Y + BODY_FONT_SIZE) * scale;
-    text + 2.0 * STATUS_CARD_V_MARGIN
+    // Asymmetric margins: (V_MARGIN - REDUCTION) at top + V_MARGIN at bottom.
+    text + (STATUS_CARD_V_MARGIN - STATUS_CARD_V_TOP_REDUCTION) + STATUS_CARD_V_MARGIN
 }
 
 /// Exact height of the top status panel. Derived from the actual two-line card
