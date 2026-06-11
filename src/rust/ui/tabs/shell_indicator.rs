@@ -27,17 +27,28 @@ impl RecordingIndicatorColor {
 }
 
 /// Pure helper: recording indicator label + colour slot for the sidebar header.
-/// Recording always takes priority over the worker runtime state.
+///
+/// Precedence:
+/// 1. A `Stopped` worker can never legitimately be recording, so it always
+///    resolves to Stopped/muted — even if `pipeline_stage` is a stale
+///    `Some("recording")` left over from a worker that exited mid-dictation.
+///    This is defense-in-depth: the lifecycle paths (stop/restart/exit/error)
+///    already clear `pipeline_stage`, but this guarantees the indicator can
+///    never stick red on a stopped worker.
+/// 2. Otherwise an active `Some("recording")` stage takes priority over the
+///    Running/Starting runtime states — this is the live transitional case
+///    where the worker is mid-utterance.
+/// 3. Otherwise fall through to the plain runtime state.
 pub(in crate::ui) fn recording_indicator_style(
     pipeline_stage: Option<&str>,
     runtime: RuntimeState,
 ) -> (UiTextKey, RecordingIndicatorColor) {
-    if pipeline_stage == Some("recording") {
-        return (UiTextKey::Recording, RecordingIndicatorColor::Error);
-    }
     match runtime {
+        RuntimeState::Stopped => (UiTextKey::Stopped, RecordingIndicatorColor::Muted),
+        RuntimeState::Running | RuntimeState::Starting if pipeline_stage == Some("recording") => {
+            (UiTextKey::Recording, RecordingIndicatorColor::Error)
+        }
         RuntimeState::Running => (UiTextKey::Ready, RecordingIndicatorColor::Ok),
         RuntimeState::Starting => (UiTextKey::Starting, RecordingIndicatorColor::Warn),
-        RuntimeState::Stopped => (UiTextKey::Stopped, RecordingIndicatorColor::Muted),
     }
 }

@@ -1,9 +1,8 @@
 //! Unit tests for the sidebar recording indicator helper.
 
-use super::super::*; // crate::ui::* — UiTextKey, ui_text, ui_palette, …
+use super::super::*; // crate::ui::* — UiTextKey, ui_text, ui_palette, RuntimeState, …
 use super::recording_indicator_style;
 use super::shell_indicator::RecordingIndicatorColor;
-use crate::runtime::RuntimeState;
 
 #[test]
 fn recording_overrides_running_state() {
@@ -13,12 +12,22 @@ fn recording_overrides_running_state() {
 }
 
 #[test]
-fn recording_overrides_stopped_state() {
-    // Defensive: if the pipeline somehow says "recording" while the worker is
-    // Stopped, we still show the red Recording indicator.
-    let (key, slot) = recording_indicator_style(Some("recording"), RuntimeState::Stopped);
+fn recording_overrides_starting_state() {
+    // The live transitional case: worker still Starting but already recording.
+    let (key, slot) = recording_indicator_style(Some("recording"), RuntimeState::Starting);
     assert_eq!(key, UiTextKey::Recording);
     assert_eq!(slot, RecordingIndicatorColor::Error);
+}
+
+#[test]
+fn stopped_runtime_shows_stopped_even_if_pipeline_stale() {
+    // Defense-in-depth: a Stopped worker can never legitimately be recording, so
+    // a stale `Some("recording")` pipeline stage (e.g. the worker exited or was
+    // stopped mid-dictation before its stage was cleared) must NOT light up the
+    // red Recording indicator — it resolves to the muted Stopped state.
+    let (key, slot) = recording_indicator_style(Some("recording"), RuntimeState::Stopped);
+    assert_eq!(key, UiTextKey::Stopped);
+    assert_eq!(slot, RecordingIndicatorColor::Muted);
 }
 
 #[test]
