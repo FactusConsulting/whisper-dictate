@@ -73,6 +73,78 @@ _BARE_MODIFIER_NAMES = frozenset({
 })
 
 
+# Media / consumer-control keys the solo guard must IGNORE entirely. A Bluetooth
+# headset (e.g. Jabra) can emit consumer-control events — volume up/down/mute,
+# play/pause, track next/prev — to the OS while a bare-modifier PTT key is held.
+# These are NOT intentional chord-forming keys: they must neither block a start
+# (rule 1) nor cancel an in-flight dictation (rule 2), and are never tracked as
+# held / counted as foreign. See ``is_ignored_foreign_key``.
+#
+# pynput represents these as ``Key`` enum members named ``media_*`` (the .name
+# attribute is ``media_volume_up`` etc.). evdev delivers raw int keycodes, so we
+# match against the corresponding ``ecodes`` integers, resolved lazily below.
+_IGNORED_PYNPUT_NAME_PREFIXES = ("media_",)
+
+# evdev ecode *names* for consumer/media keys. Resolved to integer codes once,
+# lazily, the first time the predicate sees an int (evdev may be unavailable, in
+# which case the set stays empty and nothing is ignored on that backend — but
+# evdev is only ever the active backend when it is importable).
+_IGNORED_EVDEV_ECODE_NAMES = (
+    "KEY_VOLUMEUP", "KEY_VOLUMEDOWN", "KEY_MUTE",
+    "KEY_PLAYPAUSE", "KEY_PLAY", "KEY_PAUSE",
+    "KEY_NEXTSONG", "KEY_PREVIOUSSONG",
+    "KEY_STOPCD", "KEY_PLAYCD", "KEY_PAUSECD",
+    "KEY_FORWARD", "KEY_REWIND", "KEY_PLAYER",
+)
+
+# Populated lazily by ``_ignored_evdev_codes``; None means "not yet resolved".
+_IGNORED_EVDEV_CODES: frozenset[int] | None = None
+
+
+def _ignored_evdev_codes() -> frozenset[int]:
+    """Resolve (once) the set of evdev integer keycodes the guard ignores.
+
+    Robust if evdev is not importable: returns an empty set, so the predicate
+    simply never matches an int (no media key gets ignored, original behaviour).
+    """
+    global _IGNORED_EVDEV_CODES
+    if _IGNORED_EVDEV_CODES is None:
+        codes: set[int] = set()
+        try:
+            from evdev import ecodes  # type: ignore
+            for name in _IGNORED_EVDEV_ECODE_NAMES:
+                code = getattr(ecodes, name, None)
+                if isinstance(code, int):
+                    codes.add(code)
+        except Exception:
+            pass
+        _IGNORED_EVDEV_CODES = frozenset(codes)
+    return _IGNORED_EVDEV_CODES
+
+
+def is_ignored_foreign_key(key) -> bool:
+    """True for media / consumer-control keys the solo guard must ignore.
+
+    Works for BOTH backends:
+      * pynput: a ``Key`` enum member whose ``.name`` starts with ``media_``
+        (``media_volume_up``/``media_volume_down``/``media_volume_mute``,
+        ``media_play_pause``, ``media_next``, ``media_previous``).
+      * evdev: a raw integer keycode in the consumer/media ecode set
+        (``KEY_VOLUMEUP``/``KEY_VOLUMEDOWN``/``KEY_MUTE``/``KEY_PLAYPAUSE``/
+        ``KEY_NEXTSONG``/``KEY_PREVIOUSSONG``/...), resolved lazily.
+
+    Anything else (letters, real modifiers, function keys, the PTT targets) is
+    NOT ignored — so genuine foreign keys still cancel and chord bindings are
+    unaffected.
+    """
+    name = getattr(key, "name", None)  # pynput Key enum member
+    if isinstance(name, str) and name.startswith(_IGNORED_PYNPUT_NAME_PREFIXES):
+        return True
+    if isinstance(key, int):
+        return key in _ignored_evdev_codes()
+    return False
+
+
 def is_bare_modifier_binding(key_names: list[str]) -> bool:
     """True when the PTT binding is made up ENTIRELY of bare-modifier keys.
 
@@ -137,10 +209,18 @@ class SoloModifierGuard:
         key re-firing is never treated as a new keypress — but it refreshes the
         timestamp so a genuinely-held key does not expire out of the held set.
 
+        Media / consumer-control keys (volume, play/pause — see
+        ``is_ignored_foreign_key``) are NEVER tracked: a Bluetooth headset
+        emitting them while a bare-modifier PTT key is held must not form a
+        "foreign key" that blocks a start or cancels a recording. Returns False
+        for them (not a new key) and they never enter ``_held``.
+
         No-op (returns False) when ``enabled`` is False — the guard is inert.
         """
         if not self.enabled:
             return False
+        if is_ignored_foreign_key(key):
+            return False  # media/consumer key: ignored, not tracked, never foreign
         if key in self._held:
             self._held[key] = self._now()  # OS key-repeat: refresh, still not new
             return False
@@ -204,4 +284,7 @@ class SoloModifierGuard:
         """
         if not self.enabled:
             return False
+        if is_ignored_foreign_key(key):
+            return False  # media/consumer key never cancels (and note_press would
+            # have ignored it anyway — explicit here for intent)
         return key not in self._targets and self.note_press(key)
