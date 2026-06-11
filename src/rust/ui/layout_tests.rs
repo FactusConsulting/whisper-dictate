@@ -42,7 +42,9 @@ fn top_status_panel_fully_contains_two_line_card_at_every_scale() {
     // change to the font pipeline or card geometry that makes the galley taller
     // than the formula expects will fail HERE, not silently clip at runtime.
     //
-    // Values (px, tolerance ±1.0): scale → measured outer card height
+    // Values (px; the assertion below allows the panel to be up to 1px SHORTER
+    // than these measured heights — a one-sided floor, not a symmetric ±):
+    // scale → measured outer card height
     //   0.85 → 47.95  (galley: 12+5.95+14=31.95, margins: 7+9=16  → 47.95)
     //   1.0  → 53.0   (galley: 14+7+16=37,        margins: 16      → 53.0)
     //   1.15 → 58.05  (galley: 16+8.05+18=42.05,  margins: 16      → 58.05)
