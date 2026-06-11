@@ -48,6 +48,10 @@ pub(in crate::ui) enum RuntimeLogCardKind {
     FinalText,
     Status,
     Diagnostic,
+    /// Per-utterance health summary with no warnings — shown green.
+    HealthOk,
+    /// Per-utterance health summary with at least one `| WARN …` segment — shown amber.
+    HealthWarn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,10 +295,22 @@ fn health_card(line: &str) -> Option<RuntimeLogCard> {
         "Microphone + model health"
     };
     Some(RuntimeLogCard {
-        kind: RuntimeLogCardKind::Status,
+        kind: if has_warning {
+            RuntimeLogCardKind::HealthWarn
+        } else {
+            RuntimeLogCardKind::HealthOk
+        },
         title: body.to_owned(),
         detail: detail.to_owned(),
-        badge: if has_warning { "Health!" } else { "Health" }.to_owned(),
+        // Internal marker strings — translated to localized labels at render
+        // time in runtime.rs (same pattern as the "Utterance" → "Dictation"
+        // badge translation), so log-parsing tests stay language-agnostic.
+        badge: if has_warning {
+            "HealthWarn"
+        } else {
+            "HealthOk"
+        }
+        .to_owned(),
     })
 }
 

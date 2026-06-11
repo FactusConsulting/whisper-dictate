@@ -20,6 +20,17 @@ fn runtime_log_card_style(
         RuntimeLogCardKind::Diagnostic => {
             (icons::ICON_GRAPHIC_EQ, palette.warn_text, palette.header_bg)
         }
+        // Health-ok: green — ICON_MONITOR_HEART reads as "health monitor / all
+        // clear", visually distinct from FinalText's ICON_CHECK_CIRCLE.
+        RuntimeLogCardKind::HealthOk => (
+            icons::ICON_MONITOR_HEART,
+            palette.ok_text,
+            palette.surface_bg,
+        ),
+        // Health-warn: amber — ICON_WARNING makes the problem unmissable.
+        RuntimeLogCardKind::HealthWarn => {
+            (icons::ICON_WARNING, palette.warn_text, palette.header_bg)
+        }
     }
 }
 

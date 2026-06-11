@@ -114,6 +114,10 @@ pub(in crate::ui) enum UiTextKey {
     HotkeyRefModifiers,
     /// Expandable reference line: label for the accepted named/function keys.
     HotkeyRefKeys,
+    /// Badge label for the per-utterance health card when all checks pass.
+    HealthOk,
+    /// Badge label for the per-utterance health card when at least one warning fired.
+    HealthWarn,
 }
 
 impl UiTextKey {
@@ -226,6 +230,8 @@ impl UiTextKey {
                 UiTextKey::HotkeyDuplicateToken => "Duplicate key",
                 UiTextKey::HotkeyRefModifiers => "Modifiers",
                 UiTextKey::HotkeyRefKeys => "Keys",
+                UiTextKey::HealthOk => "Healthy",
+                UiTextKey::HealthWarn => "Warning",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -334,6 +340,8 @@ impl UiTextKey {
                 UiTextKey::HotkeyDuplicateToken => "Gentaget tast",
                 UiTextKey::HotkeyRefModifiers => "Modifikatorer",
                 UiTextKey::HotkeyRefKeys => "Taster",
+                UiTextKey::HealthOk => "God",
+                UiTextKey::HealthWarn => "Advarsel",
             },
         }
     }
