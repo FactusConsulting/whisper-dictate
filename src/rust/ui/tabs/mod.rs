@@ -11,6 +11,9 @@ mod quality;
 mod runtime;
 mod settings;
 mod shell;
+mod shell_indicator;
+#[cfg(test)]
+mod shell_sidebar_tests;
 mod speech;
 mod system;
 mod top_status_layout;
@@ -28,6 +31,7 @@ pub(in crate::ui) use runtime::{
     pipeline_progress_accent_color,
 };
 pub(in crate::ui) use shell::runtime_state_color;
+pub(in crate::ui) use shell_indicator::recording_indicator_style;
 // Pure top-status-bar layout + post-indicator helpers live in their own module
 // (`top_status_layout.rs`) so the render code in `shell.rs` stays small. The
 // post on/off + label/hover helpers are used by `shell.rs`'s render code via

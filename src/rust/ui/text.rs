@@ -20,7 +20,8 @@ impl UiLanguageMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) enum UiTextKey {
-    SidebarSubtitle,
+    Recording,
+    Ready,
     Log,
     Speech,
     Quality,
@@ -89,7 +90,8 @@ impl UiTextKey {
     fn label(self, language: UiLanguageMode) -> &'static str {
         match language {
             UiLanguageMode::English => match self {
-                UiTextKey::SidebarSubtitle => "Rust control surface",
+                UiTextKey::Recording => "Recording",
+                UiTextKey::Ready => "Ready",
                 UiTextKey::Log => "Dictation",
                 UiTextKey::Speech => "Speech",
                 UiTextKey::Quality => "Quality",
@@ -154,7 +156,8 @@ impl UiTextKey {
                 UiTextKey::SpeechGroupGeneral => "General",
             },
             UiLanguageMode::Danish => match self {
-                UiTextKey::SidebarSubtitle => "Rust kontrolflade",
+                UiTextKey::Recording => "Optager",
+                UiTextKey::Ready => "Klar",
                 UiTextKey::Log => "Diktering",
                 UiTextKey::Speech => "Tale",
                 UiTextKey::Quality => "Kvalitet",
