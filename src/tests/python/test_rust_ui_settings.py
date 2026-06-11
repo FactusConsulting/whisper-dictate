@@ -259,13 +259,13 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("scroll_to_metrics_preview", ui)
         self.assertIn("response.scroll_to_me(Some(egui::Align::Center))", ui)
 
-    def test_rust_ui_output_has_single_diagnostics_level_dropdown(self):
+    def test_rust_ui_has_single_diagnostics_level_dropdown_on_system_tab(self):
         ui = rust_ui_source()
 
         # The two raw debug toggles (VOICEPI_DEBUG / VOICEPI_STT_DEBUG) were
         # consolidated into ONE ordered "Diagnostics" level dropdown. The combo is
         # a pure UI affordance over the still-persisted `debug` / `stt_debug`
-        # bools, so those env-named checkbox rows must be gone from the Output tab.
+        # bools, so those env-named checkbox rows must be gone everywhere.
         self.assertNotIn('"VOICEPI_DEBUG"', ui)
         self.assertNotIn('"VOICEPI_STT_DEBUG"', ui)
         self.assertIn("fn diagnostics_combo(", ui)
@@ -278,6 +278,17 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         # keep working), so both bools must still be written by the combo.
         self.assertIn("self.settings.debug = debug;", ui)
         self.assertIn("self.settings.stt_debug = stt_debug;", ui)
+
+        # Diagnostics is an APP-LEVEL concern, so the combo now lives on the
+        # System tab (next to Integration), NOT on the Output tab which is pure
+        # speech-output. Assert the placement by file.
+        system = Path("src/rust/ui/tabs/system.rs").read_text(encoding="utf-8")
+        output = Path("src/rust/ui/tabs/output.rs").read_text(encoding="utf-8")
+        self.assertIn("fn diagnostics_combo(", system)
+        self.assertIn('settings_grid("system_diagnostics_settings")', system)
+        self.assertIn("self.diagnostics_combo(ui)", system)
+        self.assertNotIn("diagnostics_combo", output)
+        self.assertNotIn("diagnostics_level", output)
 
     def test_rust_settings_tabs_have_visible_help_badges(self):
         script = rust_ui_source()
@@ -468,4 +479,44 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         # text_scale_stepper must exist in the UI source (lives in system.rs after
         # the text_scale.rs refactor so it falls under the coverage exclusion).
         self.assertIn("fn text_scale_stepper(", script)
+
+    def test_rust_short_value_combos_use_narrow_width(self):
+        """Short-enum dropdowns (auto/type/paste, Off/Basic/Verbose, auto/cuda/cpu)
+        use a fixed NARROW width instead of stretching the full control width, while
+        long descriptive option labels (model pickers, compute type) stay WIDE."""
+        script = rust_ui_source()
+
+        # The narrow-width machinery exists.
+        self.assertIn("const SETTINGS_SHORT_CONTROL_WIDTH: f32 = 240.0;", script)
+        self.assertIn("fn settings_short_control_width(", script)
+        self.assertIn("enum ComboWidth", script)
+
+        # Short-enum combos opt into the narrow variants.
+        self.assertIn("fn combo_help_short(", script)
+        self.assertIn("fn combo_enabled_short(", script)
+        self.assertIn("fn combo_help_labeled_short(", script)
+        self.assertIn("fn combo_enabled_labeled_short(", script)
+
+        # Output short combos.
+        output = Path("src/rust/ui/tabs/output.rs").read_text(encoding="utf-8")
+        self.assertIn('combo_help_short(\n                    ui,\n                    "Inject mode"', output)
+        self.assertIn('combo_help_short(\n                    ui,\n                    "Format commands"', output)
+
+        # Speech short combos (Device, Cloud STT provider, Language, layout).
+        speech = Path("src/rust/ui/tabs/speech.rs").read_text(encoding="utf-8")
+        self.assertIn("combo_enabled_short(", speech)
+        self.assertIn("combo_enabled_labeled_short(", speech)
+        self.assertIn("combo_help_labeled_short(", speech)
+        self.assertIn('"Device"', speech)
+        # WIDE combos with long option labels stay wide (no _short suffix).
+        self.assertIn('combo_enabled_labeled(\n                    ui,\n                    backend != SttBackendMode::Cloud,\n                    "Compute type"', speech)
+        self.assertIn("combo_model_vram(", speech)
+
+        # Post mode is short; Post model stays wide.
+        post = Path("src/rust/ui/tabs/post.rs").read_text(encoding="utf-8")
+        self.assertIn('combo_enabled_short(\n                    ui,\n                    post_enabled,\n                    "Post mode"', post)
+
+        # The label-column alignment anchor must still be in place so value
+        # columns line up across groups and tabs after the width change.
+        self.assertIn("ui.set_min_width(settings_label_width(ui))", script)
 

@@ -15,6 +15,13 @@ pub(in crate::ui) use super::widgets_combo::*;
 /// Use `settings_label_width(ui)` for the scaled value at render time.
 pub(in crate::ui) const SETTINGS_LABEL_WIDTH: f32 = 220.0;
 const SETTINGS_CONTROL_MAX_WIDTH: f32 = 420.0;
+/// Fixed narrow width for combos whose options are SHORT enum tokens
+/// (e.g. auto/type/paste, Off/Basic/Verbose, auto/cuda/cpu). Sized to comfortably
+/// fit the longest such option plus the dropdown arrow without stretching the
+/// whole grid the way long descriptive option labels (model pickers, compute
+/// type) legitimately need. Scales with the UI text-scale via
+/// `settings_short_control_width`.
+const SETTINGS_SHORT_CONTROL_WIDTH: f32 = 240.0;
 /// Compact width for short numeric-ish fields (counts, seconds, thresholds) so a
 /// value like "2000" or "0.5" no longer stretches across the whole grid.
 const SETTINGS_SHORT_INPUT_WIDTH: f32 = 120.0;
@@ -293,6 +300,22 @@ pub(in crate::ui) fn label_with_help_enabled(
 pub(in crate::ui) fn settings_control_width(ui: &egui::Ui) -> f32 {
     ui.available_width()
         .clamp(260.0, SETTINGS_CONTROL_MAX_WIDTH)
+}
+
+/// Narrow, fixed width for short-enum combos (see [`SETTINGS_SHORT_CONTROL_WIDTH`]).
+/// Scales with the UI text-scale like the label column does, and never exceeds the
+/// available width so it degrades gracefully in a tight window. Unlike
+/// [`settings_control_width`] it does NOT stretch to fill the row — a three-token
+/// dropdown should stay compact.
+pub(in crate::ui) fn settings_short_control_width(ui: &egui::Ui) -> f32 {
+    let body_size = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|f| f.size)
+        .unwrap_or(14.0);
+    let scaled = SETTINGS_SHORT_CONTROL_WIDTH * (body_size / 14.0);
+    scaled.min(ui.available_width())
 }
 
 /// A standalone `?` help badge (outside the settings grid) that toggles an

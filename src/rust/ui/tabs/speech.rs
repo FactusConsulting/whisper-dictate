@@ -76,7 +76,7 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupOnline),
             "speech_online",
             |ui| {
-                combo_enabled_labeled(
+                combo_enabled_labeled_short(
                     ui,
                     backend == SttBackendMode::Cloud,
                     "Cloud STT provider",
@@ -154,7 +154,7 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupGeneral),
             "speech_general",
             |ui| {
-                combo_enabled(
+                combo_enabled_short(
                     ui,
                     backend != SttBackendMode::Cloud,
                     "Device",
@@ -187,7 +187,7 @@ impl WhisperDictateApp {
                      Parakeet ignores this — it always uses its own precision.",
                 );
                 self.microphone_settings(ui);
-                combo_help_labeled(
+                combo_help_labeled_short(
                     ui,
                     "Language",
                     &mut self.settings.lang,
@@ -206,7 +206,7 @@ impl WhisperDictateApp {
                     "Spoken language hint. Auto lets the backend autodetect when supported.",
                 );
                 if !cfg!(windows) {
-                    combo_help_labeled(
+                    combo_help_labeled_short(
                         ui,
                         "Linux keyboard layout",
                         &mut self.settings.xkb_layout,
