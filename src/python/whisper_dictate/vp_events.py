@@ -159,14 +159,15 @@ def _sounddevice_capture_channel_candidates(max_channels: int) -> list[int]:
     return candidates
 
 
-def _sounddevice_stream_kwargs(channels: int, callback, samplerate: int | None = None) -> list[dict]:
+def _sounddevice_stream_kwargs(channels: int, callback, samplerate: int | None = None,
+                               dtype: str = "int16") -> list[dict]:
     from whisper_dictate.vp_transcribe import SR
 
     rate = int(samplerate) if samplerate else SR
     base = {
         "samplerate": rate,
         "channels": channels,
-        "dtype": "int16",
+        "dtype": dtype,
         "callback": callback,
     }
     low_latency = dict(base)
