@@ -155,6 +155,83 @@ class HallucinationFilterTests(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(dropped, [])
 
+    def test_drop_per_segment_trailing_credit_real_repro(self):
+        # REAL REPRO: a 25.9 s dictation, correct across 3 segments, with a
+        # trailing 0.42 s segment hallucinating the classic subtitle credit.
+        # The trailing segment has no_speech 0.63 but logprob only -0.43, so the
+        # plain no_speech+logprob gate does NOT fire (the AND is not satisfied);
+        # the credit-pattern drop must catch it instead.
+        s1 = types.SimpleNamespace(
+            text=("Indtil nu har det været okay, men nu vil jeg gerne kunne "
+                  "diktere i klartekst."),
+            start=0.34, end=6.36, avg_logprob=-0.162, no_speech_prob=0.0031)
+        s2 = types.SimpleNamespace(
+            text=("Jeg kunne godt tænke mig at vide om en tast er en valid "
+                  "hotkey eller ej."),
+            start=6.5, end=17.12, avg_logprob=-0.162, no_speech_prob=0.0031)
+        s3 = types.SimpleNamespace(
+            text="Eller man kan vælge at diktere ind i et klartekstfelt.",
+            start=17.54, end=25.43, avg_logprob=-0.162, no_speech_prob=0.0031)
+        credit = types.SimpleNamespace(
+            text="Danske tekster af Jesper Buhl Scandinavian Text Service 2018",
+            start=25.43, end=25.85, avg_logprob=-0.4286,
+            no_speech_prob=0.6338, compression_ratio=0.909)
+        kept, dropped = self.t._drop_hallucinated_segments(
+            [s1, s2, s3, credit], 25.9)
+        self.assertEqual([s.text for s in kept], [s1.text, s2.text, s3.text])
+        self.assertEqual([s.text for s in dropped], [credit.text])
+        assembled = " ".join(s.text for s in kept)
+        self.assertNotIn("Scandinavian Text Service", assembled)
+        self.assertNotIn("2018", assembled)
+
+    def test_drop_per_segment_credit_with_good_logprob(self):
+        # A credit-shaped segment with HEALTHY metrics (low no_speech, decent
+        # logprob) — e.g. Whisper confidently transcribing a baked-in caption —
+        # is still dropped purely on the anchored credit-pattern match.
+        real = types.SimpleNamespace(
+            text="dette er en helt almindelig sætning",
+            start=0.0, end=5.0, avg_logprob=-0.15, no_speech_prob=0.01)
+        credit = types.SimpleNamespace(
+            text="Undertekster af Jesper Buhl 2019",
+            start=5.0, end=7.0, avg_logprob=-0.15, no_speech_prob=0.02)
+        kept, dropped = self.t._drop_hallucinated_segments([real, credit], 7.5)
+        self.assertEqual([s.text for s in kept], [real.text])
+        self.assertEqual([s.text for s in dropped], [credit.text])
+
+    def test_drop_per_segment_keeps_segment_containing_credit_phrase(self):
+        # A real speech segment that merely CONTAINS "tekster af" mid-text (no
+        # trailing year, not anchored) must survive — the credit drop is anchored.
+        real = types.SimpleNamespace(
+            text="jeg leverede tekster af høj kvalitet til kunden i dag",
+            start=0.0, end=4.0, avg_logprob=-0.2, no_speech_prob=0.05)
+        kept, dropped = self.t._drop_hallucinated_segments([real], 4.5)
+        self.assertEqual([s.text for s in kept], [real.text])
+        self.assertEqual(dropped, [])
+
+    def test_drop_per_segment_keeps_real_segments_unchanged(self):
+        # Sanity: the 3 real repro segments on their own (no credit appended)
+        # are all kept — the per-segment credit check never matches real speech.
+        s1 = types.SimpleNamespace(
+            text="Indtil nu har det været okay, men nu vil jeg gerne diktere.",
+            start=0.34, end=6.36, avg_logprob=-0.162, no_speech_prob=0.0031)
+        s2 = types.SimpleNamespace(
+            text="Jeg kunne godt tænke mig at vide om en tast er en valid hotkey.",
+            start=6.5, end=17.12, avg_logprob=-0.162, no_speech_prob=0.0031)
+        s3 = types.SimpleNamespace(
+            text="Eller man kan vælge at diktere ind i et klartekstfelt.",
+            start=17.54, end=25.43, avg_logprob=-0.162, no_speech_prob=0.0031)
+        kept, dropped = self.t._drop_hallucinated_segments([s1, s2, s3], 25.9)
+        self.assertEqual(len(kept), 3)
+        self.assertEqual(dropped, [])
+
+    def test_drop_per_segment_records_reason(self):
+        credit = types.SimpleNamespace(
+            text="Danske tekster af Jesper Buhl Scandinavian Text Service 2018",
+            start=0.0, end=0.4, avg_logprob=-0.4286, no_speech_prob=0.6338)
+        _kept, dropped = self.t._drop_hallucinated_segments([credit], 25.9)
+        self.assertEqual(len(dropped), 1)
+        self.assertEqual(getattr(dropped[0], "_drop_reason", None), "credit_pattern")
+
 class TranscribeDetailTests(unittest.TestCase):
     def setUp(self):
         try:

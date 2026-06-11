@@ -388,24 +388,64 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
     """Split segments into (kept, dropped), dropping trailing-silence
     hallucinations before the text is assembled.
 
-    A segment is dropped when the model itself flags it as very likely
-    non-speech (``no_speech_prob`` high AND ``avg_logprob`` low together), or
-    when its end timestamp runs past the captured audio (a hallucination beyond
-    the recording, e.g. a 30 s "like and subscribe" tail on a 35 s clip).
+    A segment is dropped when:
+
+    * the model itself flags it as very likely non-speech (``no_speech_prob``
+      high AND ``avg_logprob`` low together); or
+    * its end timestamp runs past the captured audio (a hallucination beyond the
+      recording, e.g. a 30 s "like and subscribe" tail on a 35 s clip); or
+    * its OWN text is a known subtitle/caption credit (``is_hallucination`` —
+      the exact-match blacklist plus the year-anchored credit regex). This
+      catches a credit emitted as a SEPARATE trailing segment appended to a long
+      real utterance — the whole assembled text is then not a credit, so the
+      whole-text ``is_hallucination`` check downstream never sees it. Anchored /
+      year-required, so it cannot match a real speech segment; or
+    * it is the TRAILING segment with high ``no_speech_prob`` AND a credit-shaped
+      text — drops even when ``avg_logprob`` is not low enough for the plain
+      silence gate (the real repro: no_speech 0.63 but logprob -0.43). Kept tied
+      to the credit-pattern match so the plain silence gate's logprob threshold
+      is never broadened (which would risk real quiet words).
+
+    Returns (kept, dropped). ``dropped`` items are tagged with a transient
+    ``_drop_reason`` attribute for diagnostics.
     """
     kept = []
     dropped = []
-    for segment in segment_list:
+    last_index = len(segment_list) - 1
+    for index, segment in enumerate(segment_list):
         no_speech = float(getattr(segment, "no_speech_prob", 0.0) or 0.0)
         avg_logprob = float(getattr(segment, "avg_logprob", 0.0) or 0.0)
         end = getattr(segment, "end", None)
+        seg_text = getattr(segment, "text", "") or ""
         likely_silence = no_speech >= NO_SPEECH_DROP and avg_logprob <= NO_SPEECH_DROP_LOGPROB
         past_audio = (
             end is not None
             and audio_duration_s is not None
             and float(end) > audio_duration_s + SEGMENT_END_SLACK_S
         )
-        (dropped if (likely_silence or past_audio) else kept).append(segment)
+        is_credit = is_hallucination(seg_text)
+        # Defensive: a TRAILING credit-shaped segment the model also flags as
+        # likely non-speech (high no_speech_prob) drops regardless of avg_logprob.
+        trailing_silent_credit = (
+            index == last_index and no_speech >= NO_SPEECH_DROP and is_credit
+        )
+        reason = None
+        if likely_silence:
+            reason = "no_speech+logprob"
+        elif past_audio:
+            reason = "end_past_audio"
+        elif is_credit:
+            reason = "credit_pattern"
+        elif trailing_silent_credit:
+            reason = "trailing_no_speech_credit"
+        if reason is not None:
+            try:
+                segment._drop_reason = reason
+            except (AttributeError, TypeError):
+                pass
+            dropped.append(segment)
+        else:
+            kept.append(segment)
     return kept, dropped
 
 
@@ -494,7 +534,9 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     for segment in dropped_segments:
         print(
             f"[stt] dropped hallucinated segment: "
+            f"reason={getattr(segment, '_drop_reason', '?')} "
             f"no_speech={float(getattr(segment, 'no_speech_prob', 0.0) or 0.0):.2f} "
+            f"logprob={float(getattr(segment, 'avg_logprob', 0.0) or 0.0):.2f} "
             f"end={float(getattr(segment, 'end', 0.0) or 0.0):.1f}s "
             f"text={getattr(segment, 'text', '')!r}",
             flush=True,
