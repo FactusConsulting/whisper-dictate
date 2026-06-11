@@ -37,6 +37,8 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         dictionary_preview: String::new(),
         history_preview: String::new(),
         metrics_preview: String::new(),
+        scroll_to_history_preview: false,
+        scroll_to_metrics_preview: false,
         supervisor: RuntimeSupervisor::new(),
         background_task: None,
         background_task_label: None,

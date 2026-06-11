@@ -252,6 +252,32 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"Preview history"', ui)
         self.assertIn('"Preview metrics"', ui)
         self.assertIn("telemetry::preview_jsonl", ui)
+        # Clicking a Preview button scrolls the freshly loaded preview (which sits
+        # below the settings ScrollArea fold) into view via a one-shot flag, so the
+        # click is visibly effective instead of reading as "did nothing".
+        self.assertIn("scroll_to_history_preview", ui)
+        self.assertIn("scroll_to_metrics_preview", ui)
+        self.assertIn("response.scroll_to_me(Some(egui::Align::Center))", ui)
+
+    def test_rust_ui_output_has_single_diagnostics_level_dropdown(self):
+        ui = rust_ui_source()
+
+        # The two raw debug toggles (VOICEPI_DEBUG / VOICEPI_STT_DEBUG) were
+        # consolidated into ONE ordered "Diagnostics" level dropdown. The combo is
+        # a pure UI affordance over the still-persisted `debug` / `stt_debug`
+        # bools, so those env-named checkbox rows must be gone from the Output tab.
+        self.assertNotIn('"VOICEPI_DEBUG"', ui)
+        self.assertNotIn('"VOICEPI_STT_DEBUG"', ui)
+        self.assertIn("fn diagnostics_combo(", ui)
+        self.assertIn("enum DiagnosticsLevel", ui)
+        self.assertIn("fn diagnostics_level(debug: bool, stt_debug: bool)", ui)
+        self.assertIn("fn apply_diagnostics_level(", ui)
+        self.assertIn("UiTextKey::Diagnostics", ui)
+        self.assertIn('from_id_salt("diagnostics_level")', ui)
+        # The underlying persisted fields are untouched (config + worker + env vars
+        # keep working), so both bools must still be written by the combo.
+        self.assertIn("self.settings.debug = debug;", ui)
+        self.assertIn("self.settings.stt_debug = stt_debug;", ui)
 
     def test_rust_settings_tabs_have_visible_help_badges(self):
         script = rust_ui_source()

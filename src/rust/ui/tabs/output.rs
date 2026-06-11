@@ -56,18 +56,7 @@ impl WhisperDictateApp {
                     &mut self.settings.local_only,
                     "Block network-backed STT/post-processing providers when enabled.",
                 );
-                checkbox_help(
-                    ui,
-                    "VOICEPI_DEBUG",
-                    &mut self.settings.debug,
-                    "Print the effective configuration at worker startup.",
-                );
-                checkbox_help(
-                    ui,
-                    "VOICEPI_STT_DEBUG",
-                    &mut self.settings.stt_debug,
-                    "Enable extra backend transcription diagnostics.",
-                );
+                self.diagnostics_combo(ui);
             });
         ui.separator();
         ui.horizontal(|ui| {
@@ -80,13 +69,65 @@ impl WhisperDictateApp {
         });
         if !self.history_preview.is_empty() {
             ui.label("History preview");
-            ui.add(
+            let response = ui.add(
                 egui::TextEdit::multiline(&mut self.history_preview)
                     .font(egui::TextStyle::Monospace)
                     .desired_rows(8)
                     .desired_width(f32::INFINITY)
                     .interactive(false),
             );
+            // The settings body lives in a vertical ScrollArea, so a freshly
+            // loaded preview renders below the fold and the click reads as "did
+            // nothing". Scroll the preview into view on the frame it loads, then
+            // clear the one-shot flag (mirrors `runtime_log_scroll_to_bottom`).
+            if self.scroll_to_history_preview {
+                response.scroll_to_me(Some(egui::Align::Center));
+                self.scroll_to_history_preview = false;
+            }
         }
+    }
+
+    /// One "Diagnostics" dropdown standing in for the two raw debug toggles.
+    ///
+    /// The persisted `debug` / `stt_debug` bools (and their env vars + the
+    /// worker) are unchanged — this is a pure UI affordance over them via
+    /// [`diagnostics_level`] / [`apply_diagnostics_level`]. The level is read
+    /// from the current bools each frame; on change both bools are written so
+    /// the dirty-dot and Save behave exactly as the old checkboxes did.
+    fn diagnostics_combo(&mut self, ui: &mut egui::Ui) {
+        let label = ui_text(&self.settings.ui_language, UiTextKey::Diagnostics);
+        const HELP: &str = "How much diagnostic output the worker prints. \
+            Basic = the effective-configuration dump at startup. \
+            Verbose = Basic plus per-utterance speech-to-text and dictionary-helper detail. \
+            Set the Dictation view to \"Debug\" to see the raw lines in the log.";
+        let show_help = label_with_help(ui, label, HELP);
+        let current = diagnostics_level(self.settings.debug, self.settings.stt_debug);
+        let language = self.settings.ui_language.clone();
+        let level_label = |level: DiagnosticsLevel| -> &'static str {
+            ui_text(
+                &language,
+                match level {
+                    DiagnosticsLevel::Off => UiTextKey::DiagnosticsOff,
+                    DiagnosticsLevel::Basic => UiTextKey::DiagnosticsBasic,
+                    DiagnosticsLevel::Verbose => UiTextKey::DiagnosticsVerbose,
+                },
+            )
+        };
+        let mut selected = current;
+        egui::ComboBox::from_id_salt("diagnostics_level")
+            .width(settings_control_width(ui))
+            .selected_text(level_label(current))
+            .show_ui(ui, |ui| {
+                for level in DiagnosticsLevel::ALL {
+                    ui.selectable_value(&mut selected, level, level_label(level));
+                }
+            });
+        if selected != current {
+            let (debug, stt_debug) = apply_diagnostics_level(selected);
+            self.settings.debug = debug;
+            self.settings.stt_debug = stt_debug;
+        }
+        ui.end_row();
+        grid_help_row(ui, show_help, HELP);
     }
 }
