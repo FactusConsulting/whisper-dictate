@@ -33,6 +33,7 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 mod api_keys;
 mod app;
 mod audio_devices;
+mod diagnostics_level;
 mod icon;
 mod log_render;
 mod platform;
@@ -52,6 +53,7 @@ mod worker_json;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
+pub(in crate::ui) use self::diagnostics_level::*;
 use self::icon::app_icon;
 pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
@@ -238,6 +240,13 @@ struct WhisperDictateApp {
     dictionary_preview: String,
     history_preview: String,
     metrics_preview: String,
+    /// One-shot flags: set when a preview is (re)loaded so its next render
+    /// scrolls the freshly rendered preview into view (it would otherwise land
+    /// below the settings ScrollArea fold and read as "the button did nothing").
+    /// In egui's immediate mode this usually happens within the same UI pass as
+    /// the click. Cleared after the scroll. Mirrors `runtime_log_scroll_to_bottom`.
+    scroll_to_history_preview: bool,
+    scroll_to_metrics_preview: bool,
     supervisor: RuntimeSupervisor,
     background_task: Option<Receiver<BackgroundTaskResult>>,
     background_task_label: Option<&'static str>,
@@ -346,6 +355,8 @@ impl Default for WhisperDictateApp {
             dictionary_preview: String::new(),
             history_preview: String::new(),
             metrics_preview: String::new(),
+            scroll_to_history_preview: false,
+            scroll_to_metrics_preview: false,
             supervisor: RuntimeSupervisor::new(),
             background_task: None,
             background_task_label: None,

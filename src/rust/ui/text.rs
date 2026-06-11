@@ -84,6 +84,10 @@ pub(in crate::ui) enum UiTextKey {
     SpeechGroupParakeet,
     SpeechGroupOnline,
     SpeechGroupGeneral,
+    Diagnostics,
+    DiagnosticsOff,
+    DiagnosticsBasic,
+    DiagnosticsVerbose,
 }
 
 impl UiTextKey {
@@ -154,6 +158,10 @@ impl UiTextKey {
                 UiTextKey::SpeechGroupParakeet => "Local NVIDIA Parakeet",
                 UiTextKey::SpeechGroupOnline => "Cloud STT",
                 UiTextKey::SpeechGroupGeneral => "General",
+                UiTextKey::Diagnostics => "Diagnostics",
+                UiTextKey::DiagnosticsOff => "Off",
+                UiTextKey::DiagnosticsBasic => "Basic",
+                UiTextKey::DiagnosticsVerbose => "Verbose",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -220,6 +228,10 @@ impl UiTextKey {
                 UiTextKey::SpeechGroupParakeet => "Lokal NVIDIA Parakeet",
                 UiTextKey::SpeechGroupOnline => "Cloud STT",
                 UiTextKey::SpeechGroupGeneral => "Generelt",
+                UiTextKey::Diagnostics => "Diagnostik",
+                UiTextKey::DiagnosticsOff => "Fra",
+                UiTextKey::DiagnosticsBasic => "Basis",
+                UiTextKey::DiagnosticsVerbose => "Udførlig",
             },
         }
     }

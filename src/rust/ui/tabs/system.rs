@@ -244,13 +244,20 @@ impl WhisperDictateApp {
         });
         if !self.metrics_preview.is_empty() {
             ui.label("Metrics preview");
-            ui.add(
+            let response = ui.add(
                 egui::TextEdit::multiline(&mut self.metrics_preview)
                     .font(egui::TextStyle::Monospace)
                     .desired_rows(8)
                     .desired_width(f32::INFINITY)
                     .interactive(false),
             );
+            // Same below-the-fold problem as the history preview: scroll the
+            // freshly loaded preview into view on its first frame, then clear
+            // the one-shot flag.
+            if self.scroll_to_metrics_preview {
+                response.scroll_to_me(Some(egui::Align::Center));
+                self.scroll_to_metrics_preview = false;
+            }
         }
     }
 
