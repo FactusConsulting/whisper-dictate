@@ -534,6 +534,281 @@ class StartSounddeviceTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Part A: stream.start() failure is handled like an open failure (no crash)
+# ---------------------------------------------------------------------------
+
+class StreamStartFailureTests(unittest.TestCase):
+    """The Yeti repro surfaces AUDCLNT_E_UNSUPPORTED_FORMAT on stream.START(),
+    not on open(). start() now runs inside the guarded open loop so a start
+    failure falls through the channel/latency/native-rate fallbacks instead of
+    escaping the PTT listener."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.runtime = importlib.import_module("whisper_dictate.vp_capture")
+
+    def _fake_target(self):
+        return types.SimpleNamespace(
+            _capture_backend="", _audio_input_device="", _capture_channels=0,
+            _stream=None, _cb=lambda *_a: None,
+        )
+
+    def test_start_failure_at_16k_falls_back_to_native_rate(self):
+        # The 16k open succeeds but start() raises (WASAPI rejects 16k on start);
+        # the native-rate (48k) open+start succeeds. Capture must end up on the
+        # configured device at 48k, NOT crash and NOT drop to the default.
+        rt = self.runtime
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                self._rate = kwargs["samplerate"]
+                self.closed = False
+
+            def start(self):
+                if self._rate == 16000:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT PaErrorCode -9999")
+                self.started = True
+
+            def close(self):
+                self.closed = True
+
+        class Default:
+            device = (5, 0)
+
+        devices = [
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Other", "hostapi": 0, "max_input_channels": 2},
+            {"name": "Other", "hostapi": 1, "max_input_channels": 2},
+            {"name": "Other", "hostapi": 2, "max_input_channels": 2},
+            {"name": "Filler", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Microphone (Yeti Classic)", "hostapi": 2,
+             "max_input_channels": 2, "default_samplerate": 48000.0},
+        ]
+        hostapis = [
+            {"name": "MME", "default_input_device": 0},
+            {"name": "Windows DirectSound", "default_input_device": 2},
+            {"name": "Windows WASAPI", "default_input_device": 5},
+        ]
+
+        def query_devices(device=None, kind=None):
+            if device is None and kind is None:
+                return devices
+            if isinstance(device, int):
+                return devices[device]
+            return {"name": "default", "max_input_channels": 2,
+                    "default_samplerate": 48000.0}
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream, default=Default(),
+            query_devices=query_devices, query_hostapis=lambda: hostapis,
+        )
+        target = self._fake_target()
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        # Ended up at the device native rate (resampled to 16k at consumption).
+        self.assertEqual(target._capture_rate, 48000)
+        self.assertTrue(getattr(target._stream, "started", False))
+        # A 16k stream was opened then CLOSED (start failed); a 48k stream opened.
+        self.assertTrue(any(k["samplerate"] == 16000 for k in opened))
+        self.assertTrue(any(k["samplerate"] == 48000 for k in opened))
+        # No drop to the system default (device kwarg stayed on index 5).
+        self.assertTrue(all(k.get("device") == 5 for k in opened))
+
+    def test_default_device_16k_reject_falls_back_to_native_rate(self):
+        # No explicit device: the system default rejects a 16k open but accepts
+        # its native rate. Capture must succeed at the native rate (not raise).
+        rt = self.runtime
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                if kwargs["samplerate"] == 16000:
+                    raise RuntimeError("Invalid sample rate PaErrorCode -9997")
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream,
+            default=types.SimpleNamespace(device=(2, 0)),
+            query_devices=lambda device=None, kind=None: {
+                "name": "Default In", "max_input_channels": 2,
+                "default_samplerate": 44100.0},
+        )
+        target = self._fake_target()
+
+        with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertEqual(target._capture_rate, 44100)
+        self.assertTrue(getattr(target._stream, "started", False))
+
+    def test_total_open_failure_raises_runtimeerror_not_portaudio(self):
+        # When even the native-rate open fails, _start_sounddevice raises a
+        # single RuntimeError (caught by Dictate._start) — it never lets the raw
+        # PortAudioError escape unwrapped.
+        rt = self.runtime
+        rt.SR = 16000
+
+        class Stream:
+            def __init__(self, **kwargs):
+                raise RuntimeError("Invalid sample rate PaErrorCode -9997")
+
+        class Default:
+            device = (0, 0)
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream, default=Default(),
+            query_devices=lambda device=None, kind=None: {
+                "name": "Busy", "max_input_channels": 1,
+                "default_samplerate": 48000.0},
+        )
+        target = self._fake_target()
+
+        with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
+            with self.assertRaises(RuntimeError) as ctx:
+                rt.CaptureMixin._start_sounddevice(target)
+        self.assertIn("could not open", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# Part B: native-rate capture + software resample helpers
+# ---------------------------------------------------------------------------
+
+class ResampleCaptureBufferTests(unittest.TestCase):
+    """_resample_capture_buffer: 48k→16k shortens the buffer to the 16k-rate
+    duration and returns mono int16; 16k is a bit-identical no-op."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+        import numpy as np
+        cls.np = np
+
+    def test_resample_48k_to_16k_matches_duration_and_is_int16_mono(self):
+        np = self.np
+        self.rt.SR = 16000
+        # 1.0 s captured at 48k → 48000 samples in, ~16000 samples out.
+        pcm = np.zeros((48000, 1), dtype=np.int16)
+        out = self.rt._resample_capture_buffer(pcm, 48000)
+        self.assertEqual(out.dtype, np.int16)
+        self.assertEqual(out.ndim, 2)
+        self.assertEqual(out.shape[1], 1)
+        # Within one sample of the 16k-rate duration (1.0 s → 16000 samples).
+        self.assertTrue(abs(out.shape[0] - 16000) <= 1,
+                        f"expected ~16000 samples, got {out.shape[0]}")
+
+    def test_resample_16k_native_is_bit_identical_noop(self):
+        np = self.np
+        self.rt.SR = 16000
+        rng = np.random.default_rng(0)
+        pcm = rng.integers(-3000, 3000, size=8000, dtype=np.int16).reshape(-1, 1)
+        out = self.rt._resample_capture_buffer(pcm, 16000)
+        self.assertEqual(out.dtype, np.int16)
+        self.assertEqual(out.shape, (8000, 1))
+        # No resampling occurred — values are bit-identical to the input.
+        self.assertTrue(np.array_equal(out.reshape(-1), pcm.reshape(-1)))
+
+    def test_resample_preserves_a_tone_frequency(self):
+        # A 440 Hz tone captured at 48k must still be ~440 Hz after the 16k
+        # resample (sanity check that we're resampling, not just truncating).
+        np = self.np
+        self.rt.SR = 16000
+        t = np.arange(48000) / 48000.0
+        tone = (np.sin(2 * np.pi * 440 * t) * 20000).astype(np.int16).reshape(-1, 1)
+        out = self.rt._resample_capture_buffer(tone, 48000).reshape(-1)
+        freqs = np.fft.rfftfreq(len(out), d=1.0 / 16000)
+        peak = freqs[int(np.argmax(np.abs(np.fft.rfft(out.astype(np.float32)))))]
+        self.assertTrue(abs(peak - 440) < 15, f"peak freq {peak} Hz off from 440")
+
+
+class NativeRateOpenTests(unittest.TestCase):
+    """_open_native_rate_stream picks the device default rate when 16k fails."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+
+    def test_chosen_capture_rate_is_device_default(self):
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream,
+            query_devices=lambda device=None, kind=None: {
+                "name": "Yeti", "max_input_channels": 2,
+                "default_samplerate": 44100.0},
+            default=types.SimpleNamespace(device=(3, 0)),
+        )
+
+        stream, channels, rate, exc = rt._open_native_rate_stream(
+            fake_sd, 3, lambda *_a: None)
+        self.assertIsNotNone(stream)
+        self.assertEqual(rate, 44100)
+        self.assertIsNone(exc)
+        self.assertTrue(all(k["samplerate"] == 44100 for k in opened))
+
+    def test_no_op_when_native_rate_equals_sr(self):
+        rt = self.rt
+        rt.SR = 16000
+        fake_sd = types.SimpleNamespace(
+            InputStream=lambda **k: (_ for _ in ()).throw(AssertionError("should not open")),
+            query_devices=lambda device=None, kind=None: {
+                "name": "Jabra", "max_input_channels": 1,
+                "default_samplerate": 16000.0},
+            default=types.SimpleNamespace(device=(1, 0)),
+        )
+        stream, channels, rate, exc = rt._open_native_rate_stream(
+            fake_sd, 1, lambda *_a: None)
+        self.assertIsNone(stream)
+        self.assertEqual(rate, 0)
+        self.assertIsNone(exc)
+
+
+# ---------------------------------------------------------------------------
 # Fix 1+2+3: stop-stream robustness tests
 # ---------------------------------------------------------------------------
 

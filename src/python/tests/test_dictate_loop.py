@@ -250,6 +250,158 @@ class DictateLoopTests(unittest.TestCase):
         self.assertFalse(d._discard_recording)  # never armed the discard
         self.assertEqual(self.injected, [])     # and never transcribed
 
+    # ── Part B: native-rate capture is resampled at consumption ───────────────
+
+    def test_native_rate_buffer_is_resampled_to_16k_for_transcription(self):
+        # A 48k-native capture (e.g. a Yeti opened after a 16k open was rejected)
+        # must reach the model resampled to 16k: 1.0 s of 48k audio (48000
+        # frames) becomes ~16000 samples, not 48000.
+        d = self._make_dictate()
+        d._capture_rate = 48000
+        d.frames = [self._pcm(48000)]  # 1.0 s at 48k
+        seen = {}
+
+        def _capture_pcm(_model, pcm, _lang):
+            seen["len"] = len(pcm)
+            return _fake_transcribe_result("nativ lyd")
+
+        with patch.object(self.dictate, "_transcribe_detail", _capture_pcm):
+            self._run(d)
+        self.assertEqual(self.injected, ["nativ lyd"])
+        self.assertTrue(abs(seen["len"] - 16000) <= 1,
+                        f"expected ~16000 samples at 16k, got {seen['len']}")
+
+    def test_16k_native_buffer_is_not_resampled(self):
+        # capture_rate == SR is a no-op: the model sees exactly the captured
+        # samples (16000), unchanged from current 16k-device behaviour.
+        d = self._make_dictate()
+        d._capture_rate = 16000
+        d.frames = [self._pcm(16000)]
+        seen = {}
+
+        def _capture_pcm(_model, pcm, _lang):
+            seen["len"] = len(pcm)
+            return _fake_transcribe_result("seksten kilo")
+
+        with patch.object(self.dictate, "_transcribe_detail", _capture_pcm):
+            self._run(d)
+        self.assertEqual(seen["len"], 16000)
+
+    def test_missing_capture_rate_defaults_to_16k_no_resample(self):
+        # An object.__new__ instance without _capture_rate (defensive getattr)
+        # must behave as 16k-native — no crash, no resample.
+        d = self._make_dictate()
+        # Intentionally do NOT set d._capture_rate.
+        d.frames = [self._pcm(16000)]
+        seen = {}
+
+        def _capture_pcm(_model, pcm, _lang):
+            seen["len"] = len(pcm)
+            return _fake_transcribe_result("standard")
+
+        with patch.object(self.dictate, "_transcribe_detail", _capture_pcm):
+            self._run(d)
+        self.assertEqual(seen["len"], 16000)
+
+
+class StartCrashRecoveryTests(unittest.TestCase):
+    """Part A: a capture open/start failure must NOT escape Dictate._start (it
+    runs on the pynput on_press listener thread) — it is caught, an actionable
+    error event is emitted, and the session stays idle + usable for a retry."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.dictate = importlib.import_module("whisper_dictate.vp_dictate")
+        cls.capture = importlib.import_module("whisper_dictate.vp_capture")
+
+    def _make_dictate(self):
+        d = object.__new__(self.dictate.Dictate)
+        d.recording = False
+        d.frames = []
+        d._first_audio_event = self.capture.threading.Event()
+        d._first_audio_at = 0.0
+        d._last_audio_level_event = 0.0
+        d._record_epoch = 0
+        d._record_started = 0.0
+        d._record_keydown_at = 0.0
+        d._capture_backend = ""
+        d._audio_input_device = "Microphone (Yeti Classic)"
+        d._capture_channels = 1
+        d._stream = None
+        d._arecord_proc = None
+        d.audio_ducker = types.SimpleNamespace(
+            enter=lambda: None, exit=lambda: None)
+        d._effective_config = {}
+        # No-op the orchestration boundaries the test doesn't exercise.
+        d._reload_live_config_if_changed = lambda: None
+        d._capture_target_window = lambda: None
+        d._profiled_config = lambda cfg: d._effective_config
+        d._start_preview = lambda: None
+        return d
+
+    def _run_start(self, d):
+        """Run Dictate._start capturing worker events; return parsed payloads."""
+        rt = self.dictate
+        stderr_buf = io.StringIO()
+        with patch.object(rt, "effective_config", lambda: {}), \
+                patch.object(rt, "play_cue", lambda *_a, **_k: None), \
+                patch.object(self.capture, "_arecord_device", lambda: None), \
+                _env(VOICEPI_WORKER_EVENTS="1"), \
+                _capture_stdout(), \
+                redirect_stderr(stderr_buf):
+            rt.Dictate._start(d)
+        events = []
+        for line in stderr_buf.getvalue().splitlines():
+            if line.startswith("[worker-event] "):
+                events.append(json.loads(line[len("[worker-event] "):]))
+        return events
+
+    def test_start_failure_does_not_propagate_and_emits_error_event(self):
+        d = self._make_dictate()
+        # _start_sounddevice raises the Yeti's start-time PortAudio error.
+        d._start_sounddevice = lambda: (_ for _ in ()).throw(
+            RuntimeError("Error starting stream: AUDCLNT_E_UNSUPPORTED_FORMAT"))
+
+        events = self._run_start(d)  # must NOT raise
+
+        # (1) no exception propagated (we got here). (2) an error event names
+        # the device and carries an actionable message.
+        errors = [e for e in events if e.get("state") == "error"]
+        self.assertEqual(len(errors), 1, f"expected one error event; got {events!r}")
+        self.assertIn("Yeti", errors[0].get("audio_device", ""))
+        self.assertIn("Yeti", errors[0].get("error", ""))
+        self.assertIn("microphone", errors[0].get("error", "").lower())
+        # (3) session is idle + usable again (recording reset, ready emitted).
+        self.assertFalse(d.recording)
+        self.assertTrue(any(e.get("state") == "ready" for e in events))
+
+    def test_session_can_attempt_start_again_after_a_failure(self):
+        d = self._make_dictate()
+        attempts = {"n": 0}
+
+        def _flaky():
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+            # Second attempt succeeds.
+            d._capture_backend = "sounddevice"
+            return "sounddevice", "Microphone (Yeti Classic)"
+
+        d._start_sounddevice = _flaky
+
+        self._run_start(d)            # first press fails, recovers
+        self.assertFalse(d.recording)
+        # Second press: the worker is still alive and can start a recording.
+        self._run_start(d)
+        self.assertEqual(attempts["n"], 2)
+        self.assertTrue(d.recording)  # second attempt is now recording
+
 
 if __name__ == "__main__":
     unittest.main()

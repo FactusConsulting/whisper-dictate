@@ -165,12 +165,24 @@ class PreviewEngine:
         total_samples = len(pcm)
         # Trim by SAMPLE COUNT on the concatenated int16 array. Slicing past the
         # start is safe (numpy clamps), so a short buffer is returned in full and
-        # this never panics on an empty/short array.
-        from whisper_dictate.vp_capture import SR
-        max_samples = int(PREVIEW_MAX_AUDIO_S * SR)
+        # this never panics on an empty/short array. The window is in CAPTURE-rate
+        # samples (native rate when a 16k open was rejected) so it always spans
+        # PREVIEW_MAX_AUDIO_S of real audio regardless of the capture rate.
+        max_samples = int(PREVIEW_MAX_AUDIO_S * self._capture_rate())
         if max_samples > 0 and total_samples > max_samples:
             pcm = pcm[-max_samples:]
         return pcm, total_samples
+
+    def _capture_rate(self) -> int:
+        """The owner's live capture sample rate (Hz); defaults to ``SR`` (16k).
+
+        Native-rate capture (vp_capture) records at the device default rate and
+        resamples to SR at consumption; the preview window / fresh-audio gate /
+        recording_s are all in CAPTURED samples, so they must divide by this rate
+        rather than SR to stay accurate when capture_rate != SR.
+        """
+        from whisper_dictate.vp_capture import SR
+        return int(getattr(self._owner, "_capture_rate", SR) or SR)
 
     def _tick(self) -> None:
         """One preview attempt: gate on new audio, grab the lock, transcribe.
@@ -187,9 +199,10 @@ class PreviewEngine:
             # gate and recording_s so they keep advancing past the window.
             pcm, samples = snap
             # Skip when there isn't enough FRESH audio since the last preview;
-            # avoids re-transcribing an essentially unchanged buffer.
-            from whisper_dictate.vp_capture import SR
-            if samples - self._last_preview_samples < int(MIN_NEW_AUDIO_S * SR):
+            # avoids re-transcribing an essentially unchanged buffer. Gate is in
+            # CAPTURED samples, so use the live capture rate (native or 16k).
+            capture_rate = self._capture_rate()
+            if samples - self._last_preview_samples < int(MIN_NEW_AUDIO_S * capture_rate):
                 return
             # Non-blocking: if the final pass or a previous preview holds the
             # lock, drop this tick rather than queueing — previews must never
@@ -198,9 +211,13 @@ class PreviewEngine:
                 return
             try:
                 # Mono select like the final pass: collapse multi-channel to the
-                # active channel so the cheap decode sees the same signal shape.
+                # active channel so the cheap decode sees the same signal shape,
+                # then resample the captured rate down to the model's 16k (no-op
+                # for 16k-native devices). Same helper the final pass uses.
+                from whisper_dictate.vp_capture import _resample_capture_buffer
                 from whisper_dictate.vp_events import _select_active_channel_pcm
                 mono = _select_active_channel_pcm(pcm).astype(np.int16)
+                mono = _resample_capture_buffer(mono, capture_rate)
                 text = transcribe_preview(self._owner.model, mono, self._owner.lang)
             finally:
                 TRANSCRIBE_LOCK.release()
@@ -211,7 +228,7 @@ class PreviewEngine:
                 "status",
                 state="preview",
                 text_preview=_compact_text(text, PREVIEW_TEXT_CHARS),
-                recording_s=round(samples / SR, 2),
+                recording_s=round(samples / capture_rate, 2),
             )
         except Exception as e:  # noqa: BLE001 — preview must never kill the worker
             if not self._error_logged:

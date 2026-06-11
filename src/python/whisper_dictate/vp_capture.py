@@ -242,7 +242,58 @@ def _wasapi_autoconvert_settings(sd):
         return None
 
 
-def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None):
+def _device_default_samplerate(sd, device) -> int | None:
+    """The device's native/default capture rate (Hz) or ``None`` if unknown.
+
+    Used by the native-rate fallback: when a 16k open is rejected (e.g. a Yeti /
+    Focusrite / webcam mic running natively at 44.1/48 kHz) we re-open at the
+    rate the device actually runs at and resample to 16k in software. Queries
+    ``sd.query_devices(device)['default_samplerate']`` (or the default input
+    device's when ``device`` is ``None``). Never raises — any failure yields
+    ``None`` and the caller picks a sensible fallback rate.
+    """
+    try:
+        if device is None:
+            info = sd.query_devices(kind="input")
+        else:
+            info = sd.query_devices(device)
+        if not isinstance(info, dict):
+            return None
+        rate = info.get("default_samplerate")
+        if rate is None:
+            return None
+        rate = int(round(float(rate)))
+        return rate if rate > 0 else None
+    except Exception:
+        return None
+
+
+def _resample_capture_buffer(pcm, capture_rate: int):
+    """Resample a mono int16 capture buffer from ``capture_rate`` to ``SR``.
+
+    Pure helper (extracted so the line-length rule stays satisfied and so the
+    resample is unit-testable in isolation). ``pcm`` is an int16 array shaped
+    ``(N,)`` or ``(N, 1)``; the result is int16 shaped ``(M, 1)`` at the model's
+    16k rate. A no-op (returns an int16 ``(N, 1)`` view) when ``capture_rate`` is
+    already ``SR`` or falsy — current behaviour for 16k-native devices is
+    bit-identical. Reuses the existing :func:`vp_audio_file._resample_mono` /
+    :func:`vp_audio_file._mono_float_to_int16` so no new resampling dependency is
+    introduced.
+    """
+    audio = np.asarray(pcm)
+    if audio.ndim > 1:
+        audio = audio.reshape(-1)
+    if not capture_rate or capture_rate == SR or len(audio) == 0:
+        return audio.astype(np.int16).reshape(-1, 1)
+    from whisper_dictate.vp_audio_file import _mono_float_to_int16, _resample_mono
+
+    floats = audio.astype(np.float32) / 32768.0
+    resampled = _resample_mono(floats, int(capture_rate))
+    return _mono_float_to_int16(resampled)
+
+
+def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
+                             samplerate=None):
     """Open an ``InputStream`` for ``device``, trying channel/latency fallbacks.
 
     Returns ``(stream, channels, last_error)``: ``(stream, channels, None)`` on
@@ -257,25 +308,63 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None):
     to every candidate when not ``None`` so the WASAPI auto-convert attempt
     reuses the same channel/latency fallback matrix.
 
+    ``samplerate`` overrides the requested capture rate (default ``SR``=16k).
+    Used by the native-rate fallback: pro-audio / webcam mics that reject a 16k
+    open are opened at their device default rate and the buffer is resampled to
+    16k at consumption (see ``_resample_capture_buffer``).
+
+    The returned stream is already STARTED. ``.start()`` is called INSIDE the same
+    guarded try as ``InputStream(...)`` so a start-time failure (the Yeti / WASAPI
+    ``AUDCLNT_E_UNSUPPORTED_FORMAT`` surfaces on *start*, not open — PaErrorCode
+    -9999) is handled identically to an open failure: the half-open stream is
+    closed and the next channel/latency/rate candidate (and ultimately the
+    native-rate fallback) is tried instead of crashing the worker.
+
     Module-level (not a method) so it stays unit-testable and so the caller can
     invoke it multiple times — preferred device, WASAPI auto-convert, default
     fallback — without duplicating the channel-fallback loop.
     """
     last_error = None
     for channels in _sounddevice_capture_channel_candidates(_sounddevice_input_channels(sd)):
-        for kwargs in _sounddevice_stream_kwargs(channels, callback):
+        for kwargs in _sounddevice_stream_kwargs(channels, callback, samplerate):
             if device is not None:
                 kwargs["device"] = device
             if extra_settings is not None:
                 kwargs["extra_settings"] = extra_settings
             try:
                 stream = sd.InputStream(**kwargs)
+                stream.start()
                 return stream, channels, None
             except Exception as exc:
                 last_error = exc
+                # A stream that opened but failed to start must be closed so the
+                # device is released before the next candidate is tried.
+                try:
+                    stream.close()  # type: ignore[has-type]
+                except Exception:
+                    pass
     if last_error is not None:
         print(f"[cap] stream open failed: {last_error}", file=sys.stderr, flush=True)
     return None, 0, last_error
+
+
+def _open_native_rate_stream(sd, device, callback):
+    """Open ``device`` at its native default rate (16k-rejected fallback).
+
+    Returns ``(stream, channels, rate, error)``: a started stream opened at the
+    device's default rate (which the caller resamples native→SR at consumption),
+    or ``(None, 0, 0, error)``. ``(None, 0, 0, None)`` is returned without trying
+    when the native rate is unknown or already SR (nothing new to attempt). Pure
+    module-level helper so it stays unit-testable like ``_open_sounddevice_stream``.
+    """
+    native = _device_default_samplerate(sd, device)
+    if not native or native == SR:
+        return None, 0, 0, None
+    stream, channels, exc = _open_sounddevice_stream(
+        sd, device, callback, samplerate=native)
+    if stream is not None:
+        return stream, channels, native, None
+    return None, 0, 0, exc
 
 
 def _selected_device_name(sd, device) -> str | None:
@@ -315,8 +404,11 @@ class CaptureMixin:
             # Fix 5: enforce max recording cap in the sounddevice callback.
             cap = _max_record_s()
             if cap > 0:
+                # Use the actual capture rate (may be the device-native rate when
+                # 16k was rejected) so the duration cap stays accurate.
+                rate = getattr(self, "_capture_rate", SR) or SR
                 total_samples = sum(f.shape[0] for f in self.frames) + chunk.shape[0]
-                buffered_s = total_samples / SR
+                buffered_s = total_samples / rate
                 if buffered_s > cap:
                     if not getattr(self, "_cap_warned", False):
                         self._cap_warned = True
@@ -392,6 +484,8 @@ class CaptureMixin:
     def _start_arecord(self) -> tuple[str, str]:
         self._capture_backend = "arecord"
         self._cap_warned = False
+        # arecord is forced to S16_LE mono at SR (16k), so no resampling needed.
+        self._capture_rate = SR
         custom_device = bool((_audio_device_setting() or "").strip())
         device = _arecord_device_arg(_ARECORD_DEVICE, _audio_device_setting())
         self._audio_input_device = f"arecord -D {device}"
@@ -417,6 +511,10 @@ class CaptureMixin:
         import sounddevice as sd
         self._capture_backend = "sounddevice"
         self._cap_warned = False
+        # Capture rate the buffer is recorded at. Defaults to SR (16k); bumped to
+        # the device-native rate only when a 16k open is rejected (see below).
+        # The buffer is resampled capture_rate→SR at consumption.
+        self._capture_rate = SR
         device, device_name = _resolve_sounddevice_device(sd, _audio_device_setting())
         self._audio_input_device = (
             device_name
@@ -447,6 +545,22 @@ class CaptureMixin:
                         sd, device, self._cb, extra_settings=extra)
                     if exc is not None:
                         last_error = exc
+            # Native-rate fallback: pro-audio / webcam mics (Yeti, Focusrite, …)
+            # run natively at 44.1/48 kHz and reject a forced 16k open. Open at
+            # the device's default rate and resample to 16k in software (at
+            # buffer consumption). Tried on the configured device BEFORE dropping
+            # to the system default so the user's chosen mic actually works.
+            if self._stream is None:
+                stream, channels, rate, exc = _open_native_rate_stream(sd, device, self._cb)
+                if stream is not None:
+                    self._stream, self._capture_channels, self._capture_rate = (
+                        stream, channels, rate)
+                    print(
+                        f"[cap] opened {self._audio_input_device!r} at native "
+                        f"{rate} Hz; resampling to {SR} Hz",
+                        file=sys.stderr, flush=True)
+                elif exc is not None:
+                    last_error = exc
             if self._stream is None:
                 print(
                     f"[cap] device {device!r} ({self._audio_input_device!r}) failed to open, "
@@ -458,14 +572,43 @@ class CaptureMixin:
                     sd, None, self._cb)
                 if exc is not None:
                     last_error = exc
+                # Last resort: open the system default at its native rate too.
+                if self._stream is None:
+                    stream, channels, rate, exc = _open_native_rate_stream(
+                        sd, None, self._cb)
+                    if stream is not None:
+                        self._stream, self._capture_channels, self._capture_rate = (
+                            stream, channels, rate)
+                        print(
+                            f"[cap] opened default input at native {rate} Hz; "
+                            f"resampling to {SR} Hz",
+                            file=sys.stderr, flush=True)
+                    elif exc is not None:
+                        last_error = exc
                 if self._stream is not None:
                     self._audio_input_device = (
                         _sounddevice_input_name(sd) or "sounddevice default input"
                     )
+        if self._stream is None and device is None:
+            # No explicit device: the system default itself rejected a 16k open.
+            # Try it at its native rate before giving up (mirrors the explicit-
+            # device native-rate fallback above).
+            stream, channels, rate, exc = _open_native_rate_stream(sd, None, self._cb)
+            if stream is not None:
+                self._stream, self._capture_channels, self._capture_rate = (
+                    stream, channels, rate)
+                print(
+                    f"[cap] opened default input at native {rate} Hz; "
+                    f"resampling to {SR} Hz",
+                    file=sys.stderr, flush=True)
+            elif exc is not None:
+                last_error = exc
         if self._stream is None:
             detail = f": {last_error}" if last_error is not None else ""
             raise RuntimeError(f"could not open any sounddevice input stream{detail}")
-        self._stream.start()
+        # The stream is already started inside _open_sounddevice_stream so that a
+        # start-time failure is caught + falls through the open/native-rate
+        # fallbacks rather than escaping here (and out of the PTT listener).
         return self._capture_backend, self._audio_input_device
 
     def _stop_capture_streams(self) -> None:
