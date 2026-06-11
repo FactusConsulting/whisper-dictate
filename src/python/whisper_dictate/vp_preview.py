@@ -47,6 +47,19 @@ transcribe_preview = None
 # re-transcribing an essentially unchanged buffer.
 MIN_NEW_AUDIO_S = 1.5
 
+# Sliding-window cap (seconds): each preview decodes only the most recent
+# PREVIEW_MAX_AUDIO_S seconds of audio rather than the entire buffer-so-far.
+# Without this the live preview re-decodes the WHOLE accumulated buffer from
+# t=0 on every tick — O(n) per tick, O(n^2) over the utterance, unbounded for
+# long dictations (fine on GPU, quadratic/painful on CPU). Capping the decode
+# input bounds each preview's cost to a constant.
+#
+# This intentionally makes the live preview show a ROLLING ~window of text (a
+# live indicator of what you're saying NOW), NOT the full transcript-so-far.
+# The FINAL transcription is a SEPARATE full-buffer decode (vp_dictate.py) that
+# does NOT go through this module — it is completely unaffected by this cap.
+PREVIEW_MAX_AUDIO_S = 15.0
+
 # The preview text emitted to the UI is truncated to this many chars. Generous
 # on purpose: the live card wraps over multiple lines so the user can read the
 # whole sentence while still speaking (140 was far too tight for real
@@ -124,15 +137,40 @@ class PreviewEngine:
             self._tick()
 
     def _snapshot_frames(self):
-        """A COPY of the accumulated frames as one int16 array, or None.
+        """A COPY of the recent-tail frames as one int16 array, plus the total
+        captured sample count — or ``None`` when there are no frames.
 
-        Copied (np.concatenate makes a new array) so the preview transcription
-        never races the capture thread mutating ``owner.frames`` underneath it.
+        Returns ``(pcm, total_samples)`` where ``pcm`` is the windowed decode
+        input and ``total_samples`` is the length of the FULL accumulated buffer
+        (before trimming). Copied (np.concatenate makes a new array) so the
+        preview transcription never races the capture thread mutating
+        ``owner.frames`` underneath it.
+
+        Sliding window: ``pcm`` is trimmed to its last
+        ``PREVIEW_MAX_AUDIO_S * SR`` samples so each preview decodes only the
+        recent tail of audio (bounded cost) instead of the whole buffer-so-far.
+        Buffers SHORTER than the window are returned in full (no change for
+        short utterances). The FINAL transcription does NOT use this path and is
+        unaffected — see the PREVIEW_MAX_AUDIO_S comment above.
+
+        ``total_samples`` is returned UN-trimmed so the caller's fresh-audio gate
+        and ``recording_s`` keep tracking real elapsed audio; if they used the
+        capped length they'd freeze once the buffer exceeds the window and no
+        further previews would ever fire.
         """
         frames = list(self._owner.frames)  # shallow copy of the list of chunks
         if not frames:
             return None
-        return np.concatenate(frames, axis=0).astype(np.int16)
+        pcm = np.concatenate(frames, axis=0).astype(np.int16)
+        total_samples = len(pcm)
+        # Trim by SAMPLE COUNT on the concatenated int16 array. Slicing past the
+        # start is safe (numpy clamps), so a short buffer is returned in full and
+        # this never panics on an empty/short array.
+        from whisper_dictate.vp_capture import SR
+        max_samples = int(PREVIEW_MAX_AUDIO_S * SR)
+        if max_samples > 0 and total_samples > max_samples:
+            pcm = pcm[-max_samples:]
+        return pcm, total_samples
 
     def _tick(self) -> None:
         """One preview attempt: gate on new audio, grab the lock, transcribe.
@@ -141,10 +179,13 @@ class PreviewEngine:
         down the worker.
         """
         try:
-            pcm = self._snapshot_frames()
-            if pcm is None:
+            snap = self._snapshot_frames()
+            if snap is None:
                 return
-            samples = len(pcm)
+            # ``pcm`` is the windowed decode input (capped to PREVIEW_MAX_AUDIO_S);
+            # ``samples`` is the TOTAL captured length, used for the fresh-audio
+            # gate and recording_s so they keep advancing past the window.
+            pcm, samples = snap
             # Skip when there isn't enough FRESH audio since the last preview;
             # avoids re-transcribing an essentially unchanged buffer.
             from whisper_dictate.vp_capture import SR
