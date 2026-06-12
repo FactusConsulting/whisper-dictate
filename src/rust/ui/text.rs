@@ -154,6 +154,14 @@ pub(in crate::ui) enum UiTextKey {
     UpdateOpenReleaseHover,
     /// Transient confirmation shown after the upgrade command is copied.
     UpdateCommandCopied,
+    /// System-tray icon hover tooltip — no worker running (grey dot).
+    TrayTipNotRunning,
+    /// System-tray icon hover tooltip — worker ready, mic idle (green dot).
+    TrayTipReady,
+    /// System-tray icon hover tooltip — microphone actively capturing (red dot).
+    TrayTipRecording,
+    /// System-tray icon hover tooltip — transcribing/processing/starting (amber dot).
+    TrayTipProcessing,
 }
 
 impl UiTextKey {
@@ -299,6 +307,10 @@ impl UiTextKey {
                     "Click to open the latest release and download the new installer:"
                 }
                 UiTextKey::UpdateCommandCopied => "Copied!",
+                UiTextKey::TrayTipNotRunning => "whisper-dictate — not started",
+                UiTextKey::TrayTipReady => "whisper-dictate — ready",
+                UiTextKey::TrayTipRecording => "whisper-dictate — recording",
+                UiTextKey::TrayTipProcessing => "whisper-dictate — processing",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -440,6 +452,10 @@ impl UiTextKey {
                     "Klik for at åbne seneste udgivelse og hente den nye installer:"
                 }
                 UiTextKey::UpdateCommandCopied => "Kopieret!",
+                UiTextKey::TrayTipNotRunning => "whisper-dictate — ikke startet",
+                UiTextKey::TrayTipReady => "whisper-dictate — klar",
+                UiTextKey::TrayTipRecording => "whisper-dictate — optager",
+                UiTextKey::TrayTipProcessing => "whisper-dictate — behandler",
             },
         }
     }

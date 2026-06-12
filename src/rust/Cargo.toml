@@ -29,6 +29,14 @@ keyring = { version = "3.6", features = [
 ] }
 ureq = { version = "2.12", features = ["json"] }
 
+# Windows-only system-tray icon (notification area). Scoped to the Windows
+# target so the Linux/CI build never pulls in tray-icon's gtk/libxdo system
+# deps (its default features). On Windows it integrates with the winit/win32
+# event loop that eframe already pumps. The pure state→colour and RGBA logic
+# in `ui::tray` is cfg-free so its unit tests run on every platform.
+[target.'cfg(windows)'.dependencies]
+tray-icon = { version = "0.24", default-features = false }
+
 [build-dependencies]
 winresource = "0.1"
 

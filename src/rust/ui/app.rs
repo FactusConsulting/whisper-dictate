@@ -69,6 +69,10 @@ impl eframe::App for WhisperDictateApp {
         self.poll_background_task();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
+        // Mirror the dictation state onto the system-tray icon (recolours only on
+        // change) and handle a tray left-click → focus. Runs in both full and
+        // compact modes so the tray stays correct regardless of window layout.
+        self.sync_tray(ctx);
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -147,6 +151,30 @@ impl eframe::App for WhisperDictateApp {
 }
 
 impl WhisperDictateApp {
+    /// Recolour the system-tray icon to mirror the current dictation state and
+    /// react to a tray left-click by focusing the main window. Purely additive:
+    /// on non-Windows it is a no-op stub, and even on Windows a failed tray init
+    /// is logged exactly once and then ignored — the dictation flow never depends
+    /// on the tray.
+    ///
+    /// `display_runtime_state()` is used (not the raw state) so the "still
+    /// loading the model" window shows amber, matching the in-app indicator.
+    fn sync_tray(&mut self, ctx: &egui::Context) {
+        let state = tray_state_from_app(self.display_runtime_state(), self.pipeline_stage);
+        if let Err(reason) = self.tray.sync(state, &self.settings.ui_language) {
+            // First (and only) failure: log it, then permanently disable the tray
+            // so we never retry-spam or block the app on a headless/denied tray.
+            self.append_runtime_log(format!(
+                "[ui] system-tray icon unavailable, continuing without it: {reason}"
+            ));
+            self.tray.disable();
+            return;
+        }
+        if self.tray.poll_interaction().activate_window {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+    }
+
     pub(in crate::ui) fn start_runtime(&mut self) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {

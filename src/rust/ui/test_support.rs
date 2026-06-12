@@ -56,6 +56,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         last_update_check: None,
         update_check_rx: None,
         update_command_copied_until: None,
+        tray: TrayManager::new(),
     }
 }
 

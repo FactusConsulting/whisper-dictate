@@ -47,6 +47,7 @@ mod tasks;
 mod text;
 mod text_scale;
 mod theme;
+mod tray;
 mod update_check;
 mod upgrade_hint;
 mod widgets;
@@ -71,6 +72,7 @@ use self::secret_store::*;
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
+pub(in crate::ui) use self::tray::*;
 pub(in crate::ui) use self::update_check::*;
 pub(in crate::ui) use self::upgrade_hint::*;
 pub(in crate::ui) use self::widgets::*;
@@ -345,6 +347,12 @@ struct WhisperDictateApp {
     /// the update badge after the upgrade command is copied to the clipboard.
     /// Session-only UI state — `None` when no confirmation is pending.
     update_command_copied_until: Option<Instant>,
+    /// System-tray (notification-area) icon manager. Created empty; the actual
+    /// OS tray is built lazily on the first `update()` frame (Windows only — a
+    /// no-op stub elsewhere) and recolours to mirror the dictation state so the
+    /// user can SEE when the microphone is live. Purely additive UI — it never
+    /// touches the dictation flow.
+    tray: TrayManager,
 }
 
 impl Default for WhisperDictateApp {
@@ -435,6 +443,7 @@ impl Default for WhisperDictateApp {
             last_update_check: None,
             update_check_rx: None,
             update_command_copied_until: None,
+            tray: TrayManager::new(),
         }
     }
 }
