@@ -334,7 +334,13 @@ impl WhisperDictateApp {
         }
 
         self.last_update_check = Some(std::time::Instant::now());
-        self.update_check_rx = Some(spawn_update_check(self.app_version.clone()));
+        // The "include release candidates" opt-in is read here, at poll time, so
+        // it is LIVE: toggling it takes effect on the next scheduled poll without
+        // a restart. When off, RCs in the feed are invisible (stable-only).
+        self.update_check_rx = Some(spawn_update_check(
+            self.app_version.clone(),
+            self.settings.update_include_prereleases,
+        ));
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {

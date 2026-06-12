@@ -79,6 +79,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "quit_window_ms",
     "update_check",
     "update_check_interval_minutes",
+    "update_include_prereleases",
     "ui_language",
     "ui_log_view",
     "ui_theme",

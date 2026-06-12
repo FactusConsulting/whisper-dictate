@@ -95,6 +95,11 @@ impl AppSettings {
             "update_check_interval_minutes",
             &self.update_check_interval_minutes,
         );
+        set_bool(
+            object,
+            "update_include_prereleases",
+            self.update_include_prereleases,
+        );
         set_string(object, "ui_theme", &self.ui_theme);
         set_string(object, "ui_language", &self.ui_language);
         set_string(object, "ui_log_view", &self.ui_log_view);
