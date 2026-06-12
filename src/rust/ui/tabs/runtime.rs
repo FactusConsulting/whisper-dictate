@@ -48,6 +48,7 @@ impl WhisperDictateApp {
                 );
             }
         });
+        self.device_unusable_banner(ui, palette);
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.label(ui_text(
@@ -79,6 +80,39 @@ impl WhisperDictateApp {
                     self.render_log_entries(ui, palette, &visible_log);
                 });
         });
+    }
+
+    /// A prominent red banner shown when the worker reports that the selected
+    /// microphone is unusable (a `status` event with
+    /// `state="error"`/`reason="device_unusable"`). The user picked a mic that
+    /// can't be opened on any audio backend and must SEE that without opening the
+    /// Debug log. Nothing is rendered when `device_error` is `None` (cleared on a
+    /// subsequent working device / start / stop / exit).
+    fn device_unusable_banner(&self, ui: &mut egui::Ui, palette: UiPalette) {
+        let Some(message) = self.device_error.as_deref() else {
+            return;
+        };
+        ui.add_space(8.0);
+        egui::Frame::default()
+            .fill(palette.surface_active_bg)
+            .stroke(egui::Stroke::new(1.0, palette.error_text))
+            .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        icon_text(
+                            icons::ICON_ERROR,
+                            ui_text(&self.settings.ui_language, UiTextKey::DeviceUnusableTitle),
+                        )
+                        .strong()
+                        .color(palette.error_text),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(egui::RichText::new(message).color(palette.text)).wrap());
+            });
     }
 
     fn runtime_log_actions(&mut self, ui: &mut egui::Ui) {

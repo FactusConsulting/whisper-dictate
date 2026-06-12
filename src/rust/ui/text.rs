@@ -119,6 +119,25 @@ pub(in crate::ui) enum UiTextKey {
     HealthOk,
     /// Badge label for the per-utterance health card when at least one warning fired.
     HealthWarn,
+    /// "Refresh devices" button next to the Microphone picker.
+    MicRefresh,
+    /// "Test" button next to the Microphone picker.
+    MicTest,
+    /// Hover/help text for the Microphone "Test" button.
+    MicTestHelp,
+    /// In-flight label while the microphone test runs ("Testing…").
+    MicTesting,
+    /// ✓ result line: the selected microphone opened cleanly.
+    MicTestWorks,
+    /// ⚠ result PREFIX: works, but via a fallback path; followed by the detail
+    /// (e.g. "via DirectSound (48 kHz, resampled)").
+    MicTestWorksVia,
+    /// ✗ result PREFIX: the microphone cannot be used; followed by the reason.
+    MicTestCannot,
+    /// The "resampled" qualifier inside the ⚠ caveat detail.
+    MicTestResampled,
+    /// Banner heading shown when the worker reports the selected mic is unusable.
+    DeviceUnusableTitle,
 }
 
 impl UiTextKey {
@@ -238,6 +257,19 @@ impl UiTextKey {
                 UiTextKey::HotkeyRefKeys => "Keys",
                 UiTextKey::HealthOk => "Healthy",
                 UiTextKey::HealthWarn => "Warning",
+                UiTextKey::MicRefresh => "Refresh devices",
+                UiTextKey::MicTest => "Test",
+                UiTextKey::MicTestHelp => {
+                    "Dry-run open the selected microphone (resolve it and try the same \
+                    WASAPI/DirectSound/MME backends capture uses, recording no audio) so you \
+                    can confirm it works before starting dictation. Does not load a model."
+                }
+                UiTextKey::MicTesting => "Testing…",
+                UiTextKey::MicTestWorks => "Works",
+                UiTextKey::MicTestWorksVia => "Works via",
+                UiTextKey::MicTestCannot => "Cannot be used",
+                UiTextKey::MicTestResampled => "resampled",
+                UiTextKey::DeviceUnusableTitle => "Microphone unavailable",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -353,6 +385,19 @@ impl UiTextKey {
                 UiTextKey::HotkeyRefKeys => "Taster",
                 UiTextKey::HealthOk => "God",
                 UiTextKey::HealthWarn => "Advarsel",
+                UiTextKey::MicRefresh => "Opdater enheder",
+                UiTextKey::MicTest => "Test",
+                UiTextKey::MicTestHelp => {
+                    "Prøveåbn den valgte mikrofon (find den og prøv de samme \
+                    WASAPI/DirectSound/MME-backends som optagelsen bruger, uden at optage lyd), \
+                    så du kan bekræfte at den virker før diktering startes. Indlæser ingen model."
+                }
+                UiTextKey::MicTesting => "Tester…",
+                UiTextKey::MicTestWorks => "Virker",
+                UiTextKey::MicTestWorksVia => "Virker via",
+                UiTextKey::MicTestCannot => "Kan ikke bruges",
+                UiTextKey::MicTestResampled => "resamplet",
+                UiTextKey::DeviceUnusableTitle => "Mikrofon utilgængelig",
             },
         }
     }

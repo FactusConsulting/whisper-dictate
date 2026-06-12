@@ -86,6 +86,34 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
 }
 
 #[test]
+fn ui_language_translates_microphone_test_and_device_banner() {
+    // Microphone Test button + outcome words, both languages.
+    assert_eq!(ui_text("en", UiTextKey::MicRefresh), "Refresh devices");
+    assert_eq!(ui_text("da", UiTextKey::MicRefresh), "Opdater enheder");
+    assert_eq!(ui_text("en", UiTextKey::MicTest), "Test");
+    assert_eq!(ui_text("da", UiTextKey::MicTest), "Test");
+    assert_eq!(ui_text("en", UiTextKey::MicTesting), "Testing…");
+    assert_eq!(ui_text("da", UiTextKey::MicTesting), "Tester…");
+    assert_eq!(ui_text("en", UiTextKey::MicTestWorks), "Works");
+    assert_eq!(ui_text("da", UiTextKey::MicTestWorks), "Virker");
+    assert_eq!(ui_text("en", UiTextKey::MicTestWorksVia), "Works via");
+    assert_eq!(ui_text("da", UiTextKey::MicTestWorksVia), "Virker via");
+    assert_eq!(ui_text("en", UiTextKey::MicTestCannot), "Cannot be used");
+    assert_eq!(ui_text("da", UiTextKey::MicTestCannot), "Kan ikke bruges");
+    assert_eq!(ui_text("en", UiTextKey::MicTestResampled), "resampled");
+    assert_eq!(ui_text("da", UiTextKey::MicTestResampled), "resamplet");
+    // Device-unusable banner heading, both languages.
+    assert_eq!(
+        ui_text("en", UiTextKey::DeviceUnusableTitle),
+        "Microphone unavailable"
+    );
+    assert_eq!(
+        ui_text("da", UiTextKey::DeviceUnusableTitle),
+        "Mikrofon utilgængelig"
+    );
+}
+
+#[test]
 fn ui_language_falls_back_to_english_for_unknown_values() {
     assert_eq!(Tab::Quality.label("fr"), "Quality");
     assert_eq!(ui_text("fr", UiTextKey::UiLanguage), "UI language");

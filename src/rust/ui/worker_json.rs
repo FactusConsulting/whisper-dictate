@@ -38,6 +38,32 @@ pub(in crate::ui) fn extract_json_array(stdout: &str) -> Option<&str> {
     None
 }
 
+/// Extract a JSON object span (`{` .. last `}`) from a stdout blob that may
+/// carry surrounding log noise. Mirrors [`extract_json_array`] for the
+/// single-object case (the `--test-audio-device` result): the opening brace is
+/// the first `{` whose next non-whitespace character starts a JSON object key
+/// (`"`) or closes an empty object (`}`); a stray `{` inside a log line is
+/// skipped. Returns `None` when no such object start pairs with a trailing `}`.
+pub(in crate::ui) fn extract_json_object(stdout: &str) -> Option<&str> {
+    let end = stdout.rfind('}')?;
+    let mut search = 0;
+    while let Some(rel) = stdout[search..=end].find('{') {
+        let start = search + rel;
+        let next = stdout[start + 1..=end]
+            .bytes()
+            .find(|b| !b.is_ascii_whitespace());
+        let looks_like_object = matches!(next, Some(b'"') | Some(b'}'));
+        if looks_like_object {
+            return Some(&stdout[start..=end]);
+        }
+        if start >= end {
+            break;
+        }
+        search = start + 1;
+    }
+    None
+}
+
 /// Pull the `error` field out of a `{"error": "..."}` object, if present, so
 /// the no-array path can report the worker's own message instead of a generic
 /// fallback.
@@ -80,6 +106,31 @@ mod tests {
     #[test]
     fn empty_array_is_found() {
         assert_eq!(extract_json_array("noise\n[]\nmore"), Some("[]"));
+    }
+
+    // --- extract_json_object ---
+
+    #[test]
+    fn finds_plain_object() {
+        let s = r#"{"a":1}"#;
+        assert_eq!(extract_json_object(s), Some(s));
+    }
+
+    #[test]
+    fn object_skips_bracketed_log_tags() {
+        // A leading `[cap]` log tag has no `{`, so the object start is found.
+        let s = "[cap] probing\n{\"usable\":true}";
+        assert_eq!(extract_json_object(s), Some(r#"{"usable":true}"#));
+    }
+
+    #[test]
+    fn empty_object_is_found() {
+        assert_eq!(extract_json_object("noise\n{}\nmore"), Some("{}"));
+    }
+
+    #[test]
+    fn object_returns_none_when_no_object() {
+        assert_eq!(extract_json_object("just [text] here"), None);
     }
 
     // --- extract_error_message ---

@@ -291,21 +291,75 @@ impl WhisperDictateApp {
             MIC_HELP,
         );
 
+        let language = self.settings.ui_language.clone();
+        let palette = ui_palette(&self.settings.ui_theme);
+        let testing = self.background_task_label == Some(crate::ui::tasks::TEST_AUDIO_DEVICE_LABEL);
         ui.label("");
-        if ui
-            .add_enabled(
-                self.background_task.is_none(),
-                egui::Button::new("Refresh devices"),
-            )
-            .on_hover_text(
-                "Run the worker to list available microphones. The result populates the picker; \
-                 it does not load a model or start dictation.",
-            )
-            .clicked()
-        {
-            self.run_list_audio_devices();
-        }
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.background_task.is_none(),
+                    egui::Button::new(ui_text(&language, UiTextKey::MicRefresh)),
+                )
+                .on_hover_text(
+                    "Run the worker to list available microphones. The result populates the picker; \
+                     it does not load a model or start dictation.",
+                )
+                .clicked()
+            {
+                self.run_list_audio_devices();
+            }
+            if ui
+                .add_enabled(
+                    self.background_task.is_none(),
+                    egui::Button::new(ui_text(&language, UiTextKey::MicTest)),
+                )
+                .on_hover_text(ui_text(&language, UiTextKey::MicTestHelp))
+                .clicked()
+            {
+                self.run_test_audio_device();
+            }
+            self.microphone_test_status(ui, &language, palette, testing);
+        });
         ui.end_row();
+    }
+
+    /// Render the inline microphone-test status next to the Test button: a
+    /// "Testing…" spinner while the worker runs, then the ✓/⚠/✗ outcome (or an
+    /// error message) once it finishes. Reads `device_test_result` (transient UI
+    /// state, never persisted).
+    fn microphone_test_status(
+        &self,
+        ui: &mut egui::Ui,
+        language: &str,
+        palette: UiPalette,
+        testing: bool,
+    ) {
+        if testing {
+            ui.add_space(4.0);
+            ui.add(egui::Spinner::new().size(14.0));
+            ui.label(
+                egui::RichText::new(ui_text(language, UiTextKey::MicTesting))
+                    .color(palette.text_muted),
+            );
+            return;
+        }
+        let Some(result) = self.device_test_result.as_ref() else {
+            return;
+        };
+        ui.add_space(4.0);
+        match result {
+            Ok(display) => {
+                let (icon, color, text) = microphone_test_parts(display, language, palette);
+                ui.label(icon_text(icon, text).color(color));
+            }
+            Err(message) => {
+                ui.label(
+                    icon_text(egui_material_icons::icons::ICON_WARNING, message)
+                        .color(palette.warn_text),
+                );
+            }
+        }
     }
 
     /// Build the Microphone combo entries: "(System default)" → "" first, then
@@ -378,5 +432,168 @@ impl WhisperDictateApp {
                 self.stt_api_key_status = format!("Could not open Groq API keys page: {err}");
             }
         }
+    }
+}
+
+/// Map a parsed microphone-test display model to its inline (icon, colour,
+/// localized text) for rendering next to the Test button:
+///   ✓ green  "Works"
+///   ⚠ amber  "Works via DirectSound (48 kHz, resampled)"
+///   ✗ red    "Cannot be used: <reason>"
+/// Pure aside from the localization lookup, so the ✓/⚠/✗ branching and the
+/// caveat-detail assembly are unit-testable without an egui context.
+pub(in crate::ui) fn microphone_test_parts(
+    display: &DeviceTestDisplay,
+    language: &str,
+    palette: UiPalette,
+) -> (&'static str, egui::Color32, String) {
+    use egui_material_icons::icons;
+    match display.outcome {
+        DeviceTestOutcome::Works => (
+            icons::ICON_CHECK_CIRCLE,
+            palette.ok_text,
+            ui_text(language, UiTextKey::MicTestWorks).to_owned(),
+        ),
+        DeviceTestOutcome::WorksWithCaveat => (
+            icons::ICON_WARNING,
+            palette.warn_text,
+            microphone_test_caveat_text(display, language),
+        ),
+        DeviceTestOutcome::Cannot => {
+            let reason = display
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty());
+            let text = match reason {
+                Some(reason) => {
+                    format!("{}: {reason}", ui_text(language, UiTextKey::MicTestCannot))
+                }
+                None => ui_text(language, UiTextKey::MicTestCannot).to_owned(),
+            };
+            (icons::ICON_WARNING, palette.error_text, text)
+        }
+    }
+}
+
+/// Build the ⚠ caveat detail line, e.g. "Works via DirectSound (48 kHz,
+/// resampled)". The endpoint and rate come straight from the worker result; the
+/// "via <endpoint>" clause is dropped for the plain `default`/`wasapi` path so a
+/// resample-only caveat reads "Works (48 kHz, resampled)".
+fn microphone_test_caveat_text(display: &DeviceTestDisplay, language: &str) -> String {
+    let mut detail: Vec<String> = Vec::new();
+    if let Some(rate) = display.samplerate {
+        detail.push(samplerate_khz_label(rate));
+    }
+    if display.resampled {
+        detail.push(ui_text(language, UiTextKey::MicTestResampled).to_owned());
+    }
+    let suffix = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", detail.join(", "))
+    };
+    let via_fallback = matches!(
+        display.endpoint.as_deref(),
+        Some("directsound") | Some("mme")
+    );
+    if via_fallback {
+        let endpoint = endpoint_label(display.endpoint.as_deref().unwrap_or("default"));
+        format!(
+            "{} {endpoint}{suffix}",
+            ui_text(language, UiTextKey::MicTestWorksVia)
+        )
+    } else {
+        format!("{}{suffix}", ui_text(language, UiTextKey::MicTestWorks))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::theme::ui_palette;
+
+    fn works(endpoint: &str, samplerate: Option<u32>, resampled: bool) -> DeviceTestDisplay {
+        DeviceTestDisplay {
+            outcome: if resampled || matches!(endpoint, "directsound" | "mme") {
+                DeviceTestOutcome::WorksWithCaveat
+            } else {
+                DeviceTestOutcome::Works
+            },
+            endpoint: Some(endpoint.to_owned()),
+            samplerate,
+            resampled,
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn clean_wasapi_renders_green_works() {
+        let palette = ui_palette("dark");
+        let display = works("wasapi", Some(16000), false);
+        let (icon, color, text) = microphone_test_parts(&display, "en", palette);
+        assert_eq!(icon, egui_material_icons::icons::ICON_CHECK_CIRCLE);
+        assert_eq!(color, palette.ok_text);
+        assert_eq!(text, "Works");
+    }
+
+    #[test]
+    fn directsound_renders_amber_works_via() {
+        let palette = ui_palette("dark");
+        let display = works("directsound", Some(48000), false);
+        let (icon, color, text) = microphone_test_parts(&display, "en", palette);
+        assert_eq!(icon, egui_material_icons::icons::ICON_WARNING);
+        assert_eq!(color, palette.warn_text);
+        assert_eq!(text, "Works via DirectSound (48 kHz)");
+    }
+
+    #[test]
+    fn resampled_wasapi_renders_amber_with_resampled_note() {
+        let palette = ui_palette("dark");
+        let display = works("wasapi", Some(48000), true);
+        let (_icon, color, text) = microphone_test_parts(&display, "en", palette);
+        assert_eq!(color, palette.warn_text);
+        // Plain WASAPI path → no "via", just the rate + resampled note.
+        assert_eq!(text, "Works (48 kHz, resampled)");
+    }
+
+    #[test]
+    fn cannot_renders_red_with_reason() {
+        let palette = ui_palette("dark");
+        let display = DeviceTestDisplay {
+            outcome: DeviceTestOutcome::Cannot,
+            endpoint: None,
+            samplerate: None,
+            resampled: false,
+            reason: Some("device not found".to_owned()),
+        };
+        let (icon, color, text) = microphone_test_parts(&display, "en", palette);
+        assert_eq!(icon, egui_material_icons::icons::ICON_WARNING);
+        assert_eq!(color, palette.error_text);
+        assert_eq!(text, "Cannot be used: device not found");
+    }
+
+    #[test]
+    fn danish_localizes_the_outcome_words() {
+        let palette = ui_palette("dark");
+        assert_eq!(
+            microphone_test_parts(&works("wasapi", Some(16000), false), "da", palette).2,
+            "Virker"
+        );
+        assert_eq!(
+            microphone_test_parts(&works("directsound", Some(48000), false), "da", palette).2,
+            "Virker via DirectSound (48 kHz)"
+        );
+        let cannot = DeviceTestDisplay {
+            outcome: DeviceTestOutcome::Cannot,
+            endpoint: None,
+            samplerate: None,
+            resampled: false,
+            reason: Some("device not found".to_owned()),
+        };
+        assert_eq!(
+            microphone_test_parts(&cannot, "da", palette).2,
+            "Kan ikke bruges: device not found"
+        );
     }
 }

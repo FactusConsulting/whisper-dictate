@@ -248,6 +248,9 @@ impl WhisperDictateApp {
     fn clear_audio_meter_and_device(&mut self) {
         self.clear_audio_meter();
         self.active_audio_device.clear();
+        // A fresh start/restart can't be showing a stale device-unusable banner
+        // from the previous run — the worker will re-report on the next capture.
+        self.device_error = None;
     }
 
     fn ensure_stt_api_key_loaded_for_runtime(&mut self) {
@@ -356,6 +359,7 @@ impl WhisperDictateApp {
                     self.worker_ready = false;
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
+                    self.device_error = None;
                     self.append_runtime_log(format!(
                         "[ui] runtime exited with code {}",
                         code.map_or_else(|| "unknown".to_owned(), |c| c.to_string())
@@ -366,6 +370,7 @@ impl WhisperDictateApp {
                     self.worker_ready = false;
                     self.clear_audio_meter();
                     self.clear_pipeline_progress();
+                    self.device_error = None;
                     self.append_runtime_log(format!("[ui] runtime error: {message}"));
                 }
             }
@@ -420,7 +425,27 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn update_worker_status(&mut self, event: &WorkerEvent) {
+        // Surface (or clear) the prominent "device unusable" banner. The worker
+        // emits `state="error"` with `reason="device_unusable"` and an actionable
+        // `error` message naming the microphone the user picked that won't open on
+        // any audio backend. Show it near the live-dictation header so the user
+        // sees it without opening the Debug log; any later working device signal
+        // (a recording/ready status carrying an audio_device) clears it.
+        let is_device_unusable = event.state.as_deref() == Some("error")
+            && worker_event_string(&event.payload, "reason").as_deref() == Some("device_unusable");
+        if is_device_unusable {
+            self.device_error = worker_event_string(&event.payload, "error").or_else(|| {
+                worker_event_string(&event.payload, "audio_device")
+                    .map(|device| format!("Microphone {device} could not be opened."))
+            });
+        }
         if let Some(audio_device) = worker_event_string(&event.payload, "audio_device") {
+            // A working device was reported (anything other than the unusable
+            // error event itself) → the previously-picked-but-broken mic is no
+            // longer the active one, so drop the banner.
+            if !is_device_unusable {
+                self.device_error = None;
+            }
             self.active_audio_device = audio_device;
         }
         if let Some(state) = event.state.as_deref() {

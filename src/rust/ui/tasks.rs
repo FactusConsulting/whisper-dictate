@@ -5,8 +5,8 @@
 use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
 use crate::runtime::{
-    audio_devices_command, doctor_command, install_command, run_capture, windows_command,
-    WorkerCommand,
+    audio_devices_command, doctor_command, install_command, run_capture, test_audio_device_command,
+    windows_command, WorkerCommand,
 };
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
@@ -18,6 +18,10 @@ pub(in crate::ui) const LIST_AUDIO_DEVICES_LABEL: &str = "list audio devices";
 /// Background-task label for the worker's `--list-windows` run. Matched in
 /// `poll_background_task` to parse stdout into the Profiles tab window picker.
 pub(in crate::ui) const LIST_WINDOWS_LABEL: &str = "list windows";
+
+/// Background-task label for the worker's `--test-audio-device` run. Matched in
+/// `poll_background_task` to parse stdout into the Microphone "Test" result.
+pub(in crate::ui) const TEST_AUDIO_DEVICE_LABEL: &str = "test audio device";
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn run_doctor(&mut self) {
@@ -58,6 +62,18 @@ impl WhisperDictateApp {
     /// `poll_background_task` once the run completes.
     pub(in crate::ui) fn run_list_windows(&mut self) {
         self.run_background_command(LIST_WINDOWS_LABEL, windows_command());
+    }
+
+    /// Dry-run test the currently-saved microphone by running the worker with
+    /// `--test-audio-device "<name>"` off-thread (async, like Refresh devices, so
+    /// the UI never blocks). The captured stdout is parsed into the inline ✓/⚠/✗
+    /// result in `poll_background_task` once the run completes.
+    pub(in crate::ui) fn run_test_audio_device(&mut self) {
+        // Clear any previous result so the user sees the in-flight "Testing…"
+        // state and never a stale outcome from the last device.
+        self.device_test_result = None;
+        let name = self.settings.audio_device.trim().to_owned();
+        self.run_background_command(TEST_AUDIO_DEVICE_LABEL, test_audio_device_command(&name));
     }
 
     pub(in crate::ui) fn run_cloud_api_check(&mut self) {
@@ -235,6 +251,10 @@ impl WhisperDictateApp {
                 self.apply_window_listing(&result);
                 return;
             }
+            if result.label == TEST_AUDIO_DEVICE_LABEL {
+                self.apply_device_test(&result);
+                return;
+            }
             self.append_runtime_output(result.stdout.trim_end());
             self.append_runtime_output(result.stderr.trim_end());
             if let Some(error) = result.error {
@@ -297,6 +317,36 @@ impl WhisperDictateApp {
                 if !result.stderr.trim().is_empty() {
                     self.append_runtime_output(result.stderr.trim_end());
                 }
+            }
+        }
+    }
+
+    /// Handle a finished `--test-audio-device` run: parse the single JSON result
+    /// object into the inline ✓/⚠/✗ display model (stored in `device_test_result`)
+    /// and log the outcome. A run failure (worker couldn't even start) is stored
+    /// as an `Err` so the picker shows it instead of silently doing nothing.
+    fn apply_device_test(&mut self, result: &BackgroundTaskResult) {
+        if let Some(error) = &result.error {
+            let message = format!("Could not test microphone: {error}");
+            self.append_runtime_log(format!("[ERROR] {message}"));
+            self.device_test_result = Some(Err(message));
+            return;
+        }
+        match parse_device_test_json(&result.stdout) {
+            Ok(display) => {
+                self.append_runtime_log(format!(
+                    "[ui] microphone test: {}",
+                    device_test_log_detail(&display)
+                ));
+                self.device_test_result = Some(Ok(display));
+            }
+            Err(error) => {
+                let message = format!("Could not read microphone test result: {error}");
+                self.append_runtime_log(format!("[ERROR] {message}"));
+                if !result.stderr.trim().is_empty() {
+                    self.append_runtime_output(result.stderr.trim_end());
+                }
+                self.device_test_result = Some(Err(message));
             }
         }
     }
