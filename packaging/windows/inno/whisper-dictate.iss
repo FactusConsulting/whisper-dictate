@@ -37,6 +37,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "..\..\..\src\python\whisper_dictate\*.py"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
 Source: "..\..\..\src\python\whisper_dictate\*.json"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
+; The top-level *.py / *.json globs are NOT recursive, so the data subpackage
+; (hallucination_patterns.json, loaded at import via importlib.resources) needs
+; its own entry or it would be missing from the installed app.
+Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"; Flags: ignoreversion recursesubdirs
 Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion

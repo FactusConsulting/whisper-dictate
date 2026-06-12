@@ -269,6 +269,101 @@ class HallucinationFilterTests(unittest.TestCase):
         self.assertEqual(len(dropped), 1)
         self.assertEqual(getattr(dropped[0], "_drop_reason", None), "credit_pattern")
 
+    # --- pattern-data extraction guards (data file <-> code parity) ---
+
+    def test_pattern_data_loadable_via_importlib_resources(self):
+        # Packaging-regression guard: the JSON must ship and load through
+        # importlib.resources (the mechanism the module uses at import) — a
+        # filesystem-path read would mask a missing wheel/zip/installer entry.
+        from importlib import resources
+        raw = (
+            resources.files("whisper_dictate.data")
+            .joinpath("hallucination_patterns.json")
+            .read_text(encoding="utf-8")
+        )
+        data = json.loads(raw)
+        for key in ("exact_blacklist", "credit_phrase_year_tail",
+                    "credit_phrase_prefixes", "bare_company_names"):
+            self.assertIn(key, data, f"data file missing key {key!r}")
+        self.assertGreater(len(data["exact_blacklist"]), 0)
+        self.assertGreater(len(data["credit_phrase_prefixes"]), 0)
+        self.assertGreater(len(data["bare_company_names"]), 0)
+
+    def test_hallucinations_set_matches_data_exact_blacklist(self):
+        # The compiled frozenset must equal exactly the data file's list — proves
+        # the extraction is data-driven (no stray inline literal left behind).
+        data = self.t._HALLUCINATION_PATTERNS
+        self.assertEqual(self.t.HALLUCINATIONS, frozenset(data["exact_blacklist"]))
+
+    def test_every_data_exact_blacklist_entry_is_hallucination(self):
+        # Every previously-hardcoded exact phrase still classifies as a
+        # hallucination after the move to the data file.
+        for phrase in self.t._HALLUCINATION_PATTERNS["exact_blacklist"]:
+            self.assertTrue(self.t.is_hallucination(phrase),
+                            f"{phrase!r} (from data file) should match")
+
+    def test_data_driven_credit_examples_still_match(self):
+        # Build credit examples straight from the data lists so a future edit to
+        # the JSON keeps proving end-to-end that the loaded patterns fire.
+        # EVERY entry must have a sample — a missing entry FAILS so that adding a
+        # new credit_phrase_prefixes item without a sample breaks the test.
+        data = self.t._HALLUCINATION_PATTERNS
+        # Each phrase prefix + " noget 2019" (a year-terminated tail) must match.
+        # Samples are derived deterministically from the prefix: regex metacharacters
+        # are stripped to produce one valid literal, then a trailing year is appended.
+        # If the derivation produces a string that does not actually match (meaning the
+        # prefix is an unusual regex fragment), the entry must be added to the explicit
+        # samples dict below.
+        explicit_samples = {
+            "(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)":
+                "Danske tekster af Jesper Buhl 2019",
+        }
+        import re as _re
+        for prefix in data["credit_phrase_prefixes"]:
+            if prefix in explicit_samples:
+                sample = explicit_samples[prefix]
+            else:
+                # Collapse optional groups/alternations to the simplest literal:
+                # drop (...) wrappers, pick first alternative before '|', remove ?+*.
+                literal = _re.sub(r'\([^)]*\)', '', prefix)   # drop (?:...) groups
+                literal = _re.sub(r'[?+*\\]', '', literal)    # drop quantifiers/escapes
+                literal = literal.strip()
+                if not literal:
+                    self.fail(
+                        f"Cannot derive a literal example from prefix {prefix!r}. "
+                        "Add it to the explicit_samples dict in this test."
+                    )
+                sample = f"{literal} John Doe 2019"
+            self.assertTrue(
+                self.t.is_hallucination(sample),
+                f"{sample!r} (prefix {prefix!r}) should match — if this is a new "
+                "prefix, add a hand-crafted sample to explicit_samples in this test.",
+            )
+
+    def test_data_driven_bare_company_names_match_without_year(self):
+        # Bare company names are specific enough to match with no trailing year.
+        # EVERY entry must match — a missing or non-matching entry FAILS so that
+        # adding a new bare_company_names item without coverage breaks the test.
+        import re as _re
+        for source in self.t._HALLUCINATION_PATTERNS["bare_company_names"]:
+            # Strip the standard optional-year suffix (?: (?:19|20)\d{2})? to get
+            # the bare name, then also remove any remaining regex metacharacters.
+            bare = _re.sub(r'\(\?:.*', '', source).strip()
+            bare = _re.sub(r'[?+*\\()|]', '', bare).strip()
+            if not bare:
+                self.fail(
+                    f"Cannot derive a literal bare name from {source!r}. "
+                    "Add explicit handling for this entry in this test."
+                )
+            self.assertTrue(
+                self.t.is_hallucination(bare),
+                f"{bare!r} (from {source!r}) should match without a year",
+            )
+            self.assertTrue(
+                self.t.is_hallucination(bare + " 2018"),
+                f"{bare!r} + year should also match",
+            )
+
 class TranscribeDetailTests(unittest.TestCase):
     def setUp(self):
         try:

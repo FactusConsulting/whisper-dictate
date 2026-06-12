@@ -62,6 +62,14 @@ in stdenv.mkDerivation {
     install -Dm644 src/python/whisper_dictate/settings_schema.json \
       "$out/lib/whisper-dictate/src/python/whisper_dictate/settings_schema.json"
 
+    # Ship the data subpackage (anti-hallucination pattern JSON, loaded at import
+    # via importlib.resources). The *.py loop above is non-recursive, so the
+    # data/ files need explicit installs.
+    install -Dm644 src/python/whisper_dictate/data/__init__.py \
+      "$out/lib/whisper-dictate/src/python/whisper_dictate/data/__init__.py"
+    install -Dm644 src/python/whisper_dictate/data/hallucination_patterns.json \
+      "$out/lib/whisper-dictate/src/python/whisper_dictate/data/hallucination_patterns.json"
+
     makeWrapper ${pythonEnv}/bin/python3 $out/bin/whisper-dictate \
       --prefix PYTHONPATH : "$out/lib/whisper-dictate/src/python" \
       --add-flags "-m whisper_dictate.runtime" \
