@@ -112,3 +112,20 @@ fn update_available_strings_present_in_both_languages() {
         "DA help must state no data is sent"
     );
 }
+
+#[test]
+fn upgrade_badge_action_strings_present_in_both_languages() {
+    // The new actionable-badge strings (copy-command hover, open-release hover,
+    // and the transient "Copied!" confirmation) must be localized EN+DA.
+    for key in [
+        UiTextKey::UpdateCopyCommandHover,
+        UiTextKey::UpdateOpenReleaseHover,
+        UiTextKey::UpdateCommandCopied,
+    ] {
+        assert!(!ui_text("en", key).is_empty(), "EN missing for {key:?}");
+        assert!(!ui_text("da", key).is_empty(), "DA missing for {key:?}");
+    }
+    // Spot-check expected values so a stray edit can't silently swap them.
+    assert_eq!(ui_text("en", UiTextKey::UpdateCommandCopied), "Copied!");
+    assert_eq!(ui_text("da", UiTextKey::UpdateCommandCopied), "Kopieret!");
+}
