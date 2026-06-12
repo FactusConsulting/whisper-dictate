@@ -88,18 +88,42 @@ fn release_tag_url(version: &str) -> String {
     format!("https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{v}")
 }
 
-/// Classify how this instance was installed from the running executable's path.
+/// Classify how this instance was installed from the running executable's path
+/// and an explicit Chocolatey package-directory probe.
 ///
-/// Pure: takes the path + OS so every branch is unit-testable on any host. The
-/// match is intentionally ordered most-specific-first so e.g. a Chocolatey shim
-/// under `Program Files` is still classified as Choco. Matching is
-/// case-insensitive on Windows because installed paths there are not
-/// case-sensitive.
-pub(in crate::ui) fn detect_install_method(exe_path: &str, os: Os) -> InstallMethod {
+/// Pure: takes the path + OS + a pre-computed directory-existence flag so every
+/// branch is unit-testable on any host. The match is intentionally ordered
+/// most-specific-first.
+///
+/// On Windows the priority is:
+/// 1. `choco_pkg_dir_exists` → [`InstallMethod::Choco`] (checked **first**
+///    because our Chocolatey package is a wrapper around the Inno installer: the
+///    exe always lands in `%LOCALAPPDATA%\Programs\WhisperDictate`, so the exe
+///    path alone can never distinguish a Chocolatey install from a bare Inno
+///    install).
+/// 2. `\chocolatey\lib\whisper-dictate\` in the exe path → Choco (legacy
+///    signal, kept as a secondary / belt-and-suspenders check — harmless).
+/// 3. WinGet / WindowsApps path fragments → [`InstallMethod::Winget`].
+/// 4. `\Programs\WhisperDictate` / `Program Files` → [`InstallMethod::Installer`].
+/// 5. Anything else → [`InstallMethod::Portable`].
+///
+/// Non-Windows OSes ignore `choco_pkg_dir_exists` (always `false` there).
+pub(in crate::ui) fn detect_install_method(
+    exe_path: &str,
+    os: Os,
+    choco_pkg_dir_exists: bool,
+) -> InstallMethod {
     match os {
         Os::Windows => {
             let lower = exe_path.replace('/', "\\").to_ascii_lowercase();
-            if lower.contains("\\chocolatey\\lib\\whisper-dictate\\") {
+            // Priority 1: Chocolatey package directory exists on disk — the exe
+            // path is not a reliable signal because the wrapper uses the Inno
+            // installer, which always writes to %LOCALAPPDATA%\Programs\WhisperDictate.
+            if choco_pkg_dir_exists {
+                InstallMethod::Choco
+            } else if lower.contains("\\chocolatey\\lib\\whisper-dictate\\") {
+                // Priority 2: exe path contains the chocolatey lib path
+                // (fallback / direct-install edge case).
                 InstallMethod::Choco
             } else if lower.contains("\\microsoft\\winget\\packages\\")
                 || lower.contains("\\windowsapps\\")
@@ -218,7 +242,7 @@ mod tests {
     fn windows_choco_lib_path_is_choco() {
         let path = r"C:\ProgramData\chocolatey\lib\whisper-dictate\tools\whisper-dictate.exe";
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Choco
         );
     }
@@ -227,7 +251,7 @@ mod tests {
     fn windows_winget_packages_path_is_winget() {
         let path = r"C:\Users\lars\AppData\Local\Microsoft\WinGet\Packages\FactusConsulting.WhisperDictate_abc\whisper-dictate.exe";
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Winget
         );
     }
@@ -237,7 +261,7 @@ mod tests {
         let path = r"C:\Program Files\WindowsApps\FactusConsulting.WhisperDictate_1.9.5_x64\whisper-dictate.exe";
         // WindowsApps is matched before the Program Files installer rule.
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Winget
         );
     }
@@ -247,7 +271,7 @@ mod tests {
         // The Inno installer's per-user target.
         let path = r"C:\Users\lars\AppData\Local\Programs\WhisperDictate\whisper-dictate.exe";
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Installer
         );
     }
@@ -256,7 +280,7 @@ mod tests {
     fn windows_program_files_path_is_installer() {
         let path = r"C:\Program Files\WhisperDictate\whisper-dictate.exe";
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Installer
         );
     }
@@ -265,7 +289,7 @@ mod tests {
     fn windows_arbitrary_path_is_portable() {
         let path = r"D:\downloads\whisper-dictate-portable\whisper-dictate.exe";
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Portable
         );
     }
@@ -274,7 +298,7 @@ mod tests {
     fn windows_detection_is_case_insensitive() {
         let path = r"C:\PROGRAMDATA\Chocolatey\Lib\Whisper-Dictate\tools\whisper-dictate.exe";
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Choco
         );
     }
@@ -283,7 +307,43 @@ mod tests {
     fn windows_forward_slashes_are_normalized() {
         let path = "C:/ProgramData/chocolatey/lib/whisper-dictate/tools/whisper-dictate.exe";
         assert_eq!(
-            detect_install_method(path, Os::Windows),
+            detect_install_method(path, Os::Windows, false),
+            InstallMethod::Choco
+        );
+    }
+
+    // ── choco_pkg_dir_exists flag (the wrapper-install real-world case) ───────
+
+    #[test]
+    fn windows_choco_pkg_dir_present_and_inno_exe_path_is_choco() {
+        // Real-world case: Chocolatey wrapper installs via Inno, so the exe ends
+        // up in %LOCALAPPDATA%\Programs\WhisperDictate. The path heuristic would
+        // classify this as Installer, but choco_pkg_dir_exists=true takes priority.
+        let path = r"C:\Users\lars\AppData\Local\Programs\WhisperDictate\whisper-dictate.exe";
+        assert_eq!(
+            detect_install_method(path, Os::Windows, true),
+            InstallMethod::Choco
+        );
+    }
+
+    #[test]
+    fn windows_choco_pkg_dir_absent_and_inno_exe_path_is_installer() {
+        // When the Chocolatey package dir does NOT exist and the exe is in the
+        // Inno location, we correctly fall through to Installer.
+        let path = r"C:\Users\lars\AppData\Local\Programs\WhisperDictate\whisper-dictate.exe";
+        assert_eq!(
+            detect_install_method(path, Os::Windows, false),
+            InstallMethod::Installer
+        );
+    }
+
+    #[test]
+    fn windows_choco_pkg_dir_absent_and_choco_lib_exe_path_is_choco() {
+        // Secondary signal: even without the dir flag, the legacy chocolatey\lib
+        // path still maps to Choco (e.g. hypothetical direct-install scenario).
+        let path = r"C:\ProgramData\chocolatey\lib\whisper-dictate\tools\whisper-dictate.exe";
+        assert_eq!(
+            detect_install_method(path, Os::Windows, false),
             InstallMethod::Choco
         );
     }
@@ -291,14 +351,17 @@ mod tests {
     #[test]
     fn linux_nix_store_path_is_nix() {
         let path = "/nix/store/abc123-whisper-dictate-1.9.5/bin/whisper-dictate";
-        assert_eq!(detect_install_method(path, Os::Linux), InstallMethod::Nix);
+        assert_eq!(
+            detect_install_method(path, Os::Linux, false),
+            InstallMethod::Nix
+        );
     }
 
     #[test]
     fn linux_arbitrary_path_is_portable() {
         let path = "/home/lars/.local/bin/whisper-dictate";
         assert_eq!(
-            detect_install_method(path, Os::Linux),
+            detect_install_method(path, Os::Linux, false),
             InstallMethod::Portable
         );
     }
@@ -306,14 +369,17 @@ mod tests {
     #[test]
     fn macos_cellar_path_is_brew() {
         let path = "/opt/homebrew/Cellar/whisper-dictate/1.9.5/bin/whisper-dictate";
-        assert_eq!(detect_install_method(path, Os::Mac), InstallMethod::Brew);
+        assert_eq!(
+            detect_install_method(path, Os::Mac, false),
+            InstallMethod::Brew
+        );
     }
 
     #[test]
     fn macos_arbitrary_path_is_portable() {
         let path = "/Applications/WhisperDictate.app/Contents/MacOS/whisper-dictate";
         assert_eq!(
-            detect_install_method(path, Os::Mac),
+            detect_install_method(path, Os::Mac, false),
             InstallMethod::Portable
         );
     }
