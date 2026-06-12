@@ -48,28 +48,12 @@ impl WhisperDictateApp {
             );
             // Discreet "update available" badge, placed just ABOVE the version
             // label (bottom_up layout renders later items higher). Subtle accent
-            // line only — no popup; the hover gives the upgrade command.
-            if let Some(version) = &self.update_available {
-                ui.add(
-                    egui::Label::new(
-                        icon_text(
-                            icons::ICON_ARROW_UPWARD,
-                            format!(
-                                "v{} {}",
-                                version,
-                                ui_text(&self.settings.ui_language, UiTextKey::UpdateAvailable),
-                            ),
-                        )
-                        .text_style(egui::TextStyle::Small)
-                        .strong()
-                        .color(palette.accent_blue),
-                    )
-                    .selectable(false),
-                )
-                .on_hover_text(ui_text(
-                    &self.settings.ui_language,
-                    UiTextKey::UpdateAvailableHover,
-                ));
+            // line only — no popup. It is now CLICKABLE: clicking copies the
+            // install-method-specific upgrade command (or opens the release page
+            // for installer/portable builds); the hover spells out exactly what
+            // the click does.
+            if self.update_available.is_some() {
+                self.update_badge(ui, palette);
             }
             ui.add_space(8.0);
             // Reload config / Doctor / Install-Repair moved to the System tab so

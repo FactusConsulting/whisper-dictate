@@ -144,6 +144,16 @@ pub(in crate::ui) enum UiTextKey {
     RunBenchmark,
     /// Hover/help text for the "Run benchmark" button.
     RunBenchmarkHelp,
+    /// Hover prefix on the update badge when the install method has a copyable
+    /// upgrade command; followed by the command on its own line. Tells the user a
+    /// click copies it.
+    UpdateCopyCommandHover,
+    /// Hover prefix on the update badge when the install method has no package
+    /// manager (installer / portable); followed by the release URL. Tells the
+    /// user a click opens the release page.
+    UpdateOpenReleaseHover,
+    /// Transient confirmation shown after the upgrade command is copied.
+    UpdateCommandCopied,
 }
 
 impl UiTextKey {
@@ -233,11 +243,7 @@ impl UiTextKey {
                     Set the Dictation view to \"Debug\" to see the raw lines in the log."
                 }
                 UiTextKey::UpdateAvailable => "available",
-                UiTextKey::UpdateAvailableHover => {
-                    "A newer version has been published. Update with:\n\
-                    choco upgrade whisper-dictate --source=whisper-dictate -y\n\
-                    or update via winget / the installer from the project releases."
-                }
+                UiTextKey::UpdateAvailableHover => "A newer version has been published.",
                 UiTextKey::SystemUpdates => "Updates",
                 UiTextKey::UpdateCheck => "Check for updates",
                 UiTextKey::UpdateCheckHelp => {
@@ -284,10 +290,15 @@ impl UiTextKey {
                 UiTextKey::RunBenchmarkHelp => {
                     "Run the golden benchmark corpus (benchmark/corpus.json) through the \
                     configured backend and write per-item results plus an overall \
-                    pass count / WER summary to the log. Runs in the background — it loads \
-                    the model and processes the whole corpus, so it can take a while. \
-                    Blocked while another background task runs."
+                    summary (pass count, average WER and CER) to the log. Runs in the \
+                    background — it loads the model and processes the whole corpus, so it \
+                    can take a while. Blocked while another background task runs."
                 }
+                UiTextKey::UpdateCopyCommandHover => "Click to copy the upgrade command:",
+                UiTextKey::UpdateOpenReleaseHover => {
+                    "Click to open the latest release and download the new installer:"
+                }
+                UiTextKey::UpdateCommandCopied => "Copied!",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -373,11 +384,7 @@ impl UiTextKey {
                     Sæt Dikterings-visningen til \"Debug\" for at se de rå linjer i loggen."
                 }
                 UiTextKey::UpdateAvailable => "tilgængelig",
-                UiTextKey::UpdateAvailableHover => {
-                    "En nyere version er udgivet. Opdater med:\n\
-                    choco upgrade whisper-dictate --source=whisper-dictate -y\n\
-                    eller opdater via winget / installeren fra projektets releases."
-                }
+                UiTextKey::UpdateAvailableHover => "En nyere version er udgivet.",
                 UiTextKey::SystemUpdates => "Opdateringer",
                 UiTextKey::UpdateCheck => "Søg efter opdateringer",
                 UiTextKey::UpdateCheckHelp => {
@@ -424,10 +431,15 @@ impl UiTextKey {
                 UiTextKey::RunBenchmarkHelp => {
                     "Kør det gyldne benchmark-korpus (benchmark/corpus.json) gennem den \
                     konfigurerede backend, og skriv resultater pr. element samt en samlet \
-                    opsummering med antal beståede / WER til loggen. Kører i baggrunden — \
-                    den indlæser modellen og behandler hele korpusset, så det kan tage et stykke tid. \
-                    Blokeret mens en anden baggrundsopgave kører."
+                    opsummering (antal beståede, gennemsnitlig WER og CER) til loggen. \
+                    Kører i baggrunden — den indlæser modellen og behandler hele korpusset, \
+                    så det kan tage et stykke tid. Blokeret mens en anden baggrundsopgave kører."
                 }
+                UiTextKey::UpdateCopyCommandHover => "Klik for at kopiere opdateringskommandoen:",
+                UiTextKey::UpdateOpenReleaseHover => {
+                    "Klik for at åbne seneste udgivelse og hente den nye installer:"
+                }
+                UiTextKey::UpdateCommandCopied => "Kopieret!",
             },
         }
     }

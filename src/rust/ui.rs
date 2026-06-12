@@ -48,6 +48,7 @@ mod text;
 mod text_scale;
 mod theme;
 mod update_check;
+mod upgrade_hint;
 mod widgets;
 mod widgets_combo;
 mod window_list;
@@ -71,6 +72,7 @@ pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
 pub(in crate::ui) use self::update_check::*;
+pub(in crate::ui) use self::upgrade_hint::*;
 pub(in crate::ui) use self::widgets::*;
 pub(in crate::ui) use self::worker_event::*;
 
@@ -339,6 +341,10 @@ struct WhisperDictateApp {
     /// poll thread is running (the one-shot-per-cycle guard), `None` otherwise.
     /// The thread sends an [`UpdateCheckOutcome`] exactly once.
     update_check_rx: Option<Receiver<UpdateCheckOutcome>>,
+    /// Instant until which the transient "Copied!" confirmation is shown next to
+    /// the update badge after the upgrade command is copied to the clipboard.
+    /// Session-only UI state — `None` when no confirmation is pending.
+    update_command_copied_until: Option<Instant>,
 }
 
 impl Default for WhisperDictateApp {
@@ -428,6 +434,7 @@ impl Default for WhisperDictateApp {
             update_available: None,
             last_update_check: None,
             update_check_rx: None,
+            update_command_copied_until: None,
         }
     }
 }
