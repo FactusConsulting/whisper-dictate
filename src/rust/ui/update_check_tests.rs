@@ -185,7 +185,7 @@ fn update_check_off_clears_badge_and_drops_receiver() {
 fn update_settings_change_detected_per_field_and_ignores_unrelated() {
     use super::update_check::update_check_settings_changed;
     let base = AppSettings::default();
-    assert!(!update_check_settings_changed(&base, &base.clone()));
+    assert!(!update_check_settings_changed(&base, &base));
 
     let mut toggled = base.clone();
     toggled.update_check = !base.update_check;
