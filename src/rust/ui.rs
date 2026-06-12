@@ -393,9 +393,10 @@ struct WhisperDictateApp {
     update_command_copied_until: Option<Instant>,
     /// Cached result of the one-time check for the Chocolatey package directory
     /// (`%ProgramData%\chocolatey\lib\whisper-dictate` or via `$ChocolateyInstall`).
-    /// `None` until the first update badge render triggers the check; thereafter
-    /// the filesystem is NOT re-probed per frame. Only meaningful on Windows — on
-    /// other platforms this is always `Some(false)`.
+    /// `None` until the first update badge render runs the probe lazily; the
+    /// filesystem is then never re-probed. On non-Windows the probe is a stub
+    /// that resolves to `false` without touching the filesystem (Chocolatey is
+    /// Windows-only).
     choco_pkg_dir_exists: Option<bool>,
     /// System-tray (notification-area) icon manager. Created empty; the actual
     /// OS tray is built lazily on the first `update()` frame (Windows only — a

@@ -10,6 +10,7 @@
 use super::super::*; // crate::ui::* — UiTextKey, ui_text, upgrade-hint helpers, open_url, …
 use super::*; // tabs::* — icon_text, palette types
 use egui_material_icons::icons;
+#[cfg(windows)]
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,10 @@ use std::time::{Duration, Instant};
 ///
 /// Returns `false` on any error (missing env var, path construction failure,
 /// I/O error) so the caller always gets a definitive `bool`.
+///
+/// Windows-only: Chocolatey does not exist elsewhere, so the non-Windows stub
+/// returns `false` without touching the filesystem.
+#[cfg(windows)]
 fn probe_choco_pkg_dir() -> bool {
     // Try $ChocolateyInstall first, fall back to the hard-coded default.
     let candidates: Vec<std::path::PathBuf> = {
@@ -50,6 +55,12 @@ fn probe_choco_pkg_dir() -> bool {
         v
     };
     candidates.iter().any(|p| p.is_dir())
+}
+
+/// Non-Windows stub: Chocolatey is Windows-only, so no filesystem probe.
+#[cfg(not(windows))]
+fn probe_choco_pkg_dir() -> bool {
+    false
 }
 
 /// How long the transient "Copied!" confirmation stays visible after a copy.
