@@ -94,9 +94,10 @@ fn parse_version_ext(raw: &str, include_prereleases: bool) -> Option<Version> {
                 // exactly like the stable-only parser does.
                 return None;
             }
-            let rest = tail
-                .strip_prefix("rc.")
-                .or_else(|| tail.strip_prefix("RC."))?;
+            // Truly case-insensitive `rc.` match (rc./RC./Rc./rC.), as the
+            // docstring promises — digits are unaffected by the lowercasing.
+            let lower = tail.to_ascii_lowercase();
+            let rest = lower.strip_prefix("rc.")?;
             let n = rest.parse::<u64>().ok()?;
             (core, Some(n))
         }
@@ -448,9 +449,11 @@ mod tests {
 
     #[test]
     fn parse_ext_on_only_accepts_rc_dot_n_shape() {
-        // Recognized prerelease shape.
+        // Recognized prerelease shape — case-insensitive rc tail.
         assert!(parse_version_ext("1.10.0-rc.1", true).is_some());
         assert!(parse_version_ext("v1.10.0-RC.3", true).is_some());
+        assert!(parse_version_ext("1.10.0-Rc.1", true).is_some());
+        assert!(parse_version_ext("1.10.0-rC.2", true).is_some());
         // Unknown tails never win the compare.
         assert_eq!(parse_version_ext("1.10.0-rc1", true), None);
         assert_eq!(parse_version_ext("1.10.0-rc", true), None);
