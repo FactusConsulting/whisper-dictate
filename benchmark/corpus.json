@@ -87,6 +87,13 @@
       "terms": []
     },
     {
+      "id": "da-long-003",
+      "language": "da",
+      "category": "long_danish",
+      "text": "Det her er en testoptagelse til vores dikteringsmodel. Jeg taler i et roligt og jævnt tempo, så vi kan måle, hvor præcist systemet genkender almindelig dansk tale. Vi bruger optagelsen som en fast reference, hver gang vi ændrer noget i lydbehandlingen eller i modellen. Når jeg holder push-to-talk-tasten nede, begynder jeg først at tale, når mikrofonen er aktiv. Til sidst nævner jeg et par tekniske ord som container, deploy, Kubernetes og signal-til-støj-forhold, for at se hvordan modellen klarer fagudtryk midt i en længere sætning.",
+      "terms": ["container", "deploy", "Kubernetes"]
+    },
+    {
       "id": "en-short-001",
       "language": "en",
       "category": "short_english",
