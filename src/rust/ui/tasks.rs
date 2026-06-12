@@ -177,7 +177,11 @@ impl WhisperDictateApp {
         self.stt_api_key_input.trim().to_owned()
     }
 
-    fn run_background_command(&mut self, label: &'static str, command: WorkerCommand) {
+    pub(in crate::ui) fn run_background_command(
+        &mut self,
+        label: &'static str,
+        command: WorkerCommand,
+    ) {
         if self.background_task.is_some() {
             self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
             return;
@@ -253,6 +257,10 @@ impl WhisperDictateApp {
             }
             if result.label == TEST_AUDIO_DEVICE_LABEL {
                 self.apply_device_test(&result);
+                return;
+            }
+            if result.label == RECORD_CORPUS_ITEM_LABEL {
+                self.apply_corpus_record(&result);
                 return;
             }
             self.append_runtime_output(result.stdout.trim_end());

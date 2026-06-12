@@ -373,6 +373,15 @@ def _run_utility_subcommands(a, ap) -> None:
     if a.test_audio_device is not None:
         from whisper_dictate.vp_device_test import test_audio_device
         raise SystemExit(test_audio_device(a.test_audio_device))
+    if getattr(a, "record_corpus_item", None) is not None:
+        from whisper_dictate.vp_corpus_record import record_corpus_item
+        # Same corpus resolution as --run-benchmark (--app-root → appdata) and the
+        # same per-user audio dir the benchmark already reads from.
+        raise SystemExit(record_corpus_item(
+            a.record_corpus_item,
+            app_root=getattr(a, "app_root", None),
+            appdata=appdata_dir(),
+        ))
     if a.list_windows:
         raise SystemExit(print_windows())
     if a.model_capacity:

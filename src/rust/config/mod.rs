@@ -28,7 +28,7 @@ use crate::cli::ConfigCommand;
 
 pub use io::{
     config_path, default_history_path, ensure_dictionary_file, load_raw_config, load_settings,
-    open_dictionary, open_existing_path, save_settings, save_settings_to_path,
+    open_dictionary, open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 pub use keys::restart_required_keys;
 pub use schema::{effective_runtime_env, numeric_bounds, worker_env_overrides, NumericBounds};

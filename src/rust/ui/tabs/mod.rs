@@ -2,6 +2,7 @@ use super::*;
 use egui_material_icons::icons;
 
 mod compact;
+mod corpus_record;
 mod dictionary;
 mod log_card;
 mod output;

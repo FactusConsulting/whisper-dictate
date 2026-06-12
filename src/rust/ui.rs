@@ -33,6 +33,9 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 mod api_keys;
 mod app;
 mod audio_devices;
+mod corpus;
+mod corpus_record;
+mod corpus_record_tasks;
 mod device_test;
 mod diagnostics_level;
 mod hotkey;
@@ -57,6 +60,9 @@ mod worker_json;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
+pub(in crate::ui) use self::corpus::*;
+pub(in crate::ui) use self::corpus_record::*;
+pub(in crate::ui) use self::corpus_record_tasks::*;
 pub(in crate::ui) use self::device_test::*;
 pub(in crate::ui) use self::diagnostics_level::*;
 pub(in crate::ui) use self::hotkey::*;
@@ -278,6 +284,22 @@ struct WhisperDictateApp {
     /// run/parse failed. `None` before any test is run. Cleared when a new test
     /// is dispatched or the saved microphone changes.
     device_test_result: Option<Result<DeviceTestDisplay, String>>,
+    /// Golden-benchmark corpus items offered by the System tab's "Record corpus
+    /// audio" picker, loaded once from `benchmark/corpus.json` (app-root, falling
+    /// back to appdata). Empty when no corpus is found — the picker then shows a
+    /// "no items" placeholder.
+    corpus_items: Vec<CorpusItem>,
+    /// One-shot guard for the lazy corpus load: flips to `true` the first time
+    /// the System tab is shown and the corpus is read from disk, so re-rendering
+    /// the tab doesn't re-read the file every frame.
+    corpus_loaded: bool,
+    /// The corpus item id currently selected in the picker, or `None` before any
+    /// selection. Passed to `--record-corpus-item` when Record is clicked.
+    corpus_selected_id: Option<String>,
+    /// Transient (non-persisted) result of the last "Record" run: the parsed
+    /// saved/failed outcome on success, or an `Err` message when the run/parse
+    /// failed. `None` before any recording. Cleared when a new recording starts.
+    corpus_record_result: Option<Result<CorpusRecordOutcome, String>>,
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
@@ -412,6 +434,10 @@ impl Default for WhisperDictateApp {
             window_options: Vec::new(),
             device_error: None,
             device_test_result: None,
+            corpus_items: Vec::new(),
+            corpus_loaded: false,
+            corpus_selected_id: None,
+            corpus_record_result: None,
             config_path,
             saved_settings: settings.clone(),
             settings,
@@ -521,6 +547,8 @@ mod backend_option_tests;
 mod benchmark_task_tests;
 #[cfg(test)]
 mod cloud_settings_tests;
+#[cfg(test)]
+mod corpus_record_task_tests;
 #[cfg(test)]
 mod keyboard_layout_tests;
 #[cfg(test)]

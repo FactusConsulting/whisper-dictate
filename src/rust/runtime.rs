@@ -765,6 +765,23 @@ pub fn benchmark_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--run-benchmark".to_owned()])
 }
 
+/// Worker command that records reference audio for the golden-corpus item `id`
+/// from the configured microphone (reusing the same negotiated capture path as
+/// dictation) and saves it to `<appdata>/benchmark/audio/<id>.wav`, printing
+/// start/progress/done JSON events. Drives the System tab's "Record" action.
+/// Inherits the same `--app-root` (corpus resolution) + effective-config env
+/// (so the configured microphone is used) as every other worker command.
+pub fn record_corpus_item_command(id: &str) -> WorkerCommand {
+    default_worker_command_with_args(vec!["--record-corpus-item".to_owned(), id.to_owned()])
+}
+
+/// The app root used to resolve bundled resources (e.g. `benchmark/corpus.json`).
+/// Public wrapper over the internal resolver so the UI can read the SAME corpus
+/// manifest the worker does, honoring `VOICEPI_APP_ROOT` / the installed layout.
+pub fn resource_app_root() -> PathBuf {
+    app_root()
+}
+
 pub fn install_command() -> WorkerCommand {
     install_command_from_exe(
         env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),
