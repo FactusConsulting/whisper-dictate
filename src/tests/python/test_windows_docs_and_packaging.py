@@ -194,6 +194,23 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         )
         self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; Description: "Launch whisper-dictate now"', script)
 
+    def test_installer_and_nix_ship_data_subpackage(self):
+        # The anti-hallucination pattern JSON lives in the data/ subpackage and is
+        # loaded at import via importlib.resources. The Inno *.py / *.json globs
+        # are NOT recursive and the nix *.py loop is flat, so each needs an
+        # explicit entry or the data file would be missing from the installed app
+        # (a silent ImportError at startup).
+        installer = Path("packaging/windows/inno/whisper-dictate.iss").read_text(encoding="utf-8")
+        self.assertIn(
+            r'Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"',
+            installer,
+        )
+        nix = Path("nix/package.nix").read_text(encoding="utf-8")
+        self.assertIn("src/python/whisper_dictate/data/hallucination_patterns.json", nix)
+        # The data file must actually exist where the packaging entries point.
+        self.assertTrue(
+            Path("src/python/whisper_dictate/data/hallucination_patterns.json").exists())
+
     def test_windows_installer_workflows_build_rust_ui_before_inno(self):
         for path in (".github/workflows/release.yml", ".github/workflows/windows-installer.yml"):
             workflow = Path(path).read_text(encoding="utf-8")

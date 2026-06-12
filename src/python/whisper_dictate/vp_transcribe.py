@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from importlib import resources
 from typing import Any
 
 import numpy as np
@@ -316,63 +317,49 @@ def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> Dicti
         enabled=bool(payload.get("enabled", False)),
     )
 
-# Whisper hallucinerer disse sætninger på kort/stille lyd — ignorer dem.
-HALLUCINATIONS: frozenset[str] = frozenset({
-    "tak",
-    "tak.",
-    "tak for din opmærksomhed",
-    "tak for din opmærksomhed.",
-    "tak fordi du så med",
-    "tak fordi du så med.",
-    "tak fordi du lyttede med",
-    "tak fordi du lyttede med.",
-    "tak for at du så med",
-    "tak for at du så med.",
-    "tak for at i så med",
-    "tak for at i så med.",
-    "tak fordi i så med",
-    "tak fordi i så med.",
-    "thank you",
-    "thank you.",
-    "thank you for watching",
-    "thank you for watching.",
-    "thank you for listening",
-    "thank you for listening.",
-    "thanks for watching",
-    "thanks for watching.",
-    "undertekster af",
-    "undertekstet af",
-})
+# Anti-hallucination PATTERN DATA lives in data/hallucination_patterns.json (see
+# that file's _comment for the full design); this module owns only the matching
+# LOGIC. The loader below rebuilds, byte-for-byte, the same HALLUCINATIONS
+# frozenset and anchored _CREDIT_RE the inline literals used to produce: exact
+# whole-text blacklist, plus a credit regex whose phrase prefixes require a
+# trailing year (so real dictation starting with them survives) and whose bare
+# company names match with an optional year.
+_PATTERNS_RESOURCE = "hallucination_patterns.json"
 
 
-# Subtitle-credit hallucinations Whisper emits on quiet input come in named
-# shapes the exact-match HALLUCINATIONS set can't enumerate (e.g. "Danske
-# tekster af Jesper Buhl Scandinavian Text Service 2018"). These ANCHORED
-# regexes match the WHOLE stripped/lowercased text.
-#
-# DESIGN: phrase-forms ("tekster af …", "oversat af …", etc.) only match when
-# the utterance ends with a 4-digit year.  Real dictation can legitimately
-# START with these phrases (e.g. "oversat af Google Translate", "tekster af
-# sange er svære at huske") so dropping them without a year anchor would be the
-# worst outcome — false-positive speech loss.  Year-less short-clip credits are
-# independently caught by the speech-rate gate.  The bare company names
-# (scandinavian text service, etc.) are specific enough to match without a year.
-_CREDIT_PHRASE_YEAR = r".{0,60}\b(?:19|20)\d{2}"  # tail: some text, then a year
-_CREDIT_BODY = (
-    r"(?:"
-    r"(?:(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)"
-    rf"|tekstet af |oversat af |subtitles? by |subtitled by "
-    rf"|captions? by |translated by ){_CREDIT_PHRASE_YEAR}"
-    r"|scandinavian text service(?: (?:19|20)\d{2})?"
-    r"|broadcast text international(?: (?:19|20)\d{2})?"
-    r"|dansk video ?tekst(?: (?:19|20)\d{2})?"
-    r")"
-)
-# Trailing punctuation/whitespace tolerated, anchored both ends.
-_CREDIT_RE = re.compile(
-    rf"^{_CREDIT_BODY}[\s.!?]*$",
-    re.IGNORECASE,
-)
+def _load_hallucination_patterns() -> dict:
+    """Read the pattern-data JSON once at import via importlib.resources.
+
+    importlib.resources (not a filesystem path) stays robust across the
+    zip/installed layouts the app ships in.
+    """
+    raw = (
+        resources.files("whisper_dictate.data")
+        .joinpath(_PATTERNS_RESOURCE)
+        .read_text(encoding="utf-8")
+    )
+    return json.loads(raw)
+
+
+def _build_credit_re(patterns: dict) -> re.Pattern[str]:
+    """Compile the anchored subtitle-credit regex from the pattern data.
+
+    The shared year tail is appended ONCE to the whole credit_phrase_prefixes
+    alternation; each bare_company_names entry is an independent branch carrying
+    its own optional year suffix. Anchored both ends, trailing punctuation/space
+    tolerated.
+    """
+    phrase_group = "|".join(patterns["credit_phrase_prefixes"])
+    body = "(?:" + "|".join([
+        f"(?:{phrase_group}){patterns['credit_phrase_year_tail']}",
+        *patterns["bare_company_names"],
+    ]) + ")"
+    return re.compile(rf"^{body}[\s.!?]*$", re.IGNORECASE)
+
+
+_HALLUCINATION_PATTERNS = _load_hallucination_patterns()
+HALLUCINATIONS: frozenset[str] = frozenset(_HALLUCINATION_PATTERNS["exact_blacklist"])
+_CREDIT_RE = _build_credit_re(_HALLUCINATION_PATTERNS)
 
 
 def _looks_like_credit(text: str) -> bool:
