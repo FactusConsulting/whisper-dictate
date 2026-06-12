@@ -1,0 +1,44 @@
+name: Warm release cache
+
+# WHY: the release / windows-installer jobs run ONLY on tags, and GitHub Actions
+# caches are branch-scoped — a tag run can restore caches only from its own ref
+# or the default branch (main). The release-profile Windows build never runs on
+# main, so its cache is never populated there and every tagged release recompiles
+# the whole crate graph from scratch.
+#
+# This job builds the same `--release` target on main, using the SAME shared-key
+# as the release windows-installer job, so tagged releases restore a warm cache.
+# It runs only when the Rust build inputs change (Python-only changes don't
+# invalidate the Rust dependency cache), so it isn't triggered by routine commits.
+#
+# TRADE-OFF: spends Windows CI minutes on Rust-touching main pushes to make
+# tagged releases fast. If that cost isn't worth it, delete this workflow — the
+# release pipeline still works, releases just build cold (~3 min Rust compile).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/rust/**'
+      - '.github/workflows/warm-release-cache.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-release-cache
+  cancel-in-progress: true
+
+jobs:
+  warm-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src/rust -> ../target"
+          shared-key: "rust-release-windows"
+          cache-on-failure: true
+      - name: Warm release build
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app

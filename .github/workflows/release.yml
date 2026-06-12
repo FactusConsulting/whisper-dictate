@@ -86,9 +86,14 @@ jobs:
 
       # Cache the dependency build so the optimized release build reuses the
       # crate graph instead of recompiling every dependency from scratch.
+      # shared-key (stable, not job-name-scoped) lets the warm-release-cache
+      # job on main populate this exact cache so tag runs restore it.
+      # cache-on-failure keeps the Rust cache even when a later step fails.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "src/rust -> ../target"
+          shared-key: "rust-release-linux"
+          cache-on-failure: true
 
       - name: Build Rust desktop UI
         run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app
@@ -448,6 +453,8 @@ jobs:
         if: steps.win-check.outputs.changed == 'true'
         with:
           workspaces: "src/rust -> ../target"
+          shared-key: "rust-release-windows"
+          cache-on-failure: true
 
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
