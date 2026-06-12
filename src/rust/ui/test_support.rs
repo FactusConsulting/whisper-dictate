@@ -46,6 +46,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         background_task_label: None,
         gpu_total_mb: None,
         gpu_probe: None,
+        last_worker_status_state: String::new(),
         pipeline_stage: None,
         pipeline_preview: None,
         worker_ready: false,
@@ -56,6 +57,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         last_update_check: None,
         update_check_rx: None,
         update_command_copied_until: None,
+        tray: TrayManager::new(),
     }
 }
 
