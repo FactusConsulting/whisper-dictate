@@ -450,6 +450,12 @@
       "min": 5,
       "max": 1440,
       "step": 5
+    },
+    {
+      "env": "VOICEPI_UPDATE_INCLUDE_PRERELEASES",
+      "key": "update_include_prereleases",
+      "default": "0",
+      "live": true
     }
   ]
 }

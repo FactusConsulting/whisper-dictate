@@ -154,6 +154,10 @@ pub(in crate::ui) enum UiTextKey {
     UpdateOpenReleaseHover,
     /// Transient confirmation shown after the upgrade command is copied.
     UpdateCommandCopied,
+    /// System-tab checkbox label: opt in to receiving release-candidate updates.
+    UpdateIncludePrereleases,
+    /// Help text for the release-candidate opt-in checkbox.
+    UpdateIncludePrereleasesHelp,
 }
 
 impl UiTextKey {
@@ -299,6 +303,16 @@ impl UiTextKey {
                     "Click to open the latest release and download the new installer:"
                 }
                 UiTextKey::UpdateCommandCopied => "Copied!",
+                UiTextKey::UpdateIncludePrereleases => "Include release candidates",
+                UiTextKey::UpdateIncludePrereleasesHelp => {
+                    "Also notify about release candidates (pre-releases like \
+                    1.10.0-rc.1) when checking for updates. RCs are early test \
+                    builds offered before a final release. Off by default — leave \
+                    it off for stable-only updates. Update them with \
+                    \"choco upgrade whisper-dictate --prerelease\" or by downloading \
+                    the matching installer from the release page. Also settable via \
+                    the VOICEPI_UPDATE_INCLUDE_PRERELEASES environment variable."
+                }
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -440,6 +454,17 @@ impl UiTextKey {
                     "Klik for at åbne seneste udgivelse og hente den nye installer:"
                 }
                 UiTextKey::UpdateCommandCopied => "Kopieret!",
+                UiTextKey::UpdateIncludePrereleases => "Inkludér release candidates",
+                UiTextKey::UpdateIncludePrereleasesHelp => {
+                    "Giv også besked om release candidates (pre-releases som \
+                    1.10.0-rc.1) ved tjek for opdateringer. RC'er er tidlige \
+                    testudgaver, der tilbydes før en endelig udgivelse. Slået fra \
+                    som standard — lad den være slået fra for kun stabile \
+                    opdateringer. Opdatér dem med \
+                    \"choco upgrade whisper-dictate --prerelease\" eller ved at \
+                    hente den tilsvarende installer fra udgivelsessiden. Kan også \
+                    sættes via miljøvariablen VOICEPI_UPDATE_INCLUDE_PRERELEASES."
+                }
             },
         }
     }
@@ -454,5 +479,33 @@ pub(in crate::ui) fn runtime_state_label(state: RuntimeState, raw_language: &str
         RuntimeState::Stopped => ui_text(raw_language, UiTextKey::Stopped),
         RuntimeState::Starting => ui_text(raw_language, UiTextKey::Starting),
         RuntimeState::Running => ui_text(raw_language, UiTextKey::Running),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_candidate_optin_strings_present_en_and_da() {
+        // EN label/help.
+        assert_eq!(
+            ui_text("en", UiTextKey::UpdateIncludePrereleases),
+            "Include release candidates"
+        );
+        let en_help = ui_text("en", UiTextKey::UpdateIncludePrereleasesHelp);
+        assert!(en_help.contains("release candidates"));
+        assert!(en_help.contains("VOICEPI_UPDATE_INCLUDE_PRERELEASES"));
+        assert!(en_help.contains("--prerelease"));
+
+        // DA label/help (distinct from EN, so the localization is real).
+        assert_eq!(
+            ui_text("da", UiTextKey::UpdateIncludePrereleases),
+            "Inkludér release candidates"
+        );
+        let da_help = ui_text("da", UiTextKey::UpdateIncludePrereleasesHelp);
+        assert_ne!(da_help, en_help, "DA help must differ from EN");
+        assert!(da_help.contains("VOICEPI_UPDATE_INCLUDE_PRERELEASES"));
+        assert!(da_help.contains("--prerelease"));
     }
 }

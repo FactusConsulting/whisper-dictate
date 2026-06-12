@@ -126,14 +126,23 @@ fn spawn_gpu_probe() -> Receiver<Option<u32>> {
 /// - `Newer(v)` — feed reachable, newer version found.
 /// - `UpToDate`  — feed reachable, no newer version.
 /// - `Failed`    — fetch / parse error; caller must NOT clear a prior badge.
-fn spawn_update_check(current_version: String) -> Receiver<UpdateCheckOutcome> {
+fn spawn_update_check(
+    current_version: String,
+    include_prereleases: bool,
+) -> Receiver<UpdateCheckOutcome> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let outcome = match update_check::fetch_published_versions() {
-            Ok(versions) => match update_check::latest_newer_version(&versions, &current_version) {
-                Some(v) => UpdateCheckOutcome::Newer(v),
-                None => UpdateCheckOutcome::UpToDate,
-            },
+            Ok(versions) => {
+                match update_check::latest_newer_version(
+                    &versions,
+                    &current_version,
+                    include_prereleases,
+                ) {
+                    Some(v) => UpdateCheckOutcome::Newer(v),
+                    None => UpdateCheckOutcome::UpToDate,
+                }
+            }
             Err(_) => UpdateCheckOutcome::Failed,
         };
         let _ = tx.send(outcome);

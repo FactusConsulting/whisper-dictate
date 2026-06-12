@@ -60,6 +60,7 @@ fn changed_settings() -> AppSettings {
         toggle_mode: true,
         update_check: false,
         update_check_interval_minutes: "30".to_owned(),
+        update_include_prereleases: true,
         ui_text_scale: "1.35".to_owned(),
         ui_log_view: "debug".to_owned(),
         post_processor: "groq".to_owned(),
@@ -179,6 +180,7 @@ fn output_page_reset_restores_only_output_settings() {
     assert_eq!(settings.ui_text_scale, "1.35");
     assert!(!settings.update_check);
     assert_eq!(settings.update_check_interval_minutes, "30");
+    assert!(settings.update_include_prereleases);
     assert!(settings.inject_json);
     assert_eq!(settings.metrics_jsonl, "metrics.jsonl");
     assert!(settings.feedback_sounds);
@@ -205,6 +207,10 @@ fn system_page_reset_restores_only_system_settings() {
     assert_eq!(
         settings.update_check_interval_minutes,
         defaults.update_check_interval_minutes
+    );
+    assert_eq!(
+        settings.update_include_prereleases,
+        defaults.update_include_prereleases
     );
     assert_eq!(settings.inject_json, defaults.inject_json);
     assert_eq!(settings.metrics_jsonl, defaults.metrics_jsonl);
