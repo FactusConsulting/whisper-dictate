@@ -17,6 +17,7 @@ mod shell_sidebar_tests;
 mod speech;
 mod system;
 mod top_status_layout;
+mod update_badge;
 
 // Log-card render widgets used by the runtime tab; re-exported into the `tabs`
 // root so `runtime` (and any future tab) can reach them via `super::*`.

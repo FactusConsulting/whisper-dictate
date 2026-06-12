@@ -140,6 +140,16 @@ pub(in crate::ui) enum UiTextKey {
     MicTestResampled,
     /// Banner heading shown when the worker reports the selected mic is unusable.
     DeviceUnusableTitle,
+    /// Hover prefix on the update badge when the install method has a copyable
+    /// upgrade command; followed by the command on its own line. Tells the user a
+    /// click copies it.
+    UpdateCopyCommandHover,
+    /// Hover prefix on the update badge when the install method has no package
+    /// manager (installer / portable); followed by the release URL. Tells the
+    /// user a click opens the release page.
+    UpdateOpenReleaseHover,
+    /// Transient confirmation shown after the upgrade command is copied.
+    UpdateCommandCopied,
 }
 
 impl UiTextKey {
@@ -229,11 +239,7 @@ impl UiTextKey {
                     Set the Dictation view to \"Debug\" to see the raw lines in the log."
                 }
                 UiTextKey::UpdateAvailable => "available",
-                UiTextKey::UpdateAvailableHover => {
-                    "A newer version has been published. Update with:\n\
-                    choco upgrade whisper-dictate --source=whisper-dictate -y\n\
-                    or update via winget / the installer from the project releases."
-                }
+                UiTextKey::UpdateAvailableHover => "A newer version has been published.",
                 UiTextKey::SystemUpdates => "Updates",
                 UiTextKey::UpdateCheck => "Check for updates",
                 UiTextKey::UpdateCheckHelp => {
@@ -276,6 +282,11 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Cannot be used",
                 UiTextKey::MicTestResampled => "resampled",
                 UiTextKey::DeviceUnusableTitle => "Microphone unavailable",
+                UiTextKey::UpdateCopyCommandHover => "Click to copy the upgrade command:",
+                UiTextKey::UpdateOpenReleaseHover => {
+                    "Click to open the latest release and download the new installer:"
+                }
+                UiTextKey::UpdateCommandCopied => "Copied!",
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -361,11 +372,7 @@ impl UiTextKey {
                     Sæt Dikterings-visningen til \"Debug\" for at se de rå linjer i loggen."
                 }
                 UiTextKey::UpdateAvailable => "tilgængelig",
-                UiTextKey::UpdateAvailableHover => {
-                    "En nyere version er udgivet. Opdater med:\n\
-                    choco upgrade whisper-dictate --source=whisper-dictate -y\n\
-                    eller opdater via winget / installeren fra projektets releases."
-                }
+                UiTextKey::UpdateAvailableHover => "En nyere version er udgivet.",
                 UiTextKey::SystemUpdates => "Opdateringer",
                 UiTextKey::UpdateCheck => "Søg efter opdateringer",
                 UiTextKey::UpdateCheckHelp => {
@@ -408,6 +415,11 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Kan ikke bruges",
                 UiTextKey::MicTestResampled => "resamplet",
                 UiTextKey::DeviceUnusableTitle => "Mikrofon utilgængelig",
+                UiTextKey::UpdateCopyCommandHover => "Klik for at kopiere opdateringskommandoen:",
+                UiTextKey::UpdateOpenReleaseHover => {
+                    "Klik for at åbne seneste udgivelse og hente den nye installer:"
+                }
+                UiTextKey::UpdateCommandCopied => "Kopieret!",
             },
         }
     }
