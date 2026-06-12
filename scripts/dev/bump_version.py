@@ -36,11 +36,15 @@ import re
 import sys
 
 # A release version is strict semver MAJOR.MINOR.PATCH, optionally followed by a
-# release-candidate prerelease suffix `-rc.N` (N >= 1, no leading zero). Examples:
+# release-candidate prerelease suffix `-rc.N` (N >= 1, no leading zero). Per
+# SemVer, numeric identifiers must NOT have leading zeros, so each of MAJOR,
+# MINOR, PATCH is `0` or a non-zero-led run of digits (`0|[1-9]\d*`). Examples:
 #   1.9.5        -> stable release
 #   1.9.5-rc.1   -> prerelease (RC); tagging vX.Y.Z-rc.N marks a GitHub prerelease
-# Rejected: 1.9.5-rc, 1.9.5-rc.x, 1.9.5-rc.0, 1.9.5-beta.1, v1.9.5, 1.9.5-rc.1.2
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$")
+# Rejected: 1.9.5-rc, 1.9.5-rc.x, 1.9.5-rc.0, 1.9.5-beta.1, v1.9.5, 1.9.5-rc.1.2,
+#           01.2.3, 1.02.3, 1.2.03 (leading zeros)
+_NUM = r"(?:0|[1-9]\d*)"
+_VERSION_RE = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}(?:-rc\.[1-9]\d*)?$")
 
 VERSION_FILE = "VERSION"
 CARGO_TOML = "Cargo.toml"

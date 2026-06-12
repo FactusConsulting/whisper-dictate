@@ -171,8 +171,10 @@ def sibling_endpoints_for_device(sd, device) -> list[tuple[int, str]]:
     skipped as siblings (we never re-add the resolved endpoint or pull in
     pseudo-device noise). Pure over injected ``sd.query_devices()`` /
     ``sd.query_hostapis()`` so it unit-tests with the same stubbed tables the
-    picker/resolver use. Any query failure or a non-int ``device`` yields just
-    ``[(device, name)]`` (or ``[]``), so capture degrades to today's behaviour.
+    picker/resolver use. A non-int ``device``, a ``query_devices()`` failure, an
+    out-of-range index, or a non-dict device entry all yield ``[]`` (no sibling
+    retry), so capture degrades to today's behaviour. When the resolved name is
+    blank, only the resolved endpoint ``[(device, hostapi_name)]`` is returned.
     """
     if not isinstance(device, int):
         return []

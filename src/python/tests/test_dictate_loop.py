@@ -382,6 +382,26 @@ class StartCrashRecoveryTests(unittest.TestCase):
         self.assertFalse(d.recording)
         self.assertTrue(any(e.get("state") == "ready" for e in events))
 
+    def test_generic_start_failure_message_is_path_agnostic(self):
+        # Regression: a non-DeviceUnusableError failure must NOT frame itself as
+        # an "open" failure, claim "format unsupported", or name Windows
+        # specifically — the cause could be a start failure or an arecord/ALSA
+        # error on Linux. The message stays generic (and still names the device).
+        d = self._make_dictate()
+        d._start_sounddevice = lambda: (_ for _ in ()).throw(
+            RuntimeError("arecord exited with code 1"))
+
+        events = self._run_start(d)  # must NOT raise
+
+        errors = [e for e in events if e.get("state") == "error"]
+        self.assertEqual(len(errors), 1, f"expected one error event; got {events!r}")
+        message = errors[0].get("error", "")
+        self.assertIn("Yeti", message)  # still names the device
+        lowered = message.lower()
+        self.assertNotIn("at 16 khz", lowered)
+        self.assertNotIn("format unsupported", lowered)
+        self.assertNotIn("windows", lowered)
+
     def test_device_unusable_surfaces_actionable_error_and_stays_usable(self):
         # Fix 1 end-to-end: when _start_sounddevice raises DeviceUnusableError
         # (explicit mic that won't open on ANY host API), Dictate._start must
@@ -530,6 +550,33 @@ class LiveReloadAudioDeviceTests(unittest.TestCase):
             d, prev_setting="Old Mic", env="New Mic", resolver=_boom)
         self.assertEqual([e for e in events if e.get("state") == "ready"], [])
         self.assertEqual(d._audio_input_device, "Old Mic")  # untouched on failure
+
+    def test_no_ready_emit_while_recording_mid_pipeline(self):
+        # Regression: the live-config reload also runs at the TOP of
+        # _stop_and_transcribe, where recording is still True and the
+        # `transcribing` status has not been emitted yet. Emitting a `ready`
+        # there would wrongly flip the UI out of its recording/processing state.
+        # When recording, the optimistic emit must be suppressed entirely.
+        d = self._make_dictate()
+        d.recording = True
+        events = self._emit_on_change(
+            d, prev_setting="Old Mic", env="New Mic", resolved="New Mic (WASAPI)")
+        self.assertEqual(
+            [e for e in events if e.get("state") == "ready"], [],
+            f"no ready may be emitted mid-recording; got {events!r}")
+        # The shown label is left for the next stream-open to set; not touched here.
+        self.assertEqual(d._audio_input_device, "Old Mic")
+
+    def test_ready_emit_when_idle_after_save(self):
+        # The idle path (recording False) still emits the optimistic ready so the
+        # shown mic name updates on save.
+        d = self._make_dictate()
+        d.recording = False
+        events = self._emit_on_change(
+            d, prev_setting="Old Mic", env="New Mic", resolved="New Mic (WASAPI)")
+        ready = [e for e in events if e.get("state") == "ready"]
+        self.assertEqual(len(ready), 1, f"expected one ready event; got {events!r}")
+        self.assertEqual(ready[0]["audio_device"], "New Mic (WASAPI)")
 
     def test_reload_wires_device_change_through_to_emit(self):
         # Integration: _reload_live_config_if_changed snapshots the OLD device,

@@ -121,6 +121,8 @@ pub(in crate::ui) enum UiTextKey {
     HealthWarn,
     /// "Refresh devices" button next to the Microphone picker.
     MicRefresh,
+    /// Hover/help text for the Microphone "Refresh devices" button.
+    MicRefreshHelp,
     /// "Test" button next to the Microphone picker.
     MicTest,
     /// Hover/help text for the Microphone "Test" button.
@@ -258,6 +260,10 @@ impl UiTextKey {
                 UiTextKey::HealthOk => "Healthy",
                 UiTextKey::HealthWarn => "Warning",
                 UiTextKey::MicRefresh => "Refresh devices",
+                UiTextKey::MicRefreshHelp => {
+                    "Run the worker to list available microphones. The result populates the \
+                    picker; it does not load a model or start dictation."
+                }
                 UiTextKey::MicTest => "Test",
                 UiTextKey::MicTestHelp => {
                     "Dry-run open the selected microphone (resolve it and try the same \
@@ -386,6 +392,10 @@ impl UiTextKey {
                 UiTextKey::HealthOk => "God",
                 UiTextKey::HealthWarn => "Advarsel",
                 UiTextKey::MicRefresh => "Opdater enheder",
+                UiTextKey::MicRefreshHelp => {
+                    "Kør workeren for at vise tilgængelige mikrofoner. Resultatet udfylder \
+                    listen; det indlæser ingen model og starter ikke diktering."
+                }
                 UiTextKey::MicTest => "Test",
                 UiTextKey::MicTestHelp => {
                     "Prøveåbn den valgte mikrofon (find den og prøv de samme \

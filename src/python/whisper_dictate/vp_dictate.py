@@ -257,7 +257,17 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         to "System default" inside the resolver, so we still emit *something*. The
         truly-bound device is re-derived when the next recording opens the stream
         (``_start_*``), so a wrong optimistic name self-corrects.
+
+        Only fires when the worker is IDLE (not mid-recording/mid-transcription).
+        The live-config reload also runs at the TOP of ``_stop_and_transcribe`` —
+        where ``recording`` is still True and the ``transcribing`` status has not
+        yet been emitted. Emitting ``state="ready"`` there would wrongly flip the
+        UI out of its recording/processing state mid-pipeline if the user saved a
+        new mic while holding the key. So gate on the idle flag and let the next
+        recording's stream-open carry the new device name when not idle.
         """
+        if getattr(self, "recording", False):
+            return
         if vp_capture._audio_device_setting() == prev_setting:
             return
         try:
@@ -553,9 +563,13 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             message = exc.message
             reason = "device_unusable"
         else:
+            # Generic capture-start failure: the cause may be an open failure, a
+            # start failure, a format rejection, or an arecord/ALSA error on
+            # Linux — don't assert "open"/"format unsupported" or name Windows
+            # specifically, since any of those could be wrong for the actual path.
             message = (
-                f"Could not open {device} at 16 kHz (format unsupported: {exc}). "
-                "Try another microphone or check Windows sound settings."
+                f"Could not start recording on {device} ({exc}). "
+                "Try another microphone or check your system sound settings."
             )
             reason = "capture_open_failed"
         _emit_worker_event(
