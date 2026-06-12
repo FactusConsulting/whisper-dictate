@@ -157,10 +157,13 @@ impl WhisperDictateApp {
     /// is logged exactly once and then ignored — the dictation flow never depends
     /// on the tray.
     ///
-    /// `display_runtime_state()` is used (not the raw state) so the "still
-    /// loading the model" window shows amber, matching the in-app indicator.
+    /// Uses the raw last worker status state string (stored by
+    /// `update_worker_status`) so `"opening"` (mic device opening, NOT yet live)
+    /// correctly shows amber — capturing the exact moment between push-to-talk
+    /// and the mic going live that the in-app indicator cannot represent.
     fn sync_tray(&mut self, ctx: &egui::Context) {
-        let state = tray_state_from_app(self.display_runtime_state(), self.pipeline_stage);
+        let worker_running = self.runtime_state != RuntimeState::Stopped;
+        let state = tray_state_for(&self.last_worker_status_state, worker_running);
         if let Err(reason) = self.tray.sync(state, &self.settings.ui_language) {
             // First (and only) failure: log it, then permanently disable the tray
             // so we never retry-spam or block the app on a headless/denied tray.
@@ -254,14 +257,19 @@ impl WhisperDictateApp {
         self.clear_audio_meter_readings();
     }
 
-    /// Drop the live pipeline-progress card state (stage + growing preview text).
-    /// Called whenever the worker is no longer running a dictation — on
-    /// stop/restart and on Exited/Error — so the sidebar recording indicator and
-    /// the `render_pipeline_progress` card can't stick on a stale "recording"
-    /// stage after the worker is gone.
+    /// Drop the live pipeline-progress card state (stage + growing preview text)
+    /// and the last-seen worker status state string. Called whenever the worker
+    /// is no longer running a dictation — on stop/restart and on Exited/Error —
+    /// so the sidebar recording indicator, the `render_pipeline_progress` card,
+    /// and the tray icon can't stick on a stale "recording" stage after the
+    /// worker is gone. Clearing `last_worker_status_state` means the tray will
+    /// use the empty-string fallback, which `tray_state_for` maps to Ready/grey
+    /// depending on whether the worker is running — the correct behaviour once
+    /// the runtime_state has also flipped to Stopped.
     pub(in crate::ui) fn clear_pipeline_progress(&mut self) {
         self.pipeline_stage = None;
         self.pipeline_preview = None;
+        self.last_worker_status_state = String::new();
     }
 
     /// Blank the live meter readings (level / dBFS / peak) without touching the
@@ -362,7 +370,13 @@ impl WhisperDictateApp {
         }
 
         self.last_update_check = Some(std::time::Instant::now());
-        self.update_check_rx = Some(spawn_update_check(self.app_version.clone()));
+        // The "include release candidates" opt-in is read here, at poll time, so
+        // it is LIVE: toggling it takes effect on the next scheduled poll without
+        // a restart. When off, RCs in the feed are invisible (stable-only).
+        self.update_check_rx = Some(spawn_update_check(
+            self.app_version.clone(),
+            self.settings.update_include_prereleases,
+        ));
     }
 
     pub(in crate::ui) fn cloud_stt_missing_api_key(&self) -> bool {
@@ -477,6 +491,12 @@ impl WhisperDictateApp {
             self.active_audio_device = audio_device;
         }
         if let Some(state) = event.state.as_deref() {
+            // Store the raw state string for tray-icon mapping. "preview" is
+            // display-only and carries no state change for the tray, so we
+            // keep the previous state in that case (the mic is still recording).
+            if state != "preview" {
+                self.last_worker_status_state = state.to_owned();
+            }
             self.audio_capture_opening = state == "opening";
             // "preview" is a mid-recording, display-only signal: it must NOT
             // overwrite pipeline_stage (which would clear the live "recording"

@@ -128,14 +128,23 @@ fn spawn_gpu_probe() -> Receiver<Option<u32>> {
 /// - `Newer(v)` — feed reachable, newer version found.
 /// - `UpToDate`  — feed reachable, no newer version.
 /// - `Failed`    — fetch / parse error; caller must NOT clear a prior badge.
-fn spawn_update_check(current_version: String) -> Receiver<UpdateCheckOutcome> {
+fn spawn_update_check(
+    current_version: String,
+    include_prereleases: bool,
+) -> Receiver<UpdateCheckOutcome> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let outcome = match update_check::fetch_published_versions() {
-            Ok(versions) => match update_check::latest_newer_version(&versions, &current_version) {
-                Some(v) => UpdateCheckOutcome::Newer(v),
-                None => UpdateCheckOutcome::UpToDate,
-            },
+            Ok(versions) => {
+                match update_check::latest_newer_version(
+                    &versions,
+                    &current_version,
+                    include_prereleases,
+                ) {
+                    Some(v) => UpdateCheckOutcome::Newer(v),
+                    None => UpdateCheckOutcome::UpToDate,
+                }
+            }
             Err(_) => UpdateCheckOutcome::Failed,
         };
         let _ = tx.send(outcome);
@@ -303,6 +312,14 @@ struct WhisperDictateApp {
     /// Background thread that computes `gpu_total_mb` (runs `nvidia-smi`).
     /// Polled non-blockingly each frame; set to `None` once the result is adopted.
     gpu_probe: Option<Receiver<Option<u32>>>,
+    /// The raw worker `status` state string from the most recent status event
+    /// (e.g. `"opening"`, `"recording"`, `"transcribing"`, `"ready"`, …).
+    /// Stored verbatim so `sync_tray` can pass it to `tray_state_for`, which
+    /// correctly maps `"opening"` → amber (mic not yet live) before `"recording"`
+    /// → red (mic live). Empty string before the first status event arrives,
+    /// which `tray_state_for` treats as the `Ready` fallback when the worker is
+    /// running — an acceptable approximation for the very first frame.
+    last_worker_status_state: String,
     /// Current dictation pipeline stage from worker status events
     /// ("recording" / "transcribing" / "post-processing"), or None when idle.
     /// Drives the live progress card in the runtime log.
@@ -433,6 +450,7 @@ impl Default for WhisperDictateApp {
             background_task_label: None,
             gpu_total_mb: None,
             gpu_probe: Some(spawn_gpu_probe()),
+            last_worker_status_state: String::new(),
             pipeline_stage: None,
             pipeline_preview: None,
             worker_ready: false,

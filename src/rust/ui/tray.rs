@@ -2,13 +2,16 @@
 //! user can SEE — at a glance, without the main window — when the microphone is
 //! actually live. The core feature: the tray dot turns RED the moment capture
 //! starts (worker `status=recording`), GREEN while the worker is idle/ready,
-//! GREY when nothing is running, and AMBER while transcribing/processing.
+//! GREY when nothing is running, and AMBER while opening/transcribing/processing.
 //!
 //! Layering, by design:
 //! - The pure logic — the [`TrayState`] enum, the worker-status → state mapping
-//!   ([`tray_state_for`] / [`tray_state_from_app`]), the programmatic icon
-//!   pixels ([`tray_icon_rgba`]), and the tooltip-key mapping — is **cfg-free**
-//!   so its unit tests run on every platform (incl. the Linux dev container/CI).
+//!   ([`tray_state_for`]), the programmatic icon pixels ([`tray_icon_rgba`]), and
+//!   the tooltip-key mapping — is **cfg-free** so its unit tests run on every
+//!   platform (incl. the Linux dev container/CI). All pure items are referenced
+//!   unconditionally from either the cfg-free tests or the code paths that feed
+//!   both the Windows tray and the cross-platform app — so dead_code never fires
+//!   on any platform, no `allow(dead_code)` needed.
 //! - The actual OS tray lives behind `#[cfg(windows)]` (see [`TrayManager`]).
 //!   Windows is the primary platform and the user's request is Windows-specific;
 //!   gating to Windows also keeps tray-icon's gtk/libxdo system deps out of the
@@ -17,7 +20,6 @@
 //!   `app.rs` stay platform-agnostic and the dictation flow is never affected.
 
 use super::{ui_text, UiTextKey};
-use crate::runtime::RuntimeState;
 
 /// What the tray icon should convey. Ordered roughly idle → active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,16 +32,11 @@ pub(in crate::ui) enum TrayState {
     /// The microphone is actively capturing audio (worker `status=recording`).
     /// Red dot — "I'm listening, you can talk now".
     Recording,
-    /// The worker is busy on the rest of the pipeline (transcribing /
-    /// post-processing) or still starting up. Amber dot.
+    /// The worker is busy on the rest of the pipeline (opening the mic /
+    /// transcribing / post-processing) or still starting up. Amber dot.
     Processing,
 }
 
-// `rgb` / `tooltip_key` feed the Windows tray icon + tooltip and the cfg-free
-// unit tests. On a non-Windows non-test build (e.g. the Linux dev container/CI)
-// the tray is a no-op stub, so they read as dead there — allow it rather than
-// cfg-gate the pure logic, which must stay compiled+tested on every platform.
-#[cfg_attr(not(windows), allow(dead_code))]
 impl TrayState {
     /// The opaque RGB fill for this state's mic dot. Kept here (not in the
     /// theme palette) so it is cfg-free and unit-testable without an egui
@@ -72,19 +69,22 @@ impl TrayState {
     }
 }
 
-/// Pure mapping from a raw worker `status` `state` string + whether the worker
-/// process is running to a [`TrayState`].
+/// Pure mapping from the raw worker `status` `state` string and whether the
+/// worker process is running, to a [`TrayState`].
 ///
-/// This is the literal user scenario: while the worker is up, the dot is GREEN
-/// (`ready`/idle) and only flips RED once `state == "recording"` — i.e. once
-/// capture is actually live — so the user knows the held push-to-talk key has
-/// taken effect and they can start talking. `transcribing`/`post-processing`
-/// go AMBER; an unknown state while running falls back to GREEN (ready).
+/// This is the authoritative tray mapping used by the app (via `sync_tray`).
+/// The app passes the raw last-seen worker status state string so the full
+/// range of states — including `"opening"` (mic device opening, NOT yet live)
+/// — is faithfully represented:
 ///
-/// The app itself derives the tray state from its tracked fields via
-/// [`tray_state_from_app`]; this string-based variant matches the spec and is
-/// exercised by the unit tests (hence the `dead_code` allowance off Windows).
-#[cfg_attr(not(windows), allow(dead_code))]
+/// | Worker not running        | `NotRunning` (grey)   |
+/// | `"opening"`               | `Processing` (amber)  — mic NOT live, don't talk yet |
+/// | `"recording"`             | `Recording` (red)     — mic live, talk now |
+/// | `"transcribing"` / `"post-processing"` / `"loading_model"` | `Processing` (amber) |
+/// | any other state while running | `Ready` (green)   |
+///
+/// Keeping the mapping here (not spread across `app.rs`) makes it a pure
+/// function that the unit tests exercise directly — the same path the app uses.
 pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) -> TrayState {
     if !worker_running {
         return TrayState::NotRunning;
@@ -97,41 +97,7 @@ pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) ->
     }
 }
 
-/// Derive the tray state from the fields the app already tracks (the same
-/// inputs the in-app sidebar recording indicator uses), so the tray and the
-/// indicator never disagree.
-///
-/// Precedence mirrors [`super::tabs::recording_indicator_style`]:
-/// 1. `Stopped` → `NotRunning` (can never legitimately be recording, even with
-///    a stale `pipeline_stage`).
-/// 2. An active `recording` pipeline stage → `Recording` (the live capture
-///    moment), regardless of Running/Starting.
-/// 3. Other active stages (`transcribing`/`post-processing`) → `Processing`.
-/// 4. `Running` → `Ready`; `Starting` → `Processing` (busy loading).
-pub(in crate::ui) fn tray_state_from_app(
-    runtime: RuntimeState,
-    pipeline_stage: Option<&str>,
-) -> TrayState {
-    match runtime {
-        RuntimeState::Stopped => TrayState::NotRunning,
-        RuntimeState::Running | RuntimeState::Starting if pipeline_stage == Some("recording") => {
-            TrayState::Recording
-        }
-        RuntimeState::Running | RuntimeState::Starting
-            if matches!(
-                pipeline_stage,
-                Some("transcribing") | Some("post-processing")
-            ) =>
-        {
-            TrayState::Processing
-        }
-        RuntimeState::Running => TrayState::Ready,
-        RuntimeState::Starting => TrayState::Processing,
-    }
-}
-
 /// The localized tooltip string for a tray state (e.g. "whisper-dictate — recording").
-#[cfg_attr(not(windows), allow(dead_code))]
 pub(in crate::ui) fn tray_tooltip(state: TrayState, raw_language: &str) -> &'static str {
     ui_text(raw_language, state.tooltip_key())
 }
@@ -144,7 +110,6 @@ pub(in crate::ui) fn tray_tooltip(state: TrayState, raw_language: &str) -> &'sta
 /// `tray_icon::Icon` from this buffer via `Icon::from_rgba`.
 ///
 /// The returned buffer is exactly `size * size * 4` bytes in RGBA order.
-#[cfg_attr(not(windows), allow(dead_code))]
 pub(in crate::ui) fn tray_icon_rgba(state: TrayState, size: u32) -> Vec<u8> {
     let [r, g, b] = state.rgb();
     let mut rgba = vec![0u8; (size * size * 4) as usize];
@@ -336,6 +301,9 @@ mod stub {
 mod tests {
     use super::*;
 
+    // All tests exercise `tray_state_for` — the single unified mapping that the
+    // app uses via `sync_tray`. This is identical to the real call path.
+
     #[test]
     fn not_running_when_worker_down_regardless_of_state_string() {
         // Even a "recording" string can't show red when the worker isn't running.
@@ -387,61 +355,36 @@ mod tests {
         }
     }
 
+    /// The user scenario: holding push-to-talk triggers `opening` first (the OS
+    /// device is being opened — mic NOT yet live → amber, not red), then `recording`
+    /// (capture live → red). This test exercises `tray_state_for` which is the
+    /// exact function `sync_tray` calls, so it validates the real app code path.
     #[test]
-    fn opening_then_recording_flips_green_to_red_only_on_recording() {
-        // The exact user scenario: holding push-to-talk opens the device first
-        // (mic NOT live yet → stay amber/processing, definitely NOT recording),
-        // then capture goes live (`recording`) → RED, telling the user to talk.
+    fn opening_then_recording_flips_amber_to_red_via_unified_mapping() {
+        // `opening` → amber (Processing): mic not live yet, don't talk.
         let opening = tray_state_for("opening", true);
+        assert_eq!(
+            opening,
+            TrayState::Processing,
+            "opening must be Processing (amber), not red — mic not live yet"
+        );
         assert_ne!(
             opening,
             TrayState::Recording,
             "while merely opening, the dot must not be red yet"
         );
+
+        // `recording` → red: mic is live, talk now.
         let recording = tray_state_for("recording", true);
         assert_eq!(recording, TrayState::Recording);
         assert_ne!(
             recording, opening,
             "recording must visibly differ from opening"
         );
+
         // And distinct colours back the distinct states.
         assert_ne!(TrayState::Ready.rgb(), TrayState::Recording.rgb());
-    }
-
-    #[test]
-    fn from_app_matches_indicator_precedence() {
-        // Stopped → grey, even with a stale recording stage.
-        assert_eq!(
-            tray_state_from_app(RuntimeState::Stopped, Some("recording")),
-            TrayState::NotRunning
-        );
-        // Active recording stage wins over Running/Starting → red.
-        assert_eq!(
-            tray_state_from_app(RuntimeState::Running, Some("recording")),
-            TrayState::Recording
-        );
-        assert_eq!(
-            tray_state_from_app(RuntimeState::Starting, Some("recording")),
-            TrayState::Recording
-        );
-        // Other pipeline stages → amber.
-        assert_eq!(
-            tray_state_from_app(RuntimeState::Running, Some("transcribing")),
-            TrayState::Processing
-        );
-        assert_eq!(
-            tray_state_from_app(RuntimeState::Running, Some("post-processing")),
-            TrayState::Processing
-        );
-        // Plain running (idle) → green; plain starting → amber.
-        assert_eq!(
-            tray_state_from_app(RuntimeState::Running, None),
-            TrayState::Ready
-        );
-        assert_eq!(
-            tray_state_from_app(RuntimeState::Starting, None),
-            TrayState::Processing
-        );
+        assert_ne!(TrayState::Processing.rgb(), TrayState::Recording.rgb());
     }
 
     #[test]

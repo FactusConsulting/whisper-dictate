@@ -243,6 +243,15 @@ impl WhisperDictateApp {
                 &mut self.settings.update_check_interval_minutes,
                 ui_text(&language, UiTextKey::UpdateCheckIntervalHelp),
             );
+            // Opt-in to release-candidate notifications. Only meaningful while the
+            // check is enabled, so it greys out alongside the interval field.
+            checkbox_enabled(
+                ui,
+                self.settings.update_check,
+                ui_text(&language, UiTextKey::UpdateIncludePrereleases),
+                &mut self.settings.update_include_prereleases,
+                ui_text(&language, UiTextKey::UpdateIncludePrereleasesHelp),
+            );
         });
 
         ui.add_space(14.0);

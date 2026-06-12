@@ -89,6 +89,7 @@ requiring restart/model reload.
 | **UI theme** | Output | `ui_theme` in `config.json` | _none_ | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
 | **Update check** | System | `VOICEPI_UPDATE_CHECK` | _none_ | `1` (on) | truthy / falsey | Periodically check whether a newer version has been published and show a discreet "update available" badge next to the version in the sidebar. **PRIVACY:** only fetches the public version list from GitHub (`github.io`) and sends **NO** data, telemetry, or identifiers anywhere. UI-only (does not affect the Python worker). Automatically skipped when **Local only** is enabled. |
 | **Update check interval** | System | `VOICEPI_UPDATE_CHECK_INTERVAL_MINUTES` | _none_ | `15` | integer minutes (clamped to ≥ 5) | How often the in-app update check polls the public version list. Values below 5 are clamped up to 5. UI-only. |
+| **Include release candidates** | System | `VOICEPI_UPDATE_INCLUDE_PRERELEASES` | _none_ | `0` (off) | truthy / falsey | Opt in to update notifications for **release candidates** (pre-releases such as `1.10.0-rc.1`), not just final releases. Off by default, so stable users are never offered RCs. When on, the badge offers the newest of either an RC or a final (a final always outranks its own RCs: `…-rc.1` < `…-rc.2` < final). LIVE — applies on the next scheduled poll. UI-only (does not affect the Python worker). When the **running** build is itself an RC and this is **off**, the check falls back to the RC's base version, so a newer **final** is still offered while RC noise stays hidden. Upgrade RCs with `choco upgrade whisper-dictate --prerelease` (Chocolatey) or by downloading the matching installer from the release page. |
 
 The detailed tables below are the same knobs split by surface (env vars
 vs flags) with the longer prose. Most users only need the cheat sheet +
@@ -493,6 +494,44 @@ whisper-dictate run --dictionary-suggest benchmark\results.jsonl
 On Windows, the Settings UI exposes the same suggestion flow on the Dictionary
 tab. Pick a benchmark/history JSONL file, review the proposed replacements, and
 apply them to the configured dictionary when they look correct.
+
+### Benchmark corpus
+
+The **System** tab's **Run benchmark** button runs a "golden corpus" of
+reference sentences through your currently-configured backend and reports a
+concise `[benchmark] …` summary (pass count + average WER/CER) in the runtime
+log. It needs no arguments.
+
+**Where the manifest is found.** The corpus _manifest_ (`corpus.json`, the
+reference text + technical terms — no audio) is resolved in this order:
+
+1. an explicit `--benchmark-corpus PATH` argument, if you pass one;
+2. `<app-root>/benchmark/corpus.json` — the dev-checkout layout, and the file
+   the installer/ZIP now ship, so the button works out of the box;
+3. `%APPDATA%\WhisperDictate\benchmark\corpus.json` on Windows or
+   `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/benchmark/corpus.json`
+   elsewhere — a manifest you manage yourself that survives reinstalls.
+
+If no corpus is found anywhere, the log shows one clear line
+(`[benchmark] no corpus manifest found (looked: …) — see docs`) and the run
+ends cleanly — the button never silently does nothing.
+
+**Audio recordings are yours and stay local.** The manifest references one audio
+recording per item, but those `.wav` files are _not_ shipped (they are
+user-local and gitignored). For each item, the worker first looks for the
+recording next to the manifest, then falls back to the per-user audio dir:
+
+- Windows: `%APPDATA%\WhisperDictate\benchmark\audio\<id>.wav`
+- Linux/macOS: `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/benchmark/audio/<id>.wav`
+
+Keeping recordings there means they survive reinstalls. Items whose audio is
+missing everywhere are reported as `skipped` in the summary, so a fresh install
+shows e.g. `[benchmark] 0/31 passed, 31 skipped (no audio)` — and when _every_
+item is skipped for missing audio, the line appends
+`record corpus audio to <that audio dir>` so you know exactly what to do next.
+In a dev checkout, `scripts/benchmark/record-corpus.py` records each item next to
+the manifest (`benchmark/audio/`); to keep recordings across reinstalls, copy
+them into the per-user audio dir above (the worker checks it as a fallback).
 
 ### Target profiles
 

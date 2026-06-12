@@ -47,6 +47,10 @@ Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\docs\*.md";          DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\..\..\docs\examples\dictionary.example.json"; DestDir: "{app}\docs\examples"; Flags: ignoreversion
 Source: "..\..\..\requirements\*.txt"; DestDir: "{app}\requirements"; Flags: ignoreversion
+; The golden-benchmark manifest (corpus.json only — NOT the user-local, gitignored
+; audio recordings) so the System tab's "Run benchmark" resolves a corpus out of
+; the box in the installed app. The worker looks for {app}\benchmark\corpus.json.
+Source: "..\..\..\benchmark\corpus.json"; DestDir: "{app}\benchmark"; Flags: ignoreversion
 Source: "..\..\..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\..\scripts\dev\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
 

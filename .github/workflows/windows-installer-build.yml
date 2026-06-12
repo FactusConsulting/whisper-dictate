@@ -155,6 +155,11 @@ jobs:
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
           Copy-Item target\release\whisper-dictate.exe $bundle
+          # Ship the golden-benchmark manifest (corpus.json only — NOT the
+          # user-local, gitignored audio) so "Run benchmark" resolves a corpus
+          # out of the box. Mirrors the Inno installer's benchmark\corpus.json.
+          New-Item -ItemType Directory -Force (Join-Path $bundle "benchmark") | Out-Null
+          Copy-Item benchmark\corpus.json (Join-Path $bundle "benchmark")
           New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
           Copy-Item scripts\dev\inject-smoke.py (Join-Path $bundle "scripts")
           $zip = Join-Path $outDir "whisper-dictate-windows-$version.zip"

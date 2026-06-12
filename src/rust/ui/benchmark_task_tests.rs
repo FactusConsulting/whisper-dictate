@@ -31,6 +31,29 @@ fn run_benchmark_is_skipped_while_another_background_task_runs() {
         "expected a skip notice in the log, got: {}",
         app.runtime_log
     );
+    // ...and NO "benchmark started" line was emitted (the run never started).
+    assert!(
+        !app.runtime_log.contains("benchmark started"),
+        "no start line should be logged when the run is gated, got: {}",
+        app.runtime_log
+    );
+}
+
+#[test]
+fn run_benchmark_logs_immediate_start_line_when_it_starts() {
+    // The model load + corpus pass is slow, so the button prints an immediate
+    // "benchmark started" line (before the worker even spawns) so it never feels
+    // dead. No other task is running here, so the run starts and the line lands.
+    let mut app = test_app(AppSettings::default());
+
+    app.run_benchmark();
+
+    assert!(
+        app.runtime_log
+            .contains("[ui] benchmark started — results appear here when finished"),
+        "expected an immediate start line, got: {}",
+        app.runtime_log
+    );
 }
 
 #[test]

@@ -71,9 +71,22 @@ pub(in crate::ui) enum UpgradeAction {
 const WINGET_PACKAGE_ID: &str = "FactusConsulting.WhisperDictate";
 
 /// The latest-release page. Installer/portable users download the new
-/// installer/zip from here.
+/// installer/zip from here. NOTE: `releases/latest` resolves to the newest
+/// FINAL release and EXCLUDES prereleases, so a prerelease offer must instead
+/// link the specific tag (see [`release_tag_url`]).
 const RELEASES_LATEST_URL: &str =
     "https://github.com/FactusConsulting/whisper-dictate/releases/latest";
+
+/// Build the release page URL for a SPECIFIC version tag, e.g.
+/// `https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.10.0-rc.1`.
+///
+/// Used for prerelease offers because `releases/latest` skips prereleases. The
+/// version is normalized to a single leading `v` (the feed may carry it with or
+/// without one). Pure / unit-tested.
+fn release_tag_url(version: &str) -> String {
+    let v = version.trim().trim_start_matches('v');
+    format!("https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{v}")
+}
 
 /// Classify how this instance was installed from the running executable's path.
 ///
@@ -126,7 +139,41 @@ pub(in crate::ui) fn detect_install_method(exe_path: &str, os: Os) -> InstallMet
 /// Pure / unit-tested. Command strings are the exact paste-and-run commands;
 /// the Choco source name matches the project's feed (`--source=whisper-dictate`)
 /// and the winget id matches the published manifest.
-pub(in crate::ui) fn upgrade_action(method: InstallMethod) -> UpgradeAction {
+///
+/// `offered_version` is the version string the badge is offering and
+/// `offered_is_prerelease` whether it is an `-rc.N` pre-release. When the offer
+/// is a prerelease, the behaviour adapts:
+/// - Choco: add `--prerelease` and pin `--version=<offered_version>` so the
+///   exact rc is installed (Chocolatey otherwise upgrades to the newest STABLE).
+/// - Every other method (winget / nix / brew / installer / portable): the
+///   published winget manifest, the flake, and the Homebrew formula track FINAL
+///   releases only, and `releases/latest` excludes prereleases — so point the
+///   user at the rc's specific tag page to download the matching artifact.
+///
+/// For a FINAL offer the behaviour is exactly as before (the `offered_version`
+/// is unused on the choco final path so existing commands are byte-identical).
+pub(in crate::ui) fn upgrade_action(
+    method: InstallMethod,
+    offered_version: &str,
+    offered_is_prerelease: bool,
+) -> UpgradeAction {
+    // A prerelease offer can only be satisfied by Chocolatey's --prerelease flag
+    // or a direct download; package managers that track finals send the user to
+    // the rc's tag page instead.
+    if offered_is_prerelease {
+        return match method {
+            InstallMethod::Choco => UpgradeAction::Command(format!(
+                "choco upgrade whisper-dictate --source=whisper-dictate --prerelease --version={} -y",
+                offered_version.trim().trim_start_matches('v')
+            )),
+            InstallMethod::Winget
+            | InstallMethod::Nix
+            | InstallMethod::Brew
+            | InstallMethod::Installer
+            | InstallMethod::Portable => UpgradeAction::OpenUrl(release_tag_url(offered_version)),
+        };
+    }
+
     match method {
         InstallMethod::Choco => UpgradeAction::Command(
             "choco upgrade whisper-dictate --source=whisper-dictate -y".to_owned(),
@@ -273,10 +320,16 @@ mod tests {
 
     // ── upgrade_action ───────────────────────────────────────────────────────
 
+    // A FINAL offer: the version + flag are inert on the existing paths, so the
+    // commands/URLs are byte-identical to before the prerelease change.
+    fn final_action(method: InstallMethod) -> UpgradeAction {
+        upgrade_action(method, "1.10.0", false)
+    }
+
     #[test]
     fn choco_maps_to_command_with_feed_source() {
         assert_eq!(
-            upgrade_action(InstallMethod::Choco),
+            final_action(InstallMethod::Choco),
             UpgradeAction::Command(
                 "choco upgrade whisper-dictate --source=whisper-dictate -y".to_owned()
             )
@@ -287,7 +340,7 @@ mod tests {
     fn winget_maps_to_command_with_correct_package_id() {
         // The id must match packaging/windows/winget/*.yaml.
         assert_eq!(
-            upgrade_action(InstallMethod::Winget),
+            final_action(InstallMethod::Winget),
             UpgradeAction::Command("winget upgrade FactusConsulting.WhisperDictate".to_owned())
         );
     }
@@ -295,7 +348,7 @@ mod tests {
     #[test]
     fn nix_maps_to_flake_upgrade_command() {
         assert_eq!(
-            upgrade_action(InstallMethod::Nix),
+            final_action(InstallMethod::Nix),
             UpgradeAction::Command(
                 "nix profile upgrade github:FactusConsulting/whisper-dictate".to_owned()
             )
@@ -305,7 +358,7 @@ mod tests {
     #[test]
     fn brew_maps_to_upgrade_command() {
         assert_eq!(
-            upgrade_action(InstallMethod::Brew),
+            final_action(InstallMethod::Brew),
             UpgradeAction::Command("brew upgrade whisper-dictate".to_owned())
         );
     }
@@ -313,7 +366,7 @@ mod tests {
     #[test]
     fn installer_maps_to_release_url() {
         assert_eq!(
-            upgrade_action(InstallMethod::Installer),
+            final_action(InstallMethod::Installer),
             UpgradeAction::OpenUrl(
                 "https://github.com/FactusConsulting/whisper-dictate/releases/latest".to_owned()
             )
@@ -323,10 +376,69 @@ mod tests {
     #[test]
     fn portable_maps_to_release_url() {
         assert_eq!(
-            upgrade_action(InstallMethod::Portable),
+            final_action(InstallMethod::Portable),
             UpgradeAction::OpenUrl(
                 "https://github.com/FactusConsulting/whisper-dictate/releases/latest".to_owned()
             )
+        );
+    }
+
+    // ── prerelease offers ─────────────────────────────────────────────────────
+
+    #[test]
+    fn choco_prerelease_offer_adds_flag_and_pins_version() {
+        assert_eq!(
+            upgrade_action(InstallMethod::Choco, "1.10.0-rc.2", true),
+            UpgradeAction::Command(
+                "choco upgrade whisper-dictate --source=whisper-dictate --prerelease \
+                 --version=1.10.0-rc.2 -y"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn choco_prerelease_offer_strips_leading_v_in_pin() {
+        // A feed entry with a leading `v` must not double up in --version.
+        assert_eq!(
+            upgrade_action(InstallMethod::Choco, "v1.10.0-rc.1", true),
+            UpgradeAction::Command(
+                "choco upgrade whisper-dictate --source=whisper-dictate --prerelease \
+                 --version=1.10.0-rc.1 -y"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn non_choco_prerelease_offer_points_at_tag_url() {
+        // winget / nix / brew / installer / portable all track finals or skip
+        // prereleases, so a prerelease offer links the specific rc tag.
+        let tag = "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.10.0-rc.2";
+        for method in [
+            InstallMethod::Winget,
+            InstallMethod::Nix,
+            InstallMethod::Brew,
+            InstallMethod::Installer,
+            InstallMethod::Portable,
+        ] {
+            assert_eq!(
+                upgrade_action(method, "1.10.0-rc.2", true),
+                UpgradeAction::OpenUrl(tag.to_owned()),
+                "method {method:?} should link the rc tag page"
+            );
+        }
+    }
+
+    #[test]
+    fn tag_url_normalizes_leading_v() {
+        assert_eq!(
+            release_tag_url("1.10.0-rc.1"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.10.0-rc.1"
+        );
+        assert_eq!(
+            release_tag_url("v1.10.0-rc.1"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.10.0-rc.1"
         );
     }
 
