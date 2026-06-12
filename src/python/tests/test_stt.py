@@ -305,41 +305,64 @@ class HallucinationFilterTests(unittest.TestCase):
     def test_data_driven_credit_examples_still_match(self):
         # Build credit examples straight from the data lists so a future edit to
         # the JSON keeps proving end-to-end that the loaded patterns fire.
+        # EVERY entry must have a sample — a missing entry FAILS so that adding a
+        # new credit_phrase_prefixes item without a sample breaks the test.
         data = self.t._HALLUCINATION_PATTERNS
         # Each phrase prefix + " noget 2019" (a year-terminated tail) must match.
+        # Samples are derived deterministically from the prefix: regex metacharacters
+        # are stripped to produce one valid literal, then a trailing year is appended.
+        # If the derivation produces a string that does not actually match (meaning the
+        # prefix is an unusual regex fragment), the entry must be added to the explicit
+        # samples dict below.
+        explicit_samples = {
+            "(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)":
+                "Danske tekster af Jesper Buhl 2019",
+        }
+        import re as _re
         for prefix in data["credit_phrase_prefixes"]:
-            # Resolve simple regex alternations/optionals to a plausible literal
-            # by exercising the compiled regex rather than the raw source.
-            sample = {
-                "(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)":
-                    "Danske tekster af Jesper Buhl 2019",
-                "tekstet af ": "Tekstet af Jesper Buhl 2019",
-                "oversat af ": "Oversat af Jesper Buhl 2019",
-                "subtitles? by ": "Subtitles by John Doe 2019",
-                "subtitled by ": "Subtitled by John Doe 2019",
-                "captions? by ": "Captions by John Doe 2019",
-                "translated by ": "Translated by John Doe 2019",
-            }.get(prefix)
-            if sample is None:
-                continue  # a newly-added prefix without a hand-written sample
-            self.assertTrue(self.t.is_hallucination(sample),
-                            f"{sample!r} (prefix {prefix!r}) should match")
+            if prefix in explicit_samples:
+                sample = explicit_samples[prefix]
+            else:
+                # Collapse optional groups/alternations to the simplest literal:
+                # drop (...) wrappers, pick first alternative before '|', remove ?+*.
+                literal = _re.sub(r'\([^)]*\)', '', prefix)   # drop (?:...) groups
+                literal = _re.sub(r'[?+*\\]', '', literal)    # drop quantifiers/escapes
+                literal = literal.strip()
+                if not literal:
+                    self.fail(
+                        f"Cannot derive a literal example from prefix {prefix!r}. "
+                        "Add it to the explicit_samples dict in this test."
+                    )
+                sample = f"{literal} John Doe 2019"
+            self.assertTrue(
+                self.t.is_hallucination(sample),
+                f"{sample!r} (prefix {prefix!r}) should match — if this is a new "
+                "prefix, add a hand-crafted sample to explicit_samples in this test.",
+            )
 
     def test_data_driven_bare_company_names_match_without_year(self):
         # Bare company names are specific enough to match with no trailing year.
-        company_samples = {
-            "scandinavian text service(?: (?:19|20)\\d{2})?": "Scandinavian Text Service",
-            "broadcast text international(?: (?:19|20)\\d{2})?": "Broadcast Text International",
-            "dansk video ?tekst(?: (?:19|20)\\d{2})?": "Dansk Videotekst",
-        }
+        # EVERY entry must match — a missing or non-matching entry FAILS so that
+        # adding a new bare_company_names item without coverage breaks the test.
+        import re as _re
         for source in self.t._HALLUCINATION_PATTERNS["bare_company_names"]:
-            sample = company_samples.get(source)
-            if sample is None:
-                continue
-            self.assertTrue(self.t.is_hallucination(sample),
-                            f"{sample!r} (company {source!r}) should match")
-            self.assertTrue(self.t.is_hallucination(sample + " 2018"),
-                            f"{sample!r} + year should also match")
+            # Strip the standard optional-year suffix (?: (?:19|20)\d{2})? to get
+            # the bare name, then also remove any remaining regex metacharacters.
+            bare = _re.sub(r'\(\?:.*', '', source).strip()
+            bare = _re.sub(r'[?+*\\()|]', '', bare).strip()
+            if not bare:
+                self.fail(
+                    f"Cannot derive a literal bare name from {source!r}. "
+                    "Add explicit handling for this entry in this test."
+                )
+            self.assertTrue(
+                self.t.is_hallucination(bare),
+                f"{bare!r} (from {source!r}) should match without a year",
+            )
+            self.assertTrue(
+                self.t.is_hallucination(bare + " 2018"),
+                f"{bare!r} + year should also match",
+            )
 
 class TranscribeDetailTests(unittest.TestCase):
     def setUp(self):
