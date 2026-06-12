@@ -391,6 +391,12 @@ struct WhisperDictateApp {
     /// the update badge after the upgrade command is copied to the clipboard.
     /// Session-only UI state — `None` when no confirmation is pending.
     update_command_copied_until: Option<Instant>,
+    /// Cached result of the one-time check for the Chocolatey package directory
+    /// (`%ProgramData%\chocolatey\lib\whisper-dictate` or via `$ChocolateyInstall`).
+    /// `None` until the first update badge render triggers the check; thereafter
+    /// the filesystem is NOT re-probed per frame. Only meaningful on Windows — on
+    /// other platforms this is always `Some(false)`.
+    choco_pkg_dir_exists: Option<bool>,
     /// System-tray (notification-area) icon manager. Created empty; the actual
     /// OS tray is built lazily on the first `update()` frame (Windows only — a
     /// no-op stub elsewhere) and recolours to mirror the dictation state so the
@@ -493,6 +499,7 @@ impl Default for WhisperDictateApp {
             last_update_check: None,
             update_check_rx: None,
             update_command_copied_until: None,
+            choco_pkg_dir_exists: None,
             tray: TrayManager::new(),
         }
     }

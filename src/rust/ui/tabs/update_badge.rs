@@ -10,7 +10,47 @@
 use super::super::*; // crate::ui::* — UiTextKey, ui_text, upgrade-hint helpers, open_url, …
 use super::*; // tabs::* — icon_text, palette types
 use egui_material_icons::icons;
+use std::path::Path;
 use std::time::{Duration, Instant};
+
+/// Check whether the Chocolatey package directory for whisper-dictate exists.
+///
+/// Our Chocolatey package is a wrapper around the Inno installer, so the
+/// running exe always lands in `%LOCALAPPDATA%\Programs\WhisperDictate` —
+/// indistinguishable from a bare Inno install via the exe path alone. This
+/// directory check is therefore the primary Chocolatey signal.
+///
+/// Lookup order:
+/// 1. `$ChocolateyInstall\lib\whisper-dictate` (honoured when the env var is
+///    set, which is the norm on machines where Chocolatey changed the install
+///    root from the default).
+/// 2. `%ProgramData%\chocolatey\lib\whisper-dictate` (the Chocolatey default).
+///
+/// Returns `false` on any error (missing env var, path construction failure,
+/// I/O error) so the caller always gets a definitive `bool`.
+fn probe_choco_pkg_dir() -> bool {
+    // Try $ChocolateyInstall first, fall back to the hard-coded default.
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut v = Vec::new();
+        if let Ok(choco_root) = std::env::var("ChocolateyInstall") {
+            v.push(Path::new(&choco_root).join("lib").join("whisper-dictate"));
+        }
+        // Always include the well-known default path.
+        if let Ok(program_data) = std::env::var("ProgramData") {
+            v.push(
+                Path::new(&program_data)
+                    .join("chocolatey")
+                    .join("lib")
+                    .join("whisper-dictate"),
+            );
+        } else {
+            // Hardcoded fallback if ProgramData is somehow unset.
+            v.push(Path::new(r"C:\ProgramData\chocolatey\lib\whisper-dictate").to_path_buf());
+        }
+        v
+    };
+    candidates.iter().any(|p| p.is_dir())
+}
 
 /// How long the transient "Copied!" confirmation stays visible after a copy.
 const COPIED_CONFIRMATION: Duration = Duration::from_secs(2);
@@ -27,12 +67,17 @@ impl WhisperDictateApp {
         let exe_path = std::env::current_exe()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
+        // Probe the Chocolatey package dir at most once per session (cached so
+        // we never hit the filesystem on every repaint frame).
+        let choco_pkg_dir_exists = *self
+            .choco_pkg_dir_exists
+            .get_or_insert_with(probe_choco_pkg_dir);
         // When the offered version is a pre-release (`-rc.N`), the upgrade action
         // pins choco `--prerelease`/`--version` and links the rc's tag page for
         // the other install methods (see `upgrade_hint::upgrade_action`).
         let is_prerelease = version_is_prerelease(&version);
         let action = upgrade_action(
-            detect_install_method(&exe_path, Os::current()),
+            detect_install_method(&exe_path, Os::current(), choco_pkg_dir_exists),
             &version,
             is_prerelease,
         );
