@@ -85,10 +85,14 @@ jobs:
         run: |
           $version = "${{ env.TAG }}" -replace '^v',''
           Set-Content VERSION $version -Encoding ascii
+          # Inno Setup's VersionInfoVersion must be a numeric dotted version, so
+          # strip any prerelease suffix (e.g. 1.9.5-rc.1 -> 1.9.5). AppVersion /
+          # the output filename keep the full string incl. -rc.N.
+          $versionInfo = $version -replace '-rc\.\d+$',''
           $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $outDir  = "$PWD\Output"
           New-Item -ItemType Directory -Force $outDir | Out-Null
-          & $iscc /DVERSION=$version /O"$outDir" packaging\windows\inno\whisper-dictate.iss
+          & $iscc /DVERSION=$version /DVERSION_INFO=$versionInfo /O"$outDir" packaging\windows\inno\whisper-dictate.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
       - name: Build Windows ZIP packages
