@@ -14,6 +14,11 @@ from typing import Any, Iterable
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_cli import _resolve_device
 
+# Default golden-corpus manifest, relative to the app root (the worker's working
+# directory). The "Run benchmark" UI button drives `--run-benchmark`, which runs
+# this manifest so the button needs no arguments.
+DEFAULT_CORPUS_MANIFEST = "benchmark/corpus.json"
+
 
 @dataclass(frozen=True)
 class CorpusItem:
@@ -402,3 +407,80 @@ def run_benchmark(
         if sink:
             sink.close()
     return results
+
+
+def summarize_results(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Collapse per-item benchmark events into one overall summary.
+
+    Pure (no I/O) so it is unit-testable. Counts items, successes/failures and
+    skips, and averages WER/CER over the *scored* (non-skipped, WER-bearing)
+    items so a corpus with missing audio still yields a meaningful number.
+    """
+    rows = list(results)
+    total = len(rows)
+    passed = sum(1 for r in rows if r.get("benchmark_success"))
+    skipped = sum(1 for r in rows if r.get("benchmark_skipped"))
+    failed = total - passed - skipped
+    scored = [r for r in rows if not r.get("benchmark_skipped") and "wer" in r]
+    avg_wer = sum(float(r["wer"]) for r in scored) / len(scored) if scored else None
+    # Average CER over the rows that actually carry a `cer` field, not over every
+    # scored (WER-bearing) row: a scored row can lack `cer`, and dividing by
+    # `len(scored)` would understate the average. Mirrors `avg_wer` over its own
+    # denominator; `None` when no scored row reports CER.
+    cer_rows = [r for r in scored if "cer" in r]
+    avg_cer = (
+        sum(float(r["cer"]) for r in cer_rows) / len(cer_rows) if cer_rows else None
+    )
+    return {
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "scored": len(scored),
+        "avg_wer": avg_wer,
+        "avg_cer": avg_cer,
+    }
+
+
+def format_summary_line(summary: dict[str, Any]) -> str:
+    """Render a one-line, human-readable summary prefixed with ``[benchmark]``.
+
+    The UI surfaces this exact line in the runtime log so the user sees a concise
+    pass count + overall WER without parsing the per-item JSONL.
+    """
+    parts = [f"{summary['passed']}/{summary['total']} passed"]
+    if summary["skipped"]:
+        parts.append(f"{summary['skipped']} skipped")
+    if summary["failed"]:
+        parts.append(f"{summary['failed']} failed")
+    if summary["avg_wer"] is not None:
+        parts.append(f"avg WER {summary['avg_wer'] * 100:.1f}%")
+    if summary["avg_cer"] is not None:
+        parts.append(f"avg CER {summary['avg_cer'] * 100:.1f}%")
+    return "[benchmark] " + ", ".join(parts)
+
+
+def run_corpus_benchmark(
+    corpus_manifest: str | Path | None = None,
+    backend_specs: str | Iterable[str] | None = None,
+    *,
+    output_jsonl: str | Path | None = None,
+) -> dict[str, Any]:
+    """Run the golden corpus and print a concise summary line, then return it.
+
+    This is the single UI-invokable entry the "Run benchmark" button drives via
+    ``--run-benchmark``. It defaults to ``benchmark/corpus.json`` so the button
+    needs no arguments, runs every corpus item through the configured backend
+    (emitting the usual per-item JSONL to stdout), then prints one
+    ``[benchmark] …`` summary line so the result lands in the runtime log.
+    """
+    manifest = corpus_manifest or DEFAULT_CORPUS_MANIFEST
+    results = run_benchmark(
+        None,
+        backend_specs,
+        output_jsonl=output_jsonl,
+        corpus_manifest=manifest,
+    )
+    summary = summarize_results(results)
+    print(format_summary_line(summary), flush=True)
+    return summary

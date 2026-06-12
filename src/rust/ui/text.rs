@@ -140,6 +140,10 @@ pub(in crate::ui) enum UiTextKey {
     MicTestResampled,
     /// Banner heading shown when the worker reports the selected mic is unusable.
     DeviceUnusableTitle,
+    /// "Run benchmark" button in the System tab's Maintenance cluster.
+    RunBenchmark,
+    /// Hover/help text for the "Run benchmark" button.
+    RunBenchmarkHelp,
     /// Hover prefix on the update badge when the install method has a copyable
     /// upgrade command; followed by the command on its own line. Tells the user a
     /// click copies it.
@@ -282,6 +286,14 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Cannot be used",
                 UiTextKey::MicTestResampled => "resampled",
                 UiTextKey::DeviceUnusableTitle => "Microphone unavailable",
+                UiTextKey::RunBenchmark => "Run benchmark",
+                UiTextKey::RunBenchmarkHelp => {
+                    "Run the golden benchmark corpus (benchmark/corpus.json) through the \
+                    configured backend and write per-item results plus an overall \
+                    summary (pass count, average WER and CER) to the log. Runs in the \
+                    background — it loads the model and processes the whole corpus, so it \
+                    can take a while. Blocked while another background task runs."
+                }
                 UiTextKey::UpdateCopyCommandHover => "Click to copy the upgrade command:",
                 UiTextKey::UpdateOpenReleaseHover => {
                     "Click to open the latest release and download the new installer:"
@@ -415,6 +427,14 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Kan ikke bruges",
                 UiTextKey::MicTestResampled => "resamplet",
                 UiTextKey::DeviceUnusableTitle => "Mikrofon utilgængelig",
+                UiTextKey::RunBenchmark => "Kør benchmark",
+                UiTextKey::RunBenchmarkHelp => {
+                    "Kør det gyldne benchmark-korpus (benchmark/corpus.json) gennem den \
+                    konfigurerede backend, og skriv resultater pr. element samt en samlet \
+                    opsummering (antal beståede, gennemsnitlig WER og CER) til loggen. \
+                    Kører i baggrunden — den indlæser modellen og behandler hele korpusset, \
+                    så det kan tage et stykke tid. Blokeret mens en anden baggrundsopgave kører."
+                }
                 UiTextKey::UpdateCopyCommandHover => "Klik for at kopiere opdateringskommandoen:",
                 UiTextKey::UpdateOpenReleaseHover => {
                     "Klik for at åbne seneste udgivelse og hente den nye installer:"

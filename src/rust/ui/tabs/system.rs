@@ -67,6 +67,26 @@ impl WhisperDictateApp {
             {
                 self.run_install();
             }
+            // Run benchmark: a slow background task (loads the model + runs the
+            // whole corpus), so it shares the `idle` guard with Install/Reload —
+            // it must never freeze the UI and must not race another task. Output
+            // (per-item JSONL + the `[benchmark]` summary line) lands in the log.
+            if ui
+                .add_enabled(
+                    idle,
+                    egui::Button::new(icon_text(
+                        icons::ICON_SPEED,
+                        ui_text(&self.settings.ui_language, UiTextKey::RunBenchmark),
+                    )),
+                )
+                .on_hover_text(ui_text(
+                    &self.settings.ui_language,
+                    UiTextKey::RunBenchmarkHelp,
+                ))
+                .clicked()
+            {
+                self.run_benchmark();
+            }
             if ui
                 .button(icon_text(
                     icons::ICON_INFO,
@@ -88,6 +108,7 @@ impl WhisperDictateApp {
         const MAINTENANCE_HELP: &str = "Reload config: re-read config.json from disk (blocked while another background task runs). \
             Doctor: run environment diagnostics and write the result to the log. \
             Install/Repair: install or repair the local runtime environment (blocked while another task runs). \
+            Run benchmark: run the golden corpus through the configured backend and write the results + summary to the log (blocked while another task runs). \
             Config file: open the folder containing config.json.";
         let show_maintenance_help = ui
             .horizontal(|ui| help_toggle_badge(ui, "system_maintenance", MAINTENANCE_HELP))

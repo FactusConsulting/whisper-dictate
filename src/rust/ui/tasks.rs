@@ -262,7 +262,17 @@ impl WhisperDictateApp {
                 self.set_api_check_status(result.label, &message);
                 self.append_runtime_log(message);
             } else if result.success {
-                let detail = result.stdout.trim();
+                // The generic [OK] line normally echoes the whole stdout as its
+                // detail. For the benchmark that stdout is the full per-item JSONL
+                // (already streamed line-by-line just above), so embedding it again
+                // would duplicate a large blob into one giant log line and hurt UI
+                // responsiveness/memory. Carry only the concise final
+                // `[benchmark] …` summary line instead (if present).
+                let detail = if result.label == RUN_BENCHMARK_LABEL {
+                    benchmark_summary_line(&result.stdout).unwrap_or("")
+                } else {
+                    result.stdout.trim()
+                };
                 let message = if detail.is_empty() {
                     format!("[OK] {} passed", result.label)
                 } else {
@@ -389,5 +399,65 @@ impl WhisperDictateApp {
                 }
             }
         }
+    }
+}
+
+// --- Run benchmark (appended; kept self-contained to ease merges) ------------
+// The golden-corpus benchmark run. Its own `use`, label const and `impl` block
+// live here at the end of the file so this feature can be added/removed without
+// touching the import list or the main `impl` block above (which a parallel UI
+// PR also edits).
+use crate::runtime::benchmark_command;
+
+/// Background-task label for the worker's `--run-benchmark` run. Mostly handled
+/// by the generic `poll_background_task`: the per-item JSONL + the `[benchmark]`
+/// summary line are streamed verbatim to the runtime log. The one special case
+/// there is the `[OK]` completion line — it normally echoes the whole stdout as
+/// its detail, which for the benchmark would re-dump the full JSONL into one
+/// giant line, so it carries only `benchmark_summary_line` instead.
+pub(in crate::ui) const RUN_BENCHMARK_LABEL: &str = "run benchmark";
+
+/// Extract the concise final `[benchmark] …` summary line from the run's stdout
+/// so the `[OK]` completion log line stays small instead of re-embedding the
+/// whole per-item JSONL. Returns `None` when no summary line is present.
+fn benchmark_summary_line(stdout: &str) -> Option<&str> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .rfind(|line| line.starts_with("[benchmark]"))
+}
+
+impl WhisperDictateApp {
+    /// Run the golden benchmark corpus off-thread via the worker's
+    /// `--run-benchmark`. Same non-blocking pattern as "Refresh devices" so the
+    /// (slow: model load + corpus) run never freezes the UI; gated on no other
+    /// background task running. The captured stdout/stderr — including the final
+    /// `[benchmark] …` summary line — lands in the runtime log when it completes.
+    pub(in crate::ui) fn run_benchmark(&mut self) {
+        self.run_background_command(RUN_BENCHMARK_LABEL, benchmark_command());
+    }
+}
+
+#[cfg(test)]
+mod benchmark_tests {
+    use super::benchmark_summary_line;
+
+    #[test]
+    fn picks_the_last_benchmark_summary_line_and_ignores_jsonl() {
+        let stdout = "\
+{\"item\":1,\"wer\":0.1}
+{\"item\":2,\"wer\":0.2}
+[benchmark] 2/2 passed, avg WER 15.0%, avg CER 7.5%
+";
+        assert_eq!(
+            benchmark_summary_line(stdout),
+            Some("[benchmark] 2/2 passed, avg WER 15.0%, avg CER 7.5%"),
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_summary_line_present() {
+        assert_eq!(benchmark_summary_line("{\"item\":1}\n"), None);
+        assert_eq!(benchmark_summary_line(""), None);
     }
 }

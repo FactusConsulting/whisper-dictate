@@ -509,6 +509,8 @@ mod audio_device_picker_tests;
 #[cfg(test)]
 mod backend_option_tests;
 #[cfg(test)]
+mod benchmark_task_tests;
+#[cfg(test)]
 mod cloud_settings_tests;
 #[cfg(test)]
 mod keyboard_layout_tests;

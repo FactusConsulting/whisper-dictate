@@ -195,3 +195,46 @@ fn doctor_command_adds_doctor_argument() {
         ]
     );
 }
+
+#[test]
+fn benchmark_command_adds_run_benchmark_argument_with_app_root_and_config() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::json!({ "model": "large-v3", "device": "cuda" }).to_string(),
+    )
+    .unwrap();
+
+    let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path);
+    let _model_guard = EnvVarGuard::remove("VOICEPI_MODEL");
+    let _device_guard = EnvVarGuard::remove("VOICEPI_DEVICE");
+
+    let command = benchmark_command();
+
+    // Drives the worker's `--run-benchmark` entry, inheriting the same
+    // `--app-root` the other one-shot worker commands use.
+    assert_eq!(
+        command.args,
+        vec![
+            "-m".to_owned(),
+            "whisper_dictate.runtime".to_owned(),
+            "--app-root".to_owned(),
+            "/installed/app".to_owned(),
+            "--run-benchmark".to_owned(),
+        ]
+    );
+    // The benchmark inherits the same effective model/device config as a
+    // dictation run, so it benchmarks what the user actually has selected.
+    let env = command
+        .env
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(env["VOICEPI_MODEL"], "large-v3");
+    assert_eq!(env["VOICEPI_DEVICE"], "cuda");
+}

@@ -117,6 +117,20 @@ fn ui_language_translates_microphone_test_and_device_banner() {
 }
 
 #[test]
+fn ui_language_translates_run_benchmark_button_and_hover() {
+    // "Run benchmark" button label, both languages.
+    assert_eq!(ui_text("en", UiTextKey::RunBenchmark), "Run benchmark");
+    assert_eq!(ui_text("da", UiTextKey::RunBenchmark), "Kør benchmark");
+    // Hover/help text is localized and mentions the corpus, both languages.
+    assert!(ui_text("en", UiTextKey::RunBenchmarkHelp).contains("benchmark/corpus.json"));
+    assert!(ui_text("en", UiTextKey::RunBenchmarkHelp).contains("background"));
+    assert!(ui_text("da", UiTextKey::RunBenchmarkHelp).contains("benchmark/corpus.json"));
+    assert!(ui_text("da", UiTextKey::RunBenchmarkHelp).contains("baggrunden"));
+    // Unknown language falls back to English.
+    assert_eq!(ui_text("fr", UiTextKey::RunBenchmark), "Run benchmark");
+}
+
+#[test]
 fn ui_language_falls_back_to_english_for_unknown_values() {
     assert_eq!(Tab::Quality.label("fr"), "Quality");
     assert_eq!(ui_text("fr", UiTextKey::UiLanguage), "UI language");
