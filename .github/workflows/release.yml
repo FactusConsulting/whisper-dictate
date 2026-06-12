@@ -422,3 +422,245 @@ jobs:
     secrets:
       CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
       CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
+
+  # Gate A — automated install-smoke (docs/RELEASING.md "Test the RC" step 1).
+  #
+  # POST-PUBLISH gate: it runs AFTER the release + installer are published and
+  # only FLAGS a broken release (a red "install-smoke" check) — it never deletes
+  # or unpublishes anything. Runs for BOTH finals and prereleases (it's cheap)
+  # so the rc.1/rc.2-class breakage (Inno build that failed, or an installed app
+  # that won't even launch / whose worker package won't import) is caught
+  # automatically instead of waiting for the manual install-smoke.
+  #
+  # What it proves on a HEADLESS windows-2025 runner:
+  #   * the just-published setup .exe silently installs (Inno /VERYSILENT),
+  #   * the installed layout is complete (exe + worker package + corpus +
+  #     the data/ subpackage that #226 was about + a VERSION matching the tag),
+  #   * the Rust controller launches headless and exits 0 (no egui window),
+  #   * the installed Python worker package imports and runs its NO-MODEL audio
+  #     utility query modes cleanly (exit 0, parseable JSON — not a traceback).
+  #
+  # What it deliberately does NOT cover (stays manual — see docs/RELEASING.md):
+  #   * real microphone capture / inject / post end-to-end (no audio device on a
+  #     cloud VM), and
+  #   * a real STT model load (heavy CUDA/torch/faster-whisper deps are NOT
+  #     installed here — the worker smoke installs only sounddevice + numpy).
+  install-smoke:
+    needs: [release, windows-installer]
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "Resolved $TAG -> VERSION=${TAG#v}"
+
+      - name: Download the published Windows setup .exe
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The reusable installer build SKIPS itself (and uploads no setup .exe)
+          # when no Windows-relevant files changed since the previous tag. That is
+          # a legitimate no-op, not a failure.
+          #
+          # IMPORTANT: first check whether the asset EXISTS on the release — a
+          # missing asset is the only legitimate reason to skip. A transient API
+          # or network error during `gh release download` must NOT silently skip
+          # the gate (that would let a broken release sail through as green).
+          # Strategy:
+          #   - Query the release asset list; count matching setup .exe assets.
+          #   - 0 matches → legitimately no installer built, skip (found=false).
+          #   - ≥1 match  → asset exists, so the download MUST succeed; any
+          #                  failure propagates as a hard error (set -e exits).
+          asset_count=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '[.assets[].name | select(test("whisper-dictate-windows-setup"))] | length')
+          if [ "$asset_count" -eq 0 ]; then
+            echo "No setup .exe asset on release $TAG (installer build was skipped — no Windows-relevant changes). Skipping install-smoke."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Asset exists — download it; any failure is a real error (set -e).
+          mkdir -p dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern 'whisper-dictate-windows-setup-*.exe' --dir dl
+          # Glob into an array (nullglob => empty, not the literal pattern) and
+          # take the first match — avoids parsing `ls` output (shellcheck SC2012).
+          shopt -s nullglob
+          matches=(dl/whisper-dictate-windows-setup-*.exe)
+          shopt -u nullglob
+          setup="${matches[0]:-}"
+          if [ -z "$setup" ]; then
+            echo "No setup .exe matched after download. Skipping install-smoke."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Setup installer: $setup"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          # Forward an absolute Windows path so the pwsh steps below can run it.
+          echo "SETUP_EXE=$(cygpath -w "$(pwd)/$setup")" >> "$GITHUB_ENV"
+
+      - name: Silent install + assert installed layout
+        if: steps.download.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = $env:SETUP_EXE
+          if (-not (Test-Path -LiteralPath $setup)) { throw "Setup exe not found at $setup" }
+
+          # Inno silent install. Start-Process -Wait is the robust idiom: the
+          # installer's own process exits when the (clean-machine, no prior
+          # version => no uninstaller relaunch) install finishes, so -Wait blocks
+          # until the files are on disk. /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          # is exactly the silent contract the .iss is written against.
+          Write-Host "Installing $setup ..."
+          $p = Start-Process -FilePath $setup `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' `
+                 -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Silent install failed with exit code $($p.ExitCode)" }
+
+          # DefaultDirName={localappdata}\Programs\WhisperDictate (see the .iss).
+          $appRoot = Join-Path $env:LOCALAPPDATA 'Programs\WhisperDictate'
+          Write-Host "Install root: $appRoot"
+          if (-not (Test-Path -LiteralPath $appRoot)) { throw "Install root missing: $appRoot" }
+
+          # Assert the full expected install layout. Each of these is a real
+          # regression guard: the Rust exe (launch), the worker entrypoint
+          # (runtime.py), the benchmark corpus (#234), and the data/ subpackage
+          # whose absence was the #226 packaging bug (silent ImportError at start).
+          $required = @(
+            'whisper-dictate.exe',
+            'src\python\whisper_dictate\runtime.py',
+            'benchmark\corpus.json',
+            'src\python\whisper_dictate\data\hallucination_patterns.json'
+          )
+          foreach ($rel in $required) {
+            $full = Join-Path $appRoot $rel
+            if (-not (Test-Path -LiteralPath $full)) { throw "Missing installed file: $rel" }
+            Write-Host "  ok  $rel"
+          }
+
+          # VERSION content must equal the tag's version (with the leading v
+          # stripped). Catches a setup .exe built from the wrong ref/version.
+          $versionFile = Join-Path $appRoot 'VERSION'
+          if (-not (Test-Path -LiteralPath $versionFile)) { throw "Missing installed VERSION file" }
+          $installed = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+          $expected  = $env:VERSION
+          if ($installed -ne $expected) {
+            throw "Installed VERSION '$installed' != expected '$expected'"
+          }
+          Write-Host "  ok  VERSION = $installed"
+          "APP_ROOT=$appRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Rust controller headless smoke (no UI window)
+        if: steps.download.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:APP_ROOT 'whisper-dictate.exe'
+          # The release binary is a Windows GUI-subsystem app
+          # (windows_subsystem = "windows"), so when launched from a redirected
+          # shell its println! stdout is NOT attached to this console — we can
+          # only rely on the PROCESS EXIT CODE, not captured text. The
+          # load-bearing assertion is therefore: a headless-safe entrypoint
+          # (--version: parse args, print version, return Ok) launches and exits
+          # 0 WITHOUT opening the egui window. (A UI subcommand would block.)
+          Write-Host "Running: whisper-dictate.exe --version"
+          $p = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
+          if ($p.ExitCode -ne 0) { throw "whisper-dictate.exe --version exited $($p.ExitCode)" }
+          Write-Host "  ok  --version exit 0"
+
+          # config path is the other headless-safe entrypoint (prints a path,
+          # opens no window); assert it too exits 0.
+          Write-Host "Running: whisper-dictate.exe config path"
+          $p2 = Start-Process -FilePath $exe -ArgumentList 'config','path' -Wait -PassThru -WindowStyle Hidden
+          if ($p2.ExitCode -ne 0) { throw "whisper-dictate.exe config path exited $($p2.ExitCode)" }
+          Write-Host "  ok  config path exit 0"
+
+      - uses: actions/setup-python@v6
+        if: steps.download.outputs.found == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Worker utility smoke (minimal deps, no model)
+        if: steps.download.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appRoot = $env:APP_ROOT
+
+          # Minimal venv: the installed app normally builds the user's own venv on
+          # first run and installs the full requirements/cpu.txt (faster-whisper,
+          # ctranslate2, torch, CUDA wheels...). The utility query modes used here
+          # load NO model — at the point they run, runtime.main() has only imported
+          # the worker package (all heavy deps stay lazy) and then lazily imports
+          # ONLY sounddevice. So we install sounddevice (which pulls numpy + cffi)
+          # and nothing else: no torch / faster-whisper / CUDA.
+          python -m venv venv
+          $venvPy = Join-Path $PWD 'venv\Scripts\python.exe'
+          & $venvPy -m pip install --quiet --upgrade pip
+          & $venvPy -m pip install --quiet 'sounddevice>=0.5.5,<0.6' 'numpy<2.5'
+          if ($LASTEXITCODE -ne 0) { throw "venv dependency install failed" }
+
+          # The Rust controller sets PYTHONPATH=<app-root>\src\python when it
+          # launches the worker, because the installed layout places the package
+          # at <app-root>\src\python\whisper_dictate (not in venv site-packages).
+          # Mirror that here so both worker invocations below can import it.
+          $env:PYTHONPATH = Join-Path $appRoot 'src\python'
+
+          # 1) --test-audio-device "" tests the system default input. By contract
+          # it NEVER raises and ALWAYS exits 0, printing exactly ONE JSON object
+          # ({usable, endpoint, reason, ...}). On a headless runner with no audio
+          # this is the graceful "usable: false" path — still exit 0 + valid JSON,
+          # never a traceback. This is the strongest proof that the INSTALLED
+          # worker package imports and runs end to end.
+          Write-Host "Running: worker --test-audio-device `"`""
+          $td = & $venvPy -m whisper_dictate.runtime --app-root $appRoot --test-audio-device "" 2>&1
+          $tdCode = $LASTEXITCODE
+          Write-Host $td
+          if ($tdCode -ne 0) { throw "--test-audio-device exited $tdCode (expected 0)" }
+          # Parse the LAST stdout line as JSON (the worker prints a banner line
+          # first). It must be one object with a boolean 'usable' field.
+          $jsonLine = ($td | Where-Object { $_ -match '^\s*\{.*\}\s*$' } | Select-Object -Last 1)
+          if (-not $jsonLine) { throw "--test-audio-device printed no JSON object: $td" }
+          $obj = $jsonLine | ConvertFrom-Json
+          if ($null -eq $obj.usable) { throw "--test-audio-device JSON missing 'usable': $jsonLine" }
+          Write-Host "  ok  --test-audio-device usable=$($obj.usable)"
+
+          # 2) --list-audio-devices prints a JSON array of input devices (exit 0),
+          # or {"error": "..."} (exit 1) if sounddevice cannot enumerate on this
+          # headless host. Either is GRACEFUL (parseable JSON, not a traceback).
+          # The documented contract is exit 0 or exit 1 — any other exit code is
+          # an unexpected failure mode that must fail the gate even if the output
+          # happens to be parseable.
+          Write-Host "Running: worker --list-audio-devices"
+          $ld = & $venvPy -m whisper_dictate.runtime --app-root $appRoot --list-audio-devices 2>&1
+          $ldCode = $LASTEXITCODE
+          Write-Host $ld
+          if ($ldCode -notin @(0, 1)) {
+            throw "--list-audio-devices exited $ldCode (expected 0 or 1): $ld"
+          }
+          if ($ld -match 'Traceback \(most recent call last\)') {
+            throw "--list-audio-devices raised a traceback: $ld"
+          }
+          $ldJson = ($ld | Where-Object { $_ -match '^\s*(\[.*\]|\{.*\})\s*$' } | Select-Object -Last 1)
+          if (-not $ldJson) { throw "--list-audio-devices printed no JSON: $ld" }
+          $null = $ldJson | ConvertFrom-Json
+          Write-Host "  ok  --list-audio-devices produced parseable JSON (exit $ldCode)"
+
+      - name: Summary
+        if: steps.download.outputs.found == 'true'
+        shell: bash
+        run: |
+          echo "install-smoke PASSED for $TAG: silent-install layout OK, Rust controller launches headless (exit 0), installed worker package imports + runs no-model audio query modes cleanly."

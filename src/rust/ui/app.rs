@@ -69,6 +69,10 @@ impl eframe::App for WhisperDictateApp {
         self.poll_background_task();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
+        // Mirror the dictation state onto the system-tray icon (recolours only on
+        // change) and handle a tray left-click → focus. Runs in both full and
+        // compact modes so the tray stays correct regardless of window layout.
+        self.sync_tray(ctx);
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -147,6 +151,33 @@ impl eframe::App for WhisperDictateApp {
 }
 
 impl WhisperDictateApp {
+    /// Recolour the system-tray icon to mirror the current dictation state and
+    /// react to a tray left-click by focusing the main window. Purely additive:
+    /// on non-Windows it is a no-op stub, and even on Windows a failed tray init
+    /// is logged exactly once and then ignored — the dictation flow never depends
+    /// on the tray.
+    ///
+    /// Uses the raw last worker status state string (stored by
+    /// `update_worker_status`) so `"opening"` (mic device opening, NOT yet live)
+    /// correctly shows amber — capturing the exact moment between push-to-talk
+    /// and the mic going live that the in-app indicator cannot represent.
+    fn sync_tray(&mut self, ctx: &egui::Context) {
+        let worker_running = self.runtime_state != RuntimeState::Stopped;
+        let state = tray_state_for(&self.last_worker_status_state, worker_running);
+        if let Err(reason) = self.tray.sync(state, &self.settings.ui_language) {
+            // First (and only) failure: log it, then permanently disable the tray
+            // so we never retry-spam or block the app on a headless/denied tray.
+            self.append_runtime_log(format!(
+                "[ui] system-tray icon unavailable, continuing without it: {reason}"
+            ));
+            self.tray.disable();
+            return;
+        }
+        if self.tray.poll_interaction().activate_window {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+    }
+
     pub(in crate::ui) fn start_runtime(&mut self) {
         self.ensure_stt_api_key_loaded_for_runtime();
         if self.cloud_stt_missing_api_key() {
@@ -226,14 +257,19 @@ impl WhisperDictateApp {
         self.clear_audio_meter_readings();
     }
 
-    /// Drop the live pipeline-progress card state (stage + growing preview text).
-    /// Called whenever the worker is no longer running a dictation — on
-    /// stop/restart and on Exited/Error — so the sidebar recording indicator and
-    /// the `render_pipeline_progress` card can't stick on a stale "recording"
-    /// stage after the worker is gone.
+    /// Drop the live pipeline-progress card state (stage + growing preview text)
+    /// and the last-seen worker status state string. Called whenever the worker
+    /// is no longer running a dictation — on stop/restart and on Exited/Error —
+    /// so the sidebar recording indicator, the `render_pipeline_progress` card,
+    /// and the tray icon can't stick on a stale "recording" stage after the
+    /// worker is gone. Clearing `last_worker_status_state` means the tray will
+    /// use the empty-string fallback, which `tray_state_for` maps to Ready/grey
+    /// depending on whether the worker is running — the correct behaviour once
+    /// the runtime_state has also flipped to Stopped.
     pub(in crate::ui) fn clear_pipeline_progress(&mut self) {
         self.pipeline_stage = None;
         self.pipeline_preview = None;
+        self.last_worker_status_state = String::new();
     }
 
     /// Blank the live meter readings (level / dBFS / peak) without touching the
@@ -455,6 +491,12 @@ impl WhisperDictateApp {
             self.active_audio_device = audio_device;
         }
         if let Some(state) = event.state.as_deref() {
+            // Store the raw state string for tray-icon mapping. "preview" is
+            // display-only and carries no state change for the tray, so we
+            // keep the previous state in that case (the mic is still recording).
+            if state != "preview" {
+                self.last_worker_status_state = state.to_owned();
+            }
             self.audio_capture_opening = state == "opening";
             // "preview" is a mid-recording, display-only signal: it must NOT
             // overwrite pipeline_stage (which would clear the live "recording"

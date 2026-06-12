@@ -154,6 +154,14 @@ pub(in crate::ui) enum UiTextKey {
     UpdateOpenReleaseHover,
     /// Transient confirmation shown after the upgrade command is copied.
     UpdateCommandCopied,
+    /// System-tray icon hover tooltip — no worker running (grey dot).
+    TrayTipNotRunning,
+    /// System-tray icon hover tooltip — worker ready, mic idle (green dot).
+    TrayTipReady,
+    /// System-tray icon hover tooltip — microphone actively capturing (red dot).
+    TrayTipRecording,
+    /// System-tray icon hover tooltip — transcribing/processing/starting (amber dot).
+    TrayTipProcessing,
     /// System-tab checkbox label: opt in to receiving release-candidate updates.
     UpdateIncludePrereleases,
     /// Help text for the release-candidate opt-in checkbox.
@@ -303,6 +311,10 @@ impl UiTextKey {
                     "Click to open the latest release and download the new installer:"
                 }
                 UiTextKey::UpdateCommandCopied => "Copied!",
+                UiTextKey::TrayTipNotRunning => "whisper-dictate — not started",
+                UiTextKey::TrayTipReady => "whisper-dictate — ready",
+                UiTextKey::TrayTipRecording => "whisper-dictate — recording",
+                UiTextKey::TrayTipProcessing => "whisper-dictate — processing",
                 UiTextKey::UpdateIncludePrereleases => "Include release candidates",
                 UiTextKey::UpdateIncludePrereleasesHelp => {
                     "Also notify about release candidates (pre-releases like \
@@ -454,6 +466,10 @@ impl UiTextKey {
                     "Klik for at åbne seneste udgivelse og hente den nye installer:"
                 }
                 UiTextKey::UpdateCommandCopied => "Kopieret!",
+                UiTextKey::TrayTipNotRunning => "whisper-dictate — ikke startet",
+                UiTextKey::TrayTipReady => "whisper-dictate — klar",
+                UiTextKey::TrayTipRecording => "whisper-dictate — optager",
+                UiTextKey::TrayTipProcessing => "whisper-dictate — behandler",
                 UiTextKey::UpdateIncludePrereleases => "Inkludér release candidates",
                 UiTextKey::UpdateIncludePrereleasesHelp => {
                     "Giv også besked om release candidates (pre-releases som \
