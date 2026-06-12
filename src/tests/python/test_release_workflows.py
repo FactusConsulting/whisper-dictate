@@ -92,24 +92,68 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Uninstall-BinFile -Name $packageName", uninstall)
 
     def test_release_builds_and_optionally_pushes_chocolatey_package(self):
-        for path in (
-            Path(".github/workflows/release.yml"),
-            Path(".github/workflows/windows-installer.yml"),
+        # The installer build (incl. the Chocolatey pack/publish steps) lives in
+        # ONE place — the reusable windows-installer-build.yml — so assert the
+        # step content there. release.yml and windows-installer.yml only need to
+        # CALL it; that wiring is checked by
+        # test_installer_build_is_single_reusable_workflow.
+        path = Path(".github/workflows/windows-installer-build.yml")
+        workflow = path.read_text(encoding="utf-8")
+        self.assertIn("- name: Build Chocolatey package", workflow, path.as_posix())
+        self.assertIn("choco pack", workflow, path.as_posix())
+        self.assertIn("Output/*.nupkg", workflow, path.as_posix())
+        self.assertIn("packages: write", workflow, path.as_posix())
+        self.assertIn("Publish Chocolatey package to GitHub Packages NuGet", workflow, path.as_posix())
+        self.assertIn("nuget.pkg.github.com/${{ github.repository_owner }}", workflow, path.as_posix())
+        self.assertIn("dotnet nuget push", workflow, path.as_posix())
+        self.assertIn("Publish public Chocolatey feed to GitHub Pages", workflow, path.as_posix())
+        self.assertIn(".\\scripts\\windows\\publish-chocolatey-feed.ps1 -PackagePath", workflow, path.as_posix())
+        self.assertIn("CHOCOLATEY_NUGET_SOURCE", workflow, path.as_posix())
+        self.assertIn("CHOCOLATEY_NUGET_API_KEY", workflow, path.as_posix())
+        self.assertIn("choco push", workflow, path.as_posix())
+        self.assertIn("packaging/windows/", workflow, path.as_posix())
+
+    def test_installer_build_is_single_reusable_workflow(self):
+        # SINGLE SOURCE OF TRUTH guard: the Windows installer build steps must
+        # live in exactly one reusable workflow, and BOTH the release pipeline and
+        # the manual rebuild must call it via `uses:`. This is the regression
+        # guard for the incident where the inline release job and the standalone
+        # windows-installer.yml drifted (a prerelease Inno fix landed in only one).
+        reusable = Path(".github/workflows/windows-installer-build.yml").read_text(
+            encoding="utf-8"
+        )
+        release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        standalone = Path(".github/workflows/windows-installer.yml").read_text(
+            encoding="utf-8"
+        )
+
+        # The reusable workflow is callable and owns the build steps.
+        self.assertIn("on:\n  workflow_call:", reusable)
+        self.assertIn("- name: Build installers", reusable)
+        self.assertIn("- name: Build Chocolatey package", reusable)
+        self.assertIn("- name: Generate winget manifests", reusable)
+
+        # Both callers defer to the one reusable workflow and pass the tag.
+        for path, text in (
+            (Path(".github/workflows/release.yml"), release),
+            (Path(".github/workflows/windows-installer.yml"), standalone),
         ):
-            workflow = path.read_text(encoding="utf-8")
-            self.assertIn("- name: Build Chocolatey package", workflow, path.as_posix())
-            self.assertIn("choco pack", workflow, path.as_posix())
-            self.assertIn("Output/*.nupkg", workflow, path.as_posix())
-            self.assertIn("packages: write", workflow, path.as_posix())
-            self.assertIn("Publish Chocolatey package to GitHub Packages NuGet", workflow, path.as_posix())
-            self.assertIn("nuget.pkg.github.com/${{ github.repository_owner }}", workflow, path.as_posix())
-            self.assertIn("dotnet nuget push", workflow, path.as_posix())
-            self.assertIn("Publish public Chocolatey feed to GitHub Pages", workflow, path.as_posix())
-            self.assertIn(".\\scripts\\windows\\publish-chocolatey-feed.ps1 -PackagePath", workflow, path.as_posix())
-            self.assertIn("CHOCOLATEY_NUGET_SOURCE", workflow, path.as_posix())
-            self.assertIn("CHOCOLATEY_NUGET_API_KEY", workflow, path.as_posix())
-            self.assertIn("choco push", workflow, path.as_posix())
-            self.assertIn("packaging/windows/", workflow, path.as_posix())
+            self.assertIn(
+                "uses: ./.github/workflows/windows-installer-build.yml",
+                text,
+                path.as_posix(),
+            )
+            self.assertIn("tag:", text, path.as_posix())
+
+        # The build steps must NOT be duplicated back into either caller (that
+        # duplication is exactly what caused the drift incident).
+        for path, text in (
+            (Path(".github/workflows/release.yml"), release),
+            (Path(".github/workflows/windows-installer.yml"), standalone),
+        ):
+            self.assertNotIn("ISCC failed", text, path.as_posix())
+            self.assertNotIn("choco pack", text, path.as_posix())
+            self.assertNotIn("Generate winget manifests", text, path.as_posix())
 
     def test_public_chocolatey_feed_script_publishes_static_github_pages_feed(self):
         script = Path("scripts/windows/publish-chocolatey-feed.ps1").read_text(
@@ -162,17 +206,27 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # The packaging/windows/winget manifests are version-controlled TEMPLATES
         # (placeholders the release fills); CI generates the concrete manifests and
         # ships them as a release asset — it never commits them back to protected
-        # main (PR + CI only, so CI must not push to it).
-        for path in (
-            Path(".github/workflows/release.yml"),
-            Path(".github/workflows/windows-installer.yml"),
-        ):
-            workflow = path.read_text(encoding="utf-8")
-            # Generation happens, but the manifests are NOT committed/pushed.
-            self.assertIn("Generate winget manifests", workflow, path.as_posix())
-            self.assertIn("whisper-dictate-winget-$version.zip", workflow, path.as_posix())
-            self.assertNotIn("git add packaging/windows/winget/", workflow, path.as_posix())
-            self.assertNotIn("New-Item -ItemType Directory -Force manifests", workflow)
+        # main (PR + CI only, so CI must not push to it). Generation lives in the
+        # single reusable installer-build workflow.
+        path = Path(".github/workflows/windows-installer-build.yml")
+        workflow = path.read_text(encoding="utf-8")
+        # Generation happens, but the manifests are NOT committed/pushed.
+        self.assertIn("Generate winget manifests", workflow, path.as_posix())
+        self.assertIn("whisper-dictate-winget-$version.zip", workflow, path.as_posix())
+        self.assertNotIn("git add packaging/windows/winget/", workflow, path.as_posix())
+        self.assertNotIn("New-Item -ItemType Directory -Force manifests", workflow)
+        # Winget is finals-only: the generate step is skipped on prerelease tags.
+        self.assertIn(
+            "if: steps.win-check.outputs.changed == 'true' && inputs.is_prerelease != 'true'",
+            workflow,
+            path.as_posix(),
+        )
+        # The release pipeline forwards the prerelease flag computed by the
+        # release job into the reusable workflow, so RC tags ship no winget asset.
+        release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "is_prerelease: ${{ needs.release.outputs.is_prerelease }}", release
+        )
 
         names = (
             "FactusConsulting.WhisperDictate.yaml",

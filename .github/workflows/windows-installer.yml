@@ -1,8 +1,15 @@
 name: windows-installer
 
-# Triggers after the main release workflow creates the GitHub Release.
-# Only builds and submits to winget when Windows-relevant files changed.
-# Windows-relevant: Rust app, Python package, requirements/, scripts/, packaging/windows/
+# Manual rebuild of the Windows installer for an existing release tag.
+#
+# This is a thin wrapper: the actual build (Inno .exe, portable ZIP, Chocolatey
+# .nupkg, winget manifests) lives in the reusable
+# .github/workflows/windows-installer-build.yml — the SAME workflow the release
+# pipeline (.github/workflows/release.yml) calls. There is exactly ONE copy of
+# the build steps, so this manual path and the release path can never diverge.
+#
+# Use this to re-run the installer build against a tag that already has a GitHub
+# Release (e.g. after fixing a build issue) without cutting a new tag.
 
 on:
   workflow_dispatch:
@@ -13,241 +20,17 @@ on:
 
 jobs:
   build-installer:
-    runs-on: windows-2025
     permissions:
       contents: write
       packages: write
-
-    steps:
-      - name: Resolve tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
-          else
-            echo "TAG=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
-          fi
-
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ env.TAG }}
-          fetch-depth: 0
-
-      - name: Check for Windows-relevant changes
-        id: win-check
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -z "$prev" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed=$(git diff --name-only "$prev" HEAD -- \
-            src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
-            src/ \
-            requirements/ \
-            scripts/ \
-            packaging/windows/)
-          if [ -n "$changed" ]; then
-            echo "changed=true"  >> "$GITHUB_OUTPUT"
-            echo "Windows files changed since $prev:"
-            echo "$changed"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No Windows-specific changes since $prev — skipping build"
-          fi
-
-      - name: Install Inno Setup
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: choco install innosetup -y --no-progress
-
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-        if: steps.win-check.outputs.changed == 'true'
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.win-check.outputs.changed == 'true'
-        with:
-          workspaces: "src/rust -> ../target"
-
-      - name: Build Rust desktop UI
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app
-
-      - name: Build installers
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: |
-          $version = "${{ env.TAG }}" -replace '^v',''
-          Set-Content VERSION $version -Encoding ascii
-          # Inno Setup's VersionInfoVersion must be a numeric dotted version, so
-          # strip any prerelease suffix (e.g. 1.9.5-rc.1 -> 1.9.5). AppVersion /
-          # the output filename keep the full string incl. -rc.N.
-          $versionInfo = $version -replace '-rc\.\d+$',''
-          $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          $outDir  = "$PWD\Output"
-          New-Item -ItemType Directory -Force $outDir | Out-Null
-          & $iscc /DVERSION=$version /DVERSION_INFO=$versionInfo /O"$outDir" packaging\windows\inno\whisper-dictate.iss
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
-
-      - name: Build Windows ZIP packages
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: |
-          $version = "${{ env.TAG }}" -replace '^v',''
-          $outDir = "$PWD\Output"
-          $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
-          Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $bundle | Out-Null
-          # Ship only the Python worker package — not src\rust (compiled into the
-          # .exe) or the test trees. Mirrors the Inno installer's [Files] list.
-          New-Item -ItemType Directory -Force (Join-Path $bundle "src\python") | Out-Null
-          Copy-Item src\python\whisper_dictate (Join-Path $bundle "src\python") -Recurse
-          Get-ChildItem -LiteralPath $bundle -Directory -Recurse -Force -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item README.md,LICENSE,VERSION $bundle
-          Copy-Item docs $bundle -Recurse
-          Copy-Item requirements $bundle -Recurse
-          New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
-          Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
-          Copy-Item target\release\whisper-dictate.exe $bundle
-          New-Item -ItemType Directory -Force (Join-Path $bundle "scripts") | Out-Null
-          Copy-Item scripts\dev\inject-smoke.py (Join-Path $bundle "scripts")
-          $zip = Join-Path $outDir "whisper-dictate-windows-$version.zip"
-          Remove-Item $zip -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path (Join-Path (Split-Path $bundle -Parent) "whisper-dictate") -DestinationPath $zip -CompressionLevel Optimal
-
-      - name: Compute SHA256 hashes
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: |
-          $out = @()
-          foreach ($f in Get-ChildItem "Output\*.exe", "Output\*.zip") {
-            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
-            "$($f.Name)=$hash" | Tee-Object -Append sha256sums.txt
-            $out += [pscustomobject]@{ File = $f.Name; SHA256 = $hash }
-          }
-          $out | ConvertTo-Json | Set-Content sha256sums.json -Encoding utf8
-          Get-Content sha256sums.txt
-
-      - name: Build Chocolatey package
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: |
-          $version = "${{ env.TAG }}" -replace '^v',''
-          $repo    = "${{ github.repository }}"
-          $tag     = "${{ env.TAG }}"
-          $hashes  = Get-Content sha256sums.json | ConvertFrom-Json
-          $installerName = "whisper-dictate-windows-setup-$version.exe"
-          $installerHash = ($hashes | Where-Object File -eq $installerName).SHA256
-          if (-not $installerHash) { throw "Missing SHA256 for $installerName" }
-
-          $baseUrl = "https://github.com/$repo/releases/download/$tag"
-          $installerUrl = "$baseUrl/$installerName"
-          $packageDir = "Output\chocolatey\whisper-dictate"
-          Remove-Item $packageDir -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force "$packageDir\tools" | Out-Null
-          Copy-Item packaging\windows\chocolatey\tools\*.ps1 "$packageDir\tools\"
-
-          $nuspec = Get-Content packaging\windows\chocolatey\whisper-dictate.nuspec -Raw
-          $nuspec = $nuspec.Replace('__VERSION__', $version)
-          Set-Content "$packageDir\whisper-dictate.nuspec" $nuspec -Encoding utf8
-
-          $install = Get-Content "$packageDir\tools\chocolateyinstall.ps1" -Raw
-          $install = $install.Replace('__INSTALLER_URL__', $installerUrl)
-          $install = $install.Replace('__INSTALLER_SHA256__', $installerHash)
-          Set-Content "$packageDir\tools\chocolateyinstall.ps1" $install -Encoding utf8
-
-          choco pack "$packageDir\whisper-dictate.nuspec" --outputdirectory Output
-          if ($LASTEXITCODE -ne 0) { throw "choco pack failed" }
-
-      # Fill the winget manifest templates with this release's version, installer
-      # URL and SHA256, then ship the concrete manifests as a release asset (no
-      # push to protected main). Users install via `winget install --manifest`.
-      - name: Generate winget manifests
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: |
-          $version = "${{ env.TAG }}" -replace '^v',''
-          $repo    = "${{ github.repository }}"
-          $tag     = "${{ env.TAG }}"
-          $hashes  = Get-Content sha256sums.json | ConvertFrom-Json
-          $installerName = "whisper-dictate-windows-setup-$version.exe"
-          $installerHash = ($hashes | Where-Object File -eq $installerName).SHA256
-          if (-not $installerHash) { throw "Missing SHA256 for $installerName" }
-          $installerUrl = "https://github.com/$repo/releases/download/$tag/$installerName"
-          $releaseDate  = (Get-Date -Format 'yyyy-MM-dd')
-          $outDir = "Output\winget"
-          New-Item -ItemType Directory -Force $outDir | Out-Null
-          foreach ($f in Get-ChildItem packaging\windows\winget\*.yaml) {
-            # Drop template comment lines so the generated manifest is clean.
-            $body = (Get-Content $f.FullName | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
-            $body = $body.Replace('__VERSION__', $version).
-              Replace('__INSTALLER_URL__', $installerUrl).
-              Replace('__INSTALLER_SHA256__', $installerHash).
-              Replace('__RELEASE_DATE__', $releaseDate)
-            Set-Content (Join-Path $outDir $f.Name) $body -Encoding utf8
-          }
-          $zip = "Output\whisper-dictate-winget-$version.zip"
-          Remove-Item $zip -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path "$outDir\*" -DestinationPath $zip
-          Write-Host "Generated winget manifests for ${version}:"
-          Get-ChildItem $outDir | ForEach-Object { Write-Host "  $($_.Name)" }
-
-      - name: Upload installers + checksums to release
-        if: steps.win-check.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh release upload "$TAG" Output/*.exe Output/*.zip Output/*.nupkg sha256sums.txt --repo "$GITHUB_REPOSITORY" --clobber
-
-      - name: Publish Chocolatey package to GitHub Packages NuGet
-        if: steps.win-check.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
-          if (-not $package) { throw "Chocolatey package was not built" }
-          $source = "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
-          dotnet nuget push $package.FullName --api-key "$env:GH_TOKEN" --source "$source" --skip-duplicate
-
-      - name: Publish public Chocolatey feed to GitHub Pages
-        if: steps.win-check.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
-          if (-not $package) { throw "Chocolatey package was not built" }
-          .\scripts\windows\publish-chocolatey-feed.ps1 -PackagePath $package.FullName
-
-      - name: Publish Chocolatey package to private NuGet feed
-        if: steps.win-check.outputs.changed == 'true'
-        env:
-          CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
-          CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
-        shell: pwsh
-        run: |
-          if (-not $env:CHOCOLATEY_NUGET_SOURCE) {
-            Write-Host "CHOCOLATEY_NUGET_SOURCE not set - skipping private Chocolatey/NuGet push."
-            exit 0
-          }
-          if (-not $env:CHOCOLATEY_NUGET_API_KEY) {
-            Write-Host "CHOCOLATEY_NUGET_API_KEY not set - skipping private Chocolatey/NuGet push."
-            exit 0
-          }
-          $package = Get-ChildItem Output\whisper-dictate.*.nupkg | Select-Object -First 1
-          if (-not $package) { throw "Chocolatey package was not built" }
-          choco push $package.FullName --source "$env:CHOCOLATEY_NUGET_SOURCE" --api-key "$env:CHOCOLATEY_NUGET_API_KEY" --force
-          if ($LASTEXITCODE -ne 0) { throw "choco push failed" }
-
-      # NOTE: winget manifests (packaging/windows/winget) are NOT generated or
-      # committed here — main is protected (PR + CI only), so CI must not push to
-      # it. The installer SHA256 is published as the sha256sums.txt release asset;
-      # winget manifests are updated when needed via a separate PR using that hash.
+    uses: ./.github/workflows/windows-installer-build.yml
+    with:
+      tag: ${{ github.event.inputs.tag }}
+      # Manual rebuilds always build (force past the Windows-relevant-changes
+      # gate) and always generate the winget manifests, matching this workflow's
+      # historical behavior. is_prerelease is left at its 'false' default so the
+      # winget-generation step runs (manual rebuilds are treated as finals).
+      force_build: true
+    secrets:
+      CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
+      CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
