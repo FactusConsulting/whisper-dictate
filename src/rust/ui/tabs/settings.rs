@@ -146,6 +146,7 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.ui_text_scale = defaults.ui_text_scale;
             settings.update_check = defaults.update_check;
             settings.update_check_interval_minutes = defaults.update_check_interval_minutes;
+            settings.update_include_prereleases = defaults.update_include_prereleases;
             settings.inject_json = defaults.inject_json;
             settings.metrics_jsonl = defaults.metrics_jsonl;
             settings.feedback_sounds = defaults.feedback_sounds;

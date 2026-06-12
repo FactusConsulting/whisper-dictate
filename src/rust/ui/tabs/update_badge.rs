@@ -27,7 +27,15 @@ impl WhisperDictateApp {
         let exe_path = std::env::current_exe()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
-        let action = upgrade_action(detect_install_method(&exe_path, Os::current()));
+        // When the offered version is a pre-release (`-rc.N`), the upgrade action
+        // pins choco `--prerelease`/`--version` and links the rc's tag page for
+        // the other install methods (see `upgrade_hint::upgrade_action`).
+        let is_prerelease = version_is_prerelease(&version);
+        let action = upgrade_action(
+            detect_install_method(&exe_path, Os::current()),
+            &version,
+            is_prerelease,
+        );
 
         // A transient "Copied!" suffix for a couple of seconds after a copy.
         let copied = self

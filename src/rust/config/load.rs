@@ -168,6 +168,11 @@ impl AppSettings {
             "update_check_interval_minutes",
             &defaults.update_check_interval_minutes,
         );
+        self.update_include_prereleases = bool_value(
+            object,
+            "update_include_prereleases",
+            defaults.update_include_prereleases,
+        );
     }
 
     /// UI-only presentation settings (theme, language, log view, text scale).
