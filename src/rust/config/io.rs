@@ -117,7 +117,7 @@ pub fn open_existing_path(path: impl AsRef<Path>) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-pub(crate) fn platform_config_dir() -> PathBuf {
+pub fn platform_config_dir() -> PathBuf {
     if cfg!(windows) {
         let base = env::var_os("APPDATA")
             .map(PathBuf::from)

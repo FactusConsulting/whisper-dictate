@@ -352,6 +352,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_capture.py",
             "vp_cli.py",
             "vp_config.py",
+            "vp_corpus_record.py",
             "vp_device_test.py",
             "vp_dictate.py",
             "vp_devices.py",

@@ -209,6 +209,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "WASAPI/DirectSound/MME open matrix as capture, capturing no "
                          "audio), print a single JSON usability result, then exit. "
                          "Pass an empty string to test the system default input.")
+    ap.add_argument("--record-corpus-item", metavar="ID", default=None,
+                    help="record reference audio for the golden-corpus item ID from "
+                         "the configured microphone (reusing the same negotiated capture "
+                         "path as dictation), save it to "
+                         "<appdata>/benchmark/audio/<ID>.wav so the benchmark can score "
+                         "it, print start/progress/done JSON events, then exit. The "
+                         "recording length is derived from the reference text length.")
     ap.add_argument("--list-windows", action="store_true",
                     help="print visible top-level windows (title + process) as JSON, "
                          "then exit. Windows only; exits with code 1 on other platforms.")

@@ -119,6 +119,15 @@ impl WhisperDictateApp {
         ui.separator();
         ui.add_space(8.0);
 
+        // --- Record corpus audio: read a corpus item's reference text aloud and
+        // record it straight to the benchmark audio dir, so the golden corpus is
+        // self-service. Sits next to "Run benchmark" since they share the corpus.
+        self.corpus_record_section(ui, palette);
+
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         // --- Appearance + Display: chrome that used to sit at the top of Output.
         ui.horizontal_wrapped(|ui| {
             section_label(
