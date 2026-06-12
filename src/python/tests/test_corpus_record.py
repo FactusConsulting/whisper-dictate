@@ -254,6 +254,81 @@ class WavWriterAndContractTests(_RecorderTestBase):
         self.assertIn("no audio", events[-1]["error"])
 
 
+class SafeIdTests(unittest.TestCase):
+    """Unit tests for is_safe_corpus_id — the path-traversal guard."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib
+        cls.mod = importlib.import_module("whisper_dictate.vp_corpus_record")
+
+    def _safe(self, id_):
+        self.assertTrue(self.mod.is_safe_corpus_id(id_), f"expected safe: {id_!r}")
+
+    def _unsafe(self, id_):
+        self.assertFalse(self.mod.is_safe_corpus_id(id_), f"expected unsafe: {id_!r}")
+
+    def test_typical_ids_are_safe(self):
+        for id_ in ("da-001", "en_002", "item.3", "ABC", "x"):
+            self._safe(id_)
+
+    def test_empty_string_is_unsafe(self):
+        self._unsafe("")
+
+    def test_dot_and_dotdot_are_unsafe(self):
+        self._unsafe(".")
+        self._unsafe("..")
+
+    def test_path_traversal_with_forward_slash_is_unsafe(self):
+        self._unsafe("../evil")
+        self._unsafe("a/b")
+
+    def test_path_traversal_with_backslash_is_unsafe(self):
+        self._unsafe("a\\b")
+        self._unsafe("..\\evil")
+
+    def test_disallowed_chars_are_unsafe(self):
+        for id_ in ("a b", "id;x", "id!x", "id@x"):
+            self._unsafe(id_)
+
+
+class UnsafeIdRecordTests(_RecorderTestBase):
+    """record_corpus_item must emit corpus_record_error for unsafe IDs."""
+
+    def _tmp(self):
+        import tempfile
+        d = tempfile.mkdtemp(prefix="wd-corpus-rec-")
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        return d
+
+    def test_dotdot_slash_id_emits_error_exits_zero(self):
+        root = _write_corpus(Path(self._tmp()), [
+            {"id": "da-001", "language": "da", "text": "Hej.", "terms": []},
+        ])
+        from helpers import _capture_stdout
+        with _capture_stdout() as out:
+            code = self.mod.record_corpus_item(
+                "../evil", app_root=str(root), appdata=str(root))
+        self.assertEqual(code, 0)
+        events = _events(out.getvalue())
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "corpus_record_error")
+        self.assertIn("unsafe corpus id", events[0]["error"])
+
+    def test_subdir_slash_id_emits_error_exits_zero(self):
+        root = _write_corpus(Path(self._tmp()), [
+            {"id": "da-001", "language": "da", "text": "Hej.", "terms": []},
+        ])
+        from helpers import _capture_stdout
+        with _capture_stdout() as out:
+            code = self.mod.record_corpus_item(
+                "a/b", app_root=str(root), appdata=str(root))
+        self.assertEqual(code, 0)
+        events = _events(out.getvalue())
+        self.assertEqual(events[0]["event"], "corpus_record_error")
+        self.assertIn("unsafe corpus id", events[0]["error"])
+
+
 class CliFlagTests(unittest.TestCase):
     def test_parser_exposes_record_corpus_item_flag(self):
         from whisper_dictate.vp_cli import build_arg_parser

@@ -298,6 +298,11 @@ struct WhisperDictateApp {
     /// The corpus item id currently selected in the picker, or `None` before any
     /// selection. Passed to `--record-corpus-item` when Record is clicked.
     corpus_selected_id: Option<String>,
+    /// Cached set of corpus item IDs that already have a recording under appdata.
+    /// Populated by [`recorded_ids_set`] in `ensure_corpus_loaded` (and refreshed
+    /// after every successful recording) so [`combo_entry_label`] can check
+    /// recording presence in O(1) with no per-frame filesystem I/O.
+    corpus_recorded_ids: std::collections::HashSet<String>,
     /// Transient (non-persisted) result of the last "Record" run: the parsed
     /// saved/failed outcome on success, or an `Err` message when the run/parse
     /// failed. `None` before any recording. Cleared when a new recording starts.
@@ -453,6 +458,7 @@ impl Default for WhisperDictateApp {
             corpus_items: Vec::new(),
             corpus_loaded: false,
             corpus_selected_id: None,
+            corpus_recorded_ids: std::collections::HashSet::new(),
             corpus_record_result: None,
             config_path,
             saved_settings: settings.clone(),

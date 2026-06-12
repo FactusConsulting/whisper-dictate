@@ -46,6 +46,9 @@ impl WhisperDictateApp {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
+        // Cache which items already have a recording so combo_entry_label can
+        // check in O(1) with no per-frame filesystem I/O.
+        self.corpus_recorded_ids = recorded_ids_set(&appdata, &self.corpus_items);
         // Default the selection to the first item if nothing valid is selected.
         let selection_valid = self
             .corpus_selected_id

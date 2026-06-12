@@ -47,6 +47,26 @@ _LEAD_IN_S = 2.0
 # shows life during a long read instead of going silent.
 _PROGRESS_EVERY_S = 5.0
 
+# Allowlist for corpus IDs used as filename stems (<appdata>/benchmark/audio/<id>.wav).
+# Must match the Rust counterpart ``is_safe_corpus_id`` in ``ui/corpus.rs``.
+import re as _re
+_SAFE_ID_RE = _re.compile(r'^[A-Za-z0-9._-]+$')
+
+
+def is_safe_corpus_id(id_: str) -> bool:
+    """Return True iff ``id_`` is safe to use as a filename stem.
+
+    Allows only ``[A-Za-z0-9._-]``, rejects empty strings, ``.``, ``..``, and
+    any value containing a path separator (``/`` or ``\\``).  Mirrors the Rust
+    ``is_safe_corpus_id`` in ``ui/corpus.rs`` so the two runtimes apply the same
+    rule.
+    """
+    if not id_ or id_ in (".", ".."):
+        return False
+    if "/" in id_ or "\\" in id_:
+        return False
+    return bool(_SAFE_ID_RE.match(id_))
+
 
 def compute_record_seconds(text: str) -> float:
     """Recording length (s) for ``text``: chars/12 clamped to [8, 90] + 2s lead-in.
@@ -233,6 +253,12 @@ def record_corpus_item(item_id: str, *, app_root=None, appdata=None) -> int:
     from whisper_dictate.vp_config import appdata_dir
 
     item_id = (item_id or "").strip()
+    if not is_safe_corpus_id(item_id):
+        _print_event({
+            "event": "corpus_record_error",
+            "error": f"unsafe corpus id: {item_id!r}",
+        })
+        return 0
     if appdata is None:
         appdata = appdata_dir()
     try:

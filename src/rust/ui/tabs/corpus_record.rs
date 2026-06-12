@@ -45,7 +45,6 @@ impl WhisperDictateApp {
             return;
         }
 
-        let appdata = corpus_appdata_dir();
         let recording = self.background_task_label == Some(RECORD_CORPUS_ITEM_LABEL);
 
         ui.horizontal_wrapped(|ui| {
@@ -53,18 +52,20 @@ impl WhisperDictateApp {
             ui.label(corpus_record_text(&language, CorpusRecordText::PickerLabel));
             // The combo shows `id — preview` and a ✓ for already-recorded items so
             // the user can see at a glance which still need a recording.
+            // `corpus_recorded_ids` is populated once per load — no per-frame I/O.
+            let recorded_ids = &self.corpus_recorded_ids;
             let selected_label = self
                 .corpus_selected_id
                 .as_ref()
                 .and_then(|id| self.corpus_items.iter().find(|item| &item.id == id))
-                .map(|item| combo_entry_label(item, &appdata, &language))
+                .map(|item| combo_entry_label(item, recorded_ids, &language))
                 .unwrap_or_default();
             egui::ComboBox::from_id_salt("corpus_record_item")
                 .selected_text(selected_label)
                 .width(360.0)
                 .show_ui(ui, |ui| {
                     for item in &self.corpus_items {
-                        let label = combo_entry_label(item, &appdata, &language);
+                        let label = combo_entry_label(item, recorded_ids, &language);
                         ui.selectable_value(
                             &mut self.corpus_selected_id,
                             Some(item.id.clone()),

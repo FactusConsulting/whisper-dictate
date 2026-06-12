@@ -11,8 +11,15 @@
 //! turns a manifest string into [`CorpusItem`]s, and [`resolve_corpus_path`] /
 //! [`recorded_audio_path`] are thin filesystem-path helpers (mirroring the
 //! Python `vp_benchmark_paths` resolution order: app-root → appdata).
+//!
+//! ## ID safety
+//! Corpus IDs are used as filename stems (`<appdata>/benchmark/audio/<id>.wav`).
+//! [`is_safe_corpus_id`] enforces a strict allowlist (`[A-Za-z0-9._-]`, non-empty,
+//! not `.` or `..`, no path separators) so that a crafted manifest cannot escape
+//! the benchmark audio directory. [`parse_corpus`] silently skips unsafe IDs.
 
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// One corpus item as the picker needs it: the `id` (the value passed to
@@ -43,12 +50,30 @@ struct RawItem {
     language: String,
 }
 
+/// Whether `id` is safe to use as a filename stem under a controlled directory.
+///
+/// Allows `[A-Za-z0-9._-]` only; rejects empty strings, `.`, `..`, and any
+/// value that contains a path separator (`/` or `\`). This is a pure predicate
+/// so it can be tested and shared by both the parser and any future callers.
+pub(in crate::ui) fn is_safe_corpus_id(id: &str) -> bool {
+    if id.is_empty() || id == "." || id == ".." {
+        return false;
+    }
+    // No path separators — belt-and-suspenders guard on top of the char allowlist.
+    if id.contains('/') || id.contains('\\') {
+        return false;
+    }
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
 /// Parse a `corpus.json` manifest string into the picker's [`CorpusItem`]s.
 ///
 /// Returns an empty list (never an error / panic) when the manifest is missing
 /// an `items` array or is malformed JSON — the picker then simply shows nothing
-/// to record, exactly as if the file were absent. Items with a blank `id` or
-/// blank `text` are skipped (they can't be recorded / read aloud).
+/// to record, exactly as if the file were absent. Items with a blank `id`,
+/// blank `text`, or an unsafe `id` (fails [`is_safe_corpus_id`]) are skipped so
+/// that a crafted manifest cannot introduce path-traversal IDs.
 pub(in crate::ui) fn parse_corpus(manifest: &str) -> Vec<CorpusItem> {
     let parsed: CorpusManifest = match serde_json::from_str(manifest) {
         Ok(manifest) => manifest,
@@ -61,6 +86,10 @@ pub(in crate::ui) fn parse_corpus(manifest: &str) -> Vec<CorpusItem> {
             let id = raw.id.trim().to_owned();
             let text = raw.text.trim().to_owned();
             if id.is_empty() || text.is_empty() {
+                return None;
+            }
+            if !is_safe_corpus_id(&id) {
+                eprintln!("corpus: skipping item with unsafe id {id:?}");
                 return None;
             }
             Some(CorpusItem {
@@ -113,23 +142,42 @@ pub(in crate::ui) fn recorded_audio_path(appdata: &Path, id: &str) -> PathBuf {
 
 /// Whether a recording already exists for `id` under `appdata`. A thin
 /// `exists()` check on [`recorded_audio_path`] so the picker can suffix a "✓".
+///
+/// **Not called per-frame.** The UI caches results in a `HashSet` via
+/// [`recorded_ids_set`] and queries that set instead.
 pub(in crate::ui) fn has_recording(appdata: &Path, id: &str) -> bool {
     recorded_audio_path(appdata, id).exists()
 }
 
+/// Build the set of IDs that already have a recording under `appdata`.
+///
+/// Called once when the corpus is (re)loaded and after a successful recording,
+/// so [`combo_entry_label`] can check recording presence in O(1) without hitting
+/// the filesystem on every frame.
+pub(in crate::ui) fn recorded_ids_set(appdata: &Path, items: &[CorpusItem]) -> HashSet<String> {
+    items
+        .iter()
+        .filter(|item| has_recording(appdata, &item.id))
+        .map(|item| item.id.clone())
+        .collect()
+}
+
 /// The combo label for a corpus item: `id — <preview>` plus a ` ✓ (recorded)`
-/// marker when a recording already exists under `appdata`. The localized
+/// marker when the item's ID is present in `recorded_ids`. The localized
 /// "recorded" word is supplied by the caller (kept here so the label is built in
 /// one place and unit-tested without a UI). The preview is truncated to ~40
 /// chars (char-boundary safe).
+///
+/// `recorded_ids` is computed once by [`recorded_ids_set`] — not per-frame — so
+/// this function performs no filesystem I/O.
 pub(in crate::ui) fn combo_entry_label(
     item: &CorpusItem,
-    appdata: &Path,
+    recorded_ids: &HashSet<String>,
     raw_language: &str,
 ) -> String {
     let preview = text_preview(&item.text, 40);
     let mut label = format!("{} — {preview}", item.id);
-    if has_recording(appdata, &item.id) {
+    if recorded_ids.contains(&item.id) {
         let recorded = crate::ui::corpus_record_text(
             raw_language,
             crate::ui::CorpusRecordText::RecordedMarker,
@@ -245,6 +293,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    // ── is_safe_corpus_id ─────────────────────────────────────────────────────
+
+    #[test]
+    fn safe_ids_are_accepted() {
+        for id in &["da-001", "en_002", "item.3", "A-Z0-9", "x"] {
+            assert!(is_safe_corpus_id(id), "expected safe: {id}");
+        }
+    }
+
+    #[test]
+    fn empty_id_is_rejected() {
+        assert!(!is_safe_corpus_id(""));
+    }
+
+    #[test]
+    fn dot_and_dotdot_are_rejected() {
+        assert!(!is_safe_corpus_id("."));
+        assert!(!is_safe_corpus_id(".."));
+    }
+
+    #[test]
+    fn path_traversal_ids_are_rejected() {
+        for id in &["../evil", "a/b", "sub/dir", "a\\b", "..\\evil"] {
+            assert!(!is_safe_corpus_id(id), "expected unsafe: {id}");
+        }
+    }
+
+    #[test]
+    fn ids_with_disallowed_chars_are_rejected() {
+        for id in &["a b", "id;x", "id!x", "id@x", "id#x"] {
+            assert!(!is_safe_corpus_id(id), "expected unsafe: {id}");
+        }
+    }
+
+    // ── parse_corpus: unsafe IDs are silently skipped ─────────────────────────
+
+    #[test]
+    fn parse_corpus_skips_path_traversal_ids() {
+        let manifest = r#"{"items":[
+            {"id":"../evil","text":"escape attempt"},
+            {"id":"a/b","text":"subdir attempt"},
+            {"id":"good","text":"keep me"}
+        ]}"#;
+        let items = parse_corpus(manifest);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "good");
+    }
+
+    // ── recorded_ids_set + combo_entry_label ──────────────────────────────────
+
     #[test]
     fn has_recording_reflects_the_audio_file_presence() {
         let tmp = std::env::temp_dir().join(format!("wd-rec-{}", std::process::id()));
@@ -257,17 +355,62 @@ mod tests {
         std::fs::write(&wav, b"RIFF").unwrap();
         assert!(has_recording(&tmp, "da-001"));
 
-        // The ✓ marker is added to the combo label when a recording exists.
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn recorded_ids_set_contains_only_items_with_audio_files() {
+        let tmp = std::env::temp_dir().join(format!("wd-ridset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let items = vec![
+            CorpusItem {
+                id: "da-001".to_owned(),
+                text: "a".to_owned(),
+                language: "da".to_owned(),
+            },
+            CorpusItem {
+                id: "en-001".to_owned(),
+                text: "b".to_owned(),
+                language: "en".to_owned(),
+            },
+        ];
+
+        // No files yet → empty set.
+        assert!(recorded_ids_set(&tmp, &items).is_empty());
+
+        // Create the WAV for da-001 only.
+        let wav = recorded_audio_path(&tmp, "da-001");
+        std::fs::create_dir_all(wav.parent().unwrap()).unwrap();
+        std::fs::write(&wav, b"RIFF").unwrap();
+
+        let set = recorded_ids_set(&tmp, &items);
+        assert!(set.contains("da-001"));
+        assert!(!set.contains("en-001"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn combo_entry_label_adds_check_marker_when_id_in_recorded_set() {
         let item = CorpusItem {
             id: "da-001".to_owned(),
             text: "Hej med dig.".to_owned(),
             language: "da".to_owned(),
         };
-        let label = combo_entry_label(&item, &tmp, "en");
-        assert!(label.starts_with("da-001 — Hej med dig."));
-        assert!(label.contains("✓"));
-        assert!(label.contains("recorded"));
 
-        let _ = std::fs::remove_dir_all(&tmp);
+        // Without the id in the set — no marker.
+        let empty_set = HashSet::new();
+        let label_no_rec = combo_entry_label(&item, &empty_set, "en");
+        assert!(label_no_rec.starts_with("da-001 — Hej med dig."));
+        assert!(!label_no_rec.contains("✓"));
+
+        // With the id in the set — ✓ marker present.
+        let mut set = HashSet::new();
+        set.insert("da-001".to_owned());
+        let label_rec = combo_entry_label(&item, &set, "en");
+        assert!(label_rec.starts_with("da-001 — Hej med dig."));
+        assert!(label_rec.contains("✓"));
+        assert!(label_rec.contains("recorded"));
     }
 }
