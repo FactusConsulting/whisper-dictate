@@ -388,10 +388,11 @@ class StartSounddeviceTests(unittest.TestCase):
         self.assertIn("could not open", str(ctx.exception))
         self.assertIsNone(target._stream)
 
-    def test_start_sounddevice_falls_back_to_default_when_wasapi_open_fails(self):
-        # A configured device resolves to an explicit index whose open RAISES
-        # (WASAPI can fail on some machines). Capture must fall back to the
-        # system default (device=None) rather than break dictation.
+    def test_start_sounddevice_explicit_device_unusable_raises_no_default_swap(self):
+        # Fix 1: a configured (EXPLICIT) device resolves to an index whose open
+        # RAISES on every host API and has NO sibling endpoint. Capture must NOT
+        # silently record from the system default (a DIFFERENT physical mic) —
+        # it raises DeviceUnusableError so the worker can surface an honest error.
         rt = self.runtime
         rt.SR = 16000
         opened = []
@@ -400,13 +401,17 @@ class StartSounddeviceTests(unittest.TestCase):
             def __init__(self, **kwargs):
                 opened.append(kwargs)
                 # The explicitly-resolved device (index 5) fails to open;
-                # the default (no device= kwarg) succeeds.
+                # the default (no device= kwarg) WOULD succeed — but must not be
+                # reached for an explicit selection.
                 if kwargs.get("device") == 5:
                     raise RuntimeError("WASAPI open failed")
                 self.started = False
 
             def start(self):
                 self.started = True
+
+            def close(self):
+                pass
 
         class Default:
             device = (5, 0)
@@ -439,14 +444,17 @@ class StartSounddeviceTests(unittest.TestCase):
 
         with patch.dict(rt.sys.modules, {"sounddevice": fake_sd}):
             with _env(VOICEPI_AUDIO_DEVICE="Headset Microphone (Jabra Evolve 65 TE)"):
-                backend, device = rt.CaptureMixin._start_sounddevice(target)
+                with self.assertRaises(rt.DeviceUnusableError) as ctx:
+                    rt.CaptureMixin._start_sounddevice(target)
 
-        self.assertEqual(backend, "sounddevice")
-        self.assertTrue(target._stream.started)
-        # The WASAPI device (index 5) was tried first and failed...
+        # The WASAPI device (index 5) was tried and failed...
         self.assertTrue(any(k.get("device") == 5 for k in opened))
-        # ...then a fallback open with NO explicit device (default) succeeded.
-        self.assertTrue(any("device" not in k for k in opened))
+        # ...and NO default open was attempted (no wrong-mic swap).
+        self.assertFalse(any("device" not in k for k in opened))
+        # The error names the chosen device + the actionable next step.
+        self.assertIn("Jabra", str(ctx.exception))
+        self.assertIn("select a different microphone", str(ctx.exception).lower())
+        self.assertIn("Jabra", ctx.exception.device_label)
 
     def test_wasapi_autoconvert_retried_before_default_fallback(self):
         # WASAPI robustness: a WASAPI device that rejects a raw 16k open must be
@@ -1430,8 +1438,9 @@ class CaptureFrameToInt16Tests(unittest.TestCase):
 
 
 class DeviceSwapHonestyTests(unittest.TestCase):
-    """When the chosen device fails ALL formats and capture falls back to a
-    DIFFERENT default device, the swap must NOT be silent (WARN + status)."""
+    """Fix 1: when an EXPLICITLY-chosen device fails ALL formats and has no
+    working sibling endpoint, capture must NOT silently record from a DIFFERENT
+    default device — it raises DeviceUnusableError instead of swapping mics."""
 
     @classmethod
     def setUpClass(cls):
@@ -1443,7 +1452,7 @@ class DeviceSwapHonestyTests(unittest.TestCase):
         import importlib
         cls.rt = importlib.import_module("whisper_dictate.vp_capture")
 
-    def test_fallback_to_different_device_emits_warn_and_marks_audio_device(self):
+    def test_explicit_device_failing_all_formats_raises_not_swaps(self):
         rt = self.rt
         rt.SR = 16000
         opened = []
@@ -1452,7 +1461,8 @@ class DeviceSwapHonestyTests(unittest.TestCase):
             def __init__(self, **kwargs):
                 opened.append(kwargs)
                 # The Yeti (index 5) fails EVERY format/rate; the default
-                # (device kwarg absent) succeeds → a swap to a different mic.
+                # (device kwarg absent) WOULD succeed — but must NOT be reached
+                # for an explicit selection (no wrong-mic swap).
                 if kwargs.get("device") == 5:
                     raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
                 self.started = False
@@ -1476,19 +1486,18 @@ class DeviceSwapHonestyTests(unittest.TestCase):
                 patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
                 _env(VOICEPI_WORKER_EVENTS="1",
                      VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
-            backend, device = rt.CaptureMixin._start_sounddevice(target)
+            with self.assertRaises(rt.DeviceUnusableError) as ctx:
+                rt.CaptureMixin._start_sounddevice(target)
 
-        self.assertEqual(backend, "sounddevice")
-        self.assertTrue(getattr(target._stream, "started", False))
-        # Bound on the default (no device= kwarg) after the Yeti exhausted formats.
-        self.assertTrue(any("device" not in k for k in opened))
-        # NOT silent: the audio_device label carries a WARN naming the selection.
-        self.assertIn("WARN", target._audio_input_device)
-        self.assertIn("Yeti", target._audio_input_device)
-        # A status event surfaced the swap with a device_swap note.
-        swap_events = [e for e in events if "device_swap" in e]
-        self.assertTrue(swap_events, f"expected a device-swap event; got {events!r}")
-        self.assertIn("WARN", swap_events[0]["device_swap"])
+        # The Yeti (index 5) was tried and failed every format...
+        self.assertTrue(any(k.get("device") == 5 for k in opened))
+        # ...and NO default open (no device= kwarg) was ever attempted.
+        self.assertFalse(any("device" not in k for k in opened))
+        # The error names the chosen device + the actionable next step; NO
+        # wrong-mic swap event was emitted.
+        self.assertIn("Yeti", str(ctx.exception))
+        self.assertIn("select a different microphone", str(ctx.exception).lower())
+        self.assertEqual([e for e in events if "device_swap" in e], [])
 
     def test_no_warn_when_no_explicit_device_was_chosen(self):
         # An empty selection (system default) that needs a native-rate fallback is
@@ -1520,6 +1529,52 @@ class DeviceSwapHonestyTests(unittest.TestCase):
 
         self.assertEqual(target._capture_rate, 44100)
         self.assertNotIn("WARN", target._audio_input_device)
+
+    def test_no_explicit_device_still_falls_back_to_system_default(self):
+        # Fix 1 must NOT change the no-explicit-device path: with an EMPTY
+        # VOICEPI_AUDIO_DEVICE, the resolved preferred-host-API default endpoint
+        # (index 5) fails every format, but the system default (device=None)
+        # opens — so capture binds it WITHOUT raising and WITHOUT a swap WARN
+        # (nothing the user chose was abandoned).
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # The resolved default endpoint (index 5) fails; the bare default
+                # (no device= kwarg) succeeds.
+                if kwargs.get("device") == 5:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_fake_sd(Stream, default_input=5)
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.object(rt, "_emit_worker_event", fake_emit), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_WORKER_EVENTS="1", VOICEPI_AUDIO_DEVICE=""):
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertTrue(getattr(target._stream, "started", False))
+        # The system-default open (no device= kwarg) is what bound.
+        self.assertTrue(any("device" not in k for k in opened))
+        # No honest-error, no wrong-mic swap WARN: it is the default by design.
+        self.assertNotIn("WARN", target._audio_input_device)
+        self.assertEqual([e for e in events if "device_swap" in e], [])
 
 
 # ---------------------------------------------------------------------------
@@ -1723,10 +1778,11 @@ class SiblingEndpointFallbackTests(unittest.TestCase):
         mme_first = next(i for i, k in enumerate(opened) if k.get("device") == 7)
         self.assertLess(ds_first, mme_first)
 
-    def test_swap_warn_only_when_all_host_api_endpoints_fail(self):
-        # WASAPI + DirectSound + MME endpoints of the Yeti ALL fail; capture
-        # drops to the system default, which resolves to a DIFFERENT mic (Jabra).
-        # ONLY now does the device-swap WARN fire.
+    def test_all_host_api_endpoints_fail_raises_no_swap(self):
+        # Fix 1: WASAPI + DirectSound + MME endpoints of the EXPLICITLY-chosen
+        # Yeti ALL fail. Capture must NOT drop to the system default (a DIFFERENT
+        # mic, the Jabra) — every endpoint of the chosen device was exhausted, so
+        # it raises DeviceUnusableError instead of silently swapping mics.
         rt = self.rt
         rt.SR = 16000
         opened = []
@@ -1735,7 +1791,7 @@ class SiblingEndpointFallbackTests(unittest.TestCase):
             def __init__(self, **kwargs):
                 opened.append(kwargs)
                 # Every Yeti endpoint (51 WASAPI, 25 DS, 7 MME) fails; the default
-                # (no device= kwarg) succeeds → a true swap to a different mic.
+                # (no device= kwarg) WOULD succeed — but must not be reached.
                 if kwargs.get("device") in (51, 25, 7):
                     raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
                 self.started = False
@@ -1758,19 +1814,19 @@ class SiblingEndpointFallbackTests(unittest.TestCase):
                 patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
                 _env(VOICEPI_WORKER_EVENTS="1",
                      VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
-            rt.CaptureMixin._start_sounddevice(target)
+            with self.assertRaises(rt.DeviceUnusableError) as ctx:
+                rt.CaptureMixin._start_sounddevice(target)
 
-        self.assertTrue(getattr(target._stream, "started", False))
-        # All three Yeti host-API endpoints were attempted before the default.
+        # All three Yeti host-API endpoints were attempted (full sibling sweep)...
         self.assertTrue(any(k.get("device") == 51 for k in opened))
         self.assertTrue(any(k.get("device") == 25 for k in opened))
         self.assertTrue(any(k.get("device") == 7 for k in opened))
-        self.assertTrue(any("device" not in k for k in opened))  # default open
-        # NOW it is a swap: WARN names the abandoned selection + emits the event.
-        self.assertIn("WARN", target._audio_input_device)
-        self.assertIn("Yeti", target._audio_input_device)
-        swap_events = [e for e in events if "device_swap" in e]
-        self.assertTrue(swap_events, f"expected a device-swap event; got {events!r}")
+        # ...and NO default open (no device= kwarg) was ever attempted.
+        self.assertFalse(any("device" not in k for k in opened))
+        # No wrong-mic swap event; the error names the chosen device + next step.
+        self.assertEqual([e for e in events if "device_swap" in e], [])
+        self.assertIn("Yeti", str(ctx.exception))
+        self.assertIn("select a different microphone", str(ctx.exception).lower())
 
     def test_no_swap_warn_when_sibling_succeeds(self):
         # The negative of the above: when a sibling endpoint binds, the WARN must

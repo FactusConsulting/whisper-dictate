@@ -235,8 +235,46 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         if mt <= self._config_mtime:
             return
         self._config_mtime = mt
+        # Snapshot the audio-device setting BEFORE the reload so a live change to
+        # it can drive an immediate optimistic status update (Fix 2 below).
+        prev_audio_device = vp_capture._audio_device_setting()
         apply_config_to_environ()
         self._apply_effective_config(self._profiled_config(effective_config()))
+        self._emit_audio_device_if_changed(prev_audio_device)
+
+    def _emit_audio_device_if_changed(self, prev_setting: str) -> None:
+        """Optimistically refresh the shown mic NAME on a live device change (Fix 2).
+
+        The status display only learned the active ``audio_device`` when a
+        recording opened the stream, so after the user picked a new mic and SAVED
+        the UI kept showing the OLD name until the next recording. Here, when the
+        live-reloaded ``VOICEPI_AUDIO_DEVICE`` actually CHANGED, we re-resolve the
+        new device's NAME with the query-only resolver (``resolve_startup_audio_
+        device`` — it opens NO stream) and emit a ``status=ready`` event carrying
+        the new ``audio_device`` immediately, so the UI updates on save.
+
+        Best-effort + never blocks/crashes: a name that can't be resolved degrades
+        to "System default" inside the resolver, so we still emit *something*. The
+        truly-bound device is re-derived when the next recording opens the stream
+        (``_start_*``), so a wrong optimistic name self-corrects.
+        """
+        if vp_capture._audio_device_setting() == prev_setting:
+            return
+        try:
+            audio_device = vp_capture.resolve_startup_audio_device()
+        except Exception as exc:  # noqa: BLE001 — optimistic update is best-effort
+            print(f"[cap] could not re-resolve audio device on reload (ignored): {exc}",
+                  file=sys.stderr, flush=True)
+            return
+        self._audio_input_device = audio_device
+        print(f"[cap] audio device changed live → {audio_device!r}", flush=True)
+        _emit_worker_event(
+            "status",
+            state="ready",
+            capture_backend=self._capture_backend,
+            audio_device=audio_device,
+            capture_channels=self._capture_channels,
+        )
 
     def _should_skip_pcm(self, pcm: np.ndarray, recording_s: float) -> "str | None":
         """Return a skip-reason token if the clip should be discarded, else None.
@@ -505,14 +543,25 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             self.audio_ducker.exit()
         except Exception:  # noqa: BLE001
             pass
-        message = (
-            f"Could not open {device} at 16 kHz (format unsupported: {exc}). "
-            "Try another microphone or check Windows sound settings."
-        )
+        if isinstance(exc, vp_capture.DeviceUnusableError):
+            # Honest "device unusable" (Fix 1): an EXPLICITLY-chosen mic that
+            # would not open on ANY host API. Surface the actionable message
+            # verbatim (it already names the device + the "pick another in
+            # Settings" next step) and prefer its device label, so we never
+            # claim a generic "format unsupported" or imply the wrong mic.
+            device = getattr(exc, "device_label", None) or device
+            message = exc.message
+            reason = "device_unusable"
+        else:
+            message = (
+                f"Could not open {device} at 16 kHz (format unsupported: {exc}). "
+                "Try another microphone or check Windows sound settings."
+            )
+            reason = "capture_open_failed"
         _emit_worker_event(
             "status",
             state="error",
-            reason="capture_open_failed",
+            reason=reason,
             audio_device=device,
             error=message,
         )
