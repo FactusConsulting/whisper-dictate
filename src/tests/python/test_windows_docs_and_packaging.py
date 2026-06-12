@@ -286,6 +286,27 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
             # The smoke venv must NOT pip-install the heavy model stack.
             self.assertNotIn(f"pip install --quiet '{excluded}", workflow)
 
+        # Fix 1 (Copilot review): asset-existence check before download so a
+        # transient network/API error cannot silently skip the gate. The job must
+        # query the release asset list first; only a count of 0 legitimately
+        # skips (found=false). If the asset exists, download failure is hard.
+        self.assertIn(
+            'select(test("whisper-dictate-windows-setup"))] | length',
+            workflow,
+        )
+
+        # Fix 3 (Copilot review, CRITICAL): PYTHONPATH must point at the
+        # installed worker package so both worker invocations can import
+        # whisper_dictate (it lives at <app-root>\src\python in the installed
+        # layout, not on the venv's site-packages).
+        self.assertIn(r"src\python'", workflow)
+        self.assertIn("PYTHONPATH", workflow)
+
+        # Fix 2 (Copilot review): --list-audio-devices exit code must be
+        # captured and asserted to be 0 or 1; any other code fails the gate.
+        self.assertIn("ldCode", workflow)
+        self.assertIn("-notin @(0, 1)", workflow)
+
     def test_windows_installer_workflows_build_rust_ui_before_inno(self):
         # The installer build steps live in the single reusable workflow shared by
         # release.yml and windows-installer.yml.

@@ -472,15 +472,29 @@ jobs:
           set -euo pipefail
           # The reusable installer build SKIPS itself (and uploads no setup .exe)
           # when no Windows-relevant files changed since the previous tag. That is
-          # a legitimate no-op, not a failure — detect "no installer asset" and
-          # mark this run as skipped rather than failing the gate.
-          mkdir -p dl
-          if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-                --pattern 'whisper-dictate-windows-setup-*.exe' --dir dl; then
-            echo "No setup .exe on release $TAG (installer build was skipped — no Windows-relevant changes). Skipping install-smoke."
+          # a legitimate no-op, not a failure.
+          #
+          # IMPORTANT: first check whether the asset EXISTS on the release — a
+          # missing asset is the only legitimate reason to skip. A transient API
+          # or network error during `gh release download` must NOT silently skip
+          # the gate (that would let a broken release sail through as green).
+          # Strategy:
+          #   - Query the release asset list; count matching setup .exe assets.
+          #   - 0 matches → legitimately no installer built, skip (found=false).
+          #   - ≥1 match  → asset exists, so the download MUST succeed; any
+          #                  failure propagates as a hard error (set -e exits).
+          asset_count=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '[.assets[].name | select(test("whisper-dictate-windows-setup"))] | length')
+          if [ "$asset_count" -eq 0 ]; then
+            echo "No setup .exe asset on release $TAG (installer build was skipped — no Windows-relevant changes). Skipping install-smoke."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Asset exists — download it; any failure is a real error (set -e).
+          mkdir -p dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern 'whisper-dictate-windows-setup-*.exe' --dir dl
           # Glob into an array (nullglob => empty, not the literal pattern) and
           # take the first match — avoids parsing `ls` output (shellcheck SC2012).
           shopt -s nullglob
@@ -599,6 +613,12 @@ jobs:
           & $venvPy -m pip install --quiet 'sounddevice>=0.5.5,<0.6' 'numpy<2.5'
           if ($LASTEXITCODE -ne 0) { throw "venv dependency install failed" }
 
+          # The Rust controller sets PYTHONPATH=<app-root>\src\python when it
+          # launches the worker, because the installed layout places the package
+          # at <app-root>\src\python\whisper_dictate (not in venv site-packages).
+          # Mirror that here so both worker invocations below can import it.
+          $env:PYTHONPATH = Join-Path $appRoot 'src\python'
+
           # 1) --test-audio-device "" tests the system default input. By contract
           # it NEVER raises and ALWAYS exits 0, printing exactly ONE JSON object
           # ({usable, endpoint, reason, ...}). On a headless runner with no audio
@@ -618,20 +638,26 @@ jobs:
           if ($null -eq $obj.usable) { throw "--test-audio-device JSON missing 'usable': $jsonLine" }
           Write-Host "  ok  --test-audio-device usable=$($obj.usable)"
 
-          # 2) --list-audio-devices prints a JSON array of input devices, or
-          # {"error": "..."} (exit 1) if sounddevice cannot enumerate on this
-          # headless host. Either is GRACEFUL (parseable JSON, not a traceback);
-          # we assert the output parses as JSON and contains no Python traceback.
+          # 2) --list-audio-devices prints a JSON array of input devices (exit 0),
+          # or {"error": "..."} (exit 1) if sounddevice cannot enumerate on this
+          # headless host. Either is GRACEFUL (parseable JSON, not a traceback).
+          # The documented contract is exit 0 or exit 1 — any other exit code is
+          # an unexpected failure mode that must fail the gate even if the output
+          # happens to be parseable.
           Write-Host "Running: worker --list-audio-devices"
           $ld = & $venvPy -m whisper_dictate.runtime --app-root $appRoot --list-audio-devices 2>&1
+          $ldCode = $LASTEXITCODE
           Write-Host $ld
+          if ($ldCode -notin @(0, 1)) {
+            throw "--list-audio-devices exited $ldCode (expected 0 or 1): $ld"
+          }
           if ($ld -match 'Traceback \(most recent call last\)') {
             throw "--list-audio-devices raised a traceback: $ld"
           }
           $ldJson = ($ld | Where-Object { $_ -match '^\s*(\[.*\]|\{.*\})\s*$' } | Select-Object -Last 1)
           if (-not $ldJson) { throw "--list-audio-devices printed no JSON: $ld" }
           $null = $ldJson | ConvertFrom-Json
-          Write-Host "  ok  --list-audio-devices produced parseable JSON"
+          Write-Host "  ok  --list-audio-devices produced parseable JSON (exit $ldCode)"
 
       - name: Summary
         if: steps.download.outputs.found == 'true'
