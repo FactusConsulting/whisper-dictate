@@ -524,6 +524,34 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("1 skipped (no audio)", line)
         self.assertNotIn("record corpus audio", line)
 
+    def test_format_summary_line_mixed_skips_shows_no_audio_count_not_all(self):
+        from whisper_dictate import vp_benchmark
+
+        # 3 skipped: 2 for missing audio, 1 for another reason.
+        # Expected: "3 skipped (2 no audio)" — NOT "3 skipped (no audio)"
+        # and no all-skipped audio-hint even if a hint path is given.
+        summary = vp_benchmark.summarize_results([
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="a", text="x", audio=Path("a.wav")),
+                vp_benchmark.MISSING_AUDIO_REASON),
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="b", text="y", audio=Path("b.wav")),
+                vp_benchmark.MISSING_AUDIO_REASON),
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="c", text="z", audio=Path("c.wav")),
+                "backend unavailable"),
+        ])
+        line = vp_benchmark.format_summary_line(
+            summary, audio_hint_path="C:/AppData/WhisperDictate/benchmark/audio")
+
+        self.assertEqual(summary["skipped"], 3)
+        self.assertEqual(summary["skipped_no_audio"], 2)
+        # Precise breakdown shown, not the all-audio label.
+        self.assertIn("3 skipped (2 no audio)", line)
+        self.assertNotIn("3 skipped (no audio)", line)
+        # all-skipped hint suppressed because not ALL skips are missing-audio.
+        self.assertNotIn("record corpus audio", line)
+
     def test_handle_benchmark_routes_run_benchmark_to_corpus_runner(self):
         from whisper_dictate import runtime
 
@@ -546,6 +574,55 @@ class BenchmarkTests(unittest.TestCase):
         plain.assert_not_called()
         self.assertEqual(corpus.call_args.args[0], None)  # default manifest
         self.assertEqual(corpus.call_args.args[1], "whisper")
+
+    def test_handle_benchmark_cli_path_passes_appdata_to_run_benchmark(self):
+        from whisper_dictate import runtime
+
+        ap = types.SimpleNamespace(error=lambda msg: (_ for _ in ()).throw(
+            AssertionError(f"ap.error called: {msg}")))
+        args = types.SimpleNamespace(
+            run_benchmark=False,  # CLI path — NOT the UI "Run benchmark" button
+            benchmark_files=["audio.wav"],
+            benchmark_corpus=None,
+            benchmark_backends="whisper",
+            benchmark_jsonl=None,
+        )
+        fake_appdata = Path("/fake/appdata")
+        # Use patch.object to target the module object directly — avoids a
+        # lookup through sys.modules (which may have been cleared by a prior
+        # test that pops "whisper_dictate.runtime" in its finally block).
+        with patch.object(runtime, "appdata_dir", return_value=fake_appdata):
+            with patch("whisper_dictate.vp_benchmark.run_benchmark") as plain:
+                plain.return_value = []
+                runtime._handle_benchmark(args, ap)
+
+        plain.assert_called_once()
+        call_kw = plain.call_args.kwargs
+        # The CLI path must thread appdata through so the per-user audio
+        # fallback works identically to the UI "Run benchmark" path.
+        self.assertEqual(call_kw.get("appdata"), fake_appdata)
+
+class ConfigDirTests(unittest.TestCase):
+    def test_appdata_dir_ignores_empty_xdg_config_home_on_non_windows(self):
+        """XDG_CONFIG_HOME="" must fall back to ~/.config, not use a
+        relative "./whisper-dictate" directory (empty string is not a path)."""
+        import platform
+        from whisper_dictate import vp_config
+
+        if os.name == "nt":
+            self.skipTest("XDG_CONFIG_HOME is a Linux/macOS concern")
+
+        home_default = Path.home() / ".config" / "whisper-dictate"
+        old = os.environ.pop("XDG_CONFIG_HOME", None)
+        try:
+            os.environ["XDG_CONFIG_HOME"] = ""
+            result = vp_config.appdata_dir()
+        finally:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+            if old is not None:
+                os.environ["XDG_CONFIG_HOME"] = old
+
+        self.assertEqual(result, home_default)
 
 class HistoryTests(unittest.TestCase):
     def test_read_history_keeps_core_fields_written_by_rust(self):

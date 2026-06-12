@@ -64,7 +64,7 @@ def appdata_dir() -> Path:
     if os.name == "nt":
         base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
         return Path(base) / "WhisperDictate"
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "whisper-dictate"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "whisper-dictate"
 
 
 def config_path() -> Path:

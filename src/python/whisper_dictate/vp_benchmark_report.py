@@ -70,8 +70,17 @@ def format_summary_line(
     """
     parts = [f"{summary['passed']}/{summary['total']} passed"]
     if summary["skipped"]:
-        suffix = " (no audio)" if summary.get("skipped_no_audio") else ""
-        parts.append(f"{summary['skipped']} skipped{suffix}")
+        skipped = summary["skipped"]
+        no_audio = summary.get("skipped_no_audio", 0)
+        if no_audio == skipped:
+            # Every skip was for missing audio — use the short, precise label.
+            suffix = " (no audio)"
+        elif no_audio:
+            # Mixed: some skipped for other reasons — show the breakdown.
+            suffix = f" ({no_audio} no audio)"
+        else:
+            suffix = ""
+        parts.append(f"{skipped} skipped{suffix}")
     if summary["failed"]:
         parts.append(f"{summary['failed']} failed")
     if summary["avg_wer"] is not None:

@@ -100,7 +100,7 @@ from whisper_dictate.vp_cli import (  # noqa: E402
 from whisper_dictate.vp_inject import InjectMixin, ydotool_socket_path, ydotoold_ready  # noqa: E402,F401
 from whisper_dictate.vp_postprocess import load_postprocess_settings, postprocess_text  # noqa: E402,F401
 from whisper_dictate.vp_config import (  # noqa: E402
-    apply_config_to_environ, config_mtime, effective_config, get_value, load_config,  # noqa: F401
+    appdata_dir, apply_config_to_environ, config_mtime, effective_config, get_value, load_config,  # noqa: F401
 )
 from whisper_dictate.vp_doctor import (  # noqa: E402,F401
     Check, run_doctor, _base_checks, _linux_checks, _print_checks,
@@ -308,6 +308,7 @@ def _handle_benchmark(a, ap) -> None:
                 a.benchmark_backends,
                 output_jsonl=a.benchmark_jsonl,
                 corpus_manifest=a.benchmark_corpus,
+                appdata=appdata_dir(),
             )
     except Exception as e:  # noqa: BLE001 - argparse should report cleanly
         ap.error(str(e))
