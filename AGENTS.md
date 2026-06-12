@@ -36,8 +36,10 @@ sufficient to merge — the Copilot review must also be fetched and triaged firs
 
   ```sh
   gh api repos/<owner>/<repo>/pulls/<pr>/comments \
-    --jq '.[] | select(.user.login|test("copilot";"i")) | select(.in_reply_to_id==null) | "[\(.path):\(.line)] \(.body)"'
+    --jq '.[] | select(.user.login|test("copilot";"i")) | select(.in_reply_to_id==null) | "[\(.path):\(.line // .original_line)] \(.body)"'
   ```
+
+  (`.line` is null for comments on outdated diffs — fall back to `.original_line`.)
 
   Triage each: fix it, or record an explicit "dismissed because …" justification.
   Copilot is sometimes wrong (e.g. it flagged a UTF-8 panic in code that only
