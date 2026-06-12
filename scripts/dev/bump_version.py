@@ -3,8 +3,15 @@
 
 Usage:
     python scripts/dev/bump_version.py 1.8.6           # bump repo root files
+    python scripts/dev/bump_version.py 1.9.5-rc.1      # prerelease (RC) bump
     python scripts/dev/bump_version.py 1.8.6 --root X  # operate on another tree
     python scripts/dev/bump_version.py --check         # verify consistency only
+
+A prerelease version is `X.Y.Z-rc.N` (N >= 1). Cargo and Nix both accept the
+SemVer prerelease suffix as a valid version string, and it is written verbatim
+to all four files. Tagging `vX.Y.Z-rc.N` then publishes a GitHub *prerelease*
+(see .github/workflows/release.yml) that stable users don't get. See
+docs/RELEASING.md for the full RC -> final flow.
 
 The four files that must always agree (a stale Cargo.lock has bitten releases
 before — see the 1.8.3 bump):
@@ -28,7 +35,12 @@ import pathlib
 import re
 import sys
 
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+# A release version is strict semver MAJOR.MINOR.PATCH, optionally followed by a
+# release-candidate prerelease suffix `-rc.N` (N >= 1, no leading zero). Examples:
+#   1.9.5        -> stable release
+#   1.9.5-rc.1   -> prerelease (RC); tagging vX.Y.Z-rc.N marks a GitHub prerelease
+# Rejected: 1.9.5-rc, 1.9.5-rc.x, 1.9.5-rc.0, 1.9.5-beta.1, v1.9.5, 1.9.5-rc.1.2
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$")
 
 VERSION_FILE = "VERSION"
 CARGO_TOML = "Cargo.toml"
@@ -116,7 +128,7 @@ def _new_contents(root: pathlib.Path, old: str,
 
 def bump(root: pathlib.Path, new: str) -> int:
     if not _VERSION_RE.match(new):
-        print(f"not a x.y.z version: {new!r}", file=sys.stderr)
+        print(f"not a x.y.z or x.y.z-rc.N version: {new!r}", file=sys.stderr)
         return 1
     if check(root) != 0:
         print("refusing to bump from an inconsistent state", file=sys.stderr)
@@ -142,7 +154,8 @@ def bump(root: pathlib.Path, new: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version", nargs="?", help="new x.y.z version")
+    parser.add_argument("version", nargs="?",
+                        help="new x.y.z or x.y.z-rc.N version")
     parser.add_argument("--root", default=".", help="repo root (default: cwd)")
     parser.add_argument("--check", action="store_true",
                         help="only verify the four files agree")

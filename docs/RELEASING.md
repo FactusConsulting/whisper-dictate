@@ -1,0 +1,81 @@
+# Releasing
+
+whisper-dictate ships through `.github/workflows/release.yml`, triggered by
+pushing a version tag. There are two kinds of release:
+
+- **Final** — `vX.Y.Z` (e.g. `v1.9.5`). A normal "Latest" GitHub release that
+  every channel picks up.
+- **Prerelease (RC)** — `vX.Y.Z-rc.N` (e.g. `v1.9.5-rc.1`). A GitHub
+  *prerelease* that stable users do **not** get automatically. Used to gate a
+  final on real-world testing.
+
+The four version files must always agree — `VERSION`, `src/rust/Cargo.toml`,
+`src/rust/Cargo.lock`, `nix/package.nix`. `scripts/dev/bump_version.py` writes
+all four and refuses to start unless every file matches its expected pattern.
+
+## Cut a release candidate (RC)
+
+1. **Bump to the RC version** on a branch and open a version PR:
+
+   ```bash
+   python scripts/dev/bump_version.py 1.9.5-rc.1   # writes all four files
+   # commit, push, open PR, merge (main is protected: PR + CI only)
+   ```
+
+   `bump_version.py` accepts `X.Y.Z-rc.N` (N >= 1). Cargo and Nix both accept
+   the SemVer `-rc.N` suffix as a valid version string, so the RC version flows
+   through unchanged. Malformed prereleases (`1.9.5-rc`, `1.9.5-rc.x`,
+   `1.9.5-rc.0`) are rejected.
+
+2. **Tag the merged commit** and push:
+
+   ```bash
+   git tag v1.9.5-rc.1 && git push origin v1.9.5-rc.1
+   ```
+
+   `release.yml` detects the `-rc.` in the tag (computed once as the
+   `is_prerelease` job output) and publishes a **GitHub prerelease**.
+
+### Which channels get the RC
+
+| Channel       | RC behaviour                                                                 |
+|---------------|------------------------------------------------------------------------------|
+| **Chocolatey**| ✅ Published. The `1.9.5-rc.1` `.nupkg` is a NuGet/SemVer prerelease, added to the public Sleet feed. Install/upgrade with `--prerelease`: `choco upgrade whisper-dictate --prerelease --source=https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json`. A plain `choco upgrade` ignores it. |
+| **Nix**       | ✅ Tag-based, no release.yml step needed — `package.nix` is in-repo, so the RC tag makes `nix run github:FactusConsulting/whisper-dictate/v1.9.5-rc.1#whisper-dictate` resolve at that rev. |
+| **Homebrew**  | ⏭️ Skipped. The tap formula has a single "latest" version with no prerelease channel, so RCs are **finals-only**. |
+| **winget**    | ⏭️ Skipped (no winget manifest asset is generated for an RC). winget has no prerelease channel and we don't auto-submit manifests, so it is **finals-only**. |
+| **GitHub Release** | ✅ Published with `--prerelease` (hidden from "Latest release"). |
+
+## Test the RC
+
+1. **Automated** (planned follow-up — **not in this PR**): an install-smoke job
+   on a Windows runner that silently installs the RC's `windows-setup.exe`,
+   launches the worker headless, and asserts app/model init plus a
+   synthetic-audio (fixture WAV) dictation produces text. Until that lands, do
+   the install-smoke manually.
+
+2. **Manual real-world test**: install the RC and run real dictation on actual
+   microphones (including the Blue Yeti) — confirm capture → inject → post
+   end-to-end. Real-microphone testing cannot run on a headless cloud VM (no
+   audio device), so this stays manual / on a dedicated physical box.
+
+   ```powershell
+   choco upgrade whisper-dictate --prerelease `
+     --source=https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json
+   ```
+
+## Promote an RC to final
+
+Once the RC passes testing, cut the final by dropping the `-rc.N` suffix:
+
+```bash
+python scripts/dev/bump_version.py 1.9.5    # all four files -> 1.9.5
+# commit, push, open PR, merge
+git tag v1.9.5 && git push origin v1.9.5
+```
+
+The final tag has no `-rc.`, so `is_prerelease` is `false`: the GitHub release
+is a normal "Latest" release, Homebrew and winget run as before, and Chocolatey
+publishes a stable `.nupkg` that plain `choco upgrade` picks up. **The stable
+release path is unchanged** — every prerelease behaviour is additive and guarded
+behind the `is_prerelease` flag.

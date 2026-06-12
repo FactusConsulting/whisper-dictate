@@ -55,6 +55,59 @@ class BumpVersionScriptTests(unittest.TestCase):
             self.assertIn('version ? "1.8.6"',
                           (root / "nix/package.nix").read_text(encoding="utf-8"))
 
+    def test_bump_accepts_prerelease_rc_in_all_four_files(self):
+        # A `X.Y.Z-rc.N` prerelease is a valid Cargo/Nix version string and must
+        # be written verbatim to all four files so a `vX.Y.Z-rc.N` tag ships a
+        # consistent prerelease.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _make_tree(root, "1.9.4")
+            result = _run("1.9.5-rc.1", "--root", str(root))
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "VERSION").read_text(encoding="utf-8"),
+                             "1.9.5-rc.1\n")
+            self.assertIn('version = "1.9.5-rc.1"',
+                          (root / "src/rust/Cargo.toml").read_text(encoding="utf-8"))
+            lock = (root / "src/rust/Cargo.lock").read_text(encoding="utf-8")
+            self.assertIn(
+                'name = "whisper-dictate-app"\nversion = "1.9.5-rc.1"', lock)
+            # Other crates' versions are untouched.
+            self.assertIn('name = "other"\nversion = "9.9.9"', lock)
+            self.assertIn('version ? "1.9.5-rc.1"',
+                          (root / "nix/package.nix").read_text(encoding="utf-8"))
+
+    def test_bump_from_prerelease_to_final(self):
+        # Promoting an RC to its final release (`1.9.5-rc.2` -> `1.9.5`) bumps
+        # all four files just like any other bump.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _make_tree(root, "1.9.5-rc.2")
+            result = _run("1.9.5", "--root", str(root))
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "VERSION").read_text(encoding="utf-8"),
+                             "1.9.5\n")
+            self.assertIn('version = "1.9.5"',
+                          (root / "src/rust/Cargo.toml").read_text(encoding="utf-8"))
+
+    def test_rejects_malformed_prerelease(self):
+        # `-rc` without a number, a non-numeric/zero RC index, and unknown
+        # prerelease channels must all be rejected (and write nothing).
+        for bad in ("1.9.5-rc", "1.9.5-rc.", "1.9.5-rc.x", "1.9.5-rc.0",
+                    "1.9.5-rc.01", "1.9.5-beta.1", "1.9.5-rc.1.2",
+                    "1.9.5rc.1", "1.9.5-RC.1"):
+            with self.subTest(version=bad):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = pathlib.Path(tmp)
+                    _make_tree(root, "1.9.4")
+                    result = _run(bad, "--root", str(root))
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    # Untouched.
+                    self.assertEqual(
+                        (root / "VERSION").read_text(encoding="utf-8"),
+                        "1.9.4\n")
+
     def test_refuses_inconsistent_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
