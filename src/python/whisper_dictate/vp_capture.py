@@ -36,6 +36,41 @@ FIRST_AUDIO_WAIT_S = 0.35
 
 _ARECORD_DEVICE: str | None = None  # set once at startup
 
+
+class DeviceUnusableError(RuntimeError):
+    """An EXPLICITLY-chosen microphone could not be opened on any host API.
+
+    Raised by :meth:`CaptureMixin._start_sounddevice` when the user picked a
+    specific input device (``VOICEPI_AUDIO_DEVICE`` non-empty) and every host-API
+    endpoint of that physical device — WASAPI (incl. auto_convert + native-rate),
+    DirectSound, MME — refused to open. We deliberately do NOT silently record
+    from a DIFFERENT physical device (the system default) in this case: that
+    would capture the wrong mic while the user speaks into the chosen one.
+
+    ``_handle_capture_start_failure`` surfaces ``message`` verbatim in the
+    ``status=error`` event (rather than the generic "format unsupported" wrapper)
+    so the UI can show an actionable instruction naming the device. Subclasses
+    ``RuntimeError`` so the existing ``except (Exception,)`` crash-safety guard in
+    ``Dictate._start`` already catches it — nothing escapes the pynput listener.
+    """
+
+    def __init__(self, message: str, device_label: str):
+        super().__init__(message)
+        self.message = message
+        self.device_label = device_label
+
+
+def _device_unusable_message(device_label: str) -> str:
+    """Actionable error text for an explicitly-chosen mic that won't open.
+
+    Names the device and tells the user the concrete next step. Kept as a small
+    pure helper so the exact UI-facing string is unit-testable in isolation.
+    """
+    return (
+        f"Microphone {device_label!r} could not be opened on any audio backend "
+        "— select a different microphone in Settings."
+    )
+
 # Populated lazily by _load_runtime_modules() (numpy + the arecord probe).
 np = None
 SR = 16000
@@ -778,6 +813,12 @@ class CaptureMixin:
         # float32 frames → int16 so downstream stays int16). See _capture_frame_to_int16.
         self._capture_dtype = "int16"
         device, device_name = _resolve_sounddevice_device(sd, _audio_device_setting())
+        # Explicit-vs-default line: a NON-EMPTY VOICEPI_AUDIO_DEVICE means the user
+        # deliberately picked a microphone. When such a device fails on every host
+        # API we must NOT silently record from a DIFFERENT physical device — we
+        # surface an honest error instead (see the all-endpoints-failed branch).
+        # An empty setting (system default) keeps the graceful default fallback.
+        explicit_device = bool(_audio_device_setting())
         # The device the USER asked for (full name), so a fallback to a DIFFERENT
         # physical device can be detected + surfaced instead of silently swapping.
         requested_name = (
@@ -827,11 +868,32 @@ class CaptureMixin:
                 _bound, exc = self._try_sibling_endpoints(sd, device)
                 if exc is not None:
                     last_error = exc
+            if self._stream is None and explicit_device:
+                # HONEST "device unusable" (Fix 1): the user deliberately chose
+                # THIS microphone and every host-API endpoint of it refused to
+                # open. Recording from a different physical device (the system
+                # default) would silently capture the WRONG mic while the user
+                # speaks into the selected one. Abort with an actionable error the
+                # UI can show instead. DeviceUnusableError subclasses RuntimeError,
+                # so Dictate._start's crash-safety guard catches it, emits a
+                # status=error, and leaves the worker idle + ready for the next
+                # PTT once the user picks another microphone.
+                label = requested_name or self._audio_input_device
+                message = _device_unusable_message(label)
+                print(
+                    f"[cap] device {device!r} ({label!r}) failed to open on every "
+                    "host API; explicit selection — NOT swapping to the system "
+                    "default. Surfacing an error.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                raise DeviceUnusableError(message, label)
             if self._stream is None:
-                # Every host-API endpoint of the chosen device failed. Fall back
-                # to the system default so a genuinely-vanished device still
-                # degrades gracefully — but this may be a DIFFERENT physical mic,
-                # so it is surfaced below (not silent) once bound.
+                # No explicit device was chosen (system default): the default's
+                # preferred-host-API endpoint failed every format. Fall back to
+                # the OS default so a genuinely-vanished device still degrades
+                # gracefully. This is NOT a wrong-mic swap — nothing the user
+                # picked is being abandoned — so _note_device_swap stays silent.
                 print(
                     f"[cap] device {device!r} ({self._audio_input_device!r}) failed to open "
                     "on every host API, falling back to system default",
@@ -865,15 +927,20 @@ class CaptureMixin:
         return self._capture_backend, self._audio_input_device
 
     def _note_device_swap(self, requested_name, actual_name) -> None:
-        """Surface a fallback to a DIFFERENT physical device — never silently.
+        """Record the bound device name when degrading to the system default.
 
-        When the explicitly-chosen mic could not be opened in ANY format and
-        capture fell back to the system default, the user may be speaking into
-        the selected mic while we record a different one. Honesty fix: set the
-        status ``audio_device`` label so it makes the actual device obvious and
-        notes the selected one was unusable, emit a ``WARN`` health segment, and
-        log it. A genuinely-absent selection (no requested name) or a fallback
-        that landed on the SAME device is left silent (nothing swapped).
+        Reached ONLY in the NO-EXPLICIT-device path (Fix 1): when the user did
+        NOT pick a specific mic and the default's preferred-host-API endpoint
+        failed every format, capture falls back to the OS default. That is not a
+        wrong-mic swap — nothing the user chose is abandoned — so this just sets
+        the bound ``audio_device`` label and stays silent.
+
+        When an EXPLICIT device is chosen, every-endpoint failure no longer
+        reaches here at all: ``_start_sounddevice`` raises ``DeviceUnusableError``
+        BEFORE any different-physical-device fallback (see that branch), so the
+        worker never records the wrong microphone. The WARN branch below is thus
+        a defensive safety net only (``requested_name`` is the default's own
+        name in the path that reaches this method, so it normally no-ops).
         """
         actual = actual_name or "sounddevice default input"
         if not requested_name or requested_name == actual:

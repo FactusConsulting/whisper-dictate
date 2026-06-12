@@ -14,6 +14,7 @@ behaviour-preserving.
 """
 import io
 import json
+import os
 from contextlib import redirect_stderr
 
 from helpers import (
@@ -381,6 +382,33 @@ class StartCrashRecoveryTests(unittest.TestCase):
         self.assertFalse(d.recording)
         self.assertTrue(any(e.get("state") == "ready" for e in events))
 
+    def test_device_unusable_surfaces_actionable_error_and_stays_usable(self):
+        # Fix 1 end-to-end: when _start_sounddevice raises DeviceUnusableError
+        # (explicit mic that won't open on ANY host API), Dictate._start must
+        # surface the VERBATIM actionable message in a status=error event
+        # (reason=device_unusable, audio_device naming the device), NOT record
+        # from a different mic, and leave the worker idle + ready for a retry.
+        d = self._make_dictate()
+        err = self.capture.DeviceUnusableError(
+            "Microphone 'Microphone (Yeti Classic)' could not be opened on any "
+            "audio backend — select a different microphone in Settings.",
+            "Microphone (Yeti Classic)",
+        )
+        d._start_sounddevice = lambda: (_ for _ in ()).throw(err)
+
+        events = self._run_start(d)  # must NOT raise
+
+        errors = [e for e in events if e.get("state") == "error"]
+        self.assertEqual(len(errors), 1, f"expected one error event; got {events!r}")
+        self.assertEqual(errors[0].get("reason"), "device_unusable")
+        self.assertEqual(errors[0].get("audio_device"), "Microphone (Yeti Classic)")
+        # The actionable message is surfaced VERBATIM (UI shows it directly).
+        self.assertEqual(errors[0].get("error"), err.message)
+        self.assertIn("select a different microphone", errors[0]["error"].lower())
+        # Worker stays idle + usable for the next PTT (recording reset, ready emitted).
+        self.assertFalse(d.recording)
+        self.assertTrue(any(e.get("state") == "ready" for e in events))
+
     def test_session_can_attempt_start_again_after_a_failure(self):
         d = self._make_dictate()
         attempts = {"n": 0}
@@ -401,6 +429,148 @@ class StartCrashRecoveryTests(unittest.TestCase):
         self._run_start(d)
         self.assertEqual(attempts["n"], 2)
         self.assertTrue(d.recording)  # second attempt is now recording
+
+
+class LiveReloadAudioDeviceTests(unittest.TestCase):
+    """Fix 2: a live-reloaded audio-device CHANGE re-resolves the mic NAME with
+    the query-only resolver (NO stream opened) and emits a status=ready event
+    carrying the new audio_device immediately, so the UI updates on save."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.dictate = importlib.import_module("whisper_dictate.vp_dictate")
+        cls.capture = importlib.import_module("whisper_dictate.vp_capture")
+
+    def _make_dictate(self):
+        d = object.__new__(self.dictate.Dictate)
+        d._capture_backend = "sounddevice"
+        d._audio_input_device = "Old Mic"
+        d._capture_channels = 1
+        d._config_mtime = 100.0
+        d._effective_config = {}
+        return d
+
+    def _emit_on_change(self, d, prev_setting, *, env, resolved="New Mic",
+                        resolver=None):
+        """Drive _emit_audio_device_if_changed and return parsed worker events.
+
+        ``env`` sets VOICEPI_AUDIO_DEVICE to the NEW (post-reload) value. The
+        query-only resolver is patched to ``resolver`` (default: returns
+        ``resolved``) AND asserted to be the ONLY device entry point used — no
+        InputStream is ever constructed.
+        """
+        rt = self.dictate
+        cap = self.capture
+        stderr = io.StringIO()
+        resolver = resolver or (lambda: resolved)
+        opened = []
+
+        class _Boom:
+            def __init__(self, **_k):
+                opened.append(_k)
+                raise AssertionError("a capture stream must NOT be opened on reload")
+
+        fake_sd = types.SimpleNamespace(InputStream=_Boom)
+        with patch.object(cap, "resolve_startup_audio_device", resolver), \
+                patch.dict(cap.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_WORKER_EVENTS="1", VOICEPI_AUDIO_DEVICE=env), \
+                _capture_stdout(), \
+                redirect_stderr(stderr):
+            rt.Dictate._emit_audio_device_if_changed(d, prev_setting)
+        self.assertEqual(opened, [], "no capture stream may be opened on reload")
+        events = []
+        for line in stderr.getvalue().splitlines():
+            prefix = "[worker-event] "
+            if line.startswith(prefix):
+                events.append(json.loads(line[len(prefix):]))
+        return events
+
+    def test_device_change_emits_ready_with_new_name_no_stream(self):
+        d = self._make_dictate()
+        events = self._emit_on_change(
+            d, prev_setting="Old Mic", env="New Mic", resolved="New Mic (WASAPI)")
+        ready = [e for e in events if e.get("state") == "ready"]
+        self.assertEqual(len(ready), 1, f"expected one ready event; got {events!r}")
+        self.assertEqual(ready[0]["audio_device"], "New Mic (WASAPI)")
+        # The shown label is updated optimistically on the instance too.
+        self.assertEqual(d._audio_input_device, "New Mic (WASAPI)")
+
+    def test_unchanged_device_setting_emits_nothing(self):
+        d = self._make_dictate()
+        events = self._emit_on_change(
+            d, prev_setting="Same Mic", env="Same Mic", resolved="ignored")
+        self.assertEqual(events, [])
+        self.assertEqual(d._audio_input_device, "Old Mic")  # untouched
+
+    def test_unresolvable_new_name_does_not_crash_and_still_emits(self):
+        # Resolver degrades to "System default" for an unknown device; the emit
+        # must still happen (never block/crash) with that fallback label.
+        d = self._make_dictate()
+        events = self._emit_on_change(
+            d, prev_setting="Old Mic", env="Ghost Mic",
+            resolver=lambda: "System default")
+        ready = [e for e in events if e.get("state") == "ready"]
+        self.assertEqual(len(ready), 1)
+        self.assertEqual(ready[0]["audio_device"], "System default")
+
+    def test_resolver_exception_is_swallowed_no_emit_no_crash(self):
+        # Even a resolver that raises must not crash the reload; nothing emitted.
+        d = self._make_dictate()
+
+        def _boom():
+            raise RuntimeError("device query blew up")
+
+        events = self._emit_on_change(
+            d, prev_setting="Old Mic", env="New Mic", resolver=_boom)
+        self.assertEqual([e for e in events if e.get("state") == "ready"], [])
+        self.assertEqual(d._audio_input_device, "Old Mic")  # untouched on failure
+
+    def test_reload_wires_device_change_through_to_emit(self):
+        # Integration: _reload_live_config_if_changed snapshots the OLD device,
+        # applies the reload, and emits the NEW name when it changed — using the
+        # query-only resolver (no stream). Stubs the config plumbing so only the
+        # device-change emit is exercised.
+        rt = self.dictate
+        cap = self.capture
+        d = self._make_dictate()
+        d._capture_target_window = lambda: None
+        applied = {"n": 0}
+
+        def _apply(_after):
+            applied["n"] += 1
+
+        d._apply_effective_config = _apply
+        d._profiled_config = lambda cfg: {}
+        stderr = io.StringIO()
+
+        with patch.object(rt, "config_mtime", lambda: 200.0), \
+                patch.object(rt, "apply_config_to_environ",
+                             lambda: os.environ.__setitem__(
+                                 "VOICEPI_AUDIO_DEVICE", "New Mic")), \
+                patch.object(rt, "effective_config", lambda: {}), \
+                patch.object(cap, "resolve_startup_audio_device",
+                             lambda: "New Mic (WASAPI)"), \
+                _env(VOICEPI_WORKER_EVENTS="1", VOICEPI_AUDIO_DEVICE="Old Mic"), \
+                _capture_stdout(), \
+                redirect_stderr(stderr):
+            rt.Dictate._reload_live_config_if_changed(d)
+
+        self.assertEqual(applied["n"], 1)  # the reload ran
+        self.assertEqual(d._config_mtime, 200.0)
+        events = []
+        for line in stderr.getvalue().splitlines():
+            prefix = "[worker-event] "
+            if line.startswith(prefix):
+                events.append(json.loads(line[len(prefix):]))
+        ready = [e for e in events if e.get("state") == "ready"]
+        self.assertEqual(len(ready), 1, f"expected one ready event; got {events!r}")
+        self.assertEqual(ready[0]["audio_device"], "New Mic (WASAPI)")
 
 
 if __name__ == "__main__":
