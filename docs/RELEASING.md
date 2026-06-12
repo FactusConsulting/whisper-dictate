@@ -48,11 +48,36 @@ all four and refuses to start unless every file matches its expected pattern.
 
 ## Test the RC
 
-1. **Automated** (planned follow-up — **not in this PR**): an install-smoke job
-   on a Windows runner that silently installs the RC's `windows-setup.exe`,
-   launches the worker headless, and asserts app/model init plus a
-   synthetic-audio (fixture WAV) dictation produces text. Until that lands, do
-   the install-smoke manually.
+1. **Automated — gate A (`install-smoke`)**: the `install-smoke` job in
+   `release.yml` runs on a headless `windows-2025` runner after the release +
+   installer are published, for **both** finals and RCs (it's cheap). It is a
+   **post-publish gate**: it only *flags* a broken release (a red
+   `install-smoke` check) — it never deletes or unpublishes the release.
+
+   What it covers:
+   - Downloads the just-published `whisper-dictate-windows-setup-<version>.exe`
+     and **silently installs** it (Inno `/VERYSILENT /SUPPRESSMSGBOXES
+     /NORESTART`).
+   - Asserts the **installed layout**: `whisper-dictate.exe`, the worker
+     entrypoint `src\python\whisper_dictate\runtime.py`, `benchmark\corpus.json`,
+     the `data\hallucination_patterns.json` subpackage (the #226 packaging
+     regression guard), and that the installed `VERSION` equals the tag.
+   - Runs the **Rust controller headless** (`whisper-dictate.exe --version` and
+     `config path`) and asserts it launches and exits 0 **without opening the
+     UI window**. (The release binary is a Windows GUI-subsystem app, so only
+     the exit code is reliable — its stdout is not attached to a redirected
+     console.)
+   - Creates a minimal venv (**only `sounddevice` + `numpy`** — no
+     torch/faster-whisper/CUDA) and runs the installed worker's **no-model**
+     audio query modes (`--test-audio-device ""` and `--list-audio-devices`),
+     asserting they exit cleanly with parseable JSON rather than a traceback —
+     proving the installed worker package imports and runs.
+
+   What it deliberately does **not** cover (still manual — see step 2): real
+   microphone capture / inject / post end-to-end (a cloud VM has no audio
+   device), and a real STT model load (the heavy ML deps are not installed).
+   If the installer build was skipped (no Windows-relevant changes since the
+   previous tag, so no setup `.exe` was uploaded), the job skips itself.
 
 2. **Manual real-world test**: install the RC and run real dictation on actual
    microphones (including the Blue Yeti) — confirm capture → inject → post
