@@ -33,6 +33,7 @@ from whisper_dictate.vp_devices import (  # noqa: F401
     list_input_devices,
     resolve_capture_device,
     select_input_devices,
+    sibling_endpoints_for_device,
 )
 
 SOUNDDEVICE_START_BLOCK_MS = 20

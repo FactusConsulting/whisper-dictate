@@ -283,6 +283,8 @@ class StartSounddeviceTests(unittest.TestCase):
             lambda *a, **k: rt.CaptureMixin._bind_stream(target, *a, **k))
         target._note_device_swap = (
             lambda *a, **k: rt.CaptureMixin._note_device_swap(target, *a, **k))
+        target._try_sibling_endpoints = (
+            lambda *a, **k: rt.CaptureMixin._try_sibling_endpoints(target, *a, **k))
         return target
 
     def test_start_sounddevice_uses_first_working_channel_count(self):
@@ -574,6 +576,8 @@ class StreamStartFailureTests(unittest.TestCase):
             lambda *a, **k: rt.CaptureMixin._bind_stream(target, *a, **k))
         target._note_device_swap = (
             lambda *a, **k: rt.CaptureMixin._note_device_swap(target, *a, **k))
+        target._try_sibling_endpoints = (
+            lambda *a, **k: rt.CaptureMixin._try_sibling_endpoints(target, *a, **k))
         return target
 
     def test_start_failure_at_16k_falls_back_to_native_rate(self):
@@ -1181,6 +1185,8 @@ def _bound_target(rt):
     target._bind_stream = lambda *a, **k: rt.CaptureMixin._bind_stream(target, *a, **k)
     target._note_device_swap = (
         lambda *a, **k: rt.CaptureMixin._note_device_swap(target, *a, **k))
+    target._try_sibling_endpoints = (
+        lambda *a, **k: rt.CaptureMixin._try_sibling_endpoints(target, *a, **k))
     return target
 
 
@@ -1514,4 +1520,401 @@ class DeviceSwapHonestyTests(unittest.TestCase):
 
         self.assertEqual(target._capture_rate, 44100)
         self.assertNotIn("WARN", target._audio_input_device)
+
+
+# ---------------------------------------------------------------------------
+# Host-API sibling fallback (the core fix): a Yeti whose WASAPI endpoint won't
+# open is recorded via the SAME physical device's DirectSound / MME endpoint
+# rather than silently swapping to a DIFFERENT mic.
+# ---------------------------------------------------------------------------
+
+# The verified Blue Yeti Classic table: ONE physical mic exposed on three host
+# APIs. host API order: 0=MME, 1=DirectSound, 2=WASAPI, 3=WDM-KS.
+_YETI_FULL = "Microphone (Yeti Classic)"           # WASAPI / DirectSound full name
+_YETI_MME = "Microphone (Yeti Classic"             # MME 31-char-ish truncation
+
+
+def _yeti_hostapi_sd(stream_cls, *, jabra_default=False):
+    """Fake sounddevice exposing the Yeti on MME(7)/DirectSound(25)/WASAPI(51).
+
+    Index layout mirrors the probe: the WASAPI endpoint (51) is the one the app
+    resolves; its DirectSound (25) and MME (7, truncated name) siblings are the
+    SAME physical mic. ``jabra_default=True`` points the system default at a
+    DIFFERENT mic (the Jabra at index 1) so the device-swap honesty path can be
+    exercised when EVERY Yeti endpoint fails.
+    """
+    devices = [
+        {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},          # 0
+        {"name": "Headset Microphone (Jabra Evolve 65 TE)", "hostapi": 2,
+         "max_input_channels": 2, "default_samplerate": 16000.0},             # 1 WASAPI Jabra
+        {"name": "Sound Mapper - Input", "hostapi": 0, "max_input_channels": 2},  # 2
+    ]
+    # Pad so the stated indices line up with the probe (7=MME, 25=DS, 51=WASAPI).
+    def _pad(target_index):
+        while len(devices) < target_index:
+            devices.append({"name": "Filler", "hostapi": 0, "max_input_channels": 0})
+    _pad(7)
+    devices.append({"name": _YETI_MME, "hostapi": 0, "max_input_channels": 2,
+                    "default_samplerate": 44100.0})                            # 7 MME Yeti
+    _pad(25)
+    devices.append({"name": _YETI_FULL, "hostapi": 1, "max_input_channels": 2,
+                    "default_samplerate": 44100.0})                            # 25 DS Yeti
+    _pad(51)
+    devices.append({"name": _YETI_FULL, "hostapi": 2, "max_input_channels": 2,
+                    "default_samplerate": 48000.0})                            # 51 WASAPI Yeti
+
+    default_input = 1 if jabra_default else 51
+    hostapis = [
+        {"name": "MME", "default_input_device": 7},
+        {"name": "Windows DirectSound", "default_input_device": 25},
+        {"name": "Windows WASAPI", "default_input_device": default_input},
+    ]
+
+    def query_devices(device=None, kind=None):
+        if device is None and kind is None:
+            return devices
+        if isinstance(device, int):
+            return devices[device]
+        return devices[default_input]
+
+    return types.SimpleNamespace(
+        InputStream=stream_cls,
+        default=types.SimpleNamespace(device=(default_input, 0)),
+        query_devices=query_devices, query_hostapis=lambda: hostapis)
+
+
+class SiblingEndpointFallbackTests(unittest.TestCase):
+    """When the WASAPI endpoint of the chosen mic fails every format, capture
+    must open the SAME physical device via its DirectSound (then MME) endpoint
+    BEFORE falling back to a different mic — with NO WasapiSettings and no
+    resample when 16k int16 is accepted directly."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+
+    def test_wasapi_fails_directsound_sibling_binds_16k_no_swap_no_resample(self):
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # The WASAPI endpoint (51) rejects EVERY format/rate/dtype; the
+                # DirectSound sibling (25) accepts 16k int16 directly.
+                if kwargs.get("device") == 51:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT PaErrorCode -9999")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_hostapi_sd(Stream)
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            backend, device = rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertEqual(backend, "sounddevice")
+        self.assertTrue(getattr(target._stream, "started", False))
+        # Bound on the DirectSound sibling (index 25), at 16k int16, no resample.
+        self.assertEqual(target._capture_rate, 16000)
+        self.assertEqual(target._capture_dtype, "int16")
+        bound = opened[-1]
+        self.assertEqual(bound["device"], 25)
+        self.assertEqual(bound["dtype"], "int16")
+        self.assertEqual(bound["samplerate"], 16000)
+        # NO swap to a different physical device: still the Yeti, no WARN.
+        self.assertNotIn("WARN", target._audio_input_device)
+        self.assertIn("Yeti", target._audio_input_device)
+        # The MME endpoint (7) was NOT needed (DirectSound won first).
+        self.assertFalse(any(k.get("device") == 7 for k in opened))
+
+    def test_wasapi_settings_never_passed_to_sibling_endpoints(self):
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class _WasapiSettings:
+            def __init__(self, auto_convert=False):
+                self.auto_convert = auto_convert
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # WASAPI (51) rejects everything (even auto_convert); the
+                # DirectSound sibling (25) accepts 16k int16.
+                if kwargs.get("device") == 51:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_hostapi_sd(Stream)
+        fake_sd.WasapiSettings = _WasapiSettings
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        # The non-WASAPI sibling endpoints (DirectSound=25, MME=7) must NEVER be
+        # opened with extra_settings (WasapiSettings) — that is -9984 on MME/DS.
+        sibling_opens = [k for k in opened if k.get("device") in (25, 7)]
+        self.assertTrue(sibling_opens, "expected at least one sibling open")
+        self.assertTrue(all("extra_settings" not in k for k in sibling_opens),
+                        f"WasapiSettings leaked to a non-WASAPI endpoint: {sibling_opens!r}")
+        # auto_convert WAS attempted on the WASAPI endpoint itself (device 51).
+        self.assertTrue(any(k.get("device") == 51 and "extra_settings" in k
+                            for k in opened))
+
+    def test_mme_sibling_binds_when_directsound_also_fails(self):
+        # WASAPI (51) AND DirectSound (25) fail every format; the MME sibling (7,
+        # truncated name) still opens 16k int16 → bound on MME, still the Yeti.
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                if kwargs.get("device") in (51, 25):
+                    raise RuntimeError("format rejected")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_hostapi_sd(Stream)
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertTrue(getattr(target._stream, "started", False))
+        bound = opened[-1]
+        self.assertEqual(bound["device"], 7)  # MME endpoint
+        self.assertNotIn("WARN", target._audio_input_device)
+        self.assertIn("Yeti", target._audio_input_device)
+        # DirectSound (25) was tried before MME (7).
+        ds_first = next(i for i, k in enumerate(opened) if k.get("device") == 25)
+        mme_first = next(i for i, k in enumerate(opened) if k.get("device") == 7)
+        self.assertLess(ds_first, mme_first)
+
+    def test_swap_warn_only_when_all_host_api_endpoints_fail(self):
+        # WASAPI + DirectSound + MME endpoints of the Yeti ALL fail; capture
+        # drops to the system default, which resolves to a DIFFERENT mic (Jabra).
+        # ONLY now does the device-swap WARN fire.
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # Every Yeti endpoint (51 WASAPI, 25 DS, 7 MME) fails; the default
+                # (no device= kwarg) succeeds → a true swap to a different mic.
+                if kwargs.get("device") in (51, 25, 7):
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_hostapi_sd(Stream, jabra_default=True)
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.object(rt, "_emit_worker_event", fake_emit), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_WORKER_EVENTS="1",
+                     VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertTrue(getattr(target._stream, "started", False))
+        # All three Yeti host-API endpoints were attempted before the default.
+        self.assertTrue(any(k.get("device") == 51 for k in opened))
+        self.assertTrue(any(k.get("device") == 25 for k in opened))
+        self.assertTrue(any(k.get("device") == 7 for k in opened))
+        self.assertTrue(any("device" not in k for k in opened))  # default open
+        # NOW it is a swap: WARN names the abandoned selection + emits the event.
+        self.assertIn("WARN", target._audio_input_device)
+        self.assertIn("Yeti", target._audio_input_device)
+        swap_events = [e for e in events if "device_swap" in e]
+        self.assertTrue(swap_events, f"expected a device-swap event; got {events!r}")
+
+    def test_no_swap_warn_when_sibling_succeeds(self):
+        # The negative of the above: when a sibling endpoint binds, the WARN must
+        # NOT fire (it is the SAME physical device, not a swap) and NO device-swap
+        # event is emitted.
+        rt = self.rt
+        rt.SR = 16000
+
+        class Stream:
+            def __init__(self, **kwargs):
+                if kwargs.get("device") == 51:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_hostapi_sd(Stream, jabra_default=True)
+        events = []
+
+        def fake_emit(event_type, **kwargs):
+            events.append({"type": event_type, **kwargs})
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.object(rt, "_emit_worker_event", fake_emit), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_WORKER_EVENTS="1",
+                     VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertNotIn("WARN", target._audio_input_device)
+        self.assertEqual([e for e in events if "device_swap" in e], [])
+
+    def test_trace_logs_sibling_fallback_attempt_with_host_api(self):
+        # With VOICEPI_TRACE on, the host-API sibling fallback must be self-
+        # diagnosing: a [trace][cap] sibling-fallback line names the host API and
+        # the sibling endpoint index it is about to try.
+        rt = self.rt
+        rt.SR = 16000
+
+        class Stream:
+            def __init__(self, **kwargs):
+                if kwargs.get("device") == 51:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        target = _bound_target(rt)
+        fake_sd = _yeti_hostapi_sd(Stream)
+
+        stderr = io.StringIO()
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_TRACE="1",
+                     VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"), \
+                redirect_stderr(stderr):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        out = stderr.getvalue()
+        sibling_lines = [ln for ln in out.splitlines()
+                         if ln.startswith("[trace][cap] sibling-fallback")]
+        self.assertTrue(sibling_lines, f"expected a sibling-fallback trace line; got {out!r}")
+        # The DirectSound endpoint (25) is named with its host API.
+        self.assertTrue(any("host=Windows DirectSound" in ln and "dev=25" in ln
+                            for ln in sibling_lines))
+
+
+class BaseLatencyCandidateTests(unittest.TestCase):
+    """The low-latency WASAPI regression fix: the default-latency / default-
+    blocksize ('base') candidate is ALWAYS attempted, so a device that opens
+    only WITHOUT latency='low' still binds (the probe proves base works)."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.rt = importlib.import_module("whisper_dictate.vp_capture")
+
+    def test_base_candidate_reached_when_low_latency_rejected(self):
+        rt = self.rt
+        rt.SR = 16000
+        opened = []
+
+        class Stream:
+            def __init__(self, **kwargs):
+                opened.append(kwargs)
+                # The device rejects the explicit low-latency blocksize but
+                # accepts the default-latency / default-blocksize base candidate.
+                if kwargs.get("latency") == "low" or "blocksize" in kwargs:
+                    raise RuntimeError("AUDCLNT_E_UNSUPPORTED_FORMAT (low latency)")
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def close(self):
+                pass
+
+        devices = [
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Microphone (Yeti Classic)", "hostapi": 2,
+             "max_input_channels": 2, "default_samplerate": 16000.0},
+        ]
+        hostapis = [
+            {"name": "MME", "default_input_device": 0},
+            {"name": "Windows DirectSound", "default_input_device": 1},
+            {"name": "Windows WASAPI", "default_input_device": 1},
+        ]
+        fake_sd = types.SimpleNamespace(
+            InputStream=Stream, default=types.SimpleNamespace(device=(1, 0)),
+            query_devices=lambda device=None, kind=None: (
+                devices if device is None and kind is None
+                else (devices[device] if isinstance(device, int)
+                      else {"name": "default", "max_input_channels": 2,
+                            "default_samplerate": 16000.0})),
+            query_hostapis=lambda: hostapis)
+        target = _bound_target(rt)
+
+        with patch.object(rt.os, "name", "nt"), \
+                patch.dict(rt.sys.modules, {"sounddevice": fake_sd}), \
+                _env(VOICEPI_AUDIO_DEVICE="Microphone (Yeti Classic)"):
+            rt.CaptureMixin._start_sounddevice(target)
+
+        self.assertTrue(getattr(target._stream, "started", False))
+        # A low-latency candidate was tried (and failed)...
+        self.assertTrue(any(k.get("latency") == "low" for k in opened))
+        # ...and the base candidate (no blocksize, no latency='low') was reached
+        # and is the one that bound — still the configured device, no swap.
+        bound = opened[-1]
+        self.assertNotIn("blocksize", bound)
+        self.assertNotEqual(bound.get("latency"), "low")
+        self.assertNotIn("WARN", target._audio_input_device)
+        self.assertEqual(target._capture_rate, 16000)
 

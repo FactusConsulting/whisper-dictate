@@ -23,6 +23,7 @@ import time
 
 from whisper_dictate.vp_devices import (
     _default_input_index, _is_wasapi_device, resolve_capture_device,
+    sibling_endpoints_for_device,
 )
 from whisper_dictate.vp_events import (
     _audio_level_metrics, _emit_worker_event,
@@ -714,6 +715,56 @@ class CaptureMixin:
             self._capture_dtype = dtype
         return exc
 
+    def _try_sibling_endpoints(self, sd, device):
+        """Open the SAME physical mic via its DirectSound/MME siblings.
+
+        The core host-API-fallback fix: when the resolved (WASAPI) endpoint of
+        the user's chosen mic refuses to open across the whole format matrix
+        (incl. auto_convert + native-rate), retry the SAME physical device on its
+        OTHER host APIs — DirectSound first (cheapest, accepts 16k int16 directly,
+        no resample), then MME — BEFORE dropping to a DIFFERENT physical device.
+
+        CRITICAL: non-WASAPI endpoints reject ``WasapiSettings`` (PortAudio
+        ``-9984 Incompatible host API specific stream info``), so the sibling
+        attempts pass NO ``extra_settings`` — just the plain 16k int16→float32
+        sweep, then a native-rate sweep. The probe proves MME/DirectSound open a
+        Yeti at 16k int16 with neither auto_convert nor resampling, so the first
+        16k-capable sibling wins with the cheapest possible path.
+
+        On success ``self._stream`` (+ channels/dtype/rate) is set and
+        ``True`` is returned; the bound label stays the user's full chosen name
+        (it IS that physical device — NOT a swap to a different mic). Returns
+        ``False`` when every sibling endpoint fails (caller then drops to the
+        system default and surfaces a real device swap). Returns the last error
+        too so the caller can thread it into the final RuntimeError.
+        """
+        last_error = None
+        endpoints = sibling_endpoints_for_device(sd, device)
+        trace = _trace_enabled()
+        # endpoints[0] is the already-tried resolved endpoint; skip it.
+        for sib_index, hostapi_name in endpoints[1:]:
+            if trace:
+                print(
+                    f"[trace][cap] sibling-fallback host={hostapi_name or '?'} "
+                    f"dev={sib_index} (same physical device as {device})",
+                    file=sys.stderr, flush=True)
+            # NO extra_settings — WasapiSettings is WASAPI-only; MME/DS reject it.
+            exc = self._bind_stream(sd, sib_index)
+            if exc is not None:
+                last_error = exc
+            if self._stream is None:
+                exc = self._bind_stream(sd, sib_index, native_rate=True)
+                if exc is not None:
+                    last_error = exc
+            if self._stream is not None:
+                print(
+                    f"[cap] opened {self._audio_input_device!r} via its "
+                    f"{hostapi_name or 'alternate'} endpoint "
+                    f"(WASAPI endpoint refused every format)",
+                    file=sys.stderr, flush=True)
+                return True, None
+        return False, last_error
+
     def _start_sounddevice(self) -> tuple[str, str]:
         import sounddevice as sd
         self._capture_backend = "sounddevice"
@@ -768,13 +819,22 @@ class CaptureMixin:
                 if exc is not None:
                     last_error = exc
             if self._stream is None:
-                # Every format on the chosen device failed. Fall back to the
-                # system default so a genuinely-vanished device still degrades
-                # gracefully — but this may be a DIFFERENT physical mic, so it is
-                # surfaced below (not silent) once bound.
+                # Host-API fallback (the core fix): the resolved (WASAPI) endpoint
+                # refused EVERY format — incl. auto_convert + native-rate. Retry
+                # the SAME physical mic via its DirectSound→MME siblings (no
+                # WasapiSettings — those endpoints reject it; 16k int16 opens
+                # directly with no resample) BEFORE swapping to a different mic.
+                _bound, exc = self._try_sibling_endpoints(sd, device)
+                if exc is not None:
+                    last_error = exc
+            if self._stream is None:
+                # Every host-API endpoint of the chosen device failed. Fall back
+                # to the system default so a genuinely-vanished device still
+                # degrades gracefully — but this may be a DIFFERENT physical mic,
+                # so it is surfaced below (not silent) once bound.
                 print(
-                    f"[cap] device {device!r} ({self._audio_input_device!r}) failed to open, "
-                    "falling back to system default",
+                    f"[cap] device {device!r} ({self._audio_input_device!r}) failed to open "
+                    "on every host API, falling back to system default",
                     file=sys.stderr,
                     flush=True,
                 )

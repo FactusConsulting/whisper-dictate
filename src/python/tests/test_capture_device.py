@@ -215,6 +215,92 @@ class ResolveCaptureDeviceWindowsTests(unittest.TestCase):
         )
 
 
+class SiblingEndpointsForDeviceTests(unittest.TestCase):
+    """The pure sibling-endpoint resolver (core of the host-API fallback fix).
+
+    ``sibling_endpoints_for_device`` maps a resolved (WASAPI) endpoint of a
+    physical mic to the SAME mic's endpoints on its OTHER host APIs, in
+    open-preference order: resolved-first, then DirectSound, then MME (matched
+    across the MME 31-char name truncation). Driven over the same stubbed
+    query_devices / query_hostapis tables the resolver uses.
+    """
+
+    def _sd(self, devices, hostapis):
+        return types.SimpleNamespace(
+            query_devices=lambda: list(devices),
+            query_hostapis=lambda: list(hostapis),
+        )
+
+    def test_wasapi_endpoint_maps_to_directsound_then_mme_siblings(self):
+        # The verified Jabra table: WASAPI (5) resolves to its DirectSound (3)
+        # then MME (1) siblings, in that open-preference order.
+        sd = self._sd(_WIN_DEVICES, _WIN_HOSTAPIS)
+        result = vp_capture.sibling_endpoints_for_device(sd, 5)
+        self.assertEqual(
+            result,
+            [(5, "Windows WASAPI"), (3, "Windows DirectSound"), (1, "MME")],
+        )
+
+    def test_mme_31char_truncation_matches_same_physical_device(self):
+        # The MME endpoint's name is truncated to 31 chars, yet it must still be
+        # recognised as the SAME physical device as the full WASAPI name — the
+        # truncated entry (index 1) appears as a sibling of WASAPI (index 5).
+        sd = self._sd(_WIN_DEVICES, _WIN_HOSTAPIS)
+        result = vp_capture.sibling_endpoints_for_device(sd, 5)
+        sibling_indices = [index for index, _api in result]
+        self.assertIn(1, sibling_indices)  # the 31-char MME entry matched
+        # And its host API is correctly labelled MME (never WasapiSettings land).
+        mme = [(index, api) for index, api in result if index == 1]
+        self.assertEqual(mme, [(1, "MME")])
+
+    def test_directsound_ranks_before_mme(self):
+        # Even when the MME sibling has a LOWER query index than DirectSound, the
+        # open-preference order keeps DirectSound first (cheapest non-WASAPI path).
+        sd = self._sd(_WIN_DEVICES, _WIN_HOSTAPIS)
+        result = vp_capture.sibling_endpoints_for_device(sd, 5)
+        apis = [api for _index, api in result[1:]]  # siblings only
+        self.assertEqual(apis, ["Windows DirectSound", "MME"])
+
+    def test_wdmks_and_same_hostapi_devices_are_not_siblings(self):
+        # WDM-KS endpoints (and any other same-name entry on the resolved host
+        # API) are NOT returned as siblings — only DirectSound/MME are fallbacks.
+        devices = list(_WIN_DEVICES) + [
+            {"name": _JABRA_FULL, "hostapi": 3, "max_input_channels": 2},  # 6 WDM-KS
+            {"name": _JABRA_FULL, "hostapi": 2, "max_input_channels": 2},  # 7 2nd WASAPI
+        ]
+        hostapis = _WIN_HOSTAPIS + [{"name": "Windows WDM-KS"}]
+        sd = self._sd(devices, hostapis)
+        result = vp_capture.sibling_endpoints_for_device(sd, 5)
+        indices = [index for index, _api in result]
+        self.assertNotIn(6, indices)  # WDM-KS excluded
+        self.assertNotIn(7, indices)  # same host API as resolved → excluded
+        self.assertEqual(indices, [5, 3, 1])
+
+    def test_non_int_device_returns_empty(self):
+        sd = self._sd(_WIN_DEVICES, _WIN_HOSTAPIS)
+        self.assertEqual(vp_capture.sibling_endpoints_for_device(sd, "5"), [])
+
+    def test_query_failure_degrades_gracefully(self):
+        def _boom():
+            raise RuntimeError("PortAudio not initialized")
+
+        sd = types.SimpleNamespace(query_devices=_boom, query_hostapis=_boom)
+        self.assertEqual(vp_capture.sibling_endpoints_for_device(sd, 5), [])
+
+    def test_device_with_no_cross_host_sibling_returns_only_itself(self):
+        # A mic present on only one host API yields just the resolved endpoint
+        # (no sibling fallback to try) — capture then falls through to default.
+        devices = [
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Lonely WASAPI Mic", "hostapi": 2, "max_input_channels": 2},
+        ]
+        sd = self._sd(devices, _WIN_HOSTAPIS)
+        self.assertEqual(
+            vp_capture.sibling_endpoints_for_device(sd, 1),
+            [(1, "Windows WASAPI")],
+        )
+
+
 class ResolveStartupAudioDeviceTests(unittest.TestCase):
     """The startup device-label resolver: shows the active mic from ``ready``.
 
