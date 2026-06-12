@@ -47,6 +47,7 @@ mod tasks;
 mod text;
 mod text_scale;
 mod theme;
+mod tray;
 mod update_check;
 mod upgrade_hint;
 mod widgets;
@@ -71,6 +72,7 @@ use self::secret_store::*;
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
+pub(in crate::ui) use self::tray::*;
 pub(in crate::ui) use self::update_check::*;
 pub(in crate::ui) use self::upgrade_hint::*;
 pub(in crate::ui) use self::widgets::*;
@@ -310,6 +312,14 @@ struct WhisperDictateApp {
     /// Background thread that computes `gpu_total_mb` (runs `nvidia-smi`).
     /// Polled non-blockingly each frame; set to `None` once the result is adopted.
     gpu_probe: Option<Receiver<Option<u32>>>,
+    /// The raw worker `status` state string from the most recent status event
+    /// (e.g. `"opening"`, `"recording"`, `"transcribing"`, `"ready"`, …).
+    /// Stored verbatim so `sync_tray` can pass it to `tray_state_for`, which
+    /// correctly maps `"opening"` → amber (mic not yet live) before `"recording"`
+    /// → red (mic live). Empty string before the first status event arrives,
+    /// which `tray_state_for` treats as the `Ready` fallback when the worker is
+    /// running — an acceptable approximation for the very first frame.
+    last_worker_status_state: String,
     /// Current dictation pipeline stage from worker status events
     /// ("recording" / "transcribing" / "post-processing"), or None when idle.
     /// Drives the live progress card in the runtime log.
@@ -354,6 +364,12 @@ struct WhisperDictateApp {
     /// the update badge after the upgrade command is copied to the clipboard.
     /// Session-only UI state — `None` when no confirmation is pending.
     update_command_copied_until: Option<Instant>,
+    /// System-tray (notification-area) icon manager. Created empty; the actual
+    /// OS tray is built lazily on the first `update()` frame (Windows only — a
+    /// no-op stub elsewhere) and recolours to mirror the dictation state so the
+    /// user can SEE when the microphone is live. Purely additive UI — it never
+    /// touches the dictation flow.
+    tray: TrayManager,
 }
 
 impl Default for WhisperDictateApp {
@@ -434,6 +450,7 @@ impl Default for WhisperDictateApp {
             background_task_label: None,
             gpu_total_mb: None,
             gpu_probe: Some(spawn_gpu_probe()),
+            last_worker_status_state: String::new(),
             pipeline_stage: None,
             pipeline_preview: None,
             worker_ready: false,
@@ -444,6 +461,7 @@ impl Default for WhisperDictateApp {
             last_update_check: None,
             update_check_rx: None,
             update_command_copied_until: None,
+            tray: TrayManager::new(),
         }
     }
 }
