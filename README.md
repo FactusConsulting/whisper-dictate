@@ -695,6 +695,12 @@ python scripts/dev/bump_version.py X.Y.Z   # or --check to verify consistency
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
+To cut a **release candidate** first, bump to `X.Y.Z-rc.N` and tag
+`vX.Y.Z-rc.N`: the workflow publishes a GitHub *prerelease* (stable users don't
+get it) plus a Chocolatey prerelease `.nupkg` (`choco upgrade --prerelease`),
+while Homebrew and winget stay finals-only. See [`docs/RELEASING.md`](docs/RELEASING.md)
+for the full RC → final flow.
+
 This triggers **`release.yml`**: it publishes the Linux bundle and Rust UI
 binary, then builds the unified Windows installer, portable Windows ZIP bundle
 and Chocolatey `.nupkg` on a Windows runner. It also publishes the GitHub Release and (when the

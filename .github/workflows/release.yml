@@ -31,8 +31,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      # Computed once from the tag and consumed by the windows-installer job so a
+      # prerelease (RC) tag never bumps finals-only channels (Homebrew, winget).
+      is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
     steps:
       - name: Resolve tag
+        id: resolve
         run: |
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
             TAG="${{ github.event.inputs.tag }}"
@@ -41,6 +46,17 @@ jobs:
           fi
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          # Prerelease (RC) detection: a SemVer release-candidate tag carries a
+          # literal `-rc.` segment (e.g. v1.9.5-rc.1). A plain vX.Y.Z is NOT a
+          # prerelease. Matching `-rc.` (with the trailing dot) is precise: it
+          # won't false-match a hypothetical `-rcfoo` and requires an index to
+          # follow. This single output gates every prerelease-aware step below.
+          case "$TAG" in
+            *-rc.*) IS_PRERELEASE=true ;;
+            *)      IS_PRERELEASE=false ;;
+          esac
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG -> is_prerelease=$IS_PRERELEASE"
 
       - uses: actions/checkout@v6   # v5 = Node 24 (v4/Node 20 is being removed)
         with:
@@ -130,18 +146,27 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          # An RC tag (vX.Y.Z-rc.N) publishes a GitHub *prerelease*: it is hidden
+          # from "Latest release" so stable users don't pick it up. A plain
+          # vX.Y.Z stays a normal (latest) release — the flag is empty then, so
+          # this path is byte-for-byte unchanged for finals.
+          IS_PRERELEASE: ${{ steps.resolve.outputs.is_prerelease }}
         run: |
           set -e
           assets=(
             "whisper-dictate-linux-${VERSION}.zip"
             "whisper-dictate-linux-rust-ui-${VERSION}"
           )
+          prerelease_flag=()
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            prerelease_flag=(--prerelease)
+          fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" "${prerelease_flag[@]}" \
               --title "$TAG — download, unzip, run" --notes-file NOTES.md
             gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" "${prerelease_flag[@]}" \
               --title "$TAG — download, unzip, run" --notes-file NOTES.md
           fi
 
@@ -150,6 +175,11 @@ jobs:
       # CI must not push to it. See the version-bump PR for each release.
 
       - name: Bump Homebrew tap
+        # Skip on prerelease: Homebrew has no prerelease channel (the tap formula
+        # is a single "latest" version), so RCs are finals-only here. The guard
+        # is `if:` rather than an in-script early-exit so the step is visibly
+        # skipped for RCs; for finals it runs exactly as before.
+        if: steps.resolve.outputs.is_prerelease != 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
@@ -475,6 +505,11 @@ jobs:
           $out | ConvertTo-Json | Set-Content sha256sums.json -Encoding utf8
           Get-Content sha256sums.txt
 
+      # Runs for BOTH finals and prereleases. An RC version (e.g. 1.9.5-rc.1) is a
+      # valid NuGet/SemVer prerelease, so the resulting .nupkg is automatically a
+      # prerelease package: `choco upgrade whisper-dictate` ignores it and
+      # `choco upgrade whisper-dictate --prerelease` installs it. The version is
+      # taken verbatim from the tag, so no prerelease-specific handling is needed.
       - name: Build Chocolatey package
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
@@ -511,8 +546,13 @@ jobs:
       # replaces the old manual "bump the winget manifests in a PR" step without
       # pushing to protected main — users install via `winget install --manifest`
       # against the extracted zip.
+      #
+      # Skipped on prerelease: winget is finals-only (no prerelease channel; we
+      # don't auto-submit manifests anyway), so an RC ships no winget asset. The
+      # Chocolatey pack/publish steps below still run — an RC .nupkg is a NuGet
+      # prerelease by SemVer, installable only via `choco upgrade --prerelease`.
       - name: Generate winget manifests
-        if: steps.win-check.outputs.changed == 'true'
+        if: steps.win-check.outputs.changed == 'true' && needs.release.outputs.is_prerelease != 'true'
         shell: pwsh
         run: |
           $version = "${{ env.TAG }}" -replace '^v',''
@@ -560,6 +600,12 @@ jobs:
           $source = "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
           dotnet nuget push $package.FullName --api-key "$env:GH_TOKEN" --source "$source" --skip-duplicate
 
+      # Publishes to the public Sleet feed for BOTH finals and prereleases.
+      # publish-chocolatey-feed.ps1 does no version sorting/filtering — it pushes
+      # the single .nupkg into the feed, and Sleet keeps every version. Prerelease
+      # packages are therefore added to the feed and surfaced only to clients that
+      # pass `--prerelease`; stable `choco upgrade` ignores them. Do NOT filter
+      # prereleases out of the feed or `--prerelease` installs would break.
       - name: Publish public Chocolatey feed to GitHub Pages
         if: steps.win-check.outputs.changed == 'true'
         env:
