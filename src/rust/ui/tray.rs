@@ -8,10 +8,10 @@
 //! - The pure logic — the [`TrayState`] enum, the worker-status → state mapping
 //!   ([`tray_state_for`]), the programmatic icon pixels ([`tray_icon_rgba`]), and
 //!   the tooltip-key mapping — is **cfg-free** so its unit tests run on every
-//!   platform (incl. the Linux dev container/CI). All pure items are referenced
-//!   unconditionally from either the cfg-free tests or the code paths that feed
-//!   both the Windows tray and the cross-platform app — so dead_code never fires
-//!   on any platform, no `allow(dead_code)` needed.
+//!   platform (incl. the Linux dev container/CI). [`tray_state_for`] is called
+//!   from `app.rs` (cfg-free) so it is never dead. The icon/tooltip helpers are
+//!   Windows-only consumers; they carry `#[cfg_attr(not(windows), allow(dead_code))]`
+//!   so the pure logic stays compiled+tested on every platform.
 //! - The actual OS tray lives behind `#[cfg(windows)]` (see [`TrayManager`]).
 //!   Windows is the primary platform and the user's request is Windows-specific;
 //!   gating to Windows also keeps tray-icon's gtk/libxdo system deps out of the
@@ -37,6 +37,11 @@ pub(in crate::ui) enum TrayState {
     Processing,
 }
 
+// `rgb` / `tooltip_key` feed the Windows tray icon + tooltip and the cfg-free
+// unit tests. On a non-Windows non-test build (e.g. the Linux dev container/CI)
+// the tray is a no-op stub, so they read as dead there — allow it rather than
+// cfg-gate the pure logic, which must stay compiled+tested on every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
 impl TrayState {
     /// The opaque RGB fill for this state's mic dot. Kept here (not in the
     /// theme palette) so it is cfg-free and unit-testable without an egui
@@ -98,6 +103,7 @@ pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) ->
 }
 
 /// The localized tooltip string for a tray state (e.g. "whisper-dictate — recording").
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(in crate::ui) fn tray_tooltip(state: TrayState, raw_language: &str) -> &'static str {
     ui_text(raw_language, state.tooltip_key())
 }
@@ -110,6 +116,7 @@ pub(in crate::ui) fn tray_tooltip(state: TrayState, raw_language: &str) -> &'sta
 /// `tray_icon::Icon` from this buffer via `Icon::from_rgba`.
 ///
 /// The returned buffer is exactly `size * size * 4` bytes in RGBA order.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(in crate::ui) fn tray_icon_rgba(state: TrayState, size: u32) -> Vec<u8> {
     let [r, g, b] = state.rgb();
     let mut rgba = vec![0u8; (size * size * 4) as usize];
