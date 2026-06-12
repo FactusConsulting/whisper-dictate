@@ -283,6 +283,11 @@ impl WhisperDictateApp {
             (case-insensitive substring) or treats a number as a device index. Refresh devices \
             asks the worker to list the inputs it can see.";
         let options = self.microphone_options();
+        // Snapshot the selected device so we can detect a combo change below: the
+        // device-test result belongs to the previously-selected device, so a
+        // different selection must clear the stale ✓/✗ rather than leave it
+        // pinned next to the new device.
+        let device_before = self.settings.audio_device.clone();
         combo_help_dynamic(
             ui,
             "Microphone",
@@ -290,6 +295,7 @@ impl WhisperDictateApp {
             &options,
             MIC_HELP,
         );
+        self.clear_device_test_result_if_device_changed(&device_before);
 
         let language = self.settings.ui_language.clone();
         let palette = ui_palette(&self.settings.ui_theme);
@@ -301,10 +307,7 @@ impl WhisperDictateApp {
                     self.background_task.is_none(),
                     egui::Button::new(ui_text(&language, UiTextKey::MicRefresh)),
                 )
-                .on_hover_text(
-                    "Run the worker to list available microphones. The result populates the picker; \
-                     it does not load a model or start dictation.",
-                )
+                .on_hover_text(ui_text(&language, UiTextKey::MicRefreshHelp))
                 .clicked()
             {
                 self.run_list_audio_devices();
@@ -322,6 +325,19 @@ impl WhisperDictateApp {
             self.microphone_test_status(ui, &language, palette, testing);
         });
         ui.end_row();
+    }
+
+    /// Clear the inline microphone-test result when the selected device changed
+    /// since `device_before`. The ✓/✗ outcome was produced for the previous
+    /// device, so leaving it pinned next to a newly-picked device would show a
+    /// stale, misleading verdict. A new test must be run for the new device.
+    pub(in crate::ui) fn clear_device_test_result_if_device_changed(
+        &mut self,
+        device_before: &str,
+    ) {
+        if self.settings.audio_device != device_before {
+            self.device_test_result = None;
+        }
     }
 
     /// Render the inline microphone-test status next to the Test button: a
@@ -438,10 +454,11 @@ impl WhisperDictateApp {
 /// Map a parsed microphone-test display model to its inline (icon, colour,
 /// localized text) for rendering next to the Test button:
 ///   ✓ green  "Works"
-///   ⚠ amber  "Works via DirectSound (48 kHz, resampled)"
+///   ✓ green  "Works via DirectSound (48 kHz, resampled)" (works via a fallback
+///            path — the caveat is informational text, not a warning)
 ///   ✗ red    "Cannot be used: <reason>"
-/// Pure aside from the localization lookup, so the ✓/⚠/✗ branching and the
-/// caveat-detail assembly are unit-testable without an egui context.
+/// Pure aside from the localization lookup, so the works/cannot branching and
+/// the caveat-detail assembly are unit-testable without an egui context.
 pub(in crate::ui) fn microphone_test_parts(
     display: &DeviceTestDisplay,
     language: &str,

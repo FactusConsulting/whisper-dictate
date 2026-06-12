@@ -391,7 +391,11 @@ def _resample_capture_buffer(pcm, capture_rate: int):
     if audio.ndim > 1:
         audio = audio.reshape(-1)
     if not capture_rate or capture_rate == SR or len(audio) == 0:
-        return audio.astype(np.int16).reshape(-1, 1)
+        # No-resample fast path: avoid a needless copy when the buffer is already
+        # int16 (the common 16k-native case). `copy=False` returns the same
+        # underlying data when no cast is required; `.reshape(-1, 1)` then yields
+        # a view, preserving the (N, 1) shape contract without an extra copy.
+        return audio.astype(np.int16, copy=False).reshape(-1, 1)
     from whisper_dictate.vp_audio_file import _mono_float_to_int16, _resample_mono
 
     floats = audio.astype(np.float32) / 32768.0
@@ -519,6 +523,11 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
                     kwargs["extra_settings"] = extra_settings
                 rate = kwargs.get("samplerate")
                 latency = kwargs.get("latency", "base")
+                # Bind to None up front so the except's cleanup can tell whether
+                # the stream was actually created: if InputStream(...) raises, the
+                # name stays None and we skip close() instead of hitting an
+                # UnboundLocalError (previously swallowed, but unclean).
+                stream = None
                 try:
                     stream = sd.InputStream(**kwargs)
                     stream.start()
@@ -544,10 +553,13 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
                             file=sys.stderr, flush=True)
                     # A stream that opened but failed to start must be closed so
                     # the device is released before the next candidate is tried.
-                    try:
-                        stream.close()  # type: ignore[has-type]
-                    except Exception:
-                        pass
+                    # Guard on `stream is not None`: if InputStream(...) itself
+                    # raised, there is nothing to close.
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
     if last_error is not None:
         print(f"[cap] stream open failed: {last_error}", file=sys.stderr, flush=True)
     return None, 0, "", last_error
@@ -766,12 +778,13 @@ class CaptureMixin:
         Yeti at 16k int16 with neither auto_convert nor resampling, so the first
         16k-capable sibling wins with the cheapest possible path.
 
-        On success ``self._stream`` (+ channels/dtype/rate) is set and
-        ``True`` is returned; the bound label stays the user's full chosen name
-        (it IS that physical device — NOT a swap to a different mic). Returns
-        ``False`` when every sibling endpoint fails (caller then drops to the
-        system default and surfaces a real device swap). Returns the last error
-        too so the caller can thread it into the final RuntimeError.
+        Returns a ``(bound, last_error)`` tuple. On success ``self._stream`` (+
+        channels/dtype/rate) is set and ``(True, None)`` is returned; the bound
+        label stays the user's full chosen name (it IS that physical device —
+        NOT a swap to a different mic). When every sibling endpoint fails,
+        ``(False, last_error)`` is returned (caller then drops to the system
+        default and surfaces a real device swap) — the last PortAudio error is
+        threaded out so the caller can fold it into the final RuntimeError.
         """
         last_error = None
         endpoints = sibling_endpoints_for_device(sd, device)
@@ -865,7 +878,7 @@ class CaptureMixin:
                 # the SAME physical mic via its DirectSound→MME siblings (no
                 # WasapiSettings — those endpoints reject it; 16k int16 opens
                 # directly with no resample) BEFORE swapping to a different mic.
-                _bound, exc = self._try_sibling_endpoints(sd, device)
+                _, exc = self._try_sibling_endpoints(sd, device)
                 if exc is not None:
                     last_error = exc
             if self._stream is None and explicit_device:

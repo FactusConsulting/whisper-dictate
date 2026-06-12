@@ -90,6 +90,9 @@ fn ui_language_translates_microphone_test_and_device_banner() {
     // Microphone Test button + outcome words, both languages.
     assert_eq!(ui_text("en", UiTextKey::MicRefresh), "Refresh devices");
     assert_eq!(ui_text("da", UiTextKey::MicRefresh), "Opdater enheder");
+    // Refresh-devices hover text is localized (was hard-coded English).
+    assert!(ui_text("en", UiTextKey::MicRefreshHelp).contains("list available microphones"));
+    assert!(ui_text("da", UiTextKey::MicRefreshHelp).contains("tilgængelige mikrofoner"));
     assert_eq!(ui_text("en", UiTextKey::MicTest), "Test");
     assert_eq!(ui_text("da", UiTextKey::MicTest), "Test");
     assert_eq!(ui_text("en", UiTextKey::MicTesting), "Testing…");

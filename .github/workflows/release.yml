@@ -86,9 +86,11 @@ jobs:
 
       # Cache the dependency build so the optimized release build reuses the
       # crate graph instead of recompiling every dependency from scratch.
-      # shared-key (stable, not job-name-scoped) lets the warm-release-cache
-      # job on main populate this exact cache so tag runs restore it.
-      # cache-on-failure keeps the Rust cache even when a later step fails.
+      # shared-key (stable, not job-name-scoped) lets a tag run restore whatever
+      # this key last wrote. NOTE: warm-release-cache.yml is WINDOWS-ONLY, so the
+      # Linux release cache is NOT warmed on main — it is only populated by prior
+      # tagged Linux release runs (cache-on-failure keeps it even when a later
+      # step fails). The Windows step below is the one the warm job populates.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "src/rust -> ../target"

@@ -5,7 +5,8 @@
 //! on). That stdout can be preceded by ordinary log lines, so the parser carves
 //! out the first `{` .. last `}` object span (reusing [`extract_json_object`])
 //! and turns it into a small [`DeviceTestDisplay`] the Speech tab renders inline
-//! as ✓ / ⚠ / ✗. Kept pure and free of egui so it unit-tests without a UI.
+//! as a green check (works, optionally with an informational caveat) or a red ✗
+//! (cannot be used). Kept pure and free of egui so it unit-tests without a UI.
 
 use super::worker_json::{extract_error_message, extract_json_object};
 use serde::Deserialize;
@@ -62,6 +63,12 @@ pub(in crate::ui) fn parse_device_test_json(stdout: &str) -> Result<DeviceTestDi
         extract_error_message(stdout)
             .unwrap_or_else(|| "no device-test result found in worker output".to_owned())
     })?;
+    // A worker `{"error": "..."}` object carries no `usable` field, so it would
+    // otherwise deserialize to a normal unusable result (Cannot, reason=None),
+    // silently dropping the actionable message. Surface it as an Err instead.
+    if let Some(message) = extract_error_message(span) {
+        return Err(message);
+    }
     let result: DeviceTestResult =
         serde_json::from_str(span).map_err(|err| format!("could not parse test result: {err}"))?;
     Ok(display_from_result(result))
@@ -79,7 +86,8 @@ fn display_from_result(result: DeviceTestResult) -> DeviceTestDisplay {
     }
     // Usable, but worth a caveat when it isn't the clean WASAPI/native path: a
     // non-WASAPI endpoint (DirectSound/MME) or a resampled (non-16k) open both
-    // mean "works, but not the ideal path" — surface that as ⚠ so the user knows.
+    // mean "works, via a fallback path". It still renders as a green check; the
+    // caveat is informational text, not a warning.
     let endpoint = normalize(result.endpoint);
     let via_fallback_endpoint = matches!(endpoint.as_deref(), Some("directsound") | Some("mme"));
     let outcome = if result.resampled || via_fallback_endpoint {
@@ -100,8 +108,8 @@ fn normalize(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
-/// Human label for an endpoint token, used in the ⚠ caveat line
-/// ("Works via DirectSound"). Unknown tokens pass through capitalized.
+/// Human label for an endpoint token, used in the works-via-fallback caveat
+/// line ("Works via DirectSound"). Unknown tokens pass through capitalized.
 pub(in crate::ui) fn endpoint_label(endpoint: &str) -> String {
     match endpoint.trim().to_ascii_lowercase().as_str() {
         "wasapi" => "WASAPI".to_owned(),
@@ -224,11 +232,11 @@ mod tests {
     #[test]
     fn reports_worker_error_object() {
         let stdout = "{\"error\": \"sounddevice unavailable: boom\"}";
-        // An {"error": ...} object has no `usable` field → still parses as a
-        // result with usable=false (serde default). It must NOT be mistaken for a
-        // working device.
-        let d = parse_device_test_json(stdout).unwrap();
-        assert_eq!(d.outcome, DeviceTestOutcome::Cannot);
+        // An {"error": ...} object has no `usable` field, so it would otherwise
+        // deserialize to a Cannot result with no reason, dropping the actionable
+        // message. It must surface as an Err carrying that message instead.
+        let err = parse_device_test_json(stdout).unwrap_err();
+        assert!(err.contains("sounddevice unavailable"), "{err}");
     }
 
     #[test]

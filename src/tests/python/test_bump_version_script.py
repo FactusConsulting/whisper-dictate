@@ -79,7 +79,7 @@ class BumpVersionScriptTests(unittest.TestCase):
 
     def test_bump_from_prerelease_to_final(self):
         # Promoting an RC to its final release (`1.9.5-rc.2` -> `1.9.5`) bumps
-        # all four files just like any other bump.
+        # ALL FOUR files just like any other bump.
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             _make_tree(root, "1.9.5-rc.2")
@@ -90,10 +90,18 @@ class BumpVersionScriptTests(unittest.TestCase):
                              "1.9.5\n")
             self.assertIn('version = "1.9.5"',
                           (root / "src/rust/Cargo.toml").read_text(encoding="utf-8"))
+            lock = (root / "src/rust/Cargo.lock").read_text(encoding="utf-8")
+            self.assertIn(
+                'name = "whisper-dictate-app"\nversion = "1.9.5"', lock)
+            # Other crates' versions are untouched.
+            self.assertIn('name = "other"\nversion = "9.9.9"', lock)
+            self.assertIn('version ? "1.9.5"',
+                          (root / "nix/package.nix").read_text(encoding="utf-8"))
 
     def test_rejects_malformed_prerelease(self):
         # `-rc` without a number, a non-numeric/zero RC index, and unknown
-        # prerelease channels must all be rejected (and write nothing).
+        # prerelease channels must all be rejected — and write NOTHING to ANY of
+        # the four files (a rejected bump leaves the tree fully untouched).
         for bad in ("1.9.5-rc", "1.9.5-rc.", "1.9.5-rc.x", "1.9.5-rc.0",
                     "1.9.5-rc.01", "1.9.5-beta.1", "1.9.5-rc.1.2",
                     "1.9.5rc.1", "1.9.5-RC.1"):
@@ -103,10 +111,52 @@ class BumpVersionScriptTests(unittest.TestCase):
                     _make_tree(root, "1.9.4")
                     result = _run(bad, "--root", str(root))
                     self.assertEqual(result.returncode, 1, result.stdout)
-                    # Untouched.
+                    # All four files untouched — no partial write.
                     self.assertEqual(
                         (root / "VERSION").read_text(encoding="utf-8"),
                         "1.9.4\n")
+                    self.assertIn(
+                        'version = "1.9.4"',
+                        (root / "src/rust/Cargo.toml").read_text(encoding="utf-8"))
+                    self.assertIn(
+                        'name = "whisper-dictate-app"\nversion = "1.9.4"',
+                        (root / "src/rust/Cargo.lock").read_text(encoding="utf-8"))
+                    self.assertIn(
+                        'version ? "1.9.4"',
+                        (root / "nix/package.nix").read_text(encoding="utf-8"))
+
+    def test_rejects_leading_zero_versions(self):
+        # Strict SemVer forbids leading zeros in MAJOR/MINOR/PATCH. Each must be
+        # rejected and leave all four files untouched.
+        for bad in ("01.2.3", "1.02.3", "1.2.03", "00.1.2"):
+            with self.subTest(version=bad):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = pathlib.Path(tmp)
+                    _make_tree(root, "1.9.4")
+                    result = _run(bad, "--root", str(root))
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    self.assertEqual(
+                        (root / "VERSION").read_text(encoding="utf-8"),
+                        "1.9.4\n")
+                    self.assertIn(
+                        'version = "1.9.4"',
+                        (root / "src/rust/Cargo.toml").read_text(encoding="utf-8"))
+                    self.assertIn(
+                        'name = "whisper-dictate-app"\nversion = "1.9.4"',
+                        (root / "src/rust/Cargo.lock").read_text(encoding="utf-8"))
+                    self.assertIn(
+                        'version ? "1.9.4"',
+                        (root / "nix/package.nix").read_text(encoding="utf-8"))
+
+    def test_accepts_zero_components_without_leading_zeros(self):
+        # A bare `0` component is valid SemVer (only LEADING zeros are forbidden).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _make_tree(root, "1.9.4")
+            result = _run("1.0.0", "--root", str(root))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "VERSION").read_text(encoding="utf-8"),
+                             "1.0.0\n")
 
     def test_refuses_inconsistent_tree(self):
         with tempfile.TemporaryDirectory() as tmp:

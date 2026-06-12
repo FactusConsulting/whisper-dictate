@@ -19,6 +19,10 @@ on:
     branches: [main]
     paths:
       - 'src/rust/**'
+      # The toolchain is pinned in the repo-root rust-toolchain.toml (read by
+      # dtolnay/rust-toolchain). A channel bump there changes the compiler the
+      # release build uses, so re-warm the cache when it changes too.
+      - 'rust-toolchain.toml'
       - '.github/workflows/warm-release-cache.yml'
   workflow_dispatch:
 

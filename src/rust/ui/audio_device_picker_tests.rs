@@ -48,6 +48,48 @@ fn microphone_options_do_not_duplicate_saved_device_already_listed() {
 }
 
 #[test]
+fn changing_device_clears_stale_test_result() {
+    // A finished test result belongs to the previously-selected device. Picking a
+    // different microphone must clear it so the old ✓/✗ doesn't stay pinned next
+    // to the new device.
+    let mut app = test_app(AppSettings {
+        audio_device: "Yeti".to_owned(),
+        ..AppSettings::default()
+    });
+    app.device_test_result = Some(Ok(DeviceTestDisplay {
+        outcome: DeviceTestOutcome::Works,
+        endpoint: Some("wasapi".to_owned()),
+        samplerate: Some(16000),
+        resampled: false,
+        reason: None,
+    }));
+    let device_before = app.settings.audio_device.clone();
+    // Simulate the combo selecting a different device this frame.
+    app.settings.audio_device = "Webcam Mic".to_owned();
+    app.clear_device_test_result_if_device_changed(&device_before);
+    assert!(app.device_test_result.is_none());
+}
+
+#[test]
+fn unchanged_device_keeps_test_result() {
+    // Re-rendering without a device change must NOT discard the result.
+    let mut app = test_app(AppSettings {
+        audio_device: "Yeti".to_owned(),
+        ..AppSettings::default()
+    });
+    app.device_test_result = Some(Ok(DeviceTestDisplay {
+        outcome: DeviceTestOutcome::Works,
+        endpoint: Some("wasapi".to_owned()),
+        samplerate: Some(16000),
+        resampled: false,
+        reason: None,
+    }));
+    let device_before = app.settings.audio_device.clone();
+    app.clear_device_test_result_if_device_changed(&device_before);
+    assert!(app.device_test_result.is_some());
+}
+
+#[test]
 fn dynamic_selected_label_prefers_display_then_value_then_empty() {
     let options = vec![
         (String::new(), "(System default)".to_owned()),

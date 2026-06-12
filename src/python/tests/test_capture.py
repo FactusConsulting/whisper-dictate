@@ -764,6 +764,30 @@ class ResampleCaptureBufferTests(unittest.TestCase):
         # No resampling occurred — values are bit-identical to the input.
         self.assertTrue(np.array_equal(out.reshape(-1), pcm.reshape(-1)))
 
+    def test_resample_fast_path_int16_does_not_copy(self):
+        # Regression: the no-resample fast path used `.astype(np.int16)` which
+        # always copies. For an int16 (N, 1) input at 16k the result must be
+        # int16 (N, 1) AND share memory with the input (no needless copy).
+        np = self.np
+        self.rt.SR = 16000
+        pcm = np.arange(4000, dtype=np.int16).reshape(-1, 1)
+        out = self.rt._resample_capture_buffer(pcm, 16000)
+        self.assertEqual(out.dtype, np.int16)
+        self.assertEqual(out.shape, (4000, 1))
+        self.assertTrue(
+            np.shares_memory(out, pcm),
+            "int16 fast path must not copy the buffer")
+
+    def test_resample_fast_path_falsy_rate_returns_int16_n1(self):
+        # capture_rate falsy (0/None) → fast path, int16 (N, 1) shape contract.
+        np = self.np
+        self.rt.SR = 16000
+        pcm = np.arange(2000, dtype=np.int16)
+        out = self.rt._resample_capture_buffer(pcm, 0)
+        self.assertEqual(out.dtype, np.int16)
+        self.assertEqual(out.shape, (2000, 1))
+        self.assertTrue(np.shares_memory(out, pcm))
+
     def test_resample_preserves_a_tone_frequency(self):
         # A 440 Hz tone captured at 48k must still be ~440 Hz after the 16k
         # resample (sanity check that we're resampling, not just truncating).
@@ -837,6 +861,39 @@ class NativeRateOpenTests(unittest.TestCase):
         self.assertEqual(rate, 0)
         self.assertEqual(dtype, "")
         self.assertIsNone(exc)
+
+    def test_inputstream_raises_before_bind_returns_error_cleanly(self):
+        # Regression: when InputStream(**kwargs) raises BEFORE `stream` is bound,
+        # the except-block cleanup must NOT hit an UnboundLocalError calling
+        # stream.close(). It returns (None, 0, "", last_error) carrying the real
+        # PortAudio error, and never attempts a close on the unbound stream.
+        rt = self.rt
+        rt.SR = 16000
+        close_calls = {"n": 0}
+
+        class _RaisingInputStream:
+            def __init__(self, **_kwargs):
+                # Construction itself fails — `stream` never gets bound.
+                raise RuntimeError("PaErrorCode -9996 device unavailable")
+
+            def close(self):
+                close_calls["n"] += 1
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=_RaisingInputStream,
+            query_devices=lambda device=None, kind=None: {
+                "name": "Dead Mic", "max_input_channels": 1},
+            default=types.SimpleNamespace(device=(1, 0)),
+        )
+        stream, channels, dtype, exc = rt._open_sounddevice_stream(
+            fake_sd, 1, lambda *_a: None)
+        self.assertIsNone(stream)
+        self.assertEqual(channels, 0)
+        self.assertEqual(dtype, "")
+        self.assertIsInstance(exc, RuntimeError)
+        self.assertIn("device unavailable", str(exc))
+        # close() must never be called on an unbound stream.
+        self.assertEqual(close_calls["n"], 0)
 
 
 # ---------------------------------------------------------------------------

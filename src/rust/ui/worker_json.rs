@@ -47,14 +47,19 @@ pub(in crate::ui) fn extract_json_array(stdout: &str) -> Option<&str> {
 pub(in crate::ui) fn extract_json_object(stdout: &str) -> Option<&str> {
     let end = stdout.rfind('}')?;
     let mut search = 0;
-    while let Some(rel) = stdout[search..=end].find('{') {
+    // All indices land on `{`/`}` (ASCII) or one byte past `{`, so the slices are
+    // already on char boundaries today. Use `.get(..)` instead of `[..]` indexing
+    // so that even if a future change shifts an index off a boundary, the helper
+    // returns `None` rather than panicking on a non-ASCII stdout blob.
+    while let Some(rel) = stdout.get(search..=end)?.find('{') {
         let start = search + rel;
-        let next = stdout[start + 1..=end]
+        let next = stdout
+            .get(start + 1..=end)?
             .bytes()
             .find(|b| !b.is_ascii_whitespace());
         let looks_like_object = matches!(next, Some(b'"') | Some(b'}'));
         if looks_like_object {
-            return Some(&stdout[start..=end]);
+            return stdout.get(start..=end);
         }
         if start >= end {
             break;
@@ -131,6 +136,18 @@ mod tests {
     #[test]
     fn object_returns_none_when_no_object() {
         assert_eq!(extract_json_object("just [text] here"), None);
+    }
+
+    #[test]
+    fn object_handles_non_ascii_log_prefix_without_panic() {
+        // Multi-byte UTF-8 in the surrounding log text must not cause a slice
+        // panic: the helper only indexes at the ASCII `{`/`}` boundaries and now
+        // uses `.get(..)`, so a café/线 prefix is handled cleanly.
+        let s = "café log线 {\"usable\":true,\"endpoint\":\"wasapi\"}";
+        assert_eq!(
+            extract_json_object(s),
+            Some(r#"{"usable":true,"endpoint":"wasapi"}"#)
+        );
     }
 
     // --- extract_error_message ---
