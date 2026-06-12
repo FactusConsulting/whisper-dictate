@@ -30,8 +30,9 @@ struct DeviceTestResult {
 
 /// How a parsed device-test result should be rendered next to the picker.
 ///
-/// `Works` → ✓ green; `WorksWithCaveat` → ⚠ amber (e.g. opened via DirectSound,
-/// or at a non-native rate that is resampled); `Cannot` → ✗ red with a reason.
+/// `Works` → ✓ green; `WorksWithCaveat` → ✓ green too (it still works — opened
+/// via DirectSound/MME or at a resampled rate; the caveat is informational text,
+/// NOT a warning); `Cannot` → ✗ red with a reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::ui) enum DeviceTestOutcome {
     Works,
