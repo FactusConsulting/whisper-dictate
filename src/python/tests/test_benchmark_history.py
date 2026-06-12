@@ -293,6 +293,35 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIsNone(summary["avg_wer"])
         self.assertIsNone(summary["avg_cer"])
 
+    def test_summarize_results_averages_cer_over_cer_bearing_rows_only(self):
+        from whisper_dictate import vp_benchmark
+
+        # Two scored (WER-bearing) rows, but only one carries a `cer` field.
+        # avg_cer must divide by the count of CER-bearing rows (1), not by the
+        # number of scored rows (2) — otherwise the average is understated.
+        results = [
+            {"benchmark_success": True, "wer": 0.2, "cer": 0.4},
+            {"benchmark_success": True, "wer": 0.4},
+        ]
+        summary = vp_benchmark.summarize_results(results)
+
+        self.assertEqual(summary["scored"], 2)
+        self.assertAlmostEqual(summary["avg_wer"], 0.3)
+        # 0.4 / 1, NOT 0.4 / 2 == 0.2.
+        self.assertAlmostEqual(summary["avg_cer"], 0.4)
+
+    def test_summarize_results_cer_none_when_no_row_has_cer(self):
+        from whisper_dictate import vp_benchmark
+
+        # Scored rows exist (WER present) but none report CER → avg_cer is None.
+        summary = vp_benchmark.summarize_results([
+            {"benchmark_success": True, "wer": 0.2},
+            {"benchmark_success": True, "wer": 0.4},
+        ])
+        self.assertEqual(summary["scored"], 2)
+        self.assertAlmostEqual(summary["avg_wer"], 0.3)
+        self.assertIsNone(summary["avg_cer"])
+
     def test_format_summary_line_renders_concise_benchmark_line(self):
         from whisper_dictate import vp_benchmark
 

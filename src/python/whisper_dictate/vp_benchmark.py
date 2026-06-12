@@ -423,10 +423,13 @@ def summarize_results(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
     failed = total - passed - skipped
     scored = [r for r in rows if not r.get("benchmark_skipped") and "wer" in r]
     avg_wer = sum(float(r["wer"]) for r in scored) / len(scored) if scored else None
+    # Average CER over the rows that actually carry a `cer` field, not over every
+    # scored (WER-bearing) row: a scored row can lack `cer`, and dividing by
+    # `len(scored)` would understate the average. Mirrors `avg_wer` over its own
+    # denominator; `None` when no scored row reports CER.
+    cer_rows = [r for r in scored if "cer" in r]
     avg_cer = (
-        sum(float(r["cer"]) for r in scored if "cer" in r) / len(scored)
-        if scored
-        else None
+        sum(float(r["cer"]) for r in cer_rows) / len(cer_rows) if cer_rows else None
     )
     return {
         "total": total,
