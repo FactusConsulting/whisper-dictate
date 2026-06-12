@@ -495,6 +495,44 @@ On Windows, the Settings UI exposes the same suggestion flow on the Dictionary
 tab. Pick a benchmark/history JSONL file, review the proposed replacements, and
 apply them to the configured dictionary when they look correct.
 
+### Benchmark corpus
+
+The **System** tab's **Run benchmark** button runs a "golden corpus" of
+reference sentences through your currently-configured backend and reports a
+concise `[benchmark] …` summary (pass count + average WER/CER) in the runtime
+log. It needs no arguments.
+
+**Where the manifest is found.** The corpus _manifest_ (`corpus.json`, the
+reference text + technical terms — no audio) is resolved in this order:
+
+1. an explicit `--benchmark-corpus PATH` argument, if you pass one;
+2. `<app-root>/benchmark/corpus.json` — the dev-checkout layout, and the file
+   the installer/ZIP now ship, so the button works out of the box;
+3. `%APPDATA%\WhisperDictate\benchmark\corpus.json` on Windows or
+   `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/benchmark/corpus.json`
+   elsewhere — a manifest you manage yourself that survives reinstalls.
+
+If no corpus is found anywhere, the log shows one clear line
+(`[benchmark] no corpus manifest found (looked: …) — see docs`) and the run
+ends cleanly — the button never silently does nothing.
+
+**Audio recordings are yours and stay local.** The manifest references one audio
+recording per item, but those `.wav` files are _not_ shipped (they are
+user-local and gitignored). For each item, the worker first looks for the
+recording next to the manifest, then falls back to the per-user audio dir:
+
+- Windows: `%APPDATA%\WhisperDictate\benchmark\audio\<id>.wav`
+- Linux/macOS: `${XDG_CONFIG_HOME:-~/.config}/whisper-dictate/benchmark/audio/<id>.wav`
+
+Keeping recordings there means they survive reinstalls. Items whose audio is
+missing everywhere are reported as `skipped` in the summary, so a fresh install
+shows e.g. `[benchmark] 0/31 passed, 31 skipped (no audio)` — and when _every_
+item is skipped for missing audio, the line appends
+`record corpus audio to <that audio dir>` so you know exactly what to do next.
+In a dev checkout, `scripts/benchmark/record-corpus.py` records each item next to
+the manifest (`benchmark/audio/`); to keep recordings across reinstalls, copy
+them into the per-user audio dir above (the worker checks it as a fallback).
+
 ### Target profiles
 
 **What they solve:** the best settings aren't the same in every app. You might

@@ -341,11 +341,12 @@ class BenchmarkTests(unittest.TestCase):
         captured = {}
 
         def fake_run_benchmark(audio_files, backend_specs, *, output_jsonl=None,
-                               corpus_manifest=None):
+                               corpus_manifest=None, appdata=None):
             captured["audio_files"] = audio_files
             captured["backend_specs"] = backend_specs
             captured["corpus_manifest"] = corpus_manifest
             captured["output_jsonl"] = output_jsonl
+            captured["appdata"] = appdata
             return [{"benchmark_success": True, "wer": 0.0, "cer": 0.0}]
 
         with patch("whisper_dictate.vp_benchmark.run_benchmark",
@@ -353,13 +354,203 @@ class BenchmarkTests(unittest.TestCase):
             with _capture_stdout() as out:
                 summary = vp_benchmark.run_corpus_benchmark()
 
-        # No manifest passed → defaults to the golden corpus, no audio_files.
+        # No manifest/app-root passed → resolves the dev-checkout golden corpus
+        # under the CWD ("."), no audio_files. Run from the repo root, that path
+        # exists, so the resolved manifest ends with benchmark/corpus.json.
         self.assertIsNone(captured["audio_files"])
-        self.assertEqual(captured["corpus_manifest"],
-                         vp_benchmark.DEFAULT_CORPUS_MANIFEST)
+        self.assertTrue(
+            str(captured["corpus_manifest"]).replace("\\", "/").endswith("benchmark/corpus.json"))
         self.assertEqual(summary["passed"], 1)
         # The concise [benchmark] line lands on stdout for the UI log.
         self.assertIn("[benchmark] 1/1 passed", out.getvalue())
+
+    def test_resolve_corpus_manifest_priority_order(self):
+        import tempfile
+        from whisper_dictate import vp_benchmark
+
+        # (a) explicit always wins, returned verbatim even if it does not exist.
+        self.assertEqual(
+            vp_benchmark.resolve_corpus_manifest("approot", "given/corpus.json", "appd"),
+            Path("given/corpus.json"))
+
+        with tempfile.TemporaryDirectory() as d:
+            app_root = Path(d) / "app"
+            appdata = Path(d) / "appdata"
+            app_manifest = app_root / "benchmark" / "corpus.json"
+            appdata_manifest = appdata / "benchmark" / "corpus.json"
+
+            # (d) nothing exists anywhere → None.
+            self.assertIsNone(
+                vp_benchmark.resolve_corpus_manifest(app_root, None, appdata))
+
+            # (c) only the per-user appdata manifest exists.
+            appdata_manifest.parent.mkdir(parents=True)
+            appdata_manifest.write_text("{}", encoding="utf-8")
+            self.assertEqual(
+                vp_benchmark.resolve_corpus_manifest(app_root, None, appdata),
+                appdata_manifest)
+
+            # (b) the shipped/dev app-root manifest takes precedence over appdata.
+            app_manifest.parent.mkdir(parents=True)
+            app_manifest.write_text("{}", encoding="utf-8")
+            self.assertEqual(
+                vp_benchmark.resolve_corpus_manifest(app_root, None, appdata),
+                app_manifest)
+
+    def test_resolve_item_audio_falls_back_to_appdata(self):
+        import tempfile
+        from whisper_dictate import vp_benchmark
+
+        with tempfile.TemporaryDirectory() as d:
+            appdata = Path(d) / "appdata"
+            shipped = Path(d) / "benchmark" / "audio" / "item.wav"
+            fallback = appdata / "benchmark" / "audio" / "item.wav"
+
+            # Shipped/manifest-relative recording present → used as-is.
+            shipped.parent.mkdir(parents=True)
+            shipped.write_bytes(b"x")
+            self.assertEqual(
+                vp_benchmark.resolve_item_audio(shipped, appdata), shipped)
+
+            # Missing in place but present in the per-user appdata dir → fallback.
+            missing = Path(d) / "benchmark" / "audio" / "item2.wav"
+            fallback2 = appdata / "benchmark" / "audio" / "item2.wav"
+            fallback2.parent.mkdir(parents=True)
+            fallback2.write_bytes(b"x")
+            self.assertEqual(
+                vp_benchmark.resolve_item_audio(missing, appdata), fallback2)
+
+            # Missing everywhere → original path returned (caller records a skip).
+            gone = Path(d) / "benchmark" / "audio" / "gone.wav"
+            self.assertEqual(
+                vp_benchmark.resolve_item_audio(gone, appdata), gone)
+            # No appdata dir given → original path, no fallback attempted.
+            self.assertEqual(
+                vp_benchmark.resolve_item_audio(gone, None), gone)
+
+    def test_run_corpus_benchmark_no_corpus_prints_clear_line_and_returns_none(self):
+        import tempfile
+        from whisper_dictate import vp_benchmark
+
+        with tempfile.TemporaryDirectory() as d:
+            empty_root = Path(d) / "app"
+            empty_root.mkdir()
+            with patch("whisper_dictate.vp_benchmark.appdata_dir",
+                       return_value=Path(d) / "appdata"):
+                with patch("whisper_dictate.vp_benchmark.run_benchmark") as ran:
+                    with _capture_stdout() as out:
+                        result = vp_benchmark.run_corpus_benchmark(app_root=empty_root)
+
+        # No corpus anywhere → a single clear line, exit-0 outcome, no model run.
+        self.assertIsNone(result)
+        ran.assert_not_called()
+        line = out.getvalue()
+        self.assertIn("[benchmark] no corpus manifest found", line)
+        self.assertIn("benchmark", line)
+        self.assertIn("docs", line)
+
+    def test_run_benchmark_uses_appdata_audio_fallback_for_missing_recording(self):
+        import tempfile
+        from whisper_dictate import vp_benchmark
+
+        manifest = {
+            "audio_dir": "audio",
+            "items": [
+                {"id": "one", "language": "da", "text": "Hej Codex", "terms": []},
+            ],
+        }
+
+        def fake_transcribe(model, path, lang, **kwargs):
+            return {"event": "file_transcription", "text": "Hej Codex",
+                    "source_file": str(path)}
+
+        with tempfile.TemporaryDirectory() as d:
+            manifest_path = Path(d) / "corpus.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            # No audio next to the manifest; put the recording in the appdata dir.
+            appdata = Path(d) / "appdata"
+            fallback = appdata / "benchmark" / "audio" / "one.wav"
+            fallback.parent.mkdir(parents=True)
+            fallback.write_bytes(b"not used by patched transcriber")
+
+            try:
+                with patch("whisper_dictate.vp_benchmark._load_model_for_spec",
+                           return_value=("model", "m", "cpu", "int8")):
+                    with patch("whisper_dictate.runtime.transcribe_file_event",
+                               side_effect=fake_transcribe):
+                        results = vp_benchmark.run_benchmark(
+                            None, "whisper:tiny",
+                            corpus_manifest=manifest_path, appdata=appdata)
+            finally:
+                sys.modules.pop("whisper_dictate.runtime", None)
+                sys.modules.pop("vp_transcribe", None)
+
+        # The item scored (not skipped) because the audio resolved via appdata.
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["benchmark_success"])
+        self.assertFalse(results[0].get("benchmark_skipped"))
+
+    def test_format_summary_line_hints_audio_when_all_skipped_for_missing_audio(self):
+        from whisper_dictate import vp_benchmark
+
+        summary = vp_benchmark.summarize_results([
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="a", text="x", audio=Path("a.wav")),
+                vp_benchmark.MISSING_AUDIO_REASON),
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="b", text="y", audio=Path("b.wav")),
+                vp_benchmark.MISSING_AUDIO_REASON),
+        ])
+        line = vp_benchmark.format_summary_line(
+            summary, audio_hint_path="C:/AppData/WhisperDictate/benchmark/audio")
+
+        self.assertEqual(summary["skipped_no_audio"], 2)
+        self.assertIn("0/2 passed", line)
+        self.assertIn("2 skipped (no audio)", line)
+        self.assertIn("record corpus audio to C:/AppData/WhisperDictate/benchmark/audio", line)
+
+    def test_format_summary_line_no_audio_hint_when_some_scored(self):
+        from whisper_dictate import vp_benchmark
+
+        # A mix of scored + skipped must NOT trigger the all-skipped audio hint.
+        summary = vp_benchmark.summarize_results([
+            {"benchmark_success": True, "wer": 0.0, "cer": 0.0},
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="b", text="y", audio=Path("b.wav")),
+                vp_benchmark.MISSING_AUDIO_REASON),
+        ])
+        line = vp_benchmark.format_summary_line(summary, audio_hint_path="X")
+
+        self.assertIn("1 skipped (no audio)", line)
+        self.assertNotIn("record corpus audio", line)
+
+    def test_format_summary_line_mixed_skips_shows_no_audio_count_not_all(self):
+        from whisper_dictate import vp_benchmark
+
+        # 3 skipped: 2 for missing audio, 1 for another reason.
+        # Expected: "3 skipped (2 no audio)" — NOT "3 skipped (no audio)"
+        # and no all-skipped audio-hint even if a hint path is given.
+        summary = vp_benchmark.summarize_results([
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="a", text="x", audio=Path("a.wav")),
+                vp_benchmark.MISSING_AUDIO_REASON),
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="b", text="y", audio=Path("b.wav")),
+                vp_benchmark.MISSING_AUDIO_REASON),
+            vp_benchmark.skipped_event(
+                vp_benchmark.CorpusItem(id="c", text="z", audio=Path("c.wav")),
+                "backend unavailable"),
+        ])
+        line = vp_benchmark.format_summary_line(
+            summary, audio_hint_path="C:/AppData/WhisperDictate/benchmark/audio")
+
+        self.assertEqual(summary["skipped"], 3)
+        self.assertEqual(summary["skipped_no_audio"], 2)
+        # Precise breakdown shown, not the all-audio label.
+        self.assertIn("3 skipped (2 no audio)", line)
+        self.assertNotIn("3 skipped (no audio)", line)
+        # all-skipped hint suppressed because not ALL skips are missing-audio.
+        self.assertNotIn("record corpus audio", line)
 
     def test_handle_benchmark_routes_run_benchmark_to_corpus_runner(self):
         from whisper_dictate import runtime
@@ -383,6 +574,55 @@ class BenchmarkTests(unittest.TestCase):
         plain.assert_not_called()
         self.assertEqual(corpus.call_args.args[0], None)  # default manifest
         self.assertEqual(corpus.call_args.args[1], "whisper")
+
+    def test_handle_benchmark_cli_path_passes_appdata_to_run_benchmark(self):
+        from whisper_dictate import runtime
+
+        ap = types.SimpleNamespace(error=lambda msg: (_ for _ in ()).throw(
+            AssertionError(f"ap.error called: {msg}")))
+        args = types.SimpleNamespace(
+            run_benchmark=False,  # CLI path — NOT the UI "Run benchmark" button
+            benchmark_files=["audio.wav"],
+            benchmark_corpus=None,
+            benchmark_backends="whisper",
+            benchmark_jsonl=None,
+        )
+        fake_appdata = Path("/fake/appdata")
+        # Use patch.object to target the module object directly — avoids a
+        # lookup through sys.modules (which may have been cleared by a prior
+        # test that pops "whisper_dictate.runtime" in its finally block).
+        with patch.object(runtime, "appdata_dir", return_value=fake_appdata):
+            with patch("whisper_dictate.vp_benchmark.run_benchmark") as plain:
+                plain.return_value = []
+                runtime._handle_benchmark(args, ap)
+
+        plain.assert_called_once()
+        call_kw = plain.call_args.kwargs
+        # The CLI path must thread appdata through so the per-user audio
+        # fallback works identically to the UI "Run benchmark" path.
+        self.assertEqual(call_kw.get("appdata"), fake_appdata)
+
+class ConfigDirTests(unittest.TestCase):
+    def test_appdata_dir_ignores_empty_xdg_config_home_on_non_windows(self):
+        """XDG_CONFIG_HOME="" must fall back to ~/.config, not use a
+        relative "./whisper-dictate" directory (empty string is not a path)."""
+        import platform
+        from whisper_dictate import vp_config
+
+        if os.name == "nt":
+            self.skipTest("XDG_CONFIG_HOME is a Linux/macOS concern")
+
+        home_default = Path.home() / ".config" / "whisper-dictate"
+        old = os.environ.pop("XDG_CONFIG_HOME", None)
+        try:
+            os.environ["XDG_CONFIG_HOME"] = ""
+            result = vp_config.appdata_dir()
+        finally:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+            if old is not None:
+                os.environ["XDG_CONFIG_HOME"] = old
+
+        self.assertEqual(result, home_default)
 
 class HistoryTests(unittest.TestCase):
     def test_read_history_keeps_core_fields_written_by_rust(self):

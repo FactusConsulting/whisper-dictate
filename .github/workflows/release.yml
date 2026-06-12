@@ -116,6 +116,11 @@ jobs:
             # creates them) so the bundle stays reproducible.
             find "$d/src/python" -depth -type d -name __pycache__ -exec rm -rf {} +
             cp -r requirements "$d/"
+            # Ship the golden-benchmark manifest (corpus.json only — NOT the
+            # user-local, gitignored audio) so "Run benchmark" resolves a corpus
+            # out of the box. Mirrors the Inno installer's benchmark/corpus.json.
+            mkdir -p "$d/benchmark"
+            cp benchmark/corpus.json "$d/benchmark/"
             mkdir -p "$d/assets"
             cp assets/whisper-dictate-logo.svg "$d/assets/"
             mkdir -p "$d/scripts"

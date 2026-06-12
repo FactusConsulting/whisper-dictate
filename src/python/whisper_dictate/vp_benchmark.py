@@ -11,8 +11,32 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from whisper_dictate.vp_config import get_value
+from whisper_dictate.vp_config import appdata_dir, get_value
 from whisper_dictate.vp_cli import _resolve_device
+from whisper_dictate.vp_benchmark_paths import (
+    appdata_audio_dir,
+    corpus_search_paths,
+    resolve_corpus_manifest,
+    resolve_item_audio,
+)
+from whisper_dictate.vp_benchmark_report import (
+    MISSING_AUDIO_REASON,
+    format_summary_line,
+    summarize_results,
+)
+
+# Re-exported here so existing callers/tests keep importing these helpers from
+# ``vp_benchmark``; the pure implementations live in ``vp_benchmark_paths`` /
+# ``vp_benchmark_report`` to keep this module under the size limit.
+__all__ = [
+    "MISSING_AUDIO_REASON",
+    "appdata_audio_dir",
+    "corpus_search_paths",
+    "format_summary_line",
+    "resolve_corpus_manifest",
+    "resolve_item_audio",
+    "summarize_results",
+]
 
 # Default golden-corpus manifest, relative to the app root (the worker's working
 # directory). The "Run benchmark" UI button drives `--run-benchmark`, which runs
@@ -336,9 +360,13 @@ def _run_loaded_model(audio_file: str | Path, item: Any | None, spec: BackendSpe
 def _benchmark_work(
     audio_files: Iterable[str | Path] | None,
     corpus_items: list[Any],
+    appdata: str | Path | None = None,
 ) -> list[tuple[str | Path, Any | None]]:
     if corpus_items:
-        return [(item.audio, item) for item in corpus_items]
+        # Resolve each item's audio here (once), so both the missing-file skip
+        # check and the per-spec model-load gating below see the per-user
+        # fallback path when the manifest-relative recording is absent.
+        return [(resolve_item_audio(item.audio, appdata), item) for item in corpus_items]
     return [(path, None) for path in (audio_files or [])]
 
 
@@ -357,7 +385,7 @@ def _run_benchmark_item(
     loaded: tuple[Any, str, str, str] | None,
 ) -> dict[str, Any]:
     if item is not None and not Path(audio_file).exists():
-        event = skipped_event(item, "audio file missing")
+        event = skipped_event(item, MISSING_AUDIO_REASON)
     elif item is not None:
         event = _run_loaded_model(audio_file, item, spec, loaded)
         annotate_event(event, item)
@@ -386,11 +414,12 @@ def run_benchmark(
     *,
     output_jsonl: str | Path | None = None,
     corpus_manifest: str | Path | None = None,
+    appdata: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     specs = parse_backend_specs(backend_specs)
     results: list[dict[str, Any]] = []
     corpus_items = load_corpus(corpus_manifest) if corpus_manifest else []
-    work = _benchmark_work(audio_files, corpus_items)
+    work = _benchmark_work(audio_files, corpus_items, appdata)
     if not work:
         raise ValueError("at least one benchmark file or corpus item is required")
     sink = _open_jsonl_sink(output_jsonl)
@@ -409,78 +438,51 @@ def run_benchmark(
     return results
 
 
-def summarize_results(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    """Collapse per-item benchmark events into one overall summary.
-
-    Pure (no I/O) so it is unit-testable. Counts items, successes/failures and
-    skips, and averages WER/CER over the *scored* (non-skipped, WER-bearing)
-    items so a corpus with missing audio still yields a meaningful number.
-    """
-    rows = list(results)
-    total = len(rows)
-    passed = sum(1 for r in rows if r.get("benchmark_success"))
-    skipped = sum(1 for r in rows if r.get("benchmark_skipped"))
-    failed = total - passed - skipped
-    scored = [r for r in rows if not r.get("benchmark_skipped") and "wer" in r]
-    avg_wer = sum(float(r["wer"]) for r in scored) / len(scored) if scored else None
-    # Average CER over the rows that actually carry a `cer` field, not over every
-    # scored (WER-bearing) row: a scored row can lack `cer`, and dividing by
-    # `len(scored)` would understate the average. Mirrors `avg_wer` over its own
-    # denominator; `None` when no scored row reports CER.
-    cer_rows = [r for r in scored if "cer" in r]
-    avg_cer = (
-        sum(float(r["cer"]) for r in cer_rows) / len(cer_rows) if cer_rows else None
-    )
-    return {
-        "total": total,
-        "passed": passed,
-        "failed": failed,
-        "skipped": skipped,
-        "scored": len(scored),
-        "avg_wer": avg_wer,
-        "avg_cer": avg_cer,
-    }
-
-
-def format_summary_line(summary: dict[str, Any]) -> str:
-    """Render a one-line, human-readable summary prefixed with ``[benchmark]``.
-
-    The UI surfaces this exact line in the runtime log so the user sees a concise
-    pass count + overall WER without parsing the per-item JSONL.
-    """
-    parts = [f"{summary['passed']}/{summary['total']} passed"]
-    if summary["skipped"]:
-        parts.append(f"{summary['skipped']} skipped")
-    if summary["failed"]:
-        parts.append(f"{summary['failed']} failed")
-    if summary["avg_wer"] is not None:
-        parts.append(f"avg WER {summary['avg_wer'] * 100:.1f}%")
-    if summary["avg_cer"] is not None:
-        parts.append(f"avg CER {summary['avg_cer'] * 100:.1f}%")
-    return "[benchmark] " + ", ".join(parts)
-
-
 def run_corpus_benchmark(
     corpus_manifest: str | Path | None = None,
     backend_specs: str | Iterable[str] | None = None,
     *,
     output_jsonl: str | Path | None = None,
-) -> dict[str, Any]:
+    app_root: str | Path | None = None,
+) -> dict[str, Any] | None:
     """Run the golden corpus and print a concise summary line, then return it.
 
     This is the single UI-invokable entry the "Run benchmark" button drives via
-    ``--run-benchmark``. It defaults to ``benchmark/corpus.json`` so the button
-    needs no arguments, runs every corpus item through the configured backend
-    (emitting the usual per-item JSONL to stdout), then prints one
-    ``[benchmark] …`` summary line so the result lands in the runtime log.
+    ``--run-benchmark``. It needs no arguments: the corpus manifest is resolved
+    via :func:`resolve_corpus_manifest` (explicit arg → ``<app_root>/benchmark``
+    → per-user appdata), so it works in a dev checkout AND the installed app
+    (which now ships the manifest). Every corpus item is run through the
+    configured backend (emitting the usual per-item JSONL to stdout), then one
+    ``[benchmark] …`` summary line is printed so the result lands in the runtime
+    log.
+
+    When NO corpus is found anywhere, it prints one clear ``[benchmark] no corpus
+    manifest found …`` line and returns ``None`` (the caller exits 0) — a clean,
+    visible outcome rather than a crash, so the button never feels dead.
     """
-    manifest = corpus_manifest or DEFAULT_CORPUS_MANIFEST
+    appdata = appdata_dir()
+    # Default the app root to the worker's CWD ("."): the Rust controller runs
+    # the worker with cwd == app-root and passes --app-root, but a bare dev/CLI
+    # invocation from the repo root has no --app-root, and "." then resolves the
+    # committed dev-checkout `benchmark/corpus.json`. Same code path either way.
+    root = app_root if app_root is not None else "."
+    manifest = resolve_corpus_manifest(root, corpus_manifest, appdata)
+    if manifest is None:
+        looked = ", ".join(str(p) for p in corpus_search_paths(root, appdata))
+        print(
+            f"[benchmark] no corpus manifest found (looked: {looked}) — "
+            "see docs/CONFIGURATION.md (Benchmark corpus)",
+            flush=True,
+        )
+        return None
     results = run_benchmark(
         None,
         backend_specs,
         output_jsonl=output_jsonl,
         corpus_manifest=manifest,
+        appdata=appdata,
     )
     summary = summarize_results(results)
-    print(format_summary_line(summary), flush=True)
+    audio_hint = appdata_audio_dir(appdata)
+    print(format_summary_line(summary, audio_hint_path=audio_hint), flush=True)
     return summary

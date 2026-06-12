@@ -211,6 +211,35 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertTrue(
             Path("src/python/whisper_dictate/data/hallucination_patterns.json").exists())
 
+    def test_packaging_ships_benchmark_corpus_manifest(self):
+        # The "Run benchmark" button resolves <app-root>/benchmark/corpus.json, so
+        # the manifest must be shipped by every bundle for the button to work out
+        # of the box on a fresh install. The user-local audio recordings are
+        # gitignored and intentionally NOT shipped (the worker falls back to the
+        # per-user appdata audio dir for those).
+        installer = Path("packaging/windows/inno/whisper-dictate.iss").read_text(encoding="utf-8")
+        self.assertIn(
+            r'Source: "..\..\..\benchmark\corpus.json"; DestDir: "{app}\benchmark"',
+            installer,
+        )
+        # The audio dir must never be shipped (gitignored, user-local).
+        self.assertNotIn(r"benchmark\audio", installer)
+
+        zip_workflow = Path(".github/workflows/windows-installer-build.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            r'Copy-Item benchmark\corpus.json (Join-Path $bundle "benchmark")',
+            zip_workflow,
+        )
+
+        local_script = Path("scripts/windows/build-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn(r"benchmark\corpus.json", local_script)
+
+        linux_release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn("cp benchmark/corpus.json \"$d/benchmark/\"", linux_release)
+
+        # The shipped manifest must actually exist where every entry points.
+        self.assertTrue(Path("benchmark/corpus.json").exists())
+
     def test_windows_installer_workflows_build_rust_ui_before_inno(self):
         # The installer build steps live in the single reusable workflow shared by
         # release.yml and windows-installer.yml.
