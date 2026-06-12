@@ -289,14 +289,23 @@ def _handle_model_capacity(a, ap) -> None:
 
 
 def _handle_benchmark(a, ap) -> None:
-    from whisper_dictate.vp_benchmark import run_benchmark
+    from whisper_dictate.vp_benchmark import run_benchmark, run_corpus_benchmark
     try:
-        run_benchmark(
-            a.benchmark_files,
-            a.benchmark_backends,
-            output_jsonl=a.benchmark_jsonl,
-            corpus_manifest=a.benchmark_corpus,
-        )
+        if getattr(a, "run_benchmark", False):
+            # The UI "Run benchmark" button drives this: default corpus, configured
+            # backend, per-item JSONL + one [benchmark] summary line on stdout.
+            run_corpus_benchmark(
+                a.benchmark_corpus,
+                a.benchmark_backends,
+                output_jsonl=a.benchmark_jsonl,
+            )
+        else:
+            run_benchmark(
+                a.benchmark_files,
+                a.benchmark_backends,
+                output_jsonl=a.benchmark_jsonl,
+                corpus_manifest=a.benchmark_corpus,
+            )
     except Exception as e:  # noqa: BLE001 - argparse should report cleanly
         ap.error(str(e))
 
@@ -365,7 +374,7 @@ def _run_utility_subcommands(a, ap) -> None:
     if a.model_capacity:
         _handle_model_capacity(a, ap)
         raise SystemExit(0)
-    if a.benchmark_files or a.benchmark_corpus:
+    if a.benchmark_files or a.benchmark_corpus or getattr(a, "run_benchmark", False):
         _handle_benchmark(a, ap)
         raise SystemExit(0)
     if a.calibrate_mic is not None or a.calibrate_file:

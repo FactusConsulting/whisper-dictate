@@ -229,6 +229,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--benchmark-jsonl", default=None,
                     help="append benchmark JSONL results to this path instead "
                          "of stdout")
+    ap.add_argument("--run-benchmark", action="store_true",
+                    help="run the golden corpus (default benchmark/corpus.json, "
+                         "overridable via --benchmark-corpus) through the "
+                         "configured backend, print per-item JSONL plus one "
+                         "[benchmark] summary line, then exit. Drives the "
+                         "Settings UI \"Run benchmark\" button.")
     ap.add_argument("--calibrate-mic", nargs="?", const=5.0, type=float,
                     metavar="SECONDS",
                     help="record a short sample, recommend audio threshold "

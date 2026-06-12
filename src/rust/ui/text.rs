@@ -140,6 +140,10 @@ pub(in crate::ui) enum UiTextKey {
     MicTestResampled,
     /// Banner heading shown when the worker reports the selected mic is unusable.
     DeviceUnusableTitle,
+    /// "Run benchmark" button in the System tab's Maintenance cluster.
+    RunBenchmark,
+    /// Hover/help text for the "Run benchmark" button.
+    RunBenchmarkHelp,
 }
 
 impl UiTextKey {
@@ -276,6 +280,14 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Cannot be used",
                 UiTextKey::MicTestResampled => "resampled",
                 UiTextKey::DeviceUnusableTitle => "Microphone unavailable",
+                UiTextKey::RunBenchmark => "Run benchmark",
+                UiTextKey::RunBenchmarkHelp => {
+                    "Run the golden benchmark corpus (benchmark/corpus.json) through the \
+                    configured backend and write per-item results plus an overall \
+                    pass count / WER summary to the log. Runs in the background — it loads \
+                    the model and processes the whole corpus, so it can take a while. \
+                    Blocked while another background task runs."
+                }
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -408,6 +420,14 @@ impl UiTextKey {
                 UiTextKey::MicTestCannot => "Kan ikke bruges",
                 UiTextKey::MicTestResampled => "resamplet",
                 UiTextKey::DeviceUnusableTitle => "Mikrofon utilgængelig",
+                UiTextKey::RunBenchmark => "Kør benchmark",
+                UiTextKey::RunBenchmarkHelp => {
+                    "Kør det gyldne benchmark-korpus (benchmark/corpus.json) gennem den \
+                    konfigurerede backend, og skriv resultater pr. element samt en samlet \
+                    opsummering med antal beståede / WER til loggen. Kører i baggrunden — \
+                    den indlæser modellen og behandler hele korpusset, så det kan tage et stykke tid. \
+                    Blokeret mens en anden baggrundsopgave kører."
+                }
             },
         }
     }

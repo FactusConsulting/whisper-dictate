@@ -252,6 +252,109 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(args.benchmark_backends, "whisper,parakeet")
         self.assertEqual(args.benchmark_jsonl, "out.jsonl")
 
+    def test_parser_exposes_run_benchmark_flag(self):
+        sys.modules.pop("vp_cli", None)
+        from whisper_dictate import vp_cli
+
+        self.assertTrue(
+            vp_cli.build_arg_parser().parse_args(["--run-benchmark"]).run_benchmark)
+        # Defaults off so a normal dictation run is unaffected.
+        self.assertFalse(vp_cli.build_arg_parser().parse_args([]).run_benchmark)
+
+    def test_summarize_results_counts_and_averages_scored_items(self):
+        from whisper_dictate import vp_benchmark
+
+        results = [
+            {"benchmark_success": True, "wer": 0.0, "cer": 0.0},
+            {"benchmark_success": True, "wer": 0.2, "cer": 0.1},
+            # A skipped row (missing audio) carries wer but must not be scored.
+            {"benchmark_skipped": True, "benchmark_success": False, "wer": 1.0},
+            # A hard failure with no wer field.
+            {"benchmark_success": False},
+        ]
+        summary = vp_benchmark.summarize_results(results)
+
+        self.assertEqual(summary["total"], 4)
+        self.assertEqual(summary["passed"], 2)
+        self.assertEqual(summary["skipped"], 1)
+        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(summary["scored"], 2)
+        self.assertAlmostEqual(summary["avg_wer"], 0.1)
+        self.assertAlmostEqual(summary["avg_cer"], 0.05)
+
+    def test_summarize_results_handles_all_skipped(self):
+        from whisper_dictate import vp_benchmark
+
+        summary = vp_benchmark.summarize_results([
+            {"benchmark_skipped": True, "benchmark_success": False, "wer": 1.0},
+        ])
+        # No scored items → averages are None (avoids a divide-by-zero).
+        self.assertEqual(summary["scored"], 0)
+        self.assertIsNone(summary["avg_wer"])
+        self.assertIsNone(summary["avg_cer"])
+
+    def test_format_summary_line_renders_concise_benchmark_line(self):
+        from whisper_dictate import vp_benchmark
+
+        line = vp_benchmark.format_summary_line({
+            "total": 4, "passed": 2, "failed": 1, "skipped": 1,
+            "scored": 2, "avg_wer": 0.1, "avg_cer": 0.05,
+        })
+        self.assertTrue(line.startswith("[benchmark] "))
+        self.assertIn("2/4 passed", line)
+        self.assertIn("1 skipped", line)
+        self.assertIn("1 failed", line)
+        self.assertIn("avg WER 10.0%", line)
+
+    def test_run_corpus_benchmark_defaults_manifest_and_prints_summary(self):
+        from whisper_dictate import vp_benchmark
+
+        captured = {}
+
+        def fake_run_benchmark(audio_files, backend_specs, *, output_jsonl=None,
+                               corpus_manifest=None):
+            captured["audio_files"] = audio_files
+            captured["backend_specs"] = backend_specs
+            captured["corpus_manifest"] = corpus_manifest
+            captured["output_jsonl"] = output_jsonl
+            return [{"benchmark_success": True, "wer": 0.0, "cer": 0.0}]
+
+        with patch("whisper_dictate.vp_benchmark.run_benchmark",
+                   side_effect=fake_run_benchmark):
+            with _capture_stdout() as out:
+                summary = vp_benchmark.run_corpus_benchmark()
+
+        # No manifest passed → defaults to the golden corpus, no audio_files.
+        self.assertIsNone(captured["audio_files"])
+        self.assertEqual(captured["corpus_manifest"],
+                         vp_benchmark.DEFAULT_CORPUS_MANIFEST)
+        self.assertEqual(summary["passed"], 1)
+        # The concise [benchmark] line lands on stdout for the UI log.
+        self.assertIn("[benchmark] 1/1 passed", out.getvalue())
+
+    def test_handle_benchmark_routes_run_benchmark_to_corpus_runner(self):
+        from whisper_dictate import runtime
+
+        ap = types.SimpleNamespace(error=lambda msg: (_ for _ in ()).throw(
+            AssertionError(f"ap.error called: {msg}")))
+        args = types.SimpleNamespace(
+            run_benchmark=True,
+            benchmark_files=None,
+            benchmark_corpus=None,
+            benchmark_backends="whisper",
+            benchmark_jsonl=None,
+        )
+        with patch("whisper_dictate.vp_benchmark.run_corpus_benchmark") as corpus:
+            with patch("whisper_dictate.vp_benchmark.run_benchmark") as plain:
+                runtime._handle_benchmark(args, ap)
+
+        # --run-benchmark dispatches to the summarizing corpus runner, NOT the
+        # raw per-file run_benchmark.
+        corpus.assert_called_once()
+        plain.assert_not_called()
+        self.assertEqual(corpus.call_args.args[0], None)  # default manifest
+        self.assertEqual(corpus.call_args.args[1], "whisper")
+
 class HistoryTests(unittest.TestCase):
     def test_read_history_keeps_core_fields_written_by_rust(self):
         from whisper_dictate import runtime

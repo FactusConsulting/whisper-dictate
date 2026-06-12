@@ -754,6 +754,17 @@ pub fn test_audio_device_command(name: &str) -> WorkerCommand {
     default_worker_command_with_args(vec!["--test-audio-device".to_owned(), name.to_owned()])
 }
 
+/// Worker command that runs the golden benchmark corpus
+/// (`benchmark/corpus.json`) through the configured backend and prints per-item
+/// JSONL plus a final `[benchmark]` summary line, then exits. Drives the System
+/// tab's "Run benchmark" action. Slow (loads the model + runs the corpus), so
+/// the UI runs it as a background task. Inherits the same `--app-root` +
+/// effective-config env as every other worker command, so it uses the same
+/// model/device/backend settings the dictation run would.
+pub fn benchmark_command() -> WorkerCommand {
+    default_worker_command_with_args(vec!["--run-benchmark".to_owned()])
+}
+
 pub fn install_command() -> WorkerCommand {
     install_command_from_exe(
         env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),

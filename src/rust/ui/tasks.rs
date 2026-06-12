@@ -391,3 +391,27 @@ impl WhisperDictateApp {
         }
     }
 }
+
+// --- Run benchmark (appended; kept self-contained to ease merges) ------------
+// The golden-corpus benchmark run. Its own `use`, label const and `impl` block
+// live here at the end of the file so this feature can be added/removed without
+// touching the import list or the main `impl` block above (which a parallel UI
+// PR also edits).
+use crate::runtime::benchmark_command;
+
+/// Background-task label for the worker's `--run-benchmark` run. NOT matched in
+/// `poll_background_task`, so it falls through to the generic handler that
+/// streams the benchmark's stdout/stderr (per-item JSONL + the `[benchmark]`
+/// summary line) to the runtime log.
+pub(in crate::ui) const RUN_BENCHMARK_LABEL: &str = "run benchmark";
+
+impl WhisperDictateApp {
+    /// Run the golden benchmark corpus off-thread via the worker's
+    /// `--run-benchmark`. Same non-blocking pattern as "Refresh devices" so the
+    /// (slow: model load + corpus) run never freezes the UI; gated on no other
+    /// background task running. The captured stdout/stderr — including the final
+    /// `[benchmark] …` summary line — lands in the runtime log when it completes.
+    pub(in crate::ui) fn run_benchmark(&mut self) {
+        self.run_background_command(RUN_BENCHMARK_LABEL, benchmark_command());
+    }
+}
