@@ -129,6 +129,109 @@ def _name_matches(needle: str, name: str) -> bool:
     return needle in name or name in needle
 
 
+def _hostapi_name_at(hostapis, hostapi_index) -> str:
+    """Best-effort host-API name for a ``hostapi`` index (``""`` when unknown).
+
+    Pure over an injected ``sd.query_hostapis()`` sequence so the sibling-endpoint
+    resolver can label each endpoint (``"Windows WASAPI"`` / ``"Windows
+    DirectSound"`` / ``"MME"``) without touching the audio stack.
+    """
+    apis = list(hostapis or [])
+    if not isinstance(hostapi_index, int) or not (0 <= hostapi_index < len(apis)):
+        return ""
+    api = apis[hostapi_index]
+    if not isinstance(api, dict):
+        return ""
+    return str(api.get("name") or "").strip()
+
+
+def sibling_endpoints_for_device(sd, device) -> list[tuple[int, str]]:
+    """The SAME physical mic's input endpoints across host APIs, open-first order.
+
+    PortAudio exposes one physical mic up to four times on Windows — once per
+    host API (MME, DirectSound, WASAPI, WDM-KS). When the resolved (WASAPI)
+    endpoint of an explicitly-chosen mic refuses to open across the whole
+    format/rate/dtype matrix, capture should retry the SAME physical device via
+    its DirectSound / MME siblings BEFORE silently swapping to a *different* mic
+    (which records the wrong input). This finds those siblings.
+
+    Given a resolved ``device`` (a ``query_devices`` index), returns
+    ``[(index, hostapi_name), …]`` for every input endpoint whose name refers to
+    the same physical device, in OPEN-PREFERENCE order:
+
+      1. the resolved endpoint itself (so the caller can keep a single loop),
+      2. its DirectSound sibling(s) — cheapest non-WASAPI path, accepts 16k int16
+         directly (no WASAPI ``auto_convert``, no resample),
+      3. its MME sibling(s) — last resort (low-fidelity, name truncated to 31
+         chars; matched on a bidirectional-substring basis via
+         :func:`_name_matches`, so the MME 31-char name still maps to the same
+         physical device as the full WASAPI/DirectSound name).
+
+    Other host APIs (e.g. WDM-KS) and the resolved endpoint's own host API are
+    skipped as siblings (we never re-add the resolved endpoint or pull in
+    pseudo-device noise). Pure over injected ``sd.query_devices()`` /
+    ``sd.query_hostapis()`` so it unit-tests with the same stubbed tables the
+    picker/resolver use. Any query failure or a non-int ``device`` yields just
+    ``[(device, name)]`` (or ``[]``), so capture degrades to today's behaviour.
+    """
+    if not isinstance(device, int):
+        return []
+    try:
+        devices = list(sd.query_devices())
+    except Exception:
+        return []
+    if not (0 <= device < len(devices)):
+        return []
+    info = devices[device]
+    if not isinstance(info, dict):
+        return []
+    try:
+        hostapis = list(sd.query_hostapis())
+    except Exception:
+        hostapis = []
+
+    resolved_name = str(info.get("name") or "").strip()
+    resolved_api = info.get("hostapi")
+    result: list[tuple[int, str]] = [
+        (device, _hostapi_name_at(hostapis, resolved_api))]
+    if not resolved_name:
+        return result
+
+    def _api_rank(api_name: str) -> int | None:
+        folded = api_name.casefold()
+        if "directsound" in folded:
+            return 0  # try DirectSound before MME
+        if "mme" in folded:
+            return 1
+        return None  # WDM-KS / unknown: never a sibling fallback
+
+    siblings: list[tuple[int, int, str]] = []  # (rank, index, hostapi_name)
+    for index, entry in enumerate(devices):
+        if index == device or not isinstance(entry, dict):
+            continue
+        if entry.get("hostapi") == resolved_api:
+            continue  # same host API as the resolved endpoint — not a sibling
+        try:
+            channels = int(entry.get("max_input_channels") or 0)
+        except (TypeError, ValueError):
+            channels = 0
+        if channels <= 0:
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name or not _name_matches(resolved_name, name):
+            continue
+        api_name = _hostapi_name_at(hostapis, entry.get("hostapi"))
+        rank = _api_rank(api_name)
+        if rank is None:
+            continue
+        siblings.append((rank, index, api_name))
+
+    # DirectSound (rank 0) before MME (rank 1); stable index order within a rank.
+    siblings.sort(key=lambda item: (item[0], item[1]))
+    result.extend((index, api_name) for _rank, index, api_name in siblings)
+    return result
+
+
 def resolve_capture_device(
     devices,
     hostapis,
