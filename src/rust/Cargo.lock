@@ -4146,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "whisper-dictate-app"
-version = "1.11.0-rc.1"
+version = "1.11.0"
 dependencies = [
  "anyhow",
  "clap",
