@@ -240,6 +240,52 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         # The shipped manifest must actually exist where every entry points.
         self.assertTrue(Path("benchmark/corpus.json").exists())
 
+    def test_release_has_install_smoke_gate_a(self):
+        # Gate A (docs/RELEASING.md "Test the RC" step 1) is the automated
+        # install-smoke job in release.yml. This guard pins its key contract so
+        # the job — and each assertion that makes it meaningful — cannot be
+        # silently dropped or hollowed out: it must silently install the
+        # published setup .exe, assert the full installed layout (incl. the #226
+        # data subpackage + a VERSION matching the tag), launch the Rust
+        # controller headless (exit 0, no window), and run the no-model worker
+        # audio query modes cleanly. It must run for BOTH finals and prereleases
+        # and depend on the release + installer jobs.
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+        # The job exists, depends on both upstream jobs, and runs on Windows.
+        self.assertIn("install-smoke:", workflow)
+        self.assertIn("needs: [release, windows-installer]", workflow)
+        self.assertIn("runs-on: windows-2025", workflow)
+
+        # Downloads the just-published setup .exe by its asset pattern.
+        self.assertIn(
+            "--pattern 'whisper-dictate-windows-setup-*.exe'", workflow)
+
+        # Silent Inno install with the documented flags.
+        for flag in ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"):
+            self.assertIn(flag, workflow)
+
+        # Installed-layout assertions (the load-bearing regression guards).
+        self.assertIn(r"Programs\WhisperDictate", workflow)
+        self.assertIn(r"src\python\whisper_dictate\runtime.py", workflow)
+        self.assertIn(r"benchmark\corpus.json", workflow)
+        self.assertIn(
+            r"src\python\whisper_dictate\data\hallucination_patterns.json",
+            workflow)
+        # VERSION must be asserted equal to the tag's version.
+        self.assertIn("Installed VERSION", workflow)
+
+        # Rust controller headless smoke: a non-UI entrypoint, exit-code checked.
+        self.assertIn("whisper-dictate.exe --version", workflow)
+
+        # Worker no-model audio query modes, minimal deps only (no heavy ML).
+        self.assertIn("--test-audio-device", workflow)
+        self.assertIn("--list-audio-devices", workflow)
+        self.assertIn("sounddevice", workflow)
+        for excluded in ("faster-whisper", "torch", "ctranslate2"):
+            # The smoke venv must NOT pip-install the heavy model stack.
+            self.assertNotIn(f"pip install --quiet '{excluded}", workflow)
+
     def test_windows_installer_workflows_build_rust_ui_before_inno(self):
         # The installer build steps live in the single reusable workflow shared by
         # release.yml and windows-installer.yml.
