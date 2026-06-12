@@ -292,12 +292,15 @@ def _handle_benchmark(a, ap) -> None:
     from whisper_dictate.vp_benchmark import run_benchmark, run_corpus_benchmark
     try:
         if getattr(a, "run_benchmark", False):
-            # The UI "Run benchmark" button drives this: default corpus, configured
-            # backend, per-item JSONL + one [benchmark] summary line on stdout.
+            # The UI "Run benchmark" button drives this: the corpus is resolved
+            # relative to --app-root (so it works in the installed app, not just a
+            # dev checkout), configured backend, per-item JSONL + one [benchmark]
+            # summary line on stdout.
             run_corpus_benchmark(
                 a.benchmark_corpus,
                 a.benchmark_backends,
                 output_jsonl=a.benchmark_jsonl,
+                app_root=getattr(a, "app_root", None),
             )
         else:
             run_benchmark(

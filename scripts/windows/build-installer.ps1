@@ -124,6 +124,11 @@ try {
   New-Item -ItemType Directory -Force $assetDir | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'assets\whisper-dictate.ico') -Destination $assetDir
   Copy-Item -LiteralPath (Join-Path $root 'target\release\whisper-dictate.exe') -Destination $bundle
+  # Ship the golden-benchmark manifest (corpus.json only — NOT the user-local,
+  # gitignored audio) so "Run benchmark" resolves a corpus out of the box.
+  $benchmarkDir = Join-Path $bundle 'benchmark'
+  New-Item -ItemType Directory -Force $benchmarkDir | Out-Null
+  Copy-Item -LiteralPath (Join-Path $root 'benchmark\corpus.json') -Destination $benchmarkDir
   $scriptDir = Join-Path $bundle 'scripts'
   New-Item -ItemType Directory -Force $scriptDir | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'scripts\dev\inject-smoke.py') -Destination $scriptDir

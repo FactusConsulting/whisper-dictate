@@ -52,14 +52,26 @@ SETTING_BY_ENV = {s.env: s for s in SETTINGS}
 SETTING_BY_KEY = {s.key: s for s in SETTINGS}
 
 
+def appdata_dir() -> Path:
+    """User-managed config directory holding ``config.json`` / ``dictionary.json``.
+
+    On Windows this is ``%APPDATA%\\WhisperDictate``; on Linux/macOS it is
+    ``$XDG_CONFIG_HOME/whisper-dictate`` (defaulting to ``~/.config``). This is
+    the single helper for the per-user dir that survives reinstalls — other
+    features (e.g. the benchmark corpus/audio fallback) join into it so users
+    keep one stable location for everything they manage by hand.
+    """
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "WhisperDictate"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "whisper-dictate"
+
+
 def config_path() -> Path:
     raw = os.environ.get(CONFIG_ENV)
     if raw:
         return Path(raw).expanduser()
-    if os.name == "nt":
-        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-        return Path(base) / "WhisperDictate" / "config.json"
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "whisper-dictate" / "config.json"
+    return appdata_dir() / "config.json"
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:

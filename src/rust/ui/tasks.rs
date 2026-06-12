@@ -433,7 +433,15 @@ impl WhisperDictateApp {
     /// (slow: model load + corpus) run never freezes the UI; gated on no other
     /// background task running. The captured stdout/stderr — including the final
     /// `[benchmark] …` summary line — lands in the runtime log when it completes.
+    ///
+    /// Prints an immediate "benchmark started" line (only when the run actually
+    /// starts, i.e. no other task is in flight) so the button never feels dead:
+    /// the model load + corpus pass is slow, and without this the runtime log
+    /// would stay silent for many seconds after the click.
     pub(in crate::ui) fn run_benchmark(&mut self) {
+        if self.background_task.is_none() {
+            self.append_runtime_log("[ui] benchmark started — results appear here when finished");
+        }
         self.run_background_command(RUN_BENCHMARK_LABEL, benchmark_command());
     }
 }
