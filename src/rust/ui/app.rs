@@ -166,7 +166,7 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn stop_runtime(&mut self) {
         self.worker_ready = false;
-        self.clear_audio_meter();
+        self.clear_audio_meter_and_device();
         self.clear_pipeline_progress();
         self.append_runtime_log("[ui] stopping runtime");
         if let Err(err) = self.supervisor.stop() {
