@@ -23,14 +23,34 @@ summary and include the manual verification that covers the bug.
 
 ## Pull request review
 
+**HARD GATE — do not merge any PR with unaddressed automated-review comments.**
+This is non-negotiable and applies to EVERY merge, including agent-/script-
+orchestrated merges and `gh api ... /merge` calls. "CI is green" is NOT
+sufficient to merge — the Copilot review must also be fetched and triaged first.
+
 - Every PR is auto-reviewed by GitHub Copilot. Before merging, wait for the
   Copilot review to land (its overview notes "generated N comments") and address
   **every** Copilot comment — fix it, or reply with a clear justification. Do
   not merge while Copilot review comments are outstanding.
+- Explicitly fetch the comments before merging — don't assume there are none:
+
+  ```sh
+  gh api repos/<owner>/<repo>/pulls/<pr>/comments \
+    --jq '.[] | select(.user.login|test("copilot";"i")) | select(.in_reply_to_id==null) | "[\(.path):\(.line // .original_line)] \(.body)"'
+  ```
+
+  (`.line` is null for comments on outdated diffs — fall back to `.original_line`.)
+
+  Triage each: fix it, or record an explicit "dismissed because …" justification.
+  Copilot is sometimes wrong (e.g. it flagged a UTF-8 panic in code that only
+  slices at ASCII brace boundaries) — but you must reason it through, not skip it.
 - After pushing changes, re-request the review
   (`gh pr edit <pr> --add-reviewer @copilot`) and re-check before merging.
   Don't rely on a single early "0 comments" check — the review can land after CI
   starts. The same applies to other automated reviewers (e.g. SonarCloud).
+- When orchestrating merges across many PRs (e.g. a release wave), the
+  Copilot-comment check is part of EACH PR's merge gate — never batch-merge on
+  CI status alone.
 
 ## Project-Specific Expectations
 
