@@ -745,6 +745,15 @@ pub fn windows_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--list-windows".to_owned()])
 }
 
+/// Worker command that dry-run opens the named microphone (resolve + try the
+/// same WASAPI/DirectSound/MME open matrix as capture, recording NO audio),
+/// prints a single JSON usability result and exits without loading a model.
+/// Drives the Speech tab's microphone "Test" action. An empty `name` tests the
+/// system default input.
+pub fn test_audio_device_command(name: &str) -> WorkerCommand {
+    default_worker_command_with_args(vec!["--test-audio-device".to_owned(), name.to_owned()])
+}
+
 pub fn install_command() -> WorkerCommand {
     install_command_from_exe(
         env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),

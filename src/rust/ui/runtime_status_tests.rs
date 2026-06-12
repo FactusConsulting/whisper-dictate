@@ -126,6 +126,73 @@ fn stop_runtime_clears_stale_pipeline_progress() {
     assert_eq!(app.pipeline_preview, None);
 }
 
+fn device_unusable_event(device: &str, error: &str) -> WorkerEvent {
+    WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("error".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "error",
+            "reason": "device_unusable",
+            "audio_device": device,
+            "error": error,
+        }),
+    }
+}
+
+fn working_device_event(device: &str) -> WorkerEvent {
+    WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("recording".to_owned()),
+        payload: serde_json::json!({
+            "event": "status",
+            "state": "recording",
+            "audio_device": device,
+        }),
+    }
+}
+
+#[test]
+fn device_unusable_status_sets_error_banner_and_clears_on_working_device() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    assert!(app.device_error.is_none());
+
+    // The worker reports the picked mic can't be opened on any backend.
+    app.update_worker_status(&device_unusable_event(
+        "Microphone (Yeti)",
+        "Microphone 'Microphone (Yeti)' could not be opened on any audio backend \
+         — select a different microphone in Settings.",
+    ));
+    let banner = app
+        .device_error
+        .clone()
+        .expect("device_error should be set");
+    assert!(
+        banner.contains("could not be opened on any audio backend"),
+        "{banner}"
+    );
+    // The bad device is recorded as the active device (so the UI shows it too).
+    assert_eq!(app.active_audio_device, "Microphone (Yeti)");
+
+    // A subsequent recording on a working mic clears the banner.
+    app.update_worker_status(&working_device_event("Headset Mic"));
+    assert!(
+        app.device_error.is_none(),
+        "a working device must clear the unusable banner"
+    );
+    assert_eq!(app.active_audio_device, "Headset Mic");
+}
+
+#[test]
+fn ordinary_error_without_device_unusable_reason_does_not_set_banner() {
+    let mut app = test_app(AppSettings::default());
+    app.runtime_state = RuntimeState::Running;
+    // A generic error (e.g. a failed model load) must NOT raise the mic banner.
+    app.update_worker_status(&status_event("failed"));
+    assert!(app.device_error.is_none());
+}
+
 #[test]
 fn push_to_talk_keys_render_as_friendly_chord() {
     assert_eq!(format_push_to_talk_keys("ctrl_r"), "Ctrl (right)");

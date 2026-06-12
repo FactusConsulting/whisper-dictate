@@ -33,6 +33,7 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 mod api_keys;
 mod app;
 mod audio_devices;
+mod device_test;
 mod diagnostics_level;
 mod hotkey;
 mod icon;
@@ -55,6 +56,7 @@ mod worker_json;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
+pub(in crate::ui) use self::device_test::*;
 pub(in crate::ui) use self::diagnostics_level::*;
 pub(in crate::ui) use self::hotkey::*;
 use self::icon::app_icon;
@@ -253,6 +255,18 @@ struct WhisperDictateApp {
     /// Each entry is `(title, process)`. Shown in the Profiles tab so the user
     /// can pick a window and insert a matching profile object.
     window_options: Vec<(String, String)>,
+    /// Transient (non-persisted) banner shown when the worker reports the
+    /// selected microphone is unusable (a `status` event with
+    /// `state="error"`/`reason="device_unusable"`). Holds the actionable message
+    /// to show prominently near the live-dictation header. Cleared as soon as a
+    /// subsequent status/audio event reports a working `audio_device`, on
+    /// start/stop/restart, and on worker exit/error.
+    device_error: Option<String>,
+    /// Transient (non-persisted) result of the Microphone "Test" button: the
+    /// parsed ✓/⚠/✗ display model on success, or an `Err` message when the test
+    /// run/parse failed. `None` before any test is run. Cleared when a new test
+    /// is dispatched or the saved microphone changes.
+    device_test_result: Option<Result<DeviceTestDisplay, String>>,
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
@@ -381,6 +395,8 @@ impl Default for WhisperDictateApp {
             audio_device_options: Vec::new(),
             audio_devices_loaded: false,
             window_options: Vec::new(),
+            device_error: None,
+            device_test_result: None,
             config_path,
             saved_settings: settings.clone(),
             settings,

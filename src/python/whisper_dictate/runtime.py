@@ -357,6 +357,9 @@ def _run_utility_subcommands(a, ap) -> None:
         raise SystemExit(run_doctor())
     if a.list_audio_devices:
         raise SystemExit(print_audio_devices())
+    if a.test_audio_device is not None:
+        from whisper_dictate.vp_device_test import test_audio_device
+        raise SystemExit(test_audio_device(a.test_audio_device))
     if a.list_windows:
         raise SystemExit(print_windows())
     if a.model_capacity:

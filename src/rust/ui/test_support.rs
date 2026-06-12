@@ -22,6 +22,8 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         audio_device_options: Vec::new(),
         audio_devices_loaded: false,
         window_options: Vec::new(),
+        device_error: None,
+        device_test_result: None,
         config_path: String::new(),
         saved_settings: settings.clone(),
         settings,
