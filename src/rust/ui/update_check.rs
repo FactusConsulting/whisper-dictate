@@ -11,6 +11,7 @@
 //! `update()` loop (see `ui/app.rs`), mirroring the one-shot GPU-probe channel
 //! discipline but on a timer.
 
+use crate::config::AppSettings;
 use std::time::Duration;
 
 /// The public version feed: the Chocolatey flatcontainer index published to the
@@ -231,6 +232,19 @@ pub(in crate::ui) fn apply_update_outcome(
         UpdateCheckOutcome::UpToDate => None,
         UpdateCheckOutcome::Failed => prev,
     }
+}
+
+/// True when a save changed any update-check-related setting: the enabled
+/// flag, the poll interval, or the release-candidate opt-in.
+///
+/// Used by `save_settings` to reset the poll timer so the change takes effect
+/// on the next frame instead of after the current poll interval (up to the
+/// configured minutes — e.g. enabling "Include release candidates" should
+/// offer an available RC immediately, not 15 minutes later). Pure / unit-tested.
+pub(in crate::ui) fn update_check_settings_changed(old: &AppSettings, new: &AppSettings) -> bool {
+    old.update_check != new.update_check
+        || old.update_check_interval_minutes != new.update_check_interval_minutes
+        || old.update_include_prereleases != new.update_include_prereleases
 }
 
 /// Fetch the published version list from the public feed.

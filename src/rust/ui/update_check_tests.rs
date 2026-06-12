@@ -178,3 +178,29 @@ fn update_check_off_clears_badge_and_drops_receiver() {
         "in-flight receiver must be dropped"
     );
 }
+
+// ── update_check_settings_changed (pure) ─────────────────────────────────────
+
+#[test]
+fn update_settings_change_detected_per_field_and_ignores_unrelated() {
+    use super::update_check::update_check_settings_changed;
+    let base = AppSettings::default();
+    assert!(!update_check_settings_changed(&base, &base.clone()));
+
+    let mut toggled = base.clone();
+    toggled.update_check = !base.update_check;
+    assert!(update_check_settings_changed(&base, &toggled));
+
+    let mut interval = base.clone();
+    interval.update_check_interval_minutes = "42".to_owned();
+    assert!(update_check_settings_changed(&base, &interval));
+
+    let mut rc = base.clone();
+    rc.update_include_prereleases = !base.update_include_prereleases;
+    assert!(update_check_settings_changed(&base, &rc));
+
+    // An unrelated settings change must NOT reset the poll timer.
+    let mut unrelated = base.clone();
+    unrelated.model = "small".to_owned();
+    assert!(!update_check_settings_changed(&base, &unrelated));
+}

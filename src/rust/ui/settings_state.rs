@@ -16,6 +16,12 @@ impl WhisperDictateApp {
             Ok(path) => {
                 let restart_keys =
                     config::restart_required_keys(&self.saved_settings, &self.settings);
+                // Re-poll the update check immediately when its settings changed
+                // (e.g. enabling "Include release candidates"), instead of
+                // waiting out the current poll interval.
+                if update_check_settings_changed(&self.saved_settings, &self.settings) {
+                    self.last_update_check = None;
+                }
                 let key_message = self.save_stt_api_key_if_changed();
                 let post_key_message = self.save_post_api_key_if_changed();
                 self.saved_settings = self.settings.clone();
