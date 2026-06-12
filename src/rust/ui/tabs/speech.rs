@@ -454,9 +454,13 @@ pub(in crate::ui) fn microphone_test_parts(
             palette.ok_text,
             ui_text(language, UiTextKey::MicTestWorks).to_owned(),
         ),
+        // A device that opens via a fallback (DirectSound/MME) or at a resampled
+        // rate still WORKS — render it as a green check, not an amber warning, so
+        // the user isn't misled into thinking there's a problem. The "via
+        // DirectSound / resampled" detail is informational, carried in the text.
         DeviceTestOutcome::WorksWithCaveat => (
-            icons::ICON_WARNING,
-            palette.warn_text,
+            icons::ICON_CHECK_CIRCLE,
+            palette.ok_text,
             microphone_test_caveat_text(display, language),
         ),
         DeviceTestOutcome::Cannot => {
@@ -538,21 +542,23 @@ mod tests {
     }
 
     #[test]
-    fn directsound_renders_amber_works_via() {
+    fn directsound_renders_green_works_via() {
         let palette = ui_palette("dark");
         let display = works("directsound", Some(48000), false);
         let (icon, color, text) = microphone_test_parts(&display, "en", palette);
-        assert_eq!(icon, egui_material_icons::icons::ICON_WARNING);
-        assert_eq!(color, palette.warn_text);
+        // Works-via-fallback is still success: green check, not an amber warning.
+        assert_eq!(icon, egui_material_icons::icons::ICON_CHECK_CIRCLE);
+        assert_eq!(color, palette.ok_text);
         assert_eq!(text, "Works via DirectSound (48 kHz)");
     }
 
     #[test]
-    fn resampled_wasapi_renders_amber_with_resampled_note() {
+    fn resampled_wasapi_renders_green_with_resampled_note() {
         let palette = ui_palette("dark");
         let display = works("wasapi", Some(48000), true);
-        let (_icon, color, text) = microphone_test_parts(&display, "en", palette);
-        assert_eq!(color, palette.warn_text);
+        let (icon, color, text) = microphone_test_parts(&display, "en", palette);
+        assert_eq!(icon, egui_material_icons::icons::ICON_CHECK_CIRCLE);
+        assert_eq!(color, palette.ok_text);
         // Plain WASAPI path → no "via", just the rate + resampled note.
         assert_eq!(text, "Works (48 kHz, resampled)");
     }
