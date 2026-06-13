@@ -277,6 +277,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="run the interactive config setup wizard (writes "
                          "config.json + prints env-lines), then exit. Loads no "
                          "ML model.")
+    ap.add_argument("--capture-hotkey", action="store_true",
+                    help="press-to-capture the push-to-talk hotkey: hold the "
+                         "key(s) you want, release, confirm, and it is written to "
+                         "the 'key' setting in config.json. No typing key names. "
+                         "Then exit; loads no ML model.")
+    ap.add_argument("--capture-hotkey-allow-media", action="store_true",
+                    help="(experimental) with --capture-hotkey, also capture media "
+                         "/ consumer keys (play/pause, volume up/down) that pynput "
+                         "exposes as media keys; see issue #258.")
     ap.add_argument("--export-config", action="store_true",
                     help="print the current effective config (config.json + env "
                          "overrides) as a config.json blob plus PowerShell/bash "
@@ -288,6 +297,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="suggest smart replacements from benchmark/history JSONL, then exit")
     ap.add_argument("--dictionary-suggest-min-confidence", type=float, default=0.62,
                     help="minimum fuzzy-match confidence for --dictionary-suggest")
+    ap.add_argument("--dictionary-build-from-corpus", action="store_true",
+                    help="extract domain terms from the golden-corpus reference TEXT "
+                         "(curated terms + capitalized/multi-word/technical tokens) and "
+                         "append+dedup them into the dictionary, then exit. Previews by "
+                         "default; pass --apply to write. Reads corpus TEXT only — it "
+                         "never records or touches audio. Honours --language/--category.")
+    ap.add_argument("--dictionary-suggest-terms", metavar="JSONL",
+                    help="read an annotated benchmark JSONL and SUGGEST the domain terms "
+                         "the model missed (term_misses) as dictionary additions, then "
+                         "exit. Previews by default; pass --apply to add the new terms. "
+                         "Reads result TEXT only — never records audio.")
+    ap.add_argument("--dictionary", metavar="PATH", default=None,
+                    help="dictionary.json to read/append for the training commands "
+                         "(default: $VOICEPI_DICTIONARY or the per-user dictionary.json)")
+    ap.add_argument("--apply", action="store_true",
+                    help="with the dictionary training commands, WRITE the changes "
+                         "instead of only previewing them")
+    ap.add_argument("--min-count", type=int, default=1,
+                    help="minimum corpus/benchmark occurrence count for a term to be "
+                         "proposed by the dictionary training commands (default 1)")
+    ap.add_argument("--language", default=None,
+                    help="corpus profile: restrict the benchmark / dictionary-build to "
+                         "these languages, e.g. da or da,en")
+    ap.add_argument("--category", default=None,
+                    help="corpus profile: restrict to these categories or friendly "
+                         "groups (technical, business, names, short, long, ui, …) or an "
+                         "exact corpus category; comma-separated")
     ap.add_argument("--device", default=DEVICE, choices=VALID_DEVICES,
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
                          "auto = NVIDIA GPU if present, else CPU")
