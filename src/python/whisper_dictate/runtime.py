@@ -288,8 +288,21 @@ def _handle_model_capacity(a, ap) -> None:
         ap.error("Rust model-capacity helper is not available")
 
 
+def _benchmark_profile(a):
+    """Build the corpus profile from --language/--category, or None when unset.
+
+    Returns None when neither selector is given so the benchmark keeps its default
+    (all corpus items); otherwise a CorpusProfile that filters the corpus subset.
+    """
+    if not getattr(a, "language", None) and not getattr(a, "category", None):
+        return None
+    from whisper_dictate.vp_corpus_profile import build_profile
+    return build_profile(language=a.language, category=a.category)
+
+
 def _handle_benchmark(a, ap) -> None:
     from whisper_dictate.vp_benchmark import run_benchmark, run_corpus_benchmark
+    profile = _benchmark_profile(a)
     try:
         if getattr(a, "run_benchmark", False):
             # The UI "Run benchmark" button drives this: the corpus is resolved
@@ -301,6 +314,7 @@ def _handle_benchmark(a, ap) -> None:
                 a.benchmark_backends,
                 output_jsonl=a.benchmark_jsonl,
                 app_root=getattr(a, "app_root", None),
+                profile=profile,
             )
         else:
             run_benchmark(
@@ -309,6 +323,7 @@ def _handle_benchmark(a, ap) -> None:
                 output_jsonl=a.benchmark_jsonl,
                 corpus_manifest=a.benchmark_corpus,
                 appdata=appdata_dir(),
+                profile=profile,
             )
     except Exception as e:  # noqa: BLE001 - argparse should report cleanly
         ap.error(str(e))
@@ -355,6 +370,43 @@ def _handle_dictionary_suggest(a, ap) -> None:
         )
         print_suggestions(suggestions, as_json=a.json)
     except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        ap.error(str(e))
+
+
+def _handle_dictionary_training(a, ap) -> int:
+    """Dispatch the two corpus->dictionary training commands (Feature A).
+
+    ``--dictionary-build-from-corpus`` grows the dictionary from corpus reference
+    TEXT (honouring the --language/--category profile); ``--dictionary-suggest-terms``
+    suggests terms from benchmark misses. Both honour --dictionary/--apply/
+    --min-count, preview by default, and read TEXT only — never record audio. The
+    orchestration functions report their own errors and return an exit code.
+    """
+    from whisper_dictate.vp_dictionary_training_cli import (
+        run_build_from_corpus, run_suggest_from_misses,
+    )
+    try:
+        if getattr(a, "dictionary_suggest_terms", None):
+            return run_suggest_from_misses(
+                a.dictionary_suggest_terms,
+                dictionary_path=a.dictionary,
+                min_count=a.min_count,
+                apply=a.apply,
+                as_json=a.json,
+            )
+        return run_build_from_corpus(
+            corpus_manifest=a.benchmark_corpus,
+            app_root=getattr(a, "app_root", None),
+            dictionary_path=a.dictionary,
+            language=a.language,
+            category=a.category,
+            min_count=a.min_count,
+            apply=a.apply,
+            as_json=a.json,
+        )
+    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        # ap.error() prints usage and raises SystemExit(2); it never returns, so the
+        # function ends here (no unreachable return follows).
         ap.error(str(e))
 
 
@@ -418,6 +470,8 @@ def _run_utility_subcommands(a, ap) -> None:
     if a.dictionary_suggest:
         _handle_dictionary_suggest(a, ap)
         raise SystemExit(0)
+    if getattr(a, "dictionary_build_from_corpus", False) or getattr(a, "dictionary_suggest_terms", None):
+        raise SystemExit(_handle_dictionary_training(a, ap))
 
 
 def _resolve_backend_and_device(a, ap) -> tuple[str, str, str]:
