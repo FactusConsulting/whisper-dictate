@@ -121,9 +121,10 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
 # of Whisper hallucinations is "dead audio" at the end of a clip (you stop
 # talking but the key is still held). Whisper fills that empty tail with
 # high-probability training phrases (subtitle credits, "thank you for watching").
-# Cutting the tail BEFORE transcription removes the root cause — and, unlike
-# downstream text filtering, it can NEVER delete a real word: we only ever cut a
-# sustained run of frames sitting at the measured noise floor.
+# Cutting the tail BEFORE transcription removes the root cause. Unlike downstream
+# text filtering it will not clip a normally-voiced word: it only removes a
+# sustained trailing run that stays at/below the noise floor + a 12 dB margin,
+# and keeps a 120 ms pad after the last speech frame on top of that.
 _TRIM_FRAME = 480           # 30 ms @ 16 kHz — same framing as _noise_snr
 _TRIM_MARGIN_DB = 12.0      # a frame must sit this far above the noise floor to
                             # count as speech (12 dB ≈ the low end of real SNR,
@@ -159,7 +160,8 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
     if removed_frames < _TRIM_MIN_FRAMES:
         return a, 0.0
     keep = keep_frames * _TRIM_FRAME
-    trimmed_ms = (len(a) - keep) / _TRIM_FRAME * 30.0
+    # samples removed / 16 = ms at 16 kHz; exact, incl. any sub-frame remainder.
+    trimmed_ms = (len(a) - keep) / 16.0
     return a[:keep], trimmed_ms
 
 

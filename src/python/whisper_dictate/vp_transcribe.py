@@ -500,14 +500,17 @@ def _speech_rate_exceeded(text: str, duration_s: float) -> bool:
     """
     if MAX_CHARS_PER_SECOND <= 0:
         return False
-    return len(text) / max(duration_s, 0.1) > MAX_CHARS_PER_SECOND
+    # Count visible chars only — leading/trailing whitespace (Whisper emits a
+    # leading space on segment boundaries) is not "speech" and would inflate the
+    # rate slightly.
+    return len(text.strip()) / max(duration_s, 0.1) > MAX_CHARS_PER_SECOND
 
 
 def _exceeds_speech_rate(text: str, duration_s: float) -> bool:
     """``_speech_rate_exceeded`` plus a diagnostic log line when it fires."""
     if not _speech_rate_exceeded(text, duration_s):
         return False
-    chars = len(text)
+    chars = len(text.strip())
     rate = chars / max(duration_s, 0.1)
     print(
         f"[stt] dropped: {chars} chars in {duration_s:.1f}s = "
@@ -541,7 +544,8 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     print(f"[gate] {gate}", flush=True)
     # PRIMARY anti-hallucination defence: cut the "dead audio" tail before Whisper
     # ever sees it, so there is no empty region for it to fill with a subtitle
-    # credit. Only ever removes a sustained run at the noise floor — never speech.
+    # credit. Removes only a sustained trailing run at/below the noise floor + a
+    # 12 dB margin (past a 120 ms pad); a normally-voiced word is preserved.
     raw_audio, trimmed_ms = _trim_trailing_silence(raw_audio)
     if trimmed_ms > 0:
         print(
