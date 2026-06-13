@@ -146,6 +146,20 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(ms, 0.0)
         self.assertEqual(len(trimmed), len(a))
 
+    def test_trim_cuts_long_tail_after_short_speech(self):
+        # Short utterance (3 frames) then a long held-key dead tail (47 frames):
+        # speech is <10% of frames — the exact case a percentile "body" estimate
+        # would miss (it would land in silence and trim nothing). Anchoring on the
+        # loudest frame still cuts the tail.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 3, 0.2, dtype=np.float32),      # short speech
+            np.full(480 * 47, 0.0005, dtype=np.float32),  # long dead tail
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertGreater(ms, 0.0)
+        self.assertEqual(len(trimmed), 480 * 7)   # 3 speech + 4 pad frames
+
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
 

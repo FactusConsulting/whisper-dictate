@@ -127,11 +127,13 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
 # pad is kept after the last speech frame on top of that.
 _TRIM_FRAME = 480           # 30 ms @ 16 kHz — same framing as _noise_snr
 _TRIM_DROP_DB = 30.0        # a frame is silence only when it sits this far BELOW
-                            # the speech body (90th-pct frame RMS). Measuring
-                            # relative to the body — not an estimated noise floor,
-                            # which can land in quiet speech on a clip with no true
-                            # silence — keeps soft trailing speech (within ~25 dB
-                            # of the body) safe from trimming.
+                            # the loudest frame (the reliable "speech" reference).
+                            # Anchoring on the peak — not a percentile — is robust
+                            # to the speech/silence ratio: a percentile floor lands
+                            # in quiet speech when speech dominates (over-trim) or
+                            # in silence when the tail dominates (no trim). The peak
+                            # keeps soft trailing speech (within ~25 dB) safe AND
+                            # still cuts a long dead tail (40-60 dB down).
 _TRIM_PAD_FRAMES = 4        # keep ~120 ms after the last speech frame so a word's
                             # natural decay is never clipped
 _TRIM_MIN_FRAMES = 5        # only trim if it removes ≥ ~150 ms — never shorten a
@@ -145,8 +147,9 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
     Returns ``(trimmed, trimmed_ms)``. Leaves the clip untouched (``trimmed_ms``
     0.0) when there is no clear trailing silence or it is shorter than ~150 ms.
     A frame counts as silence only when it sits ``_TRIM_DROP_DB`` below the
-    clip's speech body (90th-pct frame RMS), so the threshold adapts to the mic
-    and soft trailing speech is preserved. Pure / side-effect-free — caller logs.
+    clip's loudest frame, so the threshold adapts to the mic, soft trailing
+    speech is preserved, and a long dead tail is still cut regardless of how much
+    of the clip it occupies. Pure / side-effect-free — the caller logs.
     """
     n = len(a) // _TRIM_FRAME
     if n < 4:
@@ -161,10 +164,11 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
         rem_rms = np.sqrt(np.mean(remainder.astype(np.float64) ** 2))
         rms = np.append(rms, rem_rms)
     n_frames = len(rms)
-    # Speech body = 90th-pct frame RMS; a frame is silence only when it sits
-    # _TRIM_DROP_DB below it. Body-relative (not noise-floor-relative) so soft
-    # trailing speech on a clip with no true silence is not mistaken for silence.
-    body = float(np.percentile(rms, 90)) or 1e-9
+    # Reference the LOUDEST frame (reliably speech); a frame is silence only when
+    # it sits _TRIM_DROP_DB below it. Peak-anchored (not a percentile) so it works
+    # whether speech or the dead tail dominates the clip. Frame-RMS averaging over
+    # 30 ms absorbs transient clicks, so the peak is a stable speech reference.
+    body = float(np.max(rms)) or 1e-9
     threshold = body * (10 ** (-_TRIM_DROP_DB / 20.0))
     speech = np.nonzero(rms > threshold)[0]
     if len(speech) == 0:
