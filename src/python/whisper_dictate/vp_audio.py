@@ -166,11 +166,13 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
         rem_rms = np.sqrt(np.mean(remainder.astype(np.float64) ** 2))
         rms = np.append(rms, rem_rms)
     n_frames = len(rms)
-    # The noise floor is the quietest 30 ms frame (room tone); the speech body is
-    # the loudest. Only trim when there is a genuine silence floor well below the
+    # Noise floor = 10th-pct frame RMS (room tone); speech body = the loudest.
+    # The 10th pct (not the raw min) keeps a single digital-zero/dropout frame
+    # from collapsing the floor estimate, while room tone still dominates the low
+    # percentiles. Only trim when there is a genuine silence floor well below the
     # speech — otherwise (near-continuous or uniformly soft speech) there is no
     # dead air to cut, and trimming would risk eating soft speech.
-    noise = float(np.min(rms)) or 1e-9
+    noise = float(np.percentile(rms, 10)) or 1e-9
     body = float(np.max(rms)) or 1e-9
     if body <= noise or 20.0 * np.log10(body / noise) < _TRIM_MIN_GAP_DB:
         return a, 0.0
