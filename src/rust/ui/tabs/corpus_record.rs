@@ -273,14 +273,13 @@ impl WhisperDictateApp {
         };
         let progress =
             batch_progress_line(language, batch.position(), batch.total(), batch.completed());
-        // Resolve the current item's full reference text (look it up by id so the
-        // panel reads the same text the worker will record).
-        let current_text = batch.current().and_then(|id| {
-            self.corpus_items
-                .iter()
-                .find(|item| item.id == id)
-                .map(|item| item.text.clone())
-        });
+        // Resolve the current item's index in corpus_items (by id) so we can
+        // borrow its text as &str after the mutable UI section — no per-frame
+        // String clone.
+        let current_item_idx = batch
+            .current()
+            .and_then(|id| self.corpus_items.iter().position(|item| item.id == id));
+        // The immutable borrows of corpus_batch and corpus_items end here.
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(progress).strong());
@@ -295,7 +294,7 @@ impl WhisperDictateApp {
             }
         });
 
-        if let Some(text) = current_text {
+        if let Some(idx) = current_item_idx {
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new(corpus_record_text(
@@ -304,7 +303,7 @@ impl WhisperDictateApp {
                 ))
                 .color(palette.text_muted),
             );
-            ui.label(egui::RichText::new(text).italics());
+            ui.label(egui::RichText::new(&self.corpus_items[idx].text).italics());
         }
 
         // Spinner while the current clip's worker is recording (between clips, the

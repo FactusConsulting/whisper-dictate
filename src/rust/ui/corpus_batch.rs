@@ -1,4 +1,4 @@
-//! Pure batch-recording model for the System tab's "record corpus audio" cluster.
+//! Pure batch-recording model for the System tab's "Benchmark reference recordings" cluster.
 //!
 //! The single-item flow records one picked item via the `--record-corpus-item`
 //! worker. Batch recording walks a *list* of items in turn, reusing that SAME
