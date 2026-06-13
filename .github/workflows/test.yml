@@ -167,3 +167,53 @@ jobs:
         run: |
           cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help
           cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- config path
+
+      # SPIKE (spike/egui-wgpu-renderer): launch the GUI headless on the
+      # GPU-less windows-2025 runner to see whether the wgpu renderer can
+      # initialise a DX12/Vulkan adapter at runtime — the decisive question
+      # the existing install-smoke (--version / config path) never exercises,
+      # because those return before eframe::run_native. A debug build keeps the
+      # console subsystem so wgpu's stderr (incl. adapter enumeration / "No
+      # suitable GPU adapters found" panic) is captured. REMOVE before merge.
+      - name: Rust GUI wgpu adapter probe (SPIKE, Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "target\debug\whisper-dictate.exe"
+          if (-not (Test-Path $exe)) { throw "debug exe missing at $exe" }
+          $log = "wgpu-probe.log"
+          # RUST_LOG=wgpu so adapter enumeration is logged; backtrace on panic.
+          $env:RUST_LOG = "wgpu_core=info,wgpu_hal=info,eframe=info,egui_wgpu=info"
+          $env:RUST_BACKTRACE = "1"
+          Write-Host "Launching GUI (Ui command) headless; capturing stderr -> $log"
+          $p = Start-Process -FilePath $exe -ArgumentList 'ui' `
+                 -RedirectStandardError $log -RedirectStandardOutput "wgpu-probe.out" `
+                 -PassThru -WindowStyle Hidden
+          # Give wgpu time to enumerate + request an adapter and create a device.
+          Start-Sleep -Seconds 30
+          $exited = $p.HasExited
+          if ($exited) {
+            $code = $p.ExitCode
+            Write-Host "Process EXITED early with code $code (window did not stay open)"
+          } else {
+            Write-Host "Process STILL RUNNING after 30s (window stayed open) — killing it"
+            Stop-Process -Id $p.Id -Force
+          }
+          Write-Host "===== wgpu-probe stderr ====="
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no stderr)" }
+          Write-Host "===== wgpu-probe stdout ====="
+          if (Test-Path "wgpu-probe.out") { Get-Content "wgpu-probe.out" } else { Write-Host "(no stdout)" }
+          Write-Host "============================="
+          $err = if (Test-Path $log) { Get-Content $log -Raw } else { "" }
+          # Decisive failure signatures for headless wgpu adapter init.
+          $adapterFail = $err -match 'No suitable GPU adapters|RequestAdapterError|NoAdapter|Failed to (create|find).*(adapter|device)|wgpu error'
+          if ($exited -and $p.ExitCode -ne 0) {
+            if ($adapterFail) {
+              throw "SPIKE FINDING: wgpu FAILED to initialise a GPU adapter headless (exit $($p.ExitCode)). This is the decisive runtime blocker — glow passed here."
+            }
+            throw "GUI exited early with code $($p.ExitCode) — see stderr above."
+          }
+          if ($adapterFail) {
+            throw "SPIKE FINDING: wgpu adapter-init error logged headless even though the process survived — investigate stderr above."
+          }
+          Write-Host "SPIKE FINDING: wgpu initialised an adapter headless OK (no adapter-init failure; window opened)."
