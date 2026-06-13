@@ -357,14 +357,38 @@ def _build_credit_re(patterns: dict) -> re.Pattern[str]:
     return re.compile(rf"^{body}[\s.!?]*$", re.IGNORECASE)
 
 
+def _build_credit_prefix_re(patterns: dict) -> re.Pattern[str]:
+    """Compile a START-anchored regex of the credit-phrase prefixes WITHOUT the
+    year requirement — a match means the text merely BEGINS like a subtitle
+    credit ("Danske tekster af …"). This is intentionally loose: it also matches
+    real dictation such as "danske tekster af høj kvalitet", so callers MUST pair
+    it with a second, independent signal (an impossible speech rate) before
+    dropping anything — see ``_drop_hallucinated_segments``. It exists to catch
+    year-LESS credit hallucinations that ``_CREDIT_RE`` deliberately won't match
+    on text alone (e.g. "Danske tekster af Nicolai Winther").
+    """
+    phrase_group = "|".join(patterns["credit_phrase_prefixes"])
+    return re.compile(rf"^(?:{phrase_group})", re.IGNORECASE)
+
+
 _HALLUCINATION_PATTERNS = _load_hallucination_patterns()
 HALLUCINATIONS: frozenset[str] = frozenset(_HALLUCINATION_PATTERNS["exact_blacklist"])
 _CREDIT_RE = _build_credit_re(_HALLUCINATION_PATTERNS)
+_CREDIT_PREFIX_RE = _build_credit_prefix_re(_HALLUCINATION_PATTERNS)
 
 
 def _looks_like_credit(text: str) -> bool:
     """True when the WHOLE text is a subtitle/caption credit (anchored match)."""
     return bool(_CREDIT_RE.match(text.strip().lower()))
+
+
+def _looks_like_credit_prefix(text: str) -> bool:
+    """True when the text BEGINS with a subtitle-credit phrase (year-less, loose).
+
+    Only safe to act on together with an impossible-rate signal; on its own it
+    matches real dictation that happens to start with these phrases.
+    """
+    return bool(_CREDIT_PREFIX_RE.match(text.strip().lower()))
 
 
 def is_hallucination(text: str) -> bool:
@@ -391,26 +415,23 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
       enough (year-anchored, up to 60 leading chars) to match confident real
       dictation like "oversat af Google i 2023", so text shape alone must never
       drop a segment; or
-    * it is the TRAILING segment with high ``no_speech_prob`` AND a credit-shaped
-      text — drops even when ``avg_logprob`` is not low enough for the plain
-      silence gate (the real repro: no_speech 0.63 but logprob -0.43). Kept tied
-      to the credit-pattern match so the plain silence gate's logprob threshold
-      is never broadened (which would risk real quiet words); or
-    * its text is a known credit AND its OWN char-rate is humanly impossible
-      (e.g. the 60-char subtitle credit on a 0.30 s tail = ~200 chars/s). This
-      needs NO ``no_speech_prob`` corroboration: the two independent signals
-      (known credit shape AND impossible speech rate) never co-occur on real
-      speech, so it stays safe. It catches the repro the no_speech-gated
-      ``credit_pattern`` drop misses when the model reports only a moderate
-      ``no_speech_prob`` (the observed 0.43 < ``NO_SPEECH_DROP``).
+    * its text is a known credit OR merely BEGINS with a credit prefix
+      ("Danske tekster af …") AND its OWN char-rate is humanly impossible (e.g.
+      the 60-char subtitle credit on a 0.30 s tail = ~200 chars/s). This needs NO
+      ``no_speech_prob`` corroboration: the two independent signals (credit shape
+      AND impossible speech rate) never co-occur on real speech, so it stays
+      safe. It catches both the moderate-``no_speech`` repro the ``credit_pattern``
+      gate misses (observed 0.43 < ``NO_SPEECH_DROP``) AND year-LESS credits the
+      year-anchored ``is_hallucination`` regex deliberately won't match on text
+      alone (e.g. "Danske tekster af Nicolai Winther" — the prefix matches real
+      dictation too, hence the impossible-rate pairing).
 
     Returns (kept, dropped). ``dropped`` items are tagged with a transient
     ``_drop_reason`` attribute for diagnostics.
     """
     kept = []
     dropped = []
-    last_index = len(segment_list) - 1
-    for index, segment in enumerate(segment_list):
+    for segment in segment_list:
         no_speech = float(getattr(segment, "no_speech_prob", 0.0) or 0.0)
         avg_logprob = float(getattr(segment, "avg_logprob", 0.0) or 0.0)
         start = getattr(segment, "start", None)
@@ -423,23 +444,21 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
             and float(end) > audio_duration_s + SEGMENT_END_SLACK_S
         )
         is_credit = is_hallucination(seg_text)
-        # Defensive: a TRAILING credit-shaped segment the model also flags as
-        # likely non-speech (high no_speech_prob) drops regardless of avg_logprob.
-        trailing_silent_credit = (
-            index == last_index and no_speech >= NO_SPEECH_DROP and is_credit
-        )
-        # A known credit whose OWN char-rate is humanly impossible is a
-        # hallucination with no need for a no_speech signal — two independent
-        # signals (credit shape AND impossible rate) never co-occur on real
-        # speech. Catches the moderate-no_speech repro the credit_pattern gate
-        # (no_speech >= NO_SPEECH_DROP) lets through.
+        # A credit (or a year-LESS subtitle-credit PREFIX like "Danske tekster
+        # af …") whose OWN char-rate is humanly impossible is a hallucination
+        # needing NO no_speech signal — two independent signals (credit shape AND
+        # impossible rate) never co-occur on real speech. Catches BOTH the
+        # moderate-no_speech repro the credit_pattern gate (no_speech >=
+        # NO_SPEECH_DROP) lets through, AND year-less credits that is_hallucination
+        # deliberately won't match on text alone (the prefix also matches real
+        # dictation, so it is ONLY ever dropped together with impossible rate).
         seg_duration = (
             float(end) - float(start)
             if end is not None and start is not None
             else None
         )
         credit_rate = (
-            is_credit
+            (is_credit or _looks_like_credit_prefix(seg_text))
             and seg_duration is not None
             and _speech_rate_exceeded(seg_text, seg_duration)
         )
@@ -452,8 +471,6 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
             reason = "credit_pattern"
         elif credit_rate:
             reason = "credit_rate"
-        elif trailing_silent_credit:
-            reason = "trailing_no_speech_credit"
         if reason is not None:
             try:
                 segment._drop_reason = reason

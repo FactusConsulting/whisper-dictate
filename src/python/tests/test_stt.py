@@ -305,6 +305,51 @@ class HallucinationFilterTests(unittest.TestCase):
         self.assertEqual([s.text for s in kept], [credit_shaped.text])
         self.assertEqual(dropped, [])
 
+    def test_looks_like_credit_prefix_matches_yearless_credit(self):
+        # The year-LESS prefix matcher recognizes a credit OPENING without a
+        # trailing year (which is_hallucination deliberately won't match) and
+        # ignores ordinary text.
+        self.assertTrue(self.t._looks_like_credit_prefix(
+            "Danske tekster af Nicolai Winther"))
+        self.assertTrue(self.t._looks_like_credit_prefix("Undertekster af nogen"))
+        self.assertFalse(self.t._looks_like_credit_prefix(
+            "jeg vil gerne graduere sundhedsvurderingen"))
+        # is_hallucination still does NOT match the year-less form on its own —
+        # that is exactly why the prefix matcher + rate gate is needed.
+        self.assertFalse(self.t.is_hallucination(
+            "Danske tekster af Nicolai Winther"))
+
+    def test_drop_per_segment_yearless_credit_prefix_impossible_rate(self):
+        # NEW REPRO (2026-06-13): "Danske tekster af Nicolai Winther" appended to
+        # a real 15.9 s dictation. It has NO trailing year, so is_hallucination
+        # does not match it; but as a ~0.3 s trailing segment its char-rate is
+        # impossible (33 chars / 0.30 s = 110 chars/s). The credit-PREFIX +
+        # impossible-rate pair drops it without any no_speech signal.
+        self.t.MAX_CHARS_PER_SECOND = 30.0
+        real = types.SimpleNamespace(
+            text=("Det ville være fedt hvis vi kunne graduere "
+                  "sundhedsvurderingen i flere niveauer."),
+            start=0.4, end=15.6, avg_logprob=-0.25, no_speech_prob=0.004)
+        credit = types.SimpleNamespace(
+            text="Danske tekster af Nicolai Winther",
+            start=15.6, end=15.9, avg_logprob=-0.2, no_speech_prob=0.30)
+        kept, dropped = self.t._drop_hallucinated_segments([real, credit], 15.9)
+        self.assertEqual([s.text for s in kept], [real.text])
+        self.assertEqual([s.text for s in dropped], [credit.text])
+        self.assertEqual(getattr(dropped[0], "_drop_reason", None), "credit_rate")
+
+    def test_drop_per_segment_yearless_credit_prefix_plausible_rate_survives(self):
+        # FALSE-POSITIVE GUARD: real dictation that merely STARTS with a credit
+        # prefix, at a plausible rate (47 chars / 3.0 s = 16 chars/s), must
+        # survive — the prefix alone never drops; it needs impossible rate too.
+        self.t.MAX_CHARS_PER_SECOND = 30.0
+        real = types.SimpleNamespace(
+            text="danske tekster af høj kvalitet er svære at lave",
+            start=0.0, end=3.0, avg_logprob=-0.2, no_speech_prob=0.05)
+        kept, dropped = self.t._drop_hallucinated_segments([real], 3.5)
+        self.assertEqual([s.text for s in kept], [real.text])
+        self.assertEqual(dropped, [])
+
     # --- pattern-data extraction guards (data file <-> code parity) ---
 
     def test_pattern_data_loadable_via_importlib_resources(self):
