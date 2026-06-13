@@ -58,8 +58,8 @@ pub(in crate::ui) enum BenchmarkText {
     AvgWer,
     /// Headline fragment: "avg CER".
     AvgCer,
-    /// Placeholder shown when a run produced no parseable results.
-    NoResults,
+    /// Note shown when no per-item rows were parsed but raw output is present.
+    NoRowsParsed,
 }
 
 impl BenchmarkText {
@@ -86,7 +86,7 @@ impl BenchmarkText {
             Self::StatusScored => "Scored",
             Self::AvgWer => "avg WER",
             Self::AvgCer => "avg CER",
-            Self::NoResults => "No benchmark results to show yet.",
+            Self::NoRowsParsed => "No per-item results were parsed from this run.",
         }
     }
 
@@ -105,7 +105,7 @@ impl BenchmarkText {
             Self::StatusScored => "Scoret",
             Self::AvgWer => "gns. WER",
             Self::AvgCer => "gns. CER",
-            Self::NoResults => "Ingen benchmark-resultater at vise endnu.",
+            Self::NoRowsParsed => "Ingen resultater pr. element blev fortolket fra dette kørsel.",
         }
     }
 }
@@ -202,8 +202,8 @@ pub(in crate::ui) struct BenchmarkSummary {
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::ui) struct BenchmarkResults {
     pub(in crate::ui) summary: BenchmarkSummary,
-    /// Rows sorted worst-WER-first among scored, then skipped/error rows after
-    /// (grey, de-emphasized) — so problems surface at the top.
+    /// Rows sorted worst-WER-first among scored, then error rows, then skipped
+    /// rows last (grey, de-emphasized) — so problems surface at the top.
     pub(in crate::ui) rows: Vec<BenchmarkRow>,
     /// The raw captured stdout (the per-item JSONL + the summary line), kept for
     /// the optional "show raw" panel.
@@ -560,7 +560,7 @@ mod tests {
             BenchmarkText::StatusScored,
             BenchmarkText::AvgWer,
             BenchmarkText::AvgCer,
-            BenchmarkText::NoResults,
+            BenchmarkText::NoRowsParsed,
         ] {
             let en = benchmark_text("en", key);
             let da = benchmark_text("da", key);

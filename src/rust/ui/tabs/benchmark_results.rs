@@ -67,34 +67,38 @@ impl WhisperDictateApp {
         };
 
         if results.is_empty() {
+            // Parsing produced no per-item rows (e.g. only the trailing
+            // `[benchmark] …` summary or error text is present). Show a brief
+            // note so the panel is not confusingly blank, but still expose the
+            // raw output — it is the only thing the user can inspect.
             ui.label(
-                egui::RichText::new(benchmark_text(&language, BenchmarkText::NoResults))
+                egui::RichText::new(benchmark_text(&language, BenchmarkText::NoRowsParsed))
                     .color(palette.text_muted),
             );
-            return;
+        } else {
+            headline(ui, &language, palette, &results.summary);
+            ui.add_space(8.0);
+            results_table(ui, &language, palette, &results.rows);
         }
-
-        headline(ui, &language, palette, &results.summary);
-        ui.add_space(8.0);
-        results_table(ui, &language, palette, &results.rows);
 
         // Raw output stays in the runtime log; it is also revealable here as a
         // fallback for the user who wants the original JSONL without leaving the
         // tab. Collapsed by default — the digestible view is the point.
-        ui.add_space(6.0);
-        egui::CollapsingHeader::new(benchmark_text(&language, BenchmarkText::ShowRaw))
-            .id_salt("benchmark_raw_output")
-            .default_open(false)
-            .show(ui, |ui| {
-                let mut raw = results.raw.clone();
-                ui.add(
-                    egui::TextEdit::multiline(&mut raw)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_rows(8)
-                        .desired_width(f32::INFINITY)
-                        .interactive(false),
-                );
-            });
+        // Always shown when raw is non-empty so it is inspectable even when no
+        // per-item rows were parsed (e.g. the run only produced the summary line
+        // or an error message).
+        if should_show_raw(results) {
+            ui.add_space(6.0);
+            egui::CollapsingHeader::new(benchmark_text(&language, BenchmarkText::ShowRaw))
+                .id_salt("benchmark_raw_output")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(results.raw.as_str()).monospace())
+                            .selectable(true),
+                    );
+                });
+        }
     }
 }
 
@@ -235,6 +239,14 @@ fn row_color(palette: UiPalette, row: &BenchmarkRow) -> egui::Color32 {
     }
 }
 
+/// Whether to render the "Show raw output" collapsible panel. True whenever the
+/// captured stdout is non-empty — regardless of whether any per-item rows were
+/// parsed — so the raw is always inspectable (even when parsing failed or only
+/// a trailing `[benchmark] …` / error text was captured).
+fn should_show_raw(results: &BenchmarkResults) -> bool {
+    !results.raw.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,5 +348,38 @@ mod tests {
         assert_eq!(status_word("da", BenchmarkStatus::Skipped), "sprunget over");
         assert_eq!(status_word("en", BenchmarkStatus::Error), "error");
         assert_eq!(status_word("da", BenchmarkStatus::Error), "fejl");
+    }
+
+    fn empty_results(raw: &str) -> BenchmarkResults {
+        BenchmarkResults {
+            summary: BenchmarkSummary {
+                total: 0,
+                scored: 0,
+                skipped: 0,
+                error: 0,
+                avg_wer: None,
+                avg_cer: None,
+            },
+            rows: vec![],
+            raw: raw.to_owned(),
+        }
+    }
+
+    #[test]
+    fn raw_panel_shown_even_when_no_rows_parsed() {
+        // When parsing fails or only a summary/error line was captured, the raw
+        // panel must still be offered so the user can inspect what happened.
+        let with_noise = empty_results("[benchmark] 2/4 passed\n");
+        assert!(
+            should_show_raw(&with_noise),
+            "raw panel must show when raw is non-empty but rows is empty"
+        );
+
+        // Completely empty stdout: nothing to show.
+        let truly_empty = empty_results("");
+        assert!(
+            !should_show_raw(&truly_empty),
+            "raw panel must not show when raw is empty"
+        );
     }
 }
