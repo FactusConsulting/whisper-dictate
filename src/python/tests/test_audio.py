@@ -90,8 +90,8 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(len(trimmed), len(a))
 
     def test_trim_leaves_all_silence_untouched(self):
-        # Uniform clip: no frame sits 30 dB below the (equally quiet) loudest
-        # frame, so nothing is classified as silence → never trims to empty.
+        # Uniform clip: loudest == quietest, so there is no silence floor below
+        # the speech (gap 0 < the minimum) → left untouched, never trims to empty.
         np = self.np
         a = np.full(480 * 10, 0.0005, dtype=np.float32)
         trimmed, ms = self.vp._trim_trailing_silence(a)
@@ -99,8 +99,8 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(len(trimmed), len(a))
 
     def test_trim_keeps_quietly_trailing_word(self):
-        # A word that trails off but stays ~28 dB below the speech body (within
-        # the 30 dB drop) is NOT clipped — only the dead tail (~52 dB down) is cut.
+        # A quiet trailing word (~24 dB above the noise floor, well above the
+        # 12 dB margin) is NOT clipped — only the dead tail at the floor is cut.
         np = self.np
         a = np.concatenate([
             np.full(480 * 10, 0.2, dtype=np.float32),      # loud speech
@@ -135,9 +135,9 @@ class AudioDspTests(RealNumpyAudioCase):
 
     def test_trim_keeps_soft_trailing_speech_without_silence(self):
         # Continuous speech that trails off SOFTLY with no true silence floor:
-        # the soft tail (~20 dB below the loudest frame) must NOT be trimmed. The
-        # threshold is relative to the loudest frame, so a noise-floor/percentile
-        # estimate landing in the quiet speech can't over-trim real words.
+        # loudest-vs-quietest gap is only ~20 dB (< the minimum), so there is no
+        # clear silence floor → the clip is left untouched rather than risking
+        # trimming the soft speech.
         np = self.np
         a = np.concatenate([
             np.full(480 * 20, 0.2, dtype=np.float32),    # loud speech body
@@ -149,9 +149,9 @@ class AudioDspTests(RealNumpyAudioCase):
 
     def test_trim_cuts_long_tail_after_short_speech(self):
         # Short utterance (3 frames) then a long held-key dead tail (47 frames):
-        # speech is <10% of frames — the exact case a percentile "body" estimate
-        # would miss (it would land in silence and trim nothing). Anchoring on the
-        # loudest frame still cuts the tail.
+        # speech is <10% of frames. The noise floor is the quietest frame
+        # regardless of the ratio, and the loud-vs-quiet gap is large, so the dead
+        # tail is still cut.
         np = self.np
         a = np.concatenate([
             np.full(480 * 3, 0.2, dtype=np.float32),      # short speech
@@ -160,6 +160,21 @@ class AudioDspTests(RealNumpyAudioCase):
         trimmed, ms = self.vp._trim_trailing_silence(a)
         self.assertGreater(ms, 0.0)
         self.assertEqual(len(trimmed), 480 * 7)   # 3 speech + 4 pad frames
+
+    def test_trim_keeps_very_soft_trailing_word_above_noise_floor(self):
+        # THE REGRESSION (real repro): a genuinely soft trailing word ~32 dB below
+        # the loud body — but still well ABOVE the room-tone noise floor — followed
+        # by dead air. The soft word must survive; only the dead air at the noise
+        # floor is cut. A "30 dB below the loudest frame" rule would have eaten it.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 15, 0.2, dtype=np.float32),     # loud speech body
+            np.full(480 * 5, 0.005, dtype=np.float32),    # very soft trailing word
+            np.full(480 * 20, 0.0003, dtype=np.float32),  # dead air at the noise floor
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertGreater(ms, 0.0)                       # the dead air IS cut
+        self.assertEqual(len(trimmed), 480 * 24)          # soft word (15-19) + 4 pad kept
 
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
