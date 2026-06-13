@@ -34,6 +34,8 @@ jobs:
           runCmd: |
             set -e
             cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
-            cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
+            # Glow-only (the shipping renderer): keeps the dev-loop fast and off
+            # the wgpu/DX12 stack. wgpu is build-validated by renderer-matrix CI.
+            cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings
             cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
             python -m pytest src/python/tests src/tests/python -q

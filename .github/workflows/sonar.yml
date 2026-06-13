@@ -49,7 +49,9 @@ jobs:
       - name: Rust Clippy report (JSON for Sonar import)
         # No -D warnings here: emit the report even when lints fire so Sonar can
         # surface them as issues. The hard clippy gate lives in test.yml's rust job.
-        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json
+        # Glow-only (our shipping renderer): keeps Sonar off the wgpu/DX12 stack;
+        # the wgpu exit route is build-validated by the renderer-matrix workflow.
+        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow --message-format=json > clippy-report.json
 
       - name: Rust coverage (LCOV for Sonar import)
         # Run the package test suite under instrumentation and emit LCOV.
@@ -58,7 +60,7 @@ jobs:
         # leave that to its default. Use an absolute --output-path so the report
         # always lands at the repo root regardless of how cargo-llvm-cov resolves
         # a relative output path.
-        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"
+        run: cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --features ui-egui-glow --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"
 
       - name: Normalize LCOV source paths to repo root
         # Sonar resolves LCOV `SF:` paths against the project base dir, so they

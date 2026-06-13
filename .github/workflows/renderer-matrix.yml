@@ -1,0 +1,69 @@
+name: renderer-matrix
+
+# "wgpu is a validated exit route" guardrail. We ship on the glow renderer (the
+# `default` Cargo feature), and everyday CI is glow-only to stay fast and off the
+# wgpu/DX12 stack. This workflow builds BOTH renderer paths on Linux AND Windows
+# so the wgpu exit route can never silently rot when egui/eframe (or their
+# transitive deps) are bumped. The decisive check is the wgpu build on
+# windows-2025, since the wgpu DX12 backend only validates on Windows CI.
+on:
+  # Catch ecosystem rot even without a dependency PR.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  # Manual re-run from the Actions tab.
+  workflow_dispatch:
+  # Validate both renderers whenever the Rust dependency graph changes (e.g. an
+  # eframe/egui bump), so a wgpu break is caught in the PR that causes it.
+  pull_request:
+    paths:
+      - "src/rust/Cargo.toml"
+      - "src/rust/Cargo.lock"
+      - ".github/workflows/renderer-matrix.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  renderer-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+        renderer:
+          - { name: glow, feature: ui-egui-glow }
+          - { name: wgpu, feature: ui-egui-wgpu }
+    name: ${{ matrix.renderer.name }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Mirror the rust job's Linux UI build deps so the glow/wgpu builds find
+      # the X11/Wayland/xkbcommon/dbus system libraries.
+      - name: Install Linux Rust UI build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            pkg-config \
+            libdbus-1-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src/rust -> ../target"
+          # Separate cache per OS+renderer so the wgpu build doesn't thrash the
+          # glow cache (and vice versa).
+          key: ${{ matrix.renderer.name }}
+
+      # Build exactly one renderer at a time: --no-default-features drops the
+      # default glow feature so the wgpu job builds a pure wgpu graph.
+      - name: Build (${{ matrix.renderer.name }})
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --no-default-features --features ${{ matrix.renderer.feature }}

@@ -227,7 +227,18 @@ const PARAKEET_MODELS: &[&str] = &[
 ];
 
 pub fn run() -> Result<()> {
+    // Pick the renderer by Cargo feature. We ship on glow (the `default`
+    // feature → `ui-egui-glow`); wgpu is the continuously-validated exit route,
+    // opted into with `--no-default-features --features ui-egui-wgpu`. wgpu wins
+    // only when its feature is on, so a plain `cargo build` (default features)
+    // is always glow. See [features] in Cargo.toml and renderer-matrix CI.
+    #[cfg(feature = "ui-egui-wgpu")]
+    let renderer = eframe::Renderer::Wgpu;
+    #[cfg(not(feature = "ui-egui-wgpu"))]
+    let renderer = eframe::Renderer::Glow;
+
     let options = eframe::NativeOptions {
+        renderer,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1080.0, 760.0])
             // Floor the window so the top status bar can't be squeezed until the
