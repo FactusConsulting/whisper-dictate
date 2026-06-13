@@ -98,8 +98,8 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(len(trimmed), len(a))
 
     def test_trim_keeps_quietly_trailing_word(self):
-        # A word that trails off but stays ~24 dB above the noise floor (well
-        # above the 12 dB margin) is NOT clipped — only sub-margin tail is cut.
+        # A word that trails off but stays ~28 dB below the speech body (within
+        # the 30 dB drop) is NOT clipped — only the dead tail (~52 dB down) is cut.
         np = self.np
         a = np.concatenate([
             np.full(480 * 10, 0.2, dtype=np.float32),      # loud speech
