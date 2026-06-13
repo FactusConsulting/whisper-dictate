@@ -88,8 +88,11 @@ class KeyToSettingNameTests(unittest.TestCase):
         self.assertEqual(key_to_setting_name(_Key("f9")), "f9")
         self.assertEqual(key_to_setting_name(_Key("space")), "space")
 
-    def test_letter_keycode_uses_char(self):
-        self.assertEqual(key_to_setting_name(_Char("a")), "a")
+    def test_letter_keycode_is_unbindable(self):
+        # Single letters can't be bound (backends only resolve named keys), so
+        # capture maps them to None and ignores them rather than writing an
+        # unusable value that would crash at startup.
+        self.assertIsNone(key_to_setting_name(_Char("a")))
 
     def test_unbindable_token_returns_none(self):
         self.assertIsNone(key_to_setting_name(_Unbindable("vk-1234")))
@@ -116,10 +119,13 @@ class ChordCaptureSingleKeyTests(unittest.TestCase):
         self.assertTrue(c.done)
         self.assertEqual(c.result, "ctrl_r")
 
-    def test_letter_single_key(self):
+    def test_letter_is_ignored_not_bound(self):
+        # A letter is unbindable, so pressing/releasing only a letter captures
+        # nothing — the user must hold a real modifier/special key.
         c = ChordCapture()
         c.press(_Char("a"))
-        self.assertEqual(c.release(_Char("a")), "a")
+        self.assertIsNone(c.release(_Char("a")))
+        self.assertFalse(c.done)
 
 
 class ChordCaptureMultiKeyTests(unittest.TestCase):

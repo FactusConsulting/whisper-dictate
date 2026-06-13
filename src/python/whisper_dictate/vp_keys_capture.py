@@ -60,11 +60,12 @@ def key_to_setting_name(key) -> str | None:
       * Other named special ``Key`` (``Key.f9`` → ``"f9"``, ``Key.space`` →
         ``"space"``): the ``.name`` verbatim. The pynput backend resolves these;
         the evdev backend only resolves ``f1``..``f12`` from this group.
-      * Character ``KeyCode`` (the letter ``a`` → ``"a"``): the ``.char``. Bind
-        a single letter as a PTT key if the user really wants to.
-
-    Anything with neither a usable ``.name`` nor a ``.char`` (an unknown
-    ``KeyCode`` carrying only a raw virtual-key code) yields ``None``.
+    Character ``KeyCode``s (letters like ``a``) and any token with neither a
+    resolvable ``.name`` nor a backend mapping yield ``None``: the pynput/evdev
+    backends only resolve named ``Key`` members (plus f1..f12 / modifiers on
+    evdev), so a single character can't be bound as a PTT key — capture ignores
+    it rather than writing an unusable value that would crash at startup
+    (``unknown key 'a'``).
     """
     canon = canon_modifier(key)
     # canon_modifier returns a family STRING for modifiers, else the token back.
@@ -74,9 +75,9 @@ def key_to_setting_name(key) -> str | None:
     name = getattr(key, "name", None)
     if isinstance(name, str) and name:
         return name
-    char = getattr(key, "char", None)
-    if isinstance(char, str) and char:
-        return char
+    # Character KeyCodes (letters) are NOT bindable: the pynput/evdev backends
+    # only resolve named Key members, so writing a single char would crash at
+    # startup ("unknown key 'a'"). Ignore them in capture.
     return None
 
 
