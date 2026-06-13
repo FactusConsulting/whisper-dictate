@@ -35,6 +35,17 @@ impl WhisperDictateApp {
             .horizontal(|ui| help_toggle_badge(ui, "system_corpus_record", section_help))
             .inner;
         inline_help(ui, show_section_help, section_help);
+
+        // Always-visible purpose line so the feature is unmistakable: these clips
+        // are the benchmark's golden reference audio, NOT dictionary entries.
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(corpus_record_text(
+                &language,
+                CorpusRecordText::PurposeIntro,
+            ))
+            .color(palette.text_muted),
+        );
         ui.add_space(6.0);
 
         if self.corpus_items.is_empty() {
@@ -42,6 +53,14 @@ impl WhisperDictateApp {
                 egui::RichText::new(corpus_record_text(&language, CorpusRecordText::NoItems))
                     .color(palette.text_muted),
             );
+            return;
+        }
+
+        // A batch run takes over the cluster: while it walks the corpus item by
+        // item the picker/Record controls are replaced by a progress panel with a
+        // Stop button. The single-item path is restored as soon as it ends.
+        if self.corpus_batch_active() {
+            self.corpus_batch_panel(ui, &language, palette);
             return;
         }
 
@@ -95,6 +114,68 @@ impl WhisperDictateApp {
                 self.run_record_corpus_item();
             }
         });
+
+        // Batch controls: walk every missing item, or re-record everything, in one
+        // sequence. Each clip still uses the single-item worker (chained in the UI
+        // on every done-event); these only seed the queue. Gated like the single
+        // Record button via `can_start_corpus_batch`.
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            let can_start = self.can_start_corpus_batch();
+            if ui
+                .add_enabled(
+                    can_start,
+                    egui::Button::new(icon_text(
+                        icons::ICON_PLAYLIST_ADD_CHECK,
+                        corpus_record_text(&language, CorpusRecordText::RecordAllMissing),
+                    )),
+                )
+                .clicked()
+            {
+                self.start_corpus_batch(BatchScope::AllMissing);
+            }
+            if ui
+                .add_enabled(
+                    can_start,
+                    egui::Button::new(icon_text(
+                        icons::ICON_REPLAY,
+                        corpus_record_text(&language, CorpusRecordText::RecordAll),
+                    )),
+                )
+                .clicked()
+            {
+                self.start_corpus_batch(BatchScope::All);
+            }
+        });
+
+        // When every item already has a recording, "Record all missing" would do
+        // nothing — say so (computed from the cached recorded-ids set; no I/O).
+        let all_recorded = self
+            .corpus_items
+            .iter()
+            .all(|item| self.corpus_recorded_ids.contains(&item.id));
+        if all_recorded {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(corpus_record_text(
+                    &language,
+                    CorpusRecordText::BatchNothingToRecord,
+                ))
+                .color(palette.text_muted),
+            );
+        }
+
+        // Clarity one-liner next to the Record actions: re-recording overwrites
+        // only that item's own WAV; the dictionary is never touched.
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(corpus_record_text(
+                &language,
+                CorpusRecordText::OverwriteNote,
+            ))
+            .color(palette.text_muted),
+        );
 
         // The runtime-running block has a dedicated localized hint so the greyed
         // button is never a dead end.
@@ -178,6 +259,64 @@ impl WhisperDictateApp {
             Err(message) => {
                 ui.label(icon_text(icons::ICON_WARNING, message).color(palette.warn_text));
             }
+        }
+    }
+
+    /// Render the active-batch panel: an "Item k of N · recorded c" progress line,
+    /// the current item's reference text to read aloud, a recording spinner while
+    /// the clip's worker runs, and a Stop button. Replaces the picker/Record
+    /// controls for the duration of the run. Reads the transient `corpus_batch`
+    /// cursor; the actual advance/launch is driven by `poll_corpus_batch`.
+    fn corpus_batch_panel(&mut self, ui: &mut egui::Ui, language: &str, palette: UiPalette) {
+        let Some(batch) = self.corpus_batch.as_ref() else {
+            return;
+        };
+        let progress =
+            batch_progress_line(language, batch.position(), batch.total(), batch.completed());
+        // Resolve the current item's index in corpus_items (by id) so we can
+        // borrow its text as &str after the mutable UI section — no per-frame
+        // String clone.
+        let current_item_idx = batch
+            .current()
+            .and_then(|id| self.corpus_items.iter().position(|item| item.id == id));
+        // The immutable borrows of corpus_batch and corpus_items end here.
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(progress).strong());
+            if ui
+                .button(icon_text(
+                    icons::ICON_STOP,
+                    corpus_record_text(language, CorpusRecordText::StopBatch),
+                ))
+                .clicked()
+            {
+                self.stop_corpus_batch();
+            }
+        });
+
+        if let Some(idx) = current_item_idx {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(corpus_record_text(
+                    language,
+                    CorpusRecordText::BatchReadAloudPrompt,
+                ))
+                .color(palette.text_muted),
+            );
+            ui.label(egui::RichText::new(&self.corpus_items[idx].text).italics());
+        }
+
+        // Spinner while the current clip's worker is recording (between clips, the
+        // brief gap shows no spinner — the next item's text is already visible).
+        if self.background_task_label == Some(RECORD_CORPUS_ITEM_LABEL) {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(14.0));
+                ui.label(
+                    egui::RichText::new(corpus_record_text(language, CorpusRecordText::Recording))
+                        .color(palette.text_muted),
+                );
+            });
         }
     }
 }
