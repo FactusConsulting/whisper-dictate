@@ -73,6 +73,48 @@ _BARE_MODIFIER_NAMES = frozenset({
 })
 
 
+# Modifier families whose left/right/generic pynput variants must be treated as
+# ONE key for chord matching. pynput's Windows backend normally reports the
+# side-specific Key (``Key.ctrl_l``), but it intermittently delivers the GENERIC
+# ``Key.ctrl`` (and, more rarely, the opposite side) — non-US layouts, virtual
+# machines, secure-desktop/focus races, and the documented "lost modifier" hook
+# bug (pynput #15/#33/#139/#155). With identity-exact matching a generic
+# ``Key.ctrl`` fails ``k in {Key.ctrl_l, Key.shift_l}`` and the chord silently
+# never completes, so PTT intermittently does not start. Collapsing every
+# variant to its family name makes chord-down detection robust regardless of
+# which variant the OS hook happens to deliver. pynput's own ``canonical()``
+# does the same generic-collapse, but only for the *active* Listener, so we
+# reproduce it on the opaque token. evdev is unaffected — it uses unambiguous
+# side-specific integer scancodes (KEY_LEFTCTRL != KEY_RIGHTCTRL), so it never
+# calls this; only the pynput backend canonicalises.
+_MODIFIER_FAMILIES = {
+    "ctrl": "ctrl", "ctrl_l": "ctrl", "ctrl_r": "ctrl",
+    "shift": "shift", "shift_l": "shift", "shift_r": "shift",
+    "alt": "alt", "alt_l": "alt", "alt_r": "alt", "alt_gr": "alt",
+    "cmd": "cmd", "cmd_l": "cmd", "cmd_r": "cmd",
+}
+
+
+def canon_modifier(k):
+    """Collapse a pynput modifier ``Key`` to a side-insensitive family token.
+
+    Returns a stable string (``"ctrl"``/``"shift"``/``"alt"``/``"cmd"``) for any
+    left/right/generic modifier ``Key`` (identified by its ``.name``), so callers
+    can treat ``ctrl_l``, ``ctrl_r`` and the generic ``ctrl`` as the same chord
+    member regardless of which variant the OS hook delivered. Every other token —
+    letters / KeyCodes, function keys, the quit key, media keys, and the plain
+    string tokens used by the unit tests — is returned UNCHANGED, preserving its
+    identity for foreign-key and quit matching. Idempotent: a family token in
+    has no ``.name``, so it passes straight back through.
+    """
+    name = getattr(k, "name", None)  # pynput Key enum member
+    if isinstance(name, str):
+        family = _MODIFIER_FAMILIES.get(name)
+        if family is not None:
+            return family
+    return k
+
+
 # Media / consumer-control keys the solo guard must IGNORE entirely. A Bluetooth
 # headset (e.g. Jabra) can emit consumer-control events — volume up/down/mute,
 # play/pause, track next/prev — to the OS while a bare-modifier PTT key is held.

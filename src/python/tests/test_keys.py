@@ -38,6 +38,32 @@ class _FakeMediaKey:
         return f"<Key.{self.name}>"
 
 
+class _FakeModKey:
+    """Hashable stand-in for a real pynput modifier ``Key`` enum member.
+
+    Real ``pynput.keyboard.Key`` members (``Key.ctrl_l``, generic ``Key.ctrl``,
+    etc.) are hashable singletons exposing a ``.name`` (``"ctrl_l"``, ``"ctrl"``).
+    The production ``_canon_modifier`` keys off that ``.name`` to collapse
+    left/right/generic variants of a modifier to one family token, so these fakes
+    must compare by name to model the real enum's identity. Two ``_FakeModKey``
+    with the SAME name are equal (one OS may emit ``Key.ctrl`` twice); different
+    names are distinct (``ctrl_l`` vs ``ctrl`` vs ``ctrl_r``), exactly as the
+    real enum behaves — and exactly what the side-insensitive fix must paper
+    over."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        return isinstance(other, _FakeModKey) and other.name == self.name
+
+    def __repr__(self):
+        return f"<Key.{self.name}>"
+
+
 def _fake_keyboard():
     keyboard = _types.ModuleType("keyboard")
     keyboard.Key = types.SimpleNamespace(
@@ -413,6 +439,123 @@ class PynputListenerTests(unittest.TestCase):
             ln.on_press("<ctrl_r>")        # resets streak
             self.assertIsNone(ln.on_press("<esc>"))  # streak back to 1, not a stop
 
+
+class ModifierQuitKeyTests(unittest.TestCase):
+    """Copilot finding (PR #254): when VOICEPI_QUIT_KEY is configured to a
+    modifier (e.g. ``ctrl``), the quit comparison must be consistent with
+    canonicalisation.  Before the fix ``_quit_key`` was stored raw but incoming
+    keys were canonicalised *before* the post-_quit_chord equality check, so
+    ``"ctrl" == Key.ctrl`` evaluated False and the modifier quit key was never
+    recognised — it fell through to ``_solo.note_press`` and potentially joined
+    the PTT state machine as a foreign key instead.  The fix canonicalises
+    ``self._quit_key`` at construction AND inside ``_quit_chord``, so every
+    comparison is canon-vs-canon."""
+
+    def _ln_with_modifier_quit(self, ptt_target="<shift_l>",
+                               quit_key=None, enabled=True):
+        """Listener whose quit key is a _FakeModKey (modifier)."""
+        if quit_key is None:
+            quit_key = _FakeModKey("ctrl")   # generic variant of a modifier family
+        guard = vp_keys_solo.SoloModifierGuard(
+            {ptt_target}, enabled=enabled)
+        return vp_keys._PynputListener(
+            _Target(), {ptt_target}, quit_key, toggle_mode=False,
+            solo_guard=guard)
+
+    # ------------------------------------------------------------------
+    # 1. Modifier quit key: quit-streak still fires
+    # ------------------------------------------------------------------
+    def test_modifier_quit_key_triggers_quit_streak(self):
+        # VOICEPI_QUIT_KEY=ctrl: pressing the quit key (as generic Key.ctrl) twice
+        # must stop the listener (return False), not be silently ignored.
+        ln = self._ln_with_modifier_quit()
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            result_1 = ln.on_press(_FakeModKey("ctrl"))   # streak = 1
+            self.assertIsNone(result_1)                   # below threshold
+            result_2 = ln.on_press(_FakeModKey("ctrl"))   # streak = 2 → quit
+        self.assertFalse(result_2, "modifier quit key should stop the listener")
+
+    def test_modifier_quit_key_left_variant_also_triggers(self):
+        # A side-specific variant of the modifier quit key (ctrl_l delivered for
+        # a quit key configured as "ctrl") is canonicalised to "ctrl" and must
+        # still hit the quit streak — not mis-routed to the PTT machinery.
+        ln = self._ln_with_modifier_quit()
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            ln.on_press(_FakeModKey("ctrl_l"))   # left variant, canonicalised → ctrl
+            result = ln.on_press(_FakeModKey("ctrl_r"))   # right variant → also ctrl
+        self.assertFalse(result, "side-specific modifier quit key must also trigger")
+
+    def test_modifier_quit_key_never_starts_recording(self):
+        # The quit key must never start dictation, even when the listener's PTT
+        # target happens to be a different modifier — the quit key is always
+        # treated as foreign and returned early (None, no start).
+        ln = self._ln_with_modifier_quit()
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            result = ln.on_press(_FakeModKey("ctrl"))
+        self.assertIsNone(result)
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
+    def test_modifier_quit_key_does_not_join_ptt_chord(self):
+        # The quit modifier must not be added to _pressed (PTT chord tracking) or
+        # influence recording state.  With the bug the key landed in the chord
+        # machinery and could, with a matching target, mis-start dictation.
+        ln = self._ln_with_modifier_quit(ptt_target="ctrl",
+                                         quit_key=_FakeModKey("ctrl"))
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            ln.on_press(_FakeModKey("ctrl"))
+        self.assertNotIn("ctrl", ln._pressed)
+        self.assertEqual(ln._owner.started, 0)
+
+    # ------------------------------------------------------------------
+    # 2. Non-modifier quit key (esc, f12): behaviour unchanged
+    # ------------------------------------------------------------------
+    def test_non_modifier_quit_key_esc_still_works(self):
+        # Default case: quit key is ``esc`` (a non-modifier). canon is a no-op
+        # for it, so the fix must leave the existing behaviour fully intact.
+        guard = vp_keys_solo.SoloModifierGuard("<shift_l>", enabled=True)
+        ln = vp_keys._PynputListener(
+            _Target(), {"<shift_l>"}, "<esc>", toggle_mode=False,
+            solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            ln.on_press("<esc>")                        # streak = 1
+            result = ln.on_press("<esc>")               # streak = 2 → quit
+        self.assertFalse(result)
+
+    def test_non_modifier_quit_key_never_starts_recording(self):
+        guard = vp_keys_solo.SoloModifierGuard("<shift_l>", enabled=True)
+        ln = vp_keys._PynputListener(
+            _Target(), {"<shift_l>"}, "<esc>", toggle_mode=False,
+            solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            result = ln.on_press("<esc>")
+        self.assertIsNone(result)
+        self.assertEqual(ln._owner.started, 0)
+
+    # ------------------------------------------------------------------
+    # 3. Side-insensitive chord (PR #254 core fix) is not regressed
+    # ------------------------------------------------------------------
+    def test_side_insensitive_chord_not_regressed(self):
+        # The PR #254 fix: shift_l PTT binding completed by a generic or
+        # opposite-side modifier variant must still start recording.
+        shift_l = _FakeModKey("shift_l")
+        ctrl_l = _FakeModKey("ctrl_l")
+        targets = {shift_l, ctrl_l}
+        canon = {vp_keys._canon_modifier(t) for t in targets}
+        guard = vp_keys_solo.SoloModifierGuard(canon, enabled=True)
+        # Use a non-modifier quit key so the quit path is orthogonal.
+        ln = vp_keys._PynputListener(
+            _Target(), set(targets), "<esc>", toggle_mode=False,
+            solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl"))   # generic ctrl variant
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
 
 
 class SoloModifierGuardUnitTests(unittest.TestCase):
@@ -1109,6 +1252,240 @@ class EvdevSoloModifierChordTests(unittest.TestCase):
                           rec, solo)     # completes → must start
         self.assertTrue(rec)
         self.assertEqual(self.t.started, 1)
+
+
+class CanonModifierUnitTests(unittest.TestCase):
+    """``_canon_modifier`` collapses side variants; leaves everything else be."""
+
+    def test_left_right_generic_ctrl_collapse_to_one_token(self):
+        c_l = vp_keys._canon_modifier(_FakeModKey("ctrl_l"))
+        c_r = vp_keys._canon_modifier(_FakeModKey("ctrl_r"))
+        c_g = vp_keys._canon_modifier(_FakeModKey("ctrl"))
+        self.assertEqual(c_l, c_r)
+        self.assertEqual(c_l, c_g)   # all three are the same chord member
+
+    def test_shift_alt_cmd_families_collapse(self):
+        for fam in ("shift", "alt", "cmd"):
+            left = vp_keys._canon_modifier(_FakeModKey(f"{fam}_l"))
+            right = vp_keys._canon_modifier(_FakeModKey(f"{fam}_r"))
+            generic = vp_keys._canon_modifier(_FakeModKey(fam))
+            self.assertEqual(left, right, fam)
+            self.assertEqual(left, generic, fam)
+        # alt_gr is part of the alt family (pynput's AltGr).
+        self.assertEqual(vp_keys._canon_modifier(_FakeModKey("alt_gr")),
+                         vp_keys._canon_modifier(_FakeModKey("alt_l")))
+
+    def test_distinct_families_do_not_collapse(self):
+        self.assertNotEqual(vp_keys._canon_modifier(_FakeModKey("ctrl_l")),
+                            vp_keys._canon_modifier(_FakeModKey("shift_l")))
+
+    def test_non_modifier_keys_pass_through_unchanged(self):
+        # KeyCode-ish chars, function keys, the quit key, media keys and the
+        # plain-string tokens the other tests use must be returned as-is so their
+        # identity (foreign-key / quit matching) is preserved.
+        for tok in ("c", "<ctrl_l>", "<esc>", _FakeModKey("f9"),
+                    _FakeMediaKey("media_volume_up")):
+            self.assertIs(vp_keys._canon_modifier(tok), tok)
+
+    def test_canon_is_idempotent(self):
+        once = vp_keys._canon_modifier(_FakeModKey("ctrl_l"))
+        self.assertEqual(vp_keys._canon_modifier(once), once)
+
+
+class PynputSideInsensitiveChordTests(unittest.TestCase):
+    """Root-cause regression: pynput on Windows intermittently reports a generic
+    or opposite-side modifier variant (``Key.ctrl`` instead of ``Key.ctrl_l``).
+    With identity-exact matching the chord never completed → the reported
+    intermittent "doesn't start recording" miss. Chord-down detection must be
+    side-insensitive AND order-independent. Targets are REAL-ish Key objects
+    (``_FakeModKey`` exposing ``.name``) so the canonicalisation path is exercised
+    end to end, including the solo guard (bare-modifier chord → enabled)."""
+
+    def _ln(self, enabled=True):
+        shift_l = _FakeModKey("shift_l")
+        ctrl_l = _FakeModKey("ctrl_l")
+        targets = {shift_l, ctrl_l}
+        canon = {vp_keys._canon_modifier(t) for t in targets}
+        guard = vp_keys_solo.SoloModifierGuard(canon, enabled=enabled)
+        return vp_keys._PynputListener(
+            _Target(), set(targets), _FakeModKey("esc"), toggle_mode=False,
+            solo_guard=guard)
+
+    def test_shift_then_ctrl_left_keys_start(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            self.assertEqual(ln._owner.started, 0)   # partial chord
+            ln.on_press(_FakeModKey("ctrl_l"))
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_ctrl_then_shift_left_keys_start(self):
+        # Order-independent: same chord, reversed press order.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_l"))
+            self.assertEqual(ln._owner.started, 0)
+            ln.on_press(_FakeModKey("shift_l"))
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_generic_ctrl_variant_completes_chord(self):
+        # THE reported intermittent miss: ctrl_l is physically pressed but pynput
+        # delivers the GENERIC Key.ctrl for it. Pre-fix, "ctrl" was not in the
+        # {ctrl_l, shift_l} target set → chord never completed → no start.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl"))      # generic variant, not ctrl_l
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_generic_variant_reversed_order_also_starts(self):
+        # The press-order suspicion was a red herring for the same ambiguity:
+        # prove BOTH orders start even when the SECOND key is the generic variant.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_l"))
+            ln.on_press(_FakeModKey("shift"))     # generic shift last
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_opposite_side_variant_completes_chord(self):
+        # Even an opposite-side delivery (ctrl_r reported for the left key the
+        # binding names) must still satisfy the chord — side-insensitive.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl_r"))    # right ctrl reported
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_release_of_different_variant_stops(self):
+        # press ctrl_l, release reported as generic ctrl: the chord must still
+        # break and stop (no stuck recording).
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl_l"))
+            self.assertEqual(ln._owner.started, 1)
+            ln.on_release(_FakeModKey("ctrl"))    # generic up for the left key
+        self.assertEqual(ln._owner.stopped, 1)
+        self.assertFalse(ln._recording)
+
+    def test_chord_member_variant_is_not_foreign(self):
+        # Solo-guard regression: a generic/opposite-side variant of a chord
+        # member must NOT be treated as a foreign key (no cancel, no block). Hold
+        # the chord, then a repeat arrives as the generic variant → still recording.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl_l"))
+            self.assertEqual(ln._owner.started, 1)
+            ln.on_press(_FakeModKey("ctrl"))      # generic repeat of a member
+            ln.on_press(_FakeModKey("shift_r"))   # opposite-side repeat of a member
+        self.assertEqual(ln._owner.cancelled, 0)
+        self.assertTrue(ln._recording)
+
+    def test_genuine_foreign_letter_still_cancels(self):
+        # The solo guard must still cancel on a real foreign key during the hold.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl_l"))
+            ln.on_press("x")                      # genuine foreign key → cancel
+        self.assertEqual(ln._owner.cancelled, 1)
+        self.assertFalse(ln._recording)
+
+    def test_foreign_then_chord_does_not_start(self):
+        # Rule 1 still holds for a real foreign key: hold X, then complete the
+        # chord (with a generic variant) → blocked.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press("x")                      # foreign held first
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl"))      # chord complete but X held
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
+
+class PynputSideInsensitiveSingleKeyTests(unittest.TestCase):
+    """Single-key bindings stay robust to the same variant ambiguity: a ctrl_l
+    binding started by a generic Key.ctrl, and hold-mode repeat semantics."""
+
+    def _ln(self, enabled=True):
+        target = _FakeModKey("ctrl_l")
+        canon = vp_keys._canon_modifier(target)
+        guard = vp_keys_solo.SoloModifierGuard({canon}, enabled=enabled)
+        return vp_keys._PynputListener(
+            _Target(), {target}, _FakeModKey("esc"), toggle_mode=False,
+            solo_guard=guard)
+
+    def test_generic_variant_starts_single_key_binding(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl"))      # generic for the ctrl_l binding
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+    def test_press_variant_release_other_variant_stops(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_l"))
+            ln.on_release(_FakeModKey("ctrl"))    # generic up
+        self.assertEqual(ln._owner.started, 1)
+        self.assertEqual(ln._owner.stopped, 1)
+        self.assertFalse(ln._recording)
+
+    def test_variant_repeat_does_not_restart(self):
+        # Hold mode: the same physical key repeating as mixed variants must start
+        # exactly once (rising-edge latch keyed on the canonical token).
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_l"))
+            ln.on_press(_FakeModKey("ctrl"))      # repeat as generic
+            ln.on_press(_FakeModKey("ctrl_l"))    # repeat as left
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
+
+class PynputSideInsensitiveToggleTests(unittest.TestCase):
+    """toggle_mode must also be side-insensitive: a generic-variant press starts,
+    and a second press (any variant) stops — release is ignored."""
+
+    def _ln(self):
+        target = _FakeModKey("ctrl_l")
+        canon = vp_keys._canon_modifier(target)
+        guard = vp_keys_solo.SoloModifierGuard({canon}, enabled=True)
+        return vp_keys._PynputListener(
+            _Target(), {target}, _FakeModKey("esc"), toggle_mode=True,
+            solo_guard=guard)
+
+    def test_toggle_with_mixed_variants(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl"))      # generic press: start
+            self.assertEqual(ln._owner.started, 1)
+            self.assertTrue(ln._recording)
+            ln.on_release(_FakeModKey("ctrl_l"))  # release ignored in toggle mode
+            self.assertEqual(ln._owner.stopped, 0)
+            self.assertTrue(ln._recording)
+            ln.on_press(_FakeModKey("ctrl_l"))    # second press (left): stop
+        self.assertEqual(ln._owner.stopped, 1)
+        self.assertFalse(ln._recording)
 
 
 if __name__ == "__main__":
