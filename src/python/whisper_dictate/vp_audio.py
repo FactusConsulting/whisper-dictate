@@ -117,6 +117,73 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
     return _boost_quiet_detail(a)[0]
 
 
+# Trailing-silence trim — the PRIMARY anti-hallucination defence. The #1 source
+# of Whisper hallucinations is "dead audio" at the end of a clip (you stop
+# talking but the key is still held). Whisper fills that empty tail with
+# high-probability training phrases (subtitle credits, "thank you for watching").
+# Cutting the tail BEFORE transcription removes the root cause. Unlike downstream
+# text filtering it will not clip a normally-voiced word: a frame counts as
+# silence only when it sits far BELOW the clip's own speech body, and a 120 ms
+# pad is kept after the last speech frame on top of that.
+_TRIM_FRAME = 480           # 30 ms @ 16 kHz — same framing as _noise_snr
+_TRIM_DROP_DB = 30.0        # a frame is silence only when it sits this far BELOW
+                            # the loudest frame (the reliable "speech" reference).
+                            # Anchoring on the peak — not a percentile — is robust
+                            # to the speech/silence ratio: a percentile floor lands
+                            # in quiet speech when speech dominates (over-trim) or
+                            # in silence when the tail dominates (no trim). The peak
+                            # keeps soft trailing speech (within ~25 dB) safe AND
+                            # still cuts a long dead tail (40-60 dB down).
+_TRIM_PAD_FRAMES = 4        # keep ~120 ms after the last speech frame so a word's
+                            # natural decay is never clipped
+_TRIM_MIN_FRAMES = 5        # only trim if it removes ≥ ~150 ms — never shorten a
+                            # tight recording pointlessly
+
+
+def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
+    """Cut a sustained run of trailing near-silence (at the noise floor) off the
+    end of ``a``.
+
+    Returns ``(trimmed, trimmed_ms)``. Leaves the clip untouched (``trimmed_ms``
+    0.0) when there is no clear trailing silence or it is shorter than ~150 ms.
+    A frame counts as silence only when it sits ``_TRIM_DROP_DB`` below the
+    clip's loudest frame, so the threshold adapts to the mic, soft trailing
+    speech is preserved, and a long dead tail is still cut regardless of how much
+    of the clip it occupies. Pure / side-effect-free — the caller logs.
+    """
+    n = len(a) // _TRIM_FRAME
+    if n < 4:
+        return a, 0.0
+    frm = a[:n * _TRIM_FRAME].reshape(n, _TRIM_FRAME)
+    rms = np.sqrt(np.mean(frm.astype(np.float64) ** 2, axis=1))
+    # Score the trailing partial frame (the < 30 ms remainder) too, over its real
+    # samples, so a brief final phoneme/click there is not mistaken for silence
+    # and trimmed away. It becomes frame index ``n`` (the (n+1)th frame).
+    remainder = a[n * _TRIM_FRAME:]
+    if remainder.size:
+        rem_rms = np.sqrt(np.mean(remainder.astype(np.float64) ** 2))
+        rms = np.append(rms, rem_rms)
+    n_frames = len(rms)
+    # Reference the LOUDEST frame (reliably speech); a frame is silence only when
+    # it sits _TRIM_DROP_DB below it. Peak-anchored (not a percentile) so it works
+    # whether speech or the dead tail dominates the clip. Frame-RMS averaging over
+    # 30 ms absorbs transient clicks, so the peak is a stable speech reference.
+    body = float(np.max(rms)) or 1e-9
+    threshold = body * (10 ** (-_TRIM_DROP_DB / 20.0))
+    speech = np.nonzero(rms > threshold)[0]
+    if len(speech) == 0:
+        return a, 0.0
+    keep_frames = min(n_frames, int(speech[-1]) + 1 + _TRIM_PAD_FRAMES)
+    removed_frames = n_frames - keep_frames
+    if removed_frames < _TRIM_MIN_FRAMES:
+        return a, 0.0
+    # The last frame may be partial, so clamp the cut back to len(a).
+    keep = min(keep_frames * _TRIM_FRAME, len(a))
+    # samples removed / 16 = ms at 16 kHz; exact, incl. any sub-frame remainder.
+    trimmed_ms = (len(a) - keep) / 16.0
+    return a[:keep], trimmed_ms
+
+
 def compute_audio_metrics(pcm: np.ndarray) -> AudioCaptureMetrics:
     """Public wrapper: compute audio capture metrics for ``pcm`` (int16 mono).
 
