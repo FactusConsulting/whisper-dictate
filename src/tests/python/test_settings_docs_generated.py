@@ -87,6 +87,24 @@ class SettingsDocsGeneratedTests(unittest.TestCase):
                 f"description for {setting['key']} not found in generated docs",
             )
 
+    def test_bad_input_exits_2_distinct_from_check_drift_exit_1(self):
+        # Exit-code contract (review flagged bad input was exiting 1, the same as
+        # --check drift): unknown category -> 2, bad/missing markers -> 2.
+        gen = _load_generator()
+        settings = gen.load_settings()
+        bad = [dict(settings[0], category="does-not-exist")]
+        with self.assertRaises(SystemExit) as ctx:
+            gen.render_block(bad)
+        self.assertEqual(ctx.exception.code, 2)
+
+        with self.assertRaises(SystemExit) as ctx:
+            gen.splice("no markers here", "block")
+        self.assertEqual(ctx.exception.code, 2)
+
+        with self.assertRaises(SystemExit) as ctx:
+            gen.splice(f"{gen.END_MARKER}\n{gen.BEGIN_MARKER}", "block")
+        self.assertEqual(ctx.exception.code, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

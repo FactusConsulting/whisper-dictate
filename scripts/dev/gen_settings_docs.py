@@ -39,10 +39,21 @@ DOCS_PATH = REPO_ROOT / "docs" / "CONFIGURATION.md"
 BEGIN_MARKER = "<!-- BEGIN GENERATED SETTINGS REFERENCE -->"
 END_MARKER = "<!-- END GENERATED SETTINGS REFERENCE -->"
 
-# Category -> (display title, ordering). Order here is the order tables appear.
-# Every `category` value used in the schema must be present in this map; the
-# generator fails loudly (exit 2) on an unknown category so a new bucket can't
-# silently fall out of the docs.
+
+def _die(message: str) -> None:
+    """Print a bad-input error to stderr and exit 2 (the documented contract).
+
+    `raise SystemExit("msg")` would exit 1 — the same code as `--check` drift —
+    which is what the review flagged. Bad input (unknown category / missing or
+    misordered markers) must be distinguishable from drift, so it exits 2.
+    """
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
+# Category -> display title. Table order = this dict's insertion order. Every
+# `category` value used in the schema must be present here; the generator fails
+# loudly (exit 2) on an unknown category so a new bucket can't silently fall out
+# of the docs.
 CATEGORY_TITLES: dict[str, str] = {
     "core": "Core (the first-time-setup basics)",
     "stt-local": "Local speech-to-text (Whisper / Parakeet)",
@@ -79,7 +90,7 @@ def render_block(settings: list[dict]) -> str:
     """Render the generated reference (between, not including, the markers)."""
     unknown = sorted({s["category"] for s in settings} - set(CATEGORY_TITLES))
     if unknown:
-        raise SystemExit(
+        _die(
             f"unknown category in schema: {unknown}. Add it to CATEGORY_TITLES "
             f"in {Path(__file__).name}."
         )
@@ -128,15 +139,12 @@ def render_block(settings: list[dict]) -> str:
 
 def splice(doc: str, block: str) -> str:
     """Return `doc` with the marker block replaced by `block`."""
-    try:
-        start = doc.index(BEGIN_MARKER)
-        end = doc.index(END_MARKER)
-    except ValueError as exc:  # pragma: no cover - guarded by a test
-        raise SystemExit(
-            f"markers {BEGIN_MARKER} / {END_MARKER} not found in {DOCS_PATH}"
-        ) from exc
+    start = doc.find(BEGIN_MARKER)
+    end = doc.find(END_MARKER)
+    if start == -1 or end == -1:
+        _die(f"markers {BEGIN_MARKER} / {END_MARKER} not found in {DOCS_PATH}")
     if end < start:
-        raise SystemExit("END marker appears before BEGIN marker")
+        _die("END marker appears before BEGIN marker")
     head = doc[: start + len(BEGIN_MARKER)]
     tail = doc[end:]
     return f"{head}\n{block}{tail}"
