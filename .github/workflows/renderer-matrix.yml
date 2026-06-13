@@ -134,9 +134,12 @@ jobs:
           if (Test-Path $outLog) { Get-Content $outLog } else { Write-Host "(no stdout)" }
           Write-Host "=============================================="
 
-          # Read captured output (cast to string so $null becomes "" on empty file).
-          $err = [string](if (Test-Path $errLog) { Get-Content $errLog -Raw } else { "" })
-          $out = [string](if (Test-Path $outLog) { Get-Content $outLog -Raw } else { "" })
+          # Read captured output; -Raw returns $null for an empty file so coerce
+          # via -join "" to always get a string (never null).
+          $errRaw = if (Test-Path $errLog) { Get-Content $errLog -Raw } else { $null }
+          $outRaw = if (Test-Path $outLog) { Get-Content $outLog -Raw } else { $null }
+          $err = if ($null -ne $errRaw) { $errRaw } else { "" }
+          $out = if ($null -ne $outRaw) { $outRaw } else { "" }
 
           # Hard-fail signals: panics or explicit renderer/adapter errors in the output.
           # These indicate a code bug regardless of whether the window survived.
