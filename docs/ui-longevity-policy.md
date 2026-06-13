@@ -35,7 +35,12 @@ The workflow triggers on:
 The **headless probe** (closes #269) launches the compiled binary's `ui`
 subcommand and asserts it survives 15 s without a non-zero exit or panic line.
 On `windows-2025` the wgpu renderer falls back to the DX12 WARP software adapter
-and glow uses the runner's software OpenGL rasteriser — both work without a GPU.
+On `windows-2025` wgpu falls back to the DX12 WARP software adapter and survives
+15 s headless (confirmed by CI). Glow exits immediately on the same runner because
+it requires an OpenGL context and the runner has no software OpenGL rasteriser
+(there is no WARP-equivalent for OpenGL). This is a runner-environment limitation,
+not a renderer code bug; the probe soft-skips glow's early exit and only hard-fails
+on a panic or explicit adapter-init error message in the output.
 Linux is build-only (no display server available on the runner).
 
 ## Core/domain isolation invariant
