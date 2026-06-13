@@ -351,6 +351,30 @@ class CaptureHotkeyFlowTests(unittest.TestCase):
         self.assertIn("shift_r+ctrl_r", joined)
         self.assertIn("VOICEPI_KEY", joined)  # equivalent env line printed
 
+    def test_wayland_session_warns_about_pynput_listener(self):
+        from unittest import mock
+        lines = []
+        with mock.patch.dict("os.environ", {"WAYLAND_DISPLAY": "wayland-0"}):
+            self.cli.run_capture_hotkey(
+                capture_fn=lambda **kw: "ctrl_r",
+                input_fn=_scripted(["n"]),
+                output_fn=lines.append,
+                config_writer=lambda cfg: "x",
+            )
+        self.assertIn("Wayland", "\n".join(lines))
+
+    def test_no_wayland_no_warning(self):
+        from unittest import mock
+        lines = []
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.cli.run_capture_hotkey(
+                capture_fn=lambda **kw: "ctrl_r",
+                input_fn=_scripted(["n"]),
+                output_fn=lines.append,
+                config_writer=lambda cfg: "x",
+            )
+        self.assertNotIn("Wayland", "\n".join(lines))
+
     def test_decline_does_not_write(self):
         lines = []
         calls = {"n": 0}

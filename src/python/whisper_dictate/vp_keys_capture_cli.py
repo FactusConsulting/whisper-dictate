@@ -18,9 +18,10 @@ importing this module never installs a global keyboard hook.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import Any, Callable, TextIO
 
 from whisper_dictate.vp_config import save_config
 from whisper_dictate.vp_setup import format_bash_lines, format_powershell_lines
@@ -33,7 +34,7 @@ HOTKEY_SETTING = "key"
 def persist_hotkey(
     chord: str,
     *,
-    config_writer: Callable[[dict[str, str]], Path] | None = None,
+    config_writer: Callable[[dict[str, Any]], Path] | None = None,
 ) -> Path:
     """Write the captured ``chord`` into the PTT ``key`` setting in config.json.
 
@@ -78,7 +79,7 @@ def run_capture_hotkey(
     capture_fn: Callable[..., str | None] | None = None,
     input_fn: Callable[[str], str] | None = None,
     output_fn: Callable[[str], None] | None = None,
-    config_writer: Callable[[dict[str, str]], Path] | None = None,
+    config_writer: Callable[[dict[str, Any]], Path] | None = None,
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
     allow_media: bool = False,
@@ -106,6 +107,16 @@ def run_capture_hotkey(
     if capture_fn is None:
         from whisper_dictate.vp_keys_capture_io import capture_chord_pynput
         capture_fn = capture_chord_pynput
+
+    # The default capture path is the pynput listener, which can miss key events
+    # on Wayland (the runtime falls back to evdev there) — warn so a Wayland user
+    # isn't confused by a consistent timeout.
+    if os.environ.get("WAYLAND_DISPLAY"):
+        output(
+            "Note: on Wayland the pynput listener can miss key events; if capture "
+            "keeps timing out, set the hotkey manually (the runtime uses the evdev "
+            "backend on Wayland)."
+        )
 
     output("Press and hold your push-to-talk key(s), then release.")
     output("What you press is what gets bound (left/right modifiers bind the same).")
