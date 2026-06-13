@@ -284,8 +284,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "Then exit; loads no ML model.")
     ap.add_argument("--capture-hotkey-allow-media", action="store_true",
                     help="(experimental) with --capture-hotkey, also capture media "
-                         "/ headset buttons (play-pause, volume, hook-switch) that "
-                         "surface as media keys; see issue #258.")
+                         "/ consumer keys (play/pause, volume up/down) that pynput "
+                         "exposes as media keys; see issue #258.")
     ap.add_argument("--export-config", action="store_true",
                     help="print the current effective config (config.json + env "
                          "overrides) as a config.json blob plus PowerShell/bash "

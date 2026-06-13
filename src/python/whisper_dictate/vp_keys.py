@@ -234,6 +234,12 @@ class KeyBackendMixin:
         'shift_l': 'KEY_LEFTSHIFT', 'shift_r': 'KEY_RIGHTSHIFT',
         'alt_l': 'KEY_LEFTALT',     'alt_r': 'KEY_RIGHTALT',
         'super_l': 'KEY_LEFTMETA',  'super_r': 'KEY_RIGHTMETA',
+        # pynput names the Win/Cmd modifier family "cmd" (cmd_l / cmd_r / cmd);
+        # evdev uses KEY_LEFTMETA / KEY_RIGHTMETA (exposed above as super_l/r).
+        # Add cmd_l / cmd_r aliases so a hotkey captured with the pynput backend
+        # (which emits "cmd_r") can also be used with the evdev backend without
+        # a sys.exit("unknown key 'cmd_r' for evdev").
+        'cmd_l': 'KEY_LEFTMETA',    'cmd_r': 'KEY_RIGHTMETA',
         **{f'f{i}': f'KEY_F{i}' for i in range(1, 13)},
     }
 

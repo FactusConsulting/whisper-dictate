@@ -91,6 +91,30 @@ class _Target(vp_keys.KeyBackendMixin):
         self.cancelled += 1
 
 
+class EvdevMapTests(unittest.TestCase):
+    """KeyBackendMixin._EVDEV_MAP must include all keys that capture can emit."""
+
+    def test_cmd_r_in_evdev_map(self):
+        # Copilot finding 2: press-to-capture emits "cmd_r" for the Win/Super
+        # key; the evdev backend must resolve it without calling sys.exit.
+        self.assertIn("cmd_r", vp_keys.KeyBackendMixin._EVDEV_MAP,
+                      "cmd_r must be in _EVDEV_MAP so evdev users can bind Win key")
+        self.assertEqual(vp_keys.KeyBackendMixin._EVDEV_MAP["cmd_r"], "KEY_RIGHTMETA")
+
+    def test_cmd_l_in_evdev_map(self):
+        self.assertIn("cmd_l", vp_keys.KeyBackendMixin._EVDEV_MAP)
+        self.assertEqual(vp_keys.KeyBackendMixin._EVDEV_MAP["cmd_l"], "KEY_LEFTMETA")
+
+    def test_evdev_target_codes_resolves_cmd_r(self):
+        # End-to-end: _evdev_target_codes must not sys.exit for a cmd_r binding.
+        import types as _local_types
+        evdev = _local_types.ModuleType("evdev")
+        evdev.ecodes = types.SimpleNamespace(KEY_RIGHTMETA=125)
+        t = _Target()
+        codes = vp_keys.KeyBackendMixin._evdev_target_codes(t, evdev, ["cmd_r"])
+        self.assertEqual(codes, {125})
+
+
 class PynputTargetTests(unittest.TestCase):
     def test_pynput_targets_resolves_each_key(self):
         t = _Target()

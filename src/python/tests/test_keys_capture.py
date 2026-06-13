@@ -133,9 +133,10 @@ class ChordCaptureMultiKeyTests(unittest.TestCase):
         # Release the last: emit the FULL chord built up, not just the last key.
         self.assertEqual(c.release(_Key("shift_r")), "ctrl_r+shift_r")
 
-    def test_release_captures_full_set_high_water_mark(self):
+    def test_release_captures_full_set_pre_release_snapshot(self):
         # Build a 3-key chord, then let go one at a time — the captured chord is
-        # the high-water mark (all three), never eroded by partial releases.
+        # the full set held just before releases began, never eroded by partial
+        # releases.
         c = ChordCapture()
         c.press(_Key("ctrl_r"))
         c.press(_Key("shift_r"))
@@ -144,6 +145,23 @@ class ChordCaptureMultiKeyTests(unittest.TestCase):
         self.assertIsNone(c.release(_Key("alt_r")))
         self.assertIsNone(c.release(_Key("ctrl_r")))
         self.assertEqual(c.release(_Key("shift_r")), "alt_r+ctrl_r+shift_r")
+
+    def test_same_size_chord_change_uses_current_held_set(self):
+        # Copilot finding 1: press Ctrl+Shift, release Ctrl, press Alt — the
+        # held set is now Shift+Alt (same size as Ctrl+Shift, but different
+        # keys). The snapshot must reflect the ACTUAL held set at first release,
+        # not the stale Ctrl+Shift set. Expected chord: alt_r+shift_r.
+        c = ChordCapture()
+        c.press(_Key("ctrl_r"))
+        c.press(_Key("shift_r"))
+        # Now release Ctrl and press Alt: same size (2), but chord changed.
+        self.assertIsNone(c.release(_Key("ctrl_r")))
+        c.press(_Key("alt_r"))
+        # held is now {shift_r, alt_r} — the snapshot must have been refreshed.
+        self.assertIsNone(c.release(_Key("shift_r")))
+        result = c.release(_Key("alt_r"))
+        self.assertEqual(result, "alt_r+shift_r",
+                         "snapshot must reflect Shift+Alt, not the stale Ctrl+Shift")
 
     def test_press_order_does_not_change_canonical_chord(self):
         a = ChordCapture()
@@ -203,6 +221,46 @@ class ChordCaptureEdgeCaseTests(unittest.TestCase):
         c = ChordCapture()
         self.assertIsNone(c.release(_Key("ctrl_r")))
         self.assertFalse(c.done)
+
+    def test_unbindable_snapshot_resets_then_accepts_next_chord(self):
+        # Exercise the "chord resolved to nothing bindable: reset and keep going"
+        # branch (vp_keys_capture.py release() lines 182-183). We reach it by
+        # using a _Char whose .char is empty-string — key_to_setting_name returns
+        # None for it, but press() also blocks it (returns early) so it never
+        # enters _held. To force the snapshot to contain only unbindable tokens
+        # we patch key_to_setting_name to allow the key into _held but return
+        # None during the resolve step.
+        from unittest.mock import patch
+        # A sentinel token that passes the press() guard with a patched
+        # key_to_setting_name, but is resolved as None for the final chord.
+        sentinel = _Key("__unbindable__")
+        original = vp_keys_capture.key_to_setting_name
+
+        def _patched(k):
+            # Allow the sentinel past the press() guard but return None at
+            # resolution time so the snapshot resolves to an empty chord.
+            if k is sentinel:
+                return "__unbindable__"  # truthy → enters _held
+            return original(k)
+
+        def _resolved_none(k):
+            # At chord-emit time _resolved calls key_to_setting_name; make the
+            # sentinel resolve to None so the chord comes back empty.
+            return None
+
+        c = ChordCapture()
+        with patch.object(vp_keys_capture, "key_to_setting_name", _patched):
+            c.press(sentinel)
+        # Now _held and _pre_release_snapshot contain sentinel.
+        # Override key_to_setting_name for the release step so _resolved → {}.
+        with patch.object(vp_keys_capture, "key_to_setting_name", _resolved_none):
+            result = c.release(sentinel)
+        # The "nothing bindable" branch reset the snapshot; the capture is not done.
+        self.assertIsNone(result)
+        self.assertFalse(c.done)
+        # After reset, a fresh key press and release should still bind normally.
+        c.press(_Key("f9"))
+        self.assertEqual(c.release(_Key("f9")), "f9")
 
 
 class ChordCaptureMediaTests(unittest.TestCase):
@@ -352,6 +410,105 @@ class CaptureHotkeyFlowTests(unittest.TestCase):
             self.cli.persist_hotkey("alt_r", config_writer=_writer)
         self.assertEqual(written.get("model"), "small", "other keys kept")
         self.assertEqual(written.get("key"), "alt_r", "key overwritten")
+
+    def test_persist_hotkey_preserves_sibling_types(self):
+        # Copilot finding 3: the old {k: str(v) for ...} call corrupted types.
+        # A number, bool, and null sibling must survive persist_hotkey unchanged.
+        from unittest.mock import patch
+        written = {}
+
+        def _writer(cfg):
+            written.update(cfg)
+            return "x"
+
+        existing = {"model": "small", "count": 3, "flag": True, "empty": None}
+        with patch("whisper_dictate.vp_config.load_config",
+                   return_value=existing):
+            self.cli.persist_hotkey("ctrl_r", config_writer=_writer)
+        self.assertIsInstance(written.get("count"), int,
+                              "integer sibling must stay int, not str")
+        self.assertIs(written.get("flag"), True,
+                      "bool sibling must stay bool, not str")
+        self.assertIsNone(written.get("empty"),
+                          "null sibling must stay None, not 'None'")
+        self.assertEqual(written.get("key"), "ctrl_r", "hotkey written")
+
+    def test_run_capture_hotkey_stdin_scripted_input(self):
+        # Cover the _resolve_input_fn scripted-stdin path that is exercised when
+        # neither input_fn nor a TTY is available: the function reads lines from
+        # a provided stdin-like object.
+        import io
+        lines = []
+
+        def _writer(cfg):
+            return "x"
+
+        stdin = io.StringIO("y\n")
+        rc = self.cli.run_capture_hotkey(
+            capture_fn=lambda **kw: "ctrl_r",
+            # No input_fn: let _resolve_input_fn pick up the scripted stdin.
+            stdin=stdin,
+            output_fn=lines.append,
+            config_writer=_writer,
+        )
+        self.assertEqual(rc, 0, "scripted 'y' answer should accept and save")
+
+    def test_run_capture_hotkey_stdin_exhausted_returns_empty(self):
+        # Cover the StopIteration branch inside _scripted: when stdin has no
+        # more lines, the scripted reader returns "" (treated as "no"), so the
+        # capture is declined.
+        import io
+        stdin = io.StringIO("")   # no lines at all
+        rc = self.cli.run_capture_hotkey(
+            capture_fn=lambda **kw: "ctrl_r",
+            stdin=stdin,
+            output_fn=lambda _t="": None,
+            config_writer=lambda cfg: "x",
+        )
+        self.assertEqual(rc, 1, "empty stdin means declined (no 'y' was given)")
+
+    def test_run_capture_hotkey_tty_stdin_uses_input_builtin(self):
+        # Cover the TTY branch (line 64: return input) in _resolve_input_fn.
+        # Fake a stdin that reports isatty()=True, then inject an input_fn so
+        # the actual builtin input() is never called.
+        import io
+        from unittest.mock import patch
+
+        class _FakeTTY(io.StringIO):
+            def isatty(self):
+                return True
+
+        # The function returns the builtin `input` when isatty() is True.
+        # We can't actually call builtin input() in tests, so patch it to
+        # return "n" (decline).
+        with patch("builtins.input", return_value="n"):
+            rc = self.cli.run_capture_hotkey(
+                capture_fn=lambda **kw: "ctrl_r",
+                stdin=_FakeTTY(),
+                # No input_fn: must pick up the TTY path.
+                output_fn=lambda _t="": None,
+                config_writer=lambda cfg: "x",
+            )
+        self.assertEqual(rc, 1, "TTY input returning 'n' should decline")
+
+    def test_run_capture_hotkey_stdout_param(self):
+        # Cover the `out = stdout or sys.stdout` path (line 98) and the _emit
+        # inner function body: pass a stdout stream and no output_fn.
+        import io
+        from unittest.mock import patch
+        buf = io.StringIO()
+
+        def _writer(cfg):
+            return "x"
+
+        rc = self.cli.run_capture_hotkey(
+            capture_fn=lambda **kw: "shift_r",
+            input_fn=_scripted(["y"]),
+            stdout=buf,
+            config_writer=_writer,
+        )
+        self.assertEqual(rc, 0)
+        self.assertIn("shift_r", buf.getvalue())
 
 
 class CaptureHotkeyCliDispatchTests(unittest.TestCase):

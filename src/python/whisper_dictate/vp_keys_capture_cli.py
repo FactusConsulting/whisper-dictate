@@ -44,7 +44,10 @@ def persist_hotkey(
     from whisper_dictate.vp_config import load_config
 
     writer = config_writer or save_config
-    data = {k: str(v) for k, v in load_config().items()}
+    # Load the existing config preserving the original types (numbers, booleans,
+    # null) — converting every value to str would corrupt siblings (null→"None",
+    # true→"True", 42→"42") and break save_config's None/"" pruning logic.
+    data = dict(load_config())
     data[HOTKEY_SETTING] = chord
     return writer(data)
 

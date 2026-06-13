@@ -118,14 +118,21 @@ class ChordCapture:
     def __init__(self, *, allow_media: bool = False) -> None:
         self._allow_media = allow_media
         self._held: set = set()
-        self._high_water: set = set()
+        # _pre_release_snapshot: the held set snapshotted on every press so we
+        # always have "the set that was held just before the user started
+        # releasing" — even when the chord changes WITHOUT growing in size (e.g.
+        # Ctrl+Shift held, Ctrl released, Alt pressed → still size 2, but the
+        # held set is now Shift+Alt, not Ctrl+Shift). Snapshotting on every press
+        # (rather than only when size increases) ensures the snapshot is always
+        # current at the moment the first release lands.
+        self._pre_release_snapshot: set = set()
         self.done = False
         self.result: str | None = None
 
     # --- introspection (handy for a live "keys held: ..." prompt) ----------
     def held_names(self) -> list[str]:
         """Sorted setting-names captured so far (for a live capture display)."""
-        return sorted(self._resolved(self._high_water))
+        return sorted(self._resolved(self._pre_release_snapshot))
 
     def _resolved(self, keys) -> set:
         out: set = set()
@@ -157,9 +164,14 @@ class ChordCapture:
         if key_to_setting_name(key) is None:
             return
         self._held.add(key)
-        # Snapshot the high-water mark: the largest set held simultaneously.
-        if len(self._held) > len(self._high_water):
-            self._high_water = set(self._held)
+        # Snapshot the held set on every press so the snapshot always reflects
+        # the most recent "fully assembled" chord — even when the chord changes
+        # without growing (e.g. Ctrl+Shift → release Ctrl → press Alt: the held
+        # set becomes Shift+Alt, same size, but the content changed). Using
+        # every-press snapshotting (not just size-increase) means the snapshot
+        # captured when the first release arrives always shows the actual keys
+        # the user is holding at that moment.
+        self._pre_release_snapshot = set(self._held)
 
     def release(self, key) -> str | None:
         """Record ``key`` as released; emit the chord when nothing is left held.
@@ -174,12 +186,12 @@ class ChordCapture:
         self._held.discard(key)
         if self._held:
             return None  # still holding part of the chord
-        if not self._high_water:
+        if not self._pre_release_snapshot:
             return None  # release with nothing ever captured — ignore
-        chord = canonical_chord(self._resolved(self._high_water))
+        chord = canonical_chord(self._resolved(self._pre_release_snapshot))
         if not chord:
             # Everything held resolved to nothing bindable: reset and keep going.
-            self._high_water = set()
+            self._pre_release_snapshot = set()
             return None
         self.done = True
         self.result = chord
