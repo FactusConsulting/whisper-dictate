@@ -319,12 +319,12 @@ fn health_card(line: &str) -> Option<RuntimeLogCard> {
 /// legacy structural WARN detection so nothing breaks: a `| WARN ...` segment
 /// maps to the amber "fair" grade, otherwise to the "good" grade.
 fn health_card_kind(body: &str) -> RuntimeLogCardKind {
-    // `Split` is not double-ended, so fold to keep the LAST `grade=` segment
-    // (the worker always appends it last; tolerate a stray earlier one).
+    // Keep the LAST `grade=` segment (the worker always appends it last;
+    // tolerate a stray earlier one). `Iterator::last` states the intent directly.
     if let Some(grade) = body
         .split(" | ")
         .filter_map(|seg| seg.trim().strip_prefix("grade="))
-        .fold(None, |_, seg| Some(seg))
+        .last()
     {
         return match grade.trim() {
             "perfect" => RuntimeLogCardKind::HealthPerfect,
