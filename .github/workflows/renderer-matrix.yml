@@ -10,8 +10,11 @@ name: renderer-matrix
 # Each renderer build is followed by a headless GUI-launch probe (closes #269):
 # the existing --version / config path checks return before eframe::run_native,
 # so a renderer/adapter INIT regression ships undetected without this step.
-# On windows-2025 wgpu falls back to the DX12 WARP software adapter; glow uses
-# the software OpenGL rasteriser. Both are validated here.
+# On windows-2025 wgpu's init is validated for real: it falls back to the DX12
+# WARP software adapter and survives the probe. Glow, however, needs an OpenGL
+# context the headless runner cannot provide (there is no WARP-equivalent
+# software OpenGL rasteriser), so its probe SOFT-SKIPS the early exit there —
+# only the wgpu probe asserts renderer-init survival.
 on:
   # Catch ecosystem rot even without a dependency PR.
   schedule:

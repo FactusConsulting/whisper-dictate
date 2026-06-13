@@ -69,7 +69,11 @@ impl eframe::App for WhisperDictateApp {
     // The `Context` (still needed for the tray, theme, repaint and the sidebar
     // bridge painter) is taken from `ui.ctx()`. Layout/visuals are unchanged.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = &ui.ctx().clone();
+        // Bind the cloned `Context` into a named owned local (not a reference to a
+        // temporary) so the borrow split off `ui` is explicit and not reliant on
+        // temporary lifetime extension; pass it as `&ctx` where a `&Context` is
+        // needed.
+        let ctx = ui.ctx().clone();
         // Poll the worker + background tasks every frame BEFORE any mode branch so
         // dictation keeps flowing (and the meter/log keep updating) whether the UI
         // is in the full window or the compact strip.
@@ -84,9 +88,9 @@ impl eframe::App for WhisperDictateApp {
         // Mirror the dictation state onto the system-tray icon (recolours only on
         // change) and handle a tray left-click → focus. Runs in both full and
         // compact modes so the tray stays correct regardless of window layout.
-        self.sync_tray(ctx);
+        self.sync_tray(&ctx);
         let palette = ui_palette(&self.settings.ui_theme);
-        apply_ui_theme(ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
+        apply_ui_theme(&ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
 
         // Compact mode: a single tiny CentralPanel with one control row — no
@@ -101,7 +105,7 @@ impl eframe::App for WhisperDictateApp {
             return;
         }
 
-        paint_sidebar_bridge(ctx, palette, &self.settings.ui_text_scale);
+        paint_sidebar_bridge(&ctx, palette, &self.settings.ui_text_scale);
 
         egui::Panel::left("primary_navigation")
             .resizable(false)

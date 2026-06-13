@@ -1,6 +1,7 @@
 use super::*;
 use egui_material_icons::icons;
 
+mod api_check_indicator;
 mod benchmark_results;
 mod compact;
 mod corpus_record;
@@ -21,6 +22,10 @@ mod system;
 mod top_status_layout;
 mod update_badge;
 
+// The inline Test-API ✓/✗/testing indicator render shell (post.rs + speech.rs
+// reach it via `super::*`). The pure classifier + parts builder it wraps are
+// unit-tested inside the module itself.
+pub(in crate::ui) use api_check_indicator::render_api_check_indicator;
 // Log-card render widgets used by the runtime tab; re-exported into the `tabs`
 // root so `runtime` (and any future tab) can reach them via `super::*`.
 #[cfg(test)]

@@ -357,7 +357,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         )[0]
 
         self.assertIn('egui::Panel::left("primary_navigation")', update_impl)
-        self.assertIn("paint_sidebar_bridge(ctx, palette, &self.settings.ui_text_scale);", update_impl)
+        self.assertIn("paint_sidebar_bridge(&ctx, palette, &self.settings.ui_text_scale);", update_impl)
         self.assertIn("fn paint_sidebar_bridge(", script)
         self.assertIn("ctx.layer_painter(egui::LayerId::background())", script)
         self.assertIn(".show_separator_line(false)", update_impl)

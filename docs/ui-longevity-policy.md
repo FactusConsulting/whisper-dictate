@@ -34,7 +34,6 @@ The workflow triggers on:
 
 The **headless probe** (closes #269) launches the compiled binary's `ui`
 subcommand and asserts it survives 15 s without a non-zero exit or panic line.
-On `windows-2025` the wgpu renderer falls back to the DX12 WARP software adapter
 On `windows-2025` wgpu falls back to the DX12 WARP software adapter and survives
 15 s headless (confirmed by CI). Glow exits immediately on the same runner because
 it requires an OpenGL context and the runner has no software OpenGL rasteriser

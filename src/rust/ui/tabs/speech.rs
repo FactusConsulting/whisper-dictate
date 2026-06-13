@@ -417,6 +417,7 @@ impl WhisperDictateApp {
             {
                 self.run_cloud_api_check();
             }
+            self.test_cloud_api_indicator(ui);
             if provider == CloudProvider::Groq
                 && ui
                     .link("Open Groq API keys")
@@ -437,6 +438,15 @@ impl WhisperDictateApp {
             "API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
         );
         ui.end_row();
+    }
+
+    /// Render the inline ✓/✗/testing indicator next to "Test cloud API" from the
+    /// stored `stt_api_key_status` and whether the cloud-API check is in flight.
+    /// Delegates to the shared `render_api_check_indicator` shell.
+    fn test_cloud_api_indicator(&self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
+        let in_flight = self.background_task_label == Some("cloud API check");
+        render_api_check_indicator(ui, &self.stt_api_key_status, in_flight, palette);
     }
 
     fn open_groq_keys_page_stt(&mut self, provider: CloudProvider) {
