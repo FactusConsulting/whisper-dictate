@@ -269,6 +269,42 @@ class HallucinationFilterTests(unittest.TestCase):
         self.assertEqual(len(dropped), 1)
         self.assertEqual(getattr(dropped[0], "_drop_reason", None), "credit_pattern")
 
+    def test_drop_per_segment_credit_impossible_rate_moderate_no_speech(self):
+        # NEW REPRO (2026-06-13): the SAME subtitle credit on a 20.8 s dictation,
+        # but the model reported no_speech_prob only 0.43 (below NO_SPEECH_DROP
+        # 0.6), so NONE of the no_speech-gated credit paths fire. The credit shape
+        # AND the humanly impossible char-rate (60 chars / 0.30 s = 200 chars/s)
+        # drop it together, with no reliance on no_speech_prob.
+        self.t.MAX_CHARS_PER_SECOND = 30.0
+        real = types.SimpleNamespace(
+            text=("Se hosts nu, og jeg kan se denne Proxmox host, men hvordan "
+                  "ser jeg dens afhængighed over til netværket?"),
+            start=0.79, end=20.41, avg_logprob=-0.19, no_speech_prob=0.0031)
+        credit = types.SimpleNamespace(
+            text="Danske tekster af Jesper Buhl Scandinavian Text Service 2018",
+            start=20.41, end=20.71, avg_logprob=-0.199,
+            no_speech_prob=0.4275, compression_ratio=0.909)
+        kept, dropped = self.t._drop_hallucinated_segments([real, credit], 20.8)
+        self.assertEqual([s.text for s in kept], [real.text])
+        self.assertEqual([s.text for s in dropped], [credit.text])
+        self.assertEqual(getattr(dropped[0], "_drop_reason", None), "credit_rate")
+        assembled = " ".join(s.text for s in kept)
+        self.assertNotIn("Scandinavian Text Service", assembled)
+        self.assertNotIn("2018", assembled)
+
+    def test_drop_per_segment_credit_shape_plausible_rate_survives(self):
+        # FALSE-POSITIVE GUARD for the credit_rate path: a credit-SHAPED segment
+        # the model is confident is real (low no_speech) AND whose char-rate is
+        # plausible (32 chars / 1.4 s = 23 chars/s < 30) must NOT be dropped — the
+        # impossible-rate signal is precisely what makes the credit_rate drop safe.
+        self.t.MAX_CHARS_PER_SECOND = 30.0
+        credit_shaped = types.SimpleNamespace(
+            text="Undertekster af Jesper Buhl 2019",
+            start=0.0, end=1.4, avg_logprob=-0.1, no_speech_prob=0.05)
+        kept, dropped = self.t._drop_hallucinated_segments([credit_shaped], 2.0)
+        self.assertEqual([s.text for s in kept], [credit_shaped.text])
+        self.assertEqual(dropped, [])
+
     # --- pattern-data extraction guards (data file <-> code parity) ---
 
     def test_pattern_data_loadable_via_importlib_resources(self):

@@ -395,7 +395,14 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
       text — drops even when ``avg_logprob`` is not low enough for the plain
       silence gate (the real repro: no_speech 0.63 but logprob -0.43). Kept tied
       to the credit-pattern match so the plain silence gate's logprob threshold
-      is never broadened (which would risk real quiet words).
+      is never broadened (which would risk real quiet words); or
+    * its text is a known credit AND its OWN char-rate is humanly impossible
+      (e.g. the 60-char subtitle credit on a 0.30 s tail = ~200 chars/s). This
+      needs NO ``no_speech_prob`` corroboration: the two independent signals
+      (known credit shape AND impossible speech rate) never co-occur on real
+      speech, so it stays safe. It catches the repro the no_speech-gated
+      ``credit_pattern`` drop misses when the model reports only a moderate
+      ``no_speech_prob`` (the observed 0.43 < ``NO_SPEECH_DROP``).
 
     Returns (kept, dropped). ``dropped`` items are tagged with a transient
     ``_drop_reason`` attribute for diagnostics.
@@ -406,6 +413,7 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
     for index, segment in enumerate(segment_list):
         no_speech = float(getattr(segment, "no_speech_prob", 0.0) or 0.0)
         avg_logprob = float(getattr(segment, "avg_logprob", 0.0) or 0.0)
+        start = getattr(segment, "start", None)
         end = getattr(segment, "end", None)
         seg_text = getattr(segment, "text", "") or ""
         likely_silence = no_speech >= NO_SPEECH_DROP and avg_logprob <= NO_SPEECH_DROP_LOGPROB
@@ -420,6 +428,21 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
         trailing_silent_credit = (
             index == last_index and no_speech >= NO_SPEECH_DROP and is_credit
         )
+        # A known credit whose OWN char-rate is humanly impossible is a
+        # hallucination with no need for a no_speech signal — two independent
+        # signals (credit shape AND impossible rate) never co-occur on real
+        # speech. Catches the moderate-no_speech repro the credit_pattern gate
+        # (no_speech >= NO_SPEECH_DROP) lets through.
+        seg_duration = (
+            float(end) - float(start)
+            if end is not None and start is not None
+            else None
+        )
+        credit_rate = (
+            is_credit
+            and seg_duration is not None
+            and _speech_rate_exceeded(seg_text, seg_duration)
+        )
         reason = None
         if likely_silence:
             reason = "no_speech+logprob"
@@ -427,6 +450,8 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
             reason = "end_past_audio"
         elif is_credit and no_speech >= NO_SPEECH_DROP:
             reason = "credit_pattern"
+        elif credit_rate:
+            reason = "credit_rate"
         elif trailing_silent_credit:
             reason = "trailing_no_speech_credit"
         if reason is not None:
@@ -440,26 +465,34 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
     return kept, dropped
 
 
-def _exceeds_speech_rate(text: str, duration_s: float) -> bool:
-    """True when ``text`` packs more chars/second than humanly plausible.
+def _speech_rate_exceeded(text: str, duration_s: float) -> bool:
+    """Pure predicate: True when ``text`` packs more chars/second than humanly
+    plausible.
 
     Real speech runs ~15-25 chars/s; the default 30 cap leaves headroom. The
     classic credit hallucination (60 chars from a 0.31 s tap = ~193 chars/s) is
     far above any real rate. ``MAX_CHARS_PER_SECOND`` of 0 disables the gate.
-    Logs a clear line when it fires.
+    Side-effect-free, so it is safe to call per-segment inside
+    ``_drop_hallucinated_segments``; ``_exceeds_speech_rate`` wraps it with the
+    diagnostic log line for the whole-text path.
     """
     if MAX_CHARS_PER_SECOND <= 0:
         return False
+    return len(text) / max(duration_s, 0.1) > MAX_CHARS_PER_SECOND
+
+
+def _exceeds_speech_rate(text: str, duration_s: float) -> bool:
+    """``_speech_rate_exceeded`` plus a diagnostic log line when it fires."""
+    if not _speech_rate_exceeded(text, duration_s):
+        return False
     chars = len(text)
     rate = chars / max(duration_s, 0.1)
-    if rate > MAX_CHARS_PER_SECOND:
-        print(
-            f"[stt] dropped: {chars} chars in {duration_s:.1f}s = "
-            f"{rate:.0f} chars/s > {MAX_CHARS_PER_SECOND:.0f} (hallucination guard)",
-            flush=True,
-        )
-        return True
-    return False
+    print(
+        f"[stt] dropped: {chars} chars in {duration_s:.1f}s = "
+        f"{rate:.0f} chars/s > {MAX_CHARS_PER_SECOND:.0f} (hallucination guard)",
+        flush=True,
+    )
+    return True
 
 
 def _segment_metric(segment) -> dict[str, Any]:
