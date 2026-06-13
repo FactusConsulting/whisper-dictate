@@ -21,6 +21,7 @@ from whisper_dictate.vp_cli import QUIT_COUNT, QUIT_KEY, QUIT_WINDOW_MS
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_keys_solo import (
     SoloModifierGuard,
+    canon_modifier as _canon_modifier,
     is_bare_modifier_binding,
 )
 
@@ -84,8 +85,19 @@ class _PynputListener:
     def __init__(self, owner, targets: set, quit_key, toggle_mode: bool = False,
                  solo_guard: SoloModifierGuard | None = None) -> None:
         self._owner = owner
-        self._targets = targets
-        self._quit_key = quit_key
+        # Match modifiers side-insensitively: collapse ctrl_l/ctrl_r/ctrl (and
+        # the shift/alt/cmd families) to one token so the chord still completes
+        # when pynput intermittently reports a generic or opposite-side variant
+        # (see _canon_modifier). Every incoming key is canonicalised the same way
+        # before the membership test, so _targets / _pressed stay consistent.
+        self._targets = {_canon_modifier(t) for t in targets}
+        # Canonicalise the quit key the same way as targets and incoming keys
+        # so that a modifier quit key (e.g. Key.ctrl / ctrl_l / ctrl_r) is
+        # always compared as the family token "ctrl" regardless of which side
+        # variant pynput happens to deliver. Non-modifier quit keys (esc, f12,
+        # a single char) pass through _canon_modifier unchanged, so the default
+        # behaviour is entirely unaffected.
+        self._quit_key = _canon_modifier(quit_key)
         self._toggle_mode = toggle_mode
         self._pressed: set = set()
         self._recording = False
@@ -98,12 +110,20 @@ class _PynputListener:
         # binding is made entirely of bare modifiers — see vp_keys_solo. Tracks
         # ALL held keys so it can detect a foreign key forming a larger chord.
         # The whole target set is non-foreign (solo modifier OR modifier chord).
-        self._solo = solo_guard or SoloModifierGuard(targets, enabled=False)
+        # The guard sees CANONICALISED keys too (targets here via the guard built
+        # in _run_pynput, incoming keys in on_press/on_release), so a generic or
+        # opposite-side variant of a chord member is recognised as a target and
+        # never mistaken for a foreign key.
+        self._solo = solo_guard or SoloModifierGuard(self._targets, enabled=False)
 
     def _quit_chord(self, k) -> bool:
         # Track the consecutive quit-key streak; True once it reaches
         # QUIT_COUNT within QUIT_WINDOW_MS. Any non-quit key resets the streak.
-        if k != self._quit_key:
+        # Canonicalise k here so a modifier quit key (stored canonicalised in
+        # __init__) is recognised regardless of which side variant pynput
+        # delivers — e.g. Key.ctrl_l, Key.ctrl_r and Key.ctrl all match a
+        # quit key configured as "ctrl".
+        if _canon_modifier(k) != self._quit_key:
             self._quit_count = 0
             return False
         if QUIT_COUNT <= 0:
@@ -117,9 +137,16 @@ class _PynputListener:
         return self._quit_count >= QUIT_COUNT
 
     def on_press(self, k):
-        # Returning False stops the pynput listener (quit chord fired).
+        # Returning False stops the pynput listener (quit chord fired). Both
+        # _quit_chord and self._quit_key canonicalise modifier keys (see
+        # __init__ and _quit_chord), so the streak comparison is always
+        # canon-vs-canon and works for modifier quit keys too.
         if self._quit_chord(k):
             return False
+        # Canonicalise modifiers so a generic / opposite-side variant of a chord
+        # member still matches the target set (see _canon_modifier). A no-op for
+        # the quit key and any non-modifier, so the checks below are unaffected.
+        k = _canon_modifier(k)
         # Bare-modifier rule 2: a foreign key going down while we are recording
         # from a solo modifier means a chord formed (e.g. Ctrl held, then C).
         # Cancel and discard — even if the foreign key is the quit key.
@@ -168,6 +195,10 @@ class _PynputListener:
                          args=(epoch,), daemon=True).start()
 
     def on_release(self, k):
+        # Canonicalise the same way as on_press so the release matches its press
+        # even if the OS reports a different modifier variant for the up event —
+        # otherwise the chord could never break and recording would stick.
+        k = _canon_modifier(k)
         self._solo.note_release(k)
         if k in self._targets:
             self._pressed.discard(k)
@@ -429,8 +460,12 @@ class KeyBackendMixin:
         print(f"whisper-dictate [lang={self.lang or 'auto'}] (pynput). {verb} "
               f"[{self.key}]{suffix} {quit_hint} to quit.", flush=True)
 
+        # Build the guard over the SAME canonical target tokens the listener uses
+        # (side-insensitive modifiers), so a chord member arriving as a generic /
+        # opposite-side variant is recognised as a target, never as foreign.
+        canon_targets = {_canon_modifier(t) for t in targets}
         solo = SoloModifierGuard(
-            targets, enabled=is_bare_modifier_binding(key_names))
+            canon_targets, enabled=is_bare_modifier_binding(key_names))
         state = _PynputListener(self, targets, quit_key, toggle_mode=toggle_mode,
                                 solo_guard=solo)
         ln = keyboard.Listener(on_press=state.on_press, on_release=state.on_release)
