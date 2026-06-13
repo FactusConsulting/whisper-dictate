@@ -26,6 +26,38 @@ fn app_with_selection() -> WhisperDictateApp {
     app
 }
 
+fn item(id: &str) -> CorpusItem {
+    CorpusItem {
+        id: id.to_owned(),
+        text: format!("text for {id}"),
+        language: "da".to_owned(),
+    }
+}
+
+/// An app with a 3-item corpus and no recordings, runtime stopped, no task — the
+/// precondition for starting a batch. The corpus load is skipped (no disk).
+fn app_with_corpus() -> WhisperDictateApp {
+    let mut app = test_app(AppSettings::default());
+    app.corpus_loaded = true;
+    app.corpus_items = vec![item("a"), item("b"), item("c")];
+    app
+}
+
+/// A synthetic `corpus_record_done` background result for `id` (no worker spawned).
+fn done_result(id: &str) -> BackgroundTaskResult {
+    BackgroundTaskResult {
+        label: RECORD_CORPUS_ITEM_LABEL,
+        command: format!("py --record-corpus-item {id}"),
+        stdout: format!(
+            "{{\"event\":\"corpus_record_done\",\"id\":\"{id}\",\"path\":\"/a/{id}.wav\",\"seconds_recorded\":3.0}}\n"
+        ),
+        stderr: String::new(),
+        success: true,
+        code: Some(0),
+        error: None,
+    }
+}
+
 #[test]
 fn record_is_skipped_while_the_runtime_is_running() {
     let mut app = app_with_selection();
@@ -170,4 +202,165 @@ fn apply_corpus_record_surfaces_run_failure_as_err() {
         "expected an Err outcome, got {:?}",
         app.corpus_record_result
     );
+}
+
+// ── Batch recording ──────────────────────────────────────────────────────────
+
+#[test]
+fn can_start_batch_requires_stopped_idle_and_no_batch() {
+    let mut app = app_with_corpus();
+    assert!(app.can_start_corpus_batch(), "stopped + idle + no batch");
+
+    // Runtime running → cannot start (it owns the mic).
+    app.runtime_state = RuntimeState::Running;
+    assert!(!app.can_start_corpus_batch());
+    app.runtime_state = RuntimeState::Stopped;
+
+    // A background task in flight → cannot start.
+    let (_tx, rx) = mpsc::channel::<BackgroundTaskResult>();
+    app.background_task = Some(rx);
+    assert!(!app.can_start_corpus_batch());
+    app.background_task = None;
+
+    // Already inside a batch → cannot start another.
+    app.corpus_batch = CorpusBatch::new(vec!["a".to_owned()]);
+    assert!(!app.can_start_corpus_batch());
+}
+
+#[test]
+fn start_batch_all_missing_with_everything_recorded_is_a_no_op() {
+    let mut app = app_with_corpus();
+    // Mark every item as already recorded → "all missing" has nothing to do.
+    app.corpus_recorded_ids = ["a", "b", "c"].iter().map(|s| (*s).to_owned()).collect();
+
+    app.start_corpus_batch(BatchScope::AllMissing);
+
+    assert!(!app.corpus_batch_active(), "no batch should start");
+    assert!(app.background_task.is_none(), "no worker should launch");
+    assert!(
+        app.runtime_log.contains("nothing to record"),
+        "expected a no-op breadcrumb, got: {}",
+        app.runtime_log
+    );
+}
+
+#[test]
+fn start_batch_while_runtime_running_does_not_start() {
+    let mut app = app_with_corpus();
+    app.runtime_state = RuntimeState::Running;
+
+    app.start_corpus_batch(BatchScope::All);
+
+    assert!(!app.corpus_batch_active());
+    assert!(app.background_task.is_none());
+}
+
+#[test]
+fn batch_advances_to_the_next_item_on_a_done_event() {
+    // Drive the sequential advance WITHOUT spawning a worker: seed the cursor
+    // directly, then feed a synthetic done-event through apply_corpus_record.
+    let mut app = app_with_corpus();
+    app.corpus_batch = CorpusBatch::new(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+
+    // First clip ("a") done → cursor advances to "b", a resume gap is armed.
+    app.apply_corpus_record(&done_result("a"));
+    let batch = app.corpus_batch.as_ref().expect("batch still active");
+    assert_eq!(batch.current(), Some("b"));
+    assert_eq!(batch.completed(), 1);
+    assert!(
+        app.corpus_batch_resume_at.is_some(),
+        "the inter-clip gap should be armed for the next launch"
+    );
+}
+
+#[test]
+fn batch_finishes_and_clears_after_the_last_item() {
+    let mut app = app_with_corpus();
+    app.corpus_batch = CorpusBatch::new(vec!["only".to_owned()]);
+
+    app.apply_corpus_record(&done_result("only"));
+
+    assert!(
+        !app.corpus_batch_active(),
+        "the batch should clear once the last item is done"
+    );
+    assert!(app.corpus_batch_resume_at.is_none());
+    assert!(
+        app.runtime_log.contains("complete"),
+        "expected a completion log, got: {}",
+        app.runtime_log
+    );
+}
+
+#[test]
+fn stop_batch_ends_the_run_and_clears_the_gap() {
+    let mut app = app_with_corpus();
+    app.corpus_batch = CorpusBatch::new(vec!["a".to_owned(), "b".to_owned()]);
+    app.corpus_batch_resume_at = Some(std::time::Instant::now());
+
+    app.stop_corpus_batch();
+
+    assert!(!app.corpus_batch_active(), "Stop ends the run");
+    assert!(app.corpus_batch_resume_at.is_none());
+    assert!(
+        app.runtime_log.contains("stopped by user"),
+        "expected a stop log, got: {}",
+        app.runtime_log
+    );
+}
+
+#[test]
+fn batch_aborts_when_a_clip_reports_a_failure() {
+    let mut app = app_with_corpus();
+    app.corpus_batch = CorpusBatch::new(vec!["a".to_owned(), "b".to_owned()]);
+
+    // A worker-reported failure (not a crash) on the first clip stops the batch
+    // rather than looping the same failure across the remaining items.
+    let failed = BackgroundTaskResult {
+        label: RECORD_CORPUS_ITEM_LABEL,
+        command: "py --record-corpus-item a".to_owned(),
+        stdout: "{\"event\":\"corpus_record_error\",\"error\":\"no audio was captured\"}\n"
+            .to_owned(),
+        stderr: String::new(),
+        success: true,
+        code: Some(0),
+        error: None,
+    };
+    app.apply_corpus_record(&failed);
+
+    assert!(!app.corpus_batch_active(), "a failed clip ends the batch");
+    assert!(app.corpus_batch_resume_at.is_none());
+}
+
+#[test]
+fn poll_batch_stops_the_run_if_the_runtime_starts_mid_batch() {
+    // Defensive: a batch must never wedge if the runtime is (re)started while it
+    // is waiting out the inter-clip gap.
+    let mut app = app_with_corpus();
+    app.corpus_batch = CorpusBatch::new(vec!["a".to_owned(), "b".to_owned()]);
+    app.corpus_batch_resume_at = Some(std::time::Instant::now());
+    app.runtime_state = RuntimeState::Running;
+
+    app.poll_corpus_batch();
+
+    assert!(
+        !app.corpus_batch_active(),
+        "the batch should stop when the runtime is no longer stopped"
+    );
+}
+
+#[test]
+fn single_item_record_does_not_create_a_batch() {
+    // A done-event with no active batch (the single Record path) must not start
+    // or leave any batch state behind.
+    let mut app = app_with_corpus();
+    assert!(!app.corpus_batch_active());
+
+    app.apply_corpus_record(&done_result("a"));
+
+    assert!(
+        !app.corpus_batch_active(),
+        "single-item path stays batch-free"
+    );
+    assert!(app.corpus_batch_resume_at.is_none());
 }
