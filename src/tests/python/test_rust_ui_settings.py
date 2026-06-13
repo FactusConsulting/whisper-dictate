@@ -243,7 +243,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
 
         self.assertIn("pub mod cloud_api;", lib)
         self.assertIn("pub mod telemetry;", lib)
-        self.assertIn('ureq = { version = "2.12"', cargo)
+        self.assertIn('ureq = { version = "3.3"', cargo)
         self.assertIn('"Test cloud API"', ui)
         self.assertIn("fn run_cloud_api_check(&mut self)", ui)
         self.assertIn("check_cloud_api(&check)", ui)
