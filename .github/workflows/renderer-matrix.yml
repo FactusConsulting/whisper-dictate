@@ -107,8 +107,9 @@ jobs:
           $p = Start-Process -FilePath $exe -ArgumentList 'ui' `
                  -RedirectStandardError $errLog -RedirectStandardOutput $outLog `
                  -PassThru -WindowStyle Hidden
-          $pid = $p.Id
-          Write-Host "PID $pid started; waiting up to 15 s for renderer init..."
+          # Note: $pid is a PowerShell reserved automatic variable; use $procId.
+          $procId = $p.Id
+          Write-Host "PID $procId started; waiting up to 15 s for renderer init..."
 
           # Poll every second for up to 15 s.
           $survived = $false
@@ -121,7 +122,7 @@ jobs:
             if ($i -eq 15) {
               Write-Host "Process still running after 15 s — renderer init OK; killing."
               $survived = $true
-              Stop-Process -Id $pid -Force
+              Stop-Process -Id $procId -Force
               $p.WaitForExit(5000) | Out-Null
             }
           }
