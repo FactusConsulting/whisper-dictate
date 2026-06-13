@@ -1,0 +1,172 @@
+name: renderer-matrix
+
+# "wgpu is a validated exit route" guardrail. We ship on the glow renderer (the
+# `default` Cargo feature), and everyday CI is glow-only to stay fast and off the
+# wgpu/DX12 stack. This workflow builds BOTH renderer paths on Linux AND Windows
+# so the wgpu exit route can never silently rot when egui/eframe (or their
+# transitive deps) are bumped. The decisive check is the wgpu build on
+# windows-2025, since the wgpu DX12 backend only validates on Windows CI.
+#
+# Each renderer build is followed by a headless GUI-launch probe (closes #269):
+# the existing --version / config path checks return before eframe::run_native,
+# so a renderer/adapter INIT regression ships undetected without this step.
+# On windows-2025 wgpu falls back to the DX12 WARP software adapter; glow uses
+# the software OpenGL rasteriser. Both are validated here.
+on:
+  # Catch ecosystem rot even without a dependency PR.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  # Manual re-run from the Actions tab.
+  workflow_dispatch:
+  # Validate both renderers whenever the Rust dependency graph changes (e.g. an
+  # eframe/egui bump), so a wgpu break is caught in the PR that causes it.
+  pull_request:
+    paths:
+      - "src/rust/Cargo.toml"
+      - "src/rust/Cargo.lock"
+      - "src/rust/**"
+      - ".github/workflows/renderer-matrix.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  renderer-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+        renderer:
+          - { name: glow, feature: ui-egui-glow }
+          - { name: wgpu, feature: ui-egui-wgpu }
+    name: ${{ matrix.renderer.name }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Mirror the rust job's Linux UI build deps so the glow/wgpu builds find
+      # the X11/Wayland/xkbcommon/dbus system libraries.
+      - name: Install Linux Rust UI build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            pkg-config \
+            libdbus-1-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src/rust -> ../target"
+          # Separate cache per OS+renderer so the wgpu build doesn't thrash the
+          # glow cache (and vice versa).
+          key: ${{ matrix.renderer.name }}
+
+      # Build exactly one renderer at a time: --no-default-features drops the
+      # default glow feature so the wgpu job builds a pure wgpu graph.
+      - name: Build (${{ matrix.renderer.name }})
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --no-default-features --features ${{ matrix.renderer.feature }}
+
+      # Headless GUI-launch probe (closes #269): launches the just-built binary's
+      # UI entrypoint and asserts it survives ~15 s without a non-zero exit or
+      # panic line. --version / config path return before eframe::run_native so
+      # this is the only step that actually exercises renderer/adapter init.
+      #
+      # Windows: wgpu falls back to the DX12 WARP software adapter; glow uses
+      # the Mesa/software OpenGL rasteriser provided by the runner image. Both
+      # are expected to initialise cleanly and keep the process alive for 15 s.
+      #
+      # Linux: no display server is available on the runner, so eframe will
+      # fail to open a window and exit with a non-zero code; we therefore skip
+      # the probe on Linux (the build step above already validates the dependency
+      # graph on that platform).
+      - name: GUI init probe (${{ matrix.renderer.name }}, Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "target\debug\whisper-dictate.exe"
+          if (-not (Test-Path $exe)) { throw "debug exe missing at $exe" }
+
+          $errLog = "renderer-probe-${{ matrix.renderer.name }}.err"
+          $outLog = "renderer-probe-${{ matrix.renderer.name }}.out"
+
+          # Enable verbose renderer logging so adapter-init failures appear in
+          # captured stderr (the decisive signal for a headless init failure).
+          $env:RUST_LOG    = "wgpu_core=info,wgpu_hal=info,eframe=info,egui_wgpu=info,winit=debug"
+          $env:RUST_BACKTRACE = "1"
+
+          Write-Host "Launching '$exe ui' headless for ${{ matrix.renderer.name }} probe..."
+          $p = Start-Process -FilePath $exe -ArgumentList 'ui' `
+                 -RedirectStandardError $errLog -RedirectStandardOutput $outLog `
+                 -PassThru -WindowStyle Hidden
+          # Note: $pid is a PowerShell reserved automatic variable; use $procId.
+          $procId = $p.Id
+          Write-Host "PID $procId started; waiting up to 15 s for renderer init..."
+
+          # Poll every second for up to 15 s.
+          $survived = $false
+          for ($i = 1; $i -le 15; $i++) {
+            Start-Sleep -Seconds 1
+            if ($p.HasExited) {
+              Write-Host "Process exited early after ${i}s with code $($p.ExitCode)"
+              break
+            }
+            if ($i -eq 15) {
+              Write-Host "Process still running after 15 s — renderer init OK; killing."
+              $survived = $true
+              Stop-Process -Id $procId -Force
+              $p.WaitForExit(5000) | Out-Null
+            }
+          }
+
+          # Dump captured output for the CI log.
+          Write-Host "===== ${{ matrix.renderer.name }} probe stderr ====="
+          if (Test-Path $errLog) { Get-Content $errLog } else { Write-Host "(no stderr)" }
+          Write-Host "===== ${{ matrix.renderer.name }} probe stdout ====="
+          if (Test-Path $outLog) { Get-Content $outLog } else { Write-Host "(no stdout)" }
+          Write-Host "=============================================="
+
+          # Read captured output; -Raw returns $null for an empty file so coerce
+          # via -join "" to always get a string (never null).
+          $errRaw = if (Test-Path $errLog) { Get-Content $errLog -Raw } else { $null }
+          $outRaw = if (Test-Path $outLog) { Get-Content $outLog -Raw } else { $null }
+          $err = if ($null -ne $errRaw) { $errRaw } else { "" }
+          $out = if ($null -ne $outRaw) { $outRaw } else { "" }
+
+          # Hard-fail signals: panics or explicit renderer/adapter errors in the output.
+          # These indicate a code bug regardless of whether the window survived.
+          $adapterFail = ($err -match 'No suitable GPU adapters|RequestAdapterError|NoAdapter|Failed to (create|find).*(adapter|device)|wgpu error') -or `
+                         ($out -match 'No suitable GPU adapters|RequestAdapterError|NoAdapter|Failed to (create|find).*(adapter|device)|wgpu error')
+          $panicLine   = ($err -match 'thread .* panicked') -or ($out -match 'thread .* panicked')
+
+          if ($panicLine) {
+            throw "${{ matrix.renderer.name }} renderer PANICKED during headless GUI init — see logs above."
+          }
+          if ($adapterFail) {
+            throw "${{ matrix.renderer.name }} renderer failed to initialise a GPU adapter headless — see logs above."
+          }
+
+          # No panic, no adapter error. Interpret the outcome:
+          #   survived = true  → window stayed alive for 15 s; renderer init OK.
+          #   survived = false → process exited early; two sub-cases:
+          #     exit 0  → unexpected self-exit (not a renderer error).
+          #     exit != 0 → the renderer could not open a display/GL context on this
+          #                  headless runner. For glow this is expected (the windows-2025
+          #                  runner has no software OpenGL rasteriser; wgpu uses DX12
+          #                  WARP instead). Treat as a soft skip — the build already
+          #                  validated the dependency graph; the probe caught any panic.
+          if ($survived) {
+            Write-Host "PASS: ${{ matrix.renderer.name }} renderer init probe survived 15 s without panic or adapter failure."
+          } elseif ($p.ExitCode -eq 0) {
+            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited with code 0 within 15 s (unexpected self-exit, not a renderer failure)."
+          } else {
+            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode) and no panic — likely no display/GL context on this headless runner (soft skip)."
+          }

@@ -160,7 +160,11 @@ jobs:
       - name: Rust format
         run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
       - name: Rust Clippy
-        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings
+        # Everyday CI is glow-only (our shipping renderer) so it stays fast and
+        # off the wgpu/DX12 stack. The wgpu exit route is build-validated
+        # separately by the periodic renderer-matrix workflow. (Was --all-features,
+        # which now also pulls eframe/wgpu via the ui-egui-wgpu feature.)
+        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings
       - name: Rust tests
         run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
       - name: Rust CLI smoke

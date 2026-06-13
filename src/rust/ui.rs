@@ -227,7 +227,18 @@ const PARAKEET_MODELS: &[&str] = &[
 ];
 
 pub fn run() -> Result<()> {
+    // Pick the renderer by Cargo feature. We ship on glow (the `default`
+    // feature → `ui-egui-glow`); wgpu is the continuously-validated exit route,
+    // opted into with `--no-default-features --features ui-egui-wgpu`. wgpu wins
+    // only when its feature is on, so a plain `cargo build` (default features)
+    // is always glow. See [features] in Cargo.toml and renderer-matrix CI.
+    #[cfg(feature = "ui-egui-wgpu")]
+    let renderer = eframe::Renderer::Wgpu;
+    #[cfg(not(feature = "ui-egui-wgpu"))]
+    let renderer = eframe::Renderer::Glow;
+
     let options = eframe::NativeOptions {
+        renderer,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1080.0, 760.0])
             // Floor the window so the top status bar can't be squeezed until the
@@ -579,14 +590,14 @@ impl Tab {
 
     pub(in crate::ui) fn icon(self) -> &'static str {
         match self {
-            Tab::Log => egui_material_icons::icons::ICON_ARTICLE,
-            Tab::Speech => egui_material_icons::icons::ICON_MIC,
-            Tab::Quality => egui_material_icons::icons::ICON_GRAPHIC_EQ,
-            Tab::Dictionary => egui_material_icons::icons::ICON_BOOK,
-            Tab::Output => egui_material_icons::icons::ICON_OUTPUT,
-            Tab::Post => egui_material_icons::icons::ICON_AUTO_FIX_HIGH,
-            Tab::Profiles => egui_material_icons::icons::ICON_GROUP,
-            Tab::System => egui_material_icons::icons::ICON_SETTINGS,
+            Tab::Log => egui_material_icons::icons::ICON_ARTICLE.codepoint,
+            Tab::Speech => egui_material_icons::icons::ICON_MIC.codepoint,
+            Tab::Quality => egui_material_icons::icons::ICON_GRAPHIC_EQ.codepoint,
+            Tab::Dictionary => egui_material_icons::icons::ICON_BOOK.codepoint,
+            Tab::Output => egui_material_icons::icons::ICON_OUTPUT.codepoint,
+            Tab::Post => egui_material_icons::icons::ICON_AUTO_FIX_HIGH.codepoint,
+            Tab::Profiles => egui_material_icons::icons::ICON_GROUP.codepoint,
+            Tab::System => egui_material_icons::icons::ICON_SETTINGS.codepoint,
         }
     }
 }

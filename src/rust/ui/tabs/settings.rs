@@ -39,7 +39,7 @@ impl WhisperDictateApp {
             // page keeps just the action that is scoped to that page.
             if ui
                 .button(icon_text(
-                    icons::ICON_REFRESH,
+                    icons::ICON_REFRESH.codepoint,
                     ui_text(&self.settings.ui_language, UiTextKey::ResetPage),
                 ))
                 .on_hover_text("Reset only the settings shown on this page to the built-in defaults. Save to keep the reset.")

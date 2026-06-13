@@ -7,7 +7,7 @@ impl WhisperDictateApp {
         ui.set_min_height(ui.available_height());
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(icons::ICON_KEYBOARD_VOICE)
+                egui::RichText::new(icons::ICON_KEYBOARD_VOICE.codepoint)
                     .size(25.0)
                     .color(palette.accent_blue),
             );
@@ -69,7 +69,7 @@ impl WhisperDictateApp {
             };
             let mut save_button = egui::Button::new(
                 icon_text(
-                    icons::ICON_SAVE,
+                    icons::ICON_SAVE.codepoint,
                     ui_text(&self.settings.ui_language, save_text),
                 )
                 .strong(),
@@ -94,7 +94,7 @@ impl WhisperDictateApp {
             ui.add(
                 egui::Label::new(
                     icon_text(
-                        icons::ICON_KEYBOARD,
+                        icons::ICON_KEYBOARD.codepoint,
                         format_push_to_talk_keys(&self.settings.key),
                     )
                     .text_style(egui::TextStyle::Small)
@@ -271,7 +271,7 @@ impl WhisperDictateApp {
                     status_card(
                         ui,
                         ui_text(&self.settings.ui_language, UiTextKey::Status),
-                        icons::ICON_RADIO_BUTTON_CHECKED,
+                        icons::ICON_RADIO_BUTTON_CHECKED.codepoint,
                         runtime_state_label(display_state, &self.settings.ui_language),
                         runtime_state_color(display_state, palette),
                         palette,
@@ -282,7 +282,7 @@ impl WhisperDictateApp {
                         status_card(
                             ui,
                             ui_text(&self.settings.ui_language, UiTextKey::Backend),
-                            icons::ICON_MODEL_TRAINING,
+                            icons::ICON_MODEL_TRAINING.codepoint,
                             self.backend_summary(),
                             palette.accent_blue,
                             palette,
@@ -312,7 +312,7 @@ impl WhisperDictateApp {
                             status_card(
                                 ui,
                                 ui_text(&self.settings.ui_language, UiTextKey::Task),
-                                icons::ICON_PENDING_ACTIONS,
+                                icons::ICON_PENDING_ACTIONS.codepoint,
                                 label,
                                 palette.warn_text,
                                 palette,
@@ -337,9 +337,9 @@ impl WhisperDictateApp {
         let enabled =
             post_processing_enabled(&self.settings.post_processor, &self.settings.post_mode);
         let (icon, color) = if enabled {
-            (icons::ICON_AUTO_FIX_HIGH, palette.accent_blue)
+            (icons::ICON_AUTO_FIX_HIGH.codepoint, palette.accent_blue)
         } else {
-            (icons::ICON_AUTO_FIX_HIGH, palette.text_muted)
+            (icons::ICON_AUTO_FIX_HIGH.codepoint, palette.text_muted)
         };
         let label = post_indicator_label(
             &self.settings.post_processor,
@@ -352,12 +352,14 @@ impl WhisperDictateApp {
         egui::Frame::default()
             .fill(palette.readout_bg)
             .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
-            .rounding(egui::Rounding::same(READOUT_RADIUS as f32))
+            .corner_radius(egui::CornerRadius::same(READOUT_RADIUS))
             .inner_margin(egui::Margin {
-                left: POST_PILL_H_MARGIN,
-                right: POST_PILL_H_MARGIN,
-                top: STATUS_CARD_V_MARGIN - STATUS_CARD_V_TOP_REDUCTION,
-                bottom: STATUS_CARD_V_MARGIN,
+                // egui 0.34: `Margin` fields are `i8` (were `f32`). The margin
+                // consts stay `f32` (they feed layout math elsewhere); cast here.
+                left: POST_PILL_H_MARGIN as i8,
+                right: POST_PILL_H_MARGIN as i8,
+                top: (STATUS_CARD_V_MARGIN - STATUS_CARD_V_TOP_REDUCTION) as i8,
+                bottom: STATUS_CARD_V_MARGIN as i8,
             })
             .show(ui, |ui| {
                 ui.label(icon_text(icon, label).strong().color(color));
@@ -378,7 +380,7 @@ impl WhisperDictateApp {
                 is_active,
                 egui::Button::new(
                     icon_text(
-                        icons::ICON_STOP,
+                        icons::ICON_STOP.codepoint,
                         ui_text(&self.settings.ui_language, UiTextKey::Stop),
                     )
                     .strong(),
@@ -395,7 +397,7 @@ impl WhisperDictateApp {
                 is_stopped,
                 egui::Button::new(
                     icon_text(
-                        icons::ICON_PLAY_ARROW,
+                        icons::ICON_PLAY_ARROW.codepoint,
                         ui_text(&self.settings.ui_language, UiTextKey::Start),
                     )
                     .strong(),
@@ -412,7 +414,8 @@ impl WhisperDictateApp {
         if ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new(icons::ICON_PICTURE_IN_PICTURE_ALT).color(palette.text),
+                    egui::RichText::new(icons::ICON_PICTURE_IN_PICTURE_ALT.codepoint)
+                        .color(palette.text),
                 )
                 .min_size(egui::vec2(34.0, 34.0)),
             )
@@ -481,12 +484,14 @@ fn status_card_sized(
     egui::Frame::default()
         .fill(palette.readout_bg)
         .stroke(egui::Stroke::new(CARD_STROKE, palette.border_soft))
-        .rounding(egui::Rounding::same(READOUT_RADIUS as f32))
+        .corner_radius(egui::CornerRadius::same(READOUT_RADIUS))
         .inner_margin(egui::Margin {
-            left: STATUS_CARD_H_MARGIN,
-            right: STATUS_CARD_H_MARGIN,
-            top: STATUS_CARD_V_MARGIN - STATUS_CARD_V_TOP_REDUCTION,
-            bottom: STATUS_CARD_V_MARGIN,
+            // egui 0.34: `Margin` fields are `i8` (were `f32`); cast at the site
+            // so the source consts can stay `f32` for the layout-width math.
+            left: STATUS_CARD_H_MARGIN as i8,
+            right: STATUS_CARD_H_MARGIN as i8,
+            top: (STATUS_CARD_V_MARGIN - STATUS_CARD_V_TOP_REDUCTION) as i8,
+            bottom: STATUS_CARD_V_MARGIN as i8,
         })
         .show(ui, |ui| {
             ui.set_min_width(min_width);

@@ -12,37 +12,47 @@ fn runtime_log_card_style(
 ) -> (&'static str, egui::Color32, egui::Color32) {
     match kind {
         RuntimeLogCardKind::FinalText => (
-            icons::ICON_CHECK_CIRCLE,
+            icons::ICON_CHECK_CIRCLE.codepoint,
             palette.ok_text,
             palette.surface_active_bg,
         ),
-        RuntimeLogCardKind::Status => (icons::ICON_INFO, palette.accent_blue, palette.surface_bg),
-        RuntimeLogCardKind::Diagnostic => {
-            (icons::ICON_GRAPHIC_EQ, palette.warn_text, palette.header_bg)
-        }
+        RuntimeLogCardKind::Status => (
+            icons::ICON_INFO.codepoint,
+            palette.accent_blue,
+            palette.surface_bg,
+        ),
+        RuntimeLogCardKind::Diagnostic => (
+            icons::ICON_GRAPHIC_EQ.codepoint,
+            palette.warn_text,
+            palette.header_bg,
+        ),
         // Graded health, worst signal wins. ICON_MONITOR_HEART reads as "health
         // monitor", visually distinct from FinalText's ICON_CHECK_CIRCLE.
         // perfect: strong/bright green.
         RuntimeLogCardKind::HealthPerfect => (
-            icons::ICON_MONITOR_HEART,
+            icons::ICON_MONITOR_HEART.codepoint,
             palette.ok_text,
             palette.surface_bg,
         ),
         // good: a calmer teal/cyan — distinct from perfect's green but still
         // clearly "fine".
         RuntimeLogCardKind::HealthGood => (
-            icons::ICON_MONITOR_HEART,
+            icons::ICON_MONITOR_HEART.codepoint,
             palette.accent_blue,
             palette.surface_bg,
         ),
         // fair: amber — ICON_WARNING flags that something was off.
-        RuntimeLogCardKind::HealthFair => {
-            (icons::ICON_WARNING, palette.warn_text, palette.header_bg)
-        }
+        RuntimeLogCardKind::HealthFair => (
+            icons::ICON_WARNING.codepoint,
+            palette.warn_text,
+            palette.header_bg,
+        ),
         // poor: red — ICON_DANGEROUS makes an unusable utterance unmissable.
-        RuntimeLogCardKind::HealthPoor => {
-            (icons::ICON_DANGEROUS, palette.error_text, palette.header_bg)
-        }
+        RuntimeLogCardKind::HealthPoor => (
+            icons::ICON_DANGEROUS.codepoint,
+            palette.error_text,
+            palette.header_bg,
+        ),
     }
 }
 
@@ -161,14 +171,14 @@ pub(in crate::ui) fn runtime_log_card(
     egui::Frame::default()
         .fill(fill)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
-        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(12.0, 12.0))
+        .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
+        .inner_margin(egui::Margin::symmetric(12, 12))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 egui::Frame::default()
                     .fill(accent)
-                    .rounding(egui::Rounding::same(PILL_RADIUS as f32))
+                    .corner_radius(egui::CornerRadius::same(PILL_RADIUS))
                     .show(ui, |ui| {
                         ui.set_min_size(egui::vec2(4.0, 46.0));
                     });
@@ -188,13 +198,13 @@ pub(in crate::ui) fn empty_log_state(
     egui::Frame::default()
         .fill(palette.surface_bg)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
-        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(16.0, 14.0))
+        .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
+        .inner_margin(egui::Margin::symmetric(16, 14))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
                 icon_text(
-                    icons::ICON_MIC,
+                    icons::ICON_MIC.codepoint,
                     ui_text(raw_language, UiTextKey::NoDictationOutputYet),
                 )
                 .strong()
@@ -221,8 +231,8 @@ fn status_pill(
     egui::Frame::default()
         .fill(palette.header_bg)
         .stroke(egui::Stroke::new(0.8, accent))
-        .rounding(egui::Rounding::same(PILL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+        .corner_radius(egui::CornerRadius::same(PILL_RADIUS))
+        .inner_margin(egui::Margin::symmetric(8, 3))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(label).size(11.0).strong().color(accent));
         })
@@ -238,8 +248,8 @@ pub(in crate::ui) fn metric_box(
     egui::Frame::default()
         .fill(palette.header_bg)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
-        .rounding(egui::Rounding::same(CONTROL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(11.0, 8.0))
+        .corner_radius(egui::CornerRadius::same(CONTROL_RADIUS))
+        .inner_margin(egui::Margin::symmetric(11, 8))
         .show(ui, |ui| {
             ui.set_min_width(102.0);
             ui.label(

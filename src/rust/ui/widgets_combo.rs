@@ -245,8 +245,10 @@ pub(in crate::ui) fn combo_model_vram(
                         format!("{model} — {note} (~{mb} MB)")
                     };
                     let selected = value.as_str() == *model;
+                    // egui 0.34: `SelectableLabel::new(sel, text)` is replaced by
+                    // `Button::selectable(sel, text)` (same selectable-row look).
                     let response =
-                        ui.add_enabled(fits, egui::SelectableLabel::new(selected, display));
+                        ui.add_enabled(fits, egui::Button::selectable(selected, display));
                     let response = match gpu_total_mb {
                         Some(total) if !fits => response.on_disabled_hover_text(format!(
                             "Needs about {mb} MB VRAM; this GPU has {total} MB total."

@@ -69,8 +69,10 @@ fn settings_grid(id: &'static str) -> egui::Grid {
 /// Horizontal and vertical inner margin used by [`scope_group`] frames.
 /// Referenced here AND in `speech.rs` so the standalone Speech-engine selector
 /// gets the identical left inset without drawing a box (approach B).
-pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_H: f32 = 12.0;
-pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_V: f32 = 10.0;
+// egui 0.34 `Margin` fields are `i8` (was `f32`); these are only ever used as
+// `Margin::symmetric` arguments, so they are typed `i8` to match.
+pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_H: i8 = 12;
+pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_V: i8 = 10;
 
 /// A thin outlined box grouping a set of settings under a small heading. Used by
 /// the Quality tab to separate "All backends" / "Whisper" / "Parakeet" scopes so
@@ -85,7 +87,7 @@ fn scope_group(
 ) {
     egui::Frame::default()
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
-        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+        .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
         .inner_margin(egui::Margin::symmetric(
             SCOPE_GROUP_INNER_MARGIN_H,
             SCOPE_GROUP_INNER_MARGIN_V,
@@ -114,12 +116,12 @@ fn theme_toggle(ui: &mut egui::Ui, value: &mut String, palette: UiPalette, raw_l
         for (raw, icon, label) in [
             (
                 "dark",
-                icons::ICON_DARK_MODE,
+                icons::ICON_DARK_MODE.codepoint,
                 ui_text(raw_language, UiTextKey::Dark),
             ),
             (
                 "light",
-                icons::ICON_LIGHT_MODE,
+                icons::ICON_LIGHT_MODE.codepoint,
                 ui_text(raw_language, UiTextKey::Light),
             ),
         ] {
