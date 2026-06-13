@@ -9,7 +9,10 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
+
+if TYPE_CHECKING:
+    from whisper_dictate.vp_corpus_profile import CorpusProfile
 
 from whisper_dictate.vp_config import appdata_dir, get_value
 from whisper_dictate.vp_cli import _resolve_device
@@ -415,10 +418,17 @@ def run_benchmark(
     output_jsonl: str | Path | None = None,
     corpus_manifest: str | Path | None = None,
     appdata: str | Path | None = None,
+    profile: "CorpusProfile | None" = None,
 ) -> list[dict[str, Any]]:
     specs = parse_backend_specs(backend_specs)
     results: list[dict[str, Any]] = []
     corpus_items = load_corpus(corpus_manifest) if corpus_manifest else []
+    if profile is not None and corpus_items:
+        from whisper_dictate.vp_corpus_profile import filter_corpus_items
+        corpus_items = filter_corpus_items(corpus_items, profile)
+        if not corpus_items:
+            raise ValueError(
+                f"corpus profile ({profile.describe()}) matched no items")
     work = _benchmark_work(audio_files, corpus_items, appdata)
     if not work:
         raise ValueError("at least one benchmark file or corpus item is required")
@@ -444,6 +454,7 @@ def run_corpus_benchmark(
     *,
     output_jsonl: str | Path | None = None,
     app_root: str | Path | None = None,
+    profile: "CorpusProfile | None" = None,
 ) -> dict[str, Any] | None:
     """Run the golden corpus and print a concise summary line, then return it.
 
@@ -481,6 +492,7 @@ def run_corpus_benchmark(
         output_jsonl=output_jsonl,
         corpus_manifest=manifest,
         appdata=appdata,
+        profile=profile,
     )
     summary = summarize_results(results)
     audio_hint = appdata_audio_dir(appdata)

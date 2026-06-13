@@ -45,6 +45,56 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(event["term_hits"], ["Claude Code"])
         self.assertEqual(event["term_misses"], ["Codex"])
 
+    def _write_profile_corpus(self) -> Path:
+        d = Path(tempfile.mkdtemp())
+        manifest = d / "corpus.json"
+        manifest.write_text(json.dumps({
+            "version": 1,
+            "audio_dir": "audio",
+            "items": [
+                {"id": "da-tech", "language": "da", "category": "mixed_technical",
+                 "text": "da tech", "terms": []},
+                {"id": "en-short", "language": "en", "category": "short_english",
+                 "text": "en short", "terms": []},
+            ],
+        }), encoding="utf-8")
+        return manifest
+
+    def test_benchmark_profile_filters_corpus_subset(self):
+        from whisper_dictate import vp_benchmark
+        from whisper_dictate.vp_corpus_profile import build_profile
+
+        manifest = self._write_profile_corpus()
+        # No audio files exist next to this manifest, so every selected item is a
+        # skip event and NO model is loaded — the profile filtering is what we test.
+        results = vp_benchmark.run_benchmark(
+            None,
+            "whisper",
+            corpus_manifest=manifest,
+            profile=build_profile(language="da"),
+        )
+        ids = {r["corpus_id"] for r in results}
+        self.assertEqual(ids, {"da-tech"})
+
+    def test_benchmark_empty_profile_runs_all(self):
+        from whisper_dictate import vp_benchmark
+        from whisper_dictate.vp_corpus_profile import build_profile
+
+        manifest = self._write_profile_corpus()
+        results = vp_benchmark.run_benchmark(
+            None, "whisper", corpus_manifest=manifest, profile=build_profile())
+        self.assertEqual({r["corpus_id"] for r in results}, {"da-tech", "en-short"})
+
+    def test_benchmark_profile_no_match_raises(self):
+        from whisper_dictate import vp_benchmark
+        from whisper_dictate.vp_corpus_profile import build_profile
+
+        manifest = self._write_profile_corpus()
+        with self.assertRaisesRegex(ValueError, "matched no items"):
+            vp_benchmark.run_benchmark(
+                None, "whisper", corpus_manifest=manifest,
+                profile=build_profile(language="fr"))
+
     def test_parse_backend_specs_supports_models(self):
         from whisper_dictate import vp_benchmark
 
@@ -341,12 +391,13 @@ class BenchmarkTests(unittest.TestCase):
         captured = {}
 
         def fake_run_benchmark(audio_files, backend_specs, *, output_jsonl=None,
-                               corpus_manifest=None, appdata=None):
+                               corpus_manifest=None, appdata=None, profile=None):
             captured["audio_files"] = audio_files
             captured["backend_specs"] = backend_specs
             captured["corpus_manifest"] = corpus_manifest
             captured["output_jsonl"] = output_jsonl
             captured["appdata"] = appdata
+            captured["profile"] = profile
             return [{"benchmark_success": True, "wer": 0.0, "cer": 0.0}]
 
         with patch("whisper_dictate.vp_benchmark.run_benchmark",
