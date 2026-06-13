@@ -737,58 +737,122 @@ fn drag_overshoot_delta_follows_selection_past_the_edges() {
 
 #[test]
 fn health_card_shown_in_minimal_and_diagnostic() {
-    let line = "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq";
+    let line = "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq \
+        | grade=perfect";
     for mode in [LogViewMode::Minimal, LogViewMode::Diagnostic] {
         let cards = runtime_log_cards(line, mode);
         assert_eq!(cards.len(), 1, "expected one health card in {mode:?}");
-        assert_eq!(cards[0].kind, RuntimeLogCardKind::HealthOk);
-        assert_eq!(cards[0].badge, "HealthOk");
+        assert_eq!(cards[0].kind, RuntimeLogCardKind::HealthPerfect);
+        assert_eq!(cards[0].badge, "HealthPerfect");
         assert_eq!(
             cards[0].title,
-            "mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq"
+            "mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq | grade=perfect"
         );
         assert_eq!(cards[0].detail, "Microphone + model health");
     }
 }
 
 #[test]
-fn health_card_flags_warnings_with_distinct_badge() {
-    let line = "[health] mic -55dBFS SNR 3dB too_quiet | confidence low (-0.82) \
-        | post off | WARN low confidence | WARN quiet input";
-    let cards = runtime_log_cards(line, LogViewMode::Minimal);
-    assert_eq!(cards.len(), 1);
-    assert_eq!(cards[0].kind, RuntimeLogCardKind::HealthWarn);
-    assert_eq!(cards[0].badge, "HealthWarn");
-    assert!(cards[0].detail.contains("warnings"));
-    assert!(cards[0].title.contains("WARN low confidence"));
+fn health_card_parses_each_grade_token() {
+    // Each `grade=<g>` token maps to its own card kind + badge.
+    let cases = [
+        (
+            "perfect",
+            RuntimeLogCardKind::HealthPerfect,
+            "HealthPerfect",
+        ),
+        ("good", RuntimeLogCardKind::HealthGood, "HealthGood"),
+        ("fair", RuntimeLogCardKind::HealthFair, "HealthFair"),
+        ("poor", RuntimeLogCardKind::HealthPoor, "HealthPoor"),
+    ];
+    for (grade, kind, badge) in cases {
+        let line =
+            format!("[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | grade={grade}");
+        let cards = runtime_log_cards(&line, LogViewMode::Minimal);
+        assert_eq!(cards.len(), 1, "grade={grade}");
+        assert_eq!(cards[0].kind, kind, "grade={grade}");
+        assert_eq!(cards[0].badge, badge, "grade={grade}");
+    }
 }
 
 #[test]
-fn health_card_warn_detection_is_structural_not_substring() {
-    // A field that merely contains the substring "WARN" (e.g. a provider/model
-    // name) must NOT trigger the warning badge — only a genuine `| WARN ...`
-    // segment should.
+fn health_card_poor_and_fair_grades_mark_detail_as_warnings() {
+    let poor = runtime_log_cards(
+        "[health] mic -55dBFS SNR 3dB too_quiet | confidence low (-0.82) | grade=poor",
+        LogViewMode::Minimal,
+    );
+    assert_eq!(poor[0].kind, RuntimeLogCardKind::HealthPoor);
+    assert!(poor[0].detail.contains("warnings"));
+
+    let fair = runtime_log_cards(
+        "[health] mic -38dBFS SNR 56dB hot | confidence ok (-0.45) | grade=fair",
+        LogViewMode::Minimal,
+    );
+    assert_eq!(fair[0].kind, RuntimeLogCardKind::HealthFair);
+    assert!(fair[0].detail.contains("warnings"));
+
+    // A clean grade keeps the plain detail (no "warnings" qualifier).
+    let good = runtime_log_cards(
+        "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | grade=good",
+        LogViewMode::Minimal,
+    );
+    assert_eq!(good[0].kind, RuntimeLogCardKind::HealthGood);
+    assert!(!good[0].detail.contains("warnings"));
+}
+
+#[test]
+fn health_card_unknown_grade_token_falls_back_to_fair() {
+    // A future/unknown grade value must land on the safe amber "fair" grade
+    // rather than crashing or being dropped.
+    let line = "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | grade=stellar";
+    let cards = runtime_log_cards(line, LogViewMode::Minimal);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].kind, RuntimeLogCardKind::HealthFair);
+}
+
+#[test]
+fn health_card_without_grade_token_falls_back_to_warn_detection() {
+    // Backward compat: an older worker that emits no `grade=` segment. A line
+    // with a `| WARN ...` segment maps to the amber "fair" grade...
+    let warn_line = "[health] mic -55dBFS SNR 3dB too_quiet | confidence low (-0.82) \
+        | post off | WARN low confidence | WARN quiet input";
+    let warn_cards = runtime_log_cards(warn_line, LogViewMode::Minimal);
+    assert_eq!(warn_cards.len(), 1);
+    assert_eq!(warn_cards[0].kind, RuntimeLogCardKind::HealthFair);
+    assert_eq!(warn_cards[0].badge, "HealthFair");
+    assert!(warn_cards[0].detail.contains("warnings"));
+    assert!(warn_cards[0].title.contains("WARN low confidence"));
+
+    // ...and a clean (no-WARN) line maps to the "good" grade.
+    let clean_line =
+        "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq";
+    let clean_cards = runtime_log_cards(clean_line, LogViewMode::Minimal);
+    assert_eq!(clean_cards.len(), 1);
+    assert_eq!(clean_cards[0].kind, RuntimeLogCardKind::HealthGood);
+    assert_eq!(clean_cards[0].badge, "HealthGood");
+}
+
+#[test]
+fn health_card_no_token_warn_detection_is_structural_not_substring() {
+    // No grade token + a field that merely CONTAINS the substring "WARN" (e.g.
+    // a provider/model name) must NOT trigger the warn fallback — only a genuine
+    // `| WARN ...` segment should.
     let no_warn_line =
         "[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/WARNer-llm";
     let cards = runtime_log_cards(no_warn_line, LogViewMode::Minimal);
     assert_eq!(cards.len(), 1);
     assert_eq!(
         cards[0].kind,
-        RuntimeLogCardKind::HealthOk,
-        "WARN inside a field value must not trigger the warning card kind"
-    );
-    assert_eq!(
-        cards[0].badge, "HealthOk",
-        "WARN inside a field value must not trigger the warning badge"
+        RuntimeLogCardKind::HealthGood,
+        "WARN inside a field value must not trigger the warn fallback"
     );
 
-    // But a real `| WARN ...` segment must still fire.
+    // But a real `| WARN ...` segment must still fire (-> fair).
     let warn_line =
         "[health] mic -38dBFS SNR 56dB good | confidence low (-0.82) | post off | WARN low confidence";
     let warn_cards = runtime_log_cards(warn_line, LogViewMode::Minimal);
     assert_eq!(warn_cards.len(), 1);
-    assert_eq!(warn_cards[0].kind, RuntimeLogCardKind::HealthWarn);
-    assert_eq!(warn_cards[0].badge, "HealthWarn");
+    assert_eq!(warn_cards[0].kind, RuntimeLogCardKind::HealthFair);
 }
 
 #[test]

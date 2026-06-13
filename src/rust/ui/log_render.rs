@@ -48,10 +48,15 @@ pub(in crate::ui) enum RuntimeLogCardKind {
     FinalText,
     Status,
     Diagnostic,
-    /// Per-utterance health summary with no warnings — shown green.
-    HealthOk,
-    /// Per-utterance health summary with at least one `| WARN …` segment — shown amber.
-    HealthWarn,
+    /// Per-utterance health summary graded "perfect" — pristine input + model
+    /// confidence, shown bright green.
+    HealthPerfect,
+    /// Per-utterance health summary graded "good" — clean, shown teal/green.
+    HealthGood,
+    /// Per-utterance health summary graded "fair" — something was off, shown amber.
+    HealthFair,
+    /// Per-utterance health summary graded "poor" — unusable, shown red.
+    HealthPoor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,42 +281,79 @@ fn status_card(line: &str) -> Option<RuntimeLogCard> {
 /// first-class card so the user sees it without switching to the Debug view.
 ///
 /// The worker emits, e.g.:
-///   `[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq`
-/// with terse `| WARN ...` flags appended only when something looks off. We show
-/// the whole body as the card title and surface whether any warning fired in the
-/// detail/badge so a "we're off" utterance stands out at a glance.
+///   `[health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq | grade=good`
+/// with terse `| WARN ...` flags appended only when something looks off, and a
+/// trailing ` | grade=<perfect|good|fair|poor>` segment carrying the graded
+/// 4-level verdict the worker computed (where all the signals live). We show the
+/// whole body as the card title and surface the grade in the card kind so the
+/// quality reads at a glance from colour + label.
 fn health_card(line: &str) -> Option<RuntimeLogCard> {
     let body = line.strip_prefix("[health] ")?.trim();
     if body.is_empty() {
         return None;
     }
-    // Warnings are emitted as distinct `| WARN ...` segments; detect them
-    // structurally rather than as a substring so a future provider/model name
-    // that happens to contain "WARN" does not trigger the warning badge.
-    let has_warning = body.split(" | ").any(|seg| seg.trim().starts_with("WARN"));
-    let detail = if has_warning {
-        "Microphone + model health (warnings)"
-    } else {
-        "Microphone + model health"
+    let kind = health_card_kind(body);
+    // Surface in the detail whether this is a degraded utterance, mirroring the
+    // grade so the muted line under the title is not silent about a problem.
+    let detail = match kind {
+        RuntimeLogCardKind::HealthFair | RuntimeLogCardKind::HealthPoor => {
+            "Microphone + model health (warnings)"
+        }
+        _ => "Microphone + model health",
     };
     Some(RuntimeLogCard {
-        kind: if has_warning {
-            RuntimeLogCardKind::HealthWarn
-        } else {
-            RuntimeLogCardKind::HealthOk
-        },
+        kind,
         title: body.to_owned(),
         detail: detail.to_owned(),
-        // Internal marker strings — translated to localized labels at render
+        // Internal marker string — translated to a localized label at render
         // time in runtime.rs (same pattern as the "Utterance" → "Dictation"
         // badge translation), so log-parsing tests stay language-agnostic.
-        badge: if has_warning {
-            "HealthWarn"
-        } else {
-            "HealthOk"
-        }
-        .to_owned(),
+        badge: health_card_badge(kind).to_owned(),
     })
+}
+
+/// Resolve the health card kind from the `[health]` line body.
+///
+/// Prefers the explicit ` | grade=<g>` token the worker now appends. When it is
+/// absent (an older worker that predates the graded badge), fall back to the
+/// legacy structural WARN detection so nothing breaks: a `| WARN ...` segment
+/// maps to the amber "fair" grade, otherwise to the "good" grade.
+fn health_card_kind(body: &str) -> RuntimeLogCardKind {
+    // `Split` is not double-ended, so fold to keep the LAST `grade=` segment
+    // (the worker always appends it last; tolerate a stray earlier one).
+    if let Some(grade) = body
+        .split(" | ")
+        .filter_map(|seg| seg.trim().strip_prefix("grade="))
+        .fold(None, |_, seg| Some(seg))
+    {
+        return match grade.trim() {
+            "perfect" => RuntimeLogCardKind::HealthPerfect,
+            "good" => RuntimeLogCardKind::HealthGood,
+            "poor" => RuntimeLogCardKind::HealthPoor,
+            // "fair" and any unknown/future token land on the safe amber grade.
+            _ => RuntimeLogCardKind::HealthFair,
+        };
+    }
+    // No grade token (older worker): detect warnings structurally rather than as
+    // a substring so a provider/model name containing "WARN" does not trip it.
+    if body.split(" | ").any(|seg| seg.trim().starts_with("WARN")) {
+        RuntimeLogCardKind::HealthFair
+    } else {
+        RuntimeLogCardKind::HealthGood
+    }
+}
+
+/// Internal (language-agnostic) badge marker for a health card kind, translated
+/// to a localized label at render time in runtime.rs.
+fn health_card_badge(kind: RuntimeLogCardKind) -> &'static str {
+    match kind {
+        RuntimeLogCardKind::HealthPerfect => "HealthPerfect",
+        RuntimeLogCardKind::HealthGood => "HealthGood",
+        RuntimeLogCardKind::HealthFair => "HealthFair",
+        RuntimeLogCardKind::HealthPoor => "HealthPoor",
+        // Not reachable for a health card; keep the match total.
+        _ => "Health",
+    }
 }
 
 /// Parse `[worker] status=no_text reason=<token> …` into a friendly card.
