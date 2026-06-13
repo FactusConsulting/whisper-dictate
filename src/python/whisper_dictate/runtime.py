@@ -229,7 +229,7 @@ _LAZY_EXPORTS = {
     "whisper_dictate.vp_audio": (
         "MIN_INPUT_DBFS", "MIN_INPUT_SNR_DB", "TARGET_DBFS",
         "_boost_quiet", "_boost_quiet_detail", "_find_arecord_device",
-        "_looks_like_speech", "_noise_snr",
+        "_looks_like_speech", "_noise_snr", "_trim_trailing_silence",
     ),
     "whisper_dictate.vp_transcribe": (
         "BEAM_SIZE", "CONTEXT_MIN_SECONDS", "HALLUCINATIONS",
@@ -261,7 +261,7 @@ def _load_runtime_modules() -> None:
     global np
     global MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS
     global _boost_quiet, _boost_quiet_detail, _find_arecord_device
-    global _looks_like_speech, _noise_snr
+    global _looks_like_speech, _noise_snr, _trim_trailing_silence
     global BEAM_SIZE, CONTEXT_MIN_SECONDS, _HALLUCINATIONS, INITIAL_PROMPT
     global SR, STT_BACKEND, TEMPERATURES, VALID_STT_BACKENDS
     global _transcribe, _transcribe_detail, is_hallucination, load_stt_model
@@ -270,7 +270,7 @@ def _load_runtime_modules() -> None:
     from whisper_dictate.vp_audio import (
         MIN_INPUT_DBFS, MIN_INPUT_SNR_DB, TARGET_DBFS,
         _boost_quiet, _boost_quiet_detail, _find_arecord_device,
-        _looks_like_speech, _noise_snr,
+        _looks_like_speech, _noise_snr, _trim_trailing_silence,
     )
     from whisper_dictate.vp_transcribe import (
         BEAM_SIZE, CONTEXT_MIN_SECONDS,

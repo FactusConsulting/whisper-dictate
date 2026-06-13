@@ -117,6 +117,52 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
     return _boost_quiet_detail(a)[0]
 
 
+# Trailing-silence trim — the PRIMARY anti-hallucination defence. The #1 source
+# of Whisper hallucinations is "dead audio" at the end of a clip (you stop
+# talking but the key is still held). Whisper fills that empty tail with
+# high-probability training phrases (subtitle credits, "thank you for watching").
+# Cutting the tail BEFORE transcription removes the root cause — and, unlike
+# downstream text filtering, it can NEVER delete a real word: we only ever cut a
+# sustained run of frames sitting at the measured noise floor.
+_TRIM_FRAME = 480           # 30 ms @ 16 kHz — same framing as _noise_snr
+_TRIM_MARGIN_DB = 12.0      # a frame must sit this far above the noise floor to
+                            # count as speech (12 dB ≈ the low end of real SNR,
+                            # so a quietly-trailed-off word is still kept)
+_TRIM_PAD_FRAMES = 4        # keep ~120 ms after the last speech frame so a word's
+                            # natural decay is never clipped
+_TRIM_MIN_FRAMES = 5        # only trim if it removes ≥ ~150 ms — never shorten a
+                            # tight recording pointlessly
+
+
+def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
+    """Cut a sustained run of trailing near-silence (at the noise floor) off the
+    end of ``a``.
+
+    Returns ``(trimmed, trimmed_ms)``. Leaves the clip untouched (``trimmed_ms``
+    0.0) when there is no clear speech or the trailing silence is shorter than
+    ~150 ms. Frames are scored against this clip's own noise floor (10th-pct
+    per-frame RMS, matching ``_noise_snr``), so the threshold adapts to the mic.
+    Pure / side-effect-free — the caller logs.
+    """
+    n = len(a) // _TRIM_FRAME
+    if n < 4:
+        return a, 0.0
+    frm = a[:n * _TRIM_FRAME].reshape(n, _TRIM_FRAME)
+    rms = np.sqrt(np.mean(frm.astype(np.float64) ** 2, axis=1))
+    noise = float(np.percentile(rms, 10)) or 1e-9
+    threshold = noise * (10 ** (_TRIM_MARGIN_DB / 20.0))
+    speech = np.nonzero(rms > threshold)[0]
+    if len(speech) == 0:
+        return a, 0.0
+    keep_frames = min(n, int(speech[-1]) + 1 + _TRIM_PAD_FRAMES)
+    removed_frames = n - keep_frames
+    if removed_frames < _TRIM_MIN_FRAMES:
+        return a, 0.0
+    keep = keep_frames * _TRIM_FRAME
+    trimmed_ms = (len(a) - keep) / _TRIM_FRAME * 30.0
+    return a[:keep], trimmed_ms
+
+
 def compute_audio_metrics(pcm: np.ndarray) -> AudioCaptureMetrics:
     """Public wrapper: compute audio capture metrics for ``pcm`` (int16 mono).
 

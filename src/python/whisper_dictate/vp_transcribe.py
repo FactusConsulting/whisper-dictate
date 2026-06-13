@@ -17,7 +17,12 @@ from typing import Any
 
 import numpy as np
 
-from whisper_dictate.vp_audio import _boost_quiet, _boost_quiet_detail, _looks_like_speech
+from whisper_dictate.vp_audio import (
+    _boost_quiet,
+    _boost_quiet_detail,
+    _looks_like_speech,
+    _trim_trailing_silence,
+)
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 
 apply_config_to_environ()
@@ -534,6 +539,15 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         print(f"[gate] {gate}", flush=True)
         return TranscribeResult(text="", gate=gate)
     print(f"[gate] {gate}", flush=True)
+    # PRIMARY anti-hallucination defence: cut the "dead audio" tail before Whisper
+    # ever sees it, so there is no empty region for it to fill with a subtitle
+    # credit. Only ever removes a sustained run at the noise floor — never speech.
+    raw_audio, trimmed_ms = _trim_trailing_silence(raw_audio)
+    if trimmed_ms > 0:
+        print(
+            f"[cap] trimmed {trimmed_ms:.0f}ms trailing silence (anti-hallucination)",
+            flush=True,
+        )
     audio, capture_metrics = _boost_quiet_detail(raw_audio)
     dur = len(audio) / SR
     in_dbfs = 20 * np.log10(float(np.sqrt(np.mean(audio**2)) or 1e-9))

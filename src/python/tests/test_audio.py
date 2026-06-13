@@ -66,6 +66,57 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertGreater(metrics.snr_db, 20.0)
         self.assertEqual(metrics.input_status, "good")
 
+    # --- _trim_trailing_silence (primary anti-hallucination defence) ---
+    def test_trim_cuts_trailing_noise_floor_keeping_speech_plus_pad(self):
+        # 20 frames of speech then 30 frames at the noise floor: the dead tail is
+        # cut, keeping the speech + a 4-frame (~120 ms) decay pad.
+        np = self.np
+        speech = np.full(480 * 20, 0.2, dtype=np.float32)
+        silence = np.full(480 * 30, 0.0005, dtype=np.float32)
+        a = np.concatenate([speech, silence])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(len(trimmed), 480 * 24)   # 20 speech + 4 pad frames
+        self.assertAlmostEqual(ms, 26 * 30.0, places=3)  # 26 frames removed
+
+    def test_trim_keeps_tight_clip_unchanged(self):
+        # Only 3 trailing silence frames (< the pad+minimum): nothing is removed.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 20, 0.2, dtype=np.float32),
+            np.full(480 * 3, 0.0005, dtype=np.float32),
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
+    def test_trim_leaves_all_silence_untouched(self):
+        # No frame rises above the noise floor → never trims to empty.
+        np = self.np
+        a = np.full(480 * 10, 0.0005, dtype=np.float32)
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
+    def test_trim_keeps_quietly_trailing_word(self):
+        # A word that trails off but stays ~24 dB above the noise floor (well
+        # above the 12 dB margin) is NOT clipped — only sub-margin tail is cut.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 10, 0.2, dtype=np.float32),      # loud speech
+            np.full(480 * 10, 0.008, dtype=np.float32),    # quiet trailing word
+            np.full(480 * 20, 0.0005, dtype=np.float32),   # dead tail
+        ])
+        trimmed, _ms = self.vp._trim_trailing_silence(a)
+        # The quiet word (frames 10-19) survives + 4 pad frames = 24 frames kept.
+        self.assertEqual(len(trimmed), 480 * 24)
+
+    def test_trim_too_short_buffer_unchanged(self):
+        np = self.np
+        a = np.full(480 * 2, 0.2, dtype=np.float32)
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
 
