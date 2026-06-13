@@ -277,6 +277,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="run the interactive config setup wizard (writes "
                          "config.json + prints env-lines), then exit. Loads no "
                          "ML model.")
+    ap.add_argument("--capture-hotkey", action="store_true",
+                    help="press-to-capture the push-to-talk hotkey: hold the "
+                         "key(s) you want, release, confirm, and it is written to "
+                         "the 'key' setting in config.json. No typing key names. "
+                         "Then exit; loads no ML model.")
+    ap.add_argument("--capture-hotkey-allow-media", action="store_true",
+                    help="(experimental) with --capture-hotkey, also capture media "
+                         "/ headset buttons (play-pause, volume, hook-switch) that "
+                         "surface as media keys; see issue #258.")
     ap.add_argument("--export-config", action="store_true",
                     help="print the current effective config (config.json + env "
                          "overrides) as a config.json blob plus PowerShell/bash "
