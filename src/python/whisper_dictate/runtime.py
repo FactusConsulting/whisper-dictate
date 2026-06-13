@@ -405,8 +405,9 @@ def _handle_dictionary_training(a, ap) -> int:
             as_json=a.json,
         )
     except Exception as e:  # noqa: BLE001 - argparse should report cleanly
+        # ap.error() prints usage and raises SystemExit(2); it never returns, so the
+        # function ends here (no unreachable return follows).
         ap.error(str(e))
-        return 2
 
 
 def _run_utility_subcommands(a, ap) -> None:

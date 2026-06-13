@@ -82,6 +82,44 @@ class ExtractCandidateTermsTests(unittest.TestCase):
         kube = next(c for c in cands if c.term == "Kubernetes")
         self.assertIn("da-tech-003", kube.samples)
 
+    def test_count_is_per_item_not_per_occurrence(self):
+        # "Kubernetes" appears twice in ONE item (and via two heuristics: text +
+        # curated) — count must be 1 (one corpus item mentioned it), not 2/3.
+        cands = dt.extract_candidate_terms(
+            ["Kubernetes runs Kubernetes again."],
+            item_terms=[["Kubernetes"]],
+            item_ids=["only"],
+        )
+        kube = next(c for c in cands if c.term == "Kubernetes")
+        self.assertEqual(kube.count, 1)
+
+    def test_count_increments_once_per_distinct_item(self):
+        cands = dt.extract_candidate_terms(
+            ["Kubernetes here.", "Kubernetes Kubernetes there.", "nothing"],
+            item_ids=["a", "b", "c"],
+        )
+        kube = next(c for c in cands if c.term == "Kubernetes")
+        self.assertEqual(kube.count, 2)  # two items, despite repeats in item b
+
+    def test_single_capital_letter_is_not_a_candidate(self):
+        # A lone capital letter ("X", "I") is noise, not a domain term, even when it
+        # is not in the stopword set — matches the _is_capitalized_token contract.
+        self.assertFalse(dt._is_capitalized_token("X"))
+        self.assertFalse(dt._is_capitalized_token("A"))
+        cands = dt.extract_candidate_terms(["X marks Kubernetes."], item_ids=["a"])
+        terms = {c.term for c in cands}
+        self.assertNotIn("X", terms)
+        self.assertIn("Kubernetes", terms)
+
+    def test_multi_letter_capitalized_token_still_accepted(self):
+        self.assertTrue(dt._is_capitalized_token("Kubernetes"))
+
+    def test_stopwords_shared_across_languages_are_present_once(self):
+        # "at"/"for" are valid in both English and Danish; the dedup of the literal
+        # must not have dropped them from the set.
+        self.assertIn("at", dt._STOPWORDS)
+        self.assertIn("for", dt._STOPWORDS)
+
 
 class MergeTermsTests(unittest.TestCase):
     def test_append_new_terms(self):

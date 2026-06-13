@@ -20,6 +20,7 @@ tooling. Kept egui-agnostic: no UI hooks (deferred to the egui 0.34 branch).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,11 @@ from whisper_dictate.vp_dictionary_training import (
 )
 
 
+def _expand_path(path: str | Path) -> Path:
+    """Expand ``~`` and ``$VAR``/``%VAR%`` in a user-supplied path before any IO."""
+    return Path(os.path.expanduser(os.path.expandvars(str(path))))
+
+
 def _load_corpus_items(corpus_manifest: str | Path | None, app_root: str | Path | None):
     """Resolve + load the golden corpus the same way the benchmark does.
 
@@ -50,10 +56,16 @@ def _load_corpus_items(corpus_manifest: str | Path | None, app_root: str | Path 
     appdata = appdata_dir()
     root = app_root if app_root is not None else "."
     manifest = resolve_corpus_manifest(root, corpus_manifest, appdata)
-    if manifest is None or not Path(manifest).exists():
-        looked = ", ".join(str(p) for p in corpus_search_paths(root, appdata))
-        raise LookupError(f"no benchmark corpus found (looked: {looked})")
-    return load_corpus(manifest)
+    # Expand ~/$VARS so an explicit "--benchmark-corpus ~/corpus.json" works (the
+    # resolver returns the explicit path verbatim) and the existence check matches
+    # what load_corpus will actually open.
+    expanded = _expand_path(manifest) if manifest is not None else None
+    if expanded is None or not expanded.exists():
+        looked_paths = [str(p) for p in corpus_search_paths(root, appdata)]
+        if manifest is not None:  # include the explicit path so the error is actionable
+            looked_paths.insert(0, str(expanded))
+        raise LookupError(f"no benchmark corpus found (looked: {', '.join(looked_paths)})")
+    return load_corpus(expanded)
 
 
 def _read_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -129,7 +141,6 @@ def run_build_from_corpus(
         items=items,
         dict_path=dict_path,
         wrote=wrote,
-        apply=apply,
         as_json=as_json,
     )
     return 0
@@ -177,7 +188,6 @@ def run_suggest_from_misses(
         new_terms=new_terms,
         dict_path=dict_path,
         wrote=wrote,
-        apply=apply,
         as_json=as_json,
     )
     return 0
@@ -191,7 +201,7 @@ def _fail(message: str, as_json: bool) -> int:
     return 1
 
 
-def _report_build(*, preview, candidates, profile, items, dict_path, wrote, apply, as_json) -> None:
+def _report_build(*, preview, candidates, profile, items, dict_path, wrote, as_json) -> None:
     if as_json:
         _emit_json({
             "command": "build-from-corpus",
@@ -209,8 +219,8 @@ def _report_build(*, preview, candidates, profile, items, dict_path, wrote, appl
         })
         return
     print(
-        f"[dictionary] build-from-corpus reads corpus reference TEXT only "
-        f"(never records audio).",
+        "[dictionary] build-from-corpus reads corpus reference TEXT only "
+        "(never records audio).",
         flush=True,
     )
     print(f"  corpus selection: {profile.describe()}  ({len(items)} item(s))", flush=True)
@@ -229,7 +239,7 @@ def _report_build(*, preview, candidates, profile, items, dict_path, wrote, appl
         print("  PREVIEW only — re-run with --apply to write these terms.", flush=True)
 
 
-def _report_suggestions(*, suggestions, new_terms, dict_path, wrote, apply, as_json) -> None:
+def _report_suggestions(*, suggestions, new_terms, dict_path, wrote, as_json) -> None:
     if as_json:
         _emit_json({
             "command": "suggest-from-benchmark-misses",

@@ -42,6 +42,36 @@ class ResolveDictionaryPathTests(unittest.TestCase):
                 os.environ["VOICEPI_DICTIONARY"] = old
 
 
+class SanitizeDictionaryPathTests(unittest.TestCase):
+    def test_resolves_and_keeps_json_suffix(self):
+        d = tempfile.mkdtemp()
+        p = store.sanitize_dictionary_path(Path(d) / "sub" / "dictionary.json")
+        self.assertTrue(p.is_absolute())
+        self.assertEqual(p.suffix, ".json")
+
+    def test_expands_user_home(self):
+        p = store.sanitize_dictionary_path("~/whisper-dictate-dict.json")
+        self.assertNotIn("~", str(p))
+        self.assertTrue(p.is_absolute())
+
+    def test_rejects_non_json_suffix(self):
+        with self.assertRaises(ValueError):
+            store.sanitize_dictionary_path("/tmp/.bashrc")
+
+    def test_rejects_parent_traversal(self):
+        with self.assertRaises(ValueError):
+            store.sanitize_dictionary_path("../../etc/evil.json")
+
+    def test_rejects_blank(self):
+        with self.assertRaises(ValueError):
+            store.sanitize_dictionary_path("   ")
+
+    def test_write_rejects_non_json_path(self):
+        d = tempfile.mkdtemp()
+        with self.assertRaises(ValueError):
+            store.write_terms(Path(d) / "dictionary.txt", ["X"])
+
+
 class LoadAndWriteTests(unittest.TestCase):
     def _tmp(self) -> Path:
         d = tempfile.mkdtemp()

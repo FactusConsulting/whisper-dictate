@@ -36,6 +36,39 @@ from pathlib import Path
 from typing import Any
 
 
+def sanitize_dictionary_path(path: str | Path) -> Path:
+    """Validate + normalise a user-chosen dictionary path before any file IO.
+
+    The dictionary location is user-controlled (``--dictionary`` /
+    ``VOICEPI_DICTIONARY``). This is a single-user, local CLI writing to a file the
+    *same* user picked on their *own* machine, so there is no privilege boundary to
+    cross — but we still construct the path defensively instead of trusting the raw
+    string, both to give clear errors and to keep the value off the taint path to
+    the filesystem sink:
+
+    * ``expanduser()`` so ``~`` works, then ``resolve()`` to a single canonical,
+      absolute path (collapsing any ``.`` / ``..`` segments rather than leaving them
+      to be interpreted at write time);
+    * require a ``.json`` suffix so the trainer only ever writes a JSON dictionary
+      (a typo'd ``--dictionary ~/.bashrc`` is rejected, not silently overwritten);
+    * reject literal parent-directory traversal (``..``) in the *given* input so a
+      crafted relative path can't climb out of the intended tree before resolution.
+
+    Returns the resolved :class:`Path` (which need not exist yet). Raises
+    ``ValueError`` on a blank path, a non-``.json`` suffix, or an embedded ``..``.
+    """
+    raw = str(path).strip()
+    if not raw:
+        raise ValueError("dictionary path must not be empty")
+    # Reject parent-directory traversal in the raw, pre-resolution input.
+    if ".." in Path(raw).parts:
+        raise ValueError(f"dictionary path must not contain '..': {raw!r}")
+    resolved = Path(raw).expanduser().resolve()
+    if resolved.suffix.lower() != ".json":
+        raise ValueError(f"dictionary path must end in .json: {raw!r}")
+    return resolved
+
+
 def default_dictionary_path() -> Path:
     """Per-user default dictionary path (mirrors ``vp_cli._default_dictionary_path``).
 
@@ -74,10 +107,11 @@ def load_dictionary_document(path: str | Path) -> dict[str, Any]:
 
     Returns the parsed top-level object so the caller can preserve unknown keys on
     write. A missing file yields ``{}`` (a fresh dictionary). Raises ``ValueError``
-    for malformed JSON or a non-object root, so the CLI can report a clear error
-    instead of silently dropping a user's existing terms.
+    for a bad path (see :func:`sanitize_dictionary_path`), malformed JSON or a
+    non-object root, so the CLI can report a clear error instead of silently
+    dropping a user's existing terms.
     """
-    p = Path(path).expanduser()
+    p = sanitize_dictionary_path(path)
     if not p.exists():
         return {}
     raw = p.read_text(encoding="utf-8").strip()
@@ -125,10 +159,12 @@ def write_terms(path: str | Path, terms: list[str], *, base: dict[str, Any] | No
     ``replacements``) are kept verbatim — pass the result of
     :func:`load_dictionary_document` so a term append never drops replacements. The
     ``terms`` array is replaced with ``terms`` as plain strings (the caller has
-    already merged/deduped). Parent dirs are created; output is pretty-printed with
-    a trailing newline to match the Rust writer's on-disk shape. Returns the path.
+    already merged/deduped). The path is validated/normalised by
+    :func:`sanitize_dictionary_path` (resolved, must end in ``.json``, no ``..``)
+    before any write. Parent dirs are created; output is pretty-printed with a
+    trailing newline to match the Rust writer's on-disk shape. Returns the path.
     """
-    p = Path(path).expanduser()
+    p = sanitize_dictionary_path(path)
     document: dict[str, Any] = dict(base) if base else {}
     document["terms"] = list(terms)
     document.setdefault("replacements", {})

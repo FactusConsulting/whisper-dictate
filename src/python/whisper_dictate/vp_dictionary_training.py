@@ -45,9 +45,10 @@ _STOPWORDS = {
     "do", "for", "from", "i", "if", "in", "is", "it", "its", "me", "new", "of",
     "on", "or", "please", "run", "set", "should", "tell", "the", "their", "them",
     "then", "they", "this", "to", "via", "want", "whether", "with", "you",
-    # Danish
-    "af", "at", "behold", "bliver", "brug", "commit", "der", "det", "du", "eller",
-    "en", "er", "et", "for", "fra", "gerne", "her", "hvis", "hvor", "ikke", "jeg",
+    # Danish (entries shared with English above, e.g. "at"/"for", are intentionally
+    # not repeated here — the set is the union; repeating them is a silent no-op).
+    "af", "behold", "bliver", "brug", "commit", "der", "det", "du", "eller",
+    "en", "er", "et", "fra", "gerne", "her", "hvis", "hvor", "ikke", "jeg",
     "kan", "lad", "lave", "lige", "med", "modellen", "nye", "og", "om", "op",
     "opret", "os", "på", "se", "skal", "skift", "som", "stadig", "så", "til",
     "tjek", "vi", "vil", "være",
@@ -58,9 +59,11 @@ _STOPWORDS = {
 class TermCandidate:
     """A proposed dictionary term plus why it was proposed (for the preview).
 
-    ``count`` is how many corpus sources mentioned it; ``reason`` is one of
-    ``curated_term`` (came from a corpus item's ``terms``), ``multi_word``,
-    ``capitalized`` or ``technical``. ``samples`` keeps a few source ids/snippets.
+    ``count`` is how many corpus ITEMS mentioned it (each item contributes at most
+    once, regardless of how many times — or via how many heuristics — it appears in
+    that item). ``reason`` is one of ``curated_term`` (came from a corpus item's
+    ``terms``), ``multi_word``, ``capitalized`` or ``technical``. ``samples`` keeps a
+    few source ids/snippets.
     """
 
     term: str
@@ -117,13 +120,18 @@ def _is_capitalized_token(token: str) -> bool:
     """A single token that looks like a name: starts upper, not ALL-lower, not a stopword.
 
     Accepts ``Kubernetes``, ``OpenClaw``, ``GitHub`` (internal caps) but rejects
-    sentence-initial fillers (``The``, ``Skift``) via the stopword set.
+    sentence-initial fillers (``The``, ``Skift``) via the stopword set, lone capital
+    letters (``X``, ``I``) and tokens with no alphabetic character at all.
     """
     if not token or not token[0].isupper():
         return False
     if _normalize(token) in _STOPWORDS:
         return False
-    # Reject pure ASCII single capital letters / numbers-only.
+    # Reject a bare single capital letter (e.g. "X", "A") — a lone letter is noise,
+    # not a domain term, even when it isn't in the stopword set.
+    if len(token) == 1:
+        return False
+    # Must contain at least one letter (drops digit-/symbol-only tokens like "3.").
     return any(ch.isalpha() for ch in token)
 
 
@@ -204,6 +212,90 @@ def _single_token_candidates(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def _aligned_ids(item_ids: Iterable[str] | None, n: int) -> list[str]:
+    """Per-text sample ids, padded with ``""`` so every text has a matching slot."""
+    ids = list(item_ids) if item_ids is not None else [""] * n
+    if len(ids) < n:
+        ids = ids + [""] * (n - len(ids))
+    return ids
+
+
+def _item_hits(text: str, curated: Iterable[str]) -> list[tuple[str, str]]:
+    """All ``(term, reason)`` hits found in one corpus item (curated first).
+
+    Curated terms lead so they own the surface form / reason; then capitalised
+    multi-word runs and the single capitalised/technical tokens. The caller
+    de-duplicates per item, so repeats within one item don't inflate the count.
+    """
+    hits: list[tuple[str, str]] = [
+        (term, "curated_term") for term in _curated_terms([curated])
+    ]
+    hits.extend((run, "multi_word") for run in _multi_word_candidates(text))
+    hits.extend(_single_token_candidates(text))
+    return hits
+
+
+class _CandidateAccumulator:
+    """Tallies term candidates by counting each term once per corpus ITEM.
+
+    ``count`` therefore means "how many corpus items mentioned the term" (matching
+    :class:`TermCandidate`'s contract) — repeated mentions within a single item, or
+    the same term surfacing via several heuristics in one item, are counted once.
+    The first non-empty surface/reason wins, except a ``curated_term`` reason
+    upgrades a weaker one. Curated terms are remembered so the merge can force-keep
+    them regardless of ``min_count``.
+    """
+
+    def __init__(self) -> None:
+        self._counts: Counter = Counter()
+        self._reasons: dict[str, str] = {}
+        self._surface: dict[str, str] = {}
+        self._samples: dict[str, list[str]] = {}
+        self._curated: set[str] = set()
+
+    def add_item(self, text: str, curated: Iterable[str], sample_id: str) -> None:
+        """Record one corpus item's hits, counting each distinct term just once."""
+        counted: set[str] = set()
+        for term, reason in _item_hits(text, curated):
+            norm = self._record_surface(term, reason, sample_id)
+            if norm and norm not in counted:
+                counted.add(norm)
+                self._counts[norm] += 1
+
+    def _record_surface(self, term: str, reason: str, sample_id: str) -> str:
+        """Update surface/reason/samples for ``term``; return its norm key ("" if blank)."""
+        cleaned = (term or "").strip()
+        norm = _normalize(cleaned)
+        if not norm:
+            return ""
+        first_seen = norm not in self._surface
+        curated_upgrade = reason == "curated_term" and self._reasons.get(norm) != "curated_term"
+        if first_seen or curated_upgrade:
+            self._surface[norm] = cleaned
+            self._reasons[norm] = reason
+        if reason == "curated_term":
+            self._curated.add(norm)
+        if sample_id and sample_id not in self._samples.setdefault(norm, []):
+            self._samples[norm].append(sample_id)
+        return norm
+
+    def results(self, min_count: int) -> list[TermCandidate]:
+        """Build the sorted candidate list, force-keeping curated terms."""
+        threshold = max(1, min_count)
+        candidates = [
+            TermCandidate(
+                term=self._surface[norm],
+                count=count,
+                reason=self._reasons.get(norm, ""),
+                samples=tuple(self._samples.get(norm, [])[:5]),
+            )
+            for norm, count in self._counts.items()
+            if norm in self._curated or count >= threshold
+        ]
+        candidates.sort(key=lambda c: (-c.count, c.term.casefold()))
+        return candidates
+
+
 def extract_candidate_terms(
     texts: Iterable[str],
     *,
@@ -223,62 +315,21 @@ def extract_candidate_terms(
       "large-v3"), each frequency-filtered by ``min_count`` so one-off noise from a
       single sentence is dropped when ``min_count > 1``.
 
-    De-duplicated case-insensitively, preferring the curated/first-seen surface
-    form. Returns :class:`TermCandidate` objects sorted by descending count then
-    case-insensitive term, so the most-mentioned domain terms preview first.
+    Each term is counted at most ONCE per corpus item (so ``count`` is the number of
+    items that mention it, not raw occurrences). De-duplicated case-insensitively,
+    preferring the curated/first-seen surface form. Returns :class:`TermCandidate`
+    objects sorted by descending count then case-insensitive term, so the
+    most-mentioned domain terms preview first.
     """
     texts = list(texts)
-    ids = list(item_ids) if item_ids is not None else [""] * len(texts)
-    if len(ids) < len(texts):
-        ids = ids + [""] * (len(texts) - len(ids))
+    curated_per_item = list(item_terms) if item_terms is not None else []
+    ids = _aligned_ids(item_ids, len(texts))
 
-    counts: Counter = Counter()
-    reasons: dict[str, str] = {}
-    surface: dict[str, str] = {}
-    samples: dict[str, list[str]] = {}
-
-    def _record(term: str, reason: str, sample: str) -> None:
-        cleaned = (term or "").strip()
-        norm = _normalize(cleaned)
-        if not norm:
-            return
-        counts[norm] += 1
-        # First reason/surface wins, but curated upgrades a weaker reason.
-        if norm not in surface or (reason == "curated_term" and reasons.get(norm) != "curated_term"):
-            surface[norm] = cleaned
-            reasons[norm] = reason
-        reasons.setdefault(norm, reason)
-        if sample and sample not in samples.setdefault(norm, []):
-            samples[norm].append(sample)
-
-    # Curated terms first so they own the surface form / reason.
-    for terms, item_id in zip(
-        (item_terms if item_terms is not None else [[] for _ in texts]),
-        ids,
-    ):
-        for term, _c in _curated_terms([terms]).items():
-            _record(term, "curated_term", item_id)
-
-    curated_norms = set(counts)  # everything curated is force-kept below
-
-    for text, item_id in zip(texts, ids):
-        for run in _multi_word_candidates(text):
-            _record(run, "multi_word", item_id)
-        for token, reason in _single_token_candidates(text):
-            _record(token, reason, item_id)
-
-    candidates: list[TermCandidate] = []
-    for norm, count in counts.items():
-        if norm not in curated_norms and count < max(1, min_count):
-            continue
-        candidates.append(TermCandidate(
-            term=surface[norm],
-            count=count,
-            reason=reasons.get(norm, ""),
-            samples=tuple(samples.get(norm, [])[:5]),
-        ))
-    candidates.sort(key=lambda c: (-c.count, c.term.casefold()))
-    return candidates
+    acc = _CandidateAccumulator()
+    for index, (text, sample_id) in enumerate(zip(texts, ids)):
+        curated = curated_per_item[index] if index < len(curated_per_item) else ()
+        acc.add_item(text, curated, sample_id)
+    return acc.results(min_count)
 
 
 def merge_terms(existing: Iterable[str], candidates: Iterable[Any]) -> MergePreview:

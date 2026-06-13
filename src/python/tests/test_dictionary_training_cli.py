@@ -102,6 +102,42 @@ class BuildFromCorpusCliTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("error", json.loads(buf.getvalue().strip().splitlines()[-1]))
 
+    def test_explicit_corpus_path_with_env_var_is_expanded(self):
+        # An explicit manifest given with a $VAR is expanded before the existence
+        # check (the resolver returns the explicit path verbatim).
+        import os
+        old = os.environ.get("WD_TEST_CORPUS_DIR")
+        os.environ["WD_TEST_CORPUS_DIR"] = str(self.dir)
+        try:
+            with _capture_stdout() as buf:
+                rc = cli.run_build_from_corpus(
+                    corpus_manifest="$WD_TEST_CORPUS_DIR/corpus.json",
+                    dictionary_path=self.dict_path,
+                    apply=False,
+                    as_json=True,
+                )
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf.getvalue().strip().splitlines()[-1])
+            self.assertEqual(payload["corpus_items"], 3)
+        finally:
+            if old is None:
+                os.environ.pop("WD_TEST_CORPUS_DIR", None)
+            else:
+                os.environ["WD_TEST_CORPUS_DIR"] = old
+
+    def test_missing_explicit_corpus_is_listed_in_error(self):
+        # The explicit (expanded) path appears in the "looked" list so the error is
+        # actionable, not just the implicit search dirs.
+        explicit = self.dir / "nope.json"
+        with _capture_stdout() as buf:
+            cli.run_build_from_corpus(
+                corpus_manifest=explicit,
+                dictionary_path=self.dict_path,
+                as_json=True,
+            )
+        payload = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertIn("nope.json", payload["error"])
+
 
 class SuggestFromMissesCliTests(unittest.TestCase):
     def setUp(self):
