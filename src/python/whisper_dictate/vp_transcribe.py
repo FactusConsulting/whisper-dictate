@@ -537,21 +537,24 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     # rate/layout Whisper wants, so no WAV round-trip or resample. Just
     # int16 -> float32 -> boost.
     raw_audio = pcm.reshape(-1).astype(np.float32) / 32768.0
-    ok, gate = _looks_like_speech(raw_audio)
-    if not ok:
-        print(f"[gate] {gate}", flush=True)
-        return TranscribeResult(text="", gate=gate)
-    print(f"[gate] {gate}", flush=True)
-    # PRIMARY anti-hallucination defence: cut the "dead audio" tail before Whisper
-    # ever sees it, so there is no empty region for it to fill with a subtitle
-    # credit. Removes only a sustained trailing run at/below the noise floor + a
-    # 12 dB margin (past a 120 ms pad); a normally-voiced word is preserved.
+    # PRIMARY anti-hallucination defence: cut the "dead audio" tail FIRST — before
+    # the speech gate, capture metrics AND decode — so all three see the same
+    # trimmed buffer. Whisper fills an empty trailing region with a subtitle
+    # credit, and a long dead tail also drags the mean level down (which could
+    # trip the too-quiet gate on a clip that actually contains clear speech).
+    # Removes only a sustained trailing run at/below the noise floor + a 12 dB
+    # margin (past a 120 ms pad); a normally-voiced word is preserved.
     raw_audio, trimmed_ms = _trim_trailing_silence(raw_audio)
     if trimmed_ms > 0:
         print(
             f"[cap] trimmed {trimmed_ms:.0f}ms trailing silence (anti-hallucination)",
             flush=True,
         )
+    ok, gate = _looks_like_speech(raw_audio)
+    if not ok:
+        print(f"[gate] {gate}", flush=True)
+        return TranscribeResult(text="", gate=gate)
+    print(f"[gate] {gate}", flush=True)
     audio, capture_metrics = _boost_quiet_detail(raw_audio)
     dur = len(audio) / SR
     in_dbfs = 20 * np.log10(float(np.sqrt(np.mean(audio**2)) or 1e-9))
