@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -124,6 +125,16 @@ def _env_for_key(key: str) -> str | None:
     return setting.env if setting else None
 
 
+def _ps_quote(value: str) -> str:
+    """Single-quote a value for PowerShell, escaping embedded single quotes.
+
+    Inside a PowerShell single-quoted string, a literal ``'`` must be doubled
+    (``''``).  Without this, values like ``it's`` or API keys that happen to
+    contain a quote would produce a syntax error when copy-pasted into a shell.
+    """
+    return "'" + value.replace("'", "''") + "'"
+
+
 def format_powershell_lines(
     config: dict[str, str],
     secrets: dict[str, str] | None = None,
@@ -133,9 +144,9 @@ def format_powershell_lines(
     for key, value in config.items():
         env = _env_for_key(key)
         if env:
-            lines.append(f"$env:{env} = '{value}'")
+            lines.append(f"$env:{env} = {_ps_quote(value)}")
     for env, value in (secrets or {}).items():
-        lines.append(f"$env:{env} = '{value}'")
+        lines.append(f"$env:{env} = {_ps_quote(value)}")
     return "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -206,6 +217,8 @@ class WizardResult:
 def _coerce_number(raw: str, row: dict) -> float | int:
     """Parse a numeric answer; raise ValueError if out of the schema bounds."""
     value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError("must be a finite number (not nan/inf)")
     lo, hi = _bounds(row)
     if lo is not None and value < lo:
         raise ValueError(f"must be >= {lo}")
@@ -277,10 +290,19 @@ class _Wizard:
     def _validate_answer(
         self, answer: str, row: dict, choices: tuple[str, ...] | None
     ) -> str | None:
-        """Return the value to store, or None (after reporting why) to re-prompt."""
-        if choices is not None and answer not in choices:
-            self._say(f"  ! '{answer}' is not one of: {', '.join(choices)}")
-            return None
+        """Return the value to store, or None (after reporting why) to re-prompt.
+
+        When choices contains ``""`` (e.g. compute_type "auto"), the human-
+        readable token ``"auto"`` is also accepted and mapped to ``""``.
+        """
+        if choices is not None:
+            # Map the human-readable token "auto" to "" when "" is a valid choice.
+            if answer == "auto" and "" in choices:
+                return ""
+            if answer not in choices:
+                visible = [c if c != "" else "auto" for c in choices]
+                self._say(f"  ! '{answer}' is not one of: {', '.join(visible)}")
+                return None
         if _is_numeric(row):
             try:
                 return str(_coerce_number(answer, row))
@@ -321,26 +343,73 @@ class _Wizard:
         answer = self._ask(prompt).strip().lower()
         return answer in ("y", "yes")
 
+    def _current_provider(self) -> str:
+        """Derive the current cloud-provider name from the effective stt_base_url.
+
+        Returns "groq" (the most common entry-point) when no URL has been
+        explicitly configured — i.e. when the URL is absent or matches the
+        schema default, which means the user never consciously set it.
+        """
+        current_url = self.config.get(
+            "stt_base_url", self._existing.get("stt_base_url", "")
+        )
+        schema_default = str(SETTING_BY_KEY["stt_base_url"].default) if "stt_base_url" in SETTING_BY_KEY else ""
+        # If the URL is the schema default or absent, treat as "not configured".
+        if not current_url or current_url == schema_default:
+            return "groq"
+        # Reverse-lookup: find a named provider whose URL matches.
+        for name, url in CLOUD_PROVIDER_BASE_URLS.items():
+            if name != "custom" and current_url == url:
+                return name
+        # URL is set but doesn't match any named provider → custom.
+        return "custom"
+
     def _prompt_cloud_provider(self) -> None:
-        """If backend=openai, seed stt_base_url from the chosen provider."""
+        """If backend=openai, seed stt_base_url from the chosen provider.
+
+        Defaults to the CURRENT provider so ENTER-to-keep never clobbers an
+        existing custom stt_base_url.  Only writes stt_base_url when the user
+        actively picks a provider (or enters a custom URL).
+        """
         backend = self.config.get("stt_backend", self._existing.get("stt_backend"))
         if backend != "openai" or self._cloud_provider_prompted:
             return
         self._cloud_provider_prompted = True
+
+        default_provider = self._current_provider()
+        current_url = self.config.get(
+            "stt_base_url", self._existing.get("stt_base_url", "")
+        )
+
         self._say()
         self._say("Cloud provider (seeds the API base URL):")
         self._say(f"  choices: {', '.join(CLOUD_PROVIDERS)}")
         while True:
-            answer = self._ask("  cloud provider [groq]: ").strip().lower()
-            provider = answer or "groq"
+            answer = self._ask(
+                f"  cloud provider [{default_provider}]: "
+            ).strip().lower()
+            provider = answer or default_provider
             if provider not in CLOUD_PROVIDERS:
                 self._say(f"  ! not one of: {', '.join(CLOUD_PROVIDERS)}")
                 continue
-            base = CLOUD_PROVIDER_BASE_URLS.get(provider)
-            # Only persist a non-default base URL (keep config.json minimal).
-            default_base = SETTING_BY_KEY["stt_base_url"].default
-            if base and base != default_base:
-                self.config["stt_base_url"] = base
+
+            if provider == "custom":
+                # Prompt for the custom URL, defaulting to the current value.
+                shown_url = current_url or "http://localhost:8000/v1"
+                url_answer = self._ask(
+                    f"  stt_base_url [{shown_url}]: "
+                ).strip()
+                chosen_url = url_answer or shown_url
+                self.config["stt_base_url"] = chosen_url
+            else:
+                chosen_url = CLOUD_PROVIDER_BASE_URLS[provider]
+                # Only persist a non-default base URL (keep config.json minimal).
+                default_base = SETTING_BY_KEY["stt_base_url"].default
+                if chosen_url != default_base:
+                    self.config["stt_base_url"] = chosen_url
+                elif "stt_base_url" in self.config:
+                    # User switched back to the default provider: remove override.
+                    del self.config["stt_base_url"]
             return
 
     def run(self, *, getpass_fn: Callable[[str], str]) -> WizardResult:

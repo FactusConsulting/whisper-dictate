@@ -366,6 +366,8 @@ def _run_utility_subcommands(a, ap) -> None:
     The per-subcommand work lives in ``_handle_*`` helpers to keep this dispatch
     flat.
     """
+    if getattr(a, "include_secrets", False) and not getattr(a, "export_config", False):
+        ap.error("--include-secrets requires --export-config")
     if getattr(a, "setup", False):
         from whisper_dictate.vp_setup import run_setup
         raise SystemExit(run_setup())

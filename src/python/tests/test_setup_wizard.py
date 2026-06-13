@@ -67,6 +67,24 @@ class PureFormatterTests(unittest.TestCase):
         self.assertIn("$env:VOICEPI_KEY = 'f9'", out)
         self.assertIn("$env:VOICEPI_MODEL = 'small'", out)
 
+    # Fix 1: PowerShell single-quote escaping
+    def test_powershell_lines_escape_single_quote(self):
+        """Embedded ' must be doubled so the PS line is valid syntax."""
+        out = vp_setup.format_powershell_lines({"initial_prompt": "it's a test"})
+        self.assertIn("$env:VOICEPI_INITIAL_PROMPT = 'it''s a test'", out)
+
+    def test_ps_quote_helper(self):
+        self.assertEqual(vp_setup._ps_quote("hello"), "'hello'")
+        self.assertEqual(vp_setup._ps_quote("it's"), "'it''s'")
+        self.assertEqual(vp_setup._ps_quote("a'b'c"), "'a''b''c'")
+        self.assertEqual(vp_setup._ps_quote(""), "''")
+
+    def test_powershell_secrets_escape_single_quote(self):
+        out = vp_setup.format_powershell_lines(
+            {}, {"VOICEPI_STT_API_KEY": "sk-it's-mine"}
+        )
+        self.assertIn("$env:VOICEPI_STT_API_KEY = 'sk-it''s-mine'", out)
+
     def test_bash_lines_quote_special_values(self):
         out = vp_setup.format_bash_lines(
             {"key": "f9", "temperature": "0.0,0.2"}
@@ -162,6 +180,42 @@ class WizardBasicTrackTests(unittest.TestCase):
         self.assertEqual(config.get("stt_backend"), "parakeet")
         self.assertIn("not one of", out)
 
+    # Fix 4: cloud provider ENTER-to-keep must not clobber existing stt_base_url
+    def test_cloud_enter_keeps_existing_custom_base_url(self):
+        """Pressing ENTER at the provider prompt must preserve an existing custom URL."""
+        out_fn, lines = _collector()
+        captured = {}
+
+        def _writer(config):
+            captured["config"] = config
+            return Path(self._cfg)
+
+        custom_url = "https://my-custom-endpoint.example.com/v1"
+        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_STT_BACKEND=None,
+                                VOICEPI_STT_BASE_URL=None):
+            # Simulate pre-existing config with stt_backend=openai and custom URL.
+            import json as _json
+            Path(self._cfg).write_text(
+                _json.dumps({"stt_backend": "openai", "stt_base_url": custom_url}),
+                encoding="utf-8",
+            )
+            # key=ENTER, model=ENTER, stt_backend=ENTER (keep openai), then
+            # rest of basic ENTER; cloud provider prompt=ENTER (keep existing), advanced=n
+            answers = ["", "", ""] + [""] * 16 + ["", "n"]
+            rc = vp_setup.run_setup(
+                input_fn=_scripted(answers),
+                output_fn=out_fn,
+                getpass_fn=lambda _p: "",
+                config_writer=_writer,
+            )
+        self.assertEqual(rc, 0)
+        # The custom URL must survive ENTER-to-keep
+        cfg = captured["config"]
+        self.assertEqual(
+            cfg.get("stt_base_url"), custom_url,
+            f"Expected custom URL to be preserved, got: {cfg.get('stt_base_url')!r}",
+        )
+
     def test_cloud_backend_prompts_provider_and_key(self):
         captured_secret = {}
 
@@ -249,6 +303,98 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         self.assertIsNone(wiz._validate_answer("0", row, choices))    # < min
         self.assertEqual(wiz._validate_answer("4", row, choices), "4")  # valid
         self.assertTrue(any("invalid number" in m for m in out_lines))
+
+    # Fix 2: nan/inf rejection
+    def test_nan_rejected(self):
+        from whisper_dictate import vp_setup as vs
+        out_lines = []
+        wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
+        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
+        choices = vs.ENUM_CHOICES.get("beam_size")
+        self.assertIsNone(wiz._validate_answer("nan", row, choices))
+        self.assertTrue(any("invalid number" in m for m in out_lines))
+
+    def test_inf_rejected(self):
+        from whisper_dictate import vp_setup as vs
+        out_lines = []
+        wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
+        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
+        choices = vs.ENUM_CHOICES.get("beam_size")
+        self.assertIsNone(wiz._validate_answer("inf", row, choices))
+        self.assertTrue(any("invalid number" in m for m in out_lines))
+
+    def test_coerce_number_nan_raises(self):
+        import math as _math
+        from whisper_dictate import vp_setup as vs
+        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
+        with self.assertRaises(ValueError) as ctx:
+            vs._coerce_number("nan", row)
+        self.assertIn("finite", str(ctx.exception))
+
+    def test_coerce_number_inf_raises(self):
+        from whisper_dictate import vp_setup as vs
+        row = next(r for r in vs._schema_rows() if r["key"] == "beam_size")
+        with self.assertRaises(ValueError):
+            vs._coerce_number("inf", row)
+
+    # Fix 3: compute_type auto selectable
+    def test_compute_type_auto_token_accepted(self):
+        """Typing 'auto' when choices contain '' maps to the empty string."""
+        from whisper_dictate import vp_setup as vs
+        out_lines = []
+        wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
+        # compute_type choices: ("", "float32", ...)
+        choices = vs.ENUM_CHOICES["compute_type"]
+        self.assertIn("", choices)
+        result = wiz._validate_answer("auto", {"key": "compute_type"}, choices)
+        self.assertEqual(result, "")
+
+    def test_compute_type_invalid_shows_auto_not_empty(self):
+        """Invalid choice error must not print the raw empty string."""
+        from whisper_dictate import vp_setup as vs
+        out_lines = []
+        wiz = vs._Wizard(lambda _p: "", out_lines.append, existing={})
+        choices = vs.ENUM_CHOICES["compute_type"]
+        wiz._validate_answer("bogus", {"key": "compute_type"}, choices)
+        error_lines = [m for m in out_lines if "not one of" in m]
+        self.assertTrue(error_lines, "expected an error message")
+        msg = error_lines[0]
+        # Must list "auto" as a selectable token, not a bare empty string.
+        self.assertIn("auto", msg)
+        self.assertNotIn("''", msg)  # raw empty string must not appear
+
+    def test_wizard_compute_type_auto_persists_empty(self):
+        """Full wizard: typing 'auto' for compute_type stores '' in config."""
+        cfg_path = os.path.join(tempfile.gettempdir(), "wd-ct-auto.json")
+        out_fn, lines = _collector()
+        captured = {}
+
+        def _writer(config):
+            captured["config"] = config
+            return Path(cfg_path)
+
+        # Find compute_type position in basic settings to know how many ENTERs
+        # before it. The basic settings are key, model, stt_backend, device,
+        # lang, inject_mode, audio_device, compute_type (order from schema).
+        # We'll feed a scripted list with 'auto' at the right position.
+        # key=ENTER, model=ENTER, stt_backend=ENTER, device=ENTER, lang=ENTER,
+        # inject_mode=ENTER, audio_device=ENTER, compute_type=auto,
+        # then ENTER for the rest, advanced=n
+        with _clean_voicepi_env(VOICEPI_CONFIG=cfg_path, VOICEPI_COMPUTE_TYPE=None,
+                                VOICEPI_STT_BACKEND=None):
+            answers = ["", "", "", "", "", "", "", "auto"] + [""] * 12 + ["n"]
+            rc = vp_setup.run_setup(
+                input_fn=_scripted(answers),
+                output_fn=out_fn,
+                getpass_fn=lambda _p: "",
+                config_writer=_writer,
+            )
+        self.assertEqual(rc, 0)
+        # compute_type="" means auto — but minimal mode only stores non-defaults.
+        # The schema default for compute_type is "" so it won't be in config.
+        # What we verify is that we did NOT get re-prompted (no "not one of" error).
+        out = "\n".join(lines)
+        self.assertNotIn("not one of", out)
 
 
 class TtySafetyTests(unittest.TestCase):
@@ -389,6 +535,16 @@ class CliDispatchTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 runtime._run_utility_subcommands(a, ap)
         m.assert_called_once_with(include_secrets=True)
+
+    # Fix 5: --include-secrets without --export-config must error
+    def test_include_secrets_without_export_config_errors(self):
+        """--include-secrets alone must produce a non-zero exit with a clear message."""
+        from whisper_dictate import runtime
+        ap = runtime.build_arg_parser()
+        a = ap.parse_args(["--include-secrets"])
+        with self.assertRaises(SystemExit) as ctx:
+            runtime._run_utility_subcommands(a, ap)
+        self.assertNotEqual(ctx.exception.code, 0)
 
     def test_vp_setup_import_pulls_no_ml_deps(self):
         # The config-UX path must NOT import torch/faster-whisper/numpy — it runs
