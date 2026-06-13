@@ -115,6 +115,11 @@ impl WhisperDictateApp {
             .inner;
         inline_help(ui, show_maintenance_help, MAINTENANCE_HELP);
 
+        // The digestible "Run benchmark" results: a coloured headline + a
+        // worst-WER-first table, shown below the button once a run completes. The
+        // raw JSONL stays in the runtime log; this is the at-a-glance view.
+        self.benchmark_results_section(ui, palette);
+
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(8.0);
