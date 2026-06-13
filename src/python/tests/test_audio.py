@@ -176,6 +176,22 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertGreater(ms, 0.0)                       # the dead air IS cut
         self.assertEqual(len(trimmed), 480 * 24)          # soft word (15-19) + 4 pad kept
 
+    def test_trim_robust_to_stray_silent_frame(self):
+        # A single fully-silent (RMS 0) dropout frame must NOT collapse the noise
+        # floor — that is why the floor is the 10th percentile, not np.min. With
+        # min, the zero would set the floor to ~0, drop the threshold to ~0, mark
+        # every frame "speech" and trim nothing; the 10th pct keeps room tone as
+        # the floor so the real dead tail is still cut.
+        np = self.np
+        a = np.concatenate([
+            np.zeros(480, dtype=np.float32),              # 1 digital-zero dropout frame
+            np.full(480 * 19, 0.2, dtype=np.float32),     # speech
+            np.full(480 * 30, 0.0005, dtype=np.float32),  # dead tail at room tone
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertGreater(ms, 0.0)   # dead tail still cut despite the zero frame
+        self.assertLess(len(trimmed), len(a))
+
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
 

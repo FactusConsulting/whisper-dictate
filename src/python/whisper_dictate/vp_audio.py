@@ -149,8 +149,9 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
     0.0) when there is no clear silence floor (the loudest frame is less than
     ``_TRIM_MIN_GAP_DB`` above the quietest), no trailing silence, or it is
     shorter than ~150 ms. A frame is silence only when within
-    ``_TRIM_NOISE_MARGIN_DB`` of the noise floor (the quietest frame), so any
-    voiced energy — even very soft trailing speech — sits above it and is kept.
+    ``_TRIM_NOISE_MARGIN_DB`` of the noise floor (the 10th-percentile frame,
+    robust to a stray dropout), so any voiced energy — even very soft trailing
+    speech — sits above it and is kept.
     Pure / side-effect-free — the caller logs.
     """
     n = len(a) // _TRIM_FRAME
