@@ -35,7 +35,7 @@ impl WhisperDictateApp {
                 .add_enabled(
                     idle,
                     egui::Button::new(icon_text(
-                        icons::ICON_REFRESH,
+                        icons::ICON_REFRESH.codepoint,
                         ui_text(&self.settings.ui_language, UiTextKey::ReloadConfig),
                     )),
                 )
@@ -46,7 +46,7 @@ impl WhisperDictateApp {
             }
             if ui
                 .button(icon_text(
-                    icons::ICON_HEALTH_AND_SAFETY,
+                    icons::ICON_HEALTH_AND_SAFETY.codepoint,
                     ui_text(&self.settings.ui_language, UiTextKey::Doctor),
                 ))
                 .on_hover_text("Run environment diagnostics and write the result to the log.")
@@ -58,7 +58,7 @@ impl WhisperDictateApp {
                 .add_enabled(
                     idle,
                     egui::Button::new(icon_text(
-                        icons::ICON_BUILD,
+                        icons::ICON_BUILD.codepoint,
                         ui_text(&self.settings.ui_language, UiTextKey::InstallRepair),
                     )),
                 )
@@ -75,7 +75,7 @@ impl WhisperDictateApp {
                 .add_enabled(
                     idle,
                     egui::Button::new(icon_text(
-                        icons::ICON_SPEED,
+                        icons::ICON_SPEED.codepoint,
                         ui_text(&self.settings.ui_language, UiTextKey::RunBenchmark),
                     )),
                 )
@@ -89,7 +89,7 @@ impl WhisperDictateApp {
             }
             if ui
                 .button(icon_text(
-                    icons::ICON_INFO,
+                    icons::ICON_INFO.codepoint,
                     ui_text(&self.settings.ui_language, UiTextKey::ConfigFile),
                 ))
                 // Hover EXPLAINS the action, then shows the actual path so the

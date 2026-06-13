@@ -61,7 +61,15 @@ pub(in crate::ui) fn trim_runtime_log(log: &mut String) {
 }
 
 impl eframe::App for WhisperDictateApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    // egui 0.34 renamed the required `App` method from `update(&Context, ..)` to
+    // `ui(&mut Ui, ..)`; the old `update` is now a deprecated default. The panels
+    // are now shown *inside* the root `ui` via `show_inside(ui, ..)` (was
+    // `show(ctx, ..)`), and `SidePanel`/`TopBottomPanel` are unified into `Panel`
+    // (`Panel::left`/`top`/`bottom`, `exact_width`/`exact_height` → `exact_size`).
+    // The `Context` (still needed for the tray, theme, repaint and the sidebar
+    // bridge painter) is taken from `ui.ctx()`. Layout/visuals are unchanged.
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         // Poll the worker + background tasks every frame BEFORE any mode branch so
         // dictation keeps flowing (and the meter/log keep updating) whether the UI
         // is in the full window or the compact strip.
@@ -82,62 +90,58 @@ impl eframe::App for WhisperDictateApp {
         // raised always-on-top by `set_compact_mode`; here we only render.
         if self.compact_mode {
             egui::CentralPanel::default()
-                .frame(
-                    egui::Frame::default()
-                        .fill(palette.panel_bg)
-                        .inner_margin(egui::Margin::symmetric(EDGE_MARGIN, EDGE_MARGIN)),
-                )
-                .show(ctx, |ui| self.compact_panel(ui, palette));
+                .frame(egui::Frame::default().fill(palette.panel_bg).inner_margin(
+                    egui::Margin::symmetric(EDGE_MARGIN as i8, EDGE_MARGIN as i8),
+                ))
+                .show_inside(ui, |ui| self.compact_panel(ui, palette));
             return;
         }
 
         paint_sidebar_bridge(ctx, palette, &self.settings.ui_text_scale);
 
-        egui::SidePanel::left("primary_navigation")
+        egui::Panel::left("primary_navigation")
             .resizable(false)
             .show_separator_line(false)
-            .exact_width(sidebar_width(&self.settings.ui_text_scale))
+            .exact_size(sidebar_width(&self.settings.ui_text_scale))
             .frame(
                 egui::Frame::default()
                     .fill(palette.header_bg)
                     .stroke(egui::Stroke::NONE)
-                    .inner_margin(egui::Margin::symmetric(14.0, 14.0)),
+                    .inner_margin(egui::Margin::symmetric(14, 14)),
             )
-            .show(ctx, |ui| self.sidebar(ui, palette));
+            .show_inside(ui, |ui| self.sidebar(ui, palette));
 
-        egui::TopBottomPanel::top("runtime_status")
+        egui::Panel::top("runtime_status")
             .resizable(false)
-            .exact_height(top_status_bar_height(&self.settings.ui_text_scale))
+            .exact_size(top_status_bar_height(&self.settings.ui_text_scale))
             .frame(
                 egui::Frame::default()
                     .fill(palette.panel_bg)
                     .stroke(egui::Stroke::new(0.8, palette.border_soft))
-                    .inner_margin(egui::Margin::symmetric(16.0, TOP_PANEL_V_MARGIN)),
+                    .inner_margin(egui::Margin::symmetric(16, TOP_PANEL_V_MARGIN as i8)),
             )
-            .show(ctx, |ui| self.top_status_bar(ui, palette));
+            .show_inside(ui, |ui| self.top_status_bar(ui, palette));
 
         // Thin global status bar: saved/unsaved state + the latest message,
         // on every tab, replacing the per-page Messages card.
-        egui::TopBottomPanel::bottom("status_message_bar")
+        egui::Panel::bottom("status_message_bar")
             .resizable(false)
-            .exact_height(bottom_message_bar_height(&self.settings.ui_text_scale))
+            .exact_size(bottom_message_bar_height(&self.settings.ui_text_scale))
             .frame(
                 egui::Frame::default()
                     .fill(palette.header_bg)
                     .stroke(egui::Stroke::new(0.8, palette.border_soft))
                     // Match the central panel's left inset so the status dot lines
                     // up with the content above it.
-                    .inner_margin(egui::Margin::symmetric(EDGE_MARGIN, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(EDGE_MARGIN as i8, 4)),
             )
-            .show(ctx, |ui| self.status_message_bar(ui, palette));
+            .show_inside(ui, |ui| self.status_message_bar(ui, palette));
 
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::default()
-                    .fill(palette.panel_bg)
-                    .inner_margin(egui::Margin::symmetric(EDGE_MARGIN, EDGE_MARGIN)),
-            )
-            .show(ctx, |ui| match self.selected_tab {
+            .frame(egui::Frame::default().fill(palette.panel_bg).inner_margin(
+                egui::Margin::symmetric(EDGE_MARGIN as i8, EDGE_MARGIN as i8),
+            ))
+            .show_inside(ui, |ui| match self.selected_tab {
                 Tab::Log => self.runtime_tab(ui),
                 Tab::Speech => self.settings_panel(ui, Self::core_tab),
                 Tab::Quality => self.settings_panel(ui, Self::quality_tab),

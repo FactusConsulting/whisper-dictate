@@ -312,8 +312,15 @@ fn eye_icon_button(ui: &mut egui::Ui, active: bool, height: f32) -> egui::Respon
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&response);
-        ui.painter()
-            .rect(rect, 2.0, visuals.bg_fill, visuals.bg_stroke);
+        // egui 0.34: `Painter::rect` gained a 5th `StrokeKind` argument;
+        // `StrokeKind::Inside` preserves the previous 4-arg appearance.
+        ui.painter().rect(
+            rect,
+            2.0,
+            visuals.bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
 
         let stroke = egui::Stroke::new(
             1.3,
@@ -404,12 +411,12 @@ fn hotkey_status_parts(
     use crate::ui::{HotkeyError, HotkeyValidation};
     match validation {
         HotkeyValidation::Valid => (
-            egui_material_icons::icons::ICON_CHECK_CIRCLE,
+            egui_material_icons::icons::ICON_CHECK_CIRCLE.codepoint,
             palette.ok_text,
             ui_text(lang, UiTextKey::HotkeyValid).to_owned(),
         ),
         HotkeyValidation::Invalid(err) => {
-            let icon = egui_material_icons::icons::ICON_WARNING;
+            let icon = egui_material_icons::icons::ICON_WARNING.codepoint;
             let message = match err {
                 HotkeyError::Empty => ui_text(lang, UiTextKey::HotkeyEmpty).to_owned(),
                 HotkeyError::EmptyToken => ui_text(lang, UiTextKey::HotkeyEmptyToken).to_owned(),

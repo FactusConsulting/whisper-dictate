@@ -564,14 +564,14 @@ impl Tab {
 
     pub(in crate::ui) fn icon(self) -> &'static str {
         match self {
-            Tab::Log => egui_material_icons::icons::ICON_ARTICLE,
-            Tab::Speech => egui_material_icons::icons::ICON_MIC,
-            Tab::Quality => egui_material_icons::icons::ICON_GRAPHIC_EQ,
-            Tab::Dictionary => egui_material_icons::icons::ICON_BOOK,
-            Tab::Output => egui_material_icons::icons::ICON_OUTPUT,
-            Tab::Post => egui_material_icons::icons::ICON_AUTO_FIX_HIGH,
-            Tab::Profiles => egui_material_icons::icons::ICON_GROUP,
-            Tab::System => egui_material_icons::icons::ICON_SETTINGS,
+            Tab::Log => egui_material_icons::icons::ICON_ARTICLE.codepoint,
+            Tab::Speech => egui_material_icons::icons::ICON_MIC.codepoint,
+            Tab::Quality => egui_material_icons::icons::ICON_GRAPHIC_EQ.codepoint,
+            Tab::Dictionary => egui_material_icons::icons::ICON_BOOK.codepoint,
+            Tab::Output => egui_material_icons::icons::ICON_OUTPUT.codepoint,
+            Tab::Post => egui_material_icons::icons::ICON_AUTO_FIX_HIGH.codepoint,
+            Tab::Profiles => egui_material_icons::icons::ICON_GROUP.codepoint,
+            Tab::System => egui_material_icons::icons::ICON_SETTINGS.codepoint,
         }
     }
 }
