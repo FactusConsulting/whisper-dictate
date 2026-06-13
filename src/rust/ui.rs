@@ -33,6 +33,7 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 mod api_keys;
 mod app;
 mod audio_devices;
+mod benchmark_results;
 mod corpus;
 mod corpus_record;
 mod corpus_record_tasks;
@@ -61,6 +62,7 @@ mod worker_json;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
+pub(in crate::ui) use self::benchmark_results::*;
 pub(in crate::ui) use self::corpus::*;
 pub(in crate::ui) use self::corpus_record::*;
 pub(in crate::ui) use self::corpus_record_tasks::*;
@@ -307,6 +309,12 @@ struct WhisperDictateApp {
     /// saved/failed outcome on success, or an `Err` message when the run/parse
     /// failed. `None` before any recording. Cleared when a new recording starts.
     corpus_record_result: Option<Result<CorpusRecordOutcome, String>>,
+    /// Transient (non-persisted) parsed results of the last "Run benchmark" run:
+    /// the per-item rows + aggregate summary the System tab renders as a
+    /// digestible headline + table (instead of the raw JSONL wall). `None` before
+    /// any run. Set when the run-benchmark background task COMPLETES (parsed from
+    /// the captured stdout) and cleared when a new run starts.
+    benchmark_results: Option<BenchmarkResults>,
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
@@ -467,6 +475,7 @@ impl Default for WhisperDictateApp {
             corpus_selected_id: None,
             corpus_recorded_ids: std::collections::HashSet::new(),
             corpus_record_result: None,
+            benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
             settings,

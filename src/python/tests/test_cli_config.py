@@ -373,6 +373,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_postprocess.py",
             "vp_preview.py",
             "vp_rust.py",
+            "vp_setup.py",
             "vp_transcribe.py",
             "vp_windows.py",
         }

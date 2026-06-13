@@ -29,6 +29,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         corpus_selected_id: None,
         corpus_recorded_ids: std::collections::HashSet::new(),
         corpus_record_result: None,
+        benchmark_results: None,
         config_path: String::new(),
         saved_settings: settings.clone(),
         settings,
