@@ -440,6 +440,123 @@ class PynputListenerTests(unittest.TestCase):
             self.assertIsNone(ln.on_press("<esc>"))  # streak back to 1, not a stop
 
 
+class ModifierQuitKeyTests(unittest.TestCase):
+    """Copilot finding (PR #254): when VOICEPI_QUIT_KEY is configured to a
+    modifier (e.g. ``ctrl``), the quit comparison must be consistent with
+    canonicalisation.  Before the fix ``_quit_key`` was stored raw but incoming
+    keys were canonicalised *before* the post-_quit_chord equality check, so
+    ``"ctrl" == Key.ctrl`` evaluated False and the modifier quit key was never
+    recognised — it fell through to ``_solo.note_press`` and potentially joined
+    the PTT state machine as a foreign key instead.  The fix canonicalises
+    ``self._quit_key`` at construction AND inside ``_quit_chord``, so every
+    comparison is canon-vs-canon."""
+
+    def _ln_with_modifier_quit(self, ptt_target="<shift_l>",
+                               quit_key=None, enabled=True):
+        """Listener whose quit key is a _FakeModKey (modifier)."""
+        if quit_key is None:
+            quit_key = _FakeModKey("ctrl")   # generic variant of a modifier family
+        guard = vp_keys_solo.SoloModifierGuard(
+            {ptt_target}, enabled=enabled)
+        return vp_keys._PynputListener(
+            _Target(), {ptt_target}, quit_key, toggle_mode=False,
+            solo_guard=guard)
+
+    # ------------------------------------------------------------------
+    # 1. Modifier quit key: quit-streak still fires
+    # ------------------------------------------------------------------
+    def test_modifier_quit_key_triggers_quit_streak(self):
+        # VOICEPI_QUIT_KEY=ctrl: pressing the quit key (as generic Key.ctrl) twice
+        # must stop the listener (return False), not be silently ignored.
+        ln = self._ln_with_modifier_quit()
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            result_1 = ln.on_press(_FakeModKey("ctrl"))   # streak = 1
+            self.assertIsNone(result_1)                   # below threshold
+            result_2 = ln.on_press(_FakeModKey("ctrl"))   # streak = 2 → quit
+        self.assertFalse(result_2, "modifier quit key should stop the listener")
+
+    def test_modifier_quit_key_left_variant_also_triggers(self):
+        # A side-specific variant of the modifier quit key (ctrl_l delivered for
+        # a quit key configured as "ctrl") is canonicalised to "ctrl" and must
+        # still hit the quit streak — not mis-routed to the PTT machinery.
+        ln = self._ln_with_modifier_quit()
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            ln.on_press(_FakeModKey("ctrl_l"))   # left variant, canonicalised → ctrl
+            result = ln.on_press(_FakeModKey("ctrl_r"))   # right variant → also ctrl
+        self.assertFalse(result, "side-specific modifier quit key must also trigger")
+
+    def test_modifier_quit_key_never_starts_recording(self):
+        # The quit key must never start dictation, even when the listener's PTT
+        # target happens to be a different modifier — the quit key is always
+        # treated as foreign and returned early (None, no start).
+        ln = self._ln_with_modifier_quit()
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            result = ln.on_press(_FakeModKey("ctrl"))
+        self.assertIsNone(result)
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
+    def test_modifier_quit_key_does_not_join_ptt_chord(self):
+        # The quit modifier must not be added to _pressed (PTT chord tracking) or
+        # influence recording state.  With the bug the key landed in the chord
+        # machinery and could, with a matching target, mis-start dictation.
+        ln = self._ln_with_modifier_quit(ptt_target="ctrl",
+                                         quit_key=_FakeModKey("ctrl"))
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            ln.on_press(_FakeModKey("ctrl"))
+        self.assertNotIn("ctrl", ln._pressed)
+        self.assertEqual(ln._owner.started, 0)
+
+    # ------------------------------------------------------------------
+    # 2. Non-modifier quit key (esc, f12): behaviour unchanged
+    # ------------------------------------------------------------------
+    def test_non_modifier_quit_key_esc_still_works(self):
+        # Default case: quit key is ``esc`` (a non-modifier). canon is a no-op
+        # for it, so the fix must leave the existing behaviour fully intact.
+        guard = vp_keys_solo.SoloModifierGuard("<shift_l>", enabled=True)
+        ln = vp_keys._PynputListener(
+            _Target(), {"<shift_l>"}, "<esc>", toggle_mode=False,
+            solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            ln.on_press("<esc>")                        # streak = 1
+            result = ln.on_press("<esc>")               # streak = 2 → quit
+        self.assertFalse(result)
+
+    def test_non_modifier_quit_key_never_starts_recording(self):
+        guard = vp_keys_solo.SoloModifierGuard("<shift_l>", enabled=True)
+        ln = vp_keys._PynputListener(
+            _Target(), {"<shift_l>"}, "<esc>", toggle_mode=False,
+            solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0):
+            result = ln.on_press("<esc>")
+        self.assertIsNone(result)
+        self.assertEqual(ln._owner.started, 0)
+
+    # ------------------------------------------------------------------
+    # 3. Side-insensitive chord (PR #254 core fix) is not regressed
+    # ------------------------------------------------------------------
+    def test_side_insensitive_chord_not_regressed(self):
+        # The PR #254 fix: shift_l PTT binding completed by a generic or
+        # opposite-side modifier variant must still start recording.
+        shift_l = _FakeModKey("shift_l")
+        ctrl_l = _FakeModKey("ctrl_l")
+        targets = {shift_l, ctrl_l}
+        canon = {vp_keys._canon_modifier(t) for t in targets}
+        guard = vp_keys_solo.SoloModifierGuard(canon, enabled=True)
+        # Use a non-modifier quit key so the quit path is orthogonal.
+        ln = vp_keys._PynputListener(
+            _Target(), set(targets), "<esc>", toggle_mode=False,
+            solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl"))   # generic ctrl variant
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
 
 class SoloModifierGuardUnitTests(unittest.TestCase):
     """Backend-agnostic state machine in vp_keys_solo."""

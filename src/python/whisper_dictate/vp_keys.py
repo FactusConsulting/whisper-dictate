@@ -91,7 +91,13 @@ class _PynputListener:
         # (see _canon_modifier). Every incoming key is canonicalised the same way
         # before the membership test, so _targets / _pressed stay consistent.
         self._targets = {_canon_modifier(t) for t in targets}
-        self._quit_key = quit_key
+        # Canonicalise the quit key the same way as targets and incoming keys
+        # so that a modifier quit key (e.g. Key.ctrl / ctrl_l / ctrl_r) is
+        # always compared as the family token "ctrl" regardless of which side
+        # variant pynput happens to deliver. Non-modifier quit keys (esc, f12,
+        # a single char) pass through _canon_modifier unchanged, so the default
+        # behaviour is entirely unaffected.
+        self._quit_key = _canon_modifier(quit_key)
         self._toggle_mode = toggle_mode
         self._pressed: set = set()
         self._recording = False
@@ -113,7 +119,11 @@ class _PynputListener:
     def _quit_chord(self, k) -> bool:
         # Track the consecutive quit-key streak; True once it reaches
         # QUIT_COUNT within QUIT_WINDOW_MS. Any non-quit key resets the streak.
-        if k != self._quit_key:
+        # Canonicalise k here so a modifier quit key (stored canonicalised in
+        # __init__) is recognised regardless of which side variant pynput
+        # delivers — e.g. Key.ctrl_l, Key.ctrl_r and Key.ctrl all match a
+        # quit key configured as "ctrl".
+        if _canon_modifier(k) != self._quit_key:
             self._quit_count = 0
             return False
         if QUIT_COUNT <= 0:
@@ -127,8 +137,10 @@ class _PynputListener:
         return self._quit_count >= QUIT_COUNT
 
     def on_press(self, k):
-        # Returning False stops the pynput listener (quit chord fired). The quit
-        # streak compares raw key identity, so run it before canonicalising.
+        # Returning False stops the pynput listener (quit chord fired). Both
+        # _quit_chord and self._quit_key canonicalise modifier keys (see
+        # __init__ and _quit_chord), so the streak comparison is always
+        # canon-vs-canon and works for modifier quit keys too.
         if self._quit_chord(k):
             return False
         # Canonicalise modifiers so a generic / opposite-side variant of a chord
