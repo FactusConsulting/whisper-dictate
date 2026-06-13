@@ -260,11 +260,14 @@ pub(in crate::ui) fn fetch_published_versions() -> Result<Vec<String>, String> {
     }
 
     let feed: Feed = ureq::get(VERSIONS_FEED_URL)
-        .set("User-Agent", USER_AGENT)
-        .timeout(FETCH_TIMEOUT)
+        .header("User-Agent", USER_AGENT)
+        .config()
+        .timeout_global(Some(FETCH_TIMEOUT))
+        .build()
         .call()
         .map_err(|err| format!("update check request failed: {err}"))?
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|err| format!("update check response was not valid JSON: {err}"))?;
     Ok(feed.versions)
 }
