@@ -90,7 +90,8 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(len(trimmed), len(a))
 
     def test_trim_leaves_all_silence_untouched(self):
-        # No frame rises above the noise floor → never trims to empty.
+        # Uniform clip: no frame sits 30 dB below the (equally quiet) loudest
+        # frame, so nothing is classified as silence → never trims to empty.
         np = self.np
         a = np.full(480 * 10, 0.0005, dtype=np.float32)
         trimmed, ms = self.vp._trim_trailing_silence(a)
@@ -134,9 +135,9 @@ class AudioDspTests(RealNumpyAudioCase):
 
     def test_trim_keeps_soft_trailing_speech_without_silence(self):
         # Continuous speech that trails off SOFTLY with no true silence floor:
-        # the soft tail (~20 dB below the body) must NOT be trimmed. The threshold
-        # is relative to the speech body (90th pct), so a noise-floor estimate
-        # landing in the quiet speech can't cause over-trimming of real words.
+        # the soft tail (~20 dB below the loudest frame) must NOT be trimmed. The
+        # threshold is relative to the loudest frame, so a noise-floor/percentile
+        # estimate landing in the quiet speech can't over-trim real words.
         np = self.np
         a = np.concatenate([
             np.full(480 * 20, 0.2, dtype=np.float32),    # loud speech body
