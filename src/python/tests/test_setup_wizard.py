@@ -549,6 +549,8 @@ class CliDispatchTests(unittest.TestCase):
     def test_vp_setup_import_pulls_no_ml_deps(self):
         # The config-UX path must NOT import torch/faster-whisper/numpy — it runs
         # before _load_runtime_modules. Import in a fresh subprocess and assert.
+        # pynput is included: --capture-hotkey must import its listener LAZILY so
+        # the import of vp_setup itself never pulls a global keyboard hook in.
         import subprocess as _sp
         src = str(Path(__file__).resolve().parents[1])
         code = (

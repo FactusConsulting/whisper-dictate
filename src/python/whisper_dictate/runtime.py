@@ -420,9 +420,16 @@ def _run_utility_subcommands(a, ap) -> None:
     """
     if getattr(a, "include_secrets", False) and not getattr(a, "export_config", False):
         ap.error("--include-secrets requires --export-config")
+    if (getattr(a, "capture_hotkey_allow_media", False)
+            and not getattr(a, "capture_hotkey", False)):
+        ap.error("--capture-hotkey-allow-media requires --capture-hotkey")
     if getattr(a, "setup", False):
         from whisper_dictate.vp_setup import run_setup
         raise SystemExit(run_setup())
+    if getattr(a, "capture_hotkey", False):
+        from whisper_dictate.vp_keys_capture_cli import run_capture_hotkey
+        raise SystemExit(run_capture_hotkey(
+            allow_media=getattr(a, "capture_hotkey_allow_media", False)))
     if getattr(a, "export_config", False):
         from whisper_dictate.vp_setup import run_export
         raise SystemExit(run_export(include_secrets=getattr(a, "include_secrets", False)))
