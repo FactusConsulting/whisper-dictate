@@ -115,10 +115,14 @@ pub(in crate::ui) enum UiTextKey {
     HotkeyRefModifiers,
     /// Expandable reference line: label for the accepted named/function keys.
     HotkeyRefKeys,
-    /// Badge label for the per-utterance health card when all checks pass.
-    HealthOk,
-    /// Badge label for the per-utterance health card when at least one warning fired.
-    HealthWarn,
+    /// Badge label for the per-utterance health card graded "perfect".
+    HealthPerfect,
+    /// Badge label for the per-utterance health card graded "good".
+    HealthGood,
+    /// Badge label for the per-utterance health card graded "fair".
+    HealthFair,
+    /// Badge label for the per-utterance health card graded "poor" (unusable).
+    HealthPoor,
     /// "Refresh devices" button next to the Microphone picker.
     MicRefresh,
     /// Hover/help text for the Microphone "Refresh devices" button.
@@ -279,8 +283,10 @@ impl UiTextKey {
                 UiTextKey::HotkeyDuplicateToken => "Duplicate key",
                 UiTextKey::HotkeyRefModifiers => "Modifiers",
                 UiTextKey::HotkeyRefKeys => "Keys",
-                UiTextKey::HealthOk => "Healthy",
-                UiTextKey::HealthWarn => "Warning",
+                UiTextKey::HealthPerfect => "Perfect",
+                UiTextKey::HealthGood => "Good",
+                UiTextKey::HealthFair => "Fair",
+                UiTextKey::HealthPoor => "Unusable",
                 UiTextKey::MicRefresh => "Refresh devices",
                 UiTextKey::MicRefreshHelp => {
                     "Run the worker to list available microphones. The result populates the \
@@ -434,8 +440,10 @@ impl UiTextKey {
                 UiTextKey::HotkeyDuplicateToken => "Gentaget tast",
                 UiTextKey::HotkeyRefModifiers => "Modifikatorer",
                 UiTextKey::HotkeyRefKeys => "Taster",
-                UiTextKey::HealthOk => "God",
-                UiTextKey::HealthWarn => "Advarsel",
+                UiTextKey::HealthPerfect => "Perfekt",
+                UiTextKey::HealthGood => "God",
+                UiTextKey::HealthFair => "Middel",
+                UiTextKey::HealthPoor => "Ubrugelig",
                 UiTextKey::MicRefresh => "Opdater enheder",
                 UiTextKey::MicRefreshHelp => {
                     "Kør workeren for at vise tilgængelige mikrofoner. Resultatet udfylder \
@@ -523,5 +531,40 @@ mod tests {
         assert_ne!(da_help, en_help, "DA help must differ from EN");
         assert!(da_help.contains("VOICEPI_UPDATE_INCLUDE_PRERELEASES"));
         assert!(da_help.contains("--prerelease"));
+    }
+
+    #[test]
+    fn health_grade_labels_present_and_distinct_en_and_da() {
+        let keys = [
+            UiTextKey::HealthPerfect,
+            UiTextKey::HealthGood,
+            UiTextKey::HealthFair,
+            UiTextKey::HealthPoor,
+        ];
+        for lang in ["en", "da"] {
+            let labels: Vec<&str> = keys.iter().map(|&key| ui_text(lang, key)).collect();
+            // Each grade has a non-empty label...
+            for label in &labels {
+                assert!(!label.is_empty(), "empty {lang} health-grade label");
+            }
+            // ...and the four are distinct within a language.
+            for i in 0..labels.len() {
+                for j in (i + 1)..labels.len() {
+                    assert_ne!(
+                        labels[i], labels[j],
+                        "{lang} health-grade labels must be distinct"
+                    );
+                }
+            }
+        }
+        // Spot-check the exact catalogue strings (both languages).
+        assert_eq!(ui_text("en", UiTextKey::HealthPerfect), "Perfect");
+        assert_eq!(ui_text("en", UiTextKey::HealthGood), "Good");
+        assert_eq!(ui_text("en", UiTextKey::HealthFair), "Fair");
+        assert_eq!(ui_text("en", UiTextKey::HealthPoor), "Unusable");
+        assert_eq!(ui_text("da", UiTextKey::HealthPerfect), "Perfekt");
+        assert_eq!(ui_text("da", UiTextKey::HealthGood), "God");
+        assert_eq!(ui_text("da", UiTextKey::HealthFair), "Middel");
+        assert_eq!(ui_text("da", UiTextKey::HealthPoor), "Ubrugelig");
     }
 }
