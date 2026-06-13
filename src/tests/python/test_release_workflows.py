@@ -540,14 +540,20 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertEqual([], missing, f"docs/CONFIGURATION.md is missing: {missing}")
 
-    def test_configuration_cheat_sheet_keeps_ui_tab_column_with_all_tabs(self):
-        # Guards only that the cheat sheet keeps its "UI tab" column and that all
-        # five tab labels appear at least once (not a full per-setting mapping).
-        # Tab labels mirror src/rust/ui/text.rs (Speech/Quality/Dictionary/Output/Post).
+    def test_configuration_reference_is_schema_generated_with_markers(self):
+        # The hand-maintained "Cheat sheet" / "Environment variables" tables were
+        # replaced by a single block generated from settings_schema.json (the
+        # single source of truth) by scripts/dev/gen_settings_docs.py. Guard that
+        # the generated block lives between its markers and uses the documented
+        # column layout; the drift content itself is checked by
+        # src/tests/python/test_settings_docs_generated.py.
         doc = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
-        self.assertIn("| Knob | UI tab | Env var | CLI flag |", doc)
-        for tab in ("Speech", "Quality", "Dictionary", "Output", "Post"):
-            self.assertIn(f"| {tab} |", doc, f"cheat sheet has no {tab} tab cell")
+        begin = "<!-- BEGIN GENERATED SETTINGS REFERENCE -->"
+        end = "<!-- END GENERATED SETTINGS REFERENCE -->"
+        self.assertIn(begin, doc)
+        self.assertIn(end, doc)
+        self.assertLess(doc.index(begin), doc.index(end))
+        self.assertIn("| Key | Env var | Default | Live/Restart | Description |", doc)
 
     def test_write_permissions_are_job_scoped(self):
         for path in (
