@@ -67,6 +67,10 @@ impl eframe::App for WhisperDictateApp {
         // is in the full window or the compact strip.
         self.poll_runtime();
         self.poll_background_task();
+        // Drive the corpus batch-record sequence: after one clip's done-event is
+        // applied (in poll_background_task), launch the next item once the small
+        // inter-clip gap elapses. Cheap no-op when no batch is active.
+        self.poll_corpus_batch();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
         // Mirror the dictation state onto the system-tray icon (recolours only on
