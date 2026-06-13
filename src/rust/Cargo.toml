@@ -15,14 +15,14 @@ path = "main.rs"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-# eframe 0.34 changed its DEFAULT renderer from glow (OpenGL) to wgpu; we have
-# always shipped on glow, and the wgpu 29 DX12 backend it now pulls fails to
-# compile on Windows (gpu-allocator 0.28 vs windows-crate 0.62 type skew in
-# wgpu-hal). Stay on glow by opting out of the wgpu default and re-listing the
-# non-renderer defaults, so the renderer (and behaviour) match the pre-0.34
-# build and wgpu/wgpu-hal/gpu-allocator leave the dependency graph entirely.
+# SPIKE (spike/egui-wgpu-renderer): re-enable eframe's 0.34 DEFAULT wgpu
+# renderer to evaluate switching off glow. eframe 0.34 flipped its default
+# renderer from glow (OpenGL) to wgpu; this opts back into wgpu (plus the
+# non-renderer defaults) to test whether the wgpu 29 DX12 backend now builds
+# on Windows after gpu-allocator 0.28 widened its windows-crate support up to
+# 0.62. DO NOT MERGE — evaluation only.
 eframe = { version = "0.34.3", default-features = false, features = [
-  "glow",
+  "wgpu",
   "accesskit",
   "default_fonts",
   "wayland",

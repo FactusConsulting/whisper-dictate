@@ -228,6 +228,9 @@ const PARAKEET_MODELS: &[&str] = &[
 
 pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
+        // SPIKE (spike/egui-wgpu-renderer): force the wgpu backend so the
+        // renderer choice is explicit while evaluating the switch off glow.
+        renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1080.0, 760.0])
             // Floor the window so the top status bar can't be squeezed until the
