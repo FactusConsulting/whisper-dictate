@@ -122,13 +122,16 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
 # talking but the key is still held). Whisper fills that empty tail with
 # high-probability training phrases (subtitle credits, "thank you for watching").
 # Cutting the tail BEFORE transcription removes the root cause. Unlike downstream
-# text filtering it will not clip a normally-voiced word: it only removes a
-# sustained trailing run that stays at/below the noise floor + a 12 dB margin,
-# and keeps a 120 ms pad after the last speech frame on top of that.
+# text filtering it will not clip a normally-voiced word: a frame counts as
+# silence only when it sits far BELOW the clip's own speech body, and a 120 ms
+# pad is kept after the last speech frame on top of that.
 _TRIM_FRAME = 480           # 30 ms @ 16 kHz — same framing as _noise_snr
-_TRIM_MARGIN_DB = 12.0      # a frame must sit this far above the noise floor to
-                            # count as speech (12 dB ≈ the low end of real SNR,
-                            # so a quietly-trailed-off word is still kept)
+_TRIM_DROP_DB = 30.0        # a frame is silence only when it sits this far BELOW
+                            # the speech body (90th-pct frame RMS). Measuring
+                            # relative to the body — not an estimated noise floor,
+                            # which can land in quiet speech on a clip with no true
+                            # silence — keeps soft trailing speech (within ~25 dB
+                            # of the body) safe from trimming.
 _TRIM_PAD_FRAMES = 4        # keep ~120 ms after the last speech frame so a word's
                             # natural decay is never clipped
 _TRIM_MIN_FRAMES = 5        # only trim if it removes ≥ ~150 ms — never shorten a
@@ -140,10 +143,10 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
     end of ``a``.
 
     Returns ``(trimmed, trimmed_ms)``. Leaves the clip untouched (``trimmed_ms``
-    0.0) when there is no clear speech or the trailing silence is shorter than
-    ~150 ms. Frames are scored against this clip's own noise floor (10th-pct
-    per-frame RMS, matching ``_noise_snr``), so the threshold adapts to the mic.
-    Pure / side-effect-free — the caller logs.
+    0.0) when there is no clear trailing silence or it is shorter than ~150 ms.
+    A frame counts as silence only when it sits ``_TRIM_DROP_DB`` below the
+    clip's speech body (90th-pct frame RMS), so the threshold adapts to the mic
+    and soft trailing speech is preserved. Pure / side-effect-free — caller logs.
     """
     n = len(a) // _TRIM_FRAME
     if n < 4:
@@ -158,8 +161,11 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
         rem_rms = np.sqrt(np.mean(remainder.astype(np.float64) ** 2))
         rms = np.append(rms, rem_rms)
     n_frames = len(rms)
-    noise = float(np.percentile(rms, 10)) or 1e-9
-    threshold = noise * (10 ** (_TRIM_MARGIN_DB / 20.0))
+    # Speech body = 90th-pct frame RMS; a frame is silence only when it sits
+    # _TRIM_DROP_DB below it. Body-relative (not noise-floor-relative) so soft
+    # trailing speech on a clip with no true silence is not mistaken for silence.
+    body = float(np.percentile(rms, 90)) or 1e-9
+    threshold = body * (10 ** (-_TRIM_DROP_DB / 20.0))
     speech = np.nonzero(rms > threshold)[0]
     if len(speech) == 0:
         return a, 0.0

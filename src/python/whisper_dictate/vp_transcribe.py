@@ -465,6 +465,7 @@ def _drop_hallucinated_segments(segment_list, audio_duration_s):
         credit_rate = (
             (is_credit or _looks_like_credit_prefix(seg_text))
             and seg_duration is not None
+            and seg_duration > 0  # ignore zero/inverted timestamps (bad timing data)
             and _speech_rate_exceeded(seg_text, seg_duration)
         )
         reason = None
@@ -542,8 +543,8 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     # trimmed buffer. Whisper fills an empty trailing region with a subtitle
     # credit, and a long dead tail also drags the mean level down (which could
     # trip the too-quiet gate on a clip that actually contains clear speech).
-    # Removes only a sustained trailing run at/below the noise floor + a 12 dB
-    # margin (past a 120 ms pad); a normally-voiced word is preserved.
+    # Removes only a sustained trailing run far below the clip's speech body
+    # (past a 120 ms pad); a normally-voiced or softly-trailed word is preserved.
     raw_audio, trimmed_ms = _trim_trailing_silence(raw_audio)
     if trimmed_ms > 0:
         print(

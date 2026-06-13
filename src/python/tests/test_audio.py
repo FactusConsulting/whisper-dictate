@@ -132,6 +132,20 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(ms, 0.0)
         self.assertEqual(len(trimmed), len(a))
 
+    def test_trim_keeps_soft_trailing_speech_without_silence(self):
+        # Continuous speech that trails off SOFTLY with no true silence floor:
+        # the soft tail (~20 dB below the body) must NOT be trimmed. The threshold
+        # is relative to the speech body (90th pct), so a noise-floor estimate
+        # landing in the quiet speech can't cause over-trimming of real words.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 20, 0.2, dtype=np.float32),    # loud speech body
+            np.full(480 * 20, 0.02, dtype=np.float32),   # soft trailing speech (~20 dB down)
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
 
