@@ -62,8 +62,10 @@ pub(in crate::ui) fn batch_targets(
 /// The flow is UI-driven: [`current`](Self::current) is the ID to record now;
 /// after that clip's worker reports done, [`advance`](Self::advance) steps to the
 /// next target (returning `true` while more remain), and the UI launches it
-/// again. [`stop`](Self::stop) ends the run early. `index` counts *completed*
-/// targets, so it doubles as the "k of N" progress numerator.
+/// again. Stopping is modelled by the owner setting its `Option<CorpusBatch>` to
+/// `None` — there is no explicit stop method, because dropping the cursor is all
+/// the cleanup needed. `index` counts *completed* targets, so it doubles as the
+/// "k of N" progress numerator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::ui) struct CorpusBatch {
     /// The ordered IDs still framing this run (computed once by [`batch_targets`]).

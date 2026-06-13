@@ -31,6 +31,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         corpus_record_result: None,
         corpus_batch: None,
         corpus_batch_resume_at: None,
+        benchmark_results: None,
         config_path: String::new(),
         saved_settings: settings.clone(),
         settings,

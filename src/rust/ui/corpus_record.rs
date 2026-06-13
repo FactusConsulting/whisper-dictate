@@ -365,19 +365,27 @@ mod tests {
 
     #[test]
     fn strings_present_in_en_and_da() {
+        // Keys where the EN and DA translations are intentionally identical
+        // (e.g. "Stop" is the same word in both languages).
+        let allow_identical = [CorpusRecordText::StopBatch];
+
         for key in [
             CorpusRecordText::SectionLabel,
+            CorpusRecordText::SectionHelp,
             CorpusRecordText::PickerLabel,
             CorpusRecordText::RecordButton,
+            CorpusRecordText::RecordButtonHelp,
             CorpusRecordText::ReadAloudPrompt,
             CorpusRecordText::StopRuntimeHint,
             CorpusRecordText::Recording,
+            CorpusRecordText::NoItems,
             CorpusRecordText::Saved,
             CorpusRecordText::RecordedMarker,
             CorpusRecordText::PurposeIntro,
             CorpusRecordText::OverwriteNote,
             CorpusRecordText::RecordAllMissing,
             CorpusRecordText::RecordAll,
+            CorpusRecordText::StopBatch,
             CorpusRecordText::BatchReadAloudPrompt,
             CorpusRecordText::BatchNothingToRecord,
         ] {
@@ -385,7 +393,9 @@ mod tests {
             let da = corpus_record_text("da", key);
             assert!(!en.is_empty(), "EN empty for {key:?}");
             assert!(!da.is_empty(), "DA empty for {key:?}");
-            assert_ne!(en, da, "EN and DA must differ for {key:?}");
+            if !allow_identical.contains(&key) {
+                assert_ne!(en, da, "EN and DA must differ for {key:?}");
+            }
         }
     }
 

@@ -33,6 +33,7 @@ pub(in crate::ui) use crate::runtime::WorkerEvent;
 mod api_keys;
 mod app;
 mod audio_devices;
+mod benchmark_results;
 mod corpus;
 mod corpus_batch;
 mod corpus_record;
@@ -62,6 +63,7 @@ mod worker_json;
 
 use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
+pub(in crate::ui) use self::benchmark_results::*;
 pub(in crate::ui) use self::corpus::*;
 pub(in crate::ui) use self::corpus_batch::*;
 pub(in crate::ui) use self::corpus_record::*;
@@ -320,6 +322,12 @@ struct WhisperDictateApp {
     /// next clip is launched once `Instant::now()` passes it (checked each frame
     /// in `poll_corpus_batch`). `None` when no launch is pending.
     corpus_batch_resume_at: Option<Instant>,
+    /// Transient (non-persisted) parsed results of the last "Run benchmark" run:
+    /// the per-item rows + aggregate summary the System tab renders as a
+    /// digestible headline + table (instead of the raw JSONL wall). `None` before
+    /// any run. Set when the run-benchmark background task COMPLETES (parsed from
+    /// the captured stdout) and cleared when a new run starts.
+    benchmark_results: Option<BenchmarkResults>,
     config_path: String,
     settings: AppSettings,
     saved_settings: AppSettings,
@@ -482,6 +490,7 @@ impl Default for WhisperDictateApp {
             corpus_record_result: None,
             corpus_batch: None,
             corpus_batch_resume_at: None,
+            benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
             settings,

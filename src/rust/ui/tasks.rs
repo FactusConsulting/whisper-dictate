@@ -263,6 +263,10 @@ impl WhisperDictateApp {
                 self.apply_corpus_record(&result);
                 return;
             }
+            if result.label == RUN_BENCHMARK_LABEL {
+                self.apply_benchmark_results(&result);
+                return;
+            }
             self.append_runtime_output(result.stdout.trim_end());
             self.append_runtime_output(result.stderr.trim_end());
             if let Some(error) = result.error {
@@ -270,17 +274,12 @@ impl WhisperDictateApp {
                 self.set_api_check_status(result.label, &message);
                 self.append_runtime_log(message);
             } else if result.success {
-                // The generic [OK] line normally echoes the whole stdout as its
-                // detail. For the benchmark that stdout is the full per-item JSONL
-                // (already streamed line-by-line just above), so embedding it again
-                // would duplicate a large blob into one giant log line and hurt UI
-                // responsiveness/memory. Carry only the concise final
-                // `[benchmark] …` summary line instead (if present).
-                let detail = if result.label == RUN_BENCHMARK_LABEL {
-                    benchmark_summary_line(&result.stdout).unwrap_or("")
-                } else {
-                    result.stdout.trim()
-                };
+                // The benchmark run is routed to `apply_benchmark_results` above
+                // (its stdout is the full per-item JSONL, parsed into the
+                // digestible view + the concise `[benchmark] …` summary line), so
+                // it never reaches this generic path. Other tasks echo their
+                // (small) stdout as the `[OK]` detail.
+                let detail = result.stdout.trim();
                 let message = if detail.is_empty() {
                     format!("[OK] {} passed", result.label)
                 } else {
@@ -448,9 +447,77 @@ impl WhisperDictateApp {
     /// would stay silent for many seconds after the click.
     pub(in crate::ui) fn run_benchmark(&mut self) {
         if self.background_task.is_none() {
+            // Clear any previous parsed results so the digestible view shows the
+            // in-flight state, not a stale table from the last run. Only when the
+            // run actually starts (no other task in flight) — mirrors the start
+            // line so a gated click leaves the prior results visible.
+            self.benchmark_results = None;
             self.append_runtime_log("[ui] benchmark started — results appear here when finished");
         }
         self.run_background_command(RUN_BENCHMARK_LABEL, benchmark_command());
+    }
+
+    /// Handle a finished `--run-benchmark` run: parse the captured per-item JSONL
+    /// stdout into the digestible [`BenchmarkResults`] model the System tab
+    /// renders (a coloured headline + a worst-WER-first table), AND preserve the
+    /// exact runtime-log behaviour the user already relied on — the per-item
+    /// JSONL streamed verbatim plus the concise final `[benchmark] …` summary line
+    /// (re-using `benchmark_summary_line` so a large blob is never re-embedded in
+    /// one giant `[OK]` line). A run failure (worker couldn't even start) clears
+    /// the model and logs the error, mirroring the generic failure path.
+    pub(in crate::ui) fn apply_benchmark_results(&mut self, result: &BackgroundTaskResult) {
+        // Stream the raw output to the log first, unchanged: the per-item JSONL
+        // (and stderr) the user has always seen stays in the runtime log so the
+        // digestible view is purely additive and the raw remains inspectable.
+        self.append_runtime_output(result.stdout.trim_end());
+        self.append_runtime_output(result.stderr.trim_end());
+
+        if let Some(error) = &result.error {
+            // The worker couldn't run at all — there is no stdout to parse. Clear
+            // any stale model and surface the failure like the generic path did.
+            self.benchmark_results = None;
+            self.append_runtime_log(format!("[ERROR] {} failed to run: {error}", result.label));
+            return;
+        }
+
+        // Parse the captured stdout into the model regardless of exit code — a
+        // non-zero exit can still carry usable per-item rows worth showing.
+        let results = parse_benchmark_results(&result.stdout);
+
+        if result.success {
+            // Preserve the original `[OK] … passed: [benchmark] …` line: carry only
+            // the concise summary line, never the whole JSONL blob.
+            let detail = benchmark_summary_line(&result.stdout).unwrap_or("");
+            let message = if detail.is_empty() {
+                format!("[OK] {} passed", result.label)
+            } else {
+                format!("[OK] {} passed: {detail}", result.label)
+            };
+            self.append_runtime_log(message);
+        } else {
+            let mut message = format!(
+                "[ERROR] {} failed with code {}",
+                result.label,
+                result
+                    .code
+                    .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+            );
+            if let Some(summary) = benchmark_summary_line(&result.stdout) {
+                message.push_str(": ");
+                message.push_str(summary);
+            }
+            self.append_runtime_log(message);
+        }
+
+        // Log the digestible one-line headline (the localized view lives in the
+        // System tab) so even the log reader gets the at-a-glance result.
+        if !results.is_empty() {
+            self.append_runtime_log(format!(
+                "[ui] benchmark: {}",
+                benchmark_results_log_detail(&results)
+            ));
+        }
+        self.benchmark_results = Some(results);
     }
 }
 
