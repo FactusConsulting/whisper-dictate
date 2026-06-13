@@ -188,6 +188,37 @@ env for matching settings. Restart-only settings (`stt_backend`, `model`,
 `device`, `compute_type`, `key`) need the worker restarted; the rest apply on
 the next record start/stop.
 
+### Set up from the CLI (`--setup`) / export your config (`--export-config`)
+
+If you do not want to hand-write `config.json`, the worker can build it for you
+and dump an existing one — no desktop UI, no model download required (these
+modes run before any ML dependency loads).
+
+- **`whisper-dictate run --setup`** launches an interactive wizard driven by the
+  settings schema. It walks the **basic** first-setup knobs first (showing each
+  setting's description, its current value or default, and the valid choices for
+  enum settings like `stt_backend`/`device`/`inject_mode`), then asks
+  **`Run advanced setup? [y/N]`** before walking the rest grouped by category.
+  Press ENTER to keep the shown value; type to change it; numeric settings are
+  re-prompted if you exceed the schema's min/max bounds. When you pick a cloud
+  backend (`stt_backend=openai`) or a cloud post-processor it prompts for the
+  API key with **hidden input**. On finish it writes `config.json` to the
+  standard path (printed) with only the keys that differ from the defaults, then
+  prints the equivalent PowerShell (`$env:VOICEPI_X = '...'`) and bash
+  (`export VOICEPI_X=...`) lines. **API keys are never written to
+  `config.json`** — they are shown in the env-lines **redacted** (`***`) with a
+  note to set the env var (`VOICEPI_STT_API_KEY` / `VOICEPI_POST_API_KEY`)
+  yourself. The wizard is pipe-/TTY-safe: with a non-interactive stdin it reads
+  scripted answers line by line instead of hanging.
+
+- **`whisper-dictate run --export-config`** prints your **current effective
+  config** — `config.json` merged with any `VOICEPI_*` env overrides, resolved
+  exactly the way the worker resolves settings at startup — as a `config.json`
+  blob plus copy-pasteable PowerShell and bash env-lines. Secrets are
+  **redacted by default**; add **`--include-secrets`** to emit API keys in full
+  (for backup/migration). Useful for snapshotting a working setup or moving it
+  to another machine.
+
 ### Recipe A — Local STT on GPU (Whisper or Parakeet)
 
 Run everything locally on an NVIDIA GPU. No network, no keys. See the
@@ -531,6 +562,9 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
 | `--json` | `$VOICEPI_JSON` or off | — | Also print one structured JSON event per accepted utterance. |
 | `--doctor` | off | — | Run Linux/Wayland health checks and exit before loading Whisper. |
+| `--setup` | off | — | Interactive config wizard (no model load): writes `config.json` and prints PowerShell/bash env-lines, secrets redacted. See [Set up from the CLI](#set-up-from-the-cli---setup--export-your-config---export-config). |
+| `--export-config` | off | — | Print the current effective config (`config.json` + env overrides) as a `config.json` blob plus PowerShell/bash env-lines, then exit. Secrets redacted by default. |
+| `--include-secrets` | off | — | With `--export-config`, emit API keys in full instead of `***` (for backup/migration). |
 | `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading Python or Whisper. |
 | `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
 | `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |

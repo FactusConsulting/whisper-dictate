@@ -273,6 +273,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dictionary-replace", metavar="FROM=TO",
                     action=_DictionaryAction,
                     help="add a smart replacement to the managed dictionary, then exit")
+    ap.add_argument("--setup", action="store_true",
+                    help="run the interactive config setup wizard (writes "
+                         "config.json + prints env-lines), then exit. Loads no "
+                         "ML model.")
+    ap.add_argument("--export-config", action="store_true",
+                    help="print the current effective config (config.json + env "
+                         "overrides) as a config.json blob plus PowerShell/bash "
+                         "env-lines, then exit. Secrets redacted by default.")
+    ap.add_argument("--include-secrets", action="store_true",
+                    help="with --export-config, emit API keys in full instead of "
+                         "redacting them (for backup/migration).")
     ap.add_argument("--dictionary-suggest", metavar="JSONL",
                     help="suggest smart replacements from benchmark/history JSONL, then exit")
     ap.add_argument("--dictionary-suggest-min-confidence", type=float, default=0.62,
