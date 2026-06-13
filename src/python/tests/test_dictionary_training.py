@@ -133,6 +133,13 @@ class MergeTermsTests(unittest.TestCase):
         self.assertEqual(preview.added, ["Codex"])
         self.assertIn("claude code", preview.skipped_existing)
 
+    def test_skipped_existing_deduped_case_insensitively(self):
+        # Several differently-cased candidates for the same existing term must
+        # appear only ONCE in skipped_existing (not "Kubectl" AND "kubectl").
+        preview = dt.merge_terms(["kubectl"], ["Kubectl", "kubectl", "KUBECTL"])
+        self.assertEqual(preview.added, [])
+        self.assertEqual(len(preview.skipped_existing), 1)
+
     def test_dedup_within_candidates(self):
         preview = dt.merge_terms([], ["MCP", "mcp", "RAG"])
         self.assertEqual(preview.added, ["MCP", "RAG"])

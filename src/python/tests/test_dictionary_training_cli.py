@@ -102,6 +102,21 @@ class BuildFromCorpusCliTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("error", json.loads(buf.getvalue().strip().splitlines()[-1]))
 
+    def test_invalid_corpus_json_returns_one(self):
+        # A corpus file with broken JSON makes load_corpus raise ValueError/
+        # JSONDecodeError; the command must catch it and return 1 (clean error),
+        # not let it bubble to argparse's exit 2.
+        bad = self.dir / "bad_corpus.json"
+        bad.write_text("{ not valid json", encoding="utf-8")
+        with _capture_stdout() as buf:
+            rc = cli.run_build_from_corpus(
+                corpus_manifest=bad,
+                dictionary_path=self.dict_path,
+                as_json=True,
+            )
+        self.assertEqual(rc, 1)
+        self.assertIn("error", json.loads(buf.getvalue().strip().splitlines()[-1]))
+
     def test_explicit_corpus_path_with_env_var_is_expanded(self):
         # An explicit manifest given with a $VAR is expanded before the existence
         # check (the resolver returns the explicit path verbatim).

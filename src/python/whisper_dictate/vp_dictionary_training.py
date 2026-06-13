@@ -344,6 +344,7 @@ def merge_terms(existing: Iterable[str], candidates: Iterable[Any]) -> MergePrev
     """
     existing_terms = [str(t).strip() for t in existing if str(t).strip()]
     seen = {_normalize(t) for t in existing_terms}
+    skipped_seen: set[str] = set()
     preview = MergePreview(
         result_terms=list(existing_terms),
         existing_count=len(existing_terms),
@@ -355,7 +356,11 @@ def merge_terms(existing: Iterable[str], candidates: Iterable[Any]) -> MergePrev
         if not norm:
             continue
         if norm in seen:
-            if term not in preview.skipped_existing:
+            # Dedup the skipped list by NORMALIZED form, so two differently-cased
+            # candidates for the same existing term ("Kubectl"/"kubectl") don't
+            # both land in skipped_existing.
+            if norm not in skipped_seen:
+                skipped_seen.add(norm)
                 preview.skipped_existing.append(term)
             continue
         seen.add(norm)

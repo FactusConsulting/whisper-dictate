@@ -13,9 +13,11 @@ tested. Two entry points map to the two CLI commands:
   annotated benchmark JSONL and surface the domain terms the model missed as
   SUGGESTED dictionary additions (preview), writing only on ``apply=True``.
 
-Both print a clear preview the user/automation confirms before any change, honour
-``--language`` / ``--category`` profile selection, and emit ``--json`` for
-tooling. Kept egui-agnostic: no UI hooks (deferred to the egui 0.34 branch).
+Both print a clear preview the user/automation confirms before any change and
+emit ``--json`` for tooling. ``--language`` / ``--category`` profile selection
+applies to ``build-from-corpus`` (it filters the corpus) and the benchmark;
+``suggest-from-misses`` reads a benchmark JSONL and does not use it. Kept
+egui-agnostic: no UI hooks (deferred to the egui 0.34 branch).
 """
 from __future__ import annotations
 
@@ -111,7 +113,10 @@ def run_build_from_corpus(
     profile = build_profile(language=language, category=category)
     try:
         items = filter_corpus_items(_load_corpus_items(corpus_manifest, app_root), profile)
-    except LookupError as exc:
+    except (LookupError, OSError, ValueError) as exc:
+        # load_corpus can raise OSError (read failure) or ValueError/
+        # JSONDecodeError (bad JSON / manifest shape) in addition to LookupError
+        # (not found); keep the command's contract of exit 1 + clean message.
         return _fail(str(exc), as_json)
 
     dict_path = resolve_dictionary_path(dictionary_path)
