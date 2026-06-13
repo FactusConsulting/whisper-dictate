@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictate-app"
-version = "1.12.0-rc.1"
+version = "1.12.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
@@ -27,7 +27,7 @@ keyring = { version = "3.6", features = [
   "linux-native-sync-persistent",
   "crypto-rust",
 ] }
-ureq = { version = "2.12", features = ["json"] }
+ureq = { version = "3.3", features = ["json"] }
 
 # Windows-only system-tray icon (notification area). Scoped to the Windows
 # target so the Linux/CI build never pulls in tray-icon's gtk/libxdo system

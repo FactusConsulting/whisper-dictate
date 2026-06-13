@@ -150,7 +150,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("const RUNTIME_LOG_CONTENT_TOP_PADDING: f32 = 10.0;", script)
         self.assertIn("const RUNTIME_LOG_CONTENT_BOTTOM_PADDING: f32 = 14.0;", script)
         self.assertIn("runtime_log_frame(palette).show(ui, |ui|", runtime_tab)
-        self.assertIn("top: RUNTIME_LOG_TOP_MARGIN,", script)
+        self.assertIn("top: RUNTIME_LOG_TOP_MARGIN as i8,", script)
         self.assertIn("ui.add_space(RUNTIME_LOG_CONTENT_TOP_PADDING);", runtime_tab)
         self.assertIn(
             "egui::vec2(ui.available_width(), RUNTIME_LOG_CONTENT_BOTTOM_PADDING)",
@@ -328,15 +328,15 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
         self.assertIn("app_version: runtime::version()", script)
-        self.assertIn('egui_material_icons = "0.2.0"', cargo)
+        self.assertIn('egui_material_icons = "0.6.0"', cargo)
         self.assertIn("egui_material_icons::initialize(&cc.egui_ctx)", script)
         self.assertIn("fn icon_text(", script)
         self.assertIn("fn icon(self) -> &'static str", script)
         self.assertIn("egui_material_icons::icons::ICON_MIC", script)
         self.assertIn("egui_material_icons::icons::ICON_OUTPUT", script)
         self.assertIn('egui::RichText::new("whisper-dictate")', script)
-        self.assertIn('egui::SidePanel::left("primary_navigation")', script)
-        self.assertIn('egui::TopBottomPanel::top("runtime_status")', script)
+        self.assertIn('egui::Panel::left("primary_navigation")', script)
+        self.assertIn('egui::Panel::top("runtime_status")', script)
         update_impl = script.split("impl eframe::App for WhisperDictateApp", 1)[1].split(
             "impl WhisperDictateApp", 1
         )[0]
@@ -356,14 +356,14 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "pub(in crate::ui) fn core_tab", 1
         )[0]
 
-        self.assertIn('egui::SidePanel::left("primary_navigation")', update_impl)
+        self.assertIn('egui::Panel::left("primary_navigation")', update_impl)
         self.assertIn("paint_sidebar_bridge(ctx, palette, &self.settings.ui_text_scale);", update_impl)
         self.assertIn("fn paint_sidebar_bridge(", script)
         self.assertIn("ctx.layer_painter(egui::LayerId::background())", script)
         self.assertIn(".show_separator_line(false)", update_impl)
-        navigation_frame = update_impl.split('egui::SidePanel::left("primary_navigation")', 1)[
+        navigation_frame = update_impl.split('egui::Panel::left("primary_navigation")', 1)[
             1
-        ].split(".show(ctx, |ui| self.sidebar(ui, palette))", 1)[0]
+        ].split(".show_inside(ui, |ui| self.sidebar(ui, palette))", 1)[0]
         self.assertIn(".stroke(egui::Stroke::NONE)", navigation_frame)
         # The footer slimmed to a single Reset-page action row after Reload config
         # + the config path moved to the System tab.
@@ -371,7 +371,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("pub(in crate::ui) const EDGE_MARGIN: f32 = 12.0;", script)
         self.assertNotIn("SETTINGS_MESSAGES_BOTTOM_GAP", script)
         # Status messages moved out of the footer into the global bottom bar.
-        self.assertIn('egui::TopBottomPanel::bottom("status_message_bar")', update_impl)
+        self.assertIn('egui::Panel::bottom("status_message_bar")', update_impl)
         self.assertNotIn("SETTINGS_MESSAGES_MAX_HEIGHT", script)
         self.assertNotIn("fn settings_messages", script)
         # The per-page footer keeps only Reset page; the Reload config button and
@@ -498,8 +498,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             full_layout.index("egui::CentralPanel::default()"),
         )
         self.assertIn("top_status_bar_height(&self.settings.ui_text_scale)", full_layout)
-        self.assertIn('egui::SidePanel::left("primary_navigation")', update_impl)
-        self.assertIn('egui::TopBottomPanel::top("runtime_status")', update_impl)
+        self.assertIn('egui::Panel::left("primary_navigation")', update_impl)
+        self.assertIn('egui::Panel::top("runtime_status")', update_impl)
         self.assertNotIn(".exact_height(76.0)", update_impl)
         self.assertNotIn("ui.horizontal_centered", update_impl)
         self.assertIn("let is_stopped = self.runtime_state == RuntimeState::Stopped;", controls)

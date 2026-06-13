@@ -35,6 +35,7 @@ mod app;
 mod audio_devices;
 mod benchmark_results;
 mod corpus;
+mod corpus_batch;
 mod corpus_record;
 mod corpus_record_tasks;
 mod device_test;
@@ -64,6 +65,7 @@ use self::api_keys::*;
 pub(in crate::ui) use self::audio_devices::parse_audio_devices_json;
 pub(in crate::ui) use self::benchmark_results::*;
 pub(in crate::ui) use self::corpus::*;
+pub(in crate::ui) use self::corpus_batch::*;
 pub(in crate::ui) use self::corpus_record::*;
 pub(in crate::ui) use self::corpus_record_tasks::*;
 pub(in crate::ui) use self::device_test::*;
@@ -309,6 +311,17 @@ struct WhisperDictateApp {
     /// saved/failed outcome on success, or an `Err` message when the run/parse
     /// failed. `None` before any recording. Cleared when a new recording starts.
     corpus_record_result: Option<Result<CorpusRecordOutcome, String>>,
+    /// Transient (non-persisted) batch recording cursor. `Some` while a "Record
+    /// all"/"Record all missing" sequence is walking the corpus item-by-item;
+    /// each item still uses the proven single-item `--record-corpus-item` worker,
+    /// chained in the UI on every done-event. `None` outside a batch run. Dropped
+    /// on completion or when the user clicks Stop. Never persisted.
+    corpus_batch: Option<CorpusBatch>,
+    /// Transient (non-persisted) deadline for the small breathing gap between
+    /// batch clips: set to `Instant::now() + gap` when a clip finishes, and the
+    /// next clip is launched once `Instant::now()` passes it (checked each frame
+    /// in `poll_corpus_batch`). `None` when no launch is pending.
+    corpus_batch_resume_at: Option<Instant>,
     /// Transient (non-persisted) parsed results of the last "Run benchmark" run:
     /// the per-item rows + aggregate summary the System tab renders as a
     /// digestible headline + table (instead of the raw JSONL wall). `None` before
@@ -475,6 +488,8 @@ impl Default for WhisperDictateApp {
             corpus_selected_id: None,
             corpus_recorded_ids: std::collections::HashSet::new(),
             corpus_record_result: None,
+            corpus_batch: None,
+            corpus_batch_resume_at: None,
             benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),

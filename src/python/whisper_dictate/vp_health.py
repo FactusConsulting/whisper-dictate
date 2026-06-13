@@ -26,6 +26,26 @@ from typing import Any, Sequence
 CONFIDENCE_HIGH = -0.35  # avg_logprob >= this -> "high"
 CONFIDENCE_OK = -0.60    # avg_logprob in [OK, HIGH) -> "ok"; below OK -> "low"
 
+# Graduated health grade thresholds (signal-to-noise ratio, in dB). The grade is
+# a single 4-level quality verdict for the whole utterance — "how well did this
+# dictation go" — folding the mic input status, the model's confidence band, the
+# post-processing outcome and the SNR into one of "perfect"/"good"/"fair"/"poor".
+# The Rust UI maps that stable token to a colour/icon/label; see health_grade.
+HEALTH_SNR_POOR = 6.0      # snr < this is "poor" (matches the WARN quiet-input bar)
+HEALTH_SNR_GOOD = 20.0     # "good" needs snr >= this (clear speech contrast)
+HEALTH_SNR_PERFECT = 30.0  # "perfect" needs snr >= this (pristine input)
+
+# Mic input-status buckets (the exact tokens vp_audio._input_level_status emits:
+# too_quiet / low_snr / clip_risk / hot / quiet / good). A status in
+# _INPUT_STATUS_POOR means the capture itself is unusable for this utterance.
+_INPUT_STATUS_POOR = frozenset({"too_quiet", "low_snr", "clip_risk"})
+
+# The four grade tokens, worst -> best, emitted verbatim in the `[health]` line.
+GRADE_POOR = "poor"
+GRADE_FAIR = "fair"
+GRADE_GOOD = "good"
+GRADE_PERFECT = "perfect"
+
 
 def _mean_avg_logprob(segments: Sequence[dict[str, Any]] | None) -> float | None:
     """Mean ``avg_logprob`` across segments, or ``None`` when unavailable."""
@@ -49,6 +69,70 @@ def _confidence_band(avg_logprob: float | None) -> str:
     if avg_logprob >= CONFIDENCE_OK:
         return "ok"
     return "low"
+
+
+def _snr_db(metrics: dict[str, Any]) -> float | None:
+    """The utterance SNR in dB, or ``None`` when unavailable/unparsable."""
+    try:
+        return float(metrics.get("audio_snr_db"))
+    except (TypeError, ValueError):
+        return None
+
+
+def health_grade(metrics: dict[str, Any]) -> str:
+    """Fold every per-utterance signal into one 4-level quality grade.
+
+    Returns one of :data:`GRADE_PERFECT` / :data:`GRADE_GOOD` /
+    :data:`GRADE_FAIR` / :data:`GRADE_POOR` ("perfect"/"good"/"fair"/"poor").
+    Pure and total: any missing or unparsable signal degrades gracefully toward
+    the safe middle "fair" grade rather than raising — a metrics dict is never
+    trusted to be complete (the no_text path, for example, carries no segments).
+
+    Priority — the worst signal wins:
+
+    * **poor**  — the input itself is unusable: ``audio_input_status`` in
+      {too_quiet, low_snr, clip_risk}, OR the model's confidence band is "low",
+      OR ``audio_snr_db`` is below :data:`HEALTH_SNR_POOR`.
+    * **fair**  — not poor, but something is off: confidence band "ok",
+      post-processing fell back to raw text, the input ran "hot", OR a signal we
+      need to judge "good"/"perfect" is missing (confidence n/a or no SNR).
+    * **good**  — clean: confidence band "high" and SNR >= :data:`HEALTH_SNR_GOOD`.
+      A "quiet" input is fine here (the worker boosts it) as long as confidence
+      and SNR hold up.
+    * **perfect** — pristine: confidence "high", no post-processing fallback, the
+      input status is exactly "good", and SNR >= :data:`HEALTH_SNR_PERFECT`.
+    """
+    band = _confidence_band(_mean_avg_logprob(metrics.get("segments")))
+    status = str(metrics.get("audio_input_status") or "").strip()
+    snr = _snr_db(metrics)
+    post_fallback = bool(metrics.get("post_fallback"))
+
+    # poor: any single unusable signal drags the whole utterance down.
+    if (
+        status in _INPUT_STATUS_POOR
+        or band == "low"
+        or (snr is not None and snr < HEALTH_SNR_POOR)
+    ):
+        return GRADE_POOR
+
+    # fair: not poor, but a known degradation OR a missing signal we'd need to
+    # promote it. We never claim "good"/"perfect" on incomplete information.
+    if band in ("ok", "n/a") or post_fallback or status == "hot" or snr is None:
+        return GRADE_FAIR
+
+    # From here band == "high" and snr is a real number >= HEALTH_SNR_POOR.
+    if (
+        not post_fallback
+        and status == "good"
+        and snr >= HEALTH_SNR_PERFECT
+    ):
+        return GRADE_PERFECT
+
+    if snr >= HEALTH_SNR_GOOD:
+        return GRADE_GOOD
+
+    # band == "high" but SNR sits between POOR and GOOD — honestly only "fair".
+    return GRADE_FAIR
 
 
 def _round_int(value: Any) -> int | None:
@@ -134,4 +218,9 @@ def format_health_line(metrics: dict[str, Any]) -> str:
         confidence = f"confidence {band} ({avg_logprob:.2f})"
     parts = [_mic_segment(metrics), confidence, _post_segment(metrics)]
     parts.extend(_warn_flags(metrics, band))
+    # The graded verdict is always the LAST segment, e.g. " | grade=good". It is
+    # a stable token the Rust UI maps to a colour/icon/label. It must never start
+    # with "WARN" so the existing structural has_warning detection (which keys off
+    # a `| WARN ...` segment) is unaffected by it.
+    parts.append(f"grade={health_grade(metrics)}")
     return "[health] " + " | ".join(parts)

@@ -126,7 +126,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
 
         # A single thin status bar at the bottom on every tab, fed by the saved
         # state + latest message — no per-page Messages card, no sidebar badge.
-        self.assertIn('egui::TopBottomPanel::bottom("status_message_bar")', script)
+        self.assertIn('egui::Panel::bottom("status_message_bar")', script)
         self.assertIn("self.status_message_bar(ui, palette)", script)
         self.assertIn("bottom_message_bar_height(&self.settings.ui_text_scale)", script)
         self.assertIn("fn bottom_message_bar_height(raw_scale: &str) -> f32", script)
@@ -160,8 +160,8 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertNotIn("compact_label(&self.config_path, config_chars)", actions)
         self.assertNotIn("self.reload_settings();", actions)
         self.assertIn("fn panel_frame(palette: UiPalette) -> egui::Frame", script)
-        self.assertIn(".rounding(egui::Rounding::same(PANEL_RADIUS as f32))", script)
-        self.assertIn("egui::Margin::symmetric(16.0, 14.0)", script)
+        self.assertIn(".corner_radius(egui::CornerRadius::same(PANEL_RADIUS))", script)
+        self.assertIn("egui::Margin::symmetric(16, 14)", script)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
         script = rust_ui_source()
@@ -243,7 +243,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
 
         self.assertIn("pub mod cloud_api;", lib)
         self.assertIn("pub mod telemetry;", lib)
-        self.assertIn('ureq = { version = "2.12"', cargo)
+        self.assertIn('ureq = { version = "3.3"', cargo)
         self.assertIn('"Test cloud API"', ui)
         self.assertIn("fn run_cloud_api_check(&mut self)", ui)
         self.assertIn("check_cloud_api(&check)", ui)

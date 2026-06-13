@@ -117,6 +117,84 @@ def _boost_quiet(a: np.ndarray) -> np.ndarray:
     return _boost_quiet_detail(a)[0]
 
 
+# Trailing-silence trim — the PRIMARY anti-hallucination defence. The #1 source
+# of Whisper hallucinations is "dead audio" at the end of a clip (you stop
+# talking but the key is still held). Whisper fills that empty tail with
+# high-probability training phrases (subtitle credits, "thank you for watching").
+# Cutting the tail BEFORE transcription removes the root cause. Unlike downstream
+# text filtering it will not clip even very soft speech: a frame counts as
+# silence only when it sits at the NOISE FLOOR (room-tone level) — any voiced
+# energy sits above that and is kept — plus a 120 ms pad after the last speech
+# frame, and only when there is a clear silence floor to cut in the first place.
+_TRIM_FRAME = 480              # 30 ms @ 16 kHz — same framing as _noise_snr
+_TRIM_NOISE_MARGIN_DB = 12.0   # a frame is silence only when within this of the
+                               # noise floor (room tone). Any voiced energy — even
+                               # a whispered trailing word — sits above it and is
+                               # kept; only true dead air is cut.
+_TRIM_MIN_GAP_DB = 30.0        # require at least this gap between the loudest frame
+                               # and the noise floor before trimming at all. Without
+                               # a clear silence floor (near-continuous or uniformly
+                               # soft speech) there is no dead air to cut, and
+                               # trimming could eat soft speech — so leave it be.
+_TRIM_PAD_FRAMES = 4           # keep ~120 ms after the last speech frame so a word's
+                               # natural decay is never clipped
+_TRIM_MIN_FRAMES = 5           # only trim if it removes ≥ ~150 ms — never shorten a
+                               # tight recording pointlessly
+
+
+def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
+    """Cut a sustained run of trailing dead air (at the noise floor) off ``a``.
+
+    Returns ``(trimmed, trimmed_ms)``. Leaves the clip untouched (``trimmed_ms``
+    0.0) when there is no clear silence floor (the loudest frame is less than
+    ``_TRIM_MIN_GAP_DB`` above the noise floor), no trailing silence, or it is
+    shorter than ~150 ms. A frame is silence only when within
+    ``_TRIM_NOISE_MARGIN_DB`` of the noise floor (the 10th-percentile frame,
+    robust to a stray dropout), so any voiced energy — even very soft trailing
+    speech — sits above it and is kept.
+    Pure / side-effect-free — the caller logs.
+    """
+    n = len(a) // _TRIM_FRAME
+    if n < 4:
+        return a, 0.0
+    frm = a[:n * _TRIM_FRAME].reshape(n, _TRIM_FRAME)
+    rms = np.sqrt(np.mean(frm.astype(np.float64) ** 2, axis=1))
+    # Score the trailing partial frame (the < 30 ms remainder) too, over its real
+    # samples, so a brief final phoneme/click there is not mistaken for silence
+    # and trimmed away. It becomes frame index ``n`` (the (n+1)th frame).
+    remainder = a[n * _TRIM_FRAME:]
+    if remainder.size:
+        rem_rms = np.sqrt(np.mean(remainder.astype(np.float64) ** 2))
+        rms = np.append(rms, rem_rms)
+    n_frames = len(rms)
+    # Noise floor = 10th-pct frame RMS (room tone); speech body = the loudest.
+    # The 10th pct (not the raw min) keeps a single digital-zero/dropout frame
+    # from collapsing the floor estimate, while room tone still dominates the low
+    # percentiles. Only trim when there is a genuine silence floor well below the
+    # speech — otherwise (near-continuous or uniformly soft speech) there is no
+    # dead air to cut, and trimming would risk eating soft speech.
+    noise = float(np.percentile(rms, 10)) or 1e-9
+    body = float(np.max(rms)) or 1e-9
+    if body <= noise or 20.0 * np.log10(body / noise) < _TRIM_MIN_GAP_DB:
+        return a, 0.0
+    # A frame is silence only when within _TRIM_NOISE_MARGIN_DB of the noise floor
+    # (room-tone level). Any voiced energy — even a whispered trailing word — sits
+    # above this and is preserved.
+    threshold = noise * (10 ** (_TRIM_NOISE_MARGIN_DB / 20.0))
+    speech = np.nonzero(rms > threshold)[0]
+    if len(speech) == 0:
+        return a, 0.0
+    keep_frames = min(n_frames, int(speech[-1]) + 1 + _TRIM_PAD_FRAMES)
+    removed_frames = n_frames - keep_frames
+    if removed_frames < _TRIM_MIN_FRAMES:
+        return a, 0.0
+    # The last frame may be partial, so clamp the cut back to len(a).
+    keep = min(keep_frames * _TRIM_FRAME, len(a))
+    # samples removed / 16 = ms at 16 kHz; exact, incl. any sub-frame remainder.
+    trimmed_ms = (len(a) - keep) / 16.0
+    return a[:keep], trimmed_ms
+
+
 def compute_audio_metrics(pcm: np.ndarray) -> AudioCaptureMetrics:
     """Public wrapper: compute audio capture metrics for ``pcm`` (int16 mono).
 

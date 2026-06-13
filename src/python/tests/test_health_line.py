@@ -10,7 +10,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path("src/python")))
 
 from whisper_dictate import runtime  # noqa: E402
-from whisper_dictate.vp_health import format_health_line  # noqa: E402
+from whisper_dictate.vp_health import (  # noqa: E402
+    GRADE_FAIR,
+    GRADE_GOOD,
+    GRADE_PERFECT,
+    GRADE_POOR,
+    format_health_line,
+    health_grade,
+)
 
 
 @contextmanager
@@ -212,7 +219,12 @@ class HealthLinePostTests(unittest.TestCase):
         })
         # A WARN segment is appended so the Rust health card turns amber.
         self.assertIn("WARN post timeout->raw (4s)", line)
-        self.assertTrue(line.split(" | ")[-1].strip().startswith("WARN"))
+        # The WARN flags come after the stage text and before the trailing
+        # grade= token (the grade is always the final segment now).
+        segments = [seg.strip() for seg in line.split(" | ")]
+        warn_index = segments.index("WARN post timeout->raw (4s)")
+        self.assertTrue(segments[-1].startswith("grade="))
+        self.assertLess(warn_index, len(segments) - 1)
         # The clean "post clean/groq" stage text is still present (provenance).
         self.assertIn("post clean/groq", line)
 
@@ -226,6 +238,159 @@ class HealthLinePostTests(unittest.TestCase):
         })
         self.assertIn("post clean/groq", line)
         self.assertNotIn("WARN", line)
+
+
+class HealthGradeTests(unittest.TestCase):
+    """The graduated 4-level quality grade (perfect/good/fair/poor)."""
+
+    def test_perfect(self):
+        # high confidence, good input, no fallback, pristine SNR.
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 42.0,
+            "post_fallback": False,
+            "segments": _segments(-0.10, -0.15),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_PERFECT)
+
+    def test_good(self):
+        # high confidence and healthy SNR, but input merely "quiet" (boosted) —
+        # not pristine enough for perfect, clearly above fair.
+        metrics = {
+            "audio_input_status": "quiet",
+            "audio_snr_db": 24.0,
+            "post_fallback": False,
+            "segments": _segments(-0.20),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_GOOD)
+
+    def test_good_demoted_to_fair_when_post_fell_back(self):
+        # Same clean signals, but post-processing timed out to raw -> fair.
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 42.0,
+            "post_fallback": True,
+            "segments": _segments(-0.10),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+    def test_fair_on_ok_band(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 42.0,
+            "segments": _segments(-0.45),  # "ok" band
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+    def test_fair_on_hot_input(self):
+        metrics = {
+            "audio_input_status": "hot",
+            "audio_snr_db": 42.0,
+            "segments": _segments(-0.10),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+    def test_fair_when_high_band_but_mediocre_snr(self):
+        # band "high" but SNR between POOR (6) and GOOD (20) -> only fair.
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 12.0,
+            "segments": _segments(-0.10),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+    def test_poor_on_low_confidence(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 42.0,
+            "segments": _segments(-0.80, -0.90),  # "low" band
+        }
+        self.assertEqual(health_grade(metrics), GRADE_POOR)
+
+    def test_poor_on_bad_input_status(self):
+        for status in ("too_quiet", "low_snr", "clip_risk"):
+            metrics = {
+                "audio_input_status": status,
+                "audio_snr_db": 42.0,
+                "segments": _segments(-0.10),
+            }
+            self.assertEqual(
+                health_grade(metrics), GRADE_POOR, f"status={status}"
+            )
+
+    def test_poor_on_low_snr_number(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 4.0,  # < HEALTH_SNR_POOR
+            "segments": _segments(-0.10),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_POOR)
+
+    def test_missing_signals_default_to_fair_not_crash(self):
+        # Empty dict: no segments (band n/a), no SNR, no status -> safe "fair".
+        self.assertEqual(health_grade({}), GRADE_FAIR)
+        # no_text-style dict (no segments) must not crash and must not over-claim.
+        self.assertEqual(health_grade({"no_text": True}), GRADE_FAIR)
+
+    def test_unparsable_snr_does_not_crash(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": "n/a",
+            "segments": _segments(-0.10),
+        }
+        # SNR unparsable -> treated as missing -> fair (never raises).
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+
+class HealthLineGradeSegmentTests(unittest.TestCase):
+    """`format_health_line` appends ` | grade=<g>` as its final segment."""
+
+    def _line(self, **over) -> str:
+        metrics = {
+            "audio_raw_dbfs": -38.0,
+            "audio_snr_db": 56.0,
+            "audio_input_status": "good",
+            "post_mode": "clean",
+            "post_processor": "groq",
+        }
+        metrics.update(over)
+        return format_health_line(metrics)
+
+    def test_grade_is_last_segment(self):
+        line = self._line(segments=_segments(-0.10))
+        self.assertTrue(line.split(" | ")[-1].strip().startswith("grade="))
+
+    def test_grade_matches_health_grade(self):
+        # The token in the line must equal what health_grade returns for the
+        # same metrics, across every level.
+        cases = [
+            dict(segments=_segments(-0.10), audio_snr_db=42.0),  # perfect
+            dict(segments=_segments(-0.20), audio_snr_db=24.0,
+                 audio_input_status="quiet"),  # good
+            dict(segments=_segments(-0.45), audio_snr_db=42.0),  # fair
+            dict(segments=_segments(-0.90), audio_snr_db=42.0),  # poor
+        ]
+        for over in cases:
+            metrics = {
+                "audio_raw_dbfs": -38.0,
+                "audio_snr_db": 56.0,
+                "audio_input_status": "good",
+                "post_mode": "clean",
+                "post_processor": "groq",
+            }
+            metrics.update(over)
+            line = format_health_line(metrics)
+            expected = health_grade(metrics)
+            self.assertEqual(line.split(" | ")[-1].strip(), f"grade={expected}")
+
+    def test_grade_segment_never_starts_with_warn(self):
+        # The trailing grade segment must not collide with the structural
+        # has_warning detection (a `| WARN ...` segment).
+        line = self._line(segments=_segments(-0.90), audio_snr_db=42.0,
+                           audio_input_status="too_quiet")
+        last = line.split(" | ")[-1].strip()
+        self.assertTrue(last.startswith("grade="))
+        self.assertFalse(last.startswith("WARN"))
 
 
 if __name__ == "__main__":

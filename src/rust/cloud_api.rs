@@ -137,15 +137,21 @@ impl PostApiCheck {
 
 pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
     let url = format!("{}/models", check.base_url.trim_end_matches('/'));
-    let response = ureq::get(&url)
-        .set("Authorization", &format!("Bearer {}", check.api_key))
-        .set("User-Agent", USER_AGENT)
-        .timeout(Duration::from_millis(check.timeout_ms.max(1000)))
+    let mut response = ureq::get(&url)
+        .header("Authorization", &format!("Bearer {}", check.api_key))
+        .header("User-Agent", USER_AGENT)
+        .config()
+        .timeout_global(Some(Duration::from_millis(check.timeout_ms.max(1000))))
+        .http_status_as_error(false)
+        .build()
         .call()
         .map_err(|err| anyhow!("{} API check failed: {}", check.provider, http_error(err)))?;
+    check_status(&mut response)
+        .map_err(|detail| anyhow!("{} API check failed: {detail}", check.provider))?;
 
     let body: Value = response
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|err| anyhow!("{} API returned invalid JSON: {err}", check.provider))?;
     let ids = model_ids(&body);
     Ok(CloudApiCheckResult {
@@ -169,11 +175,14 @@ pub fn check_post_api(check: &PostApiCheck) -> Result<PostApiCheckResult> {
         ],
         "temperature": 0,
     });
-    let response = ureq::post(&url)
-        .set("Authorization", &format!("Bearer {}", check.api_key))
-        .set("Content-Type", "application/json")
-        .set("User-Agent", USER_AGENT)
-        .timeout(Duration::from_millis(check.timeout_ms.max(1000)))
+    let mut response = ureq::post(&url)
+        .header("Authorization", &format!("Bearer {}", check.api_key))
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USER_AGENT)
+        .config()
+        .timeout_global(Some(Duration::from_millis(check.timeout_ms.max(1000))))
+        .http_status_as_error(false)
+        .build()
         .send_json(payload)
         .map_err(|err| {
             anyhow!(
@@ -182,9 +191,12 @@ pub fn check_post_api(check: &PostApiCheck) -> Result<PostApiCheckResult> {
                 http_error(err)
             )
         })?;
+    check_status(&mut response)
+        .map_err(|detail| anyhow!("{} post API check failed: {detail}", check.provider))?;
 
     let body: Value = response
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|err| anyhow!("{} post API returned invalid JSON: {err}", check.provider))?;
     let output = body
         .get("choices")
@@ -260,18 +272,24 @@ pub fn cloud_transcribe(
     }
     let (body, boundary) = multipart_audio_body(&fields, audio_wav);
     let url = format!("{base_url}/audio/transcriptions");
-    let response = ureq::post(&url)
-        .set("Authorization", &format!("Bearer {api_key}"))
-        .set(
+    let mut response = ureq::post(&url)
+        .header("Authorization", &format!("Bearer {api_key}"))
+        .header(
             "Content-Type",
             &format!("multipart/form-data; boundary={boundary}"),
         )
-        .set("User-Agent", USER_AGENT)
-        .timeout(Duration::from_millis(timeout_ms.max(1000)))
-        .send_bytes(&body)
+        .header("User-Agent", USER_AGENT)
+        .config()
+        .timeout_global(Some(Duration::from_millis(timeout_ms.max(1000))))
+        .http_status_as_error(false)
+        .build()
+        .send(&body[..])
         .map_err(|err| anyhow!("cloud transcription failed: {}", http_error(err)))?;
+    check_status(&mut response)
+        .map_err(|detail| anyhow!("cloud transcription failed: {detail}"))?;
     let body: Value = response
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|err| anyhow!("cloud transcription returned invalid JSON: {err}"))?;
     Ok(CloudTranscriptionResult {
         text: body
@@ -344,22 +362,38 @@ fn parse_timeout_ms(raw: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-fn http_error(err: ureq::Error) -> String {
-    match err {
-        ureq::Error::Status(code, response) => {
-            let retry_after = response.header("Retry-After").map(str::to_owned);
-            let detail = response.into_string().unwrap_or_default();
-            if code == 429 {
-                return rate_limit_message(retry_after.as_deref(), &detail);
-            }
-            if detail.trim().is_empty() {
-                format!("HTTP {code}")
-            } else {
-                format!("HTTP {code}: {}", detail.trim())
-            }
-        }
-        other => other.to_string(),
+/// Turn a non-2xx response into a descriptive error string, mirroring the
+/// previous `ureq::Error::Status` handling. Requests are issued with
+/// `http_status_as_error(false)`, so 4xx/5xx responses arrive here as `Ok`
+/// and we surface the status code, the `Retry-After` header, and the (best
+/// effort) response body — including the dedicated 429 rate-limit message.
+/// Returns `Ok(())` for success (2xx) responses.
+fn check_status(response: &mut ureq::http::Response<ureq::Body>) -> Result<(), String> {
+    let code = response.status().as_u16();
+    if (200..300).contains(&code) {
+        return Ok(());
     }
+    let retry_after = response
+        .headers()
+        .get("Retry-After")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let detail = response.body_mut().read_to_string().unwrap_or_default();
+    if code == 429 {
+        return Err(rate_limit_message(retry_after.as_deref(), &detail));
+    }
+    if detail.trim().is_empty() {
+        Err(format!("HTTP {code}"))
+    } else {
+        Err(format!("HTTP {code}: {}", detail.trim()))
+    }
+}
+
+/// Describe a transport-level `ureq::Error` (timeout, DNS, TLS, IO, …). HTTP
+/// status codes are handled separately by [`check_status`], since requests
+/// opt out of `http_status_as_error`.
+fn http_error(err: ureq::Error) -> String {
+    err.to_string()
 }
 
 fn rate_limit_message(retry_after: Option<&str>, detail: &str) -> String {

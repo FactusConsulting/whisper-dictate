@@ -26,17 +26,31 @@ fn runtime_log_card_style(
             palette.warn_text,
             palette.header_bg,
         ),
-        // Health-ok: green — ICON_MONITOR_HEART reads as "health monitor / all
-        // clear", visually distinct from FinalText's ICON_CHECK_CIRCLE.
-        RuntimeLogCardKind::HealthOk => (
+        // Graded health, worst signal wins. ICON_MONITOR_HEART reads as "health
+        // monitor", visually distinct from FinalText's ICON_CHECK_CIRCLE.
+        // perfect: strong/bright green.
+        RuntimeLogCardKind::HealthPerfect => (
             icons::ICON_MONITOR_HEART.codepoint,
             palette.ok_text,
             palette.surface_bg,
         ),
-        // Health-warn: amber — ICON_WARNING makes the problem unmissable.
-        RuntimeLogCardKind::HealthWarn => (
+        // good: a calmer teal/cyan — distinct from perfect's green but still
+        // clearly "fine".
+        RuntimeLogCardKind::HealthGood => (
+            icons::ICON_MONITOR_HEART.codepoint,
+            palette.accent_blue,
+            palette.surface_bg,
+        ),
+        // fair: amber — ICON_WARNING flags that something was off.
+        RuntimeLogCardKind::HealthFair => (
             icons::ICON_WARNING.codepoint,
             palette.warn_text,
+            palette.header_bg,
+        ),
+        // poor: red — ICON_DANGEROUS makes an unusable utterance unmissable.
+        RuntimeLogCardKind::HealthPoor => (
+            icons::ICON_DANGEROUS.codepoint,
+            palette.error_text,
             palette.header_bg,
         ),
     }

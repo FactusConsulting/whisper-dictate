@@ -66,6 +66,132 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertGreater(metrics.snr_db, 20.0)
         self.assertEqual(metrics.input_status, "good")
 
+    # --- _trim_trailing_silence (primary anti-hallucination defence) ---
+    def test_trim_cuts_trailing_noise_floor_keeping_speech_plus_pad(self):
+        # 20 frames of speech then 30 frames at the noise floor: the dead tail is
+        # cut, keeping the speech + a 4-frame (~120 ms) decay pad.
+        np = self.np
+        speech = np.full(480 * 20, 0.2, dtype=np.float32)
+        silence = np.full(480 * 30, 0.0005, dtype=np.float32)
+        a = np.concatenate([speech, silence])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(len(trimmed), 480 * 24)   # 20 speech + 4 pad frames
+        self.assertAlmostEqual(ms, 26 * 30.0, places=3)  # 26 frames removed
+
+    def test_trim_keeps_tight_clip_unchanged(self):
+        # Only 3 trailing silence frames (< the pad+minimum): nothing is removed.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 20, 0.2, dtype=np.float32),
+            np.full(480 * 3, 0.0005, dtype=np.float32),
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
+    def test_trim_leaves_all_silence_untouched(self):
+        # Uniform clip: the loudest frame is not above the noise floor (gap 0 <
+        # the minimum) → no silence floor → left untouched, never trims to empty.
+        np = self.np
+        a = np.full(480 * 10, 0.0005, dtype=np.float32)
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
+    def test_trim_keeps_quietly_trailing_word(self):
+        # A quiet trailing word (~24 dB above the noise floor, well above the
+        # 12 dB margin) is NOT clipped — only the dead tail at the floor is cut.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 10, 0.2, dtype=np.float32),      # loud speech
+            np.full(480 * 10, 0.008, dtype=np.float32),    # quiet trailing word
+            np.full(480 * 20, 0.0005, dtype=np.float32),   # dead tail
+        ])
+        trimmed, _ms = self.vp._trim_trailing_silence(a)
+        # The quiet word (frames 10-19) survives + 4 pad frames = 24 frames kept.
+        self.assertEqual(len(trimmed), 480 * 24)
+
+    def test_trim_too_short_buffer_unchanged(self):
+        np = self.np
+        a = np.full(480 * 2, 0.2, dtype=np.float32)
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
+    def test_trim_preserves_speech_in_final_partial_frame(self):
+        # A brief final phoneme landing in the trailing < 30 ms partial frame
+        # (after a silence gap) must NOT be trimmed — the remainder is scored too.
+        # Without that, the last full speech frame would be index 19, the blip
+        # would be ignored, and 26 frames would be wrongly cut.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 20, 0.2, dtype=np.float32),     # speech
+            np.full(480 * 30, 0.0005, dtype=np.float32),  # gap at the noise floor
+            np.full(240, 0.2, dtype=np.float32),          # blip in the partial frame
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
+    def test_trim_keeps_soft_trailing_speech_without_silence(self):
+        # Continuous speech that trails off SOFTLY with no true silence floor:
+        # loudest-vs-noise-floor gap is only ~20 dB (< the minimum), so there is no
+        # clear silence floor → the clip is left untouched rather than risking
+        # trimming the soft speech.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 20, 0.2, dtype=np.float32),    # loud speech body
+            np.full(480 * 20, 0.02, dtype=np.float32),   # soft trailing speech (~20 dB down)
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
+    def test_trim_cuts_long_tail_after_short_speech(self):
+        # Short utterance (3 frames) then a long held-key dead tail (47 frames):
+        # speech is <10% of frames. The dead tail dominates the low percentiles,
+        # so the 10th-pct noise floor sits in it and the loud-vs-floor gap is
+        # large → the dead tail is still cut.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 3, 0.2, dtype=np.float32),      # short speech
+            np.full(480 * 47, 0.0005, dtype=np.float32),  # long dead tail
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertGreater(ms, 0.0)
+        self.assertEqual(len(trimmed), 480 * 7)   # 3 speech + 4 pad frames
+
+    def test_trim_keeps_very_soft_trailing_word_above_noise_floor(self):
+        # THE REGRESSION (real repro): a genuinely soft trailing word ~32 dB below
+        # the loud body — but still well ABOVE the room-tone noise floor — followed
+        # by dead air. The soft word must survive; only the dead air at the noise
+        # floor is cut. A "30 dB below the loudest frame" rule would have eaten it.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 15, 0.2, dtype=np.float32),     # loud speech body
+            np.full(480 * 5, 0.005, dtype=np.float32),    # very soft trailing word
+            np.full(480 * 20, 0.0003, dtype=np.float32),  # dead air at the noise floor
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertGreater(ms, 0.0)                       # the dead air IS cut
+        self.assertEqual(len(trimmed), 480 * 24)          # soft word (15-19) + 4 pad kept
+
+    def test_trim_robust_to_stray_silent_frame(self):
+        # A single fully-silent (RMS 0) dropout frame must NOT collapse the noise
+        # floor — that is why the floor is the 10th percentile, not np.min. With
+        # min, the zero would set the floor to ~0, drop the threshold to ~0, mark
+        # every frame "speech" and trim nothing; the 10th pct keeps room tone as
+        # the floor so the real dead tail is still cut.
+        np = self.np
+        a = np.concatenate([
+            np.zeros(480, dtype=np.float32),              # 1 digital-zero dropout frame
+            np.full(480 * 19, 0.2, dtype=np.float32),     # speech
+            np.full(480 * 30, 0.0005, dtype=np.float32),  # dead tail at room tone
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertGreater(ms, 0.0)   # dead tail still cut despite the zero frame
+        self.assertLess(len(trimmed), len(a))
+
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
 

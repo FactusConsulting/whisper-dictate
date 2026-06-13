@@ -46,6 +46,23 @@ pub(in crate::ui) enum CorpusRecordText {
     Saved,
     /// Marker appended to picker entries that already have a recording.
     RecordedMarker,
+    /// Intro line making the feature's PURPOSE unmistakable: these recordings are
+    /// the benchmark's golden reference audio, not dictionary entries.
+    PurposeIntro,
+    /// One-liner near the Record action clarifying the overwrite/no-dictionary
+    /// semantics of re-recording an item.
+    OverwriteNote,
+    /// Label for the "record every item that has no recording yet" batch button.
+    RecordAllMissing,
+    /// Label for the "re-record every item" batch button.
+    RecordAll,
+    /// Label for the batch Stop/cancel button.
+    StopBatch,
+    /// Label preceding the read-aloud reference text during a batch run (the
+    /// "k of N" position is formatted by [`batch_progress_line`]).
+    BatchReadAloudPrompt,
+    /// Hint shown when a batch run found nothing to record (all items done).
+    BatchNothingToRecord,
 }
 
 impl CorpusRecordText {
@@ -59,11 +76,12 @@ impl CorpusRecordText {
 
     fn english(self) -> &'static str {
         match self {
-            Self::SectionLabel => "Record corpus audio",
+            Self::SectionLabel => "Benchmark reference recordings",
             Self::SectionHelp => {
-                "Record reference audio for a benchmark corpus item from your microphone: \
-                 pick an item, read the shown text aloud after clicking Record, and the clip \
-                 is saved where the benchmark scores it. Stop the dictation runtime first."
+                "Record the golden reference audio used by the speech-accuracy benchmark \
+                 (System → Run benchmark): pick an item, read the shown text aloud after \
+                 clicking Record, and the clip is saved where the benchmark scores it. This \
+                 does NOT change your dictionary. Stop the dictation runtime first."
             }
             Self::PickerLabel => "Corpus item",
             Self::RecordButton => "Record",
@@ -78,16 +96,30 @@ impl CorpusRecordText {
             Self::NoItems => "No corpus items found to record.",
             Self::Saved => "Saved",
             Self::RecordedMarker => "recorded",
+            Self::PurposeIntro => {
+                "These recordings are the golden reference audio for the speech-accuracy \
+                 benchmark (System → Run benchmark). They do NOT change your dictionary."
+            }
+            Self::OverwriteNote => {
+                "Re-recording an item overwrites only that item's own audio file; your \
+                 dictionary is never touched."
+            }
+            Self::RecordAllMissing => "Record all missing",
+            Self::RecordAll => "Re-record all",
+            Self::StopBatch => "Stop",
+            Self::BatchReadAloudPrompt => "Read this aloud:",
+            Self::BatchNothingToRecord => "Every corpus item already has a recording.",
         }
     }
 
     fn danish(self) -> &'static str {
         match self {
-            Self::SectionLabel => "Optag korpus-lyd",
+            Self::SectionLabel => "Benchmark-referenceoptagelser",
             Self::SectionHelp => {
-                "Optag reference-lyd til et benchmark-korpuselement fra din mikrofon: vælg et \
-                 element, læs den viste tekst højt efter du har klikket Optag, og klippet \
-                 gemmes der hvor benchmarken scorer det. Stop dikterings-runtimen først."
+                "Optag den gyldne reference-lyd som tale-nøjagtigheds-benchmarken bruger \
+                 (System → Kør benchmark): vælg et element, læs den viste tekst højt efter \
+                 du har klikket Optag, og klippet gemmes der hvor benchmarken scorer det. \
+                 Dette ændrer IKKE din ordbog. Stop dikterings-runtimen først."
             }
             Self::PickerLabel => "Korpuselement",
             Self::RecordButton => "Optag",
@@ -102,6 +134,19 @@ impl CorpusRecordText {
             Self::NoItems => "Ingen korpuselementer fundet at optage.",
             Self::Saved => "Gemt",
             Self::RecordedMarker => "optaget",
+            Self::PurposeIntro => {
+                "Disse optagelser er den gyldne reference-lyd til tale-nøjagtigheds-benchmarken \
+                 (System → Kør benchmark). De ændrer IKKE din ordbog."
+            }
+            Self::OverwriteNote => {
+                "At genoptage et element overskriver kun dette elements egen lydfil; din \
+                 ordbog røres aldrig."
+            }
+            Self::RecordAllMissing => "Optag alle manglende",
+            Self::RecordAll => "Genoptag alle",
+            Self::StopBatch => "Stop",
+            Self::BatchReadAloudPrompt => "Læs dette højt:",
+            Self::BatchNothingToRecord => "Alle korpuselementer har allerede en optagelse.",
         }
     }
 }
@@ -111,6 +156,26 @@ impl CorpusRecordText {
 /// kept local so this module stays self-contained for clean parallel merges.
 pub(in crate::ui) fn corpus_record_text(raw_language: &str, key: CorpusRecordText) -> &'static str {
     key.label(raw_language == "da")
+}
+
+/// The localized batch progress line: "Item k of N · recorded c" (EN) /
+/// "Element k af N · optaget c" (DA), where `position` is the 1-based current
+/// item, `total` the run length, and `completed` how many clips already saved.
+///
+/// Kept here (next to the strings) and pure so it unit-tests without egui and the
+/// EN/DA wording stays in one place. The reference text to read is rendered
+/// separately by the caller — this is just the counter line.
+pub(in crate::ui) fn batch_progress_line(
+    raw_language: &str,
+    position: usize,
+    total: usize,
+    completed: usize,
+) -> String {
+    if raw_language == "da" {
+        format!("Element {position} af {total} · optaget {completed}")
+    } else {
+        format!("Item {position} of {total} · recorded {completed}")
+    }
 }
 
 /// The terminal `corpus_record_done` event fields the UI surfaces.
@@ -300,22 +365,85 @@ mod tests {
 
     #[test]
     fn strings_present_in_en_and_da() {
+        // Keys where the EN and DA translations are intentionally identical
+        // (e.g. "Stop" is the same word in both languages).
+        let allow_identical = [CorpusRecordText::StopBatch];
+
         for key in [
             CorpusRecordText::SectionLabel,
+            CorpusRecordText::SectionHelp,
             CorpusRecordText::PickerLabel,
             CorpusRecordText::RecordButton,
+            CorpusRecordText::RecordButtonHelp,
             CorpusRecordText::ReadAloudPrompt,
             CorpusRecordText::StopRuntimeHint,
             CorpusRecordText::Recording,
+            CorpusRecordText::NoItems,
             CorpusRecordText::Saved,
             CorpusRecordText::RecordedMarker,
+            CorpusRecordText::PurposeIntro,
+            CorpusRecordText::OverwriteNote,
+            CorpusRecordText::RecordAllMissing,
+            CorpusRecordText::RecordAll,
+            CorpusRecordText::StopBatch,
+            CorpusRecordText::BatchReadAloudPrompt,
+            CorpusRecordText::BatchNothingToRecord,
         ] {
             let en = corpus_record_text("en", key);
             let da = corpus_record_text("da", key);
             assert!(!en.is_empty(), "EN empty for {key:?}");
             assert!(!da.is_empty(), "DA empty for {key:?}");
-            assert_ne!(en, da, "EN and DA must differ for {key:?}");
+            if !allow_identical.contains(&key) {
+                assert_ne!(en, da, "EN and DA must differ for {key:?}");
+            }
         }
+    }
+
+    #[test]
+    fn clarity_strings_name_the_benchmark_and_clear_the_dictionary() {
+        // The whole point of the clarity work: the heading + intro must read as
+        // benchmark reference audio, and the intro/overwrite note must say the
+        // dictionary is untouched — in BOTH languages.
+        let heading_en = corpus_record_text("en", CorpusRecordText::SectionLabel);
+        assert!(
+            heading_en.to_lowercase().contains("benchmark"),
+            "EN heading should mention the benchmark: {heading_en}"
+        );
+        let heading_da = corpus_record_text("da", CorpusRecordText::SectionLabel);
+        assert!(
+            heading_da.to_lowercase().contains("benchmark"),
+            "DA heading should mention the benchmark: {heading_da}"
+        );
+
+        let intro_en = corpus_record_text("en", CorpusRecordText::PurposeIntro);
+        assert!(intro_en.to_lowercase().contains("benchmark"), "{intro_en}");
+        assert!(intro_en.to_lowercase().contains("dictionary"), "{intro_en}");
+        let intro_da = corpus_record_text("da", CorpusRecordText::PurposeIntro);
+        assert!(intro_da.to_lowercase().contains("benchmark"), "{intro_da}");
+        assert!(intro_da.to_lowercase().contains("ordbog"), "{intro_da}");
+
+        let note_en = corpus_record_text("en", CorpusRecordText::OverwriteNote);
+        assert!(
+            note_en.to_lowercase().contains("overwrites"),
+            "EN overwrite note should say it overwrites: {note_en}"
+        );
+        assert!(note_en.to_lowercase().contains("dictionary"), "{note_en}");
+        let note_da = corpus_record_text("da", CorpusRecordText::OverwriteNote);
+        assert!(note_da.to_lowercase().contains("overskriver"), "{note_da}");
+        assert!(note_da.to_lowercase().contains("ordbog"), "{note_da}");
+    }
+
+    #[test]
+    fn batch_progress_line_formats_k_of_n_per_language() {
+        let en = batch_progress_line("en", 2, 5, 1);
+        assert!(en.contains("Item 2 of 5"), "{en}");
+        assert!(en.contains("recorded 1"), "{en}");
+
+        let da = batch_progress_line("da", 2, 5, 1);
+        assert!(da.contains("Element 2 af 5"), "{da}");
+        assert!(da.contains("optaget 1"), "{da}");
+
+        assert_ne!(en, da, "EN and DA progress lines must differ");
     }
 
     #[test]
