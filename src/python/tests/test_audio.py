@@ -90,8 +90,8 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(len(trimmed), len(a))
 
     def test_trim_leaves_all_silence_untouched(self):
-        # Uniform clip: loudest == quietest, so there is no silence floor below
-        # the speech (gap 0 < the minimum) → left untouched, never trims to empty.
+        # Uniform clip: the loudest frame is not above the noise floor (gap 0 <
+        # the minimum) → no silence floor → left untouched, never trims to empty.
         np = self.np
         a = np.full(480 * 10, 0.0005, dtype=np.float32)
         trimmed, ms = self.vp._trim_trailing_silence(a)
@@ -135,7 +135,7 @@ class AudioDspTests(RealNumpyAudioCase):
 
     def test_trim_keeps_soft_trailing_speech_without_silence(self):
         # Continuous speech that trails off SOFTLY with no true silence floor:
-        # loudest-vs-quietest gap is only ~20 dB (< the minimum), so there is no
+        # loudest-vs-noise-floor gap is only ~20 dB (< the minimum), so there is no
         # clear silence floor → the clip is left untouched rather than risking
         # trimming the soft speech.
         np = self.np
@@ -149,9 +149,9 @@ class AudioDspTests(RealNumpyAudioCase):
 
     def test_trim_cuts_long_tail_after_short_speech(self):
         # Short utterance (3 frames) then a long held-key dead tail (47 frames):
-        # speech is <10% of frames. The noise floor is the quietest frame
-        # regardless of the ratio, and the loud-vs-quiet gap is large, so the dead
-        # tail is still cut.
+        # speech is <10% of frames. The dead tail dominates the low percentiles,
+        # so the 10th-pct noise floor sits in it and the loud-vs-floor gap is
+        # large → the dead tail is still cut.
         np = self.np
         a = np.concatenate([
             np.full(480 * 3, 0.2, dtype=np.float32),      # short speech
