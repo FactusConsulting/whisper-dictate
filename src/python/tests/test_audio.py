@@ -117,6 +117,21 @@ class AudioDspTests(RealNumpyAudioCase):
         self.assertEqual(ms, 0.0)
         self.assertEqual(len(trimmed), len(a))
 
+    def test_trim_preserves_speech_in_final_partial_frame(self):
+        # A brief final phoneme landing in the trailing < 30 ms partial frame
+        # (after a silence gap) must NOT be trimmed — the remainder is scored too.
+        # Without that, the last full speech frame would be index 19, the blip
+        # would be ignored, and 26 frames would be wrongly cut.
+        np = self.np
+        a = np.concatenate([
+            np.full(480 * 20, 0.2, dtype=np.float32),     # speech
+            np.full(480 * 30, 0.0005, dtype=np.float32),  # gap at the noise floor
+            np.full(240, 0.2, dtype=np.float32),          # blip in the partial frame
+        ])
+        trimmed, ms = self.vp._trim_trailing_silence(a)
+        self.assertEqual(ms, 0.0)
+        self.assertEqual(len(trimmed), len(a))
+
     def test_cap_line_is_bold_on_interactive_terminal(self):
         from whisper_dictate import vp_audio
 

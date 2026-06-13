@@ -150,16 +150,25 @@ def _trim_trailing_silence(a: np.ndarray) -> tuple[np.ndarray, float]:
         return a, 0.0
     frm = a[:n * _TRIM_FRAME].reshape(n, _TRIM_FRAME)
     rms = np.sqrt(np.mean(frm.astype(np.float64) ** 2, axis=1))
+    # Score the trailing partial frame (the < 30 ms remainder) too, over its real
+    # samples, so a brief final phoneme/click there is not mistaken for silence
+    # and trimmed away. It becomes frame index ``n`` (the (n+1)th frame).
+    remainder = a[n * _TRIM_FRAME:]
+    if remainder.size:
+        rem_rms = np.sqrt(np.mean(remainder.astype(np.float64) ** 2))
+        rms = np.append(rms, rem_rms)
+    n_frames = len(rms)
     noise = float(np.percentile(rms, 10)) or 1e-9
     threshold = noise * (10 ** (_TRIM_MARGIN_DB / 20.0))
     speech = np.nonzero(rms > threshold)[0]
     if len(speech) == 0:
         return a, 0.0
-    keep_frames = min(n, int(speech[-1]) + 1 + _TRIM_PAD_FRAMES)
-    removed_frames = n - keep_frames
+    keep_frames = min(n_frames, int(speech[-1]) + 1 + _TRIM_PAD_FRAMES)
+    removed_frames = n_frames - keep_frames
     if removed_frames < _TRIM_MIN_FRAMES:
         return a, 0.0
-    keep = keep_frames * _TRIM_FRAME
+    # The last frame may be partial, so clamp the cut back to len(a).
+    keep = min(keep_frames * _TRIM_FRAME, len(a))
     # samples removed / 16 = ms at 16 kHz; exact, incl. any sub-frame remainder.
     trimmed_ms = (len(a) - keep) / 16.0
     return a[:keep], trimmed_ms
