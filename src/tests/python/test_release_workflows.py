@@ -338,11 +338,11 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("sonar.sources=src,", sonar)
         self.assertIn("src/rust/tests/**", sonar)
         self.assertIn("components: clippy", workflow)
-        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features --message-format=json > clippy-report.json", workflow)
+        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow --message-format=json > clippy-report.json", workflow)
         self.assertRegex(workflow, r"uses:\s*SonarSource/sonarqube-scan-action@v\d+")
         self.assertIn("SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}", workflow)
         self.assertIn("components: clippy", test_workflow)
-        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --all-features -- -D warnings", test_workflow)
+        self.assertIn("cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings", test_workflow)
 
     def test_sonar_imports_python_and_rust_coverage(self):
         sonar = Path("sonar-project.properties").read_text(encoding="utf-8")
@@ -356,7 +356,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("components: clippy, llvm-tools-preview", workflow)
         self.assertIn("tool: cargo-llvm-cov", workflow)
         self.assertIn(
-            'cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-features --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"',
+            'cargo llvm-cov --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --features ui-egui-glow --lcov --output-path "$GITHUB_WORKSPACE/lcov.info"',
             workflow,
         )
         self.assertIn(
@@ -651,7 +651,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # --target-dir target) so the two can't drift.
         self.assertIn(
             "cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target "
-            "-p whisper-dictate-app --all-targets --all-features -- -D warnings",
+            "-p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings",
             workflow,
         )
         self.assertIn(
