@@ -505,8 +505,12 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
     line per candidate — host-API, device index+name, samplerate, channels,
     dtype, auto_convert flag and the per-attempt result (``ok`` or the exact
     exception message) — and the finally-bound candidate, so a "why won't my mic
-    open" is diagnosable from the log alone. Off by default: every existing
-    Basic/Verbose code path is byte-for-byte unchanged.
+    open" is diagnosable from the log alone. The all-candidates-failed summary
+    (``stream open failed: …``) is also Trace-only: on the normal
+    WASAPI->DirectSound fallback a sibling opens right after and prints one calm
+    line, so the per-call failure is noise at Basic/Verbose. The error is always
+    RETURNED, so a genuine total failure is still surfaced by the caller. At
+    Basic/Verbose this function prints nothing — only its return value matters.
     """
     last_error = None
     channel_candidates = _sounddevice_capture_channel_candidates(
