@@ -1581,6 +1581,58 @@ class ModifierHelpersUnitTests(unittest.TestCase):
         self.assertIsNone(vp_keys_solo.key_name(object()))
 
 
+class HeldKeysClearedByReleaseUnitTests(unittest.TestCase):
+    """``held_keys_cleared_by_release`` is the SINGLE source of truth for
+    side-aware release clearing, shared by ``SoloModifierGuard.note_release`` AND
+    the pynput listener's ``_discard_held`` so both release paths agree. A generic
+    release clears the whole family (side unknown → fail-safe); a side-specific
+    release clears only the same side (``alt_gr``≡``alt_r``) plus any held generic,
+    LEAVING the opposite side held; a non-modifier release drops only the exact
+    token."""
+
+    cleared = staticmethod(vp_keys_solo.held_keys_cleared_by_release)
+
+    def test_generic_release_clears_whole_family(self):
+        left, right, gen = (_FakeModKey("ctrl_l"), _FakeModKey("ctrl_r"),
+                            _FakeModKey("ctrl"))
+        dropped = self.cleared([left, right, gen], _FakeModKey("ctrl"))
+        self.assertCountEqual(dropped, [left, right, gen])
+
+    def test_side_specific_release_leaves_opposite_side_held(self):
+        left, right = _FakeModKey("ctrl_l"), _FakeModKey("ctrl_r")
+        dropped = self.cleared([left, right], _FakeModKey("ctrl_l"))
+        self.assertEqual(dropped, [left])        # only the same side
+        self.assertNotIn(right, dropped)         # opposite stays held
+
+    def test_side_specific_release_also_clears_held_generic(self):
+        left, gen = _FakeModKey("ctrl_l"), _FakeModKey("ctrl")
+        dropped = self.cleared([left, gen], _FakeModKey("ctrl_l"))
+        self.assertCountEqual(dropped, [left, gen])  # same side + held generic
+
+    def test_alt_r_release_clears_held_alt_gr_and_vice_versa(self):
+        alt_gr = _FakeModKey("alt_gr")
+        self.assertEqual(self.cleared([alt_gr], _FakeModKey("alt_r")), [alt_gr])
+        alt_r = _FakeModKey("alt_r")
+        self.assertEqual(self.cleared([alt_r], _FakeModKey("alt_gr")), [alt_r])
+        # ...but the LEFT alt must survive a right-alt / alt_gr release.
+        alt_l = _FakeModKey("alt_l")
+        self.assertEqual(self.cleared([alt_l], _FakeModKey("alt_gr")), [])
+
+    def test_release_does_not_touch_other_family(self):
+        ctrl, shift = _FakeModKey("ctrl_l"), _FakeModKey("shift_l")
+        dropped = self.cleared([ctrl, shift], _FakeModKey("ctrl"))
+        self.assertEqual(dropped, [ctrl])
+        self.assertNotIn(shift, dropped)
+
+    def test_non_modifier_release_exact_only(self):
+        # A released letter drops only that exact token, never a held modifier.
+        ctrl = _FakeModKey("ctrl_l")
+        held = ["a", ctrl]
+        self.assertEqual(self.cleared(held, "a"), ["a"])
+        # An unknown released token not present in held → nothing dropped.
+        self.assertEqual(self.cleared(held, "z"), [])
+
+
 class PynputSideSpecificChordTests(unittest.TestCase):
     """Side-specific chord matching (reverses #254). A ``shift_l+ctrl_l`` binding
     completes for the BOUND sides (and the generic-family fallback) but NOT for
@@ -1713,6 +1765,28 @@ class PynputSideSpecificChordTests(unittest.TestCase):
             ln.on_press(_FakeModKey("ctrl"))      # chord complete but X held
         self.assertEqual(ln._owner.started, 0)
         self.assertFalse(ln._recording)
+
+    def test_discard_held_side_specific_leaves_opposite_side(self):
+        # The listener-side equivalent of note_release's over-deletion fix: with
+        # BOTH ctrl sides physically held, a side-specific release of ctrl_l must
+        # drop only ctrl_l from _held_keys and LEAVE ctrl_r held — otherwise the
+        # still-pressed opposite side would be wrongly forgotten and a held
+        # foreign key could be lost. Shared via held_keys_cleared_by_release.
+        ln = self._ln()
+        ctrl_l, ctrl_r = _FakeModKey("ctrl_l"), _FakeModKey("ctrl_r")
+        ln._held_keys = {ctrl_l, ctrl_r}
+        ln._discard_held(ctrl_l)
+        self.assertIn(ctrl_r, ln._held_keys)
+        self.assertNotIn(ctrl_l, ln._held_keys)
+
+    def test_discard_held_generic_release_clears_family(self):
+        # A generic ctrl up (side unknown) clears every held ctrl variant so the
+        # chord can always break — the fail-safe direction.
+        ln = self._ln()
+        ctrl_l, ctrl_r = _FakeModKey("ctrl_l"), _FakeModKey("ctrl_r")
+        ln._held_keys = {ctrl_l, ctrl_r}
+        ln._discard_held(_FakeModKey("ctrl"))
+        self.assertEqual(ln._held_keys, set())
 
 
 class PynputSideSpecificSingleKeyTests(unittest.TestCase):

@@ -243,6 +243,48 @@ def modifier_matches(pressed_key, target_name) -> bool:
     )
 
 
+def held_keys_cleared_by_release(held_keys, released_key) -> list:
+    """Which tokens in ``held_keys`` a release of ``released_key`` should drop.
+
+    The SINGLE source of truth for side-aware release clearing, shared by
+    :meth:`SoloModifierGuard.note_release` AND the pynput listener's
+    ``_discard_held`` so both release paths behave identically. Without it the
+    two paths drifted: one cleared the whole family on every release (so
+    releasing left Ctrl wrongly dropped a still-held right Ctrl) while the other
+    did not.
+
+    Rules, mirroring :func:`modifier_matches`:
+
+      * Non-modifier (no family): plain token equality — drop only the exact
+        token released (a generic Ctrl release must NOT touch a held letter).
+      * GENERIC modifier release (``Key.ctrl`` — side unknown): drop every held
+        member of that family. The OS reported a sideless up event for a key we
+        only ever saw with a side on the way down, so we cannot tell which side
+        lifted; clearing the family is the fail-safe that guarantees the chord
+        can break (better to end recording than to wedge it on).
+      * SIDE-SPECIFIC release (``ctrl_l`` / ``ctrl_r`` / ``alt_gr``): drop only
+        the SAME side (``alt_gr`` ≡ ``alt_r`` canonical) plus any held GENERIC
+        family token (which carries no side and would otherwise linger). The
+        OPPOSITE specific side stays held — releasing left Ctrl leaves right
+        Ctrl down, the whole point of the side-specific behaviour.
+    """
+    family = modifier_family(released_key)
+    if family is None:
+        return [k for k in held_keys if k == released_key]
+    rname = _canon_side_name(key_name(released_key))
+    generic_release = rname == family
+    return [
+        k
+        for k in held_keys
+        if modifier_family(k) == family
+        and (
+            generic_release
+            or _canon_side_name(key_name(k)) == rname
+            or key_name(k) == family
+        )
+    ]
+
+
 # Media / consumer-control keys the solo guard must IGNORE entirely. A Bluetooth
 # headset (e.g. Jabra) can emit consumer-control events — volume up/down/mute,
 # play/pause, track next/prev — to the OS while a bare-modifier PTT key is held.
@@ -457,21 +499,7 @@ class SoloModifierGuard:
         """
         if not self.enabled:
             return
-        family = modifier_family(key)
-        if family is None:
-            self._held.pop(key, None)
-            return
-        rname = _canon_side_name(key_name(key))
-        generic_release = rname == family
-        doomed = [
-            k for k in self._held
-            if modifier_family(k) == family and (
-                generic_release
-                or _canon_side_name(key_name(k)) == rname  # same side
-                or key_name(k) == family                   # a held generic
-            )
-        ]
-        for k in doomed:
+        for k in held_keys_cleared_by_release(self._held, key):
             del self._held[k]
 
     # --- the two rules -------------------------------------------------------------

@@ -21,6 +21,7 @@ from whisper_dictate.vp_cli import QUIT_COUNT, QUIT_KEY, QUIT_WINDOW_MS
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_keys_solo import (
     SoloModifierGuard,
+    held_keys_cleared_by_release as _held_keys_cleared_by_release,
     is_bare_modifier_binding,
     key_name as _key_name,
     modifier_family as _modifier_family,
@@ -223,15 +224,16 @@ class _PynputListener:
         return None
 
     def _discard_held(self, k) -> None:
-        # The SAME physical key may be reported under different variants on press
-        # vs release (ctrl_l down, generic ctrl up), so clear any held token in
-        # the SAME modifier FAMILY as the released key — otherwise the chord could
-        # never break. Non-modifier keys (no family) use plain token equality.
-        self._held_keys.discard(k)
-        kfam = _modifier_family(k)
-        if kfam is None:
-            return
-        for hk in [h for h in self._held_keys if _modifier_family(h) == kfam]:
+        # Side-aware release clearing, shared verbatim with the solo guard via
+        # ``held_keys_cleared_by_release`` so both release paths agree. The SAME
+        # physical key may be reported under different variants on press vs
+        # release (ctrl_l down, generic ctrl up): a GENERIC release clears the
+        # whole family (side unknown → fail-safe so the chord can break), but a
+        # SIDE-SPECIFIC release drops only the same side (alt_gr≡alt_r) plus any
+        # held generic — LEAVING the opposite side held, so releasing left Ctrl
+        # of a both-sides chord doesn't wrongly drop a still-held right Ctrl.
+        # Non-modifier keys (no family) use plain token equality.
+        for hk in _held_keys_cleared_by_release(self._held_keys, k):
             self._held_keys.discard(hk)
 
     def _toggle_recording(self) -> None:
