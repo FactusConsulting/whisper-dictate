@@ -103,6 +103,7 @@ class _InjectBase(unittest.TestCase):
             "_wayland_target_prefers_terminal_paste",
             "_paste",
             "_release_stale_modifiers",
+            "_ptt_is_bare_modifier",
             # _inject delegates its per-platform body to these; bind the real
             # ones so the dispatch is exercised end-to-end on the namespace.
             "_inject_log_preview",
@@ -214,6 +215,37 @@ class InjectDispatchTests(_InjectBase):
         self.assertIn(
             self.kbmod.Key.ctrl,
             {e[1] for e in t._kb.events[:type_idx] if e[0] == "release"})
+        self.assertIn("strategy: type", out.getvalue())
+
+    def test_auto_prefers_paste_for_modifier_chord_ptt(self):
+        # A bare-modifier PTT (shift_l+ctrl_l) is held THROUGH injection, so a
+        # typed burst would become Ctrl/Shift shortcuts ("Jeg deppP Proxmox.").
+        # Auto must therefore paste (Ctrl+V survives held modifiers) even for a
+        # plain ASCII target that would otherwise type.
+        t = self._target(mode="auto", title="Untitled - Notepad",
+                         process="notepad.exe", key="shift_l+ctrl_l")
+        with _env(WAYLAND_DISPLAY=None), \
+                patch.object(self.inject.os, "name", "posix"), \
+                patch.object(self.inject.shutil, "which", return_value=None), \
+                _capture_stdout() as out:
+            self.inject.InjectMixin._inject(t, "plain ascii")
+        self.assertEqual(t._last_inject_strategy, "paste")
+        self.assertEqual(self.clip.copied, ["plain ascii"])
+        self.assertIn("strategy: paste", out.getvalue())
+
+    def test_auto_still_types_for_non_modifier_ptt(self):
+        # A non-modifier PTT (f9) does not shortcut-mangle when held, so auto
+        # keeps typing plain text — the fix is scoped to modifier bindings.
+        t = self._target(mode="auto", title="Untitled - Notepad",
+                         process="notepad.exe", key="f9")
+        with _env(WAYLAND_DISPLAY=None), \
+                patch.object(self.inject.os, "name", "posix"), \
+                patch.object(self.inject.shutil, "which", return_value=None), \
+                _capture_stdout() as out:
+            self.inject.InjectMixin._inject(t, "plain ascii")
+        self.assertEqual(t._last_inject_strategy, "type")
+        self.assertIn(("type", "plain ascii"), t._kb.events)
+        self.assertEqual(self.clip.copied, [])
         self.assertIn("strategy: type", out.getvalue())
 
     def test_windows_auto_pastes_for_terminal_target(self):
