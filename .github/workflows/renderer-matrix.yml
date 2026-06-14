@@ -41,8 +41,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-2025]
         renderer:
-          - { name: glow, feature: ui-egui-glow }
-          - { name: wgpu, feature: ui-egui-wgpu }
+          # strict_headless: wgpu uses the DX12 WARP software adapter and must
+          # stay alive headless, so an early exit is a real init failure; glow
+          # has no software GL on the runner, so its early exit is a soft skip.
+          - { name: glow, feature: ui-egui-glow, strict_headless: false }
+          - { name: wgpu, feature: ui-egui-wgpu, strict_headless: true }
     name: ${{ matrix.renderer.name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     steps:
@@ -83,9 +86,10 @@ jobs:
       # panic line. --version / config path return before eframe::run_native so
       # this is the only step that actually exercises renderer/adapter init.
       #
-      # Windows: wgpu falls back to the DX12 WARP software adapter; glow uses
-      # the Mesa/software OpenGL rasteriser provided by the runner image. Both
-      # are expected to initialise cleanly and keep the process alive for 15 s.
+      # Windows: wgpu falls back to the DX12 WARP software adapter and must stay
+      # alive for 15 s — an early exit fails the probe (strict_headless). glow has
+      # no software OpenGL context on the runner, so it may exit early; that is a
+      # soft skip, not a failure.
       #
       # Linux: no display server is available on the runner, so eframe will
       # fail to open a window and exit with a non-zero code; we therefore skip
@@ -161,15 +165,18 @@ jobs:
           #   survived = true  → window stayed alive for 15 s; renderer init OK.
           #   survived = false → process exited early; two sub-cases:
           #     exit 0  → unexpected self-exit (not a renderer error).
-          #     exit != 0 → the renderer could not open a display/GL context on this
-          #                  headless runner. For glow this is expected (the windows-2025
-          #                  runner has no software OpenGL rasteriser; wgpu uses DX12
-          #                  WARP instead). Treat as a soft skip — the build already
-          #                  validated the dependency graph; the probe caught any panic.
+          #     exit != 0 → the renderer could not open a display/GL context. For
+          #                  glow this is expected on windows-2025 (no software
+          #                  OpenGL rasteriser) → soft skip. wgpu uses DX12 WARP and
+          #                  should stay alive, so for wgpu (strict_headless) an
+          #                  early exit FAILS the probe — that's how a wgpu init
+          #                  regression is caught.
           if ($survived) {
             Write-Host "PASS: ${{ matrix.renderer.name }} renderer init probe survived 15 s without panic or adapter failure."
           } elseif ($p.ExitCode -eq 0) {
             Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited with code 0 within 15 s (unexpected self-exit, not a renderer failure)."
+          } elseif ("${{ matrix.renderer.strict_headless }}" -eq "true") {
+            throw "${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode). It must stay alive headless via the DX12 WARP software adapter, so an early exit is a real init failure."
           } else {
-            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode) and no panic — likely no display/GL context on this headless runner (soft skip)."
+            Write-Host "INFO: ${{ matrix.renderer.name }} renderer exited early with code $($p.ExitCode) and no panic — no display/GL context on this headless runner (soft skip; expected for glow)."
           }

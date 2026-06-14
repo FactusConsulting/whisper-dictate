@@ -12,8 +12,9 @@ path = "lib.rs"
 name = "whisper-dictate"
 path = "main.rs"
 
-# Renderer selection. Exactly one of these gates the eframe renderer backend.
-# `default` keeps glow (our shipping renderer); build wgpu with
+# Renderer selection. These features gate the eframe renderer backend; `default`
+# selects glow (our shipping renderer). Enabling both is allowed — ui.rs prefers
+# wgpu when `ui-egui-wgpu` is on — but a normal build is glow. Build wgpu with
 # `--no-default-features --features ui-egui-wgpu`. ui.rs picks the matching
 # `eframe::Renderer` by cfg. The renderer-matrix CI workflow builds BOTH so the
 # wgpu exit route never silently rots.
