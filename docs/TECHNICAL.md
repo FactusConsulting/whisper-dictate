@@ -111,8 +111,9 @@ and injection behaviour without scraping human log lines.
 
 The Rust desktop app/controller also enables a narrower worker event stream
 with `VOICEPI_WORKER_EVENTS=1`. These events are compact JSON objects on
-stderr prefixed with `[worker-event]` so ordinary stdout remains compatible
-with the terminal workflow. Current status events use this shape:
+stderr prefixed with the `[worker-event]` marker (followed by a space, then the
+JSON) so ordinary stdout remains compatible with the terminal workflow. Current
+status events use this shape:
 
 ```json
 {"event":"status","state":"loading_model","backend":"whisper","model":"large-v3-turbo","device":"cuda","compute_type":"float16"}
