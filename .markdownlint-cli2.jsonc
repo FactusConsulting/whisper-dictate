@@ -1,0 +1,43 @@
+{
+  // Aligned with the markdownlint standard ruleset — we FIX violations rather
+  // than silencing rules. The few exceptions below are the conventional ones for
+  // a project README/docs set, not arbitrary mutes:
+  //   - MD013 line-length: prose is not hard-wrapped at 80 (the rule everyone
+  //     turns off; can't wrap tables/links cleanly).
+  //   - MD060 table-column-style: cosmetic pipe-padding; 300+ pre-existing and
+  //     not auto-fixable, so not worth the churn.
+  //   - MD034 no-bare-urls: the generated settings reference and schema
+  //     descriptions contain bare URLs on purpose (a test checks the
+  //     descriptions verbatim), so wrapping them would desync the docs.
+  //   - MD041 first-line-heading: the README opens with a centered HTML logo
+  //     header by design, not an h1.
+  //   - MD033: inline HTML is allowed only for the specific elements the header
+  //     and docs actually use (centered logo, badges) — everything else is still
+  //     flagged.
+  //   - MD024 siblings_only: the same subheading text (e.g. "Install", "Start")
+  //     may appear under different parent sections.
+  // Everything else stays at its default to catch real markup mistakes.
+  "config": {
+    "default": true,
+    "MD013": false,
+    "MD060": false,
+    "MD034": false,
+    "MD041": false,
+    "MD024": { "siblings_only": true },
+    "MD033": {
+      "allowed_elements": [
+        "p", "div", "img", "a", "br", "h1", "h2",
+        "strong", "em", "sub", "sup", "kbd", "details", "summary"
+      ]
+    }
+  },
+  "globs": ["**/*.md"],
+  // Never lint dependency/venv trees or throwaway agent worktrees.
+  "ignores": [
+    "node_modules", "**/node_modules", ".git",
+    ".claude", "**/.claude/**",
+    ".codex-test-venv", "**/.codex-test-venv/**",
+    "**/site-packages/**", "**/.venv/**", "**/venv/**",
+    "Output", "Output/**", "**/target/**", "dist", "dist/**"
+  ]
+}

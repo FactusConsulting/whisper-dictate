@@ -118,7 +118,7 @@ def render_block(settings: list[dict]) -> str:
             continue
         basic = sum(1 for s in rows if not s.get("advanced", True))
         suffix = f" -- {basic} basic" if basic else ""
-        lines.append(f"#### {title}{suffix}")
+        lines.append(f"### {title}{suffix}")
         lines.append("")
         lines.append("| Key | Env var | Default | Live/Restart | Description |")
         lines.append("|---|---|---|---|---|")

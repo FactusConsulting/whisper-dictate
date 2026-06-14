@@ -4,7 +4,7 @@ whisper-dictate prints per-utterance diagnostics so you can tell whether your
 **microphone/room** — not the Whisper model — is the bottleneck. Three lines
 per utterance:
 
-```
+```text
 [cap] raw=-44dBFS peak=0.066 gain=15.0x noise=-84dBFS snr=45dB
 [gate] raw=-44dBFS noise=-84dBFS snr=45dB
 [stt] dur=5.1s post-boost=-20dBFS compute=0.6s text='…'
@@ -16,6 +16,7 @@ can hold, more negative is quieter. There is no positive dBFS.
 ## What each number means
 
 ### `raw` — input loudness before any processing (dBFS) — *context, not quality*
+
 RMS level of the captured audio. Soft, close speech typically lands around
 **−35 to −45 dBFS**. Below **−55 dBFS** the utterance is rejected as *"input too
 quiet"* — speak up, move closer, or raise the OS input level. It is normalised
@@ -23,21 +24,25 @@ away before Whisper sees it, so a low `raw` is not bad *per se*; but very low
 `raw` forces a high `gain`, which also amplifies noise.
 
 ### `peak` — loudest single sample of the raw input (0…1, linear) — *clipping guard*
+
 The boost is hard-capped at `0.99 / peak`, so the signal can **never clip**.
 `peak` near **1.0** means you're hitting the ceiling — back off or lower the
 input gain. A healthy `peak` is roughly **0.05–0.5**.
 
 ### `gain` — how hard quiet input was boosted (×) — *lower is better*
+
 `gain = 10^((target − raw)/20)`, target = −20 dBFS, clamped by the no-clip cap.
 A hot, clean mic needs little boost (**≈1–5×**). **15–50×** means very quiet
 input: usable, but every dB of room hiss is boosted along with your voice.
 
 ### `noise` — the noise floor (dBFS) — **lower (more negative) = better**
+
 The quiet frames *between* words (10th-percentile per-30 ms-frame RMS). This is
 a real property of your **mic + room** (fans, AC, electrical hiss). Clean setups
 sit around **−75 to −90 dBFS**; **above −60 dBFS** is a noisy mic/room.
 
 ### `snr` — signal-to-noise ratio (dB) — **higher = better; the number that matters most**
+
 How far speech sits above the noise floor. It is **gain-invariant** — a louder
 mic cannot flatter it — so it is the honest quality metric:
 
@@ -49,10 +54,12 @@ mic cannot flatter it — so it is the honest quality metric:
 | < 6 dB | rejected: *"no speech contrast"* |
 
 ### `post-boost` — loudness after normalisation (dBFS) — *should be ≈ −20*
+
 Confirms the boost reached the −20 dBFS target. Far from −20 means the gain was
 clip-limited (peak too high) — reduce the input level.
 
 ### `compute` — transcription time (seconds) — **speed, not quality**
+
 Wall-clock for the Whisper model. GPU/CUDA ≈ 0.3–1 s; CPU is several seconds.
 Affects latency only, never accuracy. `dur` is how long you spoke.
 

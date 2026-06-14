@@ -1,0 +1,36 @@
+name: markdown-lint
+
+# Lint Markdown only when Markdown (or the lint config / this workflow) changes —
+# so editing a doc runs the linter, while code-only PRs skip it entirely.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - '.markdownlint-cli2.jsonc'
+      - '.github/workflows/markdown-lint.yml'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '.markdownlint-cli2.jsonc'
+      - '.github/workflows/markdown-lint.yml'
+
+# Cancel superseded PR runs; main pushes get a unique group so they aren't cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  markdownlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      # The repo's .markdownlint-cli2.jsonc holds the globs + ignores, so this is
+      # the same command (and result) as running `npx markdownlint-cli2` locally.
+      - run: npx --yes markdownlint-cli2@0.22.1
