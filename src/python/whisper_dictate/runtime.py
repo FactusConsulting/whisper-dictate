@@ -619,10 +619,16 @@ def _force_initial_prompt(prompt: str | None) -> None:
     Finally set ``INITIAL_PROMPT_FORCED`` so the live config reload leaves the
     prompt alone: the CLI flag stays authoritative for the whole session rather
     than being overwritten by the saved config value on the next reload (#154).
+
+    ``None`` means "no override" and is a no-op (nothing is forced); an explicit
+    empty string ``""`` is a deliberate "disable the prompt for this run" and IS
+    forced. Only call this when ``--prompt`` was actually given.
     """
+    if prompt is None:
+        return
     global INITIAL_PROMPT
     INITIAL_PROMPT = prompt or None
-    os.environ["VOICEPI_INITIAL_PROMPT"] = prompt or ""
+    os.environ["VOICEPI_INITIAL_PROMPT"] = prompt
     from whisper_dictate import vp_transcribe
     vp_transcribe.INITIAL_PROMPT = INITIAL_PROMPT
     vp_transcribe.INITIAL_PROMPT_FORCED = True

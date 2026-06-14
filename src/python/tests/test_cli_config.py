@@ -321,6 +321,12 @@ class ArgumentParserTests(unittest.TestCase):
             self.assertIsNone(voice_pi.INITIAL_PROMPT)
             self.assertEqual(os.environ["VOICEPI_INITIAL_PROMPT"], "")
             self.assertTrue(fake_vt.INITIAL_PROMPT_FORCED)
+            # None means "no override" → a no-op: nothing forced, globals intact.
+            fake_vt.INITIAL_PROMPT = "still-here"
+            fake_vt.INITIAL_PROMPT_FORCED = False
+            voice_pi._force_initial_prompt(None)
+            self.assertEqual(fake_vt.INITIAL_PROMPT, "still-here")
+            self.assertFalse(fake_vt.INITIAL_PROMPT_FORCED)
 
     def test_parser_defaults_to_auto_inject_mode(self):
         old = os.environ.pop("VOICEPI_INJECT_MODE", None)
