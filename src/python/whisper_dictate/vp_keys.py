@@ -25,7 +25,6 @@ from whisper_dictate.vp_keys_solo import (
     held_keys_cleared_by_release as _held_keys_cleared_by_release,
     is_bare_modifier_binding,
     key_name as _key_name,
-    modifier_family as _modifier_family,
     modifier_matches as _modifier_matches,
 )
 
