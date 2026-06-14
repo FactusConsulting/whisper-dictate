@@ -600,6 +600,22 @@ def _run_session(a, model, lang, backend: str, dev: str, ctype: str,
         print("\nbye")
 
 
+def _force_initial_prompt(prompt: str | None) -> None:
+    """Force the resolved ``--prompt`` onto the initial-prompt globals.
+
+    The transcribe module reads ``INITIAL_PROMPT`` (its own module global, also
+    set live by the config-reload path) and ``runtime`` re-exports a copy via
+    ``_load_runtime_modules``. Both are captured through ``get_value()``, which
+    reads CONFIG before env, so neither an env export nor argparse alone lets the
+    flag win over a saved ``initial_prompt`` setting. Update BOTH globals (kept in
+    sync) so the flag wins for this run. An empty string clears the prompt.
+    """
+    global INITIAL_PROMPT
+    INITIAL_PROMPT = prompt or None
+    from whisper_dictate import vp_transcribe
+    vp_transcribe.INITIAL_PROMPT = INITIAL_PROMPT
+
+
 def main() -> None:
     if not os.environ.get("VOICEPI_LAUNCHER_PRINTED_VERSION"):
         print(f"whisper-dictate {VERSION}", flush=True)
@@ -628,11 +644,10 @@ def main() -> None:
     _load_runtime_modules()
 
     # The transcribe module captured INITIAL_PROMPT from get_value() at import,
-    # which reads config BEFORE env — so refresh it from the resolved --prompt
-    # (flag, else env/config default) to guarantee the flag wins for this run.
+    # which reads config BEFORE env — so refresh it from the resolved --prompt to
+    # guarantee the flag wins over a saved config value for this run.
     if a.prompt is not None:
-        from whisper_dictate import vp_transcribe
-        vp_transcribe.INITIAL_PROMPT = a.prompt or None
+        _force_initial_prompt(a.prompt)
 
     backend, dev, ctype = _resolve_backend_and_device(a, ap)
 

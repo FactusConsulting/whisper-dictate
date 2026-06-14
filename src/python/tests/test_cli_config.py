@@ -297,6 +297,24 @@ class ArgumentParserTests(unittest.TestCase):
             parser = voice_pi.build_arg_parser()
             self.assertIsNone(parser.parse_args([]).prompt)
 
+    def test_force_initial_prompt_syncs_both_globals(self):
+        # #154: --prompt must win over a saved config value, which the transcribe
+        # module captured via get_value() (config before env). _force_initial_prompt
+        # updates BOTH the transcribe consumer global and runtime's re-exported
+        # copy. Use a fake vp_transcribe so the test stays numpy-free.
+        import whisper_dictate
+        voice_pi = load_voice_pi()
+        fake_vt = types.ModuleType("whisper_dictate.vp_transcribe")
+        fake_vt.INITIAL_PROMPT = "from-config"
+        with patch.object(whisper_dictate, "vp_transcribe", fake_vt, create=True):
+            voice_pi._force_initial_prompt("Kubernetes, Proxmox")
+            self.assertEqual(fake_vt.INITIAL_PROMPT, "Kubernetes, Proxmox")
+            self.assertEqual(voice_pi.INITIAL_PROMPT, "Kubernetes, Proxmox")
+            # An empty --prompt clears it on both globals.
+            voice_pi._force_initial_prompt("")
+            self.assertIsNone(fake_vt.INITIAL_PROMPT)
+            self.assertIsNone(voice_pi.INITIAL_PROMPT)
+
     def test_parser_defaults_to_auto_inject_mode(self):
         old = os.environ.pop("VOICEPI_INJECT_MODE", None)
         try:
