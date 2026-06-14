@@ -6,6 +6,12 @@
 
 <p align="center"><strong>Speak prompts instead of typing them.</strong></p>
 
+<p align="center">
+  <img src="assets/live-dictation.png" width="820" alt="Live dictation in the whisper-dictate GUI: each utterance shows the transcript and a per-utterance microphone/model health grade">
+</p>
+
+<p align="center"><em>Live dictation in the GUI — each utterance shows the transcript plus a microphone/model health grade.</em></p>
+
 App-agnostic **push-to-talk dictation**. Hold a key, speak quietly but
 clearly, release — the transcribed text is injected into whatever window
 has focus: a terminal, an AI chat, an editor, anything. Fully local:
@@ -14,6 +20,56 @@ Whisper runs on your own machine, no cloud STT, nothing leaves the box.
 This is a **mic → keyboard**, not an AI chat. There is deliberately no
 conversation logic — the "AI" (or text field) is whatever app you're
 already in. Switching target = just focus a different window.
+
+## Quick start
+
+Up and dictating in a few minutes. **Install** depends on your OS; **using it**
+is the same everywhere — pick the **GUI** (friendliest) or the **CLI** (one
+command). Everything beyond the three basics has a sane default.
+
+### 1. Install
+
+- **Windows** — grab the installer from the
+  [latest release](https://github.com/FactusConsulting/whisper-dictate/releases/latest),
+  or via Chocolatey:
+
+  ```powershell
+  choco source add -n=whisper-dictate -s="https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json"
+  choco install whisper-dictate
+  ```
+
+- **Linux** — run it without installing, via Nix:
+
+  ```bash
+  nix run github:FactusConsulting/whisper-dictate -- run --key f9 --lang en
+  ```
+
+Full per-OS guides (Ubuntu/Wayland, X11, NixOS, Windows details) are under
+[Supported platforms](#supported-platforms) just below.
+
+### 2a. Use the GUI (recommended)
+
+1. Launch **whisper-dictate** (the Start-menu shortcut on Windows).
+2. In the **Speech** tab, pick your microphone and set your push-to-talk key.
+3. Click **Start**, then **hold the key, speak, release** — the text is injected
+   into whatever window has focus.
+
+### 2b. Use the CLI
+
+```bash
+whisper-dictate run --key f9 --lang en
+```
+
+Hold the key, speak, release. On Windows, dictation auto-pastes for reliable
+output; pass `--type` to force keystroke typing, or `--paste` anywhere to force
+clipboard paste.
+
+### The only 3 things you need at first
+
+**Hotkey · language · microphone.** Every other setting has a sensible default.
+When you want to go deeper, the full settings reference (env var ↔ `config.json`
+key ↔ default, plus recipes) lives in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Supported platforms
 
@@ -447,39 +503,39 @@ Nix / CLI): see **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**. The most com
 | `VOICEPI_MIN_SNR_DB` | `6` | reject raw input without enough speech-vs-noise contrast |
 | `VOICEPI_MODEL` | `large-v3-turbo` | `large-v3` = slightly better accuracy, slower |
 | `VOICEPI_STT_BACKEND` | `whisper` | `whisper`, `parakeet`, or explicit opt-in `openai` external transcription |
-| `VOICEPI_STT_MODEL` | _(unset)_ | external transcription model, for example `gpt-4o-mini-transcribe` |
+| `VOICEPI_STT_MODEL` | *(unset)* | external transcription model, for example `gpt-4o-mini-transcribe` |
 | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible transcription API base URL |
-| `VOICEPI_STT_API_KEY` | _(unset)_ | optional external transcription key; `GROQ_API_KEY` works for Groq URLs and `OPENAI_API_KEY` also works |
+| `VOICEPI_STT_API_KEY` | *(unset)* | optional external transcription key; `GROQ_API_KEY` works for Groq URLs and `OPENAI_API_KEY` also works |
 | `VOICEPI_PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet model; v3 is best default for Danish/mixed Danish-English, TDT 1.1B is for pure English quality tests |
 | `VOICEPI_DEVICE` | `auto` | `cuda`/`cpu` to force; `auto` = NVIDIA if present |
-| `VOICEPI_LANG` | _(auto-detect)_ | spoken-language hint (`da`, `en`, `de`, `fr`…) |
+| `VOICEPI_LANG` | *(auto-detect)* | spoken-language hint (`da`, `en`, `de`, `fr`…) |
 | `VOICEPI_KEY` | `ctrl_r` | hold-to-talk key or chord, e.g. `f9`, `alt_r`, `ctrl_l+space` |
 | `VOICEPI_INJECT_MODE` | `auto` | `auto`, `type`, `paste`, or `print`; `auto` types directly where safe and uses paste for layout-sensitive text, including Unicode on Wayland |
 | `VOICEPI_FORMAT_COMMANDS` | `off` | optional spoken formatting commands: `off`, `en`, `da`, or `both` |
 | `VOICEPI_BEAM_SIZE` | `1` | raise to `5` for better accuracy — 3-4× slower on CPU |
-| `VOICEPI_INITIAL_PROMPT` | _(none)_ | context hint for domain-specific terms, e.g. `"Winget, whisper-dictate"` |
+| `VOICEPI_INITIAL_PROMPT` | *(none)* | context hint for domain-specific terms, e.g. `"Winget, whisper-dictate"` |
 | `VOICEPI_DICTIONARY` | user config path | JSON/text dictionary of product names and smart replacements, e.g. `Cloud Code` → `Claude Code` |
-| `VOICEPI_COMPUTE_TYPE` | _(default: `int8_float16` on GPU, `int8` on CPU)_ | force precision (`float16`, `bfloat16`, `float32`) — see VRAM table in [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
-| `VOICEPI_DEBUG` | _(unset)_ | `1` → log every effective setting + which env var supplied it at startup (verifies `setx` actually arrived) |
-| `VOICEPI_JSON` | _(unset)_ | `1` → print one JSON event per accepted utterance |
-| `VOICEPI_METRICS_JSONL` | _(unset)_ | append one JSON metrics event per accepted utterance to this file |
-| `VOICEPI_COMMAND_HOOK` | _(unset)_ | advanced opt-in command hook; receives one utterance JSON event on stdin with no shell interpolation |
+| `VOICEPI_COMPUTE_TYPE` | *(default: `int8_float16` on GPU, `int8` on CPU)* | force precision (`float16`, `bfloat16`, `float32`) — see VRAM table in [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
+| `VOICEPI_DEBUG` | *(unset)* | `1` → log every effective setting + which env var supplied it at startup (verifies `setx` actually arrived) |
+| `VOICEPI_JSON` | *(unset)* | `1` → print one JSON event per accepted utterance |
+| `VOICEPI_METRICS_JSONL` | *(unset)* | append one JSON metrics event per accepted utterance to this file |
+| `VOICEPI_COMMAND_HOOK` | *(unset)* | advanced opt-in command hook; receives one utterance JSON event on stdin with no shell interpolation |
 | `VOICEPI_COMMAND_HOOK_TIMEOUT_MS` | `2000` | maximum time to wait for the command hook before logging a non-fatal timeout |
 | `VOICEPI_HISTORY_ENABLED` | `1` | store accepted live dictations in local history |
 | `VOICEPI_HISTORY_JSONL` | user state path | override the local history JSONL path |
-| `VOICEPI_LOCAL_ONLY` | _(unset)_ | `1` → block cloud/BYOK backends and force model libraries offline; local models must already be downloaded |
+| `VOICEPI_LOCAL_ONLY` | *(unset)* | `1` → block cloud/BYOK backends and force model libraries offline; local models must already be downloaded |
 | `VOICEPI_POST_PROCESSOR` | `none` | `ollama`, `openai`, or `groq` → run optional second text pass after STT/dictionary |
 | `VOICEPI_POST_MODE` | `raw` | `clean`, `prompt`, `terminal`, `slack`, `email`, `bullets`; `bullet-list` is accepted as an alias; `raw` keeps current behavior |
 | `VOICEPI_POST_MODEL` | `qwen2.5:3b` | local Ollama model or OpenAI-compatible chat model |
 | `VOICEPI_POST_BASE_URL` | `http://localhost:11434` / `https://api.openai.com/v1` | Ollama or OpenAI-compatible chat endpoint |
-| `VOICEPI_POST_API_KEY` | _(unset)_ | optional external post-processing key; the Rust UI can store it in the OS credential store |
+| `VOICEPI_POST_API_KEY` | *(unset)* | optional external post-processing key; the Rust UI can store it in the OS credential store |
 | `VOICEPI_POST_TIMEOUT_MS` | `2000` | fallback to dictionary-final text if local rewrite is too slow |
-| `VOICEPI_POST_REDACT` | _(unset)_ | opt-in local redaction before cloud post-processing |
-| `VOICEPI_POST_REDACT_TERMS` | _(unset)_ | comma-separated names/terms to redact before cloud post-processing |
-| `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Windows-only: temporarily lower other app audio while recording |
+| `VOICEPI_POST_REDACT` | *(unset)* | opt-in local redaction before cloud post-processing |
+| `VOICEPI_POST_REDACT_TERMS` | *(unset)* | comma-separated names/terms to redact before cloud post-processing |
+| `VOICEPI_AUDIO_DUCKING` | *(unset)* | Windows-only: temporarily lower other app audio while recording |
 | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | target volume for other apps during audio ducking |
-| `VOICEPI_STT_DEBUG` | _(unset)_ | `1` → print Whisper segment metadata for debugging quality |
-| `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty value → keep interactive terminal status lines plain |
+| `VOICEPI_STT_DEBUG` | *(unset)* | `1` → print Whisper segment metadata for debugging quality |
+| `VOICEPI_NO_COLOR` / `NO_COLOR` | *(unset)* | any non-empty value → keep interactive terminal status lines plain |
 | `VOICEPI_VAD_THRESHOLD` | `0.3` | Silero VAD speech threshold passed to faster-whisper |
 | `VOICEPI_VAD_MIN_SILENCE_MS` | `600` | minimum silence gap used by VAD segmentation |
 | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | ignore very short Parakeet captures where language detection is weak |

@@ -41,7 +41,7 @@ _Generated from `src/python/whisper_dictate/settings_schema.json` by `scripts/de
 
 Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
 
-#### Core (the first-time-setup basics) -- 8 basic
+### Core (the first-time-setup basics) -- 8 basic
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
@@ -54,7 +54,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper; Parakeet v3 autodetects and ignores it. |
 | `inject_mode` | `VOICEPI_INJECT_MODE` | `auto` | Live | Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only). |
 
-#### Local speech-to-text (Whisper / Parakeet)
+### Local speech-to-text (Whisper / Parakeet)
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
@@ -69,16 +69,16 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `parakeet_min_seconds` | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | Live | Parakeet only: ignore recordings shorter than this (seconds; 0 disables) because multilingual language autodetection is weaker on short clips. |
 | `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Live | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
 
-#### Cloud speech-to-text (OpenAI-compatible APIs)
+### Cloud speech-to-text (OpenAI-compatible APIs)
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
 | `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Restart | External transcription model used only when stt_backend=openai, e.g. gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1, or a compatible name. |
-| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. https://api.groq.com/openai/v1 for Groq). |
+| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Restart | OpenAI-compatible transcription API base URL, used only when stt_backend=openai (e.g. <https://api.groq.com/openai/v1> for Groq). |
 | `stt_timeout_ms` | `VOICEPI_STT_TIMEOUT_MS` | `30000` | Restart | Maximum wait (ms) for an external transcription request before it is abandoned. |
 | `local_only` | `VOICEPI_LOCAL_ONLY` | _(unset)_ | Restart | Privacy lock: block cloud/BYOK backends and force model libraries into offline mode (HF/Transformers/W&B offline). A library/runtime guard, not an OS firewall rule. |
 
-#### Audio capture & voice activity
+### Audio capture & voice activity
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
@@ -93,7 +93,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `audio_ducking` | `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Live | Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default. |
 | `audio_ducking_level` | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | Live | Target volume (0.0-1.0) for other apps' audio while recording when audio ducking is enabled. |
 
-#### Dictionary & post-processing
+### Dictionary & post-processing
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
@@ -112,7 +112,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `post_redact` | `VOICEPI_POST_REDACT` | _(unset)_ | Live | Opt-in local redaction before cloud post-processing: replace emails, phone numbers and common API tokens with placeholders, restored afterward when possible. |
 | `post_redact_terms` | `VOICEPI_POST_REDACT_TERMS` | _(unset)_ | Live | Extra comma-separated names/terms to redact before cloud post-processing. Original values are never written to metrics. |
 
-#### Injection, hotkeys & feedback
+### Injection, hotkeys & feedback
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
@@ -124,7 +124,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `quit_count` | `VOICEPI_QUIT_COUNT` | `3` | Restart | Windows/X11 only: number of consecutive quit-key presses to quit (0 disables global key quit; 1 = single-key). |
 | `quit_window_ms` | `VOICEPI_QUIT_WINDOW_MS` | `1500` | Restart | Time window (ms) within which the consecutive quit-key presses count; any non-quit key resets the counter. |
 
-#### Diagnostics, history & automation
+### Diagnostics, history & automation
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
@@ -138,7 +138,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `stt_debug` | `VOICEPI_STT_DEBUG` | _(unset)_ | Live | Verbose diagnostics (with debug): adds the startup effective-settings dump and per-segment STT/dictionary detail. |
 | `trace` | `VOICEPI_TRACE` | _(unset)_ | Live | Trace diagnostics (with debug + stt_debug): adds full audio-device enumeration and a line per capture-open attempt. High volume; for mics that won't open. |
 
-#### Update checks
+### Update checks
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
@@ -149,22 +149,22 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 
 ### Settings not in the schema
 
-A few `VOICEPI_*` env vars and `config.json` keys are intentionally *not* in
+A few `VOICEPI_*` env vars and `config.json` keys are intentionally _not_ in
 `settings_schema.json` (they are secrets, UI-only knobs, or rarely-tuned
 advanced guards) and so are documented by hand here:
 
 | Variable / key | Default | Values | Effect |
 |---|---|---|---|
-| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI stores provider keys in the **OS credential store** and passes them to the worker as `VOICEPI_STT_API_KEY`; headless runs use the env var. **Never** stored in `config.json`. |
-| `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | *(unset)* | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the worker can fall back to the loaded Cloud STT key. |
+| `VOICEPI_STT_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for `stt_backend=openai`. `VOICEPI_STT_API_KEY` wins; `GROQ_API_KEY` is used when the base URL points at Groq; `OPENAI_API_KEY` is the generic fallback. The Rust UI stores provider keys in the **OS credential store** and passes them to the worker as `VOICEPI_STT_API_KEY`; headless runs use the env var. **Never** stored in `config.json`. |
+| `VOICEPI_POST_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | _(unset)_ | API key | Bearer token for cloud post-processing. `VOICEPI_POST_API_KEY` takes precedence; otherwise the worker can fall back to the loaded Cloud STT key. |
 | `stt_provider` (`config.json`) | `openai` | `openai` \| `groq` | Rust UI cloud-STT provider selector. Sets `VOICEPI_STT_BASE_URL` and provider-specific model choices for the managed worker; existing Groq-URL configs are migrated to `groq`. |
 | `ui_theme` (`config.json`) | `dark` | `dark` \| `light` | Rust settings UI visual theme. UI-only; does not restart dictation or affect the Python worker. |
-| `XKB_DEFAULT_LAYOUT` | *(unset)* | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
-| `VOICEPI_NO_COLOR` / `NO_COLOR` | *(unset)* | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
+| `XKB_DEFAULT_LAYOUT` | _(unset)_ | XKB layout name | **Wayland only.** Consulted after `VOICEPI_XKB_LAYOUT` for special-char injection layout; `--lang` auto-sets it if unset. |
+| `VOICEPI_NO_COLOR` / `NO_COLOR` | _(unset)_ | any non-empty | Disable ANSI styling for interactive terminal status lines. Piped output, logs, JSON and the Rust UI stay plain automatically. |
 | `VOICEPI_HALLUCINATION_SILENCE_S` | `2.0` | float seconds | Silence length above which a suspected hallucination gap is skipped. Only used when `VOICEPI_HALLUCINATION_GUARD` is on. |
 | `VOICEPI_NO_SPEECH_DROP` | `0.6` | float `0`-`1` | Always-on segment scrub: drop a segment whose `no_speech_prob` is at least this AND whose `avg_logprob` <= `VOICEPI_NO_SPEECH_DROP_LOGPROB`. |
 | `VOICEPI_NO_SPEECH_DROP_LOGPROB` | `-0.5` | float | Confidence ceiling for the no-speech segment scrub above. |
-| `VOICEPI_SKIP_SYSCHECK` | *(unset)* | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
+| `VOICEPI_SKIP_SYSCHECK` | _(unset)_ | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR
 numbers mean in practice.
@@ -466,13 +466,13 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
 - **Off** (`VOICEPI_DEBUG` unset, `VOICEPI_STT_DEBUG` unset, `VOICEPI_TRACE` unset): no diagnostics.
 - **Basic** (`VOICEPI_DEBUG=1`): one concise `[health]` line per utterance, e.g.
 
-  ```
+  ```text
   [health] mic -38dBFS SNR 56dB good | confidence high (-0.13) | post clean/groq
   ```
 
   and, when something looks off, terse warnings:
 
-  ```
+  ```text
   [health] mic -55dBFS SNR 3dB too_quiet | confidence low (-0.82) | post off | WARN low confidence | WARN quiet input
   ```
 
@@ -488,7 +488,7 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
   microphone that won't open is diagnosable from the log alone, without an
   external probe script. At startup, every input device is listed:
 
-  ```
+  ```text
   [trace][devices] host-apis: ['MME', 'Windows DirectSound', 'Windows WASAPI']
   [trace][devices] in dev=1 name='Microphone (Yeti Stereo Micro)' host=MME max_in_ch=2 default_sr=44100.0
   [trace][devices] in dev=51 name='Microphone (Yeti Stereo Microphone)' host=Windows WASAPI max_in_ch=2 default_sr=48000.0
@@ -497,7 +497,7 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
   Then every capture-open attempt (host-API × samplerate × channels × dtype ×
   auto-convert) is logged with its result, plus the finally-bound candidate:
 
-  ```
+  ```text
   [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=int16 latency=low autoconv=0 -> Error opening InputStream: Unanticipated host error [PaErrorCode -9999]: 'Undefined external error.' [AUDCLNT_E_UNSUPPORTED_FORMAT]
   [trace][cap] attempt host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0 -> ok
   [trace][cap] BOUND host=Windows WASAPI dev=51 rate=16000 ch=2 dtype=float32 latency=low autoconv=0
@@ -519,7 +519,7 @@ diagnostics (`VOICEPI_DEBUG=1` and `VOICEPI_STT_DEBUG=1`) and restart. The
 first lines of the log will print every effective setting + the env var that
 supplied it:
 
-```
+```text
 [debug] effective settings:
   --key              ctrl_r
   --model            large-v3  (env VOICEPI_MODEL=large-v3)
@@ -799,7 +799,7 @@ them into the per-user audio dir above (the worker checks it as a fallback).
 **What they solve:** the best settings aren't the same in every app. You might
 want English and clipboard-paste injection in your code editor, Danish in your
 email client, and a "prompt" post-processing mode when dictating to a coding
-agent. Profiles let you override settings *per target window* without constantly
+agent. Profiles let you override settings _per target window_ without constantly
 changing the global config: when the focused window matches a profile, that
 profile's `settings` are layered on top of your base config for that utterance,
 then drop away when you switch to another window.
@@ -935,14 +935,14 @@ OOMs, drop `BEAM_SIZE` one row or `COMPUTE_TYPE` one tier (`float16` →
 
 | Free VRAM | Device | Model | `BEAM_SIZE` | `COMPUTE_TYPE` | Footprint¹ | Notes |
 |---|---|---|---:|---|---:|---|
-| **CPU only / <2 GB** | `cpu` | `large-v3-turbo` | `1` | *(default `int8`)* | RAM, not VRAM | `beam>1` too slow on CPU; turbo beats large-v3 here |
-| **2–4 GB** *(GTX 1660, mobile RTX 3050)* | `cuda` | `large-v3-turbo` | `1`–`5` | *(default `int8_float16`)* | ~1–1.5 GB | small footprint, near-large quality |
-| **4–6 GB** *(RTX 3050 8 GB, mobile 4060)* | `cuda` | `large-v3` | `5` | *(default `int8_float16`)* | ~2.5–3 GB | quantised default keeps room for other apps |
-| **6–8 GB** *(RTX 3060 8 GB, RTX 4060)* | `cuda` | `large-v3` | `5`–`8` | `float16` | ~3.5–4.5 GB | full half-precision; small accuracy win |
-| **8–12 GB** *(RTX 3080 10 GB, RTX 4070)* | `cuda` | `large-v3` | `8` | `float16` | ~4–5 GB | sweet spot for desktop GPUs |
-| **12–16 GB** *(RTX 3060 12 GB, RTX 4080, 5070 Ti)* | `cuda` | `large-v3` | `10` | `float16` *(or `bfloat16` on Ampere+)* | ~5–6 GB | wider beam helps on hard/short utterances |
-| **16–24 GB** *(RTX 4080/5080 16 GB)* | `cuda` | `large-v3` | `10`–`16` | `float16` | ~6–8 GB | beam past 16 has diminishing returns |
-| **24+ GB** *(RTX 3090/4090/5090, A40, A100, H100)* | `cuda` | `large-v3` | `16` | `float32` *(or stay on `float16`)* | ~10–12 GB | `float32` is overkill — Whisper accuracy plateaus before this |
+| **CPU only / <2 GB** | `cpu` | `large-v3-turbo` | `1` | _(default `int8`)_ | RAM, not VRAM | `beam>1` too slow on CPU; turbo beats large-v3 here |
+| **2–4 GB** _(GTX 1660, mobile RTX 3050)_ | `cuda` | `large-v3-turbo` | `1`–`5` | _(default `int8_float16`)_ | ~1–1.5 GB | small footprint, near-large quality |
+| **4–6 GB** _(RTX 3050 8 GB, mobile 4060)_ | `cuda` | `large-v3` | `5` | _(default `int8_float16`)_ | ~2.5–3 GB | quantised default keeps room for other apps |
+| **6–8 GB** _(RTX 3060 8 GB, RTX 4060)_ | `cuda` | `large-v3` | `5`–`8` | `float16` | ~3.5–4.5 GB | full half-precision; small accuracy win |
+| **8–12 GB** _(RTX 3080 10 GB, RTX 4070)_ | `cuda` | `large-v3` | `8` | `float16` | ~4–5 GB | sweet spot for desktop GPUs |
+| **12–16 GB** _(RTX 3060 12 GB, RTX 4080, 5070 Ti)_ | `cuda` | `large-v3` | `10` | `float16` _(or `bfloat16` on Ampere+)_ | ~5–6 GB | wider beam helps on hard/short utterances |
+| **16–24 GB** _(RTX 4080/5080 16 GB)_ | `cuda` | `large-v3` | `10`–`16` | `float16` | ~6–8 GB | beam past 16 has diminishing returns |
+| **24+ GB** _(RTX 3090/4090/5090, A40, A100, H100)_ | `cuda` | `large-v3` | `16` | `float32` _(or stay on `float16`)_ | ~10–12 GB | `float32` is overkill — Whisper accuracy plateaus before this |
 
 ¹ Footprint = model weights + KV cache (~25 MB per beam at ~30 s audio) +
 ctranslate2/CUDA context (~300–500 MB). `large-v3` weights alone:
@@ -950,6 +950,7 @@ ctranslate2/CUDA context (~300–500 MB). `large-v3` weights alone:
 `large-v3-turbo` is roughly half of those.
 
 **One-liner to set the 8–12 GB row** (RTX 3080 / 4070):
+
 ```powershell
 setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8; setx VOICEPI_COMPUTE_TYPE float16; setx VOICEPI_LANG da
 # restart whisper-dictate; first [stt] line in the log will show your new compute type

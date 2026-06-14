@@ -2,7 +2,7 @@
 
 ## Architecture overview
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────┐
 │                          whisper-dictate                           │
 │                                                                    │
@@ -23,7 +23,7 @@ The current Rust/Python source split and migration guidance are documented in
 
 ## End-to-end data flow
 
-```
+```text
 User holds hotkey
       │
       ▼
@@ -111,7 +111,7 @@ and injection behaviour without scraping human log lines.
 
 The Rust desktop app/controller also enables a narrower worker event stream
 with `VOICEPI_WORKER_EVENTS=1`. These events are compact JSON objects on
-stderr prefixed with `[worker-event] ` so ordinary stdout remains compatible
+stderr prefixed with `[worker-event]` so ordinary stdout remains compatible
 with the terminal workflow. Current status events use this shape:
 
 ```json
@@ -177,7 +177,7 @@ key event is sent.
 
 The solution splits text at the DK special characters:
 
-```
+```text
 text: "Rødgrød med fløde."
 
 chunk  type      command
@@ -213,7 +213,7 @@ Uppercase sequence example for Ø: `42:1 40:1 40:0 42:0`
 ydotoold is the daemon that owns the `/dev/uinput` virtual keyboard
 device. ydotool is the client that sends commands over a Unix socket.
 
-```
+```text
 ydotool (client)
     │
     │  Unix socket (~/.ydotool_socket)
@@ -248,7 +248,7 @@ group membership, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and readable
 
 ## Audio — PipeWire routing
 
-```
+```text
 Microphone hardware
       │
       ▼
@@ -267,7 +267,7 @@ sounddevice as a last resort.
 
 ## Hotkey detection — Wayland vs X11
 
-```
+```text
 Wayland                          X11 / Windows / macOS
 ───────────────────────────────  ──────────────────────────────
 evdev: open all /dev/input/      pynput: OS keyboard hook
@@ -298,7 +298,7 @@ encoder quality as `large-v3`, distilled decoder that is 8× faster.
 When `--lang da` is passed, whisper-dictate sets `XKB_DEFAULT_LAYOUT`
 for child processes automatically. The lookup chain:
 
-```
+```text
 1. VOICEPI_XKB_LAYOUT env var  (explicit override)
 2. XKB_DEFAULT_LAYOUT env var  (already set in environment)
 3. /etc/default/keyboard        (system default, skipped if "us")
