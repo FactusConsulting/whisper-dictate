@@ -326,7 +326,16 @@ class InjectMixin:
     def _text_prefers_paste(self, text: str) -> bool:
         if os.name != "nt":
             return False
-        return any(ch in _WINDOWS_LAYOUT_SENSITIVE_CHARS for ch in text)
+        # Auto-paste when typing would be unreliable: dead-key/diacritic chars
+        # (layout-sensitive) OR any non-ASCII char. pynput's per-character type()
+        # on Windows injects non-ASCII via the Unicode path, which is both
+        # layout-sensitive AND drop-prone under a fast burst — Danish text ("på",
+        # "æøå") came out as "Kubernete pP" (dropped s + å). A single such char
+        # makes the WHOLE text paste atomically, so nothing is dropped. Pure
+        # ASCII still types.
+        return any(
+            ch in _WINDOWS_LAYOUT_SENSITIVE_CHARS or ord(ch) > 127 for ch in text
+        )
 
     def _wayland_text_prefers_paste(self, text: str) -> bool:
         return any(ord(ch) > 127 for ch in text)

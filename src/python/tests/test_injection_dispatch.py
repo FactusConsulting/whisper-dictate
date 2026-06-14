@@ -276,6 +276,32 @@ class InjectDispatchTests(_InjectBase):
         self.assertEqual(t._last_inject_strategy, "paste")
         self.assertEqual(self.clip.copied, ["I'm here"])
 
+    def test_windows_auto_pastes_non_ascii_danish_text(self):
+        # Danish text (æøå) is non-ASCII; pynput's Windows Unicode type() is
+        # drop-prone under a fast burst ("Kubernetes på" -> "Kubernete pP"), so
+        # auto pastes the whole thing atomically. f9 PTT (non-modifier) confirms
+        # this is driven by the TEXT, not the binding.
+        t = self._target(mode="auto", title="Untitled - Notepad",
+                         process="notepad.exe", key="f9")
+        with _env(WAYLAND_DISPLAY=None), \
+                patch.object(self.inject.os, "name", "nt"), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "Jeg deployer Kubernetes på Proxmox.")
+        self.assertEqual(t._last_inject_strategy, "paste")
+        self.assertEqual(self.clip.copied, ["Jeg deployer Kubernetes på Proxmox."])
+
+    def test_windows_auto_types_pure_ascii_text(self):
+        # Pure ASCII + non-modifier PTT still types (the fix is scoped to
+        # non-ASCII / layout-sensitive text and modifier bindings).
+        t = self._target(mode="auto", title="Untitled - Notepad",
+                         process="notepad.exe", key="f9")
+        with _env(WAYLAND_DISPLAY=None), \
+                patch.object(self.inject.os, "name", "nt"), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "plain ascii text")
+        self.assertEqual(t._last_inject_strategy, "type")
+        self.assertEqual(self.clip.copied, [])
+
 
 class InjectWaylandDispatchTests(_InjectBase):
     """Wayland path end-to-end with the rust injector / ydotool / pynput
