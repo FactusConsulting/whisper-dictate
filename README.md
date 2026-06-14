@@ -397,7 +397,7 @@ NVIDIA GPU is used automatically if present.
 | `VOICEPI_TOGGLE=1` | toggle mode (no CLI flag — set the env var or the **Toggle mode** checkbox in the Speech tab, persisted as `toggle_mode` in config.json): **press** the hotkey to start recording, **press again** to stop and transcribe — instead of holding it. Key autorepeat is ignored (rising-edge only); restart-only. |
 | `--lang CODE` | spoken-language hint — see [Languages](#languages) |
 | `--autodetect` | let Whisper guess the language (less reliable on short speech) |
-| `--prompt "…"` | domain-vocabulary hint for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"` (env `VOICEPI_INITIAL_PROMPT` / the Quality tab's Initial prompt; the flag wins over both) |
+| `--prompt "…"` | domain-vocabulary hint for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"` (env `VOICEPI_INITIAL_PROMPT` / the Quality tab's Initial prompt; the flag wins over both for the whole session); pass `--prompt ""` to disable the hint for this run |
 | `--type` | force direct keyboard typing (env `VOICEPI_INJECT_MODE=type`; on Wayland this uses evdev keycodes and depends on the configured XKB layout for non-ASCII) |
 | `--paste` | force clipboard paste (env `VOICEPI_INJECT_MODE=paste`; on Wayland terminal/unknown targets use Ctrl+Shift+V, other known targets use Ctrl+V) |
 | `--no-type` | print transcription only, don't inject (env `VOICEPI_INJECT_MODE=print`; useful for testing) |
