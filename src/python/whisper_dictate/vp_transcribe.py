@@ -48,6 +48,10 @@ BEAM_SIZE = int(get_value("VOICEPI_BEAM_SIZE", "1") or "1")
 # Optional context hint fed to Whisper before each utterance. Improves
 # recognition of domain-specific terms (product names, jargon, names).
 INITIAL_PROMPT = get_value("VOICEPI_INITIAL_PROMPT") or None
+# Set True when --prompt forces INITIAL_PROMPT for this run: the live config
+# reload then leaves it alone, so the CLI override stays authoritative for the
+# whole session instead of being overwritten by the saved config value (#154).
+INITIAL_PROMPT_FORCED = False
 
 
 def _parse_temperatures(spec: str | None) -> list[float]:

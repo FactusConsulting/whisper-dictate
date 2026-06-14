@@ -279,6 +279,55 @@ class ArgumentParserTests(unittest.TestCase):
             self.assertEqual(parser.parse_args(["--paste"]).mode, "paste")
             self.assertEqual(parser.parse_args(["--type"]).mode, "type")
 
+    def test_parser_prompt_is_override_only(self):
+        # #154: --prompt is a pure per-run OVERRIDE. Its default is None even when
+        # the env is set (the env/config still drives the prompt via the
+        # transcribe module); only an explicit flag carries a value, so the
+        # runtime can tell "was passed" from "use config/env".
+        with _env(VOICEPI_INITIAL_PROMPT="Kubernetes, Proxmox, LiteLLM"):
+            voice_pi = load_voice_pi()
+            parser = voice_pi.build_arg_parser()
+            self.assertIsNone(parser.parse_args([]).prompt)
+            self.assertEqual(
+                parser.parse_args(["--prompt", "ansible, terraform"]).prompt,
+                "ansible, terraform")
+            self.assertEqual(parser.parse_args(["--prompt", ""]).prompt, "")
+
+    def test_force_initial_prompt_syncs_both_globals(self):
+        # #154: --prompt must win over a saved config value, which the transcribe
+        # module captured via get_value() (config before env). _force_initial_prompt
+        # updates BOTH the transcribe consumer global and runtime's re-exported
+        # copy. Use a fake vp_transcribe so the test stays numpy-free.
+        import whisper_dictate
+        voice_pi = load_voice_pi()
+        fake_vt = types.ModuleType("whisper_dictate.vp_transcribe")
+        fake_vt.INITIAL_PROMPT = "from-config"
+        fake_vt.INITIAL_PROMPT_FORCED = False
+        # _env restores VOICEPI_INITIAL_PROMPT afterwards (the helper re-exports
+        # it to keep the env consistent with the forced globals).
+        with patch.object(whisper_dictate, "vp_transcribe", fake_vt, create=True), \
+                _env(VOICEPI_INITIAL_PROMPT="from-config"):
+            voice_pi._force_initial_prompt("Kubernetes, Proxmox")
+            self.assertEqual(fake_vt.INITIAL_PROMPT, "Kubernetes, Proxmox")
+            self.assertEqual(voice_pi.INITIAL_PROMPT, "Kubernetes, Proxmox")
+            # The env is re-synced too (clobbered back by import-time
+            # apply_config_to_environ otherwise), so the debug dump reflects it.
+            self.assertEqual(os.environ["VOICEPI_INITIAL_PROMPT"], "Kubernetes, Proxmox")
+            # FORCED is set so a later live config reload won't overwrite it.
+            self.assertTrue(fake_vt.INITIAL_PROMPT_FORCED)
+            # An empty --prompt clears it on both globals (env → ""), still forced.
+            voice_pi._force_initial_prompt("")
+            self.assertIsNone(fake_vt.INITIAL_PROMPT)
+            self.assertIsNone(voice_pi.INITIAL_PROMPT)
+            self.assertEqual(os.environ["VOICEPI_INITIAL_PROMPT"], "")
+            self.assertTrue(fake_vt.INITIAL_PROMPT_FORCED)
+            # None means "no override" → a no-op: nothing forced, globals intact.
+            fake_vt.INITIAL_PROMPT = "still-here"
+            fake_vt.INITIAL_PROMPT_FORCED = False
+            voice_pi._force_initial_prompt(None)
+            self.assertEqual(fake_vt.INITIAL_PROMPT, "still-here")
+            self.assertFalse(fake_vt.INITIAL_PROMPT_FORCED)
+
     def test_parser_defaults_to_auto_inject_mode(self):
         old = os.environ.pop("VOICEPI_INJECT_MODE", None)
         try:

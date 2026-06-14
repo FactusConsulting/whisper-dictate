@@ -183,6 +183,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "(env VOICEPI_LANG) — omit to let Whisper auto-detect")
     ap.add_argument("--autodetect", action="store_true",
                     help="explicitly auto-detect language (alias for omitting --lang)")
+    ap.add_argument("--prompt", default=None, metavar="TEXT",
+                    help="override the domain-vocabulary hint seeded into "
+                         "Whisper's initial prompt for this run, e.g. "
+                         "\"Kubernetes, Proxmox, LiteLLM, ansible\" — wins over "
+                         "VOICEPI_INITIAL_PROMPT / the Quality tab's Initial "
+                         "prompt (omit to use those); pass \"\" to disable it")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--type", action="store_const", dest="mode",
                    const="type",

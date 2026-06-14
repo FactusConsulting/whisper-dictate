@@ -226,7 +226,10 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         vp_transcribe.VAD_THRESHOLD = float(after.get("vad_threshold", "0.3"))
         vp_transcribe.VAD_MIN_SILENCE_MS = int(after.get("vad_min_silence_ms", "600"))
         vp_transcribe.VAD_SPEECH_PAD_MS = int(after.get("vad_speech_pad_ms", "200"))
-        vp_transcribe.INITIAL_PROMPT = after.get("initial_prompt") or None
+        # A --prompt override is authoritative for the whole run: don't let a live
+        # config reload overwrite it with the saved initial_prompt value (#154).
+        if not vp_transcribe.INITIAL_PROMPT_FORCED:
+            vp_transcribe.INITIAL_PROMPT = after.get("initial_prompt") or None
         vp_transcribe.STT_DEBUG = (after.get("stt_debug") or "").lower() not in (
             "", "0", "false", "no", "off")
 

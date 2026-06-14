@@ -556,6 +556,7 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--model NAME` | `$VOICEPI_MODEL` | see `VOICEPI_MODEL` | Whisper model for this run. |
 | `--lang CODE` | `$VOICEPI_LANG` | ISO 639-1 code | Force language for this run. Omit to auto-detect. |
 | `--autodetect` | off | — | Force language auto-detect (overrides `--lang`/`VOICEPI_LANG`). |
+| `--prompt TEXT` | `$VOICEPI_INITIAL_PROMPT` | free text (~1024 chars), or `""` to disable | Domain-vocabulary hint seeded into Whisper's initial prompt for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"`. Wins over `VOICEPI_INITIAL_PROMPT` / the saved `initial_prompt` setting and stays authoritative for the whole session (a live config reload won't override it). Pass `--prompt ""` to disable the hint for this run. |
 | `--device D` | `$VOICEPI_DEVICE` | `auto` \| `cuda` \| `cpu` | Compute device for this run. |
 | `--type` | `$VOICEPI_INJECT_MODE` or off | — | Force direct keyboard typing on X11/Windows. (Wayland always uses direct evdev keycodes regardless.) |
 | `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force clipboard paste: copies text via pyperclip, then sends Ctrl+V (or Ctrl+Shift+V for terminals) via ydotool on Wayland, or via pynput on X11/Windows. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). |
