@@ -306,14 +306,21 @@ class ArgumentParserTests(unittest.TestCase):
         voice_pi = load_voice_pi()
         fake_vt = types.ModuleType("whisper_dictate.vp_transcribe")
         fake_vt.INITIAL_PROMPT = "from-config"
-        with patch.object(whisper_dictate, "vp_transcribe", fake_vt, create=True):
+        # _env restores VOICEPI_INITIAL_PROMPT afterwards (the helper re-exports
+        # it to keep the env consistent with the forced globals).
+        with patch.object(whisper_dictate, "vp_transcribe", fake_vt, create=True), \
+                _env(VOICEPI_INITIAL_PROMPT="from-config"):
             voice_pi._force_initial_prompt("Kubernetes, Proxmox")
             self.assertEqual(fake_vt.INITIAL_PROMPT, "Kubernetes, Proxmox")
             self.assertEqual(voice_pi.INITIAL_PROMPT, "Kubernetes, Proxmox")
-            # An empty --prompt clears it on both globals.
+            # The env is re-synced too (clobbered back by import-time
+            # apply_config_to_environ otherwise), so the debug dump reflects it.
+            self.assertEqual(os.environ["VOICEPI_INITIAL_PROMPT"], "Kubernetes, Proxmox")
+            # An empty --prompt clears it on both globals (env → "").
             voice_pi._force_initial_prompt("")
             self.assertIsNone(fake_vt.INITIAL_PROMPT)
             self.assertIsNone(voice_pi.INITIAL_PROMPT)
+            self.assertEqual(os.environ["VOICEPI_INITIAL_PROMPT"], "")
 
     def test_parser_defaults_to_auto_inject_mode(self):
         old = os.environ.pop("VOICEPI_INJECT_MODE", None)

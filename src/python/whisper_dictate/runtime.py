@@ -609,9 +609,16 @@ def _force_initial_prompt(prompt: str | None) -> None:
     reads CONFIG before env, so neither an env export nor argparse alone lets the
     flag win over a saved ``initial_prompt`` setting. Update BOTH globals (kept in
     sync) so the flag wins for this run. An empty string clears the prompt.
+
+    Also re-export the value to ``VOICEPI_INITIAL_PROMPT``: several modules call
+    ``apply_config_to_environ()`` at import (vp_audio/vp_transcribe/...), so the
+    early env set in ``main`` is clobbered back to the config value while loading
+    runtime modules. Re-syncing here — AFTER those imports — keeps the env (read
+    directly by the debug dump / ``--show-config``) consistent with the globals.
     """
     global INITIAL_PROMPT
     INITIAL_PROMPT = prompt or None
+    os.environ["VOICEPI_INITIAL_PROMPT"] = prompt or ""
     from whisper_dictate import vp_transcribe
     vp_transcribe.INITIAL_PROMPT = INITIAL_PROMPT
 
