@@ -714,7 +714,15 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 no_text_health: dict = {"no_text": True}
                 try:
                     from whisper_dictate import vp_audio
-                    audio_metrics = vp_audio.compute_audio_metrics(pcm)
+                    # Mirror the transcribe path, which trims the dead trailing
+                    # tail BEFORE computing capture metrics (vp_transcribe), so the
+                    # no-text health line reports the SAME buffer the decode saw —
+                    # otherwise raw_dbfs/snr_db disagree on long held-key tails
+                    # (#260). The trim is scale-invariant (pure dB ratios + sample
+                    # indices), so it is safe to run on the int16 pcm directly.
+                    metrics_pcm, _trimmed_ms = vp_audio._trim_trailing_silence(
+                        pcm.reshape(-1))
+                    audio_metrics = vp_audio.compute_audio_metrics(metrics_pcm)
                     no_text_health["audio_raw_dbfs"] = audio_metrics.raw_dbfs
                     no_text_health["audio_snr_db"] = audio_metrics.snr_db
                     no_text_health["audio_input_status"] = audio_metrics.input_status

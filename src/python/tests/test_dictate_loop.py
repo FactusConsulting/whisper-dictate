@@ -217,6 +217,64 @@ class DictateLoopTests(unittest.TestCase):
         no_text = [e for e in events if e.get("state") == "no_text"]
         self.assertEqual(no_text, [], f"unexpected no_text events on success: {events}")
 
+    # ── no_text health metrics use the trimmed buffer (#260) ──────────────────
+
+    def _run_no_text_metrics(self, d):
+        """Drive the no-text branch and return (metrics_len, pre_trim_len): the
+        length compute_audio_metrics was called with vs the length _transcribe_pcm
+        received (both post channel-select/resample, so directly comparable)."""
+        import whisper_dictate.vp_audio as vp_audio
+        np = self.np
+        seen, captured = {}, {}
+
+        def fake_transcribe_pcm(pcm):
+            seen["len"] = int(np.asarray(pcm).reshape(-1).shape[0])
+            return (None, "empty")
+
+        real_cam = vp_audio.compute_audio_metrics
+
+        def spy(buf):
+            captured["len"] = int(np.asarray(buf).reshape(-1).shape[0])
+            return real_cam(buf)
+
+        d._transcribe_pcm = fake_transcribe_pcm
+        d._should_skip_pcm = lambda _pcm, _rec_s: None  # never skip in this test
+        rt = self.dictate
+        with patch.object(rt, "postprocess_text", _passthrough_postprocess), \
+                patch.object(rt, "is_hallucination", lambda _t: False), \
+                patch.object(vp_audio, "compute_audio_metrics", spy), \
+                _capture_stdout():
+            rt.Dictate._stop_and_transcribe(d)
+        self.assertIn("len", captured,
+                      "compute_audio_metrics was not called on the no-text path")
+        self.assertIn("len", seen)
+        return captured["len"], seen["len"]
+
+    def test_no_text_health_metrics_use_trimmed_buffer(self):
+        # #260: the no-text health line must compute metrics on the SAME trimmed
+        # buffer the transcribe path saw. A clip with a long dead tail therefore
+        # feeds compute_audio_metrics a SHORTER buffer than the raw capture.
+        np = self.np
+        body = np.full((16000, 1), 6000, dtype=np.int16)   # ~1.0s loud body
+        tail = np.zeros((24000, 1), dtype=np.int16)         # ~1.5s dead tail
+        d = self._make_dictate()
+        d.frames = [np.concatenate([body, tail], axis=0)]
+        metrics_len, pre_trim_len = self._run_no_text_metrics(d)
+        self.assertLess(metrics_len, pre_trim_len,
+                        "no-text metrics must use the trimmed (shorter) buffer")
+
+    def test_no_text_health_metrics_untrimmed_when_no_dead_tail(self):
+        # Negative control: with no trailing dead air the trim is a no-op, so the
+        # metrics see the whole buffer (the fix doesn't shorten clean clips).
+        np = self.np
+        t = np.arange(48000, dtype=np.float64)
+        tone = (np.sin(t / 4.0) * 6000).astype(np.int16).reshape(-1, 1)  # ~3s tone
+        d = self._make_dictate()
+        d.frames = [tone]
+        metrics_len, pre_trim_len = self._run_no_text_metrics(d)
+        self.assertEqual(metrics_len, pre_trim_len,
+                         "with no dead tail the trim is a no-op; buffer unchanged")
+
     # ── chord-cancel epoch guard (Finding 2 / 4d) ─────────────────────────────
 
     def test_cancel_matching_epoch_discards(self):
