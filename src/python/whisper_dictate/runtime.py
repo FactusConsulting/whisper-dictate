@@ -615,12 +615,17 @@ def _force_initial_prompt(prompt: str | None) -> None:
     early env set in ``main`` is clobbered back to the config value while loading
     runtime modules. Re-syncing here — AFTER those imports — keeps the env (read
     directly by the debug dump / ``--show-config``) consistent with the globals.
+
+    Finally set ``INITIAL_PROMPT_FORCED`` so the live config reload leaves the
+    prompt alone: the CLI flag stays authoritative for the whole session rather
+    than being overwritten by the saved config value on the next reload (#154).
     """
     global INITIAL_PROMPT
     INITIAL_PROMPT = prompt or None
     os.environ["VOICEPI_INITIAL_PROMPT"] = prompt or ""
     from whisper_dictate import vp_transcribe
     vp_transcribe.INITIAL_PROMPT = INITIAL_PROMPT
+    vp_transcribe.INITIAL_PROMPT_FORCED = True
 
 
 def main() -> None:

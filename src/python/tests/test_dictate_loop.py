@@ -275,6 +275,31 @@ class DictateLoopTests(unittest.TestCase):
         self.assertEqual(metrics_len, pre_trim_len,
                          "with no dead tail the trim is a no-op; buffer unchanged")
 
+    # ── --prompt override survives live config reload (#154) ──────────────────
+
+    def test_forced_initial_prompt_survives_live_config_reload(self):
+        # A --prompt override (INITIAL_PROMPT_FORCED) must NOT be overwritten by a
+        # live config reload re-applying the saved initial_prompt; without the
+        # flag, the reload still applies the config value.
+        import whisper_dictate.vp_transcribe as vp_transcribe
+        d = self._make_dictate()
+        prev_forced = vp_transcribe.INITIAL_PROMPT_FORCED
+        prev_prompt = vp_transcribe.INITIAL_PROMPT
+        try:
+            vp_transcribe.INITIAL_PROMPT_FORCED = True
+            vp_transcribe.INITIAL_PROMPT = "cli-override"
+            self.dictate.Dictate._apply_runtime_module_config(
+                d, {"initial_prompt": "from-config"})
+            self.assertEqual(vp_transcribe.INITIAL_PROMPT, "cli-override")
+
+            vp_transcribe.INITIAL_PROMPT_FORCED = False
+            self.dictate.Dictate._apply_runtime_module_config(
+                d, {"initial_prompt": "from-config"})
+            self.assertEqual(vp_transcribe.INITIAL_PROMPT, "from-config")
+        finally:
+            vp_transcribe.INITIAL_PROMPT_FORCED = prev_forced
+            vp_transcribe.INITIAL_PROMPT = prev_prompt
+
     # ── chord-cancel epoch guard (Finding 2 / 4d) ─────────────────────────────
 
     def test_cancel_matching_epoch_discards(self):
