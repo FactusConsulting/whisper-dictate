@@ -9,7 +9,8 @@ This module is the BACKEND-AGNOSTIC, side-effect-free half. It contains:
 
   * :func:`key_to_setting_name` — turn one opaque pynput key token (a ``Key``
     enum member or a ``KeyCode``) into the string the PTT ``key`` setting uses
-    (``ctrl_l``, ``ctrl_r``, ``f9``, ``a`` …), recording the ACTUAL SIDE pressed
+    (``ctrl_l``, ``ctrl_r``, ``f9``, ``space`` …; character ``KeyCode``s like
+    ``a`` are unbindable and yield ``None``), recording the ACTUAL SIDE pressed
     (``Key.ctrl_l`` → ``"ctrl_l"``) so the captured binding is side-specific —
     matching the side-specific PTT matching that reverses #254. Only when pynput
     delivers the sideless GENERIC variant (``Key.ctrl``, no side known) does it

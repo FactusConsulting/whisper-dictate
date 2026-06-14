@@ -64,6 +64,27 @@ class _FakeModKey:
         return f"<Key.{self.name}>"
 
 
+class _FakeCharKey:
+    """Hashable stand-in for a pynput ``KeyCode`` of a single character.
+
+    Real ``pynput.keyboard.KeyCode`` (what the listener receives for a letter /
+    digit key, e.g. a quit key configured as ``"q"``) exposes a ``.char`` but no
+    ``.name``. ``key_name`` must fall back to ``.char`` so a 1-character quit key
+    still matches through ``modifier_matches`` (the #274 regression)."""
+
+    def __init__(self, char):
+        self.char = char
+
+    def __hash__(self):
+        return hash(self.char)
+
+    def __eq__(self, other):
+        return isinstance(other, _FakeCharKey) and other.char == self.char
+
+    def __repr__(self):
+        return f"<KeyCode char={self.char!r}>"
+
+
 def _fake_keyboard():
     keyboard = _types.ModuleType("keyboard")
     keyboard.Key = types.SimpleNamespace(
@@ -505,6 +526,20 @@ class ModifierQuitKeyTests(unittest.TestCase):
             self.assertIsNone(result_1)                   # below threshold
             result_2 = ln.on_press(_FakeModKey("ctrl"))   # streak = 2 → quit
         self.assertFalse(result_2, "modifier quit key should stop the listener")
+
+    def test_single_char_quit_key_triggers_quit_streak(self):
+        # #274 regression: the quit match routes through modifier_matches/
+        # key_name. A 1-char quit key (VOICEPI_QUIT_KEY="q", stored by
+        # _pynput_quit_key as the bare string "q") arrives as a KeyCode with
+        # .char but no .name; without key_name's .char fallback the quit key
+        # would never match. Two presses within the window must stop the listener.
+        ln = self._ln_with_modifier_quit(quit_key="q")
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            r1 = ln.on_press(_FakeCharKey("q"))   # streak = 1
+            self.assertIsNone(r1)                  # below threshold
+            r2 = ln.on_press(_FakeCharKey("q"))   # streak = 2 → quit
+        self.assertFalse(r2, "single-char quit key must trigger the quit streak")
 
     def test_modifier_quit_key_left_variant_also_triggers(self):
         # A side-specific variant of the modifier quit key (ctrl_l delivered for
@@ -1533,6 +1568,13 @@ class ModifierMatchesUnitTests(unittest.TestCase):
         # A single-char quit key.
         self.assertTrue(self.mm("q", "q"))
 
+    def test_single_char_keycode_target_matches_via_char(self):
+        # #274 regression: a quit key configured as "q" arrives as a KeyCode
+        # (.char="q", no .name). It must match the saved "q" target and not a
+        # different char.
+        self.assertTrue(self.mm(_FakeCharKey("q"), "q"))
+        self.assertFalse(self.mm(_FakeCharKey("x"), "q"))
+
     def test_unnameable_or_bad_target_never_matches(self):
         self.assertFalse(self.mm(_FakeMediaKey("media_volume_up"), "ctrl_l"))
         self.assertFalse(self.mm(object(), "ctrl_l"))
@@ -1579,6 +1621,13 @@ class ModifierHelpersUnitTests(unittest.TestCase):
         self.assertEqual(vp_keys_solo.key_name(_FakeModKey("ctrl_l")), "ctrl_l")
         self.assertEqual(vp_keys_solo.key_name("ctrl_r"), "ctrl_r")
         self.assertIsNone(vp_keys_solo.key_name(object()))
+
+    def test_key_name_extracts_char_from_keycode(self):
+        # #274 regression: a single-char KeyCode (e.g. quit key "q") has .char
+        # but no .name; key_name must return the char so the quit match (via
+        # modifier_matches) works. A charless token still yields None.
+        self.assertEqual(vp_keys_solo.key_name(_FakeCharKey("q")), "q")
+        self.assertIsNone(vp_keys_solo.key_name(_FakeCharKey(None)))
 
 
 class HeldKeysClearedByReleaseUnitTests(unittest.TestCase):

@@ -158,15 +158,25 @@ def key_name(k):
       ``"f9"`` …).
     * a plain string token (the tokens the unit tests and some call sites use,
       e.g. ``"ctrl_l"``) → itself.
-    Anything else (a letter ``KeyCode``, an evdev int code, a media Key) → the
-    pynput ``.name`` if present, otherwise ``None`` — callers that need a name to
-    do side-aware modifier matching simply get no match.
+    * a pynput ``KeyCode`` for a single character (e.g. a quit key configured as
+      ``"q"``) → its ``.char``. ``_pynput_quit_key`` explicitly supports a
+      1-character quit key, and the quit match routes through
+      :func:`modifier_matches` (hence ``key_name``); without ``.char`` the
+      pressed ``KeyCode`` would never match the saved name. A modifier ``Key``
+      has ``.name`` and is handled above, so this branch only ever yields the
+      character of a genuine non-modifier ``KeyCode`` — it can't manufacture a
+      spurious modifier name.
+    Anything else (an evdev int code, a media Key, a charless ``KeyCode``) →
+    ``None`` — callers that need a name for side-aware matching get no match.
     """
     name = getattr(k, "name", None)  # pynput Key enum member
     if isinstance(name, str):
         return name
     if isinstance(k, str):
         return k
+    char = getattr(k, "char", None)  # pynput KeyCode (single-char key, e.g. "q")
+    if isinstance(char, str) and char:
+        return char
     return None
 
 
