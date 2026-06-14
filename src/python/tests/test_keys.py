@@ -1682,6 +1682,38 @@ class HeldKeysClearedByReleaseUnitTests(unittest.TestCase):
         self.assertEqual(self.cleared(held, "z"), [])
 
 
+class AllTargetsHaveDistinctMatchUnitTests(unittest.TestCase):
+    """``all_targets_have_distinct_match`` requires a 1:1 (injective) assignment
+    of held keys to target names, so the generic fallback cannot let ONE held
+    ``Key.ctrl`` satisfy both ``ctrl_l`` and ``ctrl_r`` in a both-sides binding
+    (#274 Copilot finding)."""
+
+    f = staticmethod(vp_keys_solo.all_targets_have_distinct_match)
+
+    def test_single_target(self):
+        self.assertTrue(self.f(["ctrl_l"], [_FakeModKey("ctrl_l")]))
+        self.assertTrue(self.f(["ctrl_l"], [_FakeModKey("ctrl")]))    # generic fallback
+        self.assertFalse(self.f(["ctrl_l"], [_FakeModKey("ctrl_r")]))  # opposite side
+
+    def test_both_sides_binding_needs_two_distinct_held(self):
+        names = ["ctrl_l", "ctrl_r"]
+        # One generic Ctrl matches BOTH names but is a SINGLE key → not complete.
+        self.assertFalse(self.f(names, [_FakeModKey("ctrl")]))
+        # Two distinct specific sides → complete.
+        self.assertTrue(self.f(names, [_FakeModKey("ctrl_l"), _FakeModKey("ctrl_r")]))
+        # One specific + one generic (generic covers the other side) → complete.
+        self.assertTrue(self.f(names, [_FakeModKey("ctrl_l"), _FakeModKey("ctrl")]))
+
+    def test_two_family_chord(self):
+        names = ["ctrl_l", "shift_l"]
+        self.assertTrue(self.f(names, [_FakeModKey("ctrl"), _FakeModKey("shift")]))
+        # Two held keys but the second matches no remaining target → incomplete.
+        self.assertFalse(self.f(names, [_FakeModKey("ctrl"), _FakeModKey("alt")]))
+
+    def test_fewer_held_than_targets_short_circuits(self):
+        self.assertFalse(self.f(["ctrl_l", "ctrl_r"], [_FakeModKey("ctrl_l")]))
+
+
 class PynputSideSpecificChordTests(unittest.TestCase):
     """Side-specific chord matching (reverses #254). A ``shift_l+ctrl_l`` binding
     completes for the BOUND sides (and the generic-family fallback) but NOT for
@@ -1836,6 +1868,24 @@ class PynputSideSpecificChordTests(unittest.TestCase):
         ln._held_keys = {ctrl_l, ctrl_r}
         ln._discard_held(_FakeModKey("ctrl"))
         self.assertEqual(ln._held_keys, set())
+
+    def test_both_sides_binding_not_completed_by_one_generic(self):
+        # ctrl_l+ctrl_r binding: a single generic Key.ctrl matches BOTH targets
+        # via the fallback, but must NOT complete the chord on its own — two
+        # distinct held keys are required (Copilot #274 finding). A second,
+        # distinct token then completes it.
+        ctrl_l, ctrl_r = _FakeModKey("ctrl_l"), _FakeModKey("ctrl_r")
+        guard = vp_keys_solo.SoloModifierGuard({ctrl_l, ctrl_r}, enabled=True)
+        ln = vp_keys._PynputListener(
+            _Target(), {ctrl_l, ctrl_r}, _FakeModKey("esc"),
+            toggle_mode=False, solo_guard=guard)
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl"))        # one generic Ctrl
+            self.assertEqual(ln._owner.started, 0)  # NOT complete on one key
+            ln.on_press(_FakeModKey("ctrl_r"))      # a second, distinct token
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
 
 
 class PynputSideSpecificSingleKeyTests(unittest.TestCase):

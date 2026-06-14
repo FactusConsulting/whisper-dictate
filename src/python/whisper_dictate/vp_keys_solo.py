@@ -295,6 +295,41 @@ def held_keys_cleared_by_release(held_keys, released_key) -> list:
     ]
 
 
+def all_targets_have_distinct_match(target_names, held_keys) -> bool:
+    """True iff every target NAME can be paired with a DISTINCT held key that
+    matches it side-aware — a 1:1 (injective) assignment, i.e. a bipartite
+    matching that covers every target.
+
+    Why not the naive ``all(any(modifier_matches(...)))``: the generic fallback
+    means a single held ``Key.ctrl`` matches BOTH ``ctrl_l`` and ``ctrl_r``, so
+    the naive form would declare a ``ctrl_l+ctrl_r`` both-sides binding complete
+    on ONE physical Ctrl. Requiring a distinct held key per target enforces the
+    real semantics: an N-key chord needs N held keys. Chord sizes are tiny, so a
+    plain augmenting-path (Kuhn) matching is far more than fast enough.
+
+    (evdev needs none of this: its int keycodes have no generic variant, so
+    ``KEY_LEFTCTRL`` != ``KEY_RIGHTCTRL`` already forces two distinct held ints.)
+    """
+    names = list(target_names)
+    held = list(held_keys)
+    if len(held) < len(names):
+        return False
+    match_target_of_held = [-1] * len(held)  # held index -> assigned target idx
+
+    def _augment(t_idx, visited):
+        for h_idx, hk in enumerate(held):
+            if h_idx in visited or not modifier_matches(hk, names[t_idx]):
+                continue
+            visited.add(h_idx)
+            if (match_target_of_held[h_idx] == -1
+                    or _augment(match_target_of_held[h_idx], visited)):
+                match_target_of_held[h_idx] = t_idx
+                return True
+        return False
+
+    return all(_augment(t_idx, set()) for t_idx in range(len(names)))
+
+
 # Media / consumer-control keys the solo guard must IGNORE entirely. A Bluetooth
 # headset (e.g. Jabra) can emit consumer-control events — volume up/down/mute,
 # play/pause, track next/prev — to the OS while a bare-modifier PTT key is held.

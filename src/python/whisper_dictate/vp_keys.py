@@ -21,6 +21,7 @@ from whisper_dictate.vp_cli import QUIT_COUNT, QUIT_KEY, QUIT_WINDOW_MS
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_keys_solo import (
     SoloModifierGuard,
+    all_targets_have_distinct_match as _all_targets_have_distinct_match,
     held_keys_cleared_by_release as _held_keys_cleared_by_release,
     is_bare_modifier_binding,
     key_name as _key_name,
@@ -133,10 +134,12 @@ class _PynputListener:
         return any(_modifier_matches(k, name) for name in self._target_names)
 
     def _chord_complete(self) -> bool:
-        # Complete when every target name has a held key matching it (side-aware).
-        return all(
-            any(_modifier_matches(hk, name) for hk in self._held_keys)
-            for name in self._target_names)
+        # Complete when every target name can be paired with a DISTINCT held key
+        # (a 1:1 assignment), not merely "some held key matches each name". The
+        # generic fallback makes one held Key.ctrl match BOTH ctrl_l and ctrl_r,
+        # so the naive form would complete a ctrl_l+ctrl_r both-sides binding on a
+        # single physical Ctrl — this requires two held keys for a two-key chord.
+        return _all_targets_have_distinct_match(self._target_names, self._held_keys)
 
     def _matches_quit(self, k) -> bool:
         return _modifier_matches(k, self._quit_name)
