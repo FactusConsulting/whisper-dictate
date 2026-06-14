@@ -125,7 +125,7 @@ impl WhisperDictateApp {
         let response = ui
             .add(
                 egui::Label::new(
-                    icon_text(icons::ICON_ARROW_UPWARD, label)
+                    icon_text(icons::ICON_ARROW_UPWARD.codepoint, label)
                         .text_style(egui::TextStyle::Small)
                         .strong()
                         .color(palette.accent_blue),

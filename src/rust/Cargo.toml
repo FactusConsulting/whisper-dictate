@@ -12,11 +12,36 @@ path = "lib.rs"
 name = "whisper-dictate"
 path = "main.rs"
 
+# Renderer selection. These features gate the eframe renderer backend; `default`
+# selects glow (our shipping renderer). Enabling both is allowed — ui.rs prefers
+# wgpu when `ui-egui-wgpu` is on — but a normal build is glow. Build wgpu with
+# `--no-default-features --features ui-egui-wgpu`. ui.rs picks the matching
+# `eframe::Renderer` by cfg. The renderer-matrix CI workflow builds BOTH so the
+# wgpu exit route never silently rots.
+[features]
+default = ["ui-egui-glow"]
+ui-egui-glow = ["eframe/glow"]
+ui-egui-wgpu = ["eframe/wgpu"]
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-eframe = { version = "0.30", default-features = true }
-egui_material_icons = "0.2.0"
+# eframe 0.34 flipped its DEFAULT renderer from glow (OpenGL) to wgpu. We ship on
+# glow and keep wgpu as a continuously-validated exit route, so the renderer is
+# chosen by OUR features (see [features] below) rather than eframe's default:
+# `default-features = false` drops eframe's renderer default, the common
+# (non-renderer) features stay always-on here, and exactly one of
+# `ui-egui-glow` / `ui-egui-wgpu` turns on `eframe/glow` / `eframe/wgpu`.
+# Default build = glow; wgpu is opt-in via
+# `--no-default-features --features ui-egui-wgpu` and is exercised by the
+# periodic renderer-matrix CI workflow.
+eframe = { version = "0.34.3", default-features = false, features = [
+  "accesskit",
+  "default_fonts",
+  "wayland",
+  "x11",
+] }
+egui_material_icons = "0.6.0"
 regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

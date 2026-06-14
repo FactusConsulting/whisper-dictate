@@ -101,7 +101,7 @@ impl WhisperDictateApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(egui::Button::new(
-                        egui::RichText::new(icons::ICON_OPEN_IN_FULL).color(palette.text),
+                        egui::RichText::new(icons::ICON_OPEN_IN_FULL.codepoint).color(palette.text),
                     ))
                     .on_hover_text("Leave compact mode")
                     .clicked()
@@ -122,7 +122,7 @@ impl WhisperDictateApp {
                 .add(
                     egui::Button::new(
                         icon_text(
-                            icons::ICON_PLAY_ARROW,
+                            icons::ICON_PLAY_ARROW.codepoint,
                             ui_text(&self.settings.ui_language, UiTextKey::Start),
                         )
                         .strong(),
@@ -138,7 +138,7 @@ impl WhisperDictateApp {
             .add(
                 egui::Button::new(
                     icon_text(
-                        icons::ICON_STOP,
+                        icons::ICON_STOP.codepoint,
                         ui_text(&self.settings.ui_language, UiTextKey::Stop),
                     )
                     .strong(),
@@ -177,7 +177,7 @@ impl WhisperDictateApp {
         ));
         let device = audio_device_label(&self.active_audio_device, device_chars);
         ui.label(
-            icon_text(icons::ICON_MIC, device)
+            icon_text(icons::ICON_MIC.codepoint, device)
                 .size(12.0)
                 .color(if active {
                     palette.accent_blue

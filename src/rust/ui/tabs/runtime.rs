@@ -21,7 +21,7 @@ impl WhisperDictateApp {
         ui.horizontal(|ui| {
             ui.label(
                 icon_text(
-                    icons::ICON_MIC,
+                    icons::ICON_MIC.codepoint,
                     ui_text(&self.settings.ui_language, UiTextKey::LiveDictation),
                 )
                 .size(18.0)
@@ -96,14 +96,14 @@ impl WhisperDictateApp {
         egui::Frame::default()
             .fill(palette.surface_active_bg)
             .stroke(egui::Stroke::new(1.0, palette.error_text))
-            .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
+            .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
                         icon_text(
-                            icons::ICON_ERROR,
+                            icons::ICON_ERROR.codepoint,
                             ui_text(&self.settings.ui_language, UiTextKey::DeviceUnusableTitle),
                         )
                         .strong()
@@ -119,7 +119,7 @@ impl WhisperDictateApp {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .button(icon_text(
-                    icons::ICON_COPY_ALL,
+                    icons::ICON_COPY_ALL.codepoint,
                     ui_text(&self.settings.ui_language, UiTextKey::Copy),
                 ))
                 .clicked()
@@ -128,7 +128,7 @@ impl WhisperDictateApp {
             }
             if ui
                 .button(icon_text(
-                    icons::ICON_DELETE,
+                    icons::ICON_DELETE.codepoint,
                     ui_text(&self.settings.ui_language, UiTextKey::Clear),
                 ))
                 .clicked()
@@ -183,8 +183,8 @@ impl WhisperDictateApp {
         egui::Frame::default()
             .fill(palette.surface_active_bg)
             .stroke(egui::Stroke::new(0.8, accent))
-            .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
+            .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -285,13 +285,16 @@ impl WhisperDictateApp {
             ui.add_sized(
                 egui::vec2(label_width, 18.0),
                 egui::Label::new(
-                    icon_text(icons::ICON_MIC, format!("{status} - {audio_device}"))
-                        .size(12.0)
-                        .color(if active {
-                            palette.accent_blue
-                        } else {
-                            palette.text_muted
-                        }),
+                    icon_text(
+                        icons::ICON_MIC.codepoint,
+                        format!("{status} - {audio_device}"),
+                    )
+                    .size(12.0)
+                    .color(if active {
+                        palette.accent_blue
+                    } else {
+                        palette.text_muted
+                    }),
                 ),
             );
             response.on_hover_text(format!(
@@ -309,7 +312,7 @@ impl WhisperDictateApp {
             ui.set_min_width(ui.available_width());
             ui.label(
                 icon_text(
-                    icons::ICON_TASK_ALT,
+                    icons::ICON_TASK_ALT.codepoint,
                     ui_text(&self.settings.ui_language, UiTextKey::Session),
                 )
                 .strong(),
@@ -404,12 +407,12 @@ impl WhisperDictateApp {
         match SttBackendMode::from_raw(&self.settings.stt_backend) {
             SttBackendMode::Cloud => (
                 ui_text(&self.settings.ui_language, UiTextKey::Model),
-                icons::ICON_MODEL_TRAINING,
+                icons::ICON_MODEL_TRAINING.codepoint,
                 compact_label(self.cloud_stt_model_summary(), 28),
             ),
             SttBackendMode::Whisper | SttBackendMode::Parakeet => (
                 ui_text(&self.settings.ui_language, UiTextKey::Compute),
-                icons::ICON_MEMORY,
+                icons::ICON_MEMORY.codepoint,
                 self.compute_summary(),
             ),
         }
@@ -437,12 +440,13 @@ fn runtime_log_frame(palette: UiPalette) -> egui::Frame {
     egui::Frame::default()
         .fill(palette.bg)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
-        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
+        .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
         .inner_margin(egui::Margin {
-            left: 12.0,
-            right: 12.0,
-            top: RUNTIME_LOG_TOP_MARGIN,
-            bottom: 10.0,
+            // egui 0.34: `Margin` fields are `i8` (were `f32`).
+            left: 12,
+            right: 12,
+            top: RUNTIME_LOG_TOP_MARGIN as i8,
+            bottom: 10,
         })
 }
 
@@ -460,11 +464,15 @@ pub(in crate::ui) fn level_gauge(
     }
 
     let painter = ui.painter_at(rect);
+    // egui 0.34: `Painter::rect` gained a 5th `StrokeKind` argument.
+    // `StrokeKind::Inside` reproduces the previous 4-arg behaviour (stroke drawn
+    // inside the rect edge).
     painter.rect(
         rect,
         8.0,
         palette.header_bg,
         egui::Stroke::new(0.8, palette.border_soft),
+        egui::StrokeKind::Inside,
     );
 
     let segments = 18;
@@ -586,8 +594,8 @@ fn runtime_status_badge(
     egui::Frame::default()
         .fill(fill)
         .stroke(egui::Stroke::new(0.8, stroke))
-        .rounding(egui::Rounding::same(PILL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .corner_radius(egui::CornerRadius::same(PILL_RADIUS))
+        .inner_margin(egui::Margin::symmetric(10, 4))
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(format!(

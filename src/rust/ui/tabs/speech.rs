@@ -13,8 +13,8 @@ impl WhisperDictateApp {
         // Wrapped in a frameless inset that matches scope_group's horizontal
         // inner margin so the dropdown value column aligns with the fields
         // inside the boxed groups below (approach B — inset without a box).
-        egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(SCOPE_GROUP_INNER_MARGIN_H, 0.0))
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(SCOPE_GROUP_INNER_MARGIN_H, 0))
             .show(ui, |ui| {
                 settings_grid("speech_engine_selector").show(ui, |ui| {
                     combo_help_labeled(
@@ -371,7 +371,7 @@ impl WhisperDictateApp {
             }
             Err(message) => {
                 ui.label(
-                    icon_text(egui_material_icons::icons::ICON_WARNING, message)
+                    icon_text(egui_material_icons::icons::ICON_WARNING.codepoint, message)
                         .color(palette.warn_text),
                 );
             }
@@ -417,6 +417,7 @@ impl WhisperDictateApp {
             {
                 self.run_cloud_api_check();
             }
+            self.test_cloud_api_indicator(ui);
             if provider == CloudProvider::Groq
                 && ui
                     .link("Open Groq API keys")
@@ -437,6 +438,15 @@ impl WhisperDictateApp {
             "API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
         );
         ui.end_row();
+    }
+
+    /// Render the inline ✓/✗/testing indicator next to "Test cloud API" from the
+    /// stored `stt_api_key_status` and whether the cloud-API check is in flight.
+    /// Delegates to the shared `render_api_check_indicator` shell.
+    fn test_cloud_api_indicator(&self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
+        let in_flight = self.background_task_label == Some("cloud API check");
+        render_api_check_indicator(ui, &self.stt_api_key_status, in_flight, palette);
     }
 
     fn open_groq_keys_page_stt(&mut self, provider: CloudProvider) {
@@ -467,7 +477,7 @@ pub(in crate::ui) fn microphone_test_parts(
     use egui_material_icons::icons;
     match display.outcome {
         DeviceTestOutcome::Works => (
-            icons::ICON_CHECK_CIRCLE,
+            icons::ICON_CHECK_CIRCLE.codepoint,
             palette.ok_text,
             ui_text(language, UiTextKey::MicTestWorks).to_owned(),
         ),
@@ -476,7 +486,7 @@ pub(in crate::ui) fn microphone_test_parts(
         // the user isn't misled into thinking there's a problem. The "via
         // DirectSound / resampled" detail is informational, carried in the text.
         DeviceTestOutcome::WorksWithCaveat => (
-            icons::ICON_CHECK_CIRCLE,
+            icons::ICON_CHECK_CIRCLE.codepoint,
             palette.ok_text,
             microphone_test_caveat_text(display, language),
         ),
@@ -492,7 +502,7 @@ pub(in crate::ui) fn microphone_test_parts(
                 }
                 None => ui_text(language, UiTextKey::MicTestCannot).to_owned(),
             };
-            (icons::ICON_WARNING, palette.error_text, text)
+            (icons::ICON_WARNING.codepoint, palette.error_text, text)
         }
     }
 }
@@ -553,7 +563,10 @@ mod tests {
         let palette = ui_palette("dark");
         let display = works("wasapi", Some(16000), false);
         let (icon, color, text) = microphone_test_parts(&display, "en", palette);
-        assert_eq!(icon, egui_material_icons::icons::ICON_CHECK_CIRCLE);
+        assert_eq!(
+            icon,
+            egui_material_icons::icons::ICON_CHECK_CIRCLE.codepoint
+        );
         assert_eq!(color, palette.ok_text);
         assert_eq!(text, "Works");
     }
@@ -564,7 +577,10 @@ mod tests {
         let display = works("directsound", Some(48000), false);
         let (icon, color, text) = microphone_test_parts(&display, "en", palette);
         // Works-via-fallback is still success: green check, not an amber warning.
-        assert_eq!(icon, egui_material_icons::icons::ICON_CHECK_CIRCLE);
+        assert_eq!(
+            icon,
+            egui_material_icons::icons::ICON_CHECK_CIRCLE.codepoint
+        );
         assert_eq!(color, palette.ok_text);
         assert_eq!(text, "Works via DirectSound (48 kHz)");
     }
@@ -574,7 +590,10 @@ mod tests {
         let palette = ui_palette("dark");
         let display = works("wasapi", Some(48000), true);
         let (icon, color, text) = microphone_test_parts(&display, "en", palette);
-        assert_eq!(icon, egui_material_icons::icons::ICON_CHECK_CIRCLE);
+        assert_eq!(
+            icon,
+            egui_material_icons::icons::ICON_CHECK_CIRCLE.codepoint
+        );
         assert_eq!(color, palette.ok_text);
         // Plain WASAPI path → no "via", just the rate + resampled note.
         assert_eq!(text, "Works (48 kHz, resampled)");
@@ -591,7 +610,7 @@ mod tests {
             reason: Some("device not found".to_owned()),
         };
         let (icon, color, text) = microphone_test_parts(&display, "en", palette);
-        assert_eq!(icon, egui_material_icons::icons::ICON_WARNING);
+        assert_eq!(icon, egui_material_icons::icons::ICON_WARNING.codepoint);
         assert_eq!(color, palette.error_text);
         assert_eq!(text, "Cannot be used: device not found");
     }

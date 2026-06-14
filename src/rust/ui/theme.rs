@@ -252,13 +252,15 @@ pub(in crate::ui) fn apply_ui_theme(ctx: &egui::Context, raw_scale: &str, raw_th
     ]);
     let button_padding = egui::vec2(10.0 * scale, 5.0 * scale);
     let item_spacing = egui::vec2(ITEM_SPACING_X * scale, ITEM_SPACING_Y * scale);
-    let mut style = (*ctx.style()).clone();
+    // egui 0.34 renamed `Context::style`/`set_style` to `global_style`/
+    // `set_global_style` (to disambiguate from `Ui::style`). Same behaviour.
+    let mut style = (*ctx.global_style()).clone();
     style.text_styles = text_styles;
     style.spacing.button_padding = button_padding;
     style.spacing.item_spacing = item_spacing;
     style.spacing.interact_size = egui::vec2(42.0 * scale, 28.0 * scale);
     style.visuals = themed_visuals(theme, palette);
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 fn themed_visuals(theme: UiThemeMode, palette: UiPalette) -> egui::Visuals {
@@ -297,12 +299,16 @@ fn themed_visuals(theme: UiThemeMode, palette: UiPalette) -> egui::Visuals {
     visuals.widgets.open.weak_bg_fill = palette.accent_dark;
     visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, palette.accent_blue);
     visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, palette.text);
-    visuals.widgets.noninteractive.rounding = egui::Rounding::same(CONTROL_RADIUS as f32);
-    visuals.widgets.inactive.rounding = egui::Rounding::same(CONTROL_RADIUS as f32);
-    visuals.widgets.hovered.rounding = egui::Rounding::same(CONTROL_RADIUS as f32);
-    visuals.widgets.active.rounding = egui::Rounding::same(CONTROL_RADIUS as f32);
-    visuals.widgets.open.rounding = egui::Rounding::same(CONTROL_RADIUS as f32);
-    visuals.window_rounding = egui::Rounding::same(PANEL_RADIUS as f32);
+    // egui 0.34: `Rounding`→`CornerRadius` (fields are `u8`, not `f32`), and the
+    // `WidgetVisuals.rounding` field / `Visuals.window_rounding` field were
+    // renamed to `corner_radius` / `window_corner_radius`. The radius consts are
+    // already `u8`, so the values are preserved exactly.
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(CONTROL_RADIUS);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(CONTROL_RADIUS);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(CONTROL_RADIUS);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(CONTROL_RADIUS);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(CONTROL_RADIUS);
+    visuals.window_corner_radius = egui::CornerRadius::same(PANEL_RADIUS);
     visuals
 }
 
@@ -367,7 +373,10 @@ pub(in crate::ui) fn paint_sidebar_bridge(
     palette: UiPalette,
     raw_scale: &str,
 ) {
-    let screen = ctx.screen_rect();
+    // egui 0.34 split `screen_rect()` into `viewport_rect()` / `content_rect()`;
+    // the content rect is the region the panels draw into, which is what the
+    // sidebar bridge spans, so it preserves the previous geometry.
+    let screen = ctx.content_rect();
     let left = screen.left() + sidebar_width(raw_scale) - 1.0;
     let bridge = egui::Rect::from_min_max(
         egui::pos2(left, screen.top()),
@@ -449,8 +458,8 @@ pub(in crate::ui) fn panel_frame(palette: UiPalette) -> egui::Frame {
     egui::Frame::default()
         .fill(palette.surface_bg)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
-        .rounding(egui::Rounding::same(PANEL_RADIUS as f32))
-        .inner_margin(egui::Margin::symmetric(16.0, 14.0))
+        .corner_radius(egui::CornerRadius::same(PANEL_RADIUS))
+        .inner_margin(egui::Margin::symmetric(16, 14))
 }
 
 #[cfg(test)]
@@ -473,12 +482,12 @@ mod tests {
     fn apply_ui_theme_sets_scaled_body_font_and_clamps_extremes() {
         let ctx = egui::Context::default();
         apply_ui_theme(&ctx, "1.0", "dark");
-        let body = ctx.style().text_styles[&egui::TextStyle::Body].size;
+        let body = ctx.global_style().text_styles[&egui::TextStyle::Body].size;
         assert!((body - 14.0).abs() < 0.001);
 
         // Out-of-range scales are clamped (max 1.6) before being applied.
         apply_ui_theme(&ctx, "99", "light");
-        let clamped = ctx.style().text_styles[&egui::TextStyle::Body].size;
+        let clamped = ctx.global_style().text_styles[&egui::TextStyle::Body].size;
         assert!((clamped - 14.0 * 1.6).abs() < 0.001);
     }
 
@@ -513,7 +522,7 @@ mod tests {
             "parse_ui_scale fallback {fallback_scale} != DEFAULT_UI_TEXT_SCALE {DEFAULT_UI_TEXT_SCALE}"
         );
         apply_ui_theme(&ctx, "garbage", "dark");
-        let body_on_garbage = ctx.style().text_styles[&egui::TextStyle::Body].size;
+        let body_on_garbage = ctx.global_style().text_styles[&egui::TextStyle::Body].size;
         assert!(
             (body_on_garbage - BODY_FONT_SIZE * DEFAULT_UI_TEXT_SCALE).abs() < 0.001,
             "apply_ui_theme set body size {body_on_garbage} but expected {}",
@@ -529,7 +538,7 @@ mod tests {
         for raw in ["1.0", "1.15", " 1.3 ", "0.1", "99"] {
             let layout = parse_ui_scale(raw);
             apply_ui_theme(&ctx, raw, "dark");
-            let text = ctx.style().text_styles[&egui::TextStyle::Body].size / BODY_FONT_SIZE;
+            let text = ctx.global_style().text_styles[&egui::TextStyle::Body].size / BODY_FONT_SIZE;
             assert!(
                 (text - layout).abs() < 0.001,
                 "text scale {text} and layout scale {layout} disagree for input {raw:?}"

@@ -101,7 +101,7 @@ impl WhisperDictateApp {
                 .add_enabled(
                     enabled,
                     egui::Button::new(icon_text(
-                        icons::ICON_FIBER_MANUAL_RECORD,
+                        icons::ICON_FIBER_MANUAL_RECORD.codepoint,
                         corpus_record_text(&language, CorpusRecordText::RecordButton),
                     )),
                 )
@@ -127,7 +127,7 @@ impl WhisperDictateApp {
                 .add_enabled(
                     can_start,
                     egui::Button::new(icon_text(
-                        icons::ICON_PLAYLIST_ADD_CHECK,
+                        icons::ICON_PLAYLIST_ADD_CHECK.codepoint,
                         corpus_record_text(&language, CorpusRecordText::RecordAllMissing),
                     )),
                 )
@@ -139,7 +139,7 @@ impl WhisperDictateApp {
                 .add_enabled(
                     can_start,
                     egui::Button::new(icon_text(
-                        icons::ICON_REPLAY,
+                        icons::ICON_REPLAY.codepoint,
                         corpus_record_text(&language, CorpusRecordText::RecordAll),
                     )),
                 )
@@ -247,17 +247,19 @@ impl WhisperDictateApp {
                 let saved = corpus_record_text(language, CorpusRecordText::Saved);
                 ui.label(
                     icon_text(
-                        icons::ICON_CHECK_CIRCLE,
+                        icons::ICON_CHECK_CIRCLE.codepoint,
                         format!("{saved}: {path} ({seconds_recorded:.1}s)"),
                     )
                     .color(palette.ok_text),
                 );
             }
             Ok(CorpusRecordOutcome::Failed { error }) => {
-                ui.label(icon_text(icons::ICON_ERROR, error).color(palette.warn_text));
+                ui.label(icon_text(icons::ICON_ERROR.codepoint, error).color(palette.warn_text));
             }
             Err(message) => {
-                ui.label(icon_text(icons::ICON_WARNING, message).color(palette.warn_text));
+                ui.label(
+                    icon_text(icons::ICON_WARNING.codepoint, message).color(palette.warn_text),
+                );
             }
         }
     }
@@ -285,7 +287,7 @@ impl WhisperDictateApp {
             ui.label(egui::RichText::new(progress).strong());
             if ui
                 .button(icon_text(
-                    icons::ICON_STOP,
+                    icons::ICON_STOP.codepoint,
                     corpus_record_text(language, CorpusRecordText::StopBatch),
                 ))
                 .clicked()

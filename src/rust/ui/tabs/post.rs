@@ -139,6 +139,7 @@ impl WhisperDictateApp {
             {
                 self.run_post_api_check();
             }
+            self.test_post_api_indicator(ui);
             if provider == PostProvider::Groq
                 && ui
                     .link("Open Groq API keys")
@@ -159,6 +160,15 @@ impl WhisperDictateApp {
             "Post-processing API keys are stored in the platform credential store when possible. If that fails, the app reports the fallback location in the runtime log.",
         );
         ui.end_row();
+    }
+
+    /// Render the inline ✓/✗/testing indicator next to "Test post API" from the
+    /// stored `post_api_key_status` and whether the post-API check is in flight.
+    /// Delegates to the shared `render_api_check_indicator` shell.
+    fn test_post_api_indicator(&self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
+        let in_flight = self.background_task_label == Some("post API check");
+        render_api_check_indicator(ui, &self.post_api_key_status, in_flight, palette);
     }
 
     fn open_groq_keys_page(&mut self, provider: PostProvider) {
