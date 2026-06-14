@@ -565,7 +565,8 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
                         except Exception:
                             pass
     if last_error is not None and trace:
-        # Per-attempt open failures are noise on the normal WASAPI->DirectSound
+        # This all-candidates-failed summary (every dtype/channel/latency combo
+        # for this endpoint raised) is noise on the normal WASAPI->DirectSound
         # fallback: a sibling endpoint usually succeeds right after and prints one
         # calm "[cap] opened ... via its <API> endpoint" line. Keep the detail
         # under Trace (VOICEPI_TRACE); a genuine total failure is still surfaced
