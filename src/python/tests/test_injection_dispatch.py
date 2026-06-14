@@ -345,6 +345,19 @@ class InjectWaylandDispatchTests(_InjectBase):
         self.assertEqual(t.typed_wayland, ["plain ascii"])
         self.assertEqual(t.pasted, [])
 
+    def test_wayland_auto_pastes_for_modifier_chord_ptt(self):
+        # Wayland parity with the X11/Windows path: a bare-modifier PTT chord
+        # makes auto paste even for plain ASCII (held modifiers would otherwise
+        # corrupt the ydotool type burst).
+        t = self._wl_target(mode="auto", key="shift_l+ctrl_l")
+
+        with _env(WAYLAND_DISPLAY="wayland-0"), _capture_stdout():
+            self.inject.InjectMixin._inject(t, "plain ascii")
+
+        self.assertEqual(t._last_inject_strategy, "paste")
+        self.assertEqual(t.pasted, ["plain ascii"])
+        self.assertEqual(t.typed_wayland, [])
+
     def test_wayland_ydotool_failure_falls_back_to_pynput_type(self):
         t = self._wl_target(mode="type", wayland_ok=False)
 
