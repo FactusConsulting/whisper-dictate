@@ -290,16 +290,30 @@ class InjectDispatchTests(_InjectBase):
         self.assertEqual(t._last_inject_strategy, "paste")
         self.assertEqual(self.clip.copied, ["Jeg deployer Kubernetes på Proxmox."])
 
-    def test_windows_auto_types_pure_ascii_text(self):
-        # Pure ASCII + non-modifier PTT still types (the fix is scoped to
-        # non-ASCII / layout-sensitive text and modifier bindings).
+    def test_windows_auto_pastes_even_pure_ascii(self):
+        # Windows: pynput type() drops chars under a fast burst ("Kubernetes" ->
+        # "deperntes"), so auto ALWAYS pastes — even pure ASCII with a non-modifier
+        # PTT (which would otherwise type).
         t = self._target(mode="auto", title="Untitled - Notepad",
                          process="notepad.exe", key="f9")
         with _env(WAYLAND_DISPLAY=None), \
                 patch.object(self.inject.os, "name", "nt"), \
                 _capture_stdout():
             self.inject.InjectMixin._inject(t, "plain ascii text")
+        self.assertEqual(t._last_inject_strategy, "paste")
+        self.assertEqual(self.clip.copied, ["plain ascii text"])
+
+    def test_windows_explicit_type_still_types(self):
+        # The Windows paste default is only for auto; --type still forces typing
+        # for users who need it (e.g. an app that ignores Ctrl+V).
+        t = self._target(mode="type", title="Untitled - Notepad",
+                         process="notepad.exe", key="f9")
+        with _env(WAYLAND_DISPLAY=None), \
+                patch.object(self.inject.os, "name", "nt"), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "plain ascii text")
         self.assertEqual(t._last_inject_strategy, "type")
+        self.assertIn(("type", "plain ascii text"), t._kb.events)
         self.assertEqual(self.clip.copied, [])
 
 
