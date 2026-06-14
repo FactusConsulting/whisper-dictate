@@ -505,9 +505,11 @@ class InjectMixin:
             # On Windows, pynput's per-character type() drops keystrokes under a
             # fast burst (worse on non-US layouts) — it mangled "Kubernetes" into
             # "deperntes". Paste (one atomic Ctrl+V of the full clipboard string)
-            # is reliable, so auto ALWAYS pastes on Windows. X11/macOS keep the
-            # per-case heuristic (paste only for fragile targets, layout-sensitive
-            # / non-ASCII text, or a modifier-chord PTT). Explicit --type overrides.
+            # is reliable, so auto ALWAYS pastes on Windows. The target/text
+            # paste-preferences below are Windows-only (they return False when
+            # os.name != "nt"), so on X11/macOS the only auto-paste trigger here
+            # is a modifier-chord PTT; otherwise it types. (Wayland has its own
+            # auto path in _inject_wayland.) Explicit --type overrides.
             mode = "paste" if (
                 os.name == "nt"
                 or self._target_prefers_paste()
