@@ -43,13 +43,13 @@ class _FakeModKey:
 
     Real ``pynput.keyboard.Key`` members (``Key.ctrl_l``, generic ``Key.ctrl``,
     etc.) are hashable singletons exposing a ``.name`` (``"ctrl_l"``, ``"ctrl"``).
-    The production ``_canon_modifier`` keys off that ``.name`` to collapse
-    left/right/generic variants of a modifier to one family token, so these fakes
-    must compare by name to model the real enum's identity. Two ``_FakeModKey``
-    with the SAME name are equal (one OS may emit ``Key.ctrl`` twice); different
-    names are distinct (``ctrl_l`` vs ``ctrl`` vs ``ctrl_r``), exactly as the
-    real enum behaves — and exactly what the side-insensitive fix must paper
-    over."""
+    The production ``modifier_matches`` keys off that ``.name`` to match a pressed
+    key against a target side-specifically (with a generic fallback), so these
+    fakes must compare by name to model the real enum's identity. Two
+    ``_FakeModKey`` with the SAME name are equal (one OS may emit ``Key.ctrl``
+    twice); different names are distinct (``ctrl_l`` vs ``ctrl`` vs ``ctrl_r``),
+    exactly as the real enum behaves — the distinction the side-specific matcher
+    now honours (left != right) with a generic-fallback safety net."""
 
     def __init__(self, name):
         self.name = name
@@ -420,15 +420,15 @@ class PynputListenerTests(unittest.TestCase):
             self.assertEqual(ln._owner.stopped, 1)
             self.assertFalse(ln._recording)
 
-    def test_non_target_key_press_does_not_accumulate_in_pressed(self):
-        # Comment 1 fix: non-target keys must never be added to _pressed, so the
-        # set stays bounded (only target keys tracked for chord completion).
+    def test_non_target_key_press_does_not_accumulate_in_held(self):
+        # Comment 1 fix: non-target keys must never be added to the held-chord
+        # set, so it stays bounded (only target keys tracked for completion).
         ln = self._listener()
         with patch.object(vp_keys, "QUIT_COUNT", 0):
             ln.on_press("<shift_l>")   # foreign key — not a target
             ln.on_release("<shift_l>")
-        self.assertNotIn("<shift_l>", ln._pressed)
-        self.assertEqual(len(ln._pressed), 0)
+        self.assertNotIn("<shift_l>", ln._held_keys)
+        self.assertEqual(len(ln._held_keys), 0)
 
     def test_quit_key_held_blocks_bare_modifier_start(self):
         # Comment 2 fix: quit key held → pressing PTT modifier must NOT start
@@ -523,14 +523,14 @@ class ModifierQuitKeyTests(unittest.TestCase):
         self.assertFalse(ln._recording)
 
     def test_modifier_quit_key_does_not_join_ptt_chord(self):
-        # The quit modifier must not be added to _pressed (PTT chord tracking) or
-        # influence recording state.  With the bug the key landed in the chord
-        # machinery and could, with a matching target, mis-start dictation.
+        # The quit modifier must not be added to the held-chord set (PTT chord
+        # tracking) or influence recording state.  With the bug the key landed in
+        # the chord machinery and could, with a matching target, mis-start.
         ln = self._ln_with_modifier_quit(ptt_target="ctrl",
                                          quit_key=_FakeModKey("ctrl"))
         with patch.object(vp_keys, "QUIT_COUNT", 0):
             ln.on_press(_FakeModKey("ctrl"))
-        self.assertNotIn("ctrl", ln._pressed)
+        self.assertNotIn("ctrl", ln._held_keys)
         self.assertEqual(ln._owner.started, 0)
 
     # ------------------------------------------------------------------
@@ -560,16 +560,16 @@ class ModifierQuitKeyTests(unittest.TestCase):
         self.assertEqual(ln._owner.started, 0)
 
     # ------------------------------------------------------------------
-    # 3. Side-insensitive chord (PR #254 core fix) is not regressed
+    # 3. Generic-fallback reliability is preserved alongside the quit path
     # ------------------------------------------------------------------
-    def test_side_insensitive_chord_not_regressed(self):
-        # The PR #254 fix: shift_l PTT binding completed by a generic or
-        # opposite-side modifier variant must still start recording.
+    def test_generic_fallback_chord_still_starts(self):
+        # Side-specific matching keeps the generic fallback: a shift_l+ctrl_l
+        # binding completed by the GENERIC ctrl variant (side unknown) must still
+        # start recording, even with a modifier-orthogonal quit key.
         shift_l = _FakeModKey("shift_l")
         ctrl_l = _FakeModKey("ctrl_l")
         targets = {shift_l, ctrl_l}
-        canon = {vp_keys._canon_modifier(t) for t in targets}
-        guard = vp_keys_solo.SoloModifierGuard(canon, enabled=True)
+        guard = vp_keys_solo.SoloModifierGuard(set(targets), enabled=True)
         # Use a non-modifier quit key so the quit path is orthogonal.
         ln = vp_keys._PynputListener(
             _Target(), set(targets), "<esc>", toggle_mode=False,
@@ -577,7 +577,7 @@ class ModifierQuitKeyTests(unittest.TestCase):
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
             ln.on_press(_FakeModKey("shift_l"))
-            ln.on_press(_FakeModKey("ctrl"))   # generic ctrl variant
+            ln.on_press(_FakeModKey("ctrl"))   # generic ctrl variant (fallback)
         self.assertEqual(ln._owner.started, 1)
         self.assertTrue(ln._recording)
 
@@ -773,6 +773,94 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
         clock[0] += vp_keys_solo.FOREIGN_KEY_EXPIRY_S - 1.0
         self.assertFalse(g.note_press("shift"))   # not newly held
         self.assertFalse(g.may_start_on_target_down())
+
+
+class SoloGuardSideAwareTests(unittest.TestCase):
+    """The SoloModifierGuard accepts an injected side-aware ``is_target``
+    predicate (built on modifier_matches by the pynput backend). With it, the
+    OPPOSITE specific side counts as a FOREIGN key while the matching side and
+    the generic-family fallback count as targets."""
+
+    def _guard(self, target_names, enabled=True):
+        def is_target(k):
+            return any(vp_keys_solo.modifier_matches(k, n) for n in target_names)
+        return vp_keys_solo.SoloModifierGuard(
+            set(), enabled=enabled, is_target=is_target)
+
+    def test_matching_side_is_not_foreign(self):
+        g = self._guard(["ctrl_l"])
+        g.note_press(_FakeModKey("ctrl_l"))
+        self.assertFalse(g.foreign_key_held())   # the bound side is a target
+        self.assertTrue(g.may_start_on_target_down())
+
+    def test_generic_variant_is_not_foreign(self):
+        g = self._guard(["ctrl_l"])
+        g.note_press(_FakeModKey("ctrl"))        # generic fallback → target
+        self.assertFalse(g.foreign_key_held())
+        self.assertTrue(g.may_start_on_target_down())
+
+    def test_opposite_side_is_foreign(self):
+        # THE reversal at the guard level: right Ctrl is NOT the bound target, so
+        # it is a foreign held key that blocks a start.
+        g = self._guard(["ctrl_l"])
+        g.note_press(_FakeModKey("ctrl_r"))
+        self.assertTrue(g.foreign_key_held())
+        self.assertFalse(g.may_start_on_target_down())
+
+    def test_opposite_side_cancels(self):
+        # Recording from ctrl_l; right Ctrl going down is a new foreign key.
+        g = self._guard(["ctrl_l"])
+        g.note_press(_FakeModKey("ctrl_l"))
+        self.assertFalse(g.should_cancel_on_press(_FakeModKey("ctrl_l")))  # target
+        self.assertTrue(g.should_cancel_on_press(_FakeModKey("ctrl_r")))   # foreign
+
+    def test_generic_target_binding_treats_any_side_as_target(self):
+        # A bound GENERIC ctrl: both sides and the generic are targets, none
+        # foreign.
+        g = self._guard(["ctrl"])
+        for pressed in ("ctrl_l", "ctrl_r", "ctrl"):
+            g.note_press(_FakeModKey(pressed))
+        self.assertFalse(g.foreign_key_held())
+
+
+class PynputQuitKeySideSpecificTests(unittest.TestCase):
+    """The quit-key match is side-aware too (modifier_matches): a side-specific
+    modifier quit key fires for its own side and the generic fallback, but NOT
+    the opposite side."""
+
+    def _ln(self, quit_key):
+        guard = vp_keys_solo.SoloModifierGuard("<shift_r>", enabled=True)
+        return vp_keys._PynputListener(
+            _Target(), {"<shift_r>"}, quit_key, toggle_mode=False,
+            solo_guard=guard)
+
+    def test_same_side_quit_fires(self):
+        ln = self._ln(_FakeModKey("ctrl_l"))   # quit bound to left Ctrl
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            ln.on_press(_FakeModKey("ctrl_l"))          # streak 1
+            result = ln.on_press(_FakeModKey("ctrl_l"))  # streak 2 → quit
+        self.assertFalse(result, "same-side modifier quit key must stop listener")
+
+    def test_generic_variant_quit_fires(self):
+        # Generic fallback also satisfies a side-specific quit key.
+        ln = self._ln(_FakeModKey("ctrl_l"))
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            ln.on_press(_FakeModKey("ctrl"))
+            result = ln.on_press(_FakeModKey("ctrl"))
+        self.assertFalse(result)
+
+    def test_opposite_side_does_not_quit(self):
+        # THE reversal: right Ctrl must NOT trigger a left-Ctrl quit key. It
+        # resets the streak instead, so the listener keeps running.
+        ln = self._ln(_FakeModKey("ctrl_l"))
+        with patch.object(vp_keys, "QUIT_COUNT", 2), \
+                patch.object(vp_keys, "QUIT_WINDOW_MS", 10_000):
+            r1 = ln.on_press(_FakeModKey("ctrl_r"))     # wrong side
+            r2 = ln.on_press(_FakeModKey("ctrl_r"))     # wrong side again
+        self.assertIsNone(r1)
+        self.assertIsNone(r2, "opposite-side modifier must not trigger the quit")
 
 
 class _SoloPynput:
@@ -1278,59 +1366,187 @@ class EvdevSoloModifierChordTests(unittest.TestCase):
         self.assertEqual(self.t.started, 1)
 
 
-class CanonModifierUnitTests(unittest.TestCase):
-    """``_canon_modifier`` collapses side variants; leaves everything else be."""
+class EvdevSideSpecificTests(unittest.TestCase):
+    """evdev is already unambiguously side-specific: KEY_LEFTCTRL and
+    KEY_RIGHTCTRL are distinct integer scancodes and there is no generic variant,
+    so a ctrl_l binding (resolved to KEY_LEFTCTRL) is matched by left Ctrl only.
+    _EVDEV_MAP must resolve every side of every modifier family."""
 
-    def test_left_right_generic_ctrl_collapse_to_one_token(self):
-        c_l = vp_keys._canon_modifier(_FakeModKey("ctrl_l"))
-        c_r = vp_keys._canon_modifier(_FakeModKey("ctrl_r"))
-        c_g = vp_keys._canon_modifier(_FakeModKey("ctrl"))
-        self.assertEqual(c_l, c_r)
-        self.assertEqual(c_l, c_g)   # all three are the same chord member
+    LEFTCTRL = 29
+    RIGHTCTRL = 97
 
-    def test_shift_alt_cmd_families_collapse(self):
-        for fam in ("shift", "alt", "cmd"):
-            left = vp_keys._canon_modifier(_FakeModKey(f"{fam}_l"))
-            right = vp_keys._canon_modifier(_FakeModKey(f"{fam}_r"))
-            generic = vp_keys._canon_modifier(_FakeModKey(fam))
-            self.assertEqual(left, right, fam)
-            self.assertEqual(left, generic, fam)
-        # alt_gr is part of the alt family (pynput's AltGr).
-        self.assertEqual(vp_keys._canon_modifier(_FakeModKey("alt_gr")),
-                         vp_keys._canon_modifier(_FakeModKey("alt_l")))
+    def setUp(self):
+        self.ev = _fake_evdev()
+        self.t = _Target()
 
-    def test_distinct_families_do_not_collapse(self):
-        self.assertNotEqual(vp_keys._canon_modifier(_FakeModKey("ctrl_l")),
-                            vp_keys._canon_modifier(_FakeModKey("shift_l")))
+    def _apply(self, code, value, target_codes, pressed, rec, solo=None):
+        return self.t._evdev_apply_event(
+            _event(1, code, value), self.ev, set(target_codes), pressed, rec,
+            solo=solo)
 
-    def test_non_modifier_keys_pass_through_unchanged(self):
-        # KeyCode-ish chars, function keys, the quit key, media keys and the
-        # plain-string tokens the other tests use must be returned as-is so their
-        # identity (foreign-key / quit matching) is preserved.
+    def test_left_ctrl_matches_left_binding(self):
+        # ctrl_l binding → {KEY_LEFTCTRL}; left Ctrl down starts.
+        pressed = set()
+        rec = self._apply(self.LEFTCTRL, self.ev.KeyEvent.key_down,
+                          {self.LEFTCTRL}, pressed, False)
+        self.assertTrue(rec)
+        self.assertEqual(self.t.started, 1)
+
+    def test_right_ctrl_does_not_match_left_binding(self):
+        # THE reversal on evdev: right Ctrl is a different scancode → no start.
+        pressed = set()
+        rec = self._apply(self.RIGHTCTRL, self.ev.KeyEvent.key_down,
+                          {self.LEFTCTRL}, pressed, False)
+        self.assertFalse(rec)
+        self.assertEqual(self.t.started, 0)
+
+    def test_right_ctrl_is_foreign_under_solo_guard(self):
+        # With the bare-modifier guard on a ctrl_l binding, right Ctrl is a
+        # foreign held key: pressed first, it blocks the left-Ctrl start.
+        pressed = set()
+        solo = vp_keys_solo.SoloModifierGuard({self.LEFTCTRL}, enabled=True)
+        rec = self._apply(self.RIGHTCTRL, self.ev.KeyEvent.key_down,
+                          {self.LEFTCTRL}, pressed, False, solo)   # foreign first
+        rec = self._apply(self.LEFTCTRL, self.ev.KeyEvent.key_down,
+                          {self.LEFTCTRL}, pressed, rec, solo)
+        self.assertFalse(rec)
+        self.assertEqual(self.t.started, 0)
+
+    def test_evdev_map_resolves_all_sides(self):
+        # _EVDEV_MAP must resolve every side of every modifier family the capture
+        # / settings can emit, so a side-specific binding never sys.exits.
+        m = vp_keys.KeyBackendMixin._EVDEV_MAP
+        expected = {
+            "ctrl_l": "KEY_LEFTCTRL", "ctrl_r": "KEY_RIGHTCTRL",
+            "shift_l": "KEY_LEFTSHIFT", "shift_r": "KEY_RIGHTSHIFT",
+            "alt_l": "KEY_LEFTALT", "alt_r": "KEY_RIGHTALT",
+            "cmd_l": "KEY_LEFTMETA", "cmd_r": "KEY_RIGHTMETA",
+            "super_l": "KEY_LEFTMETA", "super_r": "KEY_RIGHTMETA",
+        }
+        for name, ec in expected.items():
+            self.assertEqual(m.get(name), ec, name)
+
+    def test_evdev_target_codes_resolves_each_side_distinctly(self):
+        import types as _local_types
+        evdev = _local_types.ModuleType("evdev")
+        evdev.ecodes = types.SimpleNamespace(
+            KEY_LEFTCTRL=29, KEY_RIGHTCTRL=97)
+        left = vp_keys.KeyBackendMixin._evdev_target_codes(
+            self.t, evdev, ["ctrl_l"])
+        right = vp_keys.KeyBackendMixin._evdev_target_codes(
+            self.t, evdev, ["ctrl_r"])
+        self.assertEqual(left, {29})
+        self.assertEqual(right, {97})
+        self.assertNotEqual(left, right, "the two sides must be distinct codes")
+
+
+class ModifierMatchesUnitTests(unittest.TestCase):
+    """``modifier_matches`` is the single side-aware matching predicate that
+    reverses #254's full side-insensitivity: a side-specific target matches its
+    OWN side and the generic family fallback, but NOT the opposite side; a
+    generic target matches any side."""
+
+    mm = staticmethod(vp_keys_solo.modifier_matches)
+
+    # --- side-specific target: ctrl_l ------------------------------------------
+    def test_side_specific_target_matches_same_side(self):
+        self.assertTrue(self.mm(_FakeModKey("ctrl_l"), "ctrl_l"))
+
+    def test_side_specific_target_matches_generic_fallback(self):
+        # The reliability fail-safe: a generic Key.ctrl (side unknown) still
+        # satisfies a ctrl_l binding so the chord starts.
+        self.assertTrue(self.mm(_FakeModKey("ctrl"), "ctrl_l"))
+
+    def test_side_specific_target_rejects_opposite_side(self):
+        # THE reversal: right Ctrl must NOT satisfy a left-Ctrl binding.
+        self.assertFalse(self.mm(_FakeModKey("ctrl_r"), "ctrl_l"))
+
+    def test_ctrl_r_target_is_symmetric(self):
+        self.assertTrue(self.mm(_FakeModKey("ctrl_r"), "ctrl_r"))
+        self.assertTrue(self.mm(_FakeModKey("ctrl"), "ctrl_r"))   # generic fallback
+        self.assertFalse(self.mm(_FakeModKey("ctrl_l"), "ctrl_r"))
+
+    # --- generic target: bare ctrl (matches any side) --------------------------
+    def test_generic_target_matches_every_variant(self):
+        for pressed in ("ctrl_l", "ctrl_r", "ctrl"):
+            self.assertTrue(self.mm(_FakeModKey(pressed), "ctrl"),
+                            f"{pressed} should match generic ctrl target")
+
+    # --- different family never matches ----------------------------------------
+    def test_different_family_never_matches(self):
+        self.assertFalse(self.mm(_FakeModKey("shift_l"), "ctrl_l"))
+        self.assertFalse(self.mm(_FakeModKey("alt"), "ctrl"))
+
+    # --- non-modifier targets: plain name equality, unchanged ------------------
+    def test_non_modifier_target_exact_match(self):
+        self.assertTrue(self.mm(_FakeModKey("f9"), "f9"))
+        self.assertFalse(self.mm(_FakeModKey("f9"), "f12"))
+        # The string-token form the other tests use.
+        self.assertTrue(self.mm("<ctrl_r>", "<ctrl_r>"))
+        self.assertFalse(self.mm("<ctrl_r>", "<ctrl_l>"))
+        # A single-char quit key.
+        self.assertTrue(self.mm("q", "q"))
+
+    def test_unnameable_or_bad_target_never_matches(self):
+        self.assertFalse(self.mm(_FakeMediaKey("media_volume_up"), "ctrl_l"))
+        self.assertFalse(self.mm(object(), "ctrl_l"))
+        self.assertFalse(self.mm(_FakeModKey("ctrl_l"), None))
+
+    def test_alt_gr_is_alt_family_side_specific(self):
+        # alt_gr is its own resolvable name in the alt family. It matches a
+        # generic alt target (family) and an alt_gr target, but a side-specific
+        # alt_l target is only satisfied by alt_l or the generic alt fallback —
+        # alt_gr (a distinct specific variant) does not satisfy alt_l.
+        self.assertTrue(self.mm(_FakeModKey("alt_gr"), "alt"))
+        self.assertTrue(self.mm(_FakeModKey("alt_gr"), "alt_gr"))
+        self.assertFalse(self.mm(_FakeModKey("alt_gr"), "alt_l"))
+
+
+class ModifierHelpersUnitTests(unittest.TestCase):
+    """The surviving family helpers used by capture's generic-fallback and by
+    the pynput release matching (``canon_modifier`` / ``modifier_family`` /
+    ``key_name``). ``canon_modifier`` is no longer used for PTT matching."""
+
+    def test_canon_modifier_collapses_families(self):
+        for fam in ("ctrl", "shift", "alt", "cmd"):
+            left = vp_keys_solo.canon_modifier(_FakeModKey(f"{fam}_l"))
+            right = vp_keys_solo.canon_modifier(_FakeModKey(f"{fam}_r"))
+            generic = vp_keys_solo.canon_modifier(_FakeModKey(fam))
+            self.assertEqual(left, fam)
+            self.assertEqual(right, fam)
+            self.assertEqual(generic, fam)
+        self.assertEqual(vp_keys_solo.canon_modifier(_FakeModKey("alt_gr")), "alt")
+
+    def test_canon_modifier_passes_non_modifiers_through(self):
         for tok in ("c", "<ctrl_l>", "<esc>", _FakeModKey("f9"),
                     _FakeMediaKey("media_volume_up")):
-            self.assertIs(vp_keys._canon_modifier(tok), tok)
+            self.assertIs(vp_keys_solo.canon_modifier(tok), tok)
 
-    def test_canon_is_idempotent(self):
-        once = vp_keys._canon_modifier(_FakeModKey("ctrl_l"))
-        self.assertEqual(vp_keys._canon_modifier(once), once)
+    def test_modifier_family(self):
+        self.assertEqual(vp_keys_solo.modifier_family(_FakeModKey("ctrl_l")), "ctrl")
+        self.assertEqual(vp_keys_solo.modifier_family(_FakeModKey("ctrl")), "ctrl")
+        self.assertEqual(vp_keys_solo.modifier_family("shift_r"), "shift")
+        self.assertIsNone(vp_keys_solo.modifier_family(_FakeModKey("f9")))
+        self.assertIsNone(vp_keys_solo.modifier_family(object()))
+
+    def test_key_name(self):
+        self.assertEqual(vp_keys_solo.key_name(_FakeModKey("ctrl_l")), "ctrl_l")
+        self.assertEqual(vp_keys_solo.key_name("ctrl_r"), "ctrl_r")
+        self.assertIsNone(vp_keys_solo.key_name(object()))
 
 
-class PynputSideInsensitiveChordTests(unittest.TestCase):
-    """Root-cause regression: pynput on Windows intermittently reports a generic
-    or opposite-side modifier variant (``Key.ctrl`` instead of ``Key.ctrl_l``).
-    With identity-exact matching the chord never completed → the reported
-    intermittent "doesn't start recording" miss. Chord-down detection must be
-    side-insensitive AND order-independent. Targets are REAL-ish Key objects
-    (``_FakeModKey`` exposing ``.name``) so the canonicalisation path is exercised
-    end to end, including the solo guard (bare-modifier chord → enabled)."""
+class PynputSideSpecificChordTests(unittest.TestCase):
+    """Side-specific chord matching (reverses #254). A ``shift_l+ctrl_l`` binding
+    completes for the BOUND sides (and the generic-family fallback) but NOT for
+    the opposite side. Targets are REAL-ish Key objects (``_FakeModKey`` exposing
+    ``.name``) so the full side-aware path (modifier_matches) is exercised end to
+    end, including the solo guard (bare-modifier chord → enabled)."""
 
     def _ln(self, enabled=True):
         shift_l = _FakeModKey("shift_l")
         ctrl_l = _FakeModKey("ctrl_l")
         targets = {shift_l, ctrl_l}
-        canon = {vp_keys._canon_modifier(t) for t in targets}
-        guard = vp_keys_solo.SoloModifierGuard(canon, enabled=enabled)
+        guard = vp_keys_solo.SoloModifierGuard(set(targets), enabled=enabled)
         return vp_keys._PynputListener(
             _Target(), set(targets), _FakeModKey("esc"), toggle_mode=False,
             solo_guard=guard)
@@ -1357,20 +1573,19 @@ class PynputSideInsensitiveChordTests(unittest.TestCase):
         self.assertTrue(ln._recording)
 
     def test_generic_ctrl_variant_completes_chord(self):
-        # THE reported intermittent miss: ctrl_l is physically pressed but pynput
-        # delivers the GENERIC Key.ctrl for it. Pre-fix, "ctrl" was not in the
-        # {ctrl_l, shift_l} target set → chord never completed → no start.
+        # Reliability fail-safe: ctrl_l is physically pressed but pynput delivers
+        # the GENERIC Key.ctrl (side unknown). The side-specific ctrl_l target is
+        # still satisfied by the generic fallback, so the chord completes.
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
             ln.on_press(_FakeModKey("shift_l"))
-            ln.on_press(_FakeModKey("ctrl"))      # generic variant, not ctrl_l
+            ln.on_press(_FakeModKey("ctrl"))      # generic variant for ctrl_l
         self.assertEqual(ln._owner.started, 1)
         self.assertTrue(ln._recording)
 
     def test_generic_variant_reversed_order_also_starts(self):
-        # The press-order suspicion was a red herring for the same ambiguity:
-        # prove BOTH orders start even when the SECOND key is the generic variant.
+        # Generic fallback works in either press order.
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
@@ -1379,20 +1594,33 @@ class PynputSideInsensitiveChordTests(unittest.TestCase):
         self.assertEqual(ln._owner.started, 1)
         self.assertTrue(ln._recording)
 
-    def test_opposite_side_variant_completes_chord(self):
-        # Even an opposite-side delivery (ctrl_r reported for the left key the
-        # binding names) must still satisfy the chord — side-insensitive.
+    def test_opposite_side_member_does_not_complete_chord(self):
+        # THE reversal: the bound left ctrl is NOT satisfied by right ctrl, so the
+        # chord stays incomplete and recording never starts.
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
             ln.on_press(_FakeModKey("shift_l"))
-            ln.on_press(_FakeModKey("ctrl_r"))    # right ctrl reported
-        self.assertEqual(ln._owner.started, 1)
-        self.assertTrue(ln._recording)
+            ln.on_press(_FakeModKey("ctrl_r"))    # WRONG side for ctrl_l
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
+    def test_opposite_side_member_during_hold_cancels(self):
+        # Recording on shift_l+ctrl_l, then the wrong-side ctrl_r goes down: it is
+        # NOT a chord member (different side) → counts as foreign → cancel.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("shift_l"))
+            ln.on_press(_FakeModKey("ctrl_l"))
+            self.assertEqual(ln._owner.started, 1)
+            ln.on_press(_FakeModKey("ctrl_r"))    # opposite side → foreign
+        self.assertEqual(ln._owner.cancelled, 1)
+        self.assertFalse(ln._recording)
 
     def test_release_of_different_variant_stops(self):
-        # press ctrl_l, release reported as generic ctrl: the chord must still
-        # break and stop (no stuck recording).
+        # press ctrl_l, release reported as generic ctrl (same family): the chord
+        # must still break and stop (no stuck recording).
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
@@ -1403,18 +1631,17 @@ class PynputSideInsensitiveChordTests(unittest.TestCase):
         self.assertEqual(ln._owner.stopped, 1)
         self.assertFalse(ln._recording)
 
-    def test_chord_member_variant_is_not_foreign(self):
-        # Solo-guard regression: a generic/opposite-side variant of a chord
-        # member must NOT be treated as a foreign key (no cancel, no block). Hold
-        # the chord, then a repeat arrives as the generic variant → still recording.
+    def test_generic_member_repeat_is_not_foreign(self):
+        # Solo-guard: a generic variant of a held chord member must NOT be treated
+        # as a foreign key (no cancel). Hold the chord, then a repeat arrives as
+        # the generic family variant → still recording.
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
             ln.on_press(_FakeModKey("shift_l"))
             ln.on_press(_FakeModKey("ctrl_l"))
             self.assertEqual(ln._owner.started, 1)
-            ln.on_press(_FakeModKey("ctrl"))      # generic repeat of a member
-            ln.on_press(_FakeModKey("shift_r"))   # opposite-side repeat of a member
+            ln.on_press(_FakeModKey("ctrl"))      # generic repeat of ctrl_l member
         self.assertEqual(ln._owner.cancelled, 0)
         self.assertTrue(ln._recording)
 
@@ -1442,19 +1669,27 @@ class PynputSideInsensitiveChordTests(unittest.TestCase):
         self.assertFalse(ln._recording)
 
 
-class PynputSideInsensitiveSingleKeyTests(unittest.TestCase):
-    """Single-key bindings stay robust to the same variant ambiguity: a ctrl_l
-    binding started by a generic Key.ctrl, and hold-mode repeat semantics."""
+class PynputSideSpecificSingleKeyTests(unittest.TestCase):
+    """Single-key side-specific binding: a ctrl_l binding is started by left Ctrl
+    and the generic Key.ctrl fallback, but NOT by right Ctrl."""
 
     def _ln(self, enabled=True):
         target = _FakeModKey("ctrl_l")
-        canon = vp_keys._canon_modifier(target)
-        guard = vp_keys_solo.SoloModifierGuard({canon}, enabled=enabled)
+        guard = vp_keys_solo.SoloModifierGuard({target}, enabled=enabled)
         return vp_keys._PynputListener(
             _Target(), {target}, _FakeModKey("esc"), toggle_mode=False,
             solo_guard=guard)
 
+    def test_same_side_starts(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_l"))
+        self.assertEqual(ln._owner.started, 1)
+        self.assertTrue(ln._recording)
+
     def test_generic_variant_starts_single_key_binding(self):
+        # Generic Key.ctrl (side unknown) is the fail-safe fallback for ctrl_l.
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
@@ -1462,19 +1697,29 @@ class PynputSideInsensitiveSingleKeyTests(unittest.TestCase):
         self.assertEqual(ln._owner.started, 1)
         self.assertTrue(ln._recording)
 
+    def test_opposite_side_does_not_start(self):
+        # THE reversal at the single-key level: right Ctrl must not start a
+        # left-Ctrl binding.
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_r"))    # WRONG side
+        self.assertEqual(ln._owner.started, 0)
+        self.assertFalse(ln._recording)
+
     def test_press_variant_release_other_variant_stops(self):
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
             ln.on_press(_FakeModKey("ctrl_l"))
-            ln.on_release(_FakeModKey("ctrl"))    # generic up
+            ln.on_release(_FakeModKey("ctrl"))    # generic (same family) up
         self.assertEqual(ln._owner.started, 1)
         self.assertEqual(ln._owner.stopped, 1)
         self.assertFalse(ln._recording)
 
     def test_variant_repeat_does_not_restart(self):
-        # Hold mode: the same physical key repeating as mixed variants must start
-        # exactly once (rising-edge latch keyed on the canonical token).
+        # Hold mode: the same physical key repeating as same-side/generic variants
+        # must start exactly once (rising-edge latch over the held set).
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
@@ -1485,23 +1730,55 @@ class PynputSideInsensitiveSingleKeyTests(unittest.TestCase):
         self.assertTrue(ln._recording)
 
 
-class PynputSideInsensitiveToggleTests(unittest.TestCase):
-    """toggle_mode must also be side-insensitive: a generic-variant press starts,
-    and a second press (any variant) stops — release is ignored."""
+class PynputSideSpecificGenericBindingTests(unittest.TestCase):
+    """A GENERIC (sideless) binding of bare ``ctrl`` keeps matching ANY side —
+    side-specific matching only narrows side-SPECIFIC bindings."""
+
+    def _ln(self, enabled=True):
+        target = _FakeModKey("ctrl")        # generic, sideless binding
+        guard = vp_keys_solo.SoloModifierGuard({target}, enabled=enabled)
+        return vp_keys._PynputListener(
+            _Target(), {target}, _FakeModKey("esc"), toggle_mode=False,
+            solo_guard=guard)
+
+    def test_left_side_starts_generic_binding(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_l"))
+        self.assertEqual(ln._owner.started, 1)
+
+    def test_right_side_starts_generic_binding(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_r"))
+        self.assertEqual(ln._owner.started, 1)
+
+    def test_generic_press_starts_generic_binding(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl"))
+        self.assertEqual(ln._owner.started, 1)
+
+
+class PynputSideSpecificToggleTests(unittest.TestCase):
+    """toggle_mode is side-specific too: a same-side or generic press starts, the
+    opposite side does not, and a second press (same side/generic) stops."""
 
     def _ln(self):
         target = _FakeModKey("ctrl_l")
-        canon = vp_keys._canon_modifier(target)
-        guard = vp_keys_solo.SoloModifierGuard({canon}, enabled=True)
+        guard = vp_keys_solo.SoloModifierGuard({target}, enabled=True)
         return vp_keys._PynputListener(
             _Target(), {target}, _FakeModKey("esc"), toggle_mode=True,
             solo_guard=guard)
 
-    def test_toggle_with_mixed_variants(self):
+    def test_toggle_with_same_and_generic_variants(self):
         ln = self._ln()
         with patch.object(vp_keys, "QUIT_COUNT", 0), \
                 patch.object(vp_keys.threading, "Thread", _ImmediateThread):
-            ln.on_press(_FakeModKey("ctrl"))      # generic press: start
+            ln.on_press(_FakeModKey("ctrl"))      # generic press (fallback): start
             self.assertEqual(ln._owner.started, 1)
             self.assertTrue(ln._recording)
             ln.on_release(_FakeModKey("ctrl_l"))  # release ignored in toggle mode
@@ -1509,6 +1786,14 @@ class PynputSideInsensitiveToggleTests(unittest.TestCase):
             self.assertTrue(ln._recording)
             ln.on_press(_FakeModKey("ctrl_l"))    # second press (left): stop
         self.assertEqual(ln._owner.stopped, 1)
+        self.assertFalse(ln._recording)
+
+    def test_toggle_opposite_side_does_not_start(self):
+        ln = self._ln()
+        with patch.object(vp_keys, "QUIT_COUNT", 0), \
+                patch.object(vp_keys.threading, "Thread", _ImmediateThread):
+            ln.on_press(_FakeModKey("ctrl_r"))    # WRONG side
+        self.assertEqual(ln._owner.started, 0)
         self.assertFalse(ln._recording)
 
 

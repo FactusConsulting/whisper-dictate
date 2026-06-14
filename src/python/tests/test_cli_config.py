@@ -201,9 +201,12 @@ class DebugConfigTests(unittest.TestCase):
         )
         self.assertIn('QUIT_KEY = (get_value("VOICEPI_QUIT_KEY", "esc")', cli)
         # The quit chord compares against the configurable quit key (resolved
-        # from QUIT_KEY), not a hardcoded Escape. After the _PynputListener
-        # extraction the comparison reads `self._quit_key`.
-        self.assertIn("if k == self._quit_key:", keys)
+        # from QUIT_KEY), not a hardcoded Escape. After the side-specific change
+        # the comparison is the side-aware `self._matches_quit(k)` helper, which
+        # tests against `self._quit_name` (derived from the configurable quit key).
+        self.assertIn("def _matches_quit(self, k)", keys)
+        self.assertIn("self._matches_quit(k)", keys)
+        self.assertIn("self._quit_name", keys)
         self.assertNotIn("if k == keyboard.Key.esc:", keys)
 
     def test_debug_dump_treats_groq_key_as_cloud_api_key(self):

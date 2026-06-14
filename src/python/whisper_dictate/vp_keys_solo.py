@@ -26,6 +26,27 @@ evdev int codes), so it can tell whether a foreign key is present. Key-repeat
 (a held key re-firing) never counts as a new key; releases of keys never seen
 pressed are ignored.
 
+**Side-specific modifier matching (reverses #254).** Modifiers are matched
+SIDE-SPECIFICALLY: a binding of ``ctrl_l`` is satisfied by left Ctrl, NOT by
+right Ctrl. The earlier #254 design collapsed every left/right/generic variant
+to one family token so both sides triggered — the user has explicitly asked to
+reverse that. To keep PTT reliable despite pynput's Windows backend
+intermittently delivering the GENERIC ``Key.ctrl`` (side unknown) instead of the
+specific ``Key.ctrl_l`` (pynput #15/#33/#139/#155), the single side-aware
+predicate :func:`modifier_matches` keeps a GENERIC FALLBACK: a side-specific
+target is satisfied by its own side OR by the generic family press, but never by
+the opposite side. Every matching site (chord start/completion, this guard's
+target/foreign test, the quit-key match, both backends) routes through it.
+
+Residual reliability tradeoff (preserved-but-narrowed vs #254): with a
+side-specific binding, (a) if pynput delivers the OPPOSITE specific side the
+chord will NOT start (rare; the accepted cost of side-specificity), and (b) a
+press of the other side that the OS happens to report AS the generic family
+token still matches (rare leak, fail-safe toward starting). evdev is unaffected —
+its integer scancodes are already unambiguously side-specific (KEY_LEFTCTRL !=
+KEY_RIGHTCTRL) with no generic variant, so each evdev press matches its bound
+side exactly.
+
 **Phantom-held-key self-healing.** Global hooks routinely miss key-ups: Alt+Tab
 eats the Alt-up, Win+L / secure-desktop / RDP focus loss drop events, pynput
 suppression can swallow them. A held entry that is never released would make
@@ -73,20 +94,11 @@ _BARE_MODIFIER_NAMES = frozenset({
 })
 
 
-# Modifier families whose left/right/generic pynput variants must be treated as
-# ONE key for chord matching. pynput's Windows backend normally reports the
-# side-specific Key (``Key.ctrl_l``), but it intermittently delivers the GENERIC
-# ``Key.ctrl`` (and, more rarely, the opposite side) — non-US layouts, virtual
-# machines, secure-desktop/focus races, and the documented "lost modifier" hook
-# bug (pynput #15/#33/#139/#155). With identity-exact matching a generic
-# ``Key.ctrl`` fails ``k in {Key.ctrl_l, Key.shift_l}`` and the chord silently
-# never completes, so PTT intermittently does not start. Collapsing every
-# variant to its family name makes chord-down detection robust regardless of
-# which variant the OS hook happens to deliver. pynput's own ``canonical()``
-# does the same generic-collapse, but only for the *active* Listener, so we
-# reproduce it on the opaque token. evdev is unaffected — it uses unambiguous
-# side-specific integer scancodes (KEY_LEFTCTRL != KEY_RIGHTCTRL), so it never
-# calls this; only the pynput backend canonicalises.
+# Modifier families: map every pynput modifier variant name (``ctrl_l`` /
+# ``ctrl_r`` / generic ``ctrl`` …) to its family token (``ctrl``). Used to decide
+# whether two names belong to the same modifier family and whether a name is a
+# specific *side* (``ctrl_l``/``ctrl_r``) versus the generic family name
+# (``ctrl``). pynput exposes ``alt_gr`` as part of the alt family.
 _MODIFIER_FAMILIES = {
     "ctrl": "ctrl", "ctrl_l": "ctrl", "ctrl_r": "ctrl",
     "shift": "shift", "shift_l": "shift", "shift_r": "shift",
@@ -94,18 +106,27 @@ _MODIFIER_FAMILIES = {
     "cmd": "cmd", "cmd_l": "cmd", "cmd_r": "cmd",
 }
 
+# The bare family names (no side). A binding/press carrying one of these is the
+# OS-reported GENERIC modifier whose side is unknown.
+_GENERIC_MODIFIER_NAMES = frozenset({"ctrl", "shift", "alt", "cmd"})
+
 
 def canon_modifier(k):
     """Collapse a pynput modifier ``Key`` to a side-insensitive family token.
 
-    Returns a stable string (``"ctrl"``/``"shift"``/``"alt"``/``"cmd"``) for any
-    left/right/generic modifier ``Key`` (identified by its ``.name``), so callers
-    can treat ``ctrl_l``, ``ctrl_r`` and the generic ``ctrl`` as the same chord
-    member regardless of which variant the OS hook delivered. Every other token —
-    letters / KeyCodes, function keys, the quit key, media keys, and the plain
-    string tokens used by the unit tests — is returned UNCHANGED, preserving its
-    identity for foreign-key and quit matching. Idempotent: a family token in
-    has no ``.name``, so it passes straight back through.
+    Returns a stable family string (``"ctrl"``/``"shift"``/``"alt"``/``"cmd"``)
+    for any left/right/generic modifier ``Key`` (identified by its ``.name``).
+    Every other token — letters / KeyCodes, function keys, the quit key, media
+    keys, and plain string tokens — is returned UNCHANGED. Idempotent.
+
+    .. note::
+       Since the side-specific matching change (PR reversing #254's full
+       side-insensitivity) this is **no longer used to compare/collapse keys for
+       PTT chord matching** — that goes through :func:`modifier_matches`, which is
+       side-aware. ``canon_modifier`` survives only where a genuine FAMILY token
+       is wanted: capture (:func:`whisper_dictate.vp_keys_capture.key_to_setting_name`)
+       uses it to recognise that a captured key is *some* modifier and to derive
+       the generic family name when only a generic press was ever observed.
     """
     name = getattr(k, "name", None)  # pynput Key enum member
     if isinstance(name, str):
@@ -113,6 +134,93 @@ def canon_modifier(k):
         if family is not None:
             return family
     return k
+
+
+def modifier_family(k):
+    """The modifier FAMILY token (``"ctrl"`` …) for a key, or ``None``.
+
+    Returns the family for any left/right/generic modifier key (by its name);
+    ``None`` for non-modifier keys (letters, function keys, the quit key) and for
+    tokens with no resolvable name. Used to decide whether two tokens are the
+    same physical modifier reported under different variants (press ``ctrl_l`` /
+    release generic ``ctrl``) so a release reliably breaks the chord.
+    """
+    name = key_name(k)
+    if name is None:
+        return None
+    return _MODIFIER_FAMILIES.get(name)
+
+
+def key_name(k):
+    """Best-effort modifier/key NAME for a pressed token, or ``None``.
+
+    * pynput ``Key`` enum member → its ``.name`` (``"ctrl_l"``, ``"ctrl"``,
+      ``"f9"`` …).
+    * a plain string token (the tokens the unit tests and some call sites use,
+      e.g. ``"ctrl_l"``) → itself.
+    Anything else (a letter ``KeyCode``, an evdev int code, a media Key) → the
+    pynput ``.name`` if present, otherwise ``None`` — callers that need a name to
+    do side-aware modifier matching simply get no match.
+    """
+    name = getattr(k, "name", None)  # pynput Key enum member
+    if isinstance(name, str):
+        return name
+    if isinstance(k, str):
+        return k
+    return None
+
+
+def modifier_matches(pressed_key, target_name) -> bool:
+    """Side-aware match: does ``pressed_key`` satisfy a binding of ``target_name``?
+
+    This is the single predicate every PTT matching site routes through (chord
+    start/completion, the SoloModifierGuard target/foreign test, and the quit-key
+    comparison). It REVERSES the full side-insensitivity of #254 — left and right
+    modifiers are now distinct — while keeping a GENERIC fallback so reliability
+    is preserved.
+
+    ``pressed_key`` is an opaque backend token (a pynput ``Key``/``KeyCode``, a
+    plain string token, an evdev int — anything :func:`key_name` can name);
+    ``target_name`` is the PTT ``key`` setting name for one chord member
+    (``"ctrl_l"``, ``"ctrl_r"``, the generic ``"ctrl"``, ``"f9"`` …).
+
+    Matching rules:
+
+    * **Side-specific target** (``ctrl_l``): satisfied by the SAME specific side
+      (``Key.ctrl_l``) OR by the GENERIC family press (``Key.ctrl``) whose side
+      the OS did not report — a fail-safe so the chord still starts when pynput
+      intermittently delivers the generic variant. NOT satisfied by the OPPOSITE
+      specific side (``Key.ctrl_r``).
+    * **Generic target** (bare ``ctrl`` — only if the user ever binds a sideless
+      modifier): matches ANY variant of that family (``ctrl_l``/``ctrl_r``/
+      generic), i.e. side-insensitive within the family.
+    * **Non-modifier target** (``f9``, ``space``, a letter, the ``esc`` quit
+      key): plain name equality — unchanged behaviour.
+
+    Residual reliability tradeoff (documented for the user): with a side-specific
+    binding, (a) if pynput delivers the OPPOSITE specific side it will NOT match
+    (rare; "PTT might not start" — the accepted cost of side-specific matching),
+    and (b) a press of the other side that the OS happens to deliver AS the
+    generic family token WILL match (rare leak, fail-safe toward starting).
+    """
+    if not isinstance(target_name, str):
+        return False
+    pname = key_name(pressed_key)
+    if pname is None:
+        return False
+    # Non-modifier (or unknown) target: exact name equality, nothing fancy.
+    target_family = _MODIFIER_FAMILIES.get(target_name)
+    if target_family is None:
+        return pname == target_name
+    pressed_family = _MODIFIER_FAMILIES.get(pname)
+    if pressed_family != target_family:
+        return False  # different modifier family (ctrl vs shift) — never matches
+    # Same family. Decide on sides.
+    if target_name in _GENERIC_MODIFIER_NAMES:
+        return True  # generic target: any side / generic press of the family
+    # Side-specific target (ctrl_l / ctrl_r): same exact side, or the generic
+    # family press (side unknown → fail-safe match). The opposite side fails.
+    return pname == target_name or pname in _GENERIC_MODIFIER_NAMES
 
 
 # Media / consumer-control keys the solo guard must IGNORE entirely. A Bluetooth
@@ -223,9 +331,18 @@ class SoloModifierGuard:
     Held keys are stored with a monotonic timestamp so stale entries from missed
     key-ups self-heal (see module docstring). ``_now`` is injectable so tests can
     drive the expiry clock deterministically.
+
+    **Target membership.** A held key counts as a target (never foreign) when
+    ``is_target(key)`` is True. By default that is plain set membership over the
+    target tokens — exactly side-specific for evdev (distinct int scancodes) and
+    for the opaque-token unit tests. The pynput backend injects a SIDE-AWARE
+    predicate built on :func:`modifier_matches`, so a chord member arriving as the
+    GENERIC family variant still counts as its target (fail-safe) while the
+    OPPOSITE specific side counts as foreign — see ``_PynputListener``.
     """
 
-    def __init__(self, targets, *, enabled: bool, _now=time.monotonic) -> None:
+    def __init__(self, targets, *, enabled: bool, is_target=None,
+                 _now=time.monotonic) -> None:
         self.enabled = enabled
         # Normalise to a set of target tokens. A single token (the common solo
         # case, and the historical signature) is wrapped; ``None`` → empty set.
@@ -239,9 +356,16 @@ class SoloModifierGuard:
             self._targets = set(targets)
         else:
             self._targets = {targets}
+        # Predicate deciding whether a held key is one of the PTT targets. The
+        # default is exact set membership (side-specific for evdev int codes and
+        # for opaque-token tests); the pynput backend passes a side-aware matcher.
+        self._is_target = is_target if is_target is not None else self._in_targets
         # key token -> monotonic timestamp of the most recent press/repeat.
         self._held: dict = {}
         self._now = _now
+
+    def _in_targets(self, key) -> bool:
+        return key in self._targets
 
     # --- press / release tracking -------------------------------------------------
     def note_press(self, key) -> bool:
@@ -302,7 +426,7 @@ class SoloModifierGuard:
                  if now - ts > FOREIGN_KEY_EXPIRY_S]
         for k in stale:
             del self._held[k]
-        return any(k not in self._targets for k in self._held)
+        return any(not self._is_target(k) for k in self._held)
 
     def may_start_on_target_down(self) -> bool:
         """Rule 1: may we start recording now that the PTT chord just completed?
@@ -319,14 +443,14 @@ class SoloModifierGuard:
     def should_cancel_on_press(self, key) -> bool:
         """Rule 2: did a NEW foreign key go down while recording from the chord?
 
-        Returns True when ``key`` is a freshly-held key outside the target set —
-        i.e. a foreign key (Ctrl+C, or X added to Shift+Ctrl) has joined the
-        held modifier(s) and dictation must be discarded. Always False when not
-        guarded.
+        Returns True when ``key`` is a freshly-held key that is NOT a target —
+        i.e. a foreign key (Ctrl+C, or X added to Shift+Ctrl, or the WRONG-SIDE
+        modifier under side-specific matching) has joined the held modifier(s)
+        and dictation must be discarded. Always False when not guarded.
         """
         if not self.enabled:
             return False
         if is_ignored_foreign_key(key):
             return False  # media/consumer key never cancels (and note_press would
             # have ignored it anyway — explicit here for intent)
-        return key not in self._targets and self.note_press(key)
+        return not self._is_target(key) and self.note_press(key)

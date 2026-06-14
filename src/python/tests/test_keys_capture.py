@@ -25,8 +25,8 @@ class _Key:
 
     Two with the same name are equal (the OS may emit ``Key.ctrl`` twice);
     different names are distinct (``ctrl_l`` vs ``ctrl`` vs ``ctrl_r``), exactly
-    like the real enum — which is what side-insensitive canonicalisation papers
-    over."""
+    like the real enum — the distinction capture now records verbatim (the actual
+    side), reversing the earlier side-insensitive collapse."""
 
     def __init__(self, name):
         self.name = name
@@ -71,18 +71,29 @@ class _Unbindable:
 
 
 class KeyToSettingNameTests(unittest.TestCase):
-    def test_modifier_collapses_side_insensitively(self):
-        # Left and right Ctrl both bind to the same concrete name.
-        self.assertEqual(key_to_setting_name(_Key("ctrl_l")), "ctrl_r")
+    def test_modifier_records_actual_side(self):
+        # Side-specific (reverses #258 part 1's collapse): the ACTUAL side pressed
+        # is recorded verbatim, so left and right Ctrl bind to DISTINCT names.
+        self.assertEqual(key_to_setting_name(_Key("ctrl_l")), "ctrl_l")
         self.assertEqual(key_to_setting_name(_Key("ctrl_r")), "ctrl_r")
-        # The generic variant pynput sometimes delivers collapses too.
-        self.assertEqual(key_to_setting_name(_Key("ctrl")), "ctrl_r")
 
-    def test_each_modifier_family_maps_to_concrete_name(self):
-        self.assertEqual(key_to_setting_name(_Key("shift_l")), "shift_r")
-        self.assertEqual(key_to_setting_name(_Key("alt_l")), "alt_r")
-        self.assertEqual(key_to_setting_name(_Key("alt_gr")), "alt_r")  # via canon
-        self.assertEqual(key_to_setting_name(_Key("cmd_l")), "cmd_r")
+    def test_generic_variant_falls_back_to_concrete_family_name(self):
+        # Documented edge case: when only the SIDELESS generic variant is ever
+        # seen (no side to record), fall back to a concrete family name that the
+        # side-aware matcher then accepts for either side.
+        self.assertEqual(key_to_setting_name(_Key("ctrl")), "ctrl_r")
+        self.assertEqual(key_to_setting_name(_Key("shift")), "shift_r")
+        self.assertEqual(key_to_setting_name(_Key("alt")), "alt_r")
+        self.assertEqual(key_to_setting_name(_Key("cmd")), "cmd_r")
+
+    def test_each_side_specific_modifier_records_its_side(self):
+        self.assertEqual(key_to_setting_name(_Key("shift_l")), "shift_l")
+        self.assertEqual(key_to_setting_name(_Key("shift_r")), "shift_r")
+        self.assertEqual(key_to_setting_name(_Key("alt_l")), "alt_l")
+        self.assertEqual(key_to_setting_name(_Key("alt_r")), "alt_r")
+        self.assertEqual(key_to_setting_name(_Key("alt_gr")), "alt_gr")  # own name
+        self.assertEqual(key_to_setting_name(_Key("cmd_l")), "cmd_l")
+        self.assertEqual(key_to_setting_name(_Key("cmd_r")), "cmd_r")
 
     def test_named_special_key_passthrough(self):
         self.assertEqual(key_to_setting_name(_Key("f9")), "f9")
@@ -181,13 +192,23 @@ class ChordCaptureMultiKeyTests(unittest.TestCase):
         self.assertEqual(chord_a, chord_b, "chord is order-independent")
         self.assertEqual(chord_a, "ctrl_r+shift_r")
 
-    def test_left_and_right_same_family_dedupe_to_one(self):
-        # Holding BOTH left and right Ctrl must bind a single ctrl_r, not a
-        # two-member chord — side-insensitive canonicalisation collapses them.
+    def test_left_and_right_same_family_are_distinct_members(self):
+        # Side-specific (reverses #254): holding BOTH left and right Ctrl now
+        # records a TWO-member chord (each side verbatim), not a collapsed single
+        # ctrl_r — the sides are distinct.
         c = ChordCapture()
         c.press(_Key("ctrl_l"))
         c.press(_Key("ctrl_r"))
         self.assertIsNone(c.release(_Key("ctrl_l")))
+        self.assertEqual(c.release(_Key("ctrl_r")), "ctrl_l+ctrl_r")
+
+    def test_generic_variant_dedupes_with_concrete_fallback(self):
+        # A generic Key.ctrl falls back to "ctrl_r"; holding it together with a
+        # real right Ctrl dedupes to a single ctrl_r member.
+        c = ChordCapture()
+        c.press(_Key("ctrl"))        # generic → "ctrl_r"
+        c.press(_Key("ctrl_r"))      # also "ctrl_r"
+        self.assertIsNone(c.release(_Key("ctrl")))
         self.assertEqual(c.release(_Key("ctrl_r")), "ctrl_r")
 
 
@@ -291,20 +312,40 @@ class ChordCaptureMediaTests(unittest.TestCase):
         self.assertFalse(c.done)
 
 
+class ChordCaptureSideSpecificTests(unittest.TestCase):
+    """Capture now records the ACTUAL side: a left chord stays left-specific."""
+
+    def test_left_chord_captured_side_specific(self):
+        c = ChordCapture()
+        c.press(_Key("ctrl_l"))
+        c.press(_Key("shift_l"))
+        self.assertIsNone(c.release(_Key("ctrl_l")))
+        self.assertEqual(c.release(_Key("shift_l")), "ctrl_l+shift_l")
+
+    def test_mixed_side_chord_keeps_both_sides(self):
+        c = ChordCapture()
+        c.press(_Key("ctrl_l"))
+        c.press(_Key("shift_r"))
+        self.assertIsNone(c.release(_Key("ctrl_l")))
+        self.assertEqual(c.release(_Key("shift_r")), "ctrl_l+shift_r")
+
+
 class ResolvedRoundTripTests(unittest.TestCase):
     """The captured chord names must be resolvable back by the PTT backends, so
     a binding produced by capture is one the listener can actually arm. This
-    guards the family→concrete-name mapping against drift."""
+    guards the name mapping against drift."""
 
     def test_modifier_names_are_bare_modifier_bindings(self):
         from whisper_dictate.vp_keys_solo import is_bare_modifier_binding
-        for fam in ("ctrl_r", "shift_r", "alt_r"):
+        # Both sides of each family are recognised bare-modifier bindings, so a
+        # side-specific captured binding arms the press-alone guard.
+        for name in ("ctrl_l", "ctrl_r", "shift_l", "shift_r", "alt_l", "alt_r"):
             self.assertTrue(
-                is_bare_modifier_binding([fam]),
-                f"{fam} should be recognised as a bare-modifier binding")
+                is_bare_modifier_binding([name]),
+                f"{name} should be recognised as a bare-modifier binding")
         self.assertTrue(
-            is_bare_modifier_binding(["ctrl_r", "shift_r"]),
-            "a captured modifier chord stays a bare-modifier binding")
+            is_bare_modifier_binding(["ctrl_l", "shift_l"]),
+            "a captured side-specific modifier chord stays a bare-modifier binding")
 
     def test_module_exports(self):
         # Smoke: the public surface the IO shell + CLI import is present.

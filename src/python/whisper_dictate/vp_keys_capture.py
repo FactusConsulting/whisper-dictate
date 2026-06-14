@@ -9,9 +9,11 @@ This module is the BACKEND-AGNOSTIC, side-effect-free half. It contains:
 
   * :func:`key_to_setting_name` — turn one opaque pynput key token (a ``Key``
     enum member or a ``KeyCode``) into the string the PTT ``key`` setting uses
-    (``ctrl_r``, ``f9``, ``a`` …), collapsing left/right/generic modifier
-    variants side-insensitively by reusing
-    :func:`whisper_dictate.vp_keys_solo.canon_modifier`.
+    (``ctrl_l``, ``ctrl_r``, ``f9``, ``a`` …), recording the ACTUAL SIDE pressed
+    (``Key.ctrl_l`` → ``"ctrl_l"``) so the captured binding is side-specific —
+    matching the side-specific PTT matching that reverses #254. Only when pynput
+    delivers the sideless GENERIC variant (``Key.ctrl``, no side known) does it
+    fall back to the family name (``"ctrl"``), which then matches either side.
   * :class:`ChordCapture` — the state machine: feed it synthetic ``press`` /
     ``release`` events; it accumulates the SET of keys held and, on the release
     that empties the held set, emits the canonical chord (sorted, ``+``-joined)
@@ -30,14 +32,21 @@ is back up. A lone tap (press then release of a single key) binds that one key.
 """
 from __future__ import annotations
 
-from whisper_dictate.vp_keys_solo import canon_modifier, is_ignored_foreign_key
+from whisper_dictate.vp_keys_solo import (
+    canon_modifier,
+    is_ignored_foreign_key,
+    modifier_family,
+)
 
-# A captured modifier collapses (side-insensitively) to a family token; we then
-# bind a CONCRETE, resolvable name so both backends accept it. The right-hand
-# variant matches the project default (``ctrl_r``) and keeps the left hand free
-# for normal typing. ``alt_gr`` collapses to ``alt`` upstream, so it lands on
-# ``alt_r`` here too — acceptable for a PTT binding.
-_FAMILY_TO_SETTING_NAME = {
+# When only the sideless GENERIC modifier variant was ever observed during
+# capture (pynput delivered ``Key.ctrl`` with no left/right info), we fall back to
+# a CONCRETE, resolvable family name so both backends accept the binding. The
+# right-hand variant matches the project default (``ctrl_r``) and keeps the left
+# hand free for normal typing. This is only reached for the generic press; a
+# side-specific press (``Key.ctrl_l``) is recorded verbatim as ``"ctrl_l"`` so
+# the side is preserved (the #254 reversal). ``alt_gr`` has family ``alt`` and so
+# lands on ``alt_r`` here — acceptable for a PTT binding.
+_GENERIC_FAMILY_TO_SETTING_NAME = {
     "ctrl": "ctrl_r",
     "shift": "shift_r",
     "alt": "alt_r",
@@ -53,10 +62,17 @@ def key_to_setting_name(key) -> str | None:
     Returns the string the ``key`` setting / ``--key`` flag understands, or
     ``None`` for a token we cannot bind (so the capture flow can ignore it):
 
-      * Modifier ``Key`` (``Key.ctrl_l`` / generic ``Key.ctrl`` / …): collapsed
-        side-insensitively via :func:`canon_modifier` to a family token, then to
-        a concrete resolvable name (``ctrl_r`` …) — so left and right Ctrl bind
-        identically, exactly as part 1 of #258 asks.
+      * Side-specific modifier ``Key`` (``Key.ctrl_l`` → ``"ctrl_l"``,
+        ``Key.ctrl_r`` → ``"ctrl_r"``): the ``.name`` verbatim — the ACTUAL SIDE
+        pressed is recorded, so the captured binding is side-specific, matching
+        the side-specific PTT matching that reverses #254. ``Key.alt_gr`` is
+        recorded as ``"alt_gr"`` (its own resolvable name).
+      * Generic modifier ``Key`` (sideless ``Key.ctrl`` — the only case where
+        pynput does not tell us which side): there is no side to record, so it
+        falls back to a concrete family name (``"ctrl_r"`` …) which, under the
+        side-specific matcher's generic handling, matches EITHER side. This is
+        the documented edge case: a capture that only ever saw the generic
+        variant cannot bind a specific side.
       * Other named special ``Key`` (``Key.f9`` → ``"f9"``, ``Key.space`` →
         ``"space"``): the ``.name`` verbatim. The pynput backend resolves these;
         the evdev backend only resolves ``f1``..``f12`` from this group.
@@ -67,27 +83,35 @@ def key_to_setting_name(key) -> str | None:
     it rather than writing an unusable value that would crash at startup
     (``unknown key 'a'``).
     """
-    canon = canon_modifier(key)
-    # canon_modifier returns a family STRING for modifiers, else the token back.
-    if isinstance(canon, str):
-        mapped = _FAMILY_TO_SETTING_NAME.get(canon)
-        return mapped if mapped is not None else canon
     name = getattr(key, "name", None)
     if isinstance(name, str) and name:
+        family = modifier_family(key)
+        # A sideless generic modifier press (name == its own family, e.g.
+        # "ctrl") carries no side: fall back to a concrete resolvable family
+        # name. A side-specific modifier (ctrl_l / ctrl_r / alt_gr) and every
+        # non-modifier named key keep their own ``.name`` verbatim.
+        if family is not None and name == family:
+            return _GENERIC_FAMILY_TO_SETTING_NAME.get(family, name)
         return name
-    # Character KeyCodes (letters) are NOT bindable: the pynput/evdev backends
-    # only resolve named Key members, so writing a single char would crash at
-    # startup ("unknown key 'a'"). Ignore them in capture.
+    # No usable name. canon_modifier still maps a family STRING token back to a
+    # concrete name (defensive: handles a pre-collapsed family token passed in);
+    # everything else (letter KeyCodes, raw VK codes) is unbindable → None.
+    canon = canon_modifier(key)
+    if isinstance(canon, str):
+        return _GENERIC_FAMILY_TO_SETTING_NAME.get(canon, canon)
     return None
 
 
 def canonical_chord(names) -> str:
     """Join already-resolved setting names into the canonical chord string.
 
-    De-duplicates (a side-insensitive collapse can map two held keys — left and
-    right Ctrl — onto the same ``ctrl_r`` name) and sorts so the binding is
-    stable regardless of press order, matching how ``vp_keys`` compares chords as
-    an unordered set. Empty input yields ``""``.
+    De-duplicates (e.g. left Ctrl and a generic Ctrl that both resolved to the
+    same name) and sorts so the binding is stable regardless of press order,
+    matching how ``vp_keys`` compares chords as an unordered set. Note that since
+    the side-specific change, holding BOTH physical sides of a family (left AND
+    right Ctrl, both reported with their side) now yields a two-member chord
+    (``ctrl_l+ctrl_r``) rather than collapsing to one — each side is recorded
+    verbatim. Empty input yields ``""``.
     """
     return "+".join(sorted(set(names)))
 
