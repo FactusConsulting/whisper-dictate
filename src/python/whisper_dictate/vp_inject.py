@@ -365,6 +365,31 @@ class InjectMixin:
                     else _WAYLAND_CTRL_V)
         return self._try_ydotool("key", *shortcut)
 
+    def _release_stale_modifiers(self) -> None:
+        """Release modifier keys still held from a push-to-talk chord before we
+        synthesize keystrokes.
+
+        With a modifier PTT (e.g. ``shift_l+ctrl_l``) the keys can still be down
+        — physically or in the OS's view — when injection starts, so a bare
+        ``type()`` is interpreted as Ctrl/Shift+<key> shortcuts and drops/mangles
+        characters (the rc.3 "Jeg deppP Proxmox." bug). Sending an explicit
+        key-up for each modifier first makes the typed burst land as plain text.
+        Shared by the paste path (which always relied on it) and the type path.
+        """
+        from pynput import keyboard
+
+        for name in (
+                "shift", "shift_l", "shift_r",
+                "alt", "alt_l", "alt_r",
+                "ctrl", "ctrl_l", "ctrl_r",
+                "cmd", "cmd_l", "cmd_r"):
+            modifier = getattr(keyboard.Key, name, None)
+            if modifier is not None:
+                try:
+                    self._kb.release(modifier)
+                except Exception:
+                    pass
+
     def _paste(self, text: str) -> bool:
         try:
             import pyperclip
@@ -392,17 +417,7 @@ class InjectMixin:
 
             from pynput import keyboard
 
-            for name in (
-                    "shift", "shift_l", "shift_r",
-                    "alt", "alt_l", "alt_r",
-                    "ctrl", "ctrl_l", "ctrl_r",
-                    "cmd", "cmd_l", "cmd_r"):
-                modifier = getattr(keyboard.Key, name, None)
-                if modifier is not None:
-                    try:
-                        self._kb.release(modifier)
-                    except Exception:
-                        pass
+            self._release_stale_modifiers()
             self._kb.press(keyboard.Key.ctrl)
             self._kb.press("v")
             self._kb.release("v")
@@ -450,6 +465,7 @@ class InjectMixin:
         if not self._wayland_type(text):
             print("[inject] ydotool fejlede — fallback pynput", flush=True)
             self._last_inject_strategy = "type-fallback"
+            self._release_stale_modifiers()
             self._kb.type(text)
 
     def _inject_other(self, text: str) -> None:
@@ -465,9 +481,11 @@ class InjectMixin:
             self._last_inject_strategy = "paste"
             if not self._paste(text):
                 self._last_inject_strategy = "type-fallback"
+                self._release_stale_modifiers()
                 self._kb.type(text)
             return
         self._last_inject_strategy = "type"
+        self._release_stale_modifiers()
         self._kb.type(text)
 
     def _inject(self, text: str):

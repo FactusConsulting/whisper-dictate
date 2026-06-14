@@ -102,6 +102,7 @@ class _InjectBase(unittest.TestCase):
             "_wayland_text_prefers_paste",
             "_wayland_target_prefers_terminal_paste",
             "_paste",
+            "_release_stale_modifiers",
             # _inject delegates its per-platform body to these; bind the real
             # ones so the dispatch is exercised end-to-end on the namespace.
             "_inject_log_preview",
@@ -127,7 +128,7 @@ class InjectDispatchTests(_InjectBase):
         self.assertEqual(t._kb.events, [])
         self.assertEqual(self.clip.copied, [])
 
-    def test_x11_type_mode_types_text_via_controller(self):
+    def test_x11_type_mode_releases_modifiers_then_types(self):
         t = self._target(mode="type")
 
         with _env(WAYLAND_DISPLAY=None), \
@@ -137,8 +138,19 @@ class InjectDispatchTests(_InjectBase):
             self.inject.InjectMixin._inject(t, "typed text")
 
         self.assertEqual(t._last_inject_strategy, "type")
-        self.assertEqual(t._kb.events, [("type", "typed text")])
         self.assertEqual(self.clip.copied, [])
+        # The text lands as a single type() call...
+        self.assertIn(("type", "typed text"), t._kb.events)
+        type_idx = t._kb.events.index(("type", "typed text"))
+        # ...and EVERY stale PTT modifier is released BEFORE the type, so a still
+        # -held chord can't turn the text into Ctrl/Shift shortcuts (the rc.3
+        # "Jeg deppP Proxmox." bug). Ctrl + Shift specifically must be released.
+        released_before = {e[1] for e in t._kb.events[:type_idx] if e[0] == "release"}
+        self.assertIn(self.kbmod.Key.ctrl, released_before)
+        self.assertIn(self.kbmod.Key.shift, released_before)
+        # No release AFTER the type (the burst is clean once it starts).
+        self.assertFalse(
+            [e for e in t._kb.events[type_idx + 1:] if e[0] == "release"])
 
     def test_x11_paste_mode_copies_and_sends_ctrl_v(self):
         t = self._target(mode="paste")
@@ -178,7 +190,11 @@ class InjectDispatchTests(_InjectBase):
             self.inject.InjectMixin._inject(t, "fallback text")
 
         self.assertEqual(t._last_inject_strategy, "type-fallback")
-        self.assertEqual(t._kb.events, [("type", "fallback text")])
+        # The fallback type path also releases stale modifiers first.
+        self.assertIn(("type", "fallback text"), t._kb.events)
+        type_idx = t._kb.events.index(("type", "fallback text"))
+        released_before = {e[1] for e in t._kb.events[:type_idx] if e[0] == "release"}
+        self.assertIn(self.kbmod.Key.ctrl, released_before)
         self.assertIn("paste fejlede", out.getvalue())
 
     def test_x11_auto_types_plain_text(self):
@@ -192,7 +208,12 @@ class InjectDispatchTests(_InjectBase):
             self.inject.InjectMixin._inject(t, "plain ascii")
 
         self.assertEqual(t._last_inject_strategy, "type")
-        self.assertEqual(t._kb.events, [("type", "plain ascii")])
+        # Modifiers released before the (single) type burst; text intact.
+        self.assertIn(("type", "plain ascii"), t._kb.events)
+        type_idx = t._kb.events.index(("type", "plain ascii"))
+        self.assertIn(
+            self.kbmod.Key.ctrl,
+            {e[1] for e in t._kb.events[:type_idx] if e[0] == "release"})
         self.assertIn("strategy: type", out.getvalue())
 
     def test_windows_auto_pastes_for_terminal_target(self):
@@ -272,9 +293,14 @@ class InjectWaylandDispatchTests(_InjectBase):
         with _env(WAYLAND_DISPLAY="wayland-0"), _capture_stdout() as out:
             self.inject.InjectMixin._inject(t, "plain ascii")
 
-        # _wayland_type returned False -> direct pynput type fallback.
+        # _wayland_type returned False -> direct pynput type fallback, which
+        # releases stale modifiers before typing.
         self.assertEqual(t._last_inject_strategy, "type-fallback")
-        self.assertEqual(t._kb.events, [("type", "plain ascii")])
+        self.assertIn(("type", "plain ascii"), t._kb.events)
+        type_idx = t._kb.events.index(("type", "plain ascii"))
+        self.assertIn(
+            self.kbmod.Key.ctrl,
+            {e[1] for e in t._kb.events[:type_idx] if e[0] == "release"})
         self.assertIn("fallback pynput", out.getvalue())
 
     def test_wayland_paste_failure_falls_back_to_ydotool(self):
