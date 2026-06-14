@@ -606,6 +606,13 @@ def main() -> None:
     ap = build_arg_parser()
     a = ap.parse_args()
     apply_config_to_environ()
+    # --prompt overrides VOICEPI_INITIAL_PROMPT / the saved Initial-prompt setting
+    # for THIS run (like --lang). Set the env now — AFTER apply_config_to_environ
+    # so config can't clobber it — so --show-config and the debug dump (which read
+    # the env directly) reflect the flag. The transcribe module's resolved global
+    # is refreshed below (get_value reads config first, so env alone wouldn't win).
+    if a.prompt is not None:
+        os.environ["VOICEPI_INITIAL_PROMPT"] = a.prompt
     _run_utility_subcommands(a, ap)
     lang = None if (a.autodetect or not a.lang) else a.lang
 
@@ -619,6 +626,13 @@ def main() -> None:
         print("[privacy] local-only mode enabled; cloud backends and model downloads are blocked", flush=True)
 
     _load_runtime_modules()
+
+    # The transcribe module captured INITIAL_PROMPT from get_value() at import,
+    # which reads config BEFORE env — so refresh it from the resolved --prompt
+    # (flag, else env/config default) to guarantee the flag wins for this run.
+    if a.prompt is not None:
+        from whisper_dictate import vp_transcribe
+        vp_transcribe.INITIAL_PROMPT = a.prompt or None
 
     backend, dev, ctype = _resolve_backend_and_device(a, ap)
 

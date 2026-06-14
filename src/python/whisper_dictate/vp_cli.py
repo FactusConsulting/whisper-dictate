@@ -70,6 +70,8 @@ MODEL_NAME = get_value("VOICEPI_MODEL", "large-v3-turbo")
 DEVICE = get_value("VOICEPI_DEVICE", "auto")
 LANG = get_value("VOICEPI_LANG")  # None -> Whisper auto-detects
 KEY = get_value("VOICEPI_KEY", "ctrl_r")
+# Domain-vocabulary hint seeded into Whisper's initial_prompt. None -> no hint.
+INITIAL_PROMPT = get_value("VOICEPI_INITIAL_PROMPT")
 
 VALID_INJECT_MODES = ("auto", "type", "paste", "print")
 INJECT_MODE = (get_value("VOICEPI_INJECT_MODE", "auto") or "auto").strip().lower()
@@ -183,6 +185,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "(env VOICEPI_LANG) — omit to let Whisper auto-detect")
     ap.add_argument("--autodetect", action="store_true",
                     help="explicitly auto-detect language (alias for omitting --lang)")
+    ap.add_argument("--prompt", default=INITIAL_PROMPT, metavar="TEXT",
+                    help="domain-vocabulary hint seeded into Whisper's initial "
+                         "prompt, e.g. \"Kubernetes, Proxmox, LiteLLM, ansible\" "
+                         "(env VOICEPI_INITIAL_PROMPT / the Quality tab's Initial "
+                         "prompt) — the flag wins over both for this run")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--type", action="store_const", dest="mode",
                    const="type",

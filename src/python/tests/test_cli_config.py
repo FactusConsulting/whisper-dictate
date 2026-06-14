@@ -279,6 +279,24 @@ class ArgumentParserTests(unittest.TestCase):
             self.assertEqual(parser.parse_args(["--paste"]).mode, "paste")
             self.assertEqual(parser.parse_args(["--type"]).mode, "type")
 
+    def test_parser_uses_initial_prompt_env_default(self):
+        # #154: --prompt seeds Whisper's initial_prompt; env is the default and
+        # the flag overrides it for the run (like --lang/--key).
+        with _env(VOICEPI_INITIAL_PROMPT="Kubernetes, Proxmox, LiteLLM"):
+            voice_pi = load_voice_pi()
+            parser = voice_pi.build_arg_parser()
+            self.assertEqual(parser.parse_args([]).prompt,
+                             "Kubernetes, Proxmox, LiteLLM")
+            self.assertEqual(
+                parser.parse_args(["--prompt", "ansible, terraform"]).prompt,
+                "ansible, terraform")
+
+    def test_parser_prompt_defaults_to_none_when_unset(self):
+        with _env(VOICEPI_INITIAL_PROMPT=None):
+            voice_pi = load_voice_pi()
+            parser = voice_pi.build_arg_parser()
+            self.assertIsNone(parser.parse_args([]).prompt)
+
     def test_parser_defaults_to_auto_inject_mode(self):
         old = os.environ.pop("VOICEPI_INJECT_MODE", None)
         try:
