@@ -107,13 +107,14 @@ pub(in crate::ui) fn render_api_check_indicator(
     };
     ui.add_space(4.0);
     if in_flight {
-        // The spinner carries the motion, so drop the static hourglass icon and
-        // just show the muted "testing…" label next to it.
-        let _ = icon;
+        // The spinner carries the motion, so the hourglass icon is unused here;
+        // just show the muted "testing…" label next to the spinner.
         ui.add(egui::Spinner::new().size(14.0));
         ui.label(egui::RichText::new(hover).color(color));
     } else {
-        ui.label(icon_text(icon, &hover).color(color))
+        // Render ONLY the ✓/✗ icon inline — the full status message is on hover,
+        // not spilled into a long inline label.
+        ui.label(egui::RichText::new(icon).color(color))
             .on_hover_text(hover);
     }
 }
