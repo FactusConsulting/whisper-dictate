@@ -364,6 +364,15 @@ class SoloModifierGuard:
         self._held: dict = {}
         self._now = _now
 
+    def set_is_target(self, predicate) -> None:
+        """Install the target-membership predicate (held key -> bool).
+
+        Public hook for backends that can only build the predicate after the
+        guard exists — the pynput listener installs a side-aware matcher bound to
+        itself. ``None`` restores the default exact set membership.
+        """
+        self._is_target = predicate if predicate is not None else self._in_targets
+
     def _in_targets(self, key) -> bool:
         return key in self._targets
 

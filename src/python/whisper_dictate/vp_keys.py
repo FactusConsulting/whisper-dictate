@@ -120,7 +120,7 @@ class _PynputListener:
             self._solo = SoloModifierGuard(set(), enabled=False)
         else:
             self._solo = solo_guard
-            self._solo._is_target = self._key_is_target
+            self._solo.set_is_target(self._key_is_target)
 
     @staticmethod
     def _name_of(token):
@@ -253,6 +253,10 @@ class KeyBackendMixin:
         'ctrl_l': 'KEY_LEFTCTRL',   'ctrl_r': 'KEY_RIGHTCTRL',
         'shift_l': 'KEY_LEFTSHIFT', 'shift_r': 'KEY_RIGHTSHIFT',
         'alt_l': 'KEY_LEFTALT',     'alt_r': 'KEY_RIGHTALT',
+        # AltGr is physically the right Alt on most layouts; capture records it as
+        # "alt_gr" (its pynput name), so map it here too or the evdev backend
+        # would sys.exit("unknown key 'alt_gr'") on a captured AltGr binding.
+        'alt_gr': 'KEY_RIGHTALT',
         'super_l': 'KEY_LEFTMETA',  'super_r': 'KEY_RIGHTMETA',
         # pynput names the Win/Cmd modifier family "cmd" (cmd_l / cmd_r / cmd);
         # evdev uses KEY_LEFTMETA / KEY_RIGHTMETA (exposed above as super_l/r).

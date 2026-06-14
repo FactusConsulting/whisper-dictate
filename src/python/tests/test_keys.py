@@ -105,6 +105,12 @@ class EvdevMapTests(unittest.TestCase):
         self.assertIn("cmd_l", vp_keys.KeyBackendMixin._EVDEV_MAP)
         self.assertEqual(vp_keys.KeyBackendMixin._EVDEV_MAP["cmd_l"], "KEY_LEFTMETA")
 
+    def test_alt_gr_in_evdev_map(self):
+        # Capture records AltGr as "alt_gr" (its pynput name); evdev must resolve
+        # it (to the right Alt) so a captured AltGr binding doesn't sys.exit.
+        self.assertIn("alt_gr", vp_keys.KeyBackendMixin._EVDEV_MAP)
+        self.assertEqual(vp_keys.KeyBackendMixin._EVDEV_MAP["alt_gr"], "KEY_RIGHTALT")
+
     def test_evdev_target_codes_resolves_cmd_r(self):
         # End-to-end: _evdev_target_codes must not sys.exit for a cmd_r binding.
         import types as _local_types
