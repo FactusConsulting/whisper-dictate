@@ -508,8 +508,9 @@ class InjectMixin:
             # is reliable, so auto ALWAYS pastes on Windows. The target/text
             # paste-preferences below are Windows-only (they return False when
             # os.name != "nt"), so on X11/macOS the only auto-paste trigger here
-            # is a modifier-chord PTT; otherwise it types. (Wayland has its own
-            # auto path in _inject_wayland.) Explicit --type overrides.
+            # is a bare-modifier PTT (a single modifier OR a chord); otherwise it
+            # types. (Wayland has its own auto path in _inject_wayland.) Explicit
+            # --type overrides.
             mode = "paste" if (
                 os.name == "nt"
                 or self._target_prefers_paste()
