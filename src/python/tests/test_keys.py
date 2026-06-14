@@ -674,6 +674,25 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
         self.assertEqual(g._held, {})        # family-cleared, no phantom
         self.assertFalse(g.foreign_key_held())
 
+    def test_note_release_side_specific_leaves_opposite_side_held(self):
+        # Over-deletion guard: releasing ONE side of a both-sides hold must NOT
+        # drop the other side (else a still-held opposite-side foreign key would
+        # stop blocking, and a both-side chord would break).
+        g = vp_keys_solo.SoloModifierGuard("shift_l", enabled=True)
+        g.note_press("ctrl_l")
+        g.note_press("ctrl_r")
+        g.note_release("ctrl_l")             # release LEFT only
+        self.assertIn("ctrl_r", g._held)     # right still held
+        self.assertNotIn("ctrl_l", g._held)
+
+    def test_note_release_alt_r_clears_held_alt_gr(self):
+        # alt_gr ≡ alt_r (same physical right Alt): a release reported as one
+        # spelling clears a hold recorded as the other.
+        g = vp_keys_solo.SoloModifierGuard("shift_l", enabled=True)
+        g.note_press("alt_gr")
+        g.note_release("alt_r")
+        self.assertEqual(g._held, {})
+
     def test_may_start_blocked_when_foreign_held(self):
         g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
         g.note_press("shift")  # shift already down
@@ -1478,6 +1497,15 @@ class ModifierMatchesUnitTests(unittest.TestCase):
     def test_side_specific_target_rejects_opposite_side(self):
         # THE reversal: right Ctrl must NOT satisfy a left-Ctrl binding.
         self.assertFalse(self.mm(_FakeModKey("ctrl_r"), "ctrl_l"))
+
+    def test_alt_gr_and_alt_r_are_equivalent(self):
+        # AltGr is physically the right Alt: a press reported as one spelling must
+        # satisfy a binding saved as the other (backward-compat for AltGr users).
+        self.assertTrue(self.mm(_FakeModKey("alt_gr"), "alt_r"))
+        self.assertTrue(self.mm(_FakeModKey("alt_r"), "alt_gr"))
+        # ...but LEFT alt must NOT satisfy a right-alt (alt_r/alt_gr) binding.
+        self.assertFalse(self.mm(_FakeModKey("alt_l"), "alt_r"))
+        self.assertFalse(self.mm(_FakeModKey("alt_l"), "alt_gr"))
 
     def test_ctrl_r_target_is_symmetric(self):
         self.assertTrue(self.mm(_FakeModKey("ctrl_r"), "ctrl_r"))

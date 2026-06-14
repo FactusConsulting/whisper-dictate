@@ -170,6 +170,22 @@ def key_name(k):
     return None
 
 
+# AltGr is physically the right Alt on most layouts; pynput names it "alt_gr" or
+# "alt_r" depending on layout/context. Treat them as the SAME side so a binding
+# captured/saved as one still matches a press reported as the other (and to match
+# the evdev mapping, where both resolve to KEY_RIGHTALT).
+_SIDE_ALIASES = {"alt_gr": "alt_r"}
+
+
+def _canon_side_name(name):
+    """Canonicalise equivalent side names (``alt_gr`` → ``alt_r``).
+
+    Passes ``None`` and every other name through unchanged. Used by the matcher
+    and the release handler so the two right-Alt spellings are interchangeable.
+    """
+    return _SIDE_ALIASES.get(name, name)
+
+
 def modifier_matches(pressed_key, target_name) -> bool:
     """Side-aware match: does ``pressed_key`` satisfy a binding of ``target_name``?
 
@@ -218,9 +234,13 @@ def modifier_matches(pressed_key, target_name) -> bool:
     # Same family. Decide on sides.
     if target_name in _GENERIC_MODIFIER_NAMES:
         return True  # generic target: any side / generic press of the family
-    # Side-specific target (ctrl_l / ctrl_r): same exact side, or the generic
-    # family press (side unknown → fail-safe match). The opposite side fails.
-    return pname == target_name or pname in _GENERIC_MODIFIER_NAMES
+    # Side-specific target (ctrl_l / ctrl_r): same side (alt_gr≡alt_r canonical),
+    # or the generic family press (side unknown → fail-safe match). The opposite
+    # side fails.
+    return (
+        _canon_side_name(pname) == _canon_side_name(target_name)
+        or pname in _GENERIC_MODIFIER_NAMES
+    )
 
 
 # Media / consumer-control keys the solo guard must IGNORE entirely. A Bluetooth
@@ -417,23 +437,42 @@ class SoloModifierGuard:
     def note_release(self, key) -> None:
         """Record ``key`` as released. Releases of unknown keys are ignored.
 
-        Removes the exact held token AND any held token in the SAME modifier
-        family: with side-specific matching pynput can report the press as a
-        side-specific token (``ctrl_r``) but the release as the generic family
-        token (``ctrl``) — popping only the exact token would leave a phantom
-        held key (a foreign key wrongly blocking starts / cancelling) until it
-        expires. Non-modifier / evdev int tokens have no family
-        (``modifier_family`` → ``None``) and fall back to exact removal.
+        Side-specific matching needs care here, because pynput can report a press
+        and its release under different variants of the same physical key:
+
+        * **Non-modifier / evdev int / opaque token** (``modifier_family`` →
+          ``None``): exact removal. evdev has no generic and its side codes are
+          already distinct, so the exact token is the right thing to drop.
+        * **Generic family release** (``Key.ctrl``, no side): the matching press
+          could have been recorded as any side or as the generic, so clear ALL
+          held members of that family.
+        * **Side-specific release** (``ctrl_l``): clear the held token of the
+          SAME side (``alt_gr``≡``alt_r`` via :func:`_canon_side_name`) plus any
+          held GENERIC family token (a press the OS reported sideless that this
+          release ends) — but LEAVE the opposite specific side held, so releasing
+          one side of a both-sides chord doesn't drop the other and a still-held
+          opposite-side foreign key keeps blocking.
 
         No-op when ``enabled`` is False — the guard is inert.
         """
         if not self.enabled:
             return
-        self._held.pop(key, None)
         family = modifier_family(key)
-        if family is not None:
-            for held in [k for k in self._held if modifier_family(k) == family]:
-                del self._held[held]
+        if family is None:
+            self._held.pop(key, None)
+            return
+        rname = _canon_side_name(key_name(key))
+        generic_release = rname == family
+        doomed = [
+            k for k in self._held
+            if modifier_family(k) == family and (
+                generic_release
+                or _canon_side_name(key_name(k)) == rname  # same side
+                or key_name(k) == family                   # a held generic
+            )
+        ]
+        for k in doomed:
+            del self._held[k]
 
     # --- the two rules -------------------------------------------------------------
     def foreign_key_held(self) -> bool:
