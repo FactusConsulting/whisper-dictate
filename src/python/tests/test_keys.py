@@ -656,6 +656,18 @@ class SoloModifierGuardUnitTests(unittest.TestCase):
         g.note_release("never_pressed")  # must not raise / miscount
         self.assertFalse(g.foreign_key_held())
 
+    def test_note_release_generic_clears_held_side_variant(self):
+        # Side-specific matching: a modifier pressed as a side-specific token
+        # (ctrl_r) but released as the GENERIC family token (ctrl) must still
+        # clear the held entry — else it lingers as a phantom foreign key that
+        # blocks starts / causes cancels until it expires.
+        g = vp_keys_solo.SoloModifierGuard("shift_l", enabled=True)
+        g.note_press("ctrl_r")               # a foreign modifier goes down
+        self.assertTrue(g.foreign_key_held())
+        g.note_release("ctrl")               # OS reports the release as generic
+        self.assertEqual(g._held, {})        # family-cleared, no phantom
+        self.assertFalse(g.foreign_key_held())
+
     def test_may_start_blocked_when_foreign_held(self):
         g = vp_keys_solo.SoloModifierGuard("ctrl", enabled=True)
         g.note_press("shift")  # shift already down

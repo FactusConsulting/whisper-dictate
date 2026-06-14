@@ -13,7 +13,9 @@ This module is the BACKEND-AGNOSTIC, side-effect-free half. It contains:
     (``Key.ctrl_l`` → ``"ctrl_l"``) so the captured binding is side-specific —
     matching the side-specific PTT matching that reverses #254. Only when pynput
     delivers the sideless GENERIC variant (``Key.ctrl``, no side known) does it
-    fall back to the family name (``"ctrl"``), which then matches either side.
+    fall back to a concrete side name (``"ctrl_r"``) — generic family names are
+    not resolvable on the evdev backend — so that rare case binds the right side
+    (plus any generic-delivered presses); re-capture if you meant the left key.
   * :class:`ChordCapture` — the state machine: feed it synthetic ``press`` /
     ``release`` events; it accumulates the SET of keys held and, on the release
     that empties the held set, emits the canonical chord (sorted, ``+``-joined)
@@ -69,10 +71,12 @@ def key_to_setting_name(key) -> str | None:
         recorded as ``"alt_gr"`` (its own resolvable name).
       * Generic modifier ``Key`` (sideless ``Key.ctrl`` — the only case where
         pynput does not tell us which side): there is no side to record, so it
-        falls back to a concrete family name (``"ctrl_r"`` …) which, under the
-        side-specific matcher's generic handling, matches EITHER side. This is
-        the documented edge case: a capture that only ever saw the generic
-        variant cannot bind a specific side.
+        falls back to a concrete side name (``"ctrl_r"`` …) — generic family
+        names aren't resolvable on the evdev backend. Under side-specific
+        matching that binds the RIGHT side (and any press the OS reports as the
+        generic family token), NOT the left. This is the documented edge case: a
+        capture that only ever saw the sideless generic cannot know the real
+        side, so it picks one — re-capture if you intended the other side.
       * Other named special ``Key`` (``Key.f9`` → ``"f9"``, ``Key.space`` →
         ``"space"``): the ``.name`` verbatim. The pynput backend resolves these;
         the evdev backend only resolves ``f1``..``f12`` from this group.

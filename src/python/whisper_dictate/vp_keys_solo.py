@@ -408,11 +408,23 @@ class SoloModifierGuard:
     def note_release(self, key) -> None:
         """Record ``key`` as released. Releases of unknown keys are ignored.
 
+        Removes the exact held token AND any held token in the SAME modifier
+        family: with side-specific matching pynput can report the press as a
+        side-specific token (``ctrl_r``) but the release as the generic family
+        token (``ctrl``) — popping only the exact token would leave a phantom
+        held key (a foreign key wrongly blocking starts / cancelling) until it
+        expires. Non-modifier / evdev int tokens have no family
+        (``modifier_family`` → ``None``) and fall back to exact removal.
+
         No-op when ``enabled`` is False — the guard is inert.
         """
         if not self.enabled:
             return
         self._held.pop(key, None)
+        family = modifier_family(key)
+        if family is not None:
+            for held in [k for k in self._held if modifier_family(k) == family]:
+                del self._held[held]
 
     # --- the two rules -------------------------------------------------------------
     def foreign_key_held(self) -> bool:
