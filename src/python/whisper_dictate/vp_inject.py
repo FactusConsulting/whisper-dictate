@@ -17,6 +17,7 @@ import threading
 import time
 
 from whisper_dictate.vp_feedback import notify_error
+from whisper_dictate.vp_keys_solo import is_bare_modifier_binding
 from whisper_dictate.vp_windows import (
     SELF_INJECTION_PROCESSES as _SELF_INJECTION_PROCESSES,
     SELF_INJECTION_TITLE_RE as _SELF_INJECTION_TITLE_RE,
@@ -325,7 +326,16 @@ class InjectMixin:
     def _text_prefers_paste(self, text: str) -> bool:
         if os.name != "nt":
             return False
-        return any(ch in _WINDOWS_LAYOUT_SENSITIVE_CHARS for ch in text)
+        # Auto-paste when typing would be unreliable: dead-key/diacritic chars
+        # (layout-sensitive) OR any non-ASCII char. pynput's per-character type()
+        # on Windows injects non-ASCII via the Unicode path, which is both
+        # layout-sensitive AND drop-prone under a fast burst — Danish text ("på",
+        # "æøå") came out as "Kubernete pP" (dropped s + å). A single such char
+        # makes the WHOLE text paste atomically, so nothing is dropped. Pure
+        # ASCII still types.
+        return any(
+            ch in _WINDOWS_LAYOUT_SENSITIVE_CHARS or ord(ch) > 127 for ch in text
+        )
 
     def _wayland_text_prefers_paste(self, text: str) -> bool:
         return any(ord(ch) > 127 for ch in text)
@@ -364,6 +374,22 @@ class InjectMixin:
                     if self._wayland_target_prefers_terminal_paste()
                     else _WAYLAND_CTRL_V)
         return self._try_ydotool("key", *shortcut)
+
+    def _ptt_is_bare_modifier(self) -> bool:
+        """True when the configured PTT key is an ALL-modifier binding (a single
+        modifier or a chord, e.g. ``ctrl_l`` / ``shift_l+ctrl_l``).
+
+        Push-to-talk users hold the key THROUGH the injection (until the text
+        appears), so with a modifier chord the keys are physically down while we
+        type — turning the burst into Ctrl/Shift+<key> shortcuts (the "Jeg deppP
+        Proxmox." mangling). A synthetic release can't override a physically held
+        key, so for these bindings auto mode prefers PASTE: Ctrl+V (or
+        Ctrl+Shift+V) still pastes even with the modifiers held. A non-modifier
+        key (``f9``, a char) types fine and is unaffected.
+        """
+        key = getattr(self, "key", "") or ""
+        names = [k.strip().lower() for k in key.split("+") if k.strip()]
+        return is_bare_modifier_binding(names)
 
     def _release_stale_modifiers(self) -> None:
         """Release modifier keys still held from a push-to-talk chord before we
@@ -450,7 +476,10 @@ class InjectMixin:
     def _inject_wayland(self, text: str) -> None:
         mode = self.mode
         if mode == "auto":
-            mode = "paste" if self._wayland_text_prefers_paste(text) else "ydotool"
+            mode = "paste" if (
+                self._wayland_text_prefers_paste(text)
+                or self._ptt_is_bare_modifier()
+            ) else "ydotool"
             print(f"[inject] strategy: {mode}", flush=True)
         if mode == "paste":
             self._last_inject_strategy = "paste"
@@ -474,7 +503,9 @@ class InjectMixin:
         mode = self.mode
         if mode == "auto":
             mode = "paste" if (
-                self._target_prefers_paste() or self._text_prefers_paste(text)
+                self._target_prefers_paste()
+                or self._text_prefers_paste(text)
+                or self._ptt_is_bare_modifier()
             ) else "type"
             print(f"[inject] strategy: {mode}", flush=True)
         if mode == "paste":

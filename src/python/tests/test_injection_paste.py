@@ -113,6 +113,7 @@ class _InjectBase(unittest.TestCase):
             "_wayland_target_prefers_terminal_paste",
             "_paste",
             "_release_stale_modifiers",
+            "_ptt_is_bare_modifier",
             # _inject delegates its per-platform body to these; bind the real
             # ones so the dispatch is exercised end-to-end on the namespace.
             "_inject_log_preview",
