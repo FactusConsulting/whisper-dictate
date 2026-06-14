@@ -502,8 +502,15 @@ class InjectMixin:
         # targets, otherwise direct typing. Explicit --paste/--type override it.
         mode = self.mode
         if mode == "auto":
+            # On Windows, pynput's per-character type() drops keystrokes under a
+            # fast burst (worse on non-US layouts) — it mangled "Kubernetes" into
+            # "deperntes". Paste (one atomic Ctrl+V of the full clipboard string)
+            # is reliable, so auto ALWAYS pastes on Windows. X11/macOS keep the
+            # per-case heuristic (paste only for fragile targets, layout-sensitive
+            # / non-ASCII text, or a modifier-chord PTT). Explicit --type overrides.
             mode = "paste" if (
-                self._target_prefers_paste()
+                os.name == "nt"
+                or self._target_prefers_paste()
                 or self._text_prefers_paste(text)
                 or self._ptt_is_bare_modifier()
             ) else "type"
