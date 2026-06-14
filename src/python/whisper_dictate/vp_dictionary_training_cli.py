@@ -119,8 +119,15 @@ def run_build_from_corpus(
         # (not found); keep the command's contract of exit 1 + clean message.
         return _fail(str(exc), as_json)
 
-    dict_path = resolve_dictionary_path(dictionary_path)
+    # A SPECIFIED profile that matches zero corpus items is almost always a
+    # mistyped --language/--category: the build would otherwise proceed silently
+    # and write nothing (or a curated-only result) with no signal. Fail clearly
+    # (#272). An empty profile (no filter) is left alone — out of scope here.
+    if not items and not profile.is_empty:
+        return _fail(f"no corpus items matched profile {profile.describe()}", as_json)
+
     try:
+        dict_path = resolve_dictionary_path(dictionary_path)
         document = load_dictionary_document(dict_path)
     except ValueError as exc:
         return _fail(str(exc), as_json)
@@ -167,8 +174,8 @@ def run_suggest_from_misses(
     ``apply`` is True. Returns a process exit code. Reads result TEXT only — no
     audio.
     """
-    dict_path = resolve_dictionary_path(dictionary_path)
     try:
+        dict_path = resolve_dictionary_path(dictionary_path)
         document = load_dictionary_document(dict_path)
     except ValueError as exc:
         return _fail(str(exc), as_json)

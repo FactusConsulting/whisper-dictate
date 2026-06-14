@@ -117,6 +117,34 @@ class BuildFromCorpusCliTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("error", json.loads(buf.getvalue().strip().splitlines()[-1]))
 
+    def test_zero_match_profile_reports_clear_error(self):
+        # #272: a SPECIFIED profile that matches no corpus items must fail clearly
+        # (rc 1 + clear message) rather than silently producing an empty build.
+        with _capture_stdout() as buf:
+            rc = cli.run_build_from_corpus(
+                corpus_manifest=self.manifest,
+                dictionary_path=self.dict_path,
+                language="fr",            # no French items in the corpus
+                as_json=True,
+            )
+        self.assertEqual(rc, 1)
+        payload = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertIn("no corpus items matched profile", payload["error"])
+        self.assertFalse(self.dict_path.exists())  # nothing written
+
+    def test_empty_dictionary_path_reports_clean_error(self):
+        # #272: --dictionary "" is rejected with a clean error (rc 1 + JSON
+        # error), routed through the command's _fail — not a raw traceback.
+        with _capture_stdout() as buf:
+            rc = cli.run_build_from_corpus(
+                corpus_manifest=self.manifest,
+                dictionary_path="",
+                as_json=True,
+            )
+        self.assertEqual(rc, 1)
+        payload = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertIn("dictionary path is empty", payload["error"])
+
     def test_explicit_corpus_path_with_env_var_is_expanded(self):
         # An explicit manifest given with a $VAR is expanded before the existence
         # check (the resolver returns the explicit path verbatim).

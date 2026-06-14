@@ -90,7 +90,17 @@ def resolve_dictionary_path(path: str | Path | None = None) -> Path:
     ``VOICEPI_DICTIONARY`` may be an ``os.pathsep``-separated list (the Rust side
     can load several); for *writing* we target the first non-empty entry (the
     primary, user-managed file). Returns a ``Path`` that may not exist yet.
+
+    An EXPLICIT empty/blank ``path`` (``--dictionary ""``) is rejected with a
+    clear ``ValueError`` rather than silently falling through to the default —
+    silently using a different file than the one the user named is surprising.
+    Pass ``None`` (omit the flag) to mean "use env / default".
     """
+    if path is not None and not str(path).strip():
+        raise ValueError(
+            "dictionary path is empty; omit --dictionary to use the default "
+            "location instead of passing an empty value"
+        )
     if path:
         return Path(path)
     env = os.environ.get("VOICEPI_DICTIONARY")

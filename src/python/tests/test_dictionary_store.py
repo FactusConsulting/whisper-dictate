@@ -41,6 +41,26 @@ class ResolveDictionaryPathTests(unittest.TestCase):
             if old is not None:
                 os.environ["VOICEPI_DICTIONARY"] = old
 
+    def test_explicit_empty_path_is_rejected(self):
+        # #272: --dictionary "" must not silently fall through to the default;
+        # it is an explicit empty value and is rejected with a clear error.
+        for empty in ("", "   "):
+            with self.assertRaises(ValueError):
+                store.resolve_dictionary_path(empty)
+
+    def test_none_still_falls_through_to_default(self):
+        # None means "not provided" — unchanged fall-through behaviour.
+        old = os.environ.get("VOICEPI_DICTIONARY")
+        try:
+            os.environ.pop("VOICEPI_DICTIONARY", None)
+            self.assertEqual(
+                store.resolve_dictionary_path(None),
+                store.default_dictionary_path(),
+            )
+        finally:
+            if old is not None:
+                os.environ["VOICEPI_DICTIONARY"] = old
+
 
 class SanitizeDictionaryPathTests(unittest.TestCase):
     def test_resolves_and_keeps_json_suffix(self):
