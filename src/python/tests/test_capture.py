@@ -895,6 +895,42 @@ class NativeRateOpenTests(unittest.TestCase):
         # close() must never be called on an unbound stream.
         self.assertEqual(close_calls["n"], 0)
 
+    def test_open_failure_is_quiet_unless_trace(self):
+        # The per-attempt "stream open failed" line is noise on the normal
+        # WASAPI->DirectSound fallback (a sibling endpoint opens right after and
+        # prints one calm line). It must be silent by default and only appear
+        # under Trace — but the error is ALWAYS returned so the caller can still
+        # surface a genuine total failure.
+        rt = self.rt
+        rt.SR = 16000
+
+        class _RaisingInputStream:
+            def __init__(self, **_kwargs):
+                raise RuntimeError("PaErrorCode -9999 AUDCLNT_E_UNSUPPORTED_FORMAT")
+
+            def close(self):
+                pass
+
+        fake_sd = types.SimpleNamespace(
+            InputStream=_RaisingInputStream,
+            query_devices=lambda device=None, kind=None: {
+                "name": "Yeti", "max_input_channels": 1},
+            default=types.SimpleNamespace(device=(1, 0)),
+        )
+
+        # Default (no trace): nothing on stderr, but the error is returned.
+        quiet = io.StringIO()
+        with redirect_stderr(quiet):
+            _, _, _, exc = rt._open_sounddevice_stream(fake_sd, 1, lambda *_a: None)
+        self.assertIsInstance(exc, RuntimeError)
+        self.assertNotIn("stream open failed", quiet.getvalue())
+
+        # Trace: the failure detail is logged under the [trace][cap] prefix.
+        traced = io.StringIO()
+        with redirect_stderr(traced):
+            rt._open_sounddevice_stream(fake_sd, 1, lambda *_a: None, trace=True)
+        self.assertIn("[trace][cap] stream open failed", traced.getvalue())
+
 
 # ---------------------------------------------------------------------------
 # Fix 1+2+3: stop-stream robustness tests

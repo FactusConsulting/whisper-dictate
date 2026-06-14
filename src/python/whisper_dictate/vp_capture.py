@@ -560,8 +560,15 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
                             stream.close()
                         except Exception:
                             pass
-    if last_error is not None:
-        print(f"[cap] stream open failed: {last_error}", file=sys.stderr, flush=True)
+    if last_error is not None and trace:
+        # Per-attempt open failures are noise on the normal WASAPI->DirectSound
+        # fallback: a sibling endpoint usually succeeds right after and prints one
+        # calm "[cap] opened ... via its <API> endpoint" line. Keep the detail
+        # under Trace (VOICEPI_TRACE); a genuine total failure is still surfaced
+        # by the caller (the device-unusable / fall-back-to-default branches and
+        # the final RuntimeError, which carries last_error).
+        print(f"[trace][cap] stream open failed: {last_error}",
+              file=sys.stderr, flush=True)
     return None, 0, "", last_error
 
 
