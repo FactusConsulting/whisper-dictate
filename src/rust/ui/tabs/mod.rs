@@ -8,10 +8,12 @@ mod corpus_record;
 mod dictionary;
 mod log_card;
 mod output;
+mod pipeline_progress;
 mod post;
 mod profiles;
 mod quality;
 mod runtime;
+mod runtime_format;
 mod settings;
 mod shell;
 mod shell_indicator;
@@ -34,9 +36,10 @@ pub(in crate::ui) use log_card::{drag_autoscroll, empty_log_state, metric_box, r
 // The live mic gauge, runtime-state colour, pipeline-progress accent, and the
 // mic-label/audio-summary helpers are shared between the full runtime tab /
 // top status bar and the compact strip (`compact.rs`).
-pub(in crate::ui) use runtime::{
-    audio_device_label, full_audio_device_label, level_gauge, live_audio_level_summary,
-    pipeline_progress_accent_color,
+pub(in crate::ui) use pipeline_progress::pipeline_progress_accent_color;
+pub(in crate::ui) use runtime::level_gauge;
+pub(in crate::ui) use runtime_format::{
+    audio_device_label, full_audio_device_label, live_audio_level_summary,
 };
 pub(in crate::ui) use shell::runtime_state_color;
 pub(in crate::ui) use shell_indicator::recording_indicator_style;
@@ -54,11 +57,14 @@ pub(in crate::ui) use top_status_layout::{
 pub(in crate::ui) use system::default_metrics_jsonl_path;
 // The hotkey-chord formatters are shared with the sidebar's key display
 // (`shell.rs`) and the sibling test modules.
-pub(in crate::ui) use runtime::{format_push_to_talk_keys, push_to_talk_badge_label};
+pub(in crate::ui) use runtime_format::{format_push_to_talk_keys, push_to_talk_badge_label};
 
-// Free helpers consumed by sibling test modules through `ui::tabs::NAME`.
-#[cfg(test)]
-pub(in crate::ui) use runtime::{empty_as_auto, empty_as_disabled, mic_label_char_budget};
+// Pure runtime summary/format helpers used by the runtime tab's render code
+// (reached via `super::*`) and the sibling test modules.
+pub(in crate::ui) use runtime_format::{
+    empty_as_auto, empty_as_disabled, gauge_color_for_position, latest_log_summary,
+    latest_metric_summary, mic_label_char_budget,
+};
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
 fn settings_grid(id: &'static str) -> egui::Grid {
