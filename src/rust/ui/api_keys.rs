@@ -441,13 +441,12 @@ fn credential_entry(user: &str) -> Result<Entry> {
 }
 
 fn ensure_keyring_store() -> Result<()> {
-    static KEYRING_STORE_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
-    match KEYRING_STORE_INIT
-        .get_or_init(|| configure_keyring_store().map_err(|err| err.to_string()))
-    {
-        Ok(()) => Ok(()),
-        Err(err) => anyhow::bail!("{err}"),
+    static KEYRING_STORE_INIT: OnceLock<()> = OnceLock::new();
+    if KEYRING_STORE_INIT.get().is_none() {
+        configure_keyring_store()?;
+        let _ = KEYRING_STORE_INIT.set(());
     }
+    Ok(())
 }
 
 fn configure_keyring_store() -> std::result::Result<(), keyring_core::Error> {
