@@ -137,14 +137,13 @@ class PreviewEngine:
             self._tick()
 
     def _snapshot_frames(self):
-        """A COPY of the recent-tail frames as one int16 array, plus the total
-        captured sample count — or ``None`` when there are no frames.
+        """Recent-tail frames as one int16 array, plus total captured samples.
 
         Returns ``(pcm, total_samples)`` where ``pcm`` is the windowed decode
         input and ``total_samples`` is the length of the FULL accumulated buffer
-        (before trimming). Copied (np.concatenate makes a new array) so the
-        preview transcription never races the capture thread mutating
-        ``owner.frames`` underneath it.
+        (before trimming). The frame list is snapshotted before concatenation;
+        ``pcm`` may reuse storage for the single-frame fast path, so callers
+        must treat it as read-only.
 
         Sliding window: ``pcm`` is trimmed to its last
         ``PREVIEW_MAX_AUDIO_S * SR`` samples so each preview decodes only the
