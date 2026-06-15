@@ -79,7 +79,7 @@ jobs:
           sys.exit(0 if ok else 1)
           EOF
       - name: actionlint
-        uses: docker://rhysd/actionlint:1.7.7
+        uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
 
