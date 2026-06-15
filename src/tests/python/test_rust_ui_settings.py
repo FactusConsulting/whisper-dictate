@@ -228,7 +228,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("response.on_hover_text(help)", script)
         self.assertIn('"Quit key"', script)
 
-    def test_rust_ui_keyring_uses_native_platform_backends(self):
+    def test_rust_ui_keyring_initializes_v4_platform_store(self):
         cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
 
         api_keys = Path("src/rust/ui/api_keys.rs").read_text(encoding="utf-8")
