@@ -396,11 +396,18 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("UiTextKey::SaveSettings", sidebar)
         self.assertIn("format_push_to_talk_keys(&self.settings.key)", sidebar)
         self.assertIn('format!("v{}", self.app_version)', sidebar)
+        self.assertIn("release_url_for_version(&self.app_version)", sidebar)
+        self.assertIn(".sense(egui::Sense::click())", sidebar)
+        self.assertIn("egui::CursorIcon::PointingHand", sidebar)
+        self.assertIn("open_url(&version_url)", sidebar)
         self.assertIn("self.save_settings();", sidebar)
         # Maintenance actions are NOT in the sidebar anymore.
         self.assertNotIn("self.run_install();", sidebar)
         self.assertNotIn("self.run_doctor();", sidebar)
         self.assertNotIn("self.reload_settings();", sidebar)
+        self.assertNotIn("UiTextKey::InstallRepair", sidebar)
+        self.assertNotIn("UiTextKey::Doctor", sidebar)
+        self.assertNotIn("UiTextKey::ReloadConfig", sidebar)
         # The tab ScrollArea sits inside the bottom_up block, whose layout the
         # ScrollArea content INHERITS — without an explicit top_down wrapper the
         # tabs render reversed (System on top; 1.8.10 regression).
@@ -409,9 +416,18 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
             "ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {",
             sidebar,
         )
-        self.assertNotIn("UiTextKey::InstallRepair", sidebar)
-        self.assertNotIn("UiTextKey::Doctor", sidebar)
-        self.assertNotIn("UiTextKey::ReloadConfig", sidebar)
+
+    def test_rust_sidebar_version_link_opens_release_notes(self):
+        shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")
+
+        self.assertIn("fn release_url_for_version(version: &str) -> String", shell)
+        self.assertIn(
+            '"https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{version}"',
+            shell,
+        )
+        self.assertIn('"https://github.com/FactusConsulting/whisper-dictate/releases"', shell)
+        self.assertIn("fn release_url_points_to_version_tag()", shell)
+        self.assertIn("fn release_url_falls_back_for_local_builds()", shell)
 
     def test_rust_top_status_bar_shows_post_processing_indicator(self):
         shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")

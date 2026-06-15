@@ -41,11 +41,22 @@ impl WhisperDictateApp {
         // that follows fills only the space between the header and this block,
         // preventing overlap when the window is short.
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-            ui.label(
-                egui::RichText::new(format!("v{}", self.app_version))
-                    .text_style(egui::TextStyle::Small)
-                    .color(palette.text_muted),
-            );
+            let version_url = release_url_for_version(&self.app_version);
+            let version = ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("v{}", self.app_version))
+                            .text_style(egui::TextStyle::Small)
+                            .color(palette.accent_blue),
+                    )
+                    .selectable(false)
+                    .sense(egui::Sense::click()),
+                )
+                .on_hover_text(format!("Open release notes for v{}", self.app_version))
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if version.clicked() {
+                let _ = open_url(&version_url);
+            }
             // Discreet "update available" badge, placed just ABOVE the version
             // label (bottom_up layout renders later items higher). Subtle accent
             // line only — no popup. It is now CLICKABLE: clicking copies the
@@ -510,5 +521,39 @@ pub(in crate::ui) fn runtime_state_color(state: RuntimeState, palette: UiPalette
         RuntimeState::Stopped => palette.text_muted,
         RuntimeState::Starting => palette.warn_text,
         RuntimeState::Running => palette.ok_text,
+    }
+}
+
+fn release_url_for_version(version: &str) -> String {
+    let version = version.trim();
+    if version.is_empty() || version.contains('+') {
+        return "https://github.com/FactusConsulting/whisper-dictate/releases".to_owned();
+    }
+    let version = version.strip_prefix('v').unwrap_or(version);
+    format!("https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{version}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::release_url_for_version;
+
+    #[test]
+    fn release_url_points_to_version_tag() {
+        assert_eq!(
+            release_url_for_version("1.14.1"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.14.1"
+        );
+        assert_eq!(
+            release_url_for_version("v1.14.1-rc.1"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.14.1-rc.1"
+        );
+    }
+
+    #[test]
+    fn release_url_falls_back_for_local_builds() {
+        assert_eq!(
+            release_url_for_version("1.14.1+local.20260616.gabcdef"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases"
+        );
     }
 }
