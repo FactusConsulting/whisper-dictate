@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use keyring_core::{Entry, Error};
 use std::env;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use super::secret_store::*;
 use crate::config::AppSettings;
@@ -442,6 +442,14 @@ fn credential_entry(user: &str) -> Result<Entry> {
 
 fn ensure_keyring_store() -> Result<()> {
     static KEYRING_STORE_INIT: OnceLock<()> = OnceLock::new();
+    static KEYRING_STORE_INIT_LOCK: Mutex<()> = Mutex::new(());
+    if KEYRING_STORE_INIT.get().is_some() {
+        return Ok(());
+    }
+
+    let _guard = KEYRING_STORE_INIT_LOCK
+        .lock()
+        .expect("keyring store init lock poisoned");
     if KEYRING_STORE_INIT.get().is_none() {
         configure_keyring_store()?;
         let _ = KEYRING_STORE_INIT.set(());
