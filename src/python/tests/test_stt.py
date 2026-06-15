@@ -576,9 +576,16 @@ class TranscribeDetailTests(unittest.TestCase):
             replacements=[{"from": "acme", "to": "ACME"}],
             enabled=True,
         )
-        self.t._DICTIONARY_PROMPT_CACHE[
-            (self.t.INITIAL_PROMPT, "1", "a.json", "80", "1200")
-        ] = first
+
+        with _env(
+            VOICEPI_DICTIONARY_ENABLED="1",
+            VOICEPI_DICTIONARY="a.json",
+            VOICEPI_DICTIONARY_MAX_TERMS="80",
+            VOICEPI_DICTIONARY_PROMPT_CHARS="1200",
+        ):
+            self.t._DICTIONARY_PROMPT_CACHE[
+                self.t._dictionary_cache_key(self.t.INITIAL_PROMPT)
+            ] = first
 
         with _env(
             VOICEPI_DICTIONARY_ENABLED="1",
@@ -589,6 +596,29 @@ class TranscribeDetailTests(unittest.TestCase):
             self.assertIsNone(
                 self.t._apply_cached_dictionary_runtime("acme", self.t.INITIAL_PROMPT)
             )
+
+    def test_dictionary_prompt_cache_key_tracks_dictionary_file_mtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dictionary = Path(tmp) / "dictionary.json"
+            dictionary.write_text('{"terms":["ACME"]}\n', encoding="utf-8")
+            first = self.t.DictionaryRuntimeResult(
+                prompt="Vocabulary: ACME",
+                replacements=[{"from": "acme", "to": "ACME"}],
+                enabled=True,
+            )
+
+            with _env(VOICEPI_DICTIONARY=str(dictionary)):
+                self.t._DICTIONARY_PROMPT_CACHE[
+                    self.t._dictionary_cache_key(self.t.INITIAL_PROMPT)
+                ] = first
+                stat = dictionary.stat()
+                next_mtime = stat.st_mtime_ns + 2_000_000_000
+                dictionary.write_text('{"terms":["Codex"]}\n', encoding="utf-8")
+                os.utime(dictionary, ns=(next_mtime, next_mtime))
+
+                self.assertIsNone(
+                    self.t._apply_cached_dictionary_runtime("acme", self.t.INITIAL_PROMPT)
+                )
 
     def test_dictionary_prompt_runtime_reuses_cached_prompt(self):
         cached = self.t.DictionaryRuntimeResult(

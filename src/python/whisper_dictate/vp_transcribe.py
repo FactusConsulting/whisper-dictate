@@ -24,6 +24,7 @@ from whisper_dictate.vp_audio import (
     _trim_trailing_silence,
 )
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
+from whisper_dictate.vp_dictionary_store import default_dictionary_path
 
 apply_config_to_environ()
 
@@ -111,7 +112,7 @@ STT_BACKEND = (get_value("VOICEPI_STT_BACKEND", "whisper") or "whisper").strip()
 if STT_BACKEND == "faster-whisper":
     STT_BACKEND = "whisper"
 
-_DictionaryCacheKey = tuple[str | None, str | None, str | None, str | None, str | None]
+_DictionaryCacheKey = tuple[str | None, str | None, str | None, str | None, str | None, str]
 _DICTIONARY_PROMPT_CACHE: dict[_DictionaryCacheKey, DictionaryRuntimeResult] = {}
 
 
@@ -349,12 +350,29 @@ def _dictionary_cache_key(base_prompt: str | None) -> _DictionaryCacheKey:
         value = os.environ.get(env)
         return value if value not in (None, "") else default
 
+    def dictionary_freshness(raw_paths: str | None) -> str:
+        if raw_paths:
+            paths = [part for part in raw_paths.split(os.pathsep) if part]
+        else:
+            paths = [str(default_dictionary_path())]
+        parts = []
+        for raw_path in paths:
+            path = os.path.expanduser(raw_path)
+            try:
+                stat = os.stat(path)
+                parts.append(f"{path}\0{stat.st_mtime_ns}\0{stat.st_size}")
+            except OSError:
+                parts.append(f"{path}\0missing")
+        return "\0\0".join(parts)
+
+    dictionary_path = env_value("VOICEPI_DICTIONARY")
     return (
         base_prompt,
         env_value("VOICEPI_DICTIONARY_ENABLED", "1"),
-        env_value("VOICEPI_DICTIONARY"),
+        dictionary_path,
         env_value("VOICEPI_DICTIONARY_MAX_TERMS", "80"),
         env_value("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200"),
+        dictionary_freshness(dictionary_path),
     )
 
 
