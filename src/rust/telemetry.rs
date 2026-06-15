@@ -117,7 +117,7 @@ pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
         .map(str::trim)
         .filter(|path| !path.is_empty())
     {
-        append_jsonl(Path::new(path), &event)?;
+        append_jsonl(Path::new(path), event)?;
     }
     if let Some(path) = payload
         .get("history_path")
@@ -125,7 +125,7 @@ pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
         .map(str::trim)
         .filter(|path| !path.is_empty())
     {
-        append_jsonl(Path::new(path), &history_event(&event))?;
+        append_jsonl(Path::new(path), &history_event(event))?;
     }
     Ok(())
 }
