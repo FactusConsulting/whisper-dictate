@@ -345,12 +345,16 @@ def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> Dicti
 
 
 def _dictionary_cache_key(base_prompt: str | None) -> _DictionaryCacheKey:
+    def env_value(env: str, default: str | None = None) -> str | None:
+        value = os.environ.get(env)
+        return value if value not in (None, "") else default
+
     return (
         base_prompt,
-        get_value("VOICEPI_DICTIONARY_ENABLED"),
-        get_value("VOICEPI_DICTIONARY"),
-        get_value("VOICEPI_DICTIONARY_MAX_TERMS"),
-        get_value("VOICEPI_DICTIONARY_PROMPT_CHARS"),
+        env_value("VOICEPI_DICTIONARY_ENABLED", "1"),
+        env_value("VOICEPI_DICTIONARY"),
+        env_value("VOICEPI_DICTIONARY_MAX_TERMS", "80"),
+        env_value("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200"),
     )
 
 

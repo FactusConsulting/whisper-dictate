@@ -38,8 +38,14 @@ def _append_history(event: dict) -> None:
         _rust_json("append-history", event, "--path", str(history_path()))
 
 
-def append_record_sinks(event: dict, *, metrics_jsonl: str | None, json_output: bool) -> None:
+def _append_record_sinks_supported() -> bool:
     global _APPEND_RECORD_SINKS_SUPPORTED
+    if _APPEND_RECORD_SINKS_SUPPORTED is None:
+        _APPEND_RECORD_SINKS_SUPPORTED = _rust_json("append-record-sinks", {}) is not None
+    return _APPEND_RECORD_SINKS_SUPPORTED
+
+
+def append_record_sinks(event: dict, *, metrics_jsonl: str | None, json_output: bool) -> None:
     raw_metrics_path = (metrics_jsonl or "").strip()
     metrics_path = os.path.expanduser(raw_metrics_path) if json_output and raw_metrics_path else ""
     history_target = event.get("_history_path")
@@ -55,11 +61,9 @@ def append_record_sinks(event: dict, *, metrics_jsonl: str | None, json_output: 
         "metrics_path": metrics_path,
         "history_path": history_out,
     }
-    if _APPEND_RECORD_SINKS_SUPPORTED is not False:
+    if _append_record_sinks_supported():
         if _rust_json("append-record-sinks", payload) is not None:
-            _APPEND_RECORD_SINKS_SUPPORTED = True
             return
-        _APPEND_RECORD_SINKS_SUPPORTED = False
     if metrics_path:
         _append_jsonl(metrics_path, event)
     if history_out:

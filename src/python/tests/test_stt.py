@@ -1,5 +1,6 @@
 from helpers import (
     _capture_stdout,
+    _env,
     json,
     os,
     patch,
@@ -579,14 +580,12 @@ class TranscribeDetailTests(unittest.TestCase):
             (self.t.INITIAL_PROMPT, "1", "a.json", "80", "1200")
         ] = first
 
-        with patch.object(self.t, "get_value") as get_value:
-            get_value.side_effect = lambda env, default=None: {
-                "VOICEPI_DICTIONARY_ENABLED": "1",
-                "VOICEPI_DICTIONARY": "b.json",
-                "VOICEPI_DICTIONARY_MAX_TERMS": "80",
-                "VOICEPI_DICTIONARY_PROMPT_CHARS": "1200",
-            }.get(env, default)
-
+        with _env(
+            VOICEPI_DICTIONARY_ENABLED="1",
+            VOICEPI_DICTIONARY="b.json",
+            VOICEPI_DICTIONARY_MAX_TERMS="80",
+            VOICEPI_DICTIONARY_PROMPT_CHARS="1200",
+        ), patch.object(self.t, "get_value", side_effect=AssertionError):
             self.assertIsNone(
                 self.t._apply_cached_dictionary_runtime("acme", self.t.INITIAL_PROMPT)
             )

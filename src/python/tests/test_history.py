@@ -126,7 +126,11 @@ class HistoryWriteTests(unittest.TestCase):
                 json_output=True,
             )
 
-        self.assertEqual([call[0] for call in calls], ["append-record-sinks"])
+        self.assertEqual(
+            [call[0] for call in calls],
+            ["append-record-sinks", "append-record-sinks"],
+        )
+        self.assertEqual(calls[0][1], {})
 
     def test_append_record_sinks_falls_back_to_legacy_helpers(self):
         calls = []
@@ -178,6 +182,41 @@ class HistoryWriteTests(unittest.TestCase):
                 "append-history",
                 "append-jsonl",
                 "append-history",
+            ],
+        )
+
+    def test_append_record_sinks_retries_combined_helper_after_write_failure(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, payload, args))
+            if command == "append-record-sinks" and payload == {}:
+                return {}
+            if command == "append-record-sinks":
+                return None
+            return {}
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=False):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "one"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "two"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+
+        self.assertEqual(
+            [call[0] for call in calls],
+            [
+                "append-record-sinks",
+                "append-record-sinks",
+                "append-jsonl",
+                "append-record-sinks",
+                "append-jsonl",
             ],
         )
 
