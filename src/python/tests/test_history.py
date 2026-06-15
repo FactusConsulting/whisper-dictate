@@ -93,6 +93,7 @@ class HistoryWriteTests(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
         self.path = Path(self.dir.name) / "history.jsonl"
+        vp_history._APPEND_RECORD_SINKS_SUPPORTED = None
 
     def test_append_history_calls_rust_helper_when_enabled(self):
         with _env(VOICEPI_HISTORY_ENABLED="1"), \
@@ -146,6 +147,38 @@ class HistoryWriteTests(unittest.TestCase):
         self.assertEqual(
             [call[0] for call in calls],
             ["append-record-sinks", "append-jsonl", "append-history"],
+        )
+
+    def test_append_record_sinks_caches_missing_combined_helper(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, args))
+            return None
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=True), \
+                patch.object(vp_history, "history_path", return_value=self.path):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "one"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "two"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+
+        self.assertEqual(
+            [call[0] for call in calls],
+            [
+                "append-record-sinks",
+                "append-jsonl",
+                "append-history",
+                "append-jsonl",
+                "append-history",
+            ],
         )
 
     def test_append_record_sinks_ignores_whitespace_metrics_path(self):

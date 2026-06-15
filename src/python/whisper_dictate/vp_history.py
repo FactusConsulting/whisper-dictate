@@ -15,6 +15,8 @@ from pathlib import Path
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_rust import _rust_helper, _rust_json
 
+_APPEND_RECORD_SINKS_SUPPORTED: bool | None = None
+
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
@@ -37,6 +39,7 @@ def _append_history(event: dict) -> None:
 
 
 def append_record_sinks(event: dict, *, metrics_jsonl: str | None, json_output: bool) -> None:
+    global _APPEND_RECORD_SINKS_SUPPORTED
     raw_metrics_path = (metrics_jsonl or "").strip()
     metrics_path = os.path.expanduser(raw_metrics_path) if json_output and raw_metrics_path else ""
     history_target = event.get("_history_path")
@@ -52,8 +55,11 @@ def append_record_sinks(event: dict, *, metrics_jsonl: str | None, json_output: 
         "metrics_path": metrics_path,
         "history_path": history_out,
     }
-    if _rust_json("append-record-sinks", payload) is not None:
-        return
+    if _APPEND_RECORD_SINKS_SUPPORTED is not False:
+        if _rust_json("append-record-sinks", payload) is not None:
+            _APPEND_RECORD_SINKS_SUPPORTED = True
+            return
+        _APPEND_RECORD_SINKS_SUPPORTED = False
     if metrics_path:
         _append_jsonl(metrics_path, event)
     if history_out:

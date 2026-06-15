@@ -108,7 +108,10 @@ pub fn handle_append_record_sinks() -> Result<()> {
 }
 
 pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
-    let event = payload.get("event").cloned().unwrap_or(Value::Null);
+    let Some(event) = payload.get("event") else {
+        return Ok(());
+    };
+    let event = event.clone();
     if let Some(path) = payload
         .get("metrics_path")
         .and_then(Value::as_str)
@@ -315,6 +318,22 @@ mod tests {
         });
 
         append_record_sinks_payload(&payload).unwrap();
+    }
+
+    #[test]
+    fn append_record_sinks_payload_noops_without_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let metrics = dir.path().join("metrics.jsonl");
+        let history = dir.path().join("history.jsonl");
+        let payload = serde_json::json!({
+            "metrics_path": metrics.display().to_string(),
+            "history_path": history.display().to_string()
+        });
+
+        append_record_sinks_payload(&payload).unwrap();
+
+        assert!(!metrics.exists());
+        assert!(!history.exists());
     }
 
     #[test]
