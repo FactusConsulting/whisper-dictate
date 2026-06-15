@@ -496,16 +496,18 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             workflow,
         )
 
-    def test_dependabot_covers_pip_actions_and_cargo(self):
-        config = Path(".github/dependabot.yml").read_text(encoding="utf-8")
-        # Check per-ecosystem blocks so the directory is paired with the right
-        # ecosystem (not just present somewhere in the file).
-        blocks = config.split("- package-ecosystem:")
-        pip = next(b for b in blocks if '"pip"' in b)
-        self.assertIn('directory: "/requirements"', pip)  # pip scoped, not repo root
-        cargo = next(b for b in blocks if '"cargo"' in b)
-        self.assertIn('directory: "/src/rust"', cargo)
-        self.assertTrue(any('"github-actions"' in b for b in blocks))
+    def test_renovate_config_present_and_dependabot_removed(self):
+        # Dependency automation migrated from Dependabot to Renovate (org
+        # standard). Renovate's config:recommended auto-detects every ecosystem
+        # (pip, cargo, github-actions, docker, ...) with no per-ecosystem or
+        # directory blocks, so asserting the recommended preset is how we keep
+        # pip + cargo + actions covered after the migration.
+        config = json.loads(Path("renovate.json").read_text(encoding="utf-8"))
+        self.assertIn("config:recommended", config.get("extends", []))
+        self.assertFalse(
+            Path(".github/dependabot.yml").exists(),
+            "dependabot.yml must be removed after migrating to Renovate",
+        )
 
     def test_ci_caches_rust_and_cancels_superseded_runs(self):
         test_wf = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
