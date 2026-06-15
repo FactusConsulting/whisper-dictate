@@ -100,5 +100,6 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('self.settings.stt_backend = "openai".to_owned();', ui)
         self.assertIn("self.settings.stt_model = provider.default_model().to_owned();", ui)
         self.assertIn("set_string(object, \"stt_provider\", &self.stt_provider);", config)
-        self.assertIn("keyring::Entry::new", api_keys)
+        self.assertIn("fn credential_entry(user: &str) -> Result<Entry>", api_keys)
+        self.assertIn("Entry::new(CREDENTIAL_SERVICE, user)", api_keys)
         self.assertNotIn("stt_api_key", config)
