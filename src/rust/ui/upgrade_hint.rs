@@ -205,7 +205,7 @@ pub(in crate::ui) fn upgrade_action(
         InstallMethod::Winget => {
             UpgradeAction::Command(format!("winget upgrade {WINGET_PACKAGE_ID}"))
         }
-        // The flake-URL form matches the README's install command
+        // The flake-URL form matches the documented Nix install command
         // (`nix profile install github:FactusConsulting/whisper-dictate`) so the
         // upgrade resolves the same flake reference.
         InstallMethod::Nix => UpgradeAction::Command(

@@ -92,12 +92,20 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
 
     def test_windows_docs_use_rust_terminal_entrypoint(self):
         readme = Path("README.md").read_text(encoding="utf-8")
+        install = Path("docs/INSTALLATION.md").read_text(encoding="utf-8")
         config = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
         technical = Path("docs/TECHNICAL.md").read_text(encoding="utf-8")
 
-        self.assertIn("runs the Rust UI and starts the Python worker hidden underneath it", readme)
+        self.assertIn(
+            "runs the Rust UI and starts the Python worker hidden underneath it",
+            readme.replace("\n", " "),
+        )
         self.assertIn("whisper-dictate run --key ctrl_r --lang da", readme)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device cuda", readme)
+        self.assertIn(
+            "runs the Rust UI and starts the Python worker hidden underneath it",
+            install.replace("\n", " "),
+        )
         self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device cuda", config)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da", config)
         self.assertIn("Rust UI is the installer Start-menu", technical)
@@ -107,28 +115,27 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertNotIn("Current primary path is the installed PySide/PowerShell UI", technical)
 
     def test_docs_describe_groq_as_explicit_opt_in_without_storing_keys(self):
-        readme = Path("README.md").read_text(encoding="utf-8")
         config = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
 
-        for doc in (readme, config):
-            self.assertIn("https://api.groq.com/openai/v1", doc)
-            self.assertIn("whisper-large-v3-turbo", doc)
-            self.assertIn("GROQ_API_KEY", doc)
-            self.assertIn("VOICEPI_POST_API_KEY", doc)
+        self.assertIn("https://api.groq.com/openai/v1", config)
+        self.assertIn("whisper-large-v3-turbo", config)
+        self.assertIn("GROQ_API_KEY", config)
+        self.assertIn("VOICEPI_POST_API_KEY", config)
         self.assertIn("Cloud STT provider", config)
-        self.assertIn("Post processor", readme)
-        self.assertIn("Post API key", readme)
-        self.assertIn("OS credential store", readme)
+        self.assertIn("post_processor", config)
+        self.assertIn("OS credential store", config)
 
     def test_docs_describe_one_command_ubuntu_setup_and_launcher_start(self):
         readme = Path("README.md").read_text(encoding="utf-8")
+        install = Path("docs/INSTALLATION.md").read_text(encoding="utf-8")
         config = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
 
-        for doc in (readme, config):
+        for doc in (readme, install, config):
             self.assertIn("whisper-dictate setup-ubuntu", doc)
+        for doc in (install, config):
             self.assertIn("Whisper Dictate", doc)
             self.assertIn("whisper-dictate ui", doc)
-        self.assertIn("Then press **Start** in the Dictation tab", readme)
+        self.assertIn("Then press **Start** in the Dictation tab", install)
 
     def test_installer_uses_whisper_dictate_icon_and_searchable_ui_name(self):
         with open("packaging/windows/inno/whisper-dictate.iss", encoding="utf-8") as f:
@@ -323,7 +330,7 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
     def test_local_windows_installer_defaults_to_semver_build_metadata(self):
         script = Path("scripts/windows/build-installer.ps1").read_text(encoding="utf-8")
         installer = Path("packaging/windows/inno/whisper-dictate.iss").read_text(encoding="utf-8")
-        readme = Path("README.md").read_text(encoding="utf-8")
+        releasing = Path("docs/RELEASING.md").read_text(encoding="utf-8")
 
         self.assertIn("function Get-CrateVersion", script)
         self.assertIn("src\\rust\\Cargo.toml", script)
@@ -337,8 +344,8 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn('/DVERSION_INFO=$versionInfo', script)
         self.assertIn("#ifndef VERSION_INFO", installer)
         self.assertIn("VersionInfoVersion={#VERSION_INFO}", installer)
-        self.assertIn("<version>+local.<timestamp>.g<sha>.dirty", readme)
-        self.assertIn("<major>.<minor>.<patch>.1", readme)
+        self.assertIn("<version>+local.<timestamp>.g<sha>.dirty", releasing)
+        self.assertIn("<major>.<minor>.<patch>.1", releasing)
 
     def test_windows_zip_packages_are_built_on_windows_with_rust_exe(self):
         # The portable-ZIP build lives in the single reusable installer-build
@@ -373,12 +380,12 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("Compress-Archive", script)
 
     def test_docs_describe_windows_zip_and_installer_outputs(self):
-        readme = Path("README.md").read_text(encoding="utf-8")
+        releasing = Path("docs/RELEASING.md").read_text(encoding="utf-8")
         agents = Path("AGENTS.md").read_text(encoding="utf-8")
         technical = Path("docs/TECHNICAL.md").read_text(encoding="utf-8")
 
-        self.assertIn("portable Windows ZIP bundle", readme)
-        self.assertIn("installer and portable ZIP are written to `Output\\`", readme)
+        self.assertIn("portable Windows ZIP bundle", releasing)
+        self.assertIn("installer and portable ZIP are written to `Output\\`", releasing)
         self.assertIn("Output\\*.exe` and `Output\\*.zip", agents)
         self.assertIn("Output\\*.exe` and `Output\\*.zip", technical)
 

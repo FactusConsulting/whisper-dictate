@@ -24,7 +24,7 @@ adapter if it is **not** reachable through an OpenAI-compatible endpoint.
 | Candidate | Reachable via existing paths? | Verdict |
 |---|---|---|
 | **whisper.cpp / GGML servers** | Yes — most expose an OpenAI-compatible server, or run via `faster-whisper` already | **Skip** native adapter; use Custom provider |
-| **speaches / faster-whisper-server / LocalAI / vLLM-whisper** | Yes — OpenAI-compatible | **Skip**; use Custom provider (documented in README) |
+| **speaches / faster-whisper-server / LocalAI / vLLM-whisper** | Yes — OpenAI-compatible | **Skip**; use Custom provider (documented in CONFIGURATION.md) |
 | **NVIDIA Canary** (NeMo) | No — needs NeMo, like Parakeet | **Consider (low effort):** slots into the existing Parakeet/NeMo plumbing; strong multilingual quality. Best ROI of the natives |
 | **Moonshine** (on-device English) | No | **Watch:** very low-latency on-device English; niche until there's demand |
 | **Vosk / Kaldi** | No | **Skip:** materially lower accuracy than Whisper/Parakeet; no clear win |
@@ -34,9 +34,9 @@ adapter if it is **not** reachable through an OpenAI-compatible endpoint.
 ## Recommendation
 
 1. **Prefer the Custom provider over new adapters.** Point users at a local
-   OpenAI-compatible container for anything Whisper-flavoured (see the README
-   "Self-host the STT model in a container" section). This is now the answer for
-   most "can you add backend X?" requests.
+   OpenAI-compatible container for anything Whisper-flavoured (see
+   CONFIGURATION.md's self-hosted STT recipe). This is now the answer for most
+   "can you add backend X?" requests.
 2. **Only native add worth queuing: NVIDIA Canary** via the NeMo path, if/when
    multilingual quality beyond Parakeet is requested — it reuses existing
    plumbing and stays GPU-local.

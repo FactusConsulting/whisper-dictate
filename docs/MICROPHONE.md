@@ -67,7 +67,7 @@ Affects latency only, never accuracy. `dur` is how long you spoke.
 
 - **SNR ≥ 25 dB and noise ≤ −75 dBFS** → great mic/room; Whisper is now the only
   limit. Improve accuracy with `--lang`, `VOICEPI_INITIAL_PROMPT`, a bigger
-  `--model`, or `VOICEPI_BEAM_SIZE` (see README "Tuning").
+  `--model`, or `VOICEPI_BEAM_SIZE` (see CONFIGURATION.md).
 - **SNR 15–25 dB** → fine for dictation; move closer / reduce room noise to gain
   headroom.
 - **SNR < 15 dB or noise > −60 dBFS** → fix the mic/room **first**. No model
@@ -97,4 +97,4 @@ Capture thresholds (env vars): `VOICEPI_TARGET_DBFS` (−20; *lower*, e.g. −16
 boosts quiet speech harder), `VOICEPI_MIN_INPUT_DBFS` (−55; reject-too-quiet
 gate), `VOICEPI_MIN_SNR_DB` (6; reject-no-contrast gate). These shape capture,
 not recognition. Recognition-accuracy levers are separate and are documented in
-the README "Tuning" section — they do **not** fix a low-SNR microphone.
+CONFIGURATION.md — they do **not** fix a low-SNR microphone.

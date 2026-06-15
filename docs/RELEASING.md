@@ -104,3 +104,25 @@ is a normal "Latest" release, Homebrew and winget run as before, and Chocolatey
 publishes a stable `.nupkg` that plain `choco upgrade` picks up. **The stable
 release path is unchanged** — every prerelease behaviour is additive and guarded
 behind the `is_prerelease` flag.
+
+## Local Windows Installer Loop
+
+For a faster local Windows test loop without creating a release:
+
+```powershell
+.\scripts\windows\build-installer.ps1
+```
+
+The local installer and portable ZIP are written to `Output\`. The script uses
+Inno Setup 6 and installs it via winget, or Chocolatey as a fallback, when it is
+missing.
+
+Local builds default to the latest release version plus unique SemVer build
+metadata, for example `<version>+local.<timestamp>.g<sha>.dirty`, so they are
+easy to distinguish from online releases and from each other. The installer
+keeps a numeric Windows file version internally, for example
+`<major>.<minor>.<patch>.1`.
+
+The release workflow publishes the Linux bundle and Rust UI binary, then builds
+the unified Windows installer, portable Windows ZIP bundle, and Chocolatey
+package on a Windows runner.

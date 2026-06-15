@@ -174,33 +174,31 @@ class RustReleaseWorkflowTests(unittest.TestCase):
 
     def test_readme_documents_public_chocolatey_source(self):
         readme = Path("README.md").read_text(encoding="utf-8")
-        front_page = readme.split("## Ubuntu 24.04 / 26.04", 1)[0]
+        install = Path("docs/INSTALLATION.md").read_text(encoding="utf-8")
 
-        self.assertIn("Windows 10 / 11 | Chocolatey or Rust UI installer", front_page)
-        self.assertIn("Windows quick install with Chocolatey CLI 2.x", front_page)
-        self.assertIn(
-            "https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json",
-            front_page,
-        )
-        self.assertIn("Install via public Chocolatey source", readme)
+        self.assertIn("Windows 10 / 11 | Installer or Chocolatey", readme)
         self.assertIn(
             "https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json",
             readme,
         )
-        self.assertIn("public and does not require a GitHub account or token", readme)
-        self.assertIn("Chocolatey CLI 2.x NuGet v3 feed support", readme)
-        self.assertIn("choco source add -n=whisper-dictate", readme)
-        self.assertIn("choco source list", readme)
-        self.assertIn("choco install whisper-dictate --source=whisper-dictate -y", readme)
-        self.assertIn("choco upgrade whisper-dictate --source=whisper-dictate -y", readme)
-        self.assertIn("choco pin add -n=whisper-dictate", readme)
-        self.assertIn("choco uninstall whisper-dictate -y", readme)
-        self.assertIn("choco --version", readme)
-        self.assertIn(r"winget install --manifest .\winget", readme)
-        self.assertIn("whisper-dictate-winget-<version>.zip", readme)
-        self.assertIn("nuget.pkg.github.com/FactusConsulting/index.json", readme)
-        self.assertIn("CHOCOLATEY_NUGET_SOURCE", readme)
-        self.assertIn("CHOCOLATEY_NUGET_API_KEY", readme)
+        self.assertIn("Windows quick install with Chocolatey CLI 2.x", install)
+        self.assertIn(
+            "https://factusconsulting.github.io/whisper-dictate/chocolatey/index.json",
+            install,
+        )
+        self.assertIn("public source does not require a GitHub account or token", install)
+        self.assertIn("Chocolatey CLI 2.x NuGet v3 feed support", install)
+        self.assertIn("choco source add -n=whisper-dictate", install)
+        self.assertIn("choco source list", install)
+        self.assertIn("choco install whisper-dictate --source=whisper-dictate -y", install)
+        self.assertIn("choco upgrade whisper-dictate --source=whisper-dictate -y", install)
+        self.assertIn("choco pin add -n=whisper-dictate", install)
+        self.assertIn("choco uninstall whisper-dictate -y", install)
+        self.assertIn("choco --version", install)
+        self.assertIn(r"winget install --manifest .\winget", install)
+        self.assertIn("whisper-dictate-winget-<version>.zip", install)
+        self.assertIn("CHOCOLATEY_NUGET_SOURCE", install)
+        self.assertIn("CHOCOLATEY_NUGET_API_KEY", install)
 
     def test_winget_manifests_are_templated_and_generated_in_release(self):
         # The packaging/windows/winget manifests are version-controlled TEMPLATES
