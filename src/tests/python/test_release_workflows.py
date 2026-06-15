@@ -503,7 +503,9 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # directory blocks, so asserting the recommended preset is how we keep
         # pip + cargo + actions covered after the migration.
         config = json.loads(Path("renovate.json").read_text(encoding="utf-8"))
-        self.assertIn("config:recommended", config.get("extends", []))
+        self.assertIn(
+            "local>FactusConsulting/renovate-config", config.get("extends", [])
+        )
         self.assertFalse(
             Path(".github/dependabot.yml").exists(),
             "dependabot.yml must be removed after migrating to Renovate",
