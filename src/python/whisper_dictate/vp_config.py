@@ -135,6 +135,9 @@ def save_config(data: dict[str, Any], path: Path | None = None) -> Path:
 
 
 def get_value(env: str, default: str | None = None) -> str | None:
+    if env not in SETTING_BY_ENV:
+        value = os.environ.get(env)
+        return value if value not in (None, "") else default
     return config_snapshot().get_value(env, default)
 
 

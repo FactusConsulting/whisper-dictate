@@ -569,6 +569,28 @@ class TranscribeDetailTests(unittest.TestCase):
         )
         self.assertEqual(calls, [("", self.t.INITIAL_PROMPT)])
 
+    def test_dictionary_prompt_cache_key_tracks_live_dictionary_settings(self):
+        first = self.t.DictionaryRuntimeResult(
+            prompt="Vocabulary: ACME",
+            replacements=[{"from": "acme", "to": "ACME"}],
+            enabled=True,
+        )
+        self.t._DICTIONARY_PROMPT_CACHE[
+            (self.t.INITIAL_PROMPT, "1", "a.json", "80", "1200")
+        ] = first
+
+        with patch.object(self.t, "get_value") as get_value:
+            get_value.side_effect = lambda env, default=None: {
+                "VOICEPI_DICTIONARY_ENABLED": "1",
+                "VOICEPI_DICTIONARY": "b.json",
+                "VOICEPI_DICTIONARY_MAX_TERMS": "80",
+                "VOICEPI_DICTIONARY_PROMPT_CHARS": "1200",
+            }.get(env, default)
+
+            self.assertIsNone(
+                self.t._apply_cached_dictionary_runtime("acme", self.t.INITIAL_PROMPT)
+            )
+
 class STTBackendTests(unittest.TestCase):
     def _drop_package_module(self, name):
         sys.modules.pop(name, None)

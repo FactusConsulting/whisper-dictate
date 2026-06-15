@@ -112,18 +112,19 @@ pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
     if let Some(path) = payload
         .get("metrics_path")
         .and_then(Value::as_str)
-        .filter(|path| !path.trim().is_empty())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
     {
         append_jsonl(Path::new(path), &event)?;
     }
     if let Some(path) = payload
         .get("history_path")
         .and_then(Value::as_str)
-        .filter(|path| !path.trim().is_empty())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
     {
         append_jsonl(Path::new(path), &history_event(&event))?;
     }
-    println!("{}", serde_json::json!({"ok": true}));
     Ok(())
 }
 
@@ -287,8 +288,8 @@ mod tests {
         let metrics = dir.path().join("metrics.jsonl");
         let history = dir.path().join("history.jsonl");
         let payload = serde_json::json!({
-            "metrics_path": metrics.display().to_string(),
-            "history_path": history.display().to_string(),
+            "metrics_path": format!("  {}  ", metrics.display()),
+            "history_path": format!("  {}  ", history.display()),
             "event": {
                 "event": "utterance",
                 "text": "hello",
@@ -303,6 +304,17 @@ mod tests {
         assert!(metrics_raw.contains("\"api_key\":\"secret\""));
         assert!(history_raw.contains("\"text\":\"hello\""));
         assert!(!history_raw.contains("api_key"));
+    }
+
+    #[test]
+    fn append_record_sinks_payload_ignores_whitespace_only_paths() {
+        let payload = serde_json::json!({
+            "metrics_path": "   ",
+            "history_path": "\t",
+            "event": {"text": "hello"}
+        });
+
+        append_record_sinks_payload(&payload).unwrap();
     }
 
     #[test]

@@ -148,6 +148,23 @@ class HistoryWriteTests(unittest.TestCase):
             ["append-record-sinks", "append-jsonl", "append-history"],
         )
 
+    def test_append_record_sinks_ignores_whitespace_metrics_path(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, payload, args))
+            return None
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=False):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "hi"},
+                metrics_jsonl="   ",
+                json_output=True,
+            )
+
+        self.assertEqual([], calls)
+
     def test_copy_last_to_clipboard(self):
         _write_jsonl(self.path, [{"text": "copy me"}])
         fake = types.SimpleNamespace(copied=None)

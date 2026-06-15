@@ -475,7 +475,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 json_output=self.json_output,
             )
         except OSError as e:
-            print(f"[history] could not write event sinks: {e}", file=sys.stderr, flush=True)
+            print(f"[sinks] could not write event sinks: {e}", file=sys.stderr, flush=True)
         if self.json_output:
             _emit_json(event)
 

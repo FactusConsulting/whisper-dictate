@@ -111,7 +111,8 @@ STT_BACKEND = (get_value("VOICEPI_STT_BACKEND", "whisper") or "whisper").strip()
 if STT_BACKEND == "faster-whisper":
     STT_BACKEND = "whisper"
 
-_DICTIONARY_PROMPT_CACHE: dict[tuple[str | None], DictionaryRuntimeResult] = {}
+_DictionaryCacheKey = tuple[str | None, str | None, str | None, str | None, str | None]
+_DICTIONARY_PROMPT_CACHE: dict[_DictionaryCacheKey, DictionaryRuntimeResult] = {}
 
 
 def _local_only_enabled() -> bool:
@@ -343,8 +344,18 @@ def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> Dicti
     )
 
 
+def _dictionary_cache_key(base_prompt: str | None) -> _DictionaryCacheKey:
+    return (
+        base_prompt,
+        get_value("VOICEPI_DICTIONARY_ENABLED"),
+        get_value("VOICEPI_DICTIONARY"),
+        get_value("VOICEPI_DICTIONARY_MAX_TERMS"),
+        get_value("VOICEPI_DICTIONARY_PROMPT_CHARS"),
+    )
+
+
 def _dictionary_prompt_runtime(base_prompt: str | None) -> DictionaryRuntimeResult:
-    key = (base_prompt,)
+    key = _dictionary_cache_key(base_prompt)
     result = _dictionary_runtime("", base_prompt)
     _DICTIONARY_PROMPT_CACHE[key] = result
     return result
@@ -354,7 +365,7 @@ def _apply_cached_dictionary_runtime(
     text: str,
     base_prompt: str | None,
 ) -> DictionaryRuntimeResult | None:
-    cached = _DICTIONARY_PROMPT_CACHE.get((base_prompt,))
+    cached = _DICTIONARY_PROMPT_CACHE.get(_dictionary_cache_key(base_prompt))
     if cached is None or not cached.enabled:
         return None
     out = text

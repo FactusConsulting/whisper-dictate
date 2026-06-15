@@ -21,6 +21,7 @@ def _truthy(value: str | None) -> bool:
 
 
 def _append_jsonl(path: str | None, event: dict) -> None:
+    path = (path or "").strip()
     if not path:
         return
     _rust_json("append-jsonl", event, "--path", os.path.expanduser(path))
@@ -36,7 +37,8 @@ def _append_history(event: dict) -> None:
 
 
 def append_record_sinks(event: dict, *, metrics_jsonl: str | None, json_output: bool) -> None:
-    metrics_path = os.path.expanduser(metrics_jsonl) if json_output and metrics_jsonl else ""
+    raw_metrics_path = (metrics_jsonl or "").strip()
+    metrics_path = os.path.expanduser(raw_metrics_path) if json_output and raw_metrics_path else ""
     history_target = event.get("_history_path")
     history_out = ""
     if history_target:
