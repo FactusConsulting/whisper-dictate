@@ -524,6 +524,24 @@ class RustReleaseWorkflowTests(unittest.TestCase):
                 "cancel-in-progress: ${{ github.event_name == 'pull_request' }}", wf
             )
 
+    def test_spellcheck_is_pr_only_and_limited_to_docs(self):
+        workflow = Path(".github/workflows/spellcheck.yml").read_text(encoding="utf-8")
+        config = Path("cspell.json").read_text(encoding="utf-8")
+
+        self.assertIn("pull_request:", workflow)
+        self.assertNotIn("push:", workflow)
+        self.assertNotIn("workflow_call:", workflow)
+        self.assertIn("npx --yes cspell@", workflow)
+        self.assertIn("--config cspell.json", workflow)
+        self.assertIn('README.md AGENTS.md CONTRIBUTING.md "docs/**/*.md"', workflow)
+        self.assertIn("permissions:\n  contents: read", workflow)
+        self.assertIn(
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            workflow,
+        )
+        self.assertIn('"language": "en"', config)
+        self.assertIn('"dictionaries": ["en_US"]', config)
+
     def test_configuration_doc_covers_every_schema_setting(self):
         # docs/CONFIGURATION.md must document every setting in the schema (the
         # single source of truth), so the reference can't silently drift.
