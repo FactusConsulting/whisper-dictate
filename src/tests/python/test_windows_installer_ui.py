@@ -227,7 +227,6 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn('"Command hook"', output_tab)
         self.assertIn('"Command hook timeout ms"', output_tab)
         self.assertIn("&mut self.settings.history_enabled", output_tab)
-        self.assertIn("&mut self.settings.local_only", output_tab)
         self.assertIn("self.preview_history();", output_tab)
         self.assertIn("self.open_history();", output_tab)
 
@@ -244,6 +243,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertNotIn("&mut self.settings.ui_text_scale", output_tab)
         self.assertNotIn("&mut self.settings.inject_json", output_tab)
         self.assertNotIn("&mut self.settings.metrics_jsonl", output_tab)
+        self.assertNotIn("&mut self.settings.local_only", output_tab)
         self.assertNotIn("&mut self.settings.feedback_sounds", output_tab)
         self.assertNotIn("&mut self.settings.feedback_notify", output_tab)
 
@@ -286,6 +286,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("&mut self.settings.feedback_notify", system_tab)
         self.assertIn("&mut self.settings.inject_json", system_tab)
         self.assertIn("&mut self.settings.metrics_jsonl", system_tab)
+        self.assertIn("&mut self.settings.local_only", system_tab)
         self.assertIn("UiTextKey::SystemMaintenance", system_tab)
         self.assertIn("UiTextKey::SystemAppearance", system_tab)
         self.assertIn("UiTextKey::SystemDisplay", system_tab)
@@ -671,4 +672,3 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("self.stop_runtime();", compact)
         self.assertIn("level_gauge(ui, palette, level, active, gauge_width)", compact)
         self.assertIn("fn compact_stage_label(", compact)
-

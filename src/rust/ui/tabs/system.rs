@@ -310,6 +310,12 @@ impl WhisperDictateApp {
                 &mut self.settings.metrics_jsonl,
                 "Path for appending transcription metrics as JSONL. Metrics are only written while \"JSON stdout\" is enabled, so a prefilled path stays inert until you opt in.",
             );
+            checkbox_help(
+                ui,
+                "Local only",
+                &mut self.settings.local_only,
+                "Privacy lock: block network-backed STT and post-processing providers when enabled.",
+            );
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {

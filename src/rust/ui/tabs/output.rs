@@ -53,12 +53,6 @@ impl WhisperDictateApp {
                     &mut self.settings.history_jsonl,
                     "Optional override path for local utterance history JSONL.",
                 );
-                checkbox_help(
-                    ui,
-                    "Local only",
-                    &mut self.settings.local_only,
-                    "Block network-backed STT/post-processing providers when enabled.",
-                );
             });
         ui.separator();
         ui.horizontal(|ui| {

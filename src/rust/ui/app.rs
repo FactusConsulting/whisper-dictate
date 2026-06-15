@@ -199,13 +199,18 @@ impl WhisperDictateApp {
     /// is logged exactly once and then ignored — the dictation flow never depends
     /// on the tray.
     ///
-    /// Uses the raw last worker status state string (stored by
-    /// `update_worker_status`) so `"opening"` (mic device opening, NOT yet live)
-    /// correctly shows amber — capturing the exact moment between push-to-talk
-    /// and the mic going live that the in-app indicator cannot represent.
+    /// Uses the raw last worker status state string plus the audio capture flags.
+    /// Stateless audio-meter events can leave the last status at `"ready"` while
+    /// push-to-talk is already held, so the capture flags override the status
+    /// fallback for the notification-area colour.
     fn sync_tray(&mut self, ctx: &egui::Context) {
         let worker_running = self.runtime_state != RuntimeState::Stopped;
-        let state = tray_state_for(&self.last_worker_status_state, worker_running);
+        let state = tray_state_for_capture(
+            &self.last_worker_status_state,
+            worker_running,
+            self.audio_capture_opening,
+            self.audio_capture_active,
+        );
         if let Err(reason) = self.tray.sync(state, &self.settings.ui_language) {
             // First (and only) failure: log it, then permanently disable the tray
             // so we never retry-spam or block the app on a headless/denied tray.

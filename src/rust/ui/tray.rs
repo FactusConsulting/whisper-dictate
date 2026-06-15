@@ -6,8 +6,9 @@
 //!
 //! Layering, by design:
 //! - The pure logic — the [`TrayState`] enum, the worker-status → state mapping
-//!   ([`tray_state_for`]), the programmatic icon pixels ([`tray_icon_rgba`]), and
-//!   the tooltip-key mapping — is **cfg-free** so its unit tests run on every
+//!   ([`tray_state_for`]), the app-state → state mapping
+//!   ([`tray_state_for_capture`]), the programmatic icon pixels
+//!   ([`tray_icon_rgba`]), and the tooltip-key mapping — is **cfg-free** so its unit tests run on every
 //!   platform (incl. the Linux dev container/CI). [`tray_state_for`] is called
 //!   from `app.rs` (cfg-free) so it is never dead. The icon/tooltip helpers are
 //!   Windows-only consumers; they carry `#[cfg_attr(not(windows), allow(dead_code))]`
@@ -100,6 +101,30 @@ pub(in crate::ui) fn tray_state_for(status_state: &str, worker_running: bool) ->
         // ready / no_text / preview / capture_lost / listening / unknown → idle-ready.
         _ => TrayState::Ready,
     }
+}
+
+/// Pure mapping from the app's full runtime/capture state to a [`TrayState`].
+///
+/// Some worker audio events carry meter samples without repeating the worker
+/// status string. In that case `last_worker_status_state` can still be `"ready"`
+/// while push-to-talk is held and the app already knows capture is active from
+/// the audio path. Capture flags therefore override the stale status fallback.
+pub(in crate::ui) fn tray_state_for_capture(
+    status_state: &str,
+    worker_running: bool,
+    audio_capture_opening: bool,
+    audio_capture_active: bool,
+) -> TrayState {
+    if !worker_running {
+        return TrayState::NotRunning;
+    }
+    if audio_capture_active {
+        return TrayState::Recording;
+    }
+    if audio_capture_opening {
+        return TrayState::Processing;
+    }
+    tray_state_for(status_state, worker_running)
 }
 
 /// The localized tooltip string for a tray state (e.g. "whisper-dictate — recording").
@@ -392,6 +417,30 @@ mod tests {
         // And distinct colours back the distinct states.
         assert_ne!(TrayState::Ready.rgb(), TrayState::Recording.rgb());
         assert_ne!(TrayState::Processing.rgb(), TrayState::Recording.rgb());
+    }
+
+    #[test]
+    fn active_capture_overrides_stale_ready_status() {
+        assert_eq!(
+            tray_state_for_capture("ready", true, false, true),
+            TrayState::Recording
+        );
+    }
+
+    #[test]
+    fn opening_capture_overrides_stale_ready_status() {
+        assert_eq!(
+            tray_state_for_capture("ready", true, true, false),
+            TrayState::Processing
+        );
+    }
+
+    #[test]
+    fn stopped_worker_stays_not_running_even_with_capture_flags() {
+        assert_eq!(
+            tray_state_for_capture("ready", false, true, true),
+            TrayState::NotRunning
+        );
     }
 
     #[test]

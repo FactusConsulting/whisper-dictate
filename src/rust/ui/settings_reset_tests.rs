@@ -169,10 +169,6 @@ fn output_page_reset_restores_only_output_settings() {
     );
     assert_eq!(settings.history_enabled, defaults.history_enabled);
     assert_eq!(settings.history_jsonl, defaults.history_jsonl);
-    assert_eq!(settings.local_only, defaults.local_only);
-    assert_eq!(settings.debug, defaults.debug);
-    assert_eq!(settings.stt_debug, defaults.stt_debug);
-    assert_eq!(settings.trace, defaults.trace);
     // App-level settings that moved to the System tab must NOT reset here.
     assert_eq!(settings.ui_theme, "light");
     assert_eq!(settings.ui_language, "da");
@@ -183,8 +179,12 @@ fn output_page_reset_restores_only_output_settings() {
     assert!(settings.update_include_prereleases);
     assert!(settings.inject_json);
     assert_eq!(settings.metrics_jsonl, "metrics.jsonl");
+    assert!(settings.local_only);
     assert!(settings.feedback_sounds);
     assert!(settings.feedback_notify);
+    assert!(settings.debug);
+    assert!(settings.stt_debug);
+    assert!(settings.trace);
     // Unrelated pages are untouched.
     assert_eq!(settings.lang, "da");
     assert_eq!(settings.stt_backend, "openai");
@@ -198,7 +198,7 @@ fn system_page_reset_restores_only_system_settings() {
 
     reset_tab_settings(&mut settings, Tab::System);
 
-    // Appearance / display / feedback / integration settings reset here.
+    // Appearance / display / feedback / diagnostics / integration settings reset here.
     assert_eq!(settings.ui_theme, defaults.ui_theme);
     assert_eq!(settings.ui_language, defaults.ui_language);
     assert_eq!(settings.ui_log_view, defaults.ui_log_view);
@@ -214,14 +214,16 @@ fn system_page_reset_restores_only_system_settings() {
     );
     assert_eq!(settings.inject_json, defaults.inject_json);
     assert_eq!(settings.metrics_jsonl, defaults.metrics_jsonl);
+    assert_eq!(settings.local_only, defaults.local_only);
     assert_eq!(settings.feedback_sounds, defaults.feedback_sounds);
     assert_eq!(settings.feedback_notify, defaults.feedback_notify);
+    assert_eq!(settings.debug, defaults.debug);
+    assert_eq!(settings.stt_debug, defaults.stt_debug);
+    assert_eq!(settings.trace, defaults.trace);
     // Speech-output settings that stayed on Output must NOT reset here.
     assert_eq!(settings.inject_mode, "paste");
     assert_eq!(settings.command_hook, "hook.exe");
     assert!(!settings.history_enabled);
-    assert!(settings.debug);
-    assert!(settings.trace);
     // Unrelated pages are untouched.
     assert_eq!(settings.stt_backend, "openai");
     assert_eq!(settings.vad_threshold, "0.42");

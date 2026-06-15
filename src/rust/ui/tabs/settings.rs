@@ -134,10 +134,6 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.command_hook_timeout_ms = defaults.command_hook_timeout_ms;
             settings.history_enabled = defaults.history_enabled;
             settings.history_jsonl = defaults.history_jsonl;
-            settings.local_only = defaults.local_only;
-            settings.debug = defaults.debug;
-            settings.stt_debug = defaults.stt_debug;
-            settings.trace = defaults.trace;
         }
         Tab::System => {
             settings.ui_theme = defaults.ui_theme;
@@ -149,8 +145,12 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.update_include_prereleases = defaults.update_include_prereleases;
             settings.inject_json = defaults.inject_json;
             settings.metrics_jsonl = defaults.metrics_jsonl;
+            settings.local_only = defaults.local_only;
             settings.feedback_sounds = defaults.feedback_sounds;
             settings.feedback_notify = defaults.feedback_notify;
+            settings.debug = defaults.debug;
+            settings.stt_debug = defaults.stt_debug;
+            settings.trace = defaults.trace;
         }
         Tab::Post => {
             settings.post_processor = defaults.post_processor;
