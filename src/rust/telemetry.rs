@@ -111,7 +111,6 @@ pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
     let Some(event) = payload.get("event") else {
         return Ok(());
     };
-    let event = event.clone();
     if let Some(path) = payload
         .get("metrics_path")
         .and_then(Value::as_str)
