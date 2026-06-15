@@ -943,7 +943,10 @@ class CaptureMixin:
             # path on Windows), let WASAPI resample 16k internally via
             # auto_convert (int16+float32 swept again). Windows-only and guarded.
             if os.name == "nt" and _is_wasapi_device(
-                    self._sd_snapshot.devices, self._sd_snapshot.hostapis, device):
+                self._sd_snapshot.devices,
+                self._sd_snapshot.hostapis,
+                device,
+            ):
                 extra = _wasapi_autoconvert_settings(sd)
                 if extra is not None:
                     exc = self._bind_stream(sd, device, extra_settings=extra)

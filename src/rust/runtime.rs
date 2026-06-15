@@ -20,6 +20,8 @@ const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 const PYTHON_UTF8_ENV: &str = "PYTHONUTF8";
 const PYTHON_IO_ENCODING_ENV: &str = "PYTHONIOENCODING";
 const PYTHONPATH_ENV: &str = "PYTHONPATH";
+/// Maximum captured worker output kept in memory, measured in UTF-8 bytes
+/// (`str::len()`), despite the legacy `_CHARS` suffix in the public name.
 pub const CAPTURE_OUTPUT_MAX_CHARS: usize = 200_000;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
