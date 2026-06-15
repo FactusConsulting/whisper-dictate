@@ -25,6 +25,39 @@ class Setting:
     live: bool = True
 
 
+@dataclass(frozen=True)
+class ConfigSnapshot:
+    data: dict[str, Any]
+
+    def get_value(self, env: str, default: str | None = None) -> str | None:
+        setting = SETTING_BY_ENV.get(env)
+        if setting:
+            value = self.data.get(setting.key)
+            if value not in (None, ""):
+                return str(value)
+        value = os.environ.get(env)
+        if value not in (None, ""):
+            return value
+        if setting and setting.default is not None:
+            return setting.default
+        return default
+
+    def effective_config(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for setting in SETTINGS:
+            value = self.data.get(setting.key)
+            if value not in (None, ""):
+                out[setting.key] = str(value)
+                continue
+            env_value = os.environ.get(setting.env)
+            if env_value not in (None, ""):
+                out[setting.key] = str(env_value)
+                continue
+            if setting.default is not None:
+                out[setting.key] = setting.default
+        return out
+
+
 def _load_settings_schema() -> tuple[Setting, ...]:
     """Load the canonical runtime-settings schema.
 
@@ -89,6 +122,10 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     return data
 
 
+def config_snapshot(path: Path | None = None) -> ConfigSnapshot:
+    return ConfigSnapshot(load_config(path))
+
+
 def save_config(data: dict[str, Any], path: Path | None = None) -> Path:
     path = path or config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,18 +135,7 @@ def save_config(data: dict[str, Any], path: Path | None = None) -> Path:
 
 
 def get_value(env: str, default: str | None = None) -> str | None:
-    setting = SETTING_BY_ENV.get(env)
-    if setting:
-        data = load_config()
-        value = data.get(setting.key)
-        if value not in (None, ""):
-            return str(value)
-    value = os.environ.get(env)
-    if value not in (None, ""):
-        return value
-    if setting and setting.default is not None:
-        return setting.default
-    return default
+    return config_snapshot().get_value(env, default)
 
 
 def apply_config_to_environ() -> set[str]:
@@ -131,20 +157,7 @@ def apply_config_to_environ() -> set[str]:
 
 
 def effective_config() -> dict[str, str]:
-    data = load_config()
-    out: dict[str, str] = {}
-    for setting in SETTINGS:
-        value = data.get(setting.key)
-        if value not in (None, ""):
-            out[setting.key] = str(value)
-            continue
-        env_value = os.environ.get(setting.env)
-        if env_value not in (None, ""):
-            out[setting.key] = str(env_value)
-            continue
-        if setting.default is not None:
-            out[setting.key] = setting.default
-    return out
+    return config_snapshot().effective_config()
 
 
 def config_mtime(path: Path | None = None) -> float:

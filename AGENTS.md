@@ -2,17 +2,25 @@
 
 ## Local Command Execution
 
-- Run PowerShell commands without loading the user profile. Prefer no-profile
-  execution for local automation because profile startup is slow and unrelated
-  to repository behavior.
+- Run PowerShell automation without loading the user profile, e.g.
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <script>.ps1`.
+
+## Validation Commands
+
+- Python tests: `py -3.12 -m pytest src/python/tests src/tests/python`
+  (avoid root-level `pytest`; it can collect packaged copies under `Output/`).
+- Rust tests: `cargo test --manifest-path src/rust/Cargo.toml`
+- Rust checks:
+  `cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check`
+  and `cargo clippy --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-targets --all-features -- -D warnings`
 
 ## Regression Tests
 
-Whenever fixing a bug, add a regression test in the same change unless there is
-a clear technical reason not to. Prefer the narrowest useful test:
+When fixing a bug or changing performance-sensitive behavior, add the narrowest
+useful regression test unless there is a clear technical reason not to:
 
 - Unit tests for pure logic, parsing, configuration, command construction, and
-  small platform-specific guards.
+  small platform guards.
 - Integration or smoke tests when the bug is in process launch, installer
   behavior, runtime wiring, dependency setup, or cross-module behavior.
 - Both when the bug has a small isolated cause and a higher-level workflow that
@@ -23,34 +31,21 @@ summary and include the manual verification that covers the bug.
 
 ## Pull request review
 
-**HARD GATE — do not merge any PR with unaddressed automated-review comments.**
-This is non-negotiable and applies to EVERY merge, including agent-/script-
-orchestrated merges and `gh api ... /merge` calls. "CI is green" is NOT
-sufficient to merge — the Copilot review must also be fetched and triaged first.
+**HARD GATE — do not merge with unaddressed automated-review comments.**
+CI green is not enough; fetch and triage Copilot/SonarCloud comments first.
 
-- Every PR is auto-reviewed by GitHub Copilot. Before merging, wait for the
-  Copilot review to land (its overview notes "generated N comments") and address
-  **every** Copilot comment — fix it, or reply with a clear justification. Do
-  not merge while Copilot review comments are outstanding.
-- Explicitly fetch the comments before merging — don't assume there are none:
+- Before merging, wait for the Copilot review to land, then fetch comments:
 
   ```sh
   gh api repos/<owner>/<repo>/pulls/<pr>/comments \
     --jq '.[] | select(.user.login|test("copilot";"i")) | select(.in_reply_to_id==null) | "[\(.path):\(.line // .original_line)] \(.body)"'
   ```
 
-  (`.line` is null for comments on outdated diffs — fall back to `.original_line`.)
-
-  Triage each: fix it, or record an explicit "dismissed because …" justification.
-  Copilot is sometimes wrong (e.g. it flagged a UTF-8 panic in code that only
-  slices at ASCII brace boundaries) — but you must reason it through, not skip it.
+  Fix each comment or record an explicit dismissal reason. Use
+  `.line // .original_line` because outdated comments may have null `.line`.
 - After pushing changes, re-request the review
   (`gh pr edit <pr> --add-reviewer @copilot`) and re-check before merging.
-  Don't rely on a single early "0 comments" check — the review can land after CI
-  starts. The same applies to other automated reviewers (e.g. SonarCloud).
-- When orchestrating merges across many PRs (e.g. a release wave), the
-  Copilot-comment check is part of EACH PR's merge gate — never batch-merge on
-  CI status alone.
+- Apply this gate to every PR, including scripted or batch merges.
 
 ## Project-Specific Expectations
 

@@ -111,6 +111,8 @@ STT_BACKEND = (get_value("VOICEPI_STT_BACKEND", "whisper") or "whisper").strip()
 if STT_BACKEND == "faster-whisper":
     STT_BACKEND = "whisper"
 
+_DICTIONARY_PROMPT_CACHE: dict[tuple[str | None], DictionaryRuntimeResult] = {}
+
 
 def _local_only_enabled() -> bool:
     return (get_value("VOICEPI_LOCAL_ONLY") or "").strip().lower() not in (
@@ -237,6 +239,7 @@ class DictionaryRuntimeResult:
     text: str = ""
     prompt: str | None = None
     terms: list[str] = field(default_factory=list)
+    replacements: list[dict[str, str]] = field(default_factory=list)
     changes: list[dict[str, object]] = field(default_factory=list)
     term_count: int = 0
     replacement_count: int = 0
@@ -304,6 +307,18 @@ def _parse_dictionary_changes(payload: dict) -> list[dict[str, object]]:
     return changes
 
 
+def _parse_dictionary_replacements(payload: dict) -> list[dict[str, str]]:
+    replacements = []
+    for item in payload.get("replacements") or []:
+        if not isinstance(item, dict):
+            continue
+        replacements.append({
+            "from": str(item.get("from") or ""),
+            "to": str(item.get("to") or ""),
+        })
+    return replacements
+
+
 def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> DictionaryRuntimeResult:
     fallback = DictionaryRuntimeResult(text=text, prompt=_base_prompt_only(base_prompt))
     payload = _run_dictionary_helper_payload(text, base_prompt)
@@ -318,12 +333,73 @@ def _dictionary_runtime(text: str = "", base_prompt: str | None = None) -> Dicti
         text=str(payload.get("text", text)),
         prompt=payload.get("prompt") if isinstance(payload.get("prompt"), str) else None,
         terms=[str(term) for term in (payload.get("terms") or [])],
+        replacements=_parse_dictionary_replacements(payload),
         changes=_parse_dictionary_changes(payload),
         term_count=int(payload.get("term_count") or 0),
         replacement_count=int(payload.get("replacement_count") or 0),
         path=str(payload["path"]) if payload.get("path") else None,
         error=str(error) if error else None,
         enabled=bool(payload.get("enabled", False)),
+    )
+
+
+def _dictionary_prompt_runtime(base_prompt: str | None) -> DictionaryRuntimeResult:
+    key = (base_prompt,)
+    result = _dictionary_runtime("", base_prompt)
+    _DICTIONARY_PROMPT_CACHE[key] = result
+    return result
+
+
+def _apply_cached_dictionary_runtime(
+    text: str,
+    base_prompt: str | None,
+) -> DictionaryRuntimeResult | None:
+    cached = _DICTIONARY_PROMPT_CACHE.get((base_prompt,))
+    if cached is None or not cached.enabled:
+        return None
+    out = text
+    changes: list[dict[str, object]] = []
+    replacements = sorted(
+        cached.replacements,
+        key=lambda item: len(item.get("from", "")),
+        reverse=True,
+    )
+    for replacement in replacements:
+        source = replacement.get("from", "")
+        target = replacement.get("to", "")
+        if not source:
+            continue
+        pattern = (
+            r"(^|[^\w])("
+            + re.escape(source)
+            + r")([^\w]|$)"
+        )
+        count = 0
+
+        def _replace(match: re.Match[str]) -> str:
+            nonlocal count
+            count += 1
+            return f"{match.group(1)}{target}{match.group(3)}"
+
+        rewritten = re.sub(pattern, _replace, out, flags=re.IGNORECASE)
+        if count:
+            out = rewritten
+            changes.append({
+                "from": source,
+                "to": target,
+                "count": count,
+            })
+    return DictionaryRuntimeResult(
+        text=out,
+        prompt=cached.prompt,
+        terms=cached.terms,
+        replacements=cached.replacements,
+        changes=changes,
+        term_count=cached.term_count,
+        replacement_count=cached.replacement_count,
+        path=cached.path,
+        error=cached.error,
+        enabled=True,
     )
 
 # Anti-hallucination PATTERN DATA lives in data/hallucination_patterns.json (see
@@ -565,7 +641,7 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
     in_dbfs = 20 * np.log10(float(np.sqrt(np.mean(audio**2)) or 1e-9))
     use_context = CONTEXT_MIN_SECONDS > 0 and dur >= CONTEXT_MIN_SECONDS
     t0 = time.monotonic()
-    dictionary_prompt = _dictionary_runtime("", INITIAL_PROMPT)
+    dictionary_prompt = _dictionary_prompt_runtime(INITIAL_PROMPT)
     prompt = dictionary_prompt.prompt
     # hallucination_silence_threshold only takes effect with word timestamps, so
     # enable both together when the guard is on.
@@ -619,7 +695,10 @@ def _transcribe_detail(model, pcm: np.ndarray, lang: str | None) -> TranscribeRe
         # (reason="empty" -> state=no_text), not as an is_hallucination match.
         raw_text = ""
         segment_list = []
-    dictionary_text = _dictionary_runtime(raw_text, INITIAL_PROMPT)
+    dictionary_text = (
+        _apply_cached_dictionary_runtime(raw_text, INITIAL_PROMPT)
+        or _dictionary_runtime(raw_text, INITIAL_PROMPT)
+    )
     text = dictionary_text.text
     replacements = dictionary_text.changes
     compute_s = time.monotonic() - t0

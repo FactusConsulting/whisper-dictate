@@ -44,6 +44,54 @@ _DEVICES = [
 ]
 
 
+class SoundDeviceSnapshotTests(unittest.TestCase):
+    def test_snapshot_reused_by_resolver_and_hostapi_label(self):
+        calls = {"devices": 0, "hostapis": 0, "default": 0}
+        devices = [
+            {"name": "Mic", "max_input_channels": 1, "hostapi": 0},
+        ]
+        hostapis = [{"name": "Windows WASAPI"}]
+
+        class SoundDevice:
+            default = types.SimpleNamespace(device=(0, None))
+
+            def query_devices(self, *args, **kwargs):
+                if kwargs.get("kind") == "input":
+                    calls["default"] += 1
+                    return devices[0]
+                calls["devices"] += 1
+                return list(devices)
+
+            def query_hostapis(self):
+                calls["hostapis"] += 1
+                return list(hostapis)
+
+        sd = SoundDevice()
+        snapshot = vp_capture.SoundDeviceSnapshot(sd)
+        self.assertEqual(calls, {"devices": 1, "hostapis": 1, "default": 1})
+
+        self.assertEqual(
+            vp_capture._resolve_sounddevice_device(
+                sd,
+                "",
+                devices=snapshot.devices,
+                hostapis=snapshot.hostapis,
+                default_index=snapshot.default_index,
+            ),
+            (0, "Mic"),
+        )
+        self.assertEqual(
+            vp_capture._device_hostapi_name(
+                sd,
+                0,
+                devices=snapshot.devices,
+                hostapis=snapshot.hostapis,
+            ),
+            "Windows WASAPI",
+        )
+        self.assertEqual(calls, {"devices": 1, "hostapis": 1, "default": 1})
+
+
 class ResolveSounddeviceDeviceTests(unittest.TestCase):
     """The ``(index, name)`` contract on a single-host-API (non-Windows) table.
 

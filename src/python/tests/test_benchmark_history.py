@@ -773,14 +773,13 @@ class HistoryTests(unittest.TestCase):
         args = vp_cli.build_arg_parser().parse_args(["--history-reinject-last"])
         self.assertTrue(args.history_reinject_last)
 
-    def test_runtime_appends_history_after_metrics(self):
+    def test_runtime_uses_combined_record_sink_helper(self):
         with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
 
-        self.assertIn('_append_jsonl(self.metrics_jsonl, event)', script)
-        self.assertIn("_append_history(event)", script)
-        self.assertLess(script.index("_append_jsonl(self.metrics_jsonl, event)"),
-                        script.index("_append_history(event)"))
+        self.assertIn("append_record_sinks(", script)
+        self.assertIn("metrics_jsonl=self.metrics_jsonl", script)
+        self.assertIn("json_output=self.json_output", script)
 
 class ProfileTests(unittest.TestCase):
     def test_runtime_records_active_profile_in_metrics(self):

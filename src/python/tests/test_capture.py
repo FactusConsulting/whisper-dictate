@@ -50,6 +50,35 @@ class _FakeProc:
         self.waited = True
 
 
+class CaptureBufferHelperTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.runtime = load_voice_pi_realnp()
+        except ImportError as e:
+            raise unittest.SkipTest(f"real numpy unavailable: {e}")
+        cls.runtime._load_runtime_modules()
+        import importlib
+        cls.capture = importlib.import_module("whisper_dictate.vp_capture")
+        import numpy as np
+        cls.np = np
+
+    def test_concat_capture_frames_returns_none_for_empty(self):
+        self.assertIsNone(self.capture.concat_capture_frames([]))
+
+    def test_concat_capture_frames_single_frame_is_no_copy_fast_path(self):
+        frame = self.np.arange(4, dtype=self.np.int16).reshape(-1, 1)
+        out = self.capture.concat_capture_frames([frame])
+        self.assertTrue(self.np.shares_memory(frame, out))
+        self.assertEqual(out.dtype, self.np.int16)
+
+    def test_concat_capture_frames_preserves_order_for_multiple_frames(self):
+        a = self.np.array([[1], [2]], dtype=self.np.int16)
+        b = self.np.array([[3]], dtype=self.np.int16)
+        out = self.capture.concat_capture_frames([a, b])
+        self.assertEqual(out.reshape(-1).tolist(), [1, 2, 3])
+
+
 class ArecordReaderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -2066,4 +2095,3 @@ class BaseLatencyCandidateTests(unittest.TestCase):
         self.assertNotEqual(bound.get("latency"), "low")
         self.assertNotIn("WARN", target._audio_input_device)
         self.assertEqual(target._capture_rate, 16000)
-

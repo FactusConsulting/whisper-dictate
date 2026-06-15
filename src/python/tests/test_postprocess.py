@@ -239,6 +239,30 @@ class PostprocessTests(unittest.TestCase):
         self.assertEqual(settings.model, "llama-3.1-8b-instant")
         self.assertEqual(settings.api_key, "groq-test-key")
 
+    def test_load_postprocess_settings_reads_config_once(self):
+        from whisper_dictate import vp_postprocess
+        from whisper_dictate.vp_config import ConfigSnapshot
+
+        calls = []
+        data = {
+            "post_processor": "groq",
+            "post_mode": "clean",
+            "post_timeout_ms": "1234",
+            "post_max_input_chars": "2345",
+            "post_max_output_chars": "3456",
+        }
+
+        def fake_snapshot():
+            calls.append(1)
+            return ConfigSnapshot(data)
+
+        with patch.object(vp_postprocess, "config_snapshot", fake_snapshot):
+            settings = vp_postprocess.load_postprocess_settings()
+
+        self.assertEqual(settings.processor, "groq")
+        self.assertEqual(settings.timeout_ms, 1234)
+        self.assertEqual(calls, [1])
+
     def test_groq_postprocessor_uses_openai_compatible_chat_server(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer

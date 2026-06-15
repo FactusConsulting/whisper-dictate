@@ -11,6 +11,29 @@ use crate::runtime::{default_worker_command, RuntimeEvent, WorkerCommand, Worker
 pub(in crate::ui) const RUNTIME_LOG_MAX_CHARS: usize = 200_000;
 
 pub(in crate::ui) const TRIM_MARKER: &str = "[ui] \u{2026}older log trimmed\u{2026}";
+const ACTIVE_REPAINT_MS: u64 = 80;
+const IDLE_REPAINT_MS: u64 = 1000;
+
+pub(in crate::ui) fn repaint_interval_for_state(
+    compact_mode: bool,
+    runtime_state: crate::runtime::RuntimeState,
+    audio_capture_opening: bool,
+    audio_capture_active: bool,
+    background_task_running: bool,
+    pipeline_active: bool,
+) -> std::time::Duration {
+    let active = compact_mode
+        || runtime_state != crate::runtime::RuntimeState::Stopped
+        || audio_capture_opening
+        || audio_capture_active
+        || background_task_running
+        || pipeline_active;
+    std::time::Duration::from_millis(if active {
+        ACTIVE_REPAINT_MS
+    } else {
+        IDLE_REPAINT_MS
+    })
+}
 
 /// Drop the oldest whole lines from `log` until its length is under
 /// [`RUNTIME_LOG_MAX_CHARS`].  A single marker line is prepended to signal the
@@ -91,7 +114,14 @@ impl eframe::App for WhisperDictateApp {
         self.sync_tray(&ctx);
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(&ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        ctx.request_repaint_after(repaint_interval_for_state(
+            self.compact_mode,
+            self.runtime_state,
+            self.audio_capture_opening,
+            self.audio_capture_active,
+            self.background_task.is_some(),
+            self.pipeline_stage.is_some(),
+        ));
 
         // Compact mode: a single tiny CentralPanel with one control row — no
         // sidebar, tabs, log, or message bars. The viewport is already resized /

@@ -161,7 +161,10 @@ class PreviewEngine:
         frames = list(self._owner.frames)  # shallow copy of the list of chunks
         if not frames:
             return None
-        pcm = np.concatenate(frames, axis=0).astype(np.int16)
+        from whisper_dictate.vp_capture import concat_capture_frames
+        pcm = concat_capture_frames(frames)
+        if pcm is None:
+            return None
         total_samples = len(pcm)
         # Trim by SAMPLE COUNT on the concatenated int16 array. Slicing past the
         # start is safe (numpy clamps), so a short buffer is returned in full and
