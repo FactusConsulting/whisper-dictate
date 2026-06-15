@@ -3,7 +3,9 @@
 //! key-file primitives and report types live in `super::secret_store`.
 
 use anyhow::{Context, Result};
+use keyring_core::{Entry, Error};
 use std::env;
+use std::sync::OnceLock;
 
 use super::secret_store::*;
 use crate::config::AppSettings;
@@ -274,7 +276,7 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
         });
     }
 
-    let entry = match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
+    let entry = match credential_entry(user) {
         Ok(entry) => entry,
         Err(err) => {
             let fallback_reason = format!("OS credential store could not be opened: {err}");
@@ -298,7 +300,7 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
         let entry = &entry;
         match secret.trim().is_empty() {
             true => match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Ok(()) | Err(Error::NoEntry) => Ok(()),
                 Err(err) => Err(err.into()),
             },
             false => entry
@@ -390,7 +392,7 @@ fn save_secret(user: &str, secret: &str) -> Result<SecretSaveReport> {
     }
 }
 
-fn verify_keyring_readback(entry: &keyring::Entry, expected: &str) -> Result<()> {
+fn verify_keyring_readback(entry: &Entry, expected: &str) -> Result<()> {
     let actual = entry.get_password()?;
     if actual == expected {
         Ok(())
@@ -420,15 +422,42 @@ fn load_secret(user: &str) -> Result<String> {
         return load_file_secret(user);
     }
 
-    match keyring::Entry::new(CREDENTIAL_SERVICE, user) {
+    match credential_entry(user) {
         Ok(entry) => match entry.get_password() {
             Ok(secret) => Ok(secret),
-            Err(keyring::Error::NoEntry) => load_file_secret(user),
+            Err(Error::NoEntry) => load_file_secret(user),
             Err(err) => load_file_secret(user).with_context(|| {
                 format!("OS credential store failed ({err}); file fallback failed")
             }),
         },
         Err(err) => load_file_secret(user)
             .with_context(|| format!("OS credential store failed ({err}); file fallback failed")),
+    }
+}
+
+fn credential_entry(user: &str) -> Result<Entry> {
+    ensure_keyring_store()?;
+    Entry::new(CREDENTIAL_SERVICE, user).map_err(anyhow::Error::from)
+}
+
+fn ensure_keyring_store() -> Result<()> {
+    static KEYRING_STORE_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+    match KEYRING_STORE_INIT
+        .get_or_init(|| configure_keyring_store().map_err(|err| err.to_string()))
+    {
+        Ok(()) => Ok(()),
+        Err(err) => anyhow::bail!("{err}"),
+    }
+}
+
+fn configure_keyring_store() -> std::result::Result<(), keyring_core::Error> {
+    #[cfg(target_os = "linux")]
+    {
+        keyring::use_named_store("secret-service")
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        keyring::use_native_store(false)
     }
 }
