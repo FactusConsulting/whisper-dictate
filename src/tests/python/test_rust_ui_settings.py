@@ -69,7 +69,8 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("fn ensure_stt_api_key_loaded_for_runtime(&mut self)", script)
         self.assertIn("fn cloud_stt_missing_api_key(&self) -> bool", script)
         self.assertIn("fn save_stt_api_key_if_changed(", script)
-        self.assertIn("keyring::Entry::new", api_keys)
+        self.assertIn("fn credential_entry(user: &str) -> Result<Entry>", api_keys)
+        self.assertIn("Entry::new(CREDENTIAL_SERVICE, user)", api_keys)
         self.assertIn("STT_API_KEY_ENV", api_keys)
         self.assertIn("fn has_unsaved_settings(&self) -> bool", script)
         self.assertIn("icons::ICON_SAVE", script)
@@ -230,11 +231,16 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
     def test_rust_ui_keyring_uses_native_platform_backends(self):
         cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
 
-        self.assertIn('keyring = { version = "3.6"', cargo)
-        self.assertIn('"windows-native"', cargo)
-        self.assertIn('"apple-native"', cargo)
-        self.assertIn('"linux-native-sync-persistent"', cargo)
-        self.assertIn('"crypto-rust"', cargo)
+        api_keys = Path("src/rust/ui/api_keys.rs").read_text(encoding="utf-8")
+
+        self.assertIn('keyring = "4.0"', cargo)
+        self.assertIn('keyring-core = "1.0"', cargo)
+        self.assertIn("use keyring_core::{Entry, Error};", api_keys)
+        self.assertIn("keyring::use_native_store(false)", api_keys)
+        self.assertIn('keyring::use_named_store("secret-service")', api_keys)
+        self.assertNotIn('"windows-native"', cargo)
+        self.assertNotIn('"apple-native"', cargo)
+        self.assertNotIn('"linux-native-sync-persistent"', cargo)
 
     def test_rust_ui_has_cloud_api_test_and_local_viewers(self):
         ui = rust_ui_source()
@@ -527,4 +533,3 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         # The label-column alignment anchor must still be in place so value
         # columns line up across groups and tabs after the width change.
         self.assertIn("ui.set_min_width(settings_label_width(ui))", script)
-
