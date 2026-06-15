@@ -46,9 +46,14 @@ regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-keyring = "4.0"
 keyring-core = "1.0"
 ureq = { version = "3.3", features = ["json"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0", features = ["keychain"] }
 
 # Windows-only system-tray icon (notification area). Scoped to the Windows
 # target so the Linux/CI build never pulls in tray-icon's gtk/libxdo system
@@ -57,6 +62,7 @@ ureq = { version = "3.3", features = ["json"] }
 # in `ui::tray` is cfg-free so its unit tests run on every platform.
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
+windows-native-keyring-store = "1.1"
 
 [build-dependencies]
 winresource = "0.1"

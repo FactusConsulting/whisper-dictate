@@ -3,7 +3,7 @@
 //! key-file primitives and report types live in `super::secret_store`.
 
 use anyhow::{Context, Result};
-use keyring_core::{Entry, Error};
+use keyring_core::{set_default_store, Entry, Error};
 use std::env;
 use std::sync::{Mutex, OnceLock};
 
@@ -447,9 +447,10 @@ fn ensure_keyring_store() -> Result<()> {
         return Ok(());
     }
 
-    let _guard = KEYRING_STORE_INIT_LOCK
-        .lock()
-        .expect("keyring store init lock poisoned");
+    let _guard = match KEYRING_STORE_INIT_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if KEYRING_STORE_INIT.get().is_none() {
         configure_keyring_store()?;
         let _ = KEYRING_STORE_INIT.set(());
@@ -460,11 +461,26 @@ fn ensure_keyring_store() -> Result<()> {
 fn configure_keyring_store() -> std::result::Result<(), keyring_core::Error> {
     #[cfg(target_os = "linux")]
     {
-        keyring::use_named_store("secret-service")
+        set_default_store(zbus_secret_service_keyring_store::Store::new()?);
+        Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        keyring::use_native_store(false)
+        set_default_store(apple_native_keyring_store::keychain::Store::new()?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        set_default_store(windows_native_keyring_store::Store::new()?);
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Err(Error::NotSupportedByStore(
+            "No OS credential store is configured for this platform".to_owned(),
+        ))
     }
 }
