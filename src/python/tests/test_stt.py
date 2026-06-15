@@ -1,5 +1,6 @@
 from helpers import (
     _capture_stdout,
+    _env,
     json,
     os,
     patch,
@@ -516,6 +517,125 @@ class TranscribeDetailTests(unittest.TestCase):
             self.t.HALLUCINATION_SILENCE_S,
         )
 
+    def test_transcribe_detail_reuses_dictionary_payload_for_replacements(self):
+        np = self.np
+
+        class Segment:
+            text = " acme"
+            start = 0.0
+            end = 1.0
+            avg_logprob = -0.1
+            no_speech_prob = 0.02
+            compression_ratio = 1.1
+
+        class Info:
+            language = "en"
+            language_probability = 0.99
+
+        class Model:
+            def transcribe(self, audio, **kwargs):
+                self.prompt = kwargs.get("initial_prompt")
+                return [Segment()], Info()
+
+        calls = []
+
+        def fake_dictionary_payload(text, base_prompt):
+            calls.append((text, base_prompt))
+            return {
+                "enabled": True,
+                "prompt": "Vocabulary: ACME",
+                "terms": ["ACME"],
+                "replacements": [{"from": "acme", "to": "ACME"}],
+                "term_count": 1,
+                "replacement_count": 1,
+            }
+
+        audio = np.concatenate([
+            np.full(480, 0.8 if i % 2 == 0 else 0.05, dtype=np.float32)
+            for i in range(40)
+        ]).reshape(-1, 1)
+        pcm = (audio * 32767).astype(np.int16)
+        model = Model()
+
+        with patch.object(self.t, "_run_dictionary_helper_payload", fake_dictionary_payload):
+            with _capture_stdout():
+                result = self.t._transcribe_detail(model, pcm, "en")
+
+        self.assertEqual(model.prompt, "Vocabulary: ACME")
+        self.assertEqual(result.text, "ACME")
+        self.assertEqual(result.dictionary_terms, ["ACME"])
+        self.assertEqual(
+            result.dictionary_replacements,
+            [{"from": "acme", "to": "ACME", "count": 1}],
+        )
+        self.assertEqual(calls, [("", self.t.INITIAL_PROMPT)])
+
+    def test_dictionary_prompt_cache_key_tracks_live_dictionary_settings(self):
+        first = self.t.DictionaryRuntimeResult(
+            prompt="Vocabulary: ACME",
+            replacements=[{"from": "acme", "to": "ACME"}],
+            enabled=True,
+        )
+
+        with _env(
+            VOICEPI_DICTIONARY_ENABLED="1",
+            VOICEPI_DICTIONARY="a.json",
+            VOICEPI_DICTIONARY_MAX_TERMS="80",
+            VOICEPI_DICTIONARY_PROMPT_CHARS="1200",
+        ):
+            self.t._DICTIONARY_PROMPT_CACHE[
+                self.t._dictionary_cache_key(self.t.INITIAL_PROMPT)
+            ] = first
+
+        with _env(
+            VOICEPI_DICTIONARY_ENABLED="1",
+            VOICEPI_DICTIONARY="b.json",
+            VOICEPI_DICTIONARY_MAX_TERMS="80",
+            VOICEPI_DICTIONARY_PROMPT_CHARS="1200",
+        ), patch.object(self.t, "get_value", side_effect=AssertionError):
+            self.assertIsNone(
+                self.t._apply_cached_dictionary_runtime("acme", self.t.INITIAL_PROMPT)
+            )
+
+    def test_dictionary_prompt_cache_key_tracks_dictionary_file_mtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dictionary = Path(tmp) / "dictionary.json"
+            dictionary.write_text('{"terms":["ACME"]}\n', encoding="utf-8")
+            first = self.t.DictionaryRuntimeResult(
+                prompt="Vocabulary: ACME",
+                replacements=[{"from": "acme", "to": "ACME"}],
+                enabled=True,
+            )
+
+            with _env(VOICEPI_DICTIONARY=str(dictionary)):
+                self.t._DICTIONARY_PROMPT_CACHE[
+                    self.t._dictionary_cache_key(self.t.INITIAL_PROMPT)
+                ] = first
+                stat = dictionary.stat()
+                next_mtime = stat.st_mtime_ns + 2_000_000_000
+                dictionary.write_text('{"terms":["Codex"]}\n', encoding="utf-8")
+                os.utime(dictionary, ns=(next_mtime, next_mtime))
+
+                self.assertIsNone(
+                    self.t._apply_cached_dictionary_runtime("acme", self.t.INITIAL_PROMPT)
+                )
+
+    def test_dictionary_prompt_runtime_reuses_cached_prompt(self):
+        cached = self.t.DictionaryRuntimeResult(
+            prompt="Vocabulary: ACME",
+            replacements=[{"from": "acme", "to": "ACME"}],
+            enabled=True,
+        )
+        self.t._DICTIONARY_PROMPT_CACHE[
+            self.t._dictionary_cache_key(self.t.INITIAL_PROMPT)
+        ] = cached
+
+        with patch.object(self.t, "_dictionary_runtime", side_effect=AssertionError):
+            self.assertIs(
+                self.t._dictionary_prompt_runtime(self.t.INITIAL_PROMPT),
+                cached,
+            )
+
 class STTBackendTests(unittest.TestCase):
     def _drop_package_module(self, name):
         sys.modules.pop(name, None)
@@ -809,4 +929,3 @@ class STTBackendTests(unittest.TestCase):
         transcribe = script.index("result = self._call_transcribe(path)")
         self.assertLess(script.rfind("with _nemo_output_context():", 0, load), load)
         self.assertLess(script.rfind("with _nemo_output_context():", 0, transcribe), transcribe)
-

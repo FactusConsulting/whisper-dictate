@@ -123,6 +123,9 @@ pub enum Command {
         #[arg(long)]
         path: String,
     },
+    /// Internal helper used by the Python worker to append metrics + history.
+    #[command(hide = true)]
+    AppendRecordSinks,
     /// Internal helper used by the Python worker to emit controller events.
     #[command(hide = true)]
     WorkerEvent,
@@ -380,6 +383,9 @@ mod tests {
                 path: "history.jsonl".to_owned(),
             })
         );
+
+        let cli = Cli::parse_from(["whisper-dictate", "append-record-sinks"]);
+        assert_eq!(cli.command, Some(Command::AppendRecordSinks));
 
         let cli = Cli::parse_from(["whisper-dictate", "worker-event"]);
         assert_eq!(cli.command, Some(Command::WorkerEvent));

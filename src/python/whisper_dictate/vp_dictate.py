@@ -21,7 +21,7 @@ import time
 
 from whisper_dictate import vp_capture
 from whisper_dictate.vp_audio_ducking import AudioDucker, register_active_ducker
-from whisper_dictate.vp_capture import CaptureMixin, FIRST_AUDIO_WAIT_S
+from whisper_dictate.vp_capture import CaptureMixin, FIRST_AUDIO_WAIT_S, concat_capture_frames
 from whisper_dictate.vp_config import (
     apply_config_to_environ, config_mtime, effective_config, load_config,
 )
@@ -32,7 +32,7 @@ from whisper_dictate.vp_events import (
 )
 from whisper_dictate.vp_format import apply_format_commands
 from whisper_dictate.vp_health import format_health_line
-from whisper_dictate.vp_history import _append_history, _append_jsonl
+from whisper_dictate.vp_history import append_record_sinks
 from whisper_dictate.vp_inject import InjectMixin
 from whisper_dictate.vp_keymap import _detect_xkb_layout
 from whisper_dictate.vp_keys import KeyBackendMixin
@@ -468,12 +468,14 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         # user has opted into structured output. A prefilled-but-unused path (the
         # UI suggests metrics.jsonl next to config.json) therefore stays inert
         # until "JSON stdout" is enabled.
-        if self.json_output:
-            _append_jsonl(self.metrics_jsonl, event)
         try:
-            _append_history(event)
+            append_record_sinks(
+                event,
+                metrics_jsonl=self.metrics_jsonl,
+                json_output=self.json_output,
+            )
         except OSError as e:
-            print(f"[history] could not write history: {e}", file=sys.stderr, flush=True)
+            print(f"[sinks] could not write event sinks: {e}", file=sys.stderr, flush=True)
         if self.json_output:
             _emit_json(event)
 
@@ -681,7 +683,9 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 )
                 print("[stt] no text (no_audio)", flush=True)
                 return
-            pcm = np.concatenate(self.frames, axis=0).astype(np.int16)
+            pcm = concat_capture_frames(self.frames)
+            if pcm is None:
+                return
             pcm = _select_active_channel_pcm(pcm).astype(np.int16)
             # Resample native-rate capture (e.g. a 48k Yeti opened after a 16k
             # open was rejected) down to the model's 16k rate. No-op + bit-

@@ -51,6 +51,17 @@ fn run_capture_preserves_utf8_danish_output_from_python() {
 }
 
 #[test]
+fn decode_capped_output_keeps_utf8_tail_with_marker() {
+    let prefix = "x".repeat(CAPTURE_OUTPUT_MAX_CHARS + 10);
+    let raw = format!("{prefix}æøå");
+    let out = decode_capped_output(raw.as_bytes());
+
+    assert!(out.starts_with("[ui] ...older captured output trimmed..."));
+    assert!(out.ends_with("æøå"));
+    assert!(out.len() <= CAPTURE_OUTPUT_MAX_CHARS + 64);
+}
+
+#[test]
 fn install_commands_use_background_process_flags() {
     let runtime = include_str!("../runtime.rs");
     let run_install_command = runtime

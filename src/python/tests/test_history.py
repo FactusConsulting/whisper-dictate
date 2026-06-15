@@ -36,6 +36,11 @@ class HistoryReadTests(unittest.TestCase):
         rows = vp_history.read_history(2, self.path)
         self.assertEqual([r["text"] for r in rows], ["t3", "t4"])
 
+    def test_read_history_keeps_requested_tail_for_large_files(self):
+        _write_jsonl(self.path, [{"text": f"t{i}"} for i in range(5000)])
+        rows = vp_history.read_history(3, self.path)
+        self.assertEqual([r["text"] for r in rows], ["t4997", "t4998", "t4999"])
+
     def test_read_history_missing_file_is_empty(self):
         self.assertEqual(vp_history.read_history(10, self.path), [])
 
@@ -88,6 +93,7 @@ class HistoryWriteTests(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
         self.path = Path(self.dir.name) / "history.jsonl"
+        vp_history._APPEND_RECORD_SINKS_SUPPORTED = None
 
     def test_append_history_calls_rust_helper_when_enabled(self):
         with _env(VOICEPI_HISTORY_ENABLED="1"), \
@@ -103,6 +109,133 @@ class HistoryWriteTests(unittest.TestCase):
             out = vp_history.append_history({"text": "hi"}, self.path)
         self.assertIsNone(out)
         rust.assert_not_called()
+
+    def test_append_record_sinks_uses_combined_helper_when_available(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, payload, args))
+            return {"ok": True} if command == "append-record-sinks" else None
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=True), \
+                patch.object(vp_history, "history_path", return_value=self.path):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "hi"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+
+        self.assertEqual(
+            [call[0] for call in calls],
+            ["append-record-sinks", "append-record-sinks"],
+        )
+        self.assertEqual(calls[0][1], {})
+
+    def test_append_record_sinks_falls_back_to_legacy_helpers(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, args))
+            return None
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=True), \
+                patch.object(vp_history, "history_path", return_value=self.path):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "hi"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+
+        self.assertEqual(
+            [call[0] for call in calls],
+            ["append-record-sinks", "append-jsonl", "append-history"],
+        )
+
+    def test_append_record_sinks_caches_missing_combined_helper(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, args))
+            return None
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=True), \
+                patch.object(vp_history, "history_path", return_value=self.path):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "one"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "two"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+
+        self.assertEqual(
+            [call[0] for call in calls],
+            [
+                "append-record-sinks",
+                "append-jsonl",
+                "append-history",
+                "append-jsonl",
+                "append-history",
+            ],
+        )
+
+    def test_append_record_sinks_retries_combined_helper_after_write_failure(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, payload, args))
+            if command == "append-record-sinks" and payload == {}:
+                return {}
+            if command == "append-record-sinks":
+                return None
+            return {}
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=False):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "one"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "two"},
+                metrics_jsonl=str(Path(self.dir.name) / "metrics.jsonl"),
+                json_output=True,
+            )
+
+        self.assertEqual(
+            [call[0] for call in calls],
+            [
+                "append-record-sinks",
+                "append-record-sinks",
+                "append-jsonl",
+                "append-record-sinks",
+                "append-jsonl",
+            ],
+        )
+
+    def test_append_record_sinks_ignores_whitespace_metrics_path(self):
+        calls = []
+
+        def fake_rust_json(command, payload, *args, **kwargs):
+            calls.append((command, payload, args))
+            return None
+
+        with patch.object(vp_history, "_rust_json", fake_rust_json), \
+                patch.object(vp_history, "history_enabled", return_value=False):
+            vp_history.append_record_sinks(
+                {"event": "utterance", "text": "hi"},
+                metrics_jsonl="   ",
+                json_output=True,
+            )
+
+        self.assertEqual([], calls)
 
     def test_copy_last_to_clipboard(self):
         _write_jsonl(self.path, [{"text": "copy me"}])

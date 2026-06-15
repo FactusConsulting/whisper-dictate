@@ -678,6 +678,28 @@ that expose `/audio/transcriptions` and `/chat/completions`. `VOICEPI_LOCAL_ONLY
 blocks the external STT backend and external post-processor before any request is
 made.
 
+### Self-host the STT model in a container
+
+Only the heavy Whisper model can be containerized. The desktop app still runs on
+your machine because microphone capture, global push-to-talk, and text injection
+are desktop integrations.
+
+Run any OpenAI-compatible Whisper server, such as faster-whisper-server or
+speaches, and point whisper-dictate at it:
+
+```powershell
+docker compose -f packaging/docker/docker-compose.yml up -d
+setx VOICEPI_STT_BACKEND openai
+setx VOICEPI_STT_BASE_URL http://localhost:8000/v1
+setx VOICEPI_STT_MODEL Systran/faster-whisper-large-v3
+```
+
+In the Rust UI Speech tab choose `Speech engine = Cloud STT`,
+`Cloud STT provider = Custom (OpenAI-compatible)`, set the API URL to
+`http://localhost:8000/v1`, and set the model name expected by the server. A
+loopback URL is allowed even when `VOICEPI_LOCAL_ONLY=1` because audio stays on
+the machine.
+
 ### Desktop settings UI
 
 On Windows, the installer adds a Start-menu **whisper-dictate** shortcut which

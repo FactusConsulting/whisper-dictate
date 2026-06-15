@@ -4,9 +4,41 @@
 //!   3. Worker crash-streak advice (pure helper + integration via test_app)
 //!   4. Stale audio-meter guard (stateless audio event only sets active when Running)
 
-use super::app::{crash_streak_advice, trim_runtime_log, RUNTIME_LOG_MAX_CHARS, TRIM_MARKER};
+use super::app::{
+    crash_streak_advice, repaint_interval_for_state, trim_runtime_log, RUNTIME_LOG_MAX_CHARS,
+    TRIM_MARKER,
+};
 use super::test_support::test_app;
 use super::*;
+use crate::runtime::RuntimeState;
+
+#[test]
+fn repaint_interval_is_slow_when_ui_is_idle() {
+    assert_eq!(
+        repaint_interval_for_state(false, RuntimeState::Stopped, false, false, false, false)
+            .as_millis(),
+        1000
+    );
+}
+
+#[test]
+fn repaint_interval_is_fast_for_active_states() {
+    assert_eq!(
+        repaint_interval_for_state(false, RuntimeState::Running, false, false, false, false)
+            .as_millis(),
+        80
+    );
+    assert_eq!(
+        repaint_interval_for_state(false, RuntimeState::Stopped, false, true, false, false)
+            .as_millis(),
+        80
+    );
+    assert_eq!(
+        repaint_interval_for_state(true, RuntimeState::Stopped, false, false, false, false)
+            .as_millis(),
+        80
+    );
+}
 
 // ── Fix 1: Runtime-log cap ────────────────────────────────────────────────────
 

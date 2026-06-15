@@ -9,10 +9,13 @@ import json
 import os
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
 
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_rust import _rust_helper, _rust_json
+
+_APPEND_RECORD_SINKS_SUPPORTED: bool | None = None
 
 
 def _truthy(value: str | None) -> bool:
@@ -20,6 +23,7 @@ def _truthy(value: str | None) -> bool:
 
 
 def _append_jsonl(path: str | None, event: dict) -> None:
+    path = (path or "").strip()
     if not path:
         return
     _rust_json("append-jsonl", event, "--path", os.path.expanduser(path))
@@ -32,6 +36,38 @@ def _append_history(event: dict) -> None:
         return
     if history_enabled():
         _rust_json("append-history", event, "--path", str(history_path()))
+
+
+def _append_record_sinks_supported() -> bool:
+    global _APPEND_RECORD_SINKS_SUPPORTED
+    if _APPEND_RECORD_SINKS_SUPPORTED is None:
+        _APPEND_RECORD_SINKS_SUPPORTED = _rust_json("append-record-sinks", {}) is not None
+    return _APPEND_RECORD_SINKS_SUPPORTED
+
+
+def append_record_sinks(event: dict, *, metrics_jsonl: str | None, json_output: bool) -> None:
+    raw_metrics_path = (metrics_jsonl or "").strip()
+    metrics_path = os.path.expanduser(raw_metrics_path) if json_output and raw_metrics_path else ""
+    history_target = event.get("_history_path")
+    history_out = ""
+    if history_target:
+        history_out = str(history_target)
+    elif history_enabled():
+        history_out = str(history_path())
+    if not metrics_path and not history_out:
+        return
+    payload = {
+        "event": event,
+        "metrics_path": metrics_path,
+        "history_path": history_out,
+    }
+    if _append_record_sinks_supported():
+        if _rust_json("append-record-sinks", payload) is not None:
+            return
+    if metrics_path:
+        _append_jsonl(metrics_path, event)
+    if history_out:
+        _rust_json("append-history", event, "--path", history_out)
 
 
 def default_history_path() -> Path:
@@ -80,7 +116,9 @@ def read_history(limit: int = 20, path: Path | None = None) -> list[dict]:
     p = path or history_path()
     if not p.exists():
         return []
-    rows: list[dict] = []
+    # Clamp to >=1 (matches the Rust `history list`); limit<=0 must not dump all.
+    effective = max(1, limit)
+    rows: deque[dict] = deque(maxlen=effective)
     with p.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -92,9 +130,7 @@ def read_history(limit: int = 20, path: Path | None = None) -> list[dict]:
                 continue
             if isinstance(obj, dict):
                 rows.append(obj)
-    # Clamp to >=1 (matches the Rust `history list`); limit<=0 must not dump all.
-    effective = max(1, limit)
-    return rows[-effective:]
+    return list(rows)
 
 
 def last_history(path: Path | None = None) -> dict | None:

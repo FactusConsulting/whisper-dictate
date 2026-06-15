@@ -102,6 +102,34 @@ pub fn handle_append_history(path: &Path) -> Result<()> {
     append_jsonl(path, &history_event(&event))
 }
 
+pub fn handle_append_record_sinks() -> Result<()> {
+    let payload = read_stdin_json()?;
+    append_record_sinks_payload(&payload)
+}
+
+pub fn append_record_sinks_payload(payload: &Value) -> Result<()> {
+    let Some(event) = payload.get("event") else {
+        return Ok(());
+    };
+    if let Some(path) = payload
+        .get("metrics_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        append_jsonl(Path::new(path), event)?;
+    }
+    if let Some(path) = payload
+        .get("history_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        append_jsonl(Path::new(path), &history_event(event))?;
+    }
+    Ok(())
+}
+
 pub fn handle_worker_event() -> Result<()> {
     let event = read_stdin_json()?;
     eprintln!("{}{}", WORKER_EVENT_PREFIX, serde_json::to_string(&event)?);
@@ -254,6 +282,57 @@ mod tests {
         append_jsonl(&path, &serde_json::json!({"event": "ok"})).unwrap();
 
         assert_eq!(fs::read_to_string(path).unwrap(), "{\"event\":\"ok\"}\n");
+    }
+
+    #[test]
+    fn append_record_sinks_payload_writes_metrics_and_filtered_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let metrics = dir.path().join("metrics.jsonl");
+        let history = dir.path().join("history.jsonl");
+        let payload = serde_json::json!({
+            "metrics_path": format!("  {}  ", metrics.display()),
+            "history_path": format!("  {}  ", history.display()),
+            "event": {
+                "event": "utterance",
+                "text": "hello",
+                "api_key": "secret"
+            }
+        });
+
+        append_record_sinks_payload(&payload).unwrap();
+
+        let metrics_raw = fs::read_to_string(metrics).unwrap();
+        let history_raw = fs::read_to_string(history).unwrap();
+        assert!(metrics_raw.contains("\"api_key\":\"secret\""));
+        assert!(history_raw.contains("\"text\":\"hello\""));
+        assert!(!history_raw.contains("api_key"));
+    }
+
+    #[test]
+    fn append_record_sinks_payload_ignores_whitespace_only_paths() {
+        let payload = serde_json::json!({
+            "metrics_path": "   ",
+            "history_path": "\t",
+            "event": {"text": "hello"}
+        });
+
+        append_record_sinks_payload(&payload).unwrap();
+    }
+
+    #[test]
+    fn append_record_sinks_payload_noops_without_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let metrics = dir.path().join("metrics.jsonl");
+        let history = dir.path().join("history.jsonl");
+        let payload = serde_json::json!({
+            "metrics_path": metrics.display().to_string(),
+            "history_path": history.display().to_string()
+        });
+
+        append_record_sinks_payload(&payload).unwrap();
+
+        assert!(!metrics.exists());
+        assert!(!history.exists());
     }
 
     #[test]

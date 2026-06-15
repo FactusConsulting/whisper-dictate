@@ -138,6 +138,15 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(os.environ["VOICEPI_LANG"], "da")
             self.assertEqual(os.environ["VOICEPI_XKB_LAYOUT"], "dk")
 
+    def test_unknown_env_value_does_not_read_config(self):
+        from whisper_dictate import vp_config
+
+        with _env(OPENAI_API_KEY="secret"), \
+                patch.object(vp_config, "config_snapshot") as snapshot:
+            self.assertEqual(vp_config.get_value("OPENAI_API_KEY"), "secret")
+
+        snapshot.assert_not_called()
+
 class WindowsStdioEncodingTests(unittest.TestCase):
     def test_windows_stdio_keeps_interactive_console_native(self):
         voice_pi = load_voice_pi()

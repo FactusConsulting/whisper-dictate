@@ -68,6 +68,7 @@ fn run() -> anyhow::Result<()> {
         Command::AppendHistory { path } => {
             telemetry::handle_append_history(std::path::Path::new(&path))
         }
+        Command::AppendRecordSinks => telemetry::handle_append_record_sinks(),
         Command::WorkerEvent => telemetry::handle_worker_event(),
         Command::CommandHook => command_hook::handle_command_hook(),
         Command::RedactText => redaction::handle_redact_text(),

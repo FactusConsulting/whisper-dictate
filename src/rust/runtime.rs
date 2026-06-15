@@ -20,6 +20,9 @@ const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 const PYTHON_UTF8_ENV: &str = "PYTHONUTF8";
 const PYTHON_IO_ENCODING_ENV: &str = "PYTHONIOENCODING";
 const PYTHONPATH_ENV: &str = "PYTHONPATH";
+/// Maximum captured worker output kept in memory, measured in UTF-8 bytes
+/// (`str::len()`), despite the legacy `_CHARS` suffix in the public name.
+pub const CAPTURE_OUTPUT_MAX_CHARS: usize = 200_000;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -829,10 +832,25 @@ pub fn run_capture(command: &WorkerCommand) -> Result<WorkerOutput> {
     let output = process.output()?;
 
     Ok(WorkerOutput {
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stdout: decode_capped_output(&output.stdout),
+        stderr: decode_capped_output(&output.stderr),
         status: output.status,
     })
+}
+
+pub fn decode_capped_output(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let text = text.as_ref();
+    if text.len() <= CAPTURE_OUTPUT_MAX_CHARS {
+        return text.to_owned();
+    }
+    let marker = "[ui] ...older captured output trimmed...\n";
+    let target = CAPTURE_OUTPUT_MAX_CHARS.saturating_sub(marker.len());
+    let mut start = text.len().saturating_sub(target);
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("{marker}{}", &text[start..])
 }
 
 pub fn run_foreground(command: &WorkerCommand) -> Result<()> {

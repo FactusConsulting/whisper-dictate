@@ -70,10 +70,12 @@ class RustUiInstallerTests(unittest.TestCase):
 
     def test_linux_ui_docs_point_to_rust_ui_not_pyside_powershell(self):
         readme = Path("README.md").read_text(encoding="utf-8")
+        install = Path("docs/INSTALLATION.md").read_text(encoding="utf-8")
         config = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
 
-        self.assertIn("scripts/linux/install-rust-ui.sh", readme)
+        self.assertIn("scripts/linux/install-rust-ui.sh", install)
         self.assertIn("whisper-dictate ui", readme)
+        self.assertIn("whisper-dictate ui", install)
         self.assertIn("scripts/linux/install-rust-ui.sh", config)
         self.assertNotIn("On Linux/macOS, install\n`requirements-ui.txt`", readme)
         self.assertNotIn("setup.ps1 --settings-ui", readme)

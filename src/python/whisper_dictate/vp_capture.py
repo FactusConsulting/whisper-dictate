@@ -37,6 +37,37 @@ FIRST_AUDIO_WAIT_S = 0.35
 _ARECORD_DEVICE: str | None = None  # set once at startup
 
 
+class SoundDeviceSnapshot:
+    def __init__(self, sd):
+        self.devices = _safe_query_devices(sd)
+        self.hostapis = _safe_query_hostapis(sd)
+        self.default_index = _default_input_index(sd)
+        try:
+            self.default_info = sd.query_devices(kind="input")
+        except Exception:
+            self.default_info = None
+
+
+class _SnapshotSoundDevice:
+    def __init__(self, snapshot: SoundDeviceSnapshot):
+        self._snapshot = snapshot
+
+    def query_devices(self):
+        return self._snapshot.devices
+
+    def query_hostapis(self):
+        return self._snapshot.hostapis
+
+
+def sibling_endpoints_for_device_from_snapshot(devices, hostapis, device):
+    snapshot = object.__new__(SoundDeviceSnapshot)
+    snapshot.devices = devices
+    snapshot.hostapis = hostapis
+    snapshot.default_index = None
+    snapshot.default_info = None
+    return sibling_endpoints_for_device(_SnapshotSoundDevice(snapshot), device)
+
+
 class DeviceUnusableError(RuntimeError):
     """An EXPLICITLY-chosen microphone could not be opened on any host API.
 
@@ -248,7 +279,7 @@ def trace_dump_audio_devices() -> None:
               file=sys.stderr, flush=True)
 
 
-def _resolve_sounddevice_device(sd, value: str):
+def _resolve_sounddevice_device(sd, value: str, *, devices=None, hostapis=None, default_index=None):
     """Resolve a VOICEPI_AUDIO_DEVICE value to a ``(device, name)`` pair.
 
     Resolution prefers the WASAPI→DirectSound→default host API (the SAME rule
@@ -271,14 +302,14 @@ def _resolve_sounddevice_device(sd, value: str):
     label otherwise).
     """
     value = (value or "").strip()
-    devices = _safe_query_devices(sd)
-    hostapis = _safe_query_hostapis(sd)
+    devices = _safe_query_devices(sd) if devices is None else devices
+    hostapis = _safe_query_hostapis(sd) if hostapis is None else hostapis
     index, name = resolve_capture_device(
         devices,
         hostapis,
         value,
         is_windows=(os.name == "nt"),
-        default_index=_default_input_index(sd),
+        default_index=_default_input_index(sd) if default_index is None else default_index,
     )
     if value and not value.lstrip("+-").isdigit() and index is None:
         print(
@@ -349,7 +380,7 @@ def _wasapi_autoconvert_settings(sd):
         return None
 
 
-def _device_default_samplerate(sd, device) -> int | None:
+def _device_default_samplerate(sd, device, *, devices=None, default_info=None) -> int | None:
     """The device's native/default capture rate (Hz) or ``None`` if unknown.
 
     Used by the native-rate fallback: when a 16k open is rejected (e.g. a Yeti /
@@ -360,7 +391,11 @@ def _device_default_samplerate(sd, device) -> int | None:
     ``None`` and the caller picks a sensible fallback rate.
     """
     try:
-        if device is None:
+        if default_info is not None and device is None:
+            info = default_info
+        elif devices is not None and isinstance(device, int) and 0 <= device < len(devices):
+            info = devices[device]
+        elif device is None:
             info = sd.query_devices(kind="input")
         else:
             info = sd.query_devices(device)
@@ -433,7 +468,16 @@ def _capture_frame_to_int16(chunk, dtype):
     return chunk.copy()
 
 
-def _device_hostapi_name(sd, device) -> str:
+def concat_capture_frames(frames):
+    """Return frames as one int16 array, avoiding concat/copy for one frame."""
+    if not frames:
+        return None
+    if len(frames) == 1:
+        return np.asarray(frames[0]).astype(np.int16, copy=False)
+    return np.concatenate(frames, axis=0).astype(np.int16, copy=False)
+
+
+def _device_hostapi_name(sd, device, *, devices=None, hostapis=None, default_info=None) -> str:
     """Best-effort host-API name for a resolved ``device=`` arg (Trace only).
 
     Returns e.g. ``"Windows WASAPI"`` / ``"MME"`` / ``"ALSA"`` so a Trace line
@@ -443,7 +487,11 @@ def _device_hostapi_name(sd, device) -> str:
     default device (``device is None``) reports the default input's host API.
     """
     try:
-        if device is None:
+        if default_info is not None and device is None:
+            info = default_info
+        elif devices is not None and isinstance(device, int) and 0 <= device < len(devices):
+            info = devices[device]
+        elif device is None:
             info = sd.query_devices(kind="input")
         else:
             info = sd.query_devices(device)
@@ -452,7 +500,7 @@ def _device_hostapi_name(sd, device) -> str:
         api_index = info.get("hostapi")
         if api_index is None:
             return "?"
-        hostapis = _safe_query_hostapis(sd)
+        hostapis = _safe_query_hostapis(sd) if hostapis is None else hostapis
         if 0 <= int(api_index) < len(hostapis):
             api = hostapis[int(api_index)]
             if isinstance(api, dict):
@@ -463,7 +511,7 @@ def _device_hostapi_name(sd, device) -> str:
 
 
 def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
-                             samplerate=None, trace=False):
+                             samplerate=None, trace=False, snapshot=None):
     """Open an ``InputStream`` for ``device``, trying dtype/channel/latency fallbacks.
 
     Returns ``(stream, channels, dtype, last_error)``: ``(stream, channels,
@@ -515,7 +563,17 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
     last_error = None
     channel_candidates = _sounddevice_capture_channel_candidates(
         _sounddevice_input_channels(sd))
-    hostapi = _device_hostapi_name(sd, device) if trace else None
+    hostapi = (
+        _device_hostapi_name(
+            sd,
+            device,
+            devices=getattr(snapshot, "devices", None),
+            hostapis=getattr(snapshot, "hostapis", None),
+            default_info=getattr(snapshot, "default_info", None),
+        )
+        if trace
+        else None
+    )
     dev_label = "default" if device is None else device
     autoconv = 1 if extra_settings is not None else 0
     for dtype in _CAPTURE_DTYPES:
@@ -577,7 +635,7 @@ def _open_sounddevice_stream(sd, device, callback, *, extra_settings=None,
     return None, 0, "", last_error
 
 
-def _open_native_rate_stream(sd, device, callback):
+def _open_native_rate_stream(sd, device, callback, *, snapshot=None):
     """Open ``device`` at its native default rate (16k-rejected fallback).
 
     Returns ``(stream, channels, dtype, rate, error)``: a started stream opened
@@ -587,11 +645,16 @@ def _open_native_rate_stream(sd, device, callback):
     (nothing new to attempt). Pure module-level helper so it stays unit-testable
     like ``_open_sounddevice_stream``.
     """
-    native = _device_default_samplerate(sd, device)
+    native = _device_default_samplerate(
+        sd,
+        device,
+        devices=getattr(snapshot, "devices", None),
+        default_info=getattr(snapshot, "default_info", None),
+    )
     if not native or native == SR:
         return None, 0, "", 0, None
     stream, channels, dtype, exc = _open_sounddevice_stream(
-        sd, device, callback, samplerate=native, trace=_trace_enabled())
+        sd, device, callback, samplerate=native, trace=_trace_enabled(), snapshot=snapshot)
     if stream is not None:
         return stream, channels, dtype, native, None
     return None, 0, "", 0, exc
@@ -753,7 +816,7 @@ class CaptureMixin:
         """
         if native_rate:
             stream, channels, dtype, rate, exc = _open_native_rate_stream(
-                sd, device, self._cb)
+                sd, device, self._cb, snapshot=getattr(self, "_sd_snapshot", None))
             if stream is not None:
                 self._stream = stream
                 self._capture_channels = channels
@@ -767,7 +830,7 @@ class CaptureMixin:
             return exc
         stream, channels, dtype, exc = _open_sounddevice_stream(
             sd, device, self._cb, extra_settings=extra_settings,
-            trace=_trace_enabled())
+            trace=_trace_enabled(), snapshot=getattr(self, "_sd_snapshot", None))
         if stream is not None:
             self._stream = stream
             self._capture_channels = channels
@@ -799,7 +862,12 @@ class CaptureMixin:
         threaded out so the caller can fold it into the final RuntimeError.
         """
         last_error = None
-        endpoints = sibling_endpoints_for_device(sd, device)
+        snapshot = getattr(self, "_sd_snapshot", None)
+        if snapshot is not None:
+            endpoints = sibling_endpoints_for_device_from_snapshot(
+                snapshot.devices, snapshot.hostapis, device)
+        else:
+            endpoints = sibling_endpoints_for_device(sd, device)
         trace = _trace_enabled()
         # endpoints[0] is the already-tried resolved endpoint; skip it.
         for sib_index, hostapi_name in endpoints[1:]:
@@ -837,7 +905,14 @@ class CaptureMixin:
         # devices whose WASAPI shared mixformat is float32 (the callback converts
         # float32 frames → int16 so downstream stays int16). See _capture_frame_to_int16.
         self._capture_dtype = "int16"
-        device, device_name = _resolve_sounddevice_device(sd, _audio_device_setting())
+        self._sd_snapshot = SoundDeviceSnapshot(sd)
+        device, device_name = _resolve_sounddevice_device(
+            sd,
+            _audio_device_setting(),
+            devices=self._sd_snapshot.devices,
+            hostapis=self._sd_snapshot.hostapis,
+            default_index=self._sd_snapshot.default_index,
+        )
         # Explicit-vs-default line: a NON-EMPTY VOICEPI_AUDIO_DEVICE means the user
         # deliberately picked a microphone. When such a device fails on every host
         # API we must NOT silently record from a DIFFERENT physical device — we
@@ -867,8 +942,11 @@ class CaptureMixin:
             # sweep. Before dropping to the system default (the low-fidelity MME
             # path on Windows), let WASAPI resample 16k internally via
             # auto_convert (int16+float32 swept again). Windows-only and guarded.
-            if os.name == "nt" and _is_wasapi_device(_safe_query_devices(sd),
-                                                      _safe_query_hostapis(sd), device):
+            if os.name == "nt" and _is_wasapi_device(
+                self._sd_snapshot.devices,
+                self._sd_snapshot.hostapis,
+                device,
+            ):
                 extra = _wasapi_autoconvert_settings(sd)
                 if extra is not None:
                     exc = self._bind_stream(sd, device, extra_settings=extra)

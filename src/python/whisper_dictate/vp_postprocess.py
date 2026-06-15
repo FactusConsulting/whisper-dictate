@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
-from whisper_dictate.vp_config import apply_config_to_environ, get_value
+from whisper_dictate.vp_config import apply_config_to_environ, config_snapshot, get_value
 from whisper_dictate.vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
 from whisper_dictate.vp_rust import run_json_helper
 
@@ -104,9 +104,10 @@ class PostprocessResult:
     redactions: list[dict[str, object]] | None = None
 
 
-def _int_setting(name: str, default: int, minimum: int = 0) -> int:
+def _int_setting(name: str, default: int, minimum: int = 0, snapshot=None) -> int:
+    getter = snapshot.get_value if snapshot is not None else get_value
     try:
-        return max(minimum, int(float(get_value(name, str(default)) or default)))
+        return max(minimum, int(float(getter(name, str(default)) or default)))
     except (TypeError, ValueError):
         return default
 
@@ -119,12 +120,13 @@ def _default_base_url(processor: str) -> str:
     return DEFAULT_OLLAMA_BASE_URL
 
 
-def _postprocess_api_key() -> str:
+def _postprocess_api_key(snapshot=None) -> str:
+    getter = snapshot.get_value if snapshot is not None else get_value
     return (
-        get_value("VOICEPI_POST_API_KEY")
-        or get_value("VOICEPI_STT_API_KEY")
-        or get_value("GROQ_API_KEY")
-        or get_value("OPENAI_API_KEY")
+        getter("VOICEPI_POST_API_KEY")
+        or getter("VOICEPI_STT_API_KEY")
+        or getter("GROQ_API_KEY")
+        or getter("OPENAI_API_KEY")
         or ""
     ).strip()
 
@@ -147,27 +149,28 @@ def _normalized_base_url(processor: str, raw_base_url: str) -> str:
 
 
 def load_postprocess_settings() -> PostprocessSettings:
-    processor = (get_value("VOICEPI_POST_PROCESSOR", "none") or "none").strip().lower()
-    mode = normalize_mode(get_value("VOICEPI_POST_MODE", "raw") or "raw")
+    snapshot = config_snapshot()
+    processor = (snapshot.get_value("VOICEPI_POST_PROCESSOR", "none") or "none").strip().lower()
+    mode = normalize_mode(snapshot.get_value("VOICEPI_POST_MODE", "raw") or "raw")
     if processor not in VALID_PROCESSORS:
         processor = "none"
     if mode not in VALID_MODES:
         mode = "raw"
-    raw_model = get_value("VOICEPI_POST_MODEL") or ""
+    raw_model = snapshot.get_value("VOICEPI_POST_MODEL") or ""
     default_base_url = _default_base_url(processor)
-    raw_base_url = (get_value("VOICEPI_POST_BASE_URL", default_base_url) or default_base_url).rstrip("/")
+    raw_base_url = (snapshot.get_value("VOICEPI_POST_BASE_URL", default_base_url) or default_base_url).rstrip("/")
     return PostprocessSettings(
         processor=processor,
         mode=mode,
         model=_normalized_model(processor, raw_model),
         base_url=_normalized_base_url(processor, raw_base_url),
-        timeout_ms=_int_setting("VOICEPI_POST_TIMEOUT_MS", 4000, 100),
-        max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100),
-        max_output_chars=_int_setting("VOICEPI_POST_MAX_OUTPUT_CHARS", 4000, 100),
-        api_key=_postprocess_api_key(),
-        redact=(get_value("VOICEPI_POST_REDACT") or "").strip().lower() not in (
+        timeout_ms=_int_setting("VOICEPI_POST_TIMEOUT_MS", 4000, 100, snapshot),
+        max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100, snapshot),
+        max_output_chars=_int_setting("VOICEPI_POST_MAX_OUTPUT_CHARS", 4000, 100, snapshot),
+        api_key=_postprocess_api_key(snapshot),
+        redact=(snapshot.get_value("VOICEPI_POST_REDACT") or "").strip().lower() not in (
             "", "0", "false", "no", "off"),
-        redact_terms=get_value("VOICEPI_POST_REDACT_TERMS", "") or "",
+        redact_terms=snapshot.get_value("VOICEPI_POST_REDACT_TERMS", "") or "",
     )
 
 
