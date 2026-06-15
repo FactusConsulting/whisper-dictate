@@ -590,6 +590,22 @@ class TranscribeDetailTests(unittest.TestCase):
                 self.t._apply_cached_dictionary_runtime("acme", self.t.INITIAL_PROMPT)
             )
 
+    def test_dictionary_prompt_runtime_reuses_cached_prompt(self):
+        cached = self.t.DictionaryRuntimeResult(
+            prompt="Vocabulary: ACME",
+            replacements=[{"from": "acme", "to": "ACME"}],
+            enabled=True,
+        )
+        self.t._DICTIONARY_PROMPT_CACHE[
+            self.t._dictionary_cache_key(self.t.INITIAL_PROMPT)
+        ] = cached
+
+        with patch.object(self.t, "_dictionary_runtime", side_effect=AssertionError):
+            self.assertIs(
+                self.t._dictionary_prompt_runtime(self.t.INITIAL_PROMPT),
+                cached,
+            )
+
 class STTBackendTests(unittest.TestCase):
     def _drop_package_module(self, name):
         sys.modules.pop(name, None)

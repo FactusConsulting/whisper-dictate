@@ -360,6 +360,9 @@ def _dictionary_cache_key(base_prompt: str | None) -> _DictionaryCacheKey:
 
 def _dictionary_prompt_runtime(base_prompt: str | None) -> DictionaryRuntimeResult:
     key = _dictionary_cache_key(base_prompt)
+    cached = _DICTIONARY_PROMPT_CACHE.get(key)
+    if cached is not None:
+        return cached
     result = _dictionary_runtime("", base_prompt)
     _DICTIONARY_PROMPT_CACHE[key] = result
     return result
