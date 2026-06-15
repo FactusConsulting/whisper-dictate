@@ -76,7 +76,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Python coverage (XML for Sonar import)
         # coverage.py emits <source>=repo root + repo-root-relative filenames, so

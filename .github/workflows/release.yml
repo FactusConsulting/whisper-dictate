@@ -591,7 +591,7 @@ jobs:
       - uses: actions/setup-python@v6
         if: steps.download.outputs.found == 'true'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Worker utility smoke (minimal deps, no model)
         if: steps.download.outputs.found == 'true'

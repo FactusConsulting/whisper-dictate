@@ -28,7 +28,7 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install test deps
         run: python -m pip install --quiet pytest numpy
       - name: Run unit tests
@@ -45,7 +45,7 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install test deps
         run: python -m pip install --quiet pytest numpy
       - name: Run Groq integration tests (skipped without the secret)
@@ -61,7 +61,7 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install PyYAML
         run: python -m pip install --quiet pyyaml
       - name: Validate workflow YAML
@@ -97,7 +97,7 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: runtime --help
         env:
           PYTHONPATH: src/python
