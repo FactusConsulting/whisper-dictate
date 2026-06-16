@@ -46,6 +46,8 @@ GRADE_FAIR = "fair"
 GRADE_GOOD = "good"
 GRADE_PERFECT = "perfect"
 
+_REMOTE_STT_WITHOUT_CONFIDENCE = frozenset({"openai"})
+
 
 def _mean_avg_logprob(segments: Sequence[dict[str, Any]] | None) -> float | None:
     """Mean ``avg_logprob`` across segments, or ``None`` when unavailable."""
@@ -79,6 +81,12 @@ def _snr_db(metrics: dict[str, Any]) -> float | None:
         return None
 
 
+def _confidence_n_a_is_expected(metrics: dict[str, Any]) -> bool:
+    """Remote OpenAI-compatible STT does not expose segment logprobs."""
+    backend = str(metrics.get("stt_backend") or "").strip().casefold()
+    return backend in _REMOTE_STT_WITHOUT_CONFIDENCE
+
+
 def health_grade(metrics: dict[str, Any]) -> str:
     """Fold every per-utterance signal into one 4-level quality grade.
 
@@ -95,10 +103,12 @@ def health_grade(metrics: dict[str, Any]) -> str:
       OR ``audio_snr_db`` is below :data:`HEALTH_SNR_POOR`.
     * **fair**  — not poor, but something is off: confidence band "ok",
       post-processing fell back to raw text, the input ran "hot", OR a signal we
-      need to judge "good"/"perfect" is missing (confidence n/a or no SNR).
-    * **good**  — clean: confidence band "high" and SNR >= :data:`HEALTH_SNR_GOOD`.
-      A "quiet" input is fine here (the worker boosts it) as long as confidence
-      and SNR hold up.
+      need to judge quality is missing. OpenAI-compatible remote STT is the
+      exception: it does not expose confidence, so clean audio may still be
+      "good" but never "perfect".
+    * **good**  — clean: confidence band "high" (or expected-unavailable for
+      remote STT) and SNR >= :data:`HEALTH_SNR_GOOD`. A "quiet" input is fine
+      here (the worker boosts it) as long as the other signals hold up.
     * **perfect** — pristine: confidence "high", no post-processing fallback, the
       input status is exactly "good", and SNR >= :data:`HEALTH_SNR_PERFECT`.
     """
@@ -106,6 +116,11 @@ def health_grade(metrics: dict[str, Any]) -> str:
     status = str(metrics.get("audio_input_status") or "").strip()
     snr = _snr_db(metrics)
     post_fallback = bool(metrics.get("post_fallback"))
+    confidence_n_a_is_neutral = (
+        band == "n/a"
+        and not metrics.get("no_text")
+        and _confidence_n_a_is_expected(metrics)
+    )
 
     # poor: any single unusable signal drags the whole utterance down.
     if (
@@ -117,12 +132,20 @@ def health_grade(metrics: dict[str, Any]) -> str:
 
     # fair: not poor, but a known degradation OR a missing signal we'd need to
     # promote it. We never claim "good"/"perfect" on incomplete information.
-    if band in ("ok", "n/a") or post_fallback or status == "hot" or snr is None:
+    if (
+        band == "ok"
+        or (band == "n/a" and not confidence_n_a_is_neutral)
+        or post_fallback
+        or status == "hot"
+        or snr is None
+    ):
         return GRADE_FAIR
 
-    # From here band == "high" and snr is a real number >= HEALTH_SNR_POOR.
+    # From here band is high, or n/a because the remote STT backend does not
+    # expose confidence, and snr is a real number >= HEALTH_SNR_POOR.
     if (
-        not post_fallback
+        band == "high"
+        and not post_fallback
         and status == "good"
         and snr >= HEALTH_SNR_PERFECT
     ):

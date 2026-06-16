@@ -299,6 +299,61 @@ class HealthGradeTests(unittest.TestCase):
         }
         self.assertEqual(health_grade(metrics), GRADE_FAIR)
 
+    def test_good_for_openai_when_confidence_unavailable_but_audio_is_clean(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 47.0,
+            "stt_backend": "openai",
+            "device": "api",
+            "compute_type": "remote",
+            "segments": [{"text": "clean remote transcript"}],
+        }
+        self.assertEqual(health_grade(metrics), GRADE_GOOD)
+
+        line = format_health_line(metrics)
+        self.assertIn("confidence n/a", line)
+        self.assertTrue(line.endswith("grade=good"))
+
+    def test_openai_without_confidence_never_claims_perfect(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 56.0,
+            "stt_backend": "openai",
+            "device": "api",
+            "compute_type": "remote",
+            "segments": [{"text": "clean remote transcript"}],
+        }
+        self.assertEqual(health_grade(metrics), GRADE_GOOD)
+
+    def test_non_remote_missing_confidence_stays_fair(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 47.0,
+            "segments": [{"text": "local transcript without logprob"}],
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+    def test_explicit_non_openai_remote_missing_confidence_stays_fair(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 47.0,
+            "stt_backend": "custom",
+            "device": "api",
+            "compute_type": "remote",
+            "segments": [{"text": "remote transcript without logprob"}],
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+    def test_unknown_remote_missing_confidence_stays_fair(self):
+        metrics = {
+            "audio_input_status": "good",
+            "audio_snr_db": 47.0,
+            "device": "api",
+            "compute_type": "remote",
+            "segments": [{"text": "remote transcript without logprob"}],
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
     def test_poor_on_low_confidence(self):
         metrics = {
             "audio_input_status": "good",
