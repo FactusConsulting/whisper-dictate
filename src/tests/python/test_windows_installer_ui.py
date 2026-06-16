@@ -421,11 +421,8 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         shell = Path("src/rust/ui/tabs/shell.rs").read_text(encoding="utf-8")
 
         self.assertIn("fn release_url_for_version(version: &str) -> String", shell)
-        self.assertIn(
-            '"https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{version}"',
-            shell,
-        )
-        self.assertIn('"https://github.com/FactusConsulting/whisper-dictate/releases"', shell)
+        self.assertIn("release_tag_url(&version)", shell)
+        self.assertIn("RELEASES_INDEX_URL.to_owned()", shell)
         self.assertIn("fn release_url_points_to_version_tag()", shell)
         self.assertIn("fn release_url_falls_back_for_local_builds()", shell)
 

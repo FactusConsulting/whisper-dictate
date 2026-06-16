@@ -526,37 +526,32 @@ pub(in crate::ui) fn runtime_state_color(state: RuntimeState, palette: UiPalette
 }
 
 fn release_url_for_version(version: &str) -> String {
-    let version = version.trim();
     let Some(version) = release_tag_version(version) else {
-        return "https://github.com/FactusConsulting/whisper-dictate/releases".to_owned();
+        return RELEASES_INDEX_URL.to_owned();
     };
-    format!("https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{version}")
+    release_tag_url(&version)
 }
 
 fn release_hover_for_version(version: &str) -> String {
-    if release_tag_version(version).is_some() {
-        format!(
-            "Open release notes for v{}",
-            version.trim().trim_start_matches('v')
-        )
-    } else {
-        "Open whisper-dictate releases".to_owned()
-    }
+    let Some(version) = release_tag_version(version) else {
+        return "Open whisper-dictate releases".to_owned();
+    };
+    format!("Open release notes for v{version}")
 }
 
-fn release_tag_version(version: &str) -> Option<&str> {
+fn release_tag_version(version: &str) -> Option<String> {
     let version = version.trim().strip_prefix('v').unwrap_or(version.trim());
     if version.is_empty() || version.contains('+') {
         return None;
     }
     if let Some((core, rc)) = version.split_once("-rc.") {
         if is_numeric_version(core) && is_ascii_digits(rc) {
-            return Some(version);
+            return Some(version.to_owned());
         }
         return None;
     }
     if is_numeric_version(version) {
-        return Some(version);
+        return Some(version.to_owned());
     }
     None
 }
@@ -586,6 +581,10 @@ mod tests {
         );
         assert_eq!(
             release_url_for_version("v1.14.1-rc.1"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.14.1-rc.1"
+        );
+        assert_eq!(
+            release_url_for_version("1.14.1-rc.1"),
             "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.14.1-rc.1"
         );
     }
