@@ -76,4 +76,3 @@ For read-only information-gathering and simple mechanical comparisons (scanning 
 - Keep Whisper and Parakeet configuration separate. Parakeet must use its own
   model defaults, dependency checks, and CUDA readiness checks rather than
   inheriting Whisper model names such as `large-v3`.
-
