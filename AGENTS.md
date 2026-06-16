@@ -47,6 +47,10 @@ CI green is not enough; fetch and triage Copilot/SonarCloud comments first.
   (`gh pr edit <pr> --add-reviewer @copilot`) and re-check before merging.
 - Apply this gate to every PR, including scripted or batch merges.
 
+## Model economy
+
+For read-only information-gathering and simple mechanical comparisons (scanning files, looking up which secret holds which key, diffing across repos, summarizing configs), delegate to the cheapest *capable* sub-model your harness supports — Claude Code: the Task/Agent tool with Haiku or Sonnet; other harnesses: your equivalent, or skip if none. Keep design decisions, code edits, and irreversible actions on the primary model. Prefer correctness over economy — never use a model too weak for the task.
+
 ## Project-Specific Expectations
 
 - Treat Windows as the primary supported desktop path. Changes to the Rust
@@ -72,3 +76,4 @@ CI green is not enough; fetch and triage Copilot/SonarCloud comments first.
 - Keep Whisper and Parakeet configuration separate. Parakeet must use its own
   model defaults, dependency checks, and CUDA readiness checks rather than
   inheriting Whisper model names such as `large-v3`.
+
