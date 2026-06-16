@@ -77,13 +77,18 @@ const WINGET_PACKAGE_ID: &str = "FactusConsulting.WhisperDictate";
 const RELEASES_LATEST_URL: &str =
     "https://github.com/FactusConsulting/whisper-dictate/releases/latest";
 
+/// The repository release index, used when there is no concrete published tag
+/// to target (for example local/git-describe builds).
+pub(in crate::ui) const RELEASES_INDEX_URL: &str =
+    "https://github.com/FactusConsulting/whisper-dictate/releases";
+
 /// Build the release page URL for a SPECIFIC version tag, e.g.
 /// `https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.10.0-rc.1`.
 ///
 /// Used for prerelease offers because `releases/latest` skips prereleases. The
 /// version is normalized to a single leading `v` (the feed may carry it with or
 /// without one). Pure / unit-tested.
-fn release_tag_url(version: &str) -> String {
+pub(in crate::ui) fn release_tag_url(version: &str) -> String {
     let v = version.trim().trim_start_matches('v');
     format!("https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{v}")
 }
