@@ -42,6 +42,7 @@ impl WhisperDictateApp {
         // preventing overlap when the window is short.
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             let version_url = release_url_for_version(&self.app_version);
+            let version_hover = release_hover_for_version(&self.app_version);
             let version = ui
                 .add(
                     egui::Label::new(
@@ -52,7 +53,7 @@ impl WhisperDictateApp {
                     .selectable(false)
                     .sense(egui::Sense::click()),
                 )
-                .on_hover_text(format!("Open release notes for v{}", self.app_version))
+                .on_hover_text(version_hover)
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if version.clicked() {
                 let _ = open_url(&version_url);
@@ -526,16 +527,56 @@ pub(in crate::ui) fn runtime_state_color(state: RuntimeState, palette: UiPalette
 
 fn release_url_for_version(version: &str) -> String {
     let version = version.trim();
-    if version.is_empty() || version.contains('+') {
+    let Some(version) = release_tag_version(version) else {
         return "https://github.com/FactusConsulting/whisper-dictate/releases".to_owned();
-    }
-    let version = version.strip_prefix('v').unwrap_or(version);
+    };
     format!("https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{version}")
+}
+
+fn release_hover_for_version(version: &str) -> String {
+    if release_tag_version(version).is_some() {
+        format!(
+            "Open release notes for v{}",
+            version.trim().trim_start_matches('v')
+        )
+    } else {
+        "Open whisper-dictate releases".to_owned()
+    }
+}
+
+fn release_tag_version(version: &str) -> Option<&str> {
+    let version = version.trim().strip_prefix('v').unwrap_or(version.trim());
+    if version.is_empty() || version.contains('+') {
+        return None;
+    }
+    if let Some((core, rc)) = version.split_once("-rc.") {
+        if is_numeric_version(core) && is_ascii_digits(rc) {
+            return Some(version);
+        }
+        return None;
+    }
+    if is_numeric_version(version) {
+        return Some(version);
+    }
+    None
+}
+
+fn is_numeric_version(value: &str) -> bool {
+    let mut parts = value.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(major), Some(minor), Some(patch), None)
+            if is_ascii_digits(major) && is_ascii_digits(minor) && is_ascii_digits(patch)
+    )
+}
+
+fn is_ascii_digits(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::release_url_for_version;
+    use super::{release_hover_for_version, release_url_for_version};
 
     #[test]
     fn release_url_points_to_version_tag() {
@@ -554,6 +595,26 @@ mod tests {
         assert_eq!(
             release_url_for_version("1.14.1+local.20260616.gabcdef"),
             "https://github.com/FactusConsulting/whisper-dictate/releases"
+        );
+        assert_eq!(
+            release_url_for_version("1.14.1-12-gabcdef"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases"
+        );
+        assert_eq!(
+            release_url_for_version("1.14.1-12-gabcdef-dirty"),
+            "https://github.com/FactusConsulting/whisper-dictate/releases"
+        );
+    }
+
+    #[test]
+    fn release_hover_matches_target() {
+        assert_eq!(
+            release_hover_for_version("1.14.1"),
+            "Open release notes for v1.14.1"
+        );
+        assert_eq!(
+            release_hover_for_version("1.14.1-12-gabcdef"),
+            "Open whisper-dictate releases"
         );
     }
 }
