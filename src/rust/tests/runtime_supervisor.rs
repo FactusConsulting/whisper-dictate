@@ -42,6 +42,51 @@ fn supervisor_captures_stdout_and_exit() {
 }
 
 #[test]
+fn supervisor_fires_repaint_notifier_on_every_event() {
+    // The whole point of the notifier — every runtime event published on the
+    // channel must wake the consumer (egui). Without this the tray icon stays
+    // GREEN through a full PTT cycle when the window has no foreground
+    // attention. Drive it with a real child so the counter covers start(),
+    // stream_lines (stdout) and the stop()/wait thread; the worker_event_tests
+    // unit cover the trivial accessors.
+    let Some(python) = test_python() else {
+        return;
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let count = Arc::new(AtomicUsize::new(0));
+    let count_for_cb = Arc::clone(&count);
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.set_repaint_notifier(Arc::new(move || {
+        count_for_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+    assert!(supervisor.has_repaint_notifier());
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "print('hello', flush=True)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    let _ = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "hello") && has_exit(events)
+    });
+    // Two channel-sends are guaranteed: Started (from start()) and one
+    // Stdout (from the stream_lines thread). The Exited event is sent by
+    // poll() on the main thread which deliberately does NOT notify — the
+    // consumer is already there. So `>= 2` is the right bar.
+    let total = count.load(Ordering::SeqCst);
+    assert!(
+        total >= 2,
+        "repaint notifier should fire on every channel send; got {total}"
+    );
+}
+
+#[test]
 fn supervisor_forces_utf8_stdio_for_piped_python_worker() {
     let Some(python) = test_python() else {
         return;
