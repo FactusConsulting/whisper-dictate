@@ -64,10 +64,7 @@ fn supervisor_fires_repaint_notifier_on_every_event() {
     supervisor
         .start(WorkerCommand {
             program: python,
-            args: vec![
-                "-c".to_owned(),
-                "print('hello', flush=True)".to_owned(),
-            ],
+            args: vec!["-c".to_owned(), "print('hello', flush=True)".to_owned()],
             working_dir: env::current_dir().unwrap(),
             env: Vec::new(),
         })
