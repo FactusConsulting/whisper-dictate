@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 
 from whisper_dictate.vp_cli import QUIT_COUNT, QUIT_KEY, QUIT_WINDOW_MS
 from whisper_dictate.vp_config import get_value
@@ -501,13 +502,60 @@ class KeyBackendMixin:
             targets, enabled=is_bare_modifier_binding(key_names))
         state = _PynputListener(self, targets, quit_key, toggle_mode=toggle_mode,
                                 solo_guard=solo)
-        ln = keyboard.Listener(on_press=state.on_press, on_release=state.on_release)
+        # Wrap the pynput callbacks so any exception that escapes on_press /
+        # on_release is logged with a full traceback BEFORE pynput's internal
+        # listener thread swallows it and quietly stops. Diagnostic for the
+        # "tray sticks on green after some time" bug: a wedged listener thread
+        # leaves the worker alive but unable to start recordings, so we want
+        # the cause printed once instead of disappearing.
+        def _logged_on_press(k):
+            try:
+                return state.on_press(k)
+            except Exception:
+                print("[hotkey] on_press raised — listener will stop:",
+                      flush=True)
+                traceback.print_exc()
+                raise
+        def _logged_on_release(k):
+            try:
+                return state.on_release(k)
+            except Exception:
+                print("[hotkey] on_release raised — listener will stop:",
+                      flush=True)
+                traceback.print_exc()
+                raise
+        ln = keyboard.Listener(on_press=_logged_on_press,
+                               on_release=_logged_on_release)
         ln.start()
+        # Heartbeat: periodically report whether the listener thread is still
+        # alive. If the tray ever locks on green, the most recent heartbeat
+        # tells us whether the Python listener died (alive=False) or the
+        # Rust UI side simply didn't react (alive=True). Daemon thread so
+        # it never holds the process up at shutdown.
+        #
+        # Cadence: 300 s (5 min) in normal release runs — the goal is to
+        # catch a listener that has *died*, not to monitor it in real time,
+        # so ~3000 lines/day is unnecessary noise. Override with
+        # VOICEPI_HOTKEY_HEARTBEAT_S during active debugging (e.g. =30).
+        # Set to 0 / negative to disable the heartbeat entirely.
+        try:
+            heartbeat_s = float(os.environ.get("VOICEPI_HOTKEY_HEARTBEAT_S",
+                                               "300") or "300")
+        except ValueError:
+            heartbeat_s = 300.0
+        stop_heartbeat = threading.Event()
+        def _heartbeat():
+            while not stop_heartbeat.wait(heartbeat_s):
+                print(f"[hotkey] listener alive={ln.is_alive()}", flush=True)
+        if heartbeat_s > 0:
+            threading.Thread(target=_heartbeat, name="hotkey-heartbeat",
+                             daemon=True).start()
         try:
             ln.join()
         except KeyboardInterrupt:
             pass
         finally:
+            stop_heartbeat.set()
             ln.stop()
         print("\nbye", flush=True)
 

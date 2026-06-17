@@ -211,6 +211,21 @@ impl WhisperDictateApp {
             self.audio_capture_opening,
             self.audio_capture_active,
         );
+        // Diagnostic trace — logs ONLY on transitions, so the runtime log shows
+        // every tray colour change with the four inputs that drove it. Lets us
+        // tell "worker stopped emitting recording" from "Rust never saw it" the
+        // next time the tray gets stuck on green. Cheap: one push to a String
+        // per state change, not per frame.
+        if self.last_logged_tray_state != Some(state) {
+            self.append_runtime_log(format!(
+                "[ui] tray sync state={state:?} worker_running={worker_running} \
+                 audio_active={} audio_opening={} last_status={:?}",
+                self.audio_capture_active,
+                self.audio_capture_opening,
+                self.last_worker_status_state,
+            ));
+            self.last_logged_tray_state = Some(state);
+        }
         if let Err(reason) = self.tray.sync(state, &self.settings.ui_language) {
             // First (and only) failure: log it, then permanently disable the tray
             // so we never retry-spam or block the app on a headless/denied tray.
