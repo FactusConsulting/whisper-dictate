@@ -360,10 +360,13 @@ class ResolveStartupAudioDeviceTests(unittest.TestCase):
     def setUp(self):
         # Control the cached arecord device per-test (None ⇒ sounddevice path).
         self._saved = vp_capture._ARECORD_DEVICE
+        self._saved_find_arecord_device = vp_capture._find_arecord_device
         vp_capture._ARECORD_DEVICE = None
+        vp_capture._find_arecord_device = lambda: None
 
     def tearDown(self):
         vp_capture._ARECORD_DEVICE = self._saved
+        vp_capture._find_arecord_device = self._saved_find_arecord_device
         sys.modules.pop("sounddevice", None)
 
     def test_arecord_route_labels_arecord_device(self):
