@@ -334,22 +334,16 @@ pub struct WorkerEvent {
 /// the OS tray API.
 pub type RepaintNotifier = std::sync::Arc<dyn Fn() + Send + Sync>;
 
+// No `#[derive(Debug)]`: `Arc<dyn Fn() + Send + Sync>` (the repaint notifier)
+// does not implement Debug. Nothing in the codebase actually formats the
+// supervisor with `{:?}`, so the manual impl is dead weight; leave it off
+// and `#[derive(Debug)]` can return if/when a real consumer wants it.
 pub struct RuntimeSupervisor {
     child: Option<Child>,
     state: RuntimeState,
     tx: Sender<RuntimeEvent>,
     rx: Receiver<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
-}
-
-impl std::fmt::Debug for RuntimeSupervisor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RuntimeSupervisor")
-            .field("child", &self.child)
-            .field("state", &self.state)
-            .field("has_repaint_notifier", &self.repaint_notifier.is_some())
-            .finish()
-    }
 }
 
 impl Default for RuntimeSupervisor {
