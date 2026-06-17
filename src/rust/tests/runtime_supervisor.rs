@@ -42,6 +42,89 @@ fn supervisor_captures_stdout_and_exit() {
 }
 
 #[test]
+fn supervisor_fires_repaint_notifier_on_every_event() {
+    // The whole point of the notifier — every runtime event published on the
+    // channel must wake the consumer (egui). Without this the tray icon stays
+    // GREEN through a full PTT cycle when the window has no foreground
+    // attention. Drive it with a real child so the counter covers start() and
+    // stream_lines (stdout); the stop()/wait thread is covered by the
+    // separate test below.
+    let Some(python) = test_python() else {
+        return;
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let count = Arc::new(AtomicUsize::new(0));
+    let count_for_cb = Arc::clone(&count);
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.set_repaint_notifier(Arc::new(move || {
+        count_for_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+    assert!(supervisor.has_repaint_notifier());
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec!["-c".to_owned(), "print('hello', flush=True)".to_owned()],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    let _ = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "hello") && has_exit(events)
+    });
+    // Two channel-sends are guaranteed: Started (from start()) and one
+    // Stdout (from the stream_lines thread). The Exited event is sent by
+    // poll() on the main thread which deliberately does NOT notify — the
+    // consumer is already there. So `>= 2` is the right bar.
+    let total = count.load(Ordering::SeqCst);
+    assert!(
+        total >= 2,
+        "repaint notifier should fire on every channel send; got {total}"
+    );
+}
+
+#[test]
+fn supervisor_fires_repaint_notifier_from_stop_thread() {
+    // stop() spawns a thread that waits for the child to terminate and then
+    // sends Exited (or Error on failure) through the channel and fires the
+    // notifier. Cover that explicit path so coverage hits both branches in
+    // the spawned closure.
+    let Some(python) = test_python() else {
+        return;
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let count = Arc::new(AtomicUsize::new(0));
+    let count_for_cb = Arc::clone(&count);
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.set_repaint_notifier(Arc::new(move || {
+        count_for_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import time; print('ready', flush=True); time.sleep(30)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    let _ = collect_until(&mut supervisor, |events| has_stdout(events, "ready"));
+    let before_stop = count.load(Ordering::SeqCst);
+    supervisor.stop().unwrap();
+    let _ = collect_until(&mut supervisor, has_exit);
+    // stop()'s wait-thread is the only path that bumps the notifier between
+    // before_stop and now — the Exited send + notifier() inside that closure.
+    let after_stop = count.load(Ordering::SeqCst);
+    assert!(
+        after_stop > before_stop,
+        "stop() wait-thread should fire notifier; before={before_stop} after={after_stop}"
+    );
+}
+
+#[test]
 fn supervisor_forces_utf8_stdio_for_piped_python_worker() {
     let Some(python) = test_python() else {
         return;

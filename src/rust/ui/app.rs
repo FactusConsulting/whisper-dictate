@@ -97,6 +97,22 @@ impl eframe::App for WhisperDictateApp {
         // temporary lifetime extension; pass it as `&ctx` where a `&Context` is
         // needed.
         let ctx = ui.ctx().clone();
+        // Install the runtime supervisor's repaint notifier on the first frame.
+        // It wakes egui whenever a worker event arrives — without it, events
+        // that land while the window has no foreground attention sit in the
+        // mpsc channel until the next ~80 ms repaint tick, which on Windows
+        // simply does not fire when nothing tells egui to redraw. The visible
+        // symptom was a tray icon that stayed GREEN through a full PTT cycle
+        // after ~10 min of idle: worker events fine, UI just not awake to
+        // process them. has_repaint_notifier() makes this idempotent — only
+        // the first frame actually installs it.
+        if !self.supervisor.has_repaint_notifier() {
+            let ctx_for_notifier = ctx.clone();
+            self.supervisor
+                .set_repaint_notifier(std::sync::Arc::new(move || {
+                    ctx_for_notifier.request_repaint();
+                }));
+        }
         // Poll the worker + background tasks every frame BEFORE any mode branch so
         // dictation keeps flowing (and the meter/log keep updating) whether the UI
         // is in the full window or the compact strip.
