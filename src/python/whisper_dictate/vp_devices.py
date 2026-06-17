@@ -16,8 +16,9 @@ Two consumers share the rule via :func:`_select_host_api_index`:
 
 All functions are pure over injected ``sd.query_devices()`` /
 ``sd.query_hostapis()`` sequences (no real audio stack), so they unit-test with
-stubbed tables. On a single-host-API platform (Linux/macOS ALSA/CoreAudio)
-resolution is unchanged.
+stubbed tables. On Linux/macOS the picker lists every input across host APIs so
+PulseAudio/PipeWire/JACK/ALSA combinations do not hide USB devices; capture
+resolution still prefers the default host API first and then falls back by name.
 """
 from __future__ import annotations
 
@@ -143,6 +144,15 @@ def _hostapi_name_at(hostapis, hostapi_index) -> str:
     if not isinstance(api, dict):
         return ""
     return str(api.get("name") or "").strip()
+
+
+def _is_windows_pseudo_input_name(name: str) -> bool:
+    """True for PortAudio Windows mapper/driver pseudo input endpoints."""
+    folded = name.casefold()
+    return (
+        "sound mapper" in folded
+        or folded == "primary sound capture driver"
+    )
 
 
 def sibling_endpoints_for_device(sd, device) -> list[tuple[int, str]]:
@@ -358,9 +368,12 @@ def select_input_devices(devices, hostapis, *, is_windows: bool, default_index: 
 
     Given ``sd.query_devices()`` (``devices``) and ``sd.query_hostapis()``
     (``hostapis``), choose ONE host API (see :func:`_select_host_api_index`) and
-    return each of its real input devices once:
+    return each real input device to show in the picker. On Windows this uses one
+    preferred host API plus a hot-plug fallback (below) to avoid duplicate
+    physical mics. On Linux/macOS it lists all host APIs because hiding devices
+    is worse than an occasional duplicate and capture resolution can still match
+    by name across host APIs.
 
-      * ``hostapi`` == the chosen host-API index,
       * ``max_input_channels > 0``,
       * non-empty name (blank names collide with the UI's "(System default)").
 
@@ -373,11 +386,33 @@ def select_input_devices(devices, hostapis, *, is_windows: bool, default_index: 
     unit-testable with stubbed sequences.
     """
     chosen = _select_host_api_index(hostapis, is_windows=is_windows)
+    picker_hostapi = chosen if is_windows else None
     result: list[dict] = []
+    result_names: list[str] = []
+
+    def _append(index, name, channels):
+        result.append({
+            "index": index,
+            "name": name,
+            "max_input_channels": channels,
+            "default": index == default_index,
+        })
+        result_names.append(name)
+
+    def _fallback_api_rank(info) -> int | None:
+        if not is_windows:
+            return None
+        hostapi = info.get("hostapi") if isinstance(info, dict) else None
+        if hostapi == picker_hostapi:
+            return None
+        api_name = _hostapi_name_at(hostapis, hostapi).casefold()
+        if "directsound" in api_name:
+            return 0
+        return None
+
+    fallback_candidates: list[tuple[int, int, str, int]] = []
     for index, info in enumerate(devices):
         if not isinstance(info, dict):
-            continue
-        if chosen is not None and info.get("hostapi") != chosen:
             continue
         try:
             channels = int(info.get("max_input_channels") or 0)
@@ -390,12 +425,27 @@ def select_input_devices(devices, hostapis, *, is_windows: bool, default_index: 
             # An empty name would collide with the UI's "" = "(System default)"
             # combo value and make the selection ambiguous — skip the entry.
             continue
-        result.append({
-            "index": index,
-            "name": name,
-            "max_input_channels": channels,
-            "default": index == default_index,
-        })
+        if is_windows and _is_windows_pseudo_input_name(name):
+            continue
+        if picker_hostapi is None or info.get("hostapi") == picker_hostapi:
+            _append(index, name, channels)
+            continue
+        rank = _fallback_api_rank(info)
+        if rank is not None:
+            fallback_candidates.append((rank, index, name, channels))
+
+    if is_windows and picker_hostapi is not None:
+        # Hot-plug/docking can leave a newly-attached USB microphone visible on
+        # DirectSound before it appears on WASAPI. Keep the normal WASAPI
+        # de-duplication, but add fallback-host entries that do not already have
+        # a same-physical-device sibling in the chosen host API. MME stays out of
+        # the picker here: it includes Sound Mapper pseudo-devices and truncated
+        # names, while capture can still retry MME as a last-resort sibling for an
+        # explicitly selected device.
+        for _rank, index, name, channels in sorted(fallback_candidates):
+            if any(_name_matches(name, existing) for existing in result_names):
+                continue
+            _append(index, name, channels)
     return result
 
 

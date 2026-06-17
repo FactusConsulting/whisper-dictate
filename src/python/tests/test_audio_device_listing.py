@@ -114,6 +114,52 @@ class SelectInputDevicesWindowsTests(unittest.TestCase):
         self.assertTrue(all(d["index"] in (16, 17, 18) for d in devices))
         self.assertIn("Microphone (Yeti Classic)", [d["name"] for d in devices])
 
+    def test_windows_includes_hotplugged_mic_seen_only_on_fallback_host_api(self):
+        # Docking/hot-plug regression: PortAudio can report an attached USB mic
+        # under DirectSound/MME before the WASAPI table has caught up. The picker
+        # should still show that new physical mic when Refresh devices is clicked,
+        # while keeping normal WASAPI entries first and avoiding duplicate
+        # DirectSound/MME siblings for devices already present under WASAPI.
+        devices = _windows_devices()
+        devices.extend([
+            {
+                "name": "Microphone (Yeti Stereo Microphone)",
+                "hostapi": 1,
+                "max_input_channels": 2,
+            },
+            {
+                "name": "Microphone (Yeti Stereo Microp",
+                "hostapi": 0,
+                "max_input_channels": 2,
+            },
+        ])
+
+        result = vp_events.select_input_devices(
+            devices,
+            _WINDOWS_HOSTAPIS,
+            is_windows=True,
+            default_index=45,
+        )
+
+        names = [d["name"] for d in result]
+        self.assertEqual(
+            names[:3],
+            [
+                "Microphone (Logitech BRIO)",
+                "Microphone (HD Pro Webcam C920)",
+                "Microphone (Yeti Classic)",
+            ],
+        )
+        self.assertIn("Microphone (Yeti Stereo Microphone)", names)
+        self.assertNotIn("Microphone (Yeti Stereo Microp", names)
+        self.assertNotIn("Primary Sound Capture Driver", names)
+        self.assertNotIn("Microsoft Sound Mapper - Input", names)
+        self.assertEqual(
+            names.count("Microphone (Yeti Classic)"),
+            1,
+            "fallback siblings of already-listed WASAPI devices must stay hidden",
+        )
+
 
 class SelectInputDevicesNonWindowsTests(unittest.TestCase):
     def test_linux_single_alsa_host_api_returns_its_devices(self):
@@ -130,6 +176,33 @@ class SelectInputDevicesNonWindowsTests(unittest.TestCase):
         self.assertEqual([d["index"] for d in result], [1, 2])
         self.assertEqual(result[0]["name"], "Internal Mic")
         self.assertTrue(result[0]["default"])
+
+    def test_linux_multi_host_api_returns_inputs_from_every_host_api(self):
+        # Linux setups can expose multiple PortAudio host APIs (for example ALSA
+        # plus PulseAudio/PipeWire/JACK). The picker must not hide a USB mic just
+        # because it is not on the default host API.
+        hostapis = [
+            {"name": "ALSA", "default_input_device": 1},
+            {"name": "PulseAudio", "default_input_device": 3},
+        ]
+        devices = [
+            {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+            {"name": "Internal Mic (ALSA)", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Yeti Classic (ALSA)", "hostapi": 0, "max_input_channels": 2},
+            {"name": "USB Dock Mic (PulseAudio)", "hostapi": 1, "max_input_channels": 2},
+        ]
+        result = vp_events.select_input_devices(
+            devices, hostapis, is_windows=False, default_index=3
+        )
+        self.assertEqual(
+            [d["name"] for d in result],
+            [
+                "Internal Mic (ALSA)",
+                "Yeti Classic (ALSA)",
+                "USB Dock Mic (PulseAudio)",
+            ],
+        )
+        self.assertTrue(result[2]["default"])
 
     def test_empty_hostapis_returns_all_inputs(self):
         # No host API table → no filtering by host API (legacy/safe behavior).
