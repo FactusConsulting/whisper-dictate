@@ -322,12 +322,34 @@ pub struct WorkerEvent {
     pub payload: Value,
 }
 
-#[derive(Debug)]
+/// Optional zero-arg callback fired AFTER every event is pushed onto the
+/// runtime channel. Lets the consumer (the egui UI) wake itself up so an
+/// event that arrives while the window is minimized / unfocused gets
+/// processed immediately instead of waiting for the next 80 ms repaint
+/// tick — which, on Windows, doesn't fire when the window doesn't have
+/// foreground attention. Without this, the user observed the tray icon
+/// staying GREEN for a full PTT cycle after ~10 min of idle: the worker
+/// emitted opening/recording/transcribing as usual, but the UI never woke
+/// to process the events, so the tray-state transitions never made it to
+/// the OS tray API.
+pub type RepaintNotifier = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 pub struct RuntimeSupervisor {
     child: Option<Child>,
     state: RuntimeState,
     tx: Sender<RuntimeEvent>,
     rx: Receiver<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+}
+
+impl std::fmt::Debug for RuntimeSupervisor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeSupervisor")
+            .field("child", &self.child)
+            .field("state", &self.state)
+            .field("has_repaint_notifier", &self.repaint_notifier.is_some())
+            .finish()
+    }
 }
 
 impl Default for RuntimeSupervisor {
@@ -344,7 +366,20 @@ impl RuntimeSupervisor {
             state: RuntimeState::Stopped,
             tx,
             rx,
+            repaint_notifier: None,
         }
+    }
+
+    /// Install a callback that fires after every runtime event is enqueued.
+    /// The UI installs this on its first `update()` call so the egui context
+    /// is woken whenever a worker event arrives, even when the window has no
+    /// foreground attention. Idempotent — overwrites any previous notifier.
+    pub fn set_repaint_notifier(&mut self, notifier: RepaintNotifier) {
+        self.repaint_notifier = Some(notifier);
+    }
+
+    pub fn has_repaint_notifier(&self) -> bool {
+        self.repaint_notifier.is_some()
     }
 
     pub fn state(&self) -> RuntimeState {
@@ -376,15 +411,28 @@ impl RuntimeSupervisor {
         let mut child = process.spawn()?;
 
         if let Some(stdout) = child.stdout.take() {
-            stream_lines(stdout, self.tx.clone(), RuntimeStream::Stdout);
+            stream_lines(
+                stdout,
+                self.tx.clone(),
+                RuntimeStream::Stdout,
+                self.repaint_notifier.clone(),
+            );
         }
         if let Some(stderr) = child.stderr.take() {
-            stream_lines(stderr, self.tx.clone(), RuntimeStream::Stderr);
+            stream_lines(
+                stderr,
+                self.tx.clone(),
+                RuntimeStream::Stderr,
+                self.repaint_notifier.clone(),
+            );
         }
 
         self.state = RuntimeState::Running;
         self.child = Some(child);
         let _ = self.tx.send(RuntimeEvent::Started { command: display });
+        if let Some(notifier) = self.repaint_notifier.as_ref() {
+            notifier();
+        }
         Ok(())
     }
 
@@ -396,6 +444,7 @@ impl RuntimeSupervisor {
 
         self.state = RuntimeState::Stopped;
         let tx = self.tx.clone();
+        let notifier = self.repaint_notifier.clone();
         thread::spawn(move || {
             let result = kill_child(&mut child).and_then(|_| child.wait().map_err(Into::into));
             match result {
@@ -407,6 +456,9 @@ impl RuntimeSupervisor {
                 Err(err) => {
                     let _ = tx.send(RuntimeEvent::Error(format!("stop failed: {err}")));
                 }
+            }
+            if let Some(notifier) = notifier.as_ref() {
+                notifier();
             }
         });
         Ok(())
@@ -890,8 +942,12 @@ enum RuntimeStream {
     Stderr,
 }
 
-fn stream_lines<R>(reader: R, tx: Sender<RuntimeEvent>, stream: RuntimeStream)
-where
+fn stream_lines<R>(
+    reader: R,
+    tx: Sender<RuntimeEvent>,
+    stream: RuntimeStream,
+    repaint_notifier: Option<RepaintNotifier>,
+) where
     R: std::io::Read + Send + 'static,
 {
     thread::spawn(move || {
@@ -900,9 +956,15 @@ where
                 Ok(line) => {
                     let event = runtime_event_from_line(line, stream);
                     let _ = tx.send(event);
+                    if let Some(notifier) = repaint_notifier.as_ref() {
+                        notifier();
+                    }
                 }
                 Err(err) => {
                     let _ = tx.send(RuntimeEvent::Error(err.to_string()));
+                    if let Some(notifier) = repaint_notifier.as_ref() {
+                        notifier();
+                    }
                     break;
                 }
             }
