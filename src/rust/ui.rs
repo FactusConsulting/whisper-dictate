@@ -438,6 +438,11 @@ struct WhisperDictateApp {
     /// user can SEE when the microphone is live. Purely additive UI — it never
     /// touches the dictation flow.
     tray: TrayManager,
+    /// Last [`TrayState`] we wrote a diagnostic log line for, so the "tray sync"
+    /// trace only fires on TRANSITIONS — not on every frame. `None` means we
+    /// have not yet logged any state (so the very first computed state is
+    /// always logged as the baseline). See `sync_tray` in `ui/app.rs`.
+    pub(in crate::ui) last_logged_tray_state: Option<TrayState>,
 }
 
 impl Default for WhisperDictateApp {
@@ -539,6 +544,7 @@ impl Default for WhisperDictateApp {
             update_command_copied_until: None,
             choco_pkg_dir_exists: None,
             tray: TrayManager::new(),
+            last_logged_tray_state: None,
         }
     }
 }

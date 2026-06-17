@@ -67,6 +67,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         update_command_copied_until: None,
         choco_pkg_dir_exists: None,
         tray: TrayManager::new(),
+        last_logged_tray_state: None,
     }
 }
 
