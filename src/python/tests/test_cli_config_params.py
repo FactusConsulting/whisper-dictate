@@ -138,6 +138,40 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(os.environ["VOICEPI_LANG"], "da")
             self.assertEqual(os.environ["VOICEPI_XKB_LAYOUT"], "dk")
 
+    def test_apply_config_logs_audio_device_transition(self):
+        """Diagnostic: VOICEPI_AUDIO_DEVICE changes must be logged to stderr.
+
+        Audio-device-switch-stale bug needs an unambiguous trace next time
+        it reproduces. Verify the print fires when the env var actually
+        changes; verify it does NOT fire when the env was already at the
+        config value.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "config.json")
+            os.environ["VOICEPI_CONFIG"] = path
+            os.environ.pop("VOICEPI_AUDIO_DEVICE", None)
+            from whisper_dictate import vp_config
+
+            vp_config.save_config({"audio_device": "Yeti"})
+            from io import StringIO
+            with patch("sys.stderr", new_callable=StringIO) as err:
+                vp_config.apply_config_to_environ()
+            self.assertIn(
+                "VOICEPI_AUDIO_DEVICE:",
+                err.getvalue(),
+                "transition log must fire on first set",
+            )
+            self.assertIn("Yeti", err.getvalue())
+
+            # Re-applying the same config shouldn't log anything new.
+            with patch("sys.stderr", new_callable=StringIO) as err:
+                vp_config.apply_config_to_environ()
+            self.assertNotIn(
+                "VOICEPI_AUDIO_DEVICE",
+                err.getvalue(),
+                "no-op reload must not spam the log",
+            )
+
     def test_unknown_env_value_does_not_read_config(self):
         from whisper_dictate import vp_config
 
