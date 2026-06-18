@@ -81,20 +81,27 @@ def _play_windows(kind: str) -> None:
 _FREEDESKTOP_START = "/usr/share/sounds/freedesktop/stereo/message.oga"
 _FREEDESKTOP_STOP = "/usr/share/sounds/freedesktop/stereo/dialog-information.oga"
 
+# Tried in order; first found on PATH wins.
+_LINUX_PLAYERS = ["paplay", "pw-play"]
+
 
 def _play_linux(kind: str) -> None:
-    """Play a freedesktop sound file via paplay (non-blocking, best-effort)."""
+    """Play a freedesktop sound file via paplay or pw-play (non-blocking, best-effort)."""
     sound_file = _FREEDESKTOP_START if kind == "start" else _FREEDESKTOP_STOP
     if not os.path.exists(sound_file):
         return
-    try:
-        _reap(subprocess.Popen(
-            ["paplay", sound_file],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ))
-    except Exception:
-        pass
+    for player in _LINUX_PLAYERS:
+        try:
+            _reap(subprocess.Popen(
+                [player, sound_file],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ))
+            return
+        except FileNotFoundError:
+            continue
+        except Exception:
+            return
 
 
 # ---------------------------------------------------------------------------
