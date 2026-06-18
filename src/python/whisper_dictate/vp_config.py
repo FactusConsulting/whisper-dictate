@@ -145,9 +145,18 @@ def apply_config_to_environ() -> set[str]:
     """Overlay configured JSON settings into os.environ.
 
     Existing env vars remain the fallback when a key is absent from config.json.
+
+    Diagnostic note: when VOICEPI_AUDIO_DEVICE is among the updated env vars,
+    a one-line trace is emitted to stderr (the runtime supervisor mirrors it
+    into the UI log). The audio-device-switch-stale bug surfaces here: if you
+    SAVE a new mic in the UI but this line does NOT appear, the new value
+    never reached env (which means the config-file load saw stale or empty
+    data), and the next capture-open will use whatever env had before.
     """
+    import sys
     data = load_config()
     changed: set[str] = set()
+    audio_device_before = os.environ.get("VOICEPI_AUDIO_DEVICE", "")
     for key, value in data.items():
         setting = SETTING_BY_KEY.get(key)
         if not setting:
@@ -156,6 +165,23 @@ def apply_config_to_environ() -> set[str]:
         if os.environ.get(setting.env) != new_value:
             os.environ[setting.env] = new_value
             changed.add(setting.env)
+    if "VOICEPI_AUDIO_DEVICE" in changed:
+        print(
+            f"[config] VOICEPI_AUDIO_DEVICE: {audio_device_before!r} → "
+            f"{os.environ.get('VOICEPI_AUDIO_DEVICE', '')!r} "
+            f"(config has audio_device={data.get('audio_device')!r})",
+            file=sys.stderr,
+            flush=True,
+        )
+    elif "audio_device" in data and data["audio_device"] != audio_device_before:
+        # Config has a different audio_device value but env wasn't updated
+        # — should never happen, log it loudly if it does.
+        print(
+            f"[config] WARN: config has audio_device={data['audio_device']!r} "
+            f"but VOICEPI_AUDIO_DEVICE stays {audio_device_before!r}",
+            file=sys.stderr,
+            flush=True,
+        )
     return changed
 
 

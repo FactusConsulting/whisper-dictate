@@ -906,9 +906,17 @@ class CaptureMixin:
         # float32 frames → int16 so downstream stays int16). See _capture_frame_to_int16.
         self._capture_dtype = "int16"
         self._sd_snapshot = SoundDeviceSnapshot(sd)
+        # Read fresh from env so a live config reload between PTT presses takes
+        # effect on the next recording. Log the env value the open will use, so
+        # the device-switch-stale-state bug is unambiguous if it reappears.
+        requested = _audio_device_setting()
+        print(
+            f"[cap] open requested device: VOICEPI_AUDIO_DEVICE={requested!r}",
+            flush=True,
+        )
         device, device_name = _resolve_sounddevice_device(
             sd,
-            _audio_device_setting(),
+            requested,
             devices=self._sd_snapshot.devices,
             hostapis=self._sd_snapshot.hostapis,
             default_index=self._sd_snapshot.default_index,
