@@ -113,6 +113,55 @@ python -m pytest src/python/tests src/tests/python -q
 For Rust, clippy/fmt, and a CI-matched environment, use the dev container in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Build features
+
+The Rust crate exposes a small set of opt-in cargo features beyond the
+default UI build:
+
+| Feature              | Default | What it does |
+|----------------------|---------|--------------|
+| `ui-egui-glow`       | yes     | egui via the glow (OpenGL) backend — shipping renderer. |
+| `ui-egui-wgpu`       | no      | egui via the wgpu backend — continuously-validated exit route. |
+| `whisper-rs-local`   | no      | Compiles in [whisper-rs] (whisper.cpp bindings) for local CPU inference. See below. |
+
+[whisper-rs]: https://crates.io/crates/whisper-rs
+
+### Local Whisper (experimental)
+
+Behind the **`whisper-rs-local`** cargo feature, the crate ships a
+small `whisper` module that loads a GGML/GGUF Whisper model and
+transcribes a 16 kHz mono WAV. This is the CPU-only spike from roadmap
+issue [#317] sub-task 1 — it is **not** wired into the runtime yet; the
+Python transcription path is still the only thing the app uses at
+runtime.
+
+Enabling the feature pulls in whisper.cpp and compiles it from source,
+so the build host must have:
+
+- **CMake** (3.x)
+- A **C/C++ compiler** (clang or gcc on Linux/macOS; MSVC on Windows)
+
+Grab a model from the [whisper.cpp release page on Hugging Face][whisper-models]
+— `ggml-tiny.en.bin` (~75 MB) is enough to validate the integration.
+
+Run the example against a 16 kHz mono WAV:
+
+```bash
+cargo run --release \
+    --manifest-path src/rust/Cargo.toml \
+    --features whisper-rs-local \
+    --example whisper_local -- \
+    --model /path/to/ggml-tiny.en.bin \
+    --wav   /path/to/audio_16khz_mono.wav
+```
+
+The unit test `transcribes_hello_world_when_model_available` skips
+unless both `WHISPER_TEST_MODEL_PATH` and `WHISPER_TEST_WAV_PATH` are
+set, so CI is unaffected.
+
+[#317]: https://github.com/FactusConsulting/whisper-dictate/issues/317
+[whisper-models]: https://huggingface.co/ggerganov/whisper.cpp
+
 ## License
 
 MIT - see [LICENSE](LICENSE).

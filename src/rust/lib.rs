@@ -12,3 +12,8 @@ pub mod redaction;
 pub mod runtime;
 pub mod telemetry;
 pub mod ui;
+// Local Whisper inference (CPU-only spike, roadmap issue #317 sub-task 1).
+// Gated behind the `whisper-rs-local` cargo feature so the default build
+// never pulls in whisper.cpp / CMake.
+#[cfg(feature = "whisper-rs-local")]
+pub mod whisper;
