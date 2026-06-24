@@ -129,20 +129,48 @@ default UI build:
 ### Local Whisper (experimental)
 
 Behind the **`whisper-rs-local`** cargo feature, the crate ships a
-small `whisper` module that loads a GGML/GGUF Whisper model and
-transcribes a 16 kHz mono WAV. This is the CPU-only spike from roadmap
-issue [#317] sub-task 1 — it is **not** wired into the runtime yet; the
+small `whisper` module that loads a GGML Whisper model and transcribes
+a 16 kHz mono WAV. This is the CPU-only spike from roadmap issue
+[#317] sub-task 1 — it is **not** wired into the runtime yet; the
 Python transcription path is still the only thing the app uses at
 runtime.
 
-Enabling the feature pulls in whisper.cpp and compiles it from source,
-so the build host must have:
+> **Model format:** only the GGML container (`ggml-*.bin`) works.
+> whisper.cpp does not yet read llama.cpp's newer GGUF format, and
+> loading a `.gguf` file is rejected up front with a clean error.
 
-- **CMake** (3.x)
-- A **C/C++ compiler** (clang or gcc on Linux/macOS; MSVC on Windows)
+Enabling the feature pulls in whisper.cpp and compiles it from source,
+*and* runs `bindgen` against whisper.cpp's headers — so the build host
+needs both a C/C++ toolchain *and* the libclang shared library that
+bindgen links against:
+
+- **Linux / WSL:** `cmake`, `clang`, **`libclang-dev`**
+  (Debian/Ubuntu: `apt install cmake clang libclang-dev`; equivalent
+  packages on other distros). The libclang dev package is the usual
+  blocker — it ships the headers bindgen needs, not just the `clang`
+  binary.
+- **macOS:** install the Xcode command-line tools
+  (`xcode-select --install`) — they bundle clang, libclang and the
+  build essentials. Install `cmake` via Homebrew (`brew install
+  cmake`).
+- **Windows:** install [CMake] and [LLVM] (the LLVM installer adds
+  `libclang.dll`; if bindgen can't find it, point at the install dir
+  with `LIBCLANG_PATH=C:\Program Files\LLVM\bin`). The pre-built
+  installer for the app shipped from CI does **not** include local
+  Whisper — this section is for developers building from source with
+  `--features whisper-rs-local`.
+
+(The `.devcontainer/` image already includes all of the Linux deps
+above, so the easiest path on any host is `devcontainer up` and build
+inside it.)
 
 Grab a model from the [whisper.cpp release page on Hugging Face][whisper-models]
 — `ggml-tiny.en.bin` (~75 MB) is enough to validate the integration.
+Make sure you download the **GGML** variant (filename starts with
+`ggml-` and ends with `.bin`); GGUF variants will be rejected.
+
+[CMake]: https://cmake.org/download/
+[LLVM]: https://releases.llvm.org/download.html
 
 Run the example against a 16 kHz mono WAV:
 
