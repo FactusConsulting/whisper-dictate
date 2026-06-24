@@ -35,6 +35,7 @@
     "Evdev",
     "Factus",
     "GGML",
+    "GGUF",
     "Groq",
     "Inno",
     "jsonl",
