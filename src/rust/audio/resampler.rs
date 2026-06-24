@@ -21,9 +21,26 @@
 
 use rubato::{FftFixedIn, Resampler};
 
-/// Output sample rate fed to Silero. 16 kHz is what the v5 ONNX model expects.
+/// Output sample rate fed to Silero. 16 kHz is what the bundled
+/// Silero v4 ONNX model expects.
 pub const OUTPUT_RATE: usize = 16_000;
 /// Output samples per emitted frame. 30 ms × 16 kHz = 480 samples.
+///
+/// Note: the bundled Silero **v4** ONNX model documents 512-sample
+/// windows at 16 kHz as its supported window size; we feed 480-sample
+/// (30 ms) frames instead. `vad-rs` 0.1.5 accepts dynamic ONNX input
+/// shapes so this works empirically, but voice-probability accuracy
+/// MAY degrade on unsupported window sizes. Calibration on the
+/// synthetic 1 s silence + 1 s loud-sine test in
+/// `src/rust/tests/audio_pipeline.rs` looks sensible; if real-world
+/// recall regresses we should buffer to 512 samples before calling
+/// `inner.compute` (still emitting one VAD decision per 30 ms frame)
+/// rather than enlarge FRAME_SIZE — the pipe protocol pins FRAME_SIZE
+/// to 480 on both ends.
+///
+/// TODO(audio-in-rust): review on next vad-rs / Silero upgrade — if the
+/// upstream model adds a documented 480-sample mode this comment can be
+/// dropped. See PR #335 review finding #3.
 pub const FRAME_SIZE: usize = 480;
 /// Fixed input chunk size handed to `FftFixedIn`. 1024 is a good balance
 /// between resampler latency (≈ 21 ms at 48 kHz input) and FFT efficiency.
@@ -43,6 +60,15 @@ pub struct FrameResampler {
     /// every call. Sized at construction so we never reallocate on the audio
     /// thread.
     process_scratch: Vec<Vec<f32>>,
+    /// Whether any non-empty input has been pushed since the last
+    /// [`finish`] (or construction). Used as the [`finish`] guard so we
+    /// only flush the FFT tail when there's something to flush. The old
+    /// guard inspected `input_buffer.len()` + `output_buffer.len()`,
+    /// which is fragile: `drain_full_frames` always leaves
+    /// `output_buffer` at `< FRAME_SIZE`, so the relevant invariant
+    /// could silently flip under a future refactor and lose the tail
+    /// without an error.
+    fed_any: bool,
 }
 
 impl FrameResampler {
@@ -64,6 +90,7 @@ impl FrameResampler {
             input_buffer: Vec::with_capacity(INPUT_CHUNK * 2),
             output_buffer: Vec::with_capacity(FRAME_SIZE * 2),
             process_scratch,
+            fed_any: false,
         })
     }
 
@@ -83,6 +110,7 @@ impl FrameResampler {
         if samples.is_empty() {
             return;
         }
+        self.fed_any = true;
         self.input_buffer.extend_from_slice(samples);
 
         // Resample as many full input chunks as we currently hold.
@@ -117,6 +145,19 @@ impl FrameResampler {
     where
         F: FnMut(&[f32]),
     {
+        // Reset `fed_any` first so a second call to finish() (or re-use
+        // after re-feeding) starts from a clean "nothing pushed yet"
+        // state. We capture the pre-reset value below to decide whether
+        // we have anything to flush.
+        let had_input = self.fed_any;
+        self.fed_any = false;
+        if !had_input {
+            // Nothing was ever pushed since the last finish/construction
+            // — no tail to flush. Bail BEFORE inflating the input buffer
+            // with two silence chunks, otherwise we'd emit a frame of
+            // pure silence as the "tail" of zero real input.
+            return;
+        }
         // FftFixedIn buffers input internally — a single full-INPUT_CHUNK
         // process call doesn't always emit anything (the FFT operates on
         // `fft_size_in` which can be slightly larger than our INPUT_CHUNK,
@@ -126,22 +167,16 @@ impl FrameResampler {
         // INPUT_CHUNK and the second is pure silence to flush the FFT
         // buffer. Both add only synthetic zeros AFTER the real signal
         // ended, so no real samples are lost or duplicated.
-        let pending = self.input_buffer.len();
-        if pending > 0 || self.output_buffer.len() < FRAME_SIZE {
-            // First flush chunk: pad pending input with zeros to INPUT_CHUNK.
-            if pending > 0 {
-                self.input_buffer.resize(INPUT_CHUNK, 0.0);
-            } else {
-                self.input_buffer
-                    .extend(std::iter::repeat_n(0.0, INPUT_CHUNK));
-            }
-            self.drain_one_chunk();
-            // Second flush chunk: pure-silence buffer to push the FFT's
-            // internal saved frames through to the output.
-            self.input_buffer
-                .extend(std::iter::repeat_n(0.0, INPUT_CHUNK));
-            self.drain_one_chunk();
-        }
+        // First flush chunk: pad pending input up to INPUT_CHUNK with
+        // zeros. `resize` is the unified idiom for both the pending > 0
+        // case (where it extends from the current length) and the
+        // pending == 0 case (where it grows from 0).
+        self.input_buffer.resize(INPUT_CHUNK, 0.0);
+        self.drain_one_chunk();
+        // Second flush chunk: pure-silence buffer to push the FFT's
+        // internal saved frames through to the output.
+        self.input_buffer.resize(INPUT_CHUNK, 0.0);
+        self.drain_one_chunk();
 
         // Emit every complete frame we now have.
         self.drain_full_frames(&mut on_frame);
@@ -254,6 +289,66 @@ mod tests {
                 "trailing samples in the padded final frame are zero"
             );
         }
+    }
+
+    #[test]
+    fn finish_emits_no_frames_when_nothing_was_pushed() {
+        // Regression guard: the old `if pending > 0 || output_buffer.len()
+        // < FRAME_SIZE` guard was structurally "always true after any
+        // construction" (output_buffer starts at 0 < FRAME_SIZE), so it
+        // would try to flush even from a virgin resampler. With `fed_any`
+        // we bail BEFORE inflating the input buffer with synthetic silence
+        // so finish() on a never-pushed resampler is a no-op.
+        let mut resampler = FrameResampler::new(48_000).expect("construct");
+        let mut frames = 0_usize;
+        resampler.finish(|_| frames += 1);
+        assert_eq!(
+            frames, 0,
+            "finish() with no prior push() must not emit synthetic-silence frames"
+        );
+    }
+
+    #[test]
+    fn finish_flushes_tail_when_output_buffer_would_be_frame_aligned() {
+        // Drive enough audio through that after the steady-state push
+        // loop, the FFT has emitted at least one full INPUT_CHUNK worth
+        // of output samples — multiple output frames get drained out
+        // mid-push, leaving output_buffer at some `< FRAME_SIZE` length
+        // (the documented invariant of drain_full_frames). The old
+        // finish() guard happened to be equivalent to "output_buffer is
+        // strictly less than FRAME_SIZE", which is structurally always
+        // true at this point — so a future refactor that left
+        // output_buffer at exactly FRAME_SIZE would silently make
+        // finish() a no-op. With `fed_any` the guard is "did we ever
+        // see real input", which still triggers regardless of internal
+        // buffer state.
+        let mut resampler = FrameResampler::new(48_000).expect("construct");
+        // 2 INPUT_CHUNK's worth = 2048 samples at 48 kHz → ~682 samples at
+        // 16 kHz → at least one full 480-sample frame emitted mid-push.
+        let input: Vec<f32> = (0..2048).map(|i| (i as f32) * 1e-4).collect();
+        let mut mid_frames = 0_usize;
+        resampler.push(&input, |_| mid_frames += 1);
+        // We may or may not have emitted a frame mid-push depending on
+        // FFT chunk boundaries; either way the invariant is the same:
+        // finish() must still flush whatever tail remains (possibly
+        // padded).
+        let mut tail_frames = 0_usize;
+        resampler.finish(|frame| {
+            assert_eq!(frame.len(), FRAME_SIZE);
+            tail_frames += 1;
+        });
+        assert!(
+            mid_frames + tail_frames > 0,
+            "between push() + finish() at least one frame must be emitted"
+        );
+        // A second finish() with no intervening push must be a no-op
+        // (fed_any was reset).
+        let mut after_reset = 0_usize;
+        resampler.finish(|_| after_reset += 1);
+        assert_eq!(
+            after_reset, 0,
+            "finish() after finish() with no new push must not re-emit"
+        );
     }
 
     #[test]

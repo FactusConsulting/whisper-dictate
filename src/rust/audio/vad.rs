@@ -24,8 +24,9 @@ use std::collections::VecDeque;
 
 use vad_rs::Vad as InnerVad;
 
-/// Silero v5 probability threshold above which a frame is "voice". Below
-/// the threshold a frame is "silence". The spec mandates 0.3.
+/// Silero probability threshold above which a frame is "voice". Below
+/// the threshold a frame is "silence". The Silero v4 README recommends
+/// 0.3 as the speech/silence cutoff for the bundled model.
 pub const VOICE_THRESHOLD: f32 = 0.3;
 /// How many 30 ms frames of audio we cache to flush as pre-roll on speech
 /// onset. 15 frames × 30 ms = 450 ms.
@@ -59,7 +60,7 @@ pub enum VadEvent {
     Silence,
 }
 
-/// Decision source for [`SileroVad`]: either the real Silero v5 ONNX
+/// Decision source for [`SileroVad`]: either the real Silero v4 ONNX
 /// model (via `vad-rs`/`ort`) or a deterministic RMS-based stub used in
 /// unit tests that don't want to load a multi-MB ONNX model into every
 /// test process. The pipeline always uses the ONNX backend at runtime;
@@ -73,6 +74,10 @@ enum Backend {
     Silero(Box<InnerVad>),
     /// Deterministic RMS → probability mapping used by tests.
     Rms,
+    /// Always returns an error on `probability()`. Used by the pump
+    /// regression test for the "DeviceError is terminal" wire contract.
+    #[cfg(test)]
+    AlwaysError,
 }
 
 /// Thin wrapper that returns a single voice/silence decision for one
@@ -93,17 +98,28 @@ impl SileroVad {
         })
     }
 
-    /// Build a Silero VAD from the bundled ONNX bytes. Writes them to a
-    /// temp file because `vad-rs::Vad::new` only accepts a path. The
-    /// file is leaked into the temp dir for the lifetime of the process
-    /// to keep ort/session from racing temp cleanup or anti-virus on
-    /// Windows.
+    /// Build a Silero VAD from the bundled ONNX bytes.
+    ///
+    /// Lifecycle: we extract the model bytes to a stable cache location
+    /// (`$LOCALAPPDATA/whisper-dictate/silero_vad.onnx` on Windows;
+    /// `$XDG_CACHE_HOME/whisper-dictate/silero_vad.onnx` or
+    /// `~/.cache/whisper-dictate/...` on Linux/macOS) and re-use the
+    /// same file across runs. We do this instead of [`tempfile`] because:
+    ///
+    /// 1. `vad-rs::Vad::new` only accepts a path, so the bytes have to
+    ///    live on disk somewhere.
+    /// 2. On Windows, anti-virus and temp-dir cleanup occasionally race
+    ///    session init if the model lives under `%TEMP%` — a stable
+    ///    cache path sidesteps both.
+    /// 3. Re-using the file avoids a multi-MB write on every launch.
+    ///
+    /// If the cache dir is unavailable (locked-down sandbox, etc.) we
+    /// fall back to a [`tempfile::NamedTempFile`] that is `keep()`-ed so
+    /// the file outlives the `NamedTempFile` handle (vad-rs may hold it
+    /// open via mmap inside its ORT session). The handle isn't tracked
+    /// across runs; the OS cleans the temp dir eventually.
     pub fn from_embedded_bytes(model_bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        use std::io::Write;
-        let mut tmp = tempfile::NamedTempFile::new()?;
-        tmp.write_all(model_bytes)?;
-        tmp.flush()?;
-        let (_file, path) = tmp.keep()?;
+        let path = super::model_cache::cache_or_temp_model_path(model_bytes)?;
         Self::from_path(path)
     }
 
@@ -114,6 +130,18 @@ impl SileroVad {
         Self {
             threshold: VOICE_THRESHOLD,
             backend: Backend::Rms,
+        }
+    }
+
+    /// Always-erroring stub: every `probability()` / `is_voice()` call
+    /// returns `Err`. Used by the pump regression test to verify that a
+    /// VAD error produces a single `DeviceError` event and then stops
+    /// the pump (the documented terminal-event wire contract).
+    #[cfg(test)]
+    pub(crate) fn always_error_for_tests() -> Self {
+        Self {
+            threshold: VOICE_THRESHOLD,
+            backend: Backend::AlwaysError,
         }
     }
 
@@ -135,6 +163,8 @@ impl SileroVad {
                 let rms = (sum_sq / frame.len() as f32).sqrt();
                 Ok((rms * 2.0).min(1.0))
             }
+            #[cfg(test)]
+            Backend::AlwaysError => Err(anyhow::anyhow!("synthetic vad failure for tests")),
         }
     }
 
@@ -172,11 +202,21 @@ impl SmoothedVad {
     /// Reset to "not in speech" without losing the VAD's loaded weights.
     /// Use when the consumer cancels a recording mid-utterance so we don't
     /// emit a spurious `SpeechEnd` later.
-    pub fn reset(&mut self) {
+    ///
+    /// Returns `true` iff we were in the middle of an utterance when
+    /// reset was called. The caller should translate a `true` return into
+    /// a `PipelineEvent::Cancelled` BEFORE delivering any subsequent
+    /// events — otherwise the Python consumer would hold a growing
+    /// utterance buffer indefinitely (it saw `SpeechStart` and will never
+    /// see the matching `SpeechEnd`).
+    #[must_use]
+    pub fn reset(&mut self) -> bool {
+        let was_in_speech = self.in_speech;
         self.prefill.clear();
         self.in_speech = false;
         self.voice_run = 0;
         self.silence_run = 0;
+        was_in_speech
     }
 
     /// Whether we're currently inside an utterance. Exposed for the runtime
@@ -409,5 +449,39 @@ mod tests {
         }
         assert!(ended, "long pause must produce SpeechEnd");
         assert!(!vad.in_speech());
+    }
+
+    #[test]
+    fn reset_during_silence_returns_false() {
+        let mut vad = make_vad();
+        // Pure silence — never in speech.
+        for _ in 0..10 {
+            let _ = vad.feed(&silence_frame()).expect("vad feed");
+        }
+        assert!(!vad.in_speech());
+        let was_in_speech = vad.reset();
+        assert!(
+            !was_in_speech,
+            "reset() during silence must return false (no Cancelled to emit)"
+        );
+    }
+
+    #[test]
+    fn reset_during_speech_returns_true() {
+        let mut vad = make_vad();
+        // Drive into speech.
+        for _ in 0..PREFILL_FRAMES {
+            let _ = vad.feed(&silence_frame()).expect("vad feed");
+        }
+        for _ in 0..ONSET_FRAMES + 1 {
+            let _ = vad.feed(&voice_frame(0.5)).expect("vad feed");
+        }
+        assert!(vad.in_speech(), "should be in speech now");
+        let was_in_speech = vad.reset();
+        assert!(
+            was_in_speech,
+            "reset() during speech must return true so caller emits Cancelled",
+        );
+        assert!(!vad.in_speech(), "reset clears in_speech");
     }
 }

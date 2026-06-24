@@ -146,28 +146,91 @@ pub fn start_capture(
 
 // ----- helpers ----------------------------------------------------------------
 
+/// Outcome of [`resolve_device_index`] — either an index into the
+/// enumerated device list or a structured error for the caller to
+/// translate.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DeviceLookup {
+    /// The selector matched the device at this index.
+    Matched(usize),
+    /// The selector is a numeric index that's outside the device list.
+    IndexOutOfRange { wanted: usize, available: usize },
+    /// No exact name, substring or numeric index matched.
+    NotFound,
+}
+
+/// Resolve a device selector against a list of device names. Pure
+/// helper so the lookup precedence (exact → substring → numeric index)
+/// can be unit-tested without a live cpal host.
+///
+/// Precedence:
+///   1. Empty selector → caller handles default device.
+///   2. Exact case-insensitive match — first hit wins.
+///   3. Case-insensitive substring match — first hit wins (sounddevice
+///      style; matches `vp_devices.py`).
+///   4. Trimmed numeric selector → index into `device_names`.
+///
+/// Returns [`DeviceLookup::Matched`] with the chosen index on success,
+/// [`DeviceLookup::IndexOutOfRange`] when a parseable index is past the
+/// end of the list, and [`DeviceLookup::NotFound`] otherwise.
+pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> DeviceLookup {
+    let needle = selector.to_lowercase();
+    let mut substring_match: Option<usize> = None;
+    for (idx, name) in device_names.iter().enumerate() {
+        let lower = name.to_lowercase();
+        if lower == needle {
+            return DeviceLookup::Matched(idx);
+        }
+        if substring_match.is_none() && lower.contains(&needle) {
+            substring_match = Some(idx);
+        }
+    }
+    if let Some(idx) = substring_match {
+        return DeviceLookup::Matched(idx);
+    }
+    if let Ok(idx) = selector.trim().parse::<usize>() {
+        if idx < device_names.len() {
+            return DeviceLookup::Matched(idx);
+        }
+        return DeviceLookup::IndexOutOfRange {
+            wanted: idx,
+            available: device_names.len(),
+        };
+    }
+    DeviceLookup::NotFound
+}
+
+/// Resolve a CPAL input device by selector string.
+///
+/// Lookup order (see [`resolve_device_index`] for the pure logic):
+///   1. Empty string → the host's default input device.
+///   2. Exact (case-insensitive) name match against any enumerated input.
+///   3. Case-insensitive substring match against any enumerated input.
+///   4. Numeric selector → index into the host's input device list.
 fn pick_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Device, anyhow::Error> {
     if device_name.is_empty() {
         return host
             .default_input_device()
             .ok_or_else(|| anyhow::anyhow!("no default input device available"));
     }
-    // Substring + case-insensitive match — sounddevice-style. Whisper-dictate's
-    // existing Python device resolver does the same (see vp_devices.py).
-    let needle = device_name.to_lowercase();
-    let devices = host
+    // Enumerate once. cpal's iterator can only be walked once on some
+    // backends, so we materialise into a Vec before doing the name +
+    // numeric passes.
+    let devices: Vec<cpal::Device> = host
         .input_devices()
-        .map_err(|err| anyhow::anyhow!("enumerate input devices: {err}"))?;
-    for device in devices {
-        // cpal 0.18 removed `Device::name()` in favour of the `Display`
-        // impl + a structured `description()`. `to_string()` matches the
-        // string we want to compare against; equivalent on every backend.
-        let name = device.to_string().to_lowercase();
-        if name == needle || name.contains(&needle) {
-            return Ok(device);
-        }
+        .map_err(|err| anyhow::anyhow!("enumerate input devices: {err}"))?
+        .collect();
+    // cpal 0.18 removed `Device::name()` in favour of the `Display`
+    // impl + a structured `description()`. `to_string()` is equivalent
+    // on every backend.
+    let names: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
+    match resolve_device_index(&names, device_name) {
+        DeviceLookup::Matched(idx) => Ok(devices.into_iter().nth(idx).expect("index in range")),
+        DeviceLookup::IndexOutOfRange { wanted, available } => Err(anyhow::anyhow!(
+            "input device index {wanted} out of range (have {available} input device(s))"
+        )),
+        DeviceLookup::NotFound => Err(anyhow::anyhow!("input device not found: {device_name:?}")),
     }
-    Err(anyhow::anyhow!("input device not found: {device_name:?}"))
 }
 
 fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, anyhow::Error> {
@@ -313,6 +376,68 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!((out[0] - 0.2).abs() < 1e-6);
         assert!(out[1].abs() < 1e-6);
+    }
+
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_device_index_prefers_exact_match_over_substring() {
+        let devs = names(&["Realtek HD Audio Mic", "Realtek Mic"]);
+        // "realtek mic" exactly matches index 1 (case-insensitive),
+        // even though it'd also substring-match index 0.
+        assert_eq!(
+            resolve_device_index(&devs, "realtek mic"),
+            DeviceLookup::Matched(1)
+        );
+    }
+
+    #[test]
+    fn resolve_device_index_substring_match_when_no_exact() {
+        let devs = names(&["Realtek HD Audio Mic", "Webcam Mic"]);
+        assert_eq!(
+            resolve_device_index(&devs, "webcam"),
+            DeviceLookup::Matched(1)
+        );
+    }
+
+    #[test]
+    fn resolve_device_index_numeric_selector_indexes_into_list() {
+        let devs = names(&["Mic A", "Mic B", "Mic C"]);
+        // No name "2" exists, so we fall through to the numeric pass.
+        assert_eq!(resolve_device_index(&devs, "2"), DeviceLookup::Matched(2));
+        // Leading/trailing whitespace is trimmed before parsing.
+        assert_eq!(resolve_device_index(&devs, " 1 "), DeviceLookup::Matched(1));
+    }
+
+    #[test]
+    fn resolve_device_index_numeric_selector_out_of_range_returns_error() {
+        let devs = names(&["Mic A", "Mic B"]);
+        assert_eq!(
+            resolve_device_index(&devs, "7"),
+            DeviceLookup::IndexOutOfRange {
+                wanted: 7,
+                available: 2
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_device_index_numeric_substring_match_wins_over_index_fallback() {
+        // If a device literally has "2" in its name, substring match
+        // catches it before we'd try the numeric index path.
+        let devs = names(&["Mic 2 — USB", "Mic A", "Mic B"]);
+        assert_eq!(resolve_device_index(&devs, "2"), DeviceLookup::Matched(0));
+    }
+
+    #[test]
+    fn resolve_device_index_unknown_selector_returns_not_found() {
+        let devs = names(&["Mic A"]);
+        assert_eq!(
+            resolve_device_index(&devs, "nonexistent"),
+            DeviceLookup::NotFound
+        );
     }
 
     #[test]

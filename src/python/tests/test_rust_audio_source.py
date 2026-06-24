@@ -53,6 +53,11 @@ def test_decode_frame_event_round_trips_samples():
     np.testing.assert_allclose(event.samples, samples)
 
 
+def test_decode_cancelled_event():
+    event = decode_event(json.dumps({"type": "cancelled"}))
+    assert event == RustAudioEvent(kind="cancelled")
+
+
 def test_decode_device_error_preserves_message():
     event = decode_event(json.dumps({"type": "device_error", "message": "no device"}))
     assert event is not None
@@ -96,6 +101,21 @@ def test_frame_event_wrong_length_raises_protocol_error():
 def test_frame_event_invalid_base64_raises_protocol_error():
     with pytest.raises(RustStdinProtocolError):
         decode_event(json.dumps({"type": "frame", "samples": "$$not-base64$$"}))
+
+
+def test_frame_event_misaligned_bytes_raises_protocol_error():
+    # Decode to 6 bytes — not a multiple of 4 (sizeof f32). Mirrors what
+    # would happen if the Rust side ever shipped a truncated frame: the
+    # raw numpy.frombuffer error would be opaque, so the decoder wraps
+    # it as a ProtocolError including the offending byte count.
+    misaligned_b64 = base64.b64encode(b"\x00\x00\x00\x00\x00\x00").decode("ascii")
+    with pytest.raises(RustStdinProtocolError) as excinfo:
+        decode_event(json.dumps({"type": "frame", "samples": misaligned_b64}))
+    msg = str(excinfo.value)
+    assert "6" in msg, f"error message must include offending byte count, got {msg!r}"
+    assert "multiple of 4" in msg or "f32" in msg, (
+        f"error message must describe the alignment requirement, got {msg!r}"
+    )
 
 
 def test_iter_events_walks_a_stream_and_skips_blanks():

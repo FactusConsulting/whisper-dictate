@@ -25,6 +25,7 @@ pub fn event_to_json_line(event: &PipelineEvent) -> String {
     match event {
         PipelineEvent::SpeechStart => json!({ "type": "speech_start" }).to_string(),
         PipelineEvent::SpeechEnd => json!({ "type": "speech_end" }).to_string(),
+        PipelineEvent::Cancelled => json!({ "type": "cancelled" }).to_string(),
         PipelineEvent::DeviceError(message) => {
             json!({ "type": "device_error", "message": message }).to_string()
         }
@@ -78,6 +79,14 @@ mod tests {
         let line = event_to_json_line(&PipelineEvent::SpeechEnd);
         let parsed: serde_json::Value = serde_json::from_str(&line).expect("valid JSON");
         assert_eq!(parsed["type"], "speech_end");
+    }
+
+    #[test]
+    fn cancelled_serializes_to_known_json() {
+        let line = event_to_json_line(&PipelineEvent::Cancelled);
+        let parsed: serde_json::Value = serde_json::from_str(&line).expect("valid JSON");
+        assert_eq!(parsed["type"], "cancelled");
+        assert_eq!(parsed.as_object().unwrap().len(), 1);
     }
 
     #[test]
