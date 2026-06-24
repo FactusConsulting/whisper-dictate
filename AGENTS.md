@@ -29,6 +29,49 @@ useful regression test unless there is a clear technical reason not to:
 If a regression test is not practical, document the reason in the commit or PR
 summary and include the manual verification that covers the bug.
 
+## Review guidelines
+
+Guidance for automated reviewers (Codex, Copilot, etc.) reviewing pull
+requests in this repository. Comment only on findings that match one of the
+categories below; skip stylistic preferences not encoded here.
+
+- **Modularity.** No new files over ~500 lines and no oversized methods —
+  split into modules + small helpers so each piece stays unit-testable.
+- **Tests as a safety net.** Any bug fix or behavior change should add the
+  narrowest useful regression test (unit for pure logic, integration/smoke
+  for process launch, installer, runtime wiring, or cross-module flows).
+  Flag PRs that change observable behavior with zero new test coverage.
+- **Windows-first.** Treat Windows as the primary supported desktop. Flag
+  changes to the Rust launcher/controller, installer, subprocess handling,
+  console encoding, Settings UI behavior, or keyboard/text injection that
+  ship without Windows-specific verification.
+- **Console output is ASCII- or UTF-8-safe.** New stdout/stderr lines, log
+  messages, and installer scripts must work under PowerShell, cmd.exe,
+  hidden launchers, and the Rust UI's subprocess logs. Non-ASCII without a
+  tested fallback is a defect.
+- **Whisper vs Parakeet config stay separate.** Parakeet must use its own
+  model defaults and dependency checks; reject any change that lets
+  Parakeet inherit Whisper names like `large-v3`.
+- **Dictionary/prompt changes stay bounded.** Any change to dictionary
+  loading, prompt construction, term selection, or replacements must
+  preserve prompt length caps and include tests for `terms` AND
+  `replacements` behavior.
+- **Preserve the unified controller model.** The Rust UI owns the managed
+  runtime process on Windows. Don't introduce duplicate UI instances or
+  silent restarts — start/stop/restart must be explicit and visible.
+- **Cargo features stay off by default.** New experimental features should
+  be opt-in via cargo features or env vars so the default install stays
+  unchanged.
+- **Secrets and tokens.** Never accept hardcoded API keys, tokens, or
+  account-bound URLs in tracked code. Flag any `.env`-style file added
+  without a corresponding ignore entry.
+- **PR scope discipline.** Flag PRs that bundle unrelated changes (a bug
+  fix + a drive-by refactor + new dependencies) — they should be split.
+
+When suggesting fixes, prefer the smallest change that addresses the
+finding; do not propose refactors beyond what the PR's stated scope
+requires.
+
 ## Pull request review
 
 **HARD GATE — do not merge with unaddressed automated-review comments.**
