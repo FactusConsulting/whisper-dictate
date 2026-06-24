@@ -1,3 +1,9 @@
+// The cpal capture + rubato resample + Silero VAD pipeline. Compiled in only
+// when the `audio-in-rust` feature is on, so the default build still has
+// nothing to do with the ONNX runtime / cpal's native backends. See
+// src/rust/audio/mod.rs for the wiring + the PR description for the rollout.
+#[cfg(feature = "audio-in-rust")]
+pub mod audio;
 pub mod cli;
 pub mod cloud_api;
 pub mod command_hook;
