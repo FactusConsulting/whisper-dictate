@@ -1,0 +1,36 @@
+name: Claude Code
+
+# Responds to @claude mentions in issues and PR comments. Uses the
+# CLAUDE_CODE_OAUTH_TOKEN org-level secret (subscription-based auth, not
+# pay-per-token API). Codex still does the automatic-on-every-PR pass via
+# its own integration; Claude is the on-demand second opinion you summon
+# when you want a deeper look or a different perspective.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
