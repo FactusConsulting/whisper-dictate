@@ -1,9 +1,14 @@
 //! Local Whisper inference via the [`whisper-rs`] (whisper.cpp) bindings.
 //!
 //! This is the **CPU-only spike** for roadmap issue #317 sub-task 1: prove
-//! the integration works end-to-end (load a GGML/GGUF model, transcribe a
-//! 16 kHz mono WAV, return the concatenated text) behind the
+//! the integration works end-to-end (load a GGML whisper.cpp model,
+//! transcribe a 16 kHz mono WAV, return the concatenated text) behind the
 //! `whisper-rs-local` cargo feature.
+//!
+//! **Model format:** only GGML (`ggml-*.bin` from the whisper.cpp release
+//! index) is supported. whisper.cpp does not yet read llama.cpp's newer
+//! GGUF container; loading a GGUF file fails at startup with a clean error
+//! from [`LocalWhisper::new`] rather than a cryptic FFI message.
 //!
 //! **Out of scope for this spike:** GPU backends, model download UI, idle
 //! unload, Python-pipeline parity, runtime wiring. The runtime (`runtime.rs`
@@ -34,11 +39,15 @@ pub struct LocalWhisper {
 }
 
 impl LocalWhisper {
-    /// Load a GGML/GGUF whisper.cpp model from disk (CPU-only).
+    /// Load a GGML whisper.cpp model from disk (CPU-only).
     ///
     /// `model_path` should point to a file such as `ggml-small.en.bin` from
     /// the [ggerganov/whisper.cpp releases]. GPU is explicitly disabled in
     /// this spike — that lands in a later roadmap sub-task.
+    ///
+    /// **Only GGML is supported.** whisper.cpp has not yet picked up
+    /// llama.cpp's GGUF container, so a GGUF file is rejected up front by a
+    /// magic-bytes check rather than failing with a cryptic FFI error.
     ///
     /// [ggerganov/whisper.cpp releases]: https://huggingface.co/ggerganov/whisper.cpp
     pub fn new(model_path: &Path) -> Result<Self> {
@@ -48,9 +57,13 @@ impl LocalWhisper {
                 model_path.display()
             ));
         }
+        reject_gguf_model(model_path)?;
         // whisper-rs takes the path as a &str (it hands it to whisper.cpp
         // which uses C strings internally). Surface a clean error rather
-        // than panicking on non-UTF-8 paths.
+        // than panicking on non-UTF-8 paths. On Windows that means file
+        // names with unpaired surrogates can't be loaded — whisper.cpp's
+        // C API has the same limitation, so this is documenting reality,
+        // not narrowing it.
         let model_str = model_path.to_str().ok_or_else(|| {
             anyhow!(
                 "whisper model path is not valid UTF-8: {}",
@@ -58,8 +71,10 @@ impl LocalWhisper {
             )
         })?;
 
-        let mut params = WhisperContextParameters::default();
-        params.use_gpu = false;
+        let params = WhisperContextParameters {
+            use_gpu: false,
+            ..Default::default()
+        };
 
         let ctx = WhisperContext::new_with_params(model_str, params).with_context(|| {
             format!("failed to load whisper model from {}", model_path.display())
@@ -151,7 +166,11 @@ pub fn decode_wav_16k_mono(wav_path: &Path) -> Result<Vec<f32>> {
             .collect::<Result<Vec<_>, _>>()
             .with_context(|| format!("failed to read float samples from {}", wav_path.display()))?,
         hound::SampleFormat::Int => {
-            let max = i32::pow(2, spec.bits_per_sample as u32 - 1) as f32;
+            // Compute the full-scale magnitude in i64 to avoid overflow when
+            // bits_per_sample == 32: `i32::pow(2, 31)` panics in debug and
+            // wraps to i32::MIN in release, which would silently invert every
+            // sample. i64 has plenty of headroom for any hound-supported depth.
+            let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
             reader
                 .samples::<i32>()
                 .map(|s| s.map(|v| v as f32 / max))
@@ -169,6 +188,31 @@ pub fn decode_wav_16k_mono(wav_path: &Path) -> Result<Vec<f32>> {
         ));
     }
     Ok(samples)
+}
+
+/// Reject GGUF model files with a friendly error.
+///
+/// whisper.cpp's loader expects the GGML container; GGUF (llama.cpp's newer
+/// format) starts with the magic bytes `GGUF` and currently fails inside
+/// the FFI with an opaque message. Catching it here lets us point users at
+/// the right model index.
+fn reject_gguf_model(model_path: &Path) -> Result<()> {
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut head = [0u8; 4];
+    let mut f = File::open(model_path)
+        .with_context(|| format!("failed to open whisper model file {}", model_path.display()))?;
+    // A short read here means the file is smaller than the magic header —
+    // not a GGUF, let whisper.cpp produce its own (perhaps clearer) error.
+    if f.read(&mut head).unwrap_or(0) == 4 && &head == b"GGUF" {
+        return Err(anyhow!(
+            "{} is a GGUF model; whisper.cpp (via whisper-rs) only loads GGML \
+             models — download a `ggml-*.bin` from https://huggingface.co/ggerganov/whisper.cpp",
+            model_path.display()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -235,12 +279,155 @@ mod tests {
         assert!(err.to_string().contains("mono"), "unexpected error: {err}");
     }
 
+    /// Small helper: `Result::unwrap_err` requires the `Ok` value (here a
+    /// `LocalWhisper` wrapping a non-Debug `WhisperContext`) to implement
+    /// `Debug`; this avoids the bound without forcing `Debug` onto our
+    /// public type.
+    fn unwrap_err<T>(r: Result<T>) -> anyhow::Error {
+        match r {
+            Ok(_) => panic!("expected an error, got Ok"),
+            Err(e) => e,
+        }
+    }
+
     #[test]
     fn new_rejects_missing_model() {
-        let err = LocalWhisper::new(Path::new("/definitely/not/a/real/model.bin")).unwrap_err();
+        let err = unwrap_err(LocalWhisper::new(Path::new(
+            "/definitely/not/a/real/model.bin",
+        )));
         assert!(
             err.to_string().contains("not found"),
             "unexpected error: {err}"
+        );
+    }
+
+    /// Regression: writing a positive 16-bit PCM sample must decode to a
+    /// positive f32. The earlier `i32::pow(2, bits-1) as f32` worked for
+    /// 16-bit but is here as a sanity baseline so a future change can't
+    /// silently flip sign across the common-case path.
+    #[test]
+    fn decode_wav_16bit_int_preserves_sign() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("pos16.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: WHISPER_SAMPLE_RATE_HZ,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        // Large positive amplitude near full scale.
+        w.write_sample(16_000i16).unwrap();
+        w.write_sample(8_000i16).unwrap();
+        w.finalize().unwrap();
+
+        let samples = decode_wav_16k_mono(&path).expect("decode 16-bit WAV");
+        assert_eq!(samples.len(), 2);
+        assert!(
+            samples[0] > 0.0,
+            "expected positive sample, got {}",
+            samples[0]
+        );
+        assert!(
+            samples[1] > 0.0,
+            "expected positive sample, got {}",
+            samples[1]
+        );
+        // Roughly 16000 / 32768 ≈ 0.488 — allow slack for the conversion.
+        assert!(
+            (0.3..0.7).contains(&samples[0]),
+            "amplitude off: {}",
+            samples[0]
+        );
+    }
+
+    /// Regression for the i32 overflow bug at the previous
+    /// `i32::pow(2, bits - 1)` line: 32-bit PCM panicked in debug and
+    /// wrapped to i32::MIN (negative) in release, silently inverting every
+    /// sample. Decoding a known-positive 32-bit sample must produce a
+    /// positive f32.
+    #[test]
+    fn decode_wav_32bit_int_does_not_overflow_or_flip_sign() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("pos32.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: WHISPER_SAMPLE_RATE_HZ,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        // Quarter-scale positive samples — large enough that any sign flip
+        // or overflow shows up as obviously-wrong magnitude.
+        let amp: i32 = 1 << 29;
+        w.write_sample(amp).unwrap();
+        w.write_sample(amp / 2).unwrap();
+        w.finalize().unwrap();
+
+        let samples = decode_wav_16k_mono(&path).expect("decode 32-bit WAV");
+        assert_eq!(samples.len(), 2);
+        assert!(
+            samples[0] > 0.0,
+            "32-bit sample sign flipped: {}",
+            samples[0]
+        );
+        assert!(
+            samples[1] > 0.0,
+            "32-bit sample sign flipped: {}",
+            samples[1]
+        );
+        // 2^29 / 2^31 = 0.25 — within range, well below 1.0.
+        assert!(
+            (0.2..0.3).contains(&samples[0]),
+            "amplitude off: {}",
+            samples[0]
+        );
+        assert!(
+            (0.1..0.15).contains(&samples[1]),
+            "amplitude off: {}",
+            samples[1]
+        );
+    }
+
+    /// Loading a path whose file name contains non-ASCII characters must
+    /// not panic or silently mangle the path. On Windows valid UTF-8 paths
+    /// must succeed (we only error on the very rare unpaired-surrogate
+    /// case); on Unix `tempdir` + non-ASCII file names round-trip fine.
+    /// Either way we expect a clean "not found"-style error when the file
+    /// doesn't exist, not a panic, and a "model file not found" message
+    /// since we point at a non-existent path under the non-ASCII directory.
+    #[test]
+    fn new_handles_non_ascii_path_cleanly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("æøå-日本語-model.bin");
+        // File does not exist — we just want to confirm the error message
+        // surfaces the path without panicking on Display / to_str.
+        let err = unwrap_err(LocalWhisper::new(&path));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not found"),
+            "expected missing-file error, got: {msg}"
+        );
+    }
+
+    /// GGUF files start with the magic bytes `GGUF`; whisper.cpp can't read
+    /// them yet and would otherwise produce an opaque FFI error.
+    #[test]
+    fn new_rejects_gguf_model_with_clear_error() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("fake.gguf");
+        let mut f = std::fs::File::create(&path).unwrap();
+        // Magic + a bit of filler so the file exists with the right header.
+        f.write_all(b"GGUF\x00\x00\x00\x00more bytes").unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        let err = unwrap_err(LocalWhisper::new(&path));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("GGUF") && msg.contains("GGML"),
+            "expected GGUF/GGML guidance, got: {msg}"
         );
     }
 

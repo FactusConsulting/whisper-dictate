@@ -32,7 +32,8 @@ fn main() -> anyhow::Result<()> {
     #[derive(Parser, Debug)]
     #[command(about = "Transcribe a 16 kHz mono WAV with a local Whisper model")]
     struct Args {
-        /// Path to a whisper.cpp GGML/GGUF model file.
+        /// Path to a whisper.cpp GGML model file (`ggml-*.bin`).
+        /// GGUF models are not supported by whisper-rs.
         #[arg(long)]
         model: PathBuf,
         /// Path to a 16 kHz mono PCM WAV file.
