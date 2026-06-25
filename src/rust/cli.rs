@@ -57,6 +57,13 @@ pub enum Command {
     /// stdout. See `src/rust/dictionary/ops.rs` for the op catalogue.
     #[command(hide = true)]
     DictionaryOps,
+    /// Internal helper used by the Python worker for the dictation
+    /// orchestrator pure-logic decisions (Wave 5 shell-out fallback for
+    /// `VOICEPI_DICTATE_BACKEND=rust`). Reads a JSON envelope on stdin
+    /// (`{"op": "...", "params": {...}}`) and writes a JSON response on
+    /// stdout. See `src/rust/dictate/ops.rs` for the op catalogue.
+    #[command(hide = true)]
+    DictateOps,
     /// Inspect local dictation history without starting Python.
     History {
         #[command(subcommand)]
@@ -341,6 +348,12 @@ mod tests {
     fn parses_hidden_dictionary_ops_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "dictionary-ops"]);
         assert_eq!(cli.command, Some(Command::DictionaryOps));
+    }
+
+    #[test]
+    fn parses_hidden_dictate_ops_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "dictate-ops"]);
+        assert_eq!(cli.command, Some(Command::DictateOps));
     }
 
     #[test]

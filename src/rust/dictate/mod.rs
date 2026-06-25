@@ -1,0 +1,50 @@
+//! Pure-logic helpers for the live push-to-talk dictation loop.
+//!
+//! Wave 5 of the Python-removal roadmap (issue #348). The Python orchestrator
+//! `src/python/whisper_dictate/vp_dictate.py` (the live PTT event loop) plus
+//! `src/python/whisper_dictate/runtime.py` (the worker entry point) drive a
+//! mixture of OS/IPC orchestration (subprocess spawning, file I/O, signal
+//! handling, pynput callbacks) and small pure-logic decisions (skip-gating,
+//! restart-required diff, backend/model label resolution, env-flag parsing).
+//!
+//! This module ports the **pure-logic** half to Rust so the canonical
+//! implementation is reachable from the Rust supervisor that takes over the
+//! full event loop in Wave 8. The orchestration half stays Python until
+//! then — `vp_dictate.py` and `runtime.py` continue to be the caller-facing
+//! product surface, exactly as Wave 4-A/B/C left them.
+//!
+//! # Wave 5 choice: Option B (Python wrapper stays caller-facing)
+//!
+//! The dictation loop is the per-utterance hot path; a subprocess shim per
+//! `Dictate._should_skip_pcm` call would add tens of milliseconds of JSON
+//! encode/decode latency to every recording. So this PR ports the small
+//! pure helpers to Rust + unit-tests them (positioning Wave 8 to drop
+//! Python entirely), exposes them through a hidden `dictate-ops` JSON-RPC
+//! subcommand for one-shot startup-time queries, but leaves the Python
+//! `Dictate` class as the in-process implementation for the hot path.
+//! `vp_dictate_rust.py` opt-in via `VOICEPI_DICTATE_BACKEND=rust` shells
+//! out for the startup-time queries; the default install keeps Python.
+//!
+//! # Module layout
+//!
+//! - [`skip`] — `Dictate._should_skip_pcm` decision (too-short / Parakeet
+//!   minimum / `min_record_seconds` floor).
+//! - [`restart`] — `Dictate._report_restart_required` diff against the
+//!   restart-required key set.
+//! - [`backend`] — `runtime._resolve_backend_and_device` /
+//!   `runtime._resolve_model_name` label + validation.
+//! - [`env_gates`] — `runtime._truthy`, `_config_dump_enabled`,
+//!   `_trace_enabled` env-flag parsing.
+//! - [`ops`] — JSON envelope dispatcher wired into the hidden
+//!   `dictate-ops` CLI subcommand.
+
+pub mod backend;
+pub mod env_gates;
+pub mod ops;
+pub mod restart;
+pub mod skip;
+
+pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelError};
+pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
+pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
+pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};

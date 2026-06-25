@@ -478,10 +478,7 @@ def _resolve_backend_and_device(a, ap) -> tuple[str, str, str]:
     """Validate VOICEPI_STT_BACKEND and resolve the compute device/type."""
     try:
         backend = STT_BACKEND
-        if backend not in VALID_STT_BACKENDS:
-            raise ValueError(
-                "invalid VOICEPI_STT_BACKEND="
-                f"{backend!r}; expected one of {', '.join(VALID_STT_BACKENDS)}")
+        backend = _validate_backend_opt_rust(backend)
     except ValueError as e:
         ap.error(str(e))
 
@@ -495,14 +492,41 @@ def _resolve_backend_and_device(a, ap) -> tuple[str, str, str]:
     return backend, dev, ctype
 
 
+def _validate_backend_opt_rust(backend: str) -> str:
+    """Validate the STT backend, with optional shell-out to the Rust helper.
+
+    Default (gate off): the Python ``VALID_STT_BACKENDS`` membership check
+    runs unchanged. With ``VOICEPI_DICTATE_BACKEND=rust`` AND a resolvable
+    Rust helper, the validation is delegated to ``whisper-dictate
+    dictate-ops`` (Wave 5 shell-out for the dictation orchestrator pure
+    helpers). The Rust path raises ``ValueError`` on an unknown backend
+    with the SAME ``invalid VOICEPI_STT_BACKEND=...`` text so ``ap.error``
+    surfaces an identical message either way.
+    """
+    from whisper_dictate.vp_dictate_rust import rust_validate_backend
+    rust_result = None
+    try:
+        rust_result = rust_validate_backend(backend)
+    except ValueError:
+        raise
+    if rust_result is not None:
+        canonical, _label = rust_result
+        return canonical
+    # vp_transcribe is the source of truth for VALID_STT_BACKENDS; import it
+    # locally so this helper works even before _load_runtime_modules() has
+    # materialised the module-level lazy re-export (the test path imports
+    # runtime + calls this helper directly without going through main()).
+    from whisper_dictate.vp_transcribe import VALID_STT_BACKENDS as _VALID
+    if backend not in _VALID:
+        raise ValueError(
+            "invalid VOICEPI_STT_BACKEND="
+            f"{backend!r}; expected one of {', '.join(_VALID)}")
+    return backend
+
+
 def _resolve_model_name(a, backend: str) -> tuple[str, str]:
     """Resolve the human label + concrete model name for the chosen backend."""
-    if backend == "parakeet":
-        label = "NVIDIA Parakeet"
-    elif backend == "openai":
-        label = "External API"
-    else:
-        label = "Whisper"
+    label = _backend_label_opt_rust(backend)
     loaded_model_name = a.model
     if backend == "parakeet":
         from whisper_dictate.vp_parakeet import resolve_parakeet_model_name
@@ -511,6 +535,28 @@ def _resolve_model_name(a, backend: str) -> tuple[str, str]:
         from whisper_dictate.vp_external_api import load_stt_api_settings
         loaded_model_name = load_stt_api_settings(a.model).model
     return label, loaded_model_name
+
+
+def _backend_label_opt_rust(backend: str) -> str:
+    """Return the human label for ``backend``, optionally via the Rust helper.
+
+    Mirrors the Python fall-through (Parakeet/OpenAI/Whisper) byte-for-byte
+    when the gate is off. With ``VOICEPI_DICTATE_BACKEND=rust`` the label
+    comes from ``whisper-dictate dictate-ops`` so the canonical mapping
+    lives in one place — the Rust dictate module — ready for Wave 8.
+    """
+    from whisper_dictate.vp_dictate_rust import rust_validate_backend
+    try:
+        rust_result = rust_validate_backend(backend)
+    except ValueError:
+        rust_result = None
+    if rust_result is not None:
+        return rust_result[1]
+    if backend == "parakeet":
+        return "NVIDIA Parakeet"
+    if backend == "openai":
+        return "External API"
+    return "Whisper"
 
 
 def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, float]:

@@ -13,6 +13,14 @@ pub mod cli;
 pub mod cloud_api;
 pub mod command_hook;
 pub mod config;
+// Pure-logic helpers for the live PTT dictation loop — Wave 5 port of
+// `src/python/whisper_dictate/vp_dictate.py` + `runtime.py` (#348). The
+// orchestration layer stays Python; the skip-gate / restart-required
+// diff / backend-label / env-flag decisions are mirrored here so the
+// Wave 8 Rust supervisor can drop the Python helper. Exposes a hidden
+// `dictate-ops` JSON-RPC subcommand the Python caller shells out to
+// when `VOICEPI_DICTATE_BACKEND=rust` (default keeps Python).
+pub mod dictate;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
 // Python-removal roadmap #348). Gated behind `audio-in-rust` so the default
 // build does not pull cpal — the audio capture feature already requires the
