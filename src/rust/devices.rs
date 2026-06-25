@@ -6,8 +6,8 @@
 //! on Windows down to a single entry per physical mic. cpal already enumerates
 //! devices through the preferred host backend on each platform (WASAPI on
 //! Windows, ALSA on Linux, CoreAudio on macOS), so this Rust port is the
-//! cheap-and-clean equivalent: one entry per cpal input device, no host-API
-//! collapsing needed because cpal has already done it.
+//! cheap-and-clean equivalent: one entry per cpal input device, with non-default
+//! hosts merged behind so PulseAudio/PipeWire/JACK setups don't hide USB mics.
 //!
 //! The module is gated behind the `audio-in-rust` cargo feature (cpal is the
 //! only heavy native dep this pulls in, and the audio feature has the same
@@ -18,8 +18,8 @@
 //!     host's default input).
 //!   * [`default_input_device`] → `Option<DeviceInfo>` for the platform
 //!     default.
-//!   * [`find_device_by_name`] → exact + case-insensitive substring match,
-//!     same precedence the Python resolver uses.
+//!   * [`find_device_by_name`] → exact + longest-substring match, same
+//!     precedence the Python resolver uses.
 //!
 //! The CLI subcommand `devices` (`handle_devices`) serialises the same list
 //! as a JSON envelope so `vp_devices.py` can shell out to it when
@@ -39,51 +39,54 @@ use serde::{Deserialize, Serialize};
 /// rate; those report `min == max`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceInfo {
-    /// Position in the enumeration order (parallels Python's
-    /// `sd.query_devices()` index — but compacted across filtered entries).
+    /// Position in the default-host's `input_devices()` enumeration order
+    /// (parallels cpal's own iteration so `nth(index)` in the capture path
+    /// resolves the same physical device). Devices contributed by non-default
+    /// hosts get indices appended after the default host's range; those entries
+    /// are intended to be matched by NAME, not by numeric index.
     pub index: usize,
     /// Human-readable device name (cpal's `Display` impl on every backend).
     pub name: String,
-    /// Maximum input channel count the device reports. Entries with zero
-    /// input channels are filtered out upstream, so any value here is ≥ 1.
+    /// Maximum input channel count across the device's supported configs.
+    /// Matches the sounddevice JSON contract (`max_input_channels`) the Python
+    /// picker emits. Entries with zero usable input configs are filtered out
+    /// upstream, so any value here is ≥ 1.
     pub max_input_channels: u16,
     /// `(min_hz, max_hz)` from cpal's supported-input-configs union.
     /// `(0, 0)` when the device exposes no input configs (extremely rare;
     /// defensive against backend quirks).
     pub sample_rates: (u32, u32),
-    /// True when this entry matches the host's default input device by name.
-    /// We compare by NAME (not by object identity) because cpal's `Device`
-    /// values returned from `default_input_device()` and `input_devices()` are
-    /// distinct handles even when they refer to the same physical device.
+    /// True when this entry IS the host's default input device (matched on
+    /// the cpal-native index of the default host, so duplicate-named devices
+    /// don't all carry the flag).
     pub default: bool,
 }
 
-/// Enumerate every input device the platform exposes, in the host iterator's
-/// natural order. Devices with zero input channels or blank names are
-/// filtered out so a caller can show the list verbatim without re-filtering.
+/// Enumerate every input device the platform exposes. Default-host devices
+/// come first in their cpal-native order; non-default-host devices are appended
+/// behind (de-duplicated by name) so a saved mic exposed only via JACK/ASIO
+/// still shows up in the picker. Devices with zero usable input configs or
+/// blank names are filtered out so a caller can show the list verbatim.
 pub fn list_input_devices() -> Vec<DeviceInfo> {
-    let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .map(|d| d.to_string())
-        .unwrap_or_default();
-    enumerate_with_host(&host, &default_name)
+    enumerate_all_hosts()
 }
 
 /// The host's default input device, if any. Returns the same `DeviceInfo`
-/// shape so the UI can render it identically to the picker entries.
+/// shape so the UI can render it identically to the picker entries. The
+/// `index` field reports the device's real position in [`list_input_devices`]
+/// so callers comparing the two envelopes stay consistent.
 pub fn default_input_device() -> Option<DeviceInfo> {
-    let host = cpal::default_host();
-    let default = host.default_input_device()?;
-    let name = default.to_string();
-    Some(build_device_info(0, &default, &name, true))
+    let list = list_input_devices();
+    list.into_iter().find(|d| d.default)
 }
 
 /// Find a device by name. Precedence matches the Python resolver:
 ///   1. case-insensitive EXACT name match wins,
 ///   2. otherwise case-insensitive SUBSTRING match (bidirectional — saved
 ///      name in device name, or device name in saved value — so an
-///      MME-truncated saved value still maps to its full WASAPI name).
+///      MME-truncated saved value still maps to its full WASAPI name),
+///      preferring the LONGEST matching device name so a truncated saved
+///      value binds to the fullest sibling rather than a generic prefix.
 ///
 /// Returns `None` if no device matches.
 pub fn find_device_by_name(query: &str) -> Option<DeviceInfo> {
@@ -95,6 +98,11 @@ pub fn find_device_by_name(query: &str) -> Option<DeviceInfo> {
 
 /// Pure name lookup. Exposed so the test suite can exercise it against a
 /// hand-rolled device list without depending on a live audio backend.
+///
+/// See [`find_device_by_name`] for the precedence rules; the longest-substring
+/// tie-breaker matters because PortAudio's MME path truncates names to 31
+/// chars, and a saved MME value must bind to its full WASAPI sibling — not to
+/// a generic prefix like "Microphone".
 pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceInfo> {
     let needle = query.trim();
     if needle.is_empty() {
@@ -106,64 +114,186 @@ pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceI
         return Some(hit);
     }
     // 2. bidirectional substring match — same semantics as
-    //    vp_devices._name_matches: either side may be the prefix.
-    devices.iter().find(|d| {
+    //    vp_devices._name_matches: either side may be the prefix. Iterate the
+    //    whole list and keep the entry with the LONGEST matching name; the
+    //    Python resolver (vp_devices.resolve_capture_device._best_match) does
+    //    the same so a truncated MME saved value still maps to the fullest
+    //    WASAPI sibling rather than to a shorter generic match.
+    let mut best: Option<&DeviceInfo> = None;
+    for d in devices {
         let lower = d.name.to_lowercase();
-        !lower.is_empty() && (lower.contains(&folded) || folded.contains(&lower))
-    })
+        if lower.is_empty() {
+            continue;
+        }
+        if !(lower.contains(&folded) || folded.contains(&lower)) {
+            continue;
+        }
+        match best {
+            None => best = Some(d),
+            Some(prev) if d.name.len() > prev.name.len() => best = Some(d),
+            _ => {}
+        }
+    }
+    best
 }
 
-fn enumerate_with_host(host: &cpal::Host, default_name: &str) -> Vec<DeviceInfo> {
-    let devices = match host.input_devices() {
-        Ok(iter) => iter.collect::<Vec<_>>(),
-        Err(_) => return Vec::new(),
+/// Walk every cpal host (default first), enumerate input devices on each, and
+/// merge them into a single list de-duplicated by name. The default host's
+/// entries keep their cpal-native indices so the capture path's numeric-index
+/// selector still resolves the same physical device.
+fn enumerate_all_hosts() -> Vec<DeviceInfo> {
+    let default_host = cpal::default_host();
+    let default_host_id = default_host.id();
+    let default_input_index = default_input_index(&default_host);
+
+    let mut out: Vec<DeviceInfo> = Vec::new();
+    let mut seen_names: Vec<String> = Vec::new();
+    append_host_devices(
+        &default_host,
+        /*default_input_index=*/ default_input_index,
+        /*is_default_host=*/ true,
+        /*next_synthetic_index=*/ &mut 0,
+        &mut out,
+        &mut seen_names,
+    );
+
+    // After the default host comes everything else cpal knows about, in
+    // ALL_HOSTS order. Non-default-host devices keep their cpal-native index
+    // (within that host's enumeration) BUT they live in a different host's
+    // index space than the capture path uses — see [`DeviceInfo::index`].
+    // They are still useful for name-based selection (the picker's primary
+    // matching mode), which is exactly what the Python multi-host enumeration
+    // provides on non-Windows.
+    for host_id in cpal::available_hosts() {
+        if host_id == default_host_id {
+            continue;
+        }
+        let Ok(host) = cpal::host_from_id(host_id) else {
+            continue;
+        };
+        // Use the next-free index for non-default-host entries so they don't
+        // collide with the default host's cpal-native indices.
+        let mut next_synthetic = out.len();
+        append_host_devices(
+            &host,
+            /*default_input_index=*/ None,
+            /*is_default_host=*/ false,
+            &mut next_synthetic,
+            &mut out,
+            &mut seen_names,
+        );
+    }
+
+    out
+}
+
+/// Look up the default input device's index inside the host's `input_devices()`
+/// enumeration. Returns `None` when the host has no default input OR the
+/// default can't be located by name in the device list (defensive against
+/// backend quirks that return a default but enumerate it differently).
+fn default_input_index(host: &cpal::Host) -> Option<usize> {
+    let default = host.default_input_device()?;
+    let default_name = default.to_string();
+    if default_name.trim().is_empty() {
+        return None;
+    }
+    let iter = host.input_devices().ok()?;
+    for (idx, device) in iter.enumerate() {
+        if device.to_string() == default_name {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Enumerate a single host's input devices and append usable entries to `out`.
+///
+/// Falls back to enumerating just the host's default input device when
+/// `input_devices()` itself fails — the Python picker never silently empties
+/// the list when the backend is flaky, and the Settings UI relies on at least
+/// the default mic appearing.
+fn append_host_devices(
+    host: &cpal::Host,
+    default_input_index: Option<usize>,
+    is_default_host: bool,
+    next_synthetic_index: &mut usize,
+    out: &mut Vec<DeviceInfo>,
+    seen_names: &mut Vec<String>,
+) {
+    let iter = match host.input_devices() {
+        Ok(iter) => iter,
+        Err(err) => {
+            // Backend hiccup (audio server restart, transient ALSA error, …).
+            // Don't silently report an empty list — the picker would render
+            // "no microphones" even though the OS clearly has at least a
+            // default. Fall back to just that default with a logged warning.
+            eprintln!(
+                "[devices] host {:?} input_devices() failed: {err}; falling back to default input",
+                host.id()
+            );
+            if is_default_host {
+                if let Some(default) = host.default_input_device() {
+                    let name = default.to_string();
+                    if !name.trim().is_empty()
+                        && !seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
+                    {
+                        let info = build_device_info(0, &default, &name, true);
+                        if info.max_input_channels > 0 {
+                            seen_names.push(name);
+                            out.push(info);
+                            *next_synthetic_index = out.len();
+                        }
+                    }
+                }
+            }
+            return;
+        }
     };
-    let mut out = Vec::with_capacity(devices.len());
-    let mut next_index = 0usize;
-    for device in devices {
+
+    for (cpal_index, device) in iter.enumerate() {
         let name = device.to_string();
         if name.trim().is_empty() {
             // Empty names collide with the Python UI's "(System default)"
             // sentinel, so we drop them just like select_input_devices does.
             continue;
         }
-        let info = build_device_info(next_index, &device, &name, name == default_name);
-        if info.max_input_channels == 0 {
-            // No-input-channel entries (some virtual / loopback devices)
-            // never belong in the input picker.
+        // De-duplicate across hosts BY NAME. On Windows the default host
+        // (WASAPI) already collapses host-API duplication, but cross-host
+        // enumeration can re-introduce the same physical mic (e.g. ALSA
+        // direct + Pulse default on Linux). The Python picker uses the same
+        // bidirectional-substring rule for picker de-dup — we keep it simple
+        // here with an exact case-insensitive name comparison, which already
+        // covers the same-physical-device case.
+        if seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
             continue;
         }
+
+        let is_default = is_default_host && Some(cpal_index) == default_input_index;
+        // Default-host entries keep their cpal-native index so the capture
+        // path's `nth(index)` resolves the same physical device. Non-default
+        // hosts get synthetic indices appended after the default host's range.
+        let reported_index = if is_default_host {
+            cpal_index
+        } else {
+            *next_synthetic_index
+        };
+        let info = build_device_info(reported_index, &device, &name, is_default);
+        if info.max_input_channels == 0 {
+            // No usable input configs at all (neither default_input_config nor
+            // supported_input_configs reported channels). Skip — the picker
+            // can't open it.
+            continue;
+        }
+        seen_names.push(name);
         out.push(info);
-        next_index += 1;
+        if !is_default_host {
+            *next_synthetic_index += 1;
+        }
     }
-    out
 }
 
 fn build_device_info(index: usize, device: &cpal::Device, name: &str, default: bool) -> DeviceInfo {
-    let (channels, sample_rates) = match device.default_input_config() {
-        Ok(cfg) => {
-            // cpal 0.18 type-aliased `SampleRate` to a plain `u32` (no
-            // tuple-struct .0 field) — see audio/capture.rs for the same
-            // pattern. `sample_rate()` and `{min,max}_sample_rate()` return
-            // the rate directly.
-            let cfg_rate: u32 = cfg.sample_rate();
-            let (mut lo, mut hi) = (cfg_rate, cfg_rate);
-            if let Ok(supported) = device.supported_input_configs() {
-                for sc in supported {
-                    let smin: u32 = sc.min_sample_rate();
-                    let smax: u32 = sc.max_sample_rate();
-                    if smin > 0 && (lo == 0 || smin < lo) {
-                        lo = smin;
-                    }
-                    if smax > hi {
-                        hi = smax;
-                    }
-                }
-            }
-            (cfg.channels(), (lo, hi))
-        }
-        Err(_) => (0, (0u32, 0u32)),
-    };
+    let (channels, sample_rates) = probe_device_config(device);
     DeviceInfo {
         index,
         name: name.to_owned(),
@@ -171,6 +301,51 @@ fn build_device_info(index: usize, device: &cpal::Device, name: &str, default: b
         sample_rates,
         default,
     }
+}
+
+/// Inspect a cpal `Device` for its channel count and sample-rate range.
+///
+/// Uses `supported_input_configs()` as the source of truth (max channels and
+/// the union of rate ranges), falling back to `default_input_config()` when
+/// the supported-configs iterator is unavailable. This MUST NOT drop devices
+/// where only `default_input_config()` errors but `supported_input_configs()`
+/// still reports usable shapes — the capture path opens from the supported
+/// list, so hiding such mics here is a UX regression.
+fn probe_device_config(device: &cpal::Device) -> (u16, (u32, u32)) {
+    let mut max_channels: u16 = 0;
+    let mut lo: u32 = 0;
+    let mut hi: u32 = 0;
+
+    if let Ok(supported) = device.supported_input_configs() {
+        for sc in supported {
+            let ch = sc.channels();
+            if ch > max_channels {
+                max_channels = ch;
+            }
+            let smin: u32 = sc.min_sample_rate();
+            let smax: u32 = sc.max_sample_rate();
+            if smin > 0 && (lo == 0 || smin < lo) {
+                lo = smin;
+            }
+            if smax > hi {
+                hi = smax;
+            }
+        }
+    }
+
+    // If supported_input_configs returned nothing usable, try the default
+    // config as a last resort. (Some backends only expose a single default
+    // shape; supported_input_configs may still err on disconnected devices.)
+    if max_channels == 0 {
+        if let Ok(cfg) = device.default_input_config() {
+            max_channels = cfg.channels();
+            let r: u32 = cfg.sample_rate();
+            lo = r;
+            hi = r;
+        }
+    }
+
+    (max_channels, (lo, hi))
 }
 
 // ----- CLI handler ------------------------------------------------------------
@@ -267,7 +442,7 @@ mod tests {
     #[test]
     fn find_in_exact_match_wins_over_substring() {
         // "Microphone" is a clean prefix of "Microphone Array" — the exact
-        // hit must bind to the first entry, not the longer sibling.
+        // hit must bind to the second entry, not the longer sibling.
         let devs = vec![
             make(0, "Microphone Array", false),
             make(1, "Microphone", false),
@@ -297,6 +472,24 @@ mod tests {
         let saved_long = "Microphone (Realtek)";
         let hit2 = find_in(&devs2, saved_long).expect("longer-saved match");
         assert_eq!(hit2.index, 0);
+    }
+
+    #[test]
+    fn find_in_prefers_longest_substring_match() {
+        // Regression for the truncated-MME hijack bug: when a saved value is
+        // a substring of MULTIPLE device names, we must bind to the LONGEST
+        // (fullest) one — not the first match in iteration order. Without
+        // this, a saved "Headset Microphone (Jabra Evolv" would resolve to
+        // the generic "Headset Microphone" sibling and capture would record
+        // from the wrong physical device.
+        let devs = vec![
+            make(0, "Headset Microphone", false),
+            make(1, "Headset Microphone (Jabra Evolve 65 TE)", false),
+            make(2, "Headset Microphone (USB)", false),
+        ];
+        let saved = "Headset Microphone (Jabra Evolv"; // truncated MME
+        let hit = find_in(&devs, saved).expect("longest match");
+        assert_eq!(hit.index, 1);
     }
 
     #[test]

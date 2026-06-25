@@ -450,14 +450,14 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn parses_hidden_inject_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "inject"]);
         assert_eq!(cli.command, Some(Command::Inject));
-=======
+    }
+
+    #[test]
     fn parses_devices_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "devices"]);
         assert_eq!(cli.command, Some(Command::Devices));
->>>>>>> 2fc7121 (feat(devices): port vp_devices.py to Rust (Phase 2.2.z))
     }
 }
