@@ -271,5 +271,90 @@ class RustStdinCaptureGlueTests(unittest.TestCase):
         )
 
 
+class RustStdinMaxRecordCapTests(unittest.TestCase):
+    """Iteration-3 review finding #2: holding PTT beyond
+    ``VOICEPI_MAX_RECORD_S`` on the Rust backend must drop further
+    frames (same behaviour the sounddevice and arecord paths apply via
+    :func:`vp_capture._max_record_s`) and emit a single ``capped=True``
+    status worker event.
+    """
+
+    def _set_cap(self, seconds: str | None):
+        import os
+        prev = os.environ.get("VOICEPI_MAX_RECORD_S")
+        if seconds is None:
+            os.environ.pop("VOICEPI_MAX_RECORD_S", None)
+        else:
+            os.environ["VOICEPI_MAX_RECORD_S"] = seconds
+        return prev
+
+    def _restore_cap(self, prev):
+        import os
+        if prev is None:
+            os.environ.pop("VOICEPI_MAX_RECORD_S", None)
+        else:
+            os.environ["VOICEPI_MAX_RECORD_S"] = prev
+
+    def test_cap_drops_frames_and_emits_status_event_once(self):
+        # 30 ms per frame at 16 kHz; cap at 0.05 s → second frame trips
+        # the cap (0.06 s buffered > 0.05).
+        prev = self._set_cap("0.05")
+        try:
+            frames = [
+                np.full(FRAME_SAMPLES, 0.1, dtype="<f4"),
+                np.full(FRAME_SAMPLES, 0.2, dtype="<f4"),
+                np.full(FRAME_SAMPLES, 0.3, dtype="<f4"),
+            ]
+            lines = "\n".join(_frame_line(f) for f in frames) + "\n"
+            mixin = _FakeMixin()
+            # Capture the cap status events. The shim emits via
+            # _emit_worker_event → stderr; we intercept by patching the
+            # symbol the module imported at load time.
+            import whisper_dictate.vp_capture_rust_stdin as shim
+            events: list[dict] = []
+            original = shim._emit_worker_event
+            shim._emit_worker_event = lambda evt, **fields: events.append(
+                {"event": evt, **fields}
+            )
+            try:
+                start_rust_stdin_capture(mixin, stream=io.StringIO(lines))
+                mixin._rust_stdin_thread.join(timeout=2.0)
+            finally:
+                shim._emit_worker_event = original
+            # First frame lands; second and third are dropped (over cap).
+            self.assertEqual(
+                len(mixin.frames), 1,
+                f"expected exactly 1 frame under the cap, got {len(mixin.frames)}",
+            )
+            # Exactly one cap-warning event with capped=True.
+            cap_events = [
+                e for e in events
+                if e.get("event") == "status"
+                and e.get("state") == "recording"
+                and e.get("capped") is True
+            ]
+            self.assertEqual(
+                len(cap_events), 1,
+                f"expected exactly one capped=True status event, got: {events}",
+            )
+            # The reader did NOT die — terminal events shouldn't be raised.
+            # (Already proven: thread joined cleanly above.)
+        finally:
+            self._restore_cap(prev)
+
+    def test_cap_zero_disables_the_check(self):
+        # Cap = 0 disables → all three frames must land.
+        prev = self._set_cap("0")
+        try:
+            frames = [np.full(FRAME_SAMPLES, 0.1, dtype="<f4") for _ in range(3)]
+            lines = "\n".join(_frame_line(f) for f in frames) + "\n"
+            mixin = _FakeMixin()
+            start_rust_stdin_capture(mixin, stream=io.StringIO(lines))
+            mixin._rust_stdin_thread.join(timeout=2.0)
+            self.assertEqual(len(mixin.frames), 3)
+        finally:
+            self._restore_cap(prev)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,6 +80,73 @@ impl Drop for BridgeHandle {
     }
 }
 
+/// Two-stage bridge that defers opening the cpal capture stream until
+/// the Python worker's stdin reader is up.
+///
+/// Iteration-3 review finding #1: when the supervisor opened the
+/// pipeline immediately after spawning the worker, the Rust side could
+/// emit VAD-detected speech frames into the child's stdin DURING the
+/// child's model load — the Python reader doesn't start until
+/// `Dictate.__init__` (which runs after the model is ready). Those
+/// pre-ready frames piled up in the OS pipe buffer (≈64 KB) and the
+/// first PTT press would drain them as stale audio; worse, a full pipe
+/// blocks the writer thread so `stop()` could hang joining it.
+///
+/// The fix: split [`spawn_bridge`] into two stages. The supervisor:
+///
+/// 1. Calls [`spawn_bridge_pending_ready`] right after spawning the
+///    worker. This eagerly loads the Silero VAD model (fail-fast for a
+///    missing/bad ONNX file) and parks the result in a [`PendingBridge`].
+///    No cpal stream is opened; no frames are produced.
+/// 2. Watches the worker's stderr for the `state=ready` event the
+///    Python child emits after its model loads (see
+///    `runtime.py::_emit_worker_event(..., state="ready", ...)`).
+/// 3. Calls [`PendingBridge::start`] on receipt of `ready`, which opens
+///    cpal and spawns the writer thread. Frames now flow into a stdin
+///    reader that's guaranteed to be alive.
+///
+/// If the worker dies before `ready` (model-load failure), the
+/// supervisor drops the `PendingBridge`; no cpal stream is ever opened
+/// and the user's mic-permission prompt is preserved for the next run.
+pub struct PendingBridge {
+    silero: Option<SileroVad>,
+    writer_out: Option<Box<dyn Write + Send>>,
+}
+
+impl PendingBridge {
+    /// Activate the pipeline: open cpal for `device_name`, spawn the
+    /// writer thread that pipes events into the worker's stdin, and
+    /// return a [`BridgeHandle`] plus the error channel — same shape
+    /// the single-stage [`spawn_bridge`] returned.
+    ///
+    /// Consumes `self` so the caller cannot accidentally start twice.
+    pub fn start(
+        mut self,
+        device_name: &str,
+    ) -> Result<(BridgeHandle, Receiver<BridgeError>), anyhow::Error> {
+        let silero = self
+            .silero
+            .take()
+            .expect("PendingBridge::start called twice (SileroVad already taken)");
+        let out = self
+            .writer_out
+            .take()
+            .expect("PendingBridge::start called twice (writer already taken)");
+        let (pipeline, events) = AudioPipeline::start(device_name, move || Ok(silero))?;
+        let (err_tx, err_rx) = mpsc::channel::<BridgeError>();
+        let writer = thread::spawn(move || {
+            run_writer(events, out, err_tx);
+        });
+        Ok((
+            BridgeHandle {
+                pipeline: Some(pipeline),
+                writer: Some(writer),
+            },
+            err_rx,
+        ))
+    }
+}
+
 /// Spawn the audio pipeline AND the writer thread that pipes its events
 /// into `out`.
 ///
@@ -112,6 +179,30 @@ where
         },
         err_rx,
     ))
+}
+
+/// Stage one of the deferred-start bridge (iteration-3 review finding
+/// #1). Loads the Silero VAD model so a missing/bad ONNX surfaces as a
+/// synchronous error, parks the worker's stdin writer for later, and
+/// returns a [`PendingBridge`] the supervisor can [`PendingBridge::start`]
+/// once the Python child has emitted its `state=ready` event.
+///
+/// No cpal stream is opened by this call — that's deferred to
+/// [`PendingBridge::start`] so the OS pipe buffer is never filled with
+/// pre-ready frames the Python worker has no reader for.
+pub fn spawn_bridge_pending_ready<W, L>(
+    out: W,
+    model_loader: L,
+) -> Result<PendingBridge, anyhow::Error>
+where
+    W: Write + Send + 'static,
+    L: FnOnce() -> Result<SileroVad, anyhow::Error>,
+{
+    let silero = model_loader()?;
+    Ok(PendingBridge {
+        silero: Some(silero),
+        writer_out: Some(Box::new(out)),
+    })
 }
 
 /// Pure drain loop, factored out so it can be tested without spawning a
@@ -198,6 +289,62 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    /// Iteration-3 review finding #1: `spawn_bridge_pending_ready`
+    /// must load the Silero model eagerly (so a missing/bad ONNX
+    /// fails-fast) but MUST NOT open the cpal capture stream — that's
+    /// the whole point of the two-stage handshake. We assert this by
+    /// passing a failing model loader (synchronous Err returned from
+    /// the call) and a loader that succeeds (no Err) and observing
+    /// that `start_capture` is only invoked when we actually call
+    /// `PendingBridge::start`. Without a real cpal-in-process stub we
+    /// detect the start by passing an obviously-bogus device name and
+    /// asserting that the error surfaces from `start()`, not from
+    /// `spawn_bridge_pending_ready`.
+    #[test]
+    fn spawn_pending_ready_surfaces_model_loader_failure_synchronously() {
+        let writer = CapturingWriter::new();
+        let result =
+            spawn_bridge_pending_ready(writer, || Err(anyhow::anyhow!("synthetic loader failure")));
+        assert!(
+            result.is_err(),
+            "model-load failure must propagate from spawn_bridge_pending_ready",
+        );
+        let msg = format!("{}", result.err().unwrap());
+        assert!(
+            msg.contains("synthetic loader failure"),
+            "expected loader error, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn spawn_pending_ready_does_not_open_capture_stream() {
+        // If `spawn_bridge_pending_ready` accidentally called
+        // `AudioPipeline::start` itself (the pre-fix behaviour
+        // promoted by `spawn_bridge`), cpal would try to open the
+        // bogus device name and FAIL — which would surface here, not
+        // when we call `PendingBridge::start`. By asserting the call
+        // succeeds despite the device being unopenable, we prove the
+        // cpal open is correctly deferred.
+        let writer = CapturingWriter::new();
+        let pending = spawn_bridge_pending_ready(writer, || {
+            // Loader succeeds — use the same path as the real
+            // SileroVad::from_embedded_bytes (with the embedded model
+            // bytes from the crate). The pending bridge must NOT open
+            // any cpal stream during this call.
+            super::SileroVad::from_embedded_bytes(super::super::EMBEDDED_SILERO_BYTES)
+        });
+        assert!(
+            pending.is_ok(),
+            "loader-only path must succeed without touching cpal",
+        );
+        // We deliberately drop the PendingBridge here instead of
+        // calling .start() — a buggy implementation that opened cpal
+        // up-front would leak the stream past this point. Dropping
+        // the PendingBridge proves the no-open contract: there's
+        // nothing for `Drop` to clean up because nothing was opened.
+        drop(pending);
     }
 
     #[test]

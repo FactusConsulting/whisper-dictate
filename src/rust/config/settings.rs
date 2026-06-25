@@ -202,6 +202,12 @@ impl AppSettings {
             "quit_key" => Some(&self.quit_key),
             "quit_count" => Some(&self.quit_count),
             "quit_window_ms" => Some(&self.quit_window_ms),
+            // Iteration-3 review finding #3: not in the static
+            // RESTART_KEYS table (Python backends are live-reloadable
+            // for this key), but exposed here so the dynamic
+            // rust-backend-aware check in `restart_required_keys` can
+            // diff it. See keys.rs for the gate.
+            "audio_device" => Some(&self.audio_device),
             _ => None,
         }
     }

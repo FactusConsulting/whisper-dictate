@@ -61,6 +61,10 @@ from .vp_rust_audio_source import (
     RustStdinProtocolError,
     iter_events,
 )
+# Worker-event emitter shared with vp_capture so the cap-reached `status`
+# event has the exact same shape on the wire regardless of which capture
+# path saw it first (sounddevice / arecord / rust-stdin).
+from .vp_events import _emit_worker_event
 
 
 def start_rust_stdin_capture(
@@ -165,6 +169,15 @@ def _handle_event(mixin, event: RustAudioEvent, np) -> bool:
     keeps draining stdin (so the pipe never blocks the Rust writer)
     but no idle-time audio reaches ``mixin.frames`` between PTT
     presses.
+
+    Iteration-3 review finding #2: also drop frames once the recording
+    exceeds ``VOICEPI_MAX_RECORD_S`` (default 120 s, ``0`` disables).
+    The sounddevice and arecord paths apply this cap in their own
+    callbacks; without the matching check here, holding PTT beyond
+    the cap on the Rust backend would accumulate frames unbounded and
+    transcribe an overlong buffer (memory + latency regression).
+    Emits the same ``status``/``capped=True`` worker event the other
+    backends do, exactly once per recording.
     """
     if event.kind == "frame":
         if event.samples is None or event.samples.size != FRAME_SAMPLES:
@@ -184,6 +197,31 @@ def _handle_event(mixin, event: RustAudioEvent, np) -> bool:
             mixin._first_audio_event.set()
         # f32 in [-1, 1] → int16. clip first so loud frames don't wrap.
         int16 = np.clip(event.samples * 32768.0, -32768.0, 32767.0).astype(np.int16)
+        # Iteration-3 review finding #2: enforce the max-recording cap
+        # before appending. Reuse SAMPLE_RATE (the Rust pipeline always
+        # emits 16 kHz frames) so the duration math stays accurate.
+        # `_max_record_s()` is read live so a config reload between
+        # presses takes effect on the next recording without a restart
+        # (mirrors vp_capture._cb).
+        from .vp_capture import _max_record_s
+        cap = _max_record_s()
+        if cap > 0:
+            total_samples = sum(f.shape[0] for f in mixin.frames) + int16.shape[0]
+            buffered_s = total_samples / SAMPLE_RATE
+            if buffered_s > cap:
+                if not getattr(mixin, "_cap_warned", False):
+                    mixin._cap_warned = True
+                    print(
+                        f"[cap] max recording reached ({cap:.0f}s) — release the key",
+                        flush=True,
+                    )
+                    _emit_worker_event(
+                        "status",
+                        state="recording",
+                        capped=True,
+                        recording_s=round(buffered_s, 1),
+                    )
+                return True
         # Existing frame buffer expects shape (n, channels).
         mixin.frames.append(int16.reshape(-1, 1))
         return True

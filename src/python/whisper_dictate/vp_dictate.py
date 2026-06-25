@@ -155,6 +155,19 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         # from `ready` rather than blank "Input pending". The truly-bound device
         # is re-derived when a recording opens the stream (_start_*).
         self._audio_input_device = vp_capture.resolve_startup_audio_device()
+        # Iteration-3 review finding #1: when the Rust audio backend is in
+        # play the supervisor is ALREADY producing pipeline events into
+        # our stdin while we're still loading the model. Spawn the
+        # long-lived reader NOW (not at first PTT press) so those frames
+        # get drained as they arrive — without it, idle-time frames pile
+        # up in the OS pipe and the very first press drains them as
+        # stale audio (and a full pipe can block the bridge so stop()
+        # hangs joining the writer). The reader drops frames when
+        # ``recording`` is False, so this is safe to start immediately.
+        if self._audio_source == "rust-stdin":
+            from .vp_capture_rust_stdin import start_rust_stdin_capture
+            self._cap_warned = False
+            start_rust_stdin_capture(self)
 
     def _profiled_config(self, base: dict[str, str]) -> dict[str, str]:
         data = load_config()

@@ -161,6 +161,46 @@ fn resolve_audio_device_from_env_returns_empty_when_neither_set() {
     );
 }
 
+/// Iteration-3 review finding #4: the Python capture path normalises
+/// `VOICEPI_AUDIO_DEVICE` with `.strip()`, so values like `"  Yeti  "`
+/// resolve to `"Yeti"` and a whitespace-only value collapses to `""`
+/// (= system default). The Rust path must apply the same trimming so a
+/// single saved setting selects the same mic on both backends; without
+/// it the raw spaces get forwarded to CPAL's device matching and
+/// either fail to match or are treated as a literal selector.
+#[test]
+fn resolve_audio_device_from_env_trims_whitespace_from_overrides() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
+    let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "  Yeti X  ".to_owned())];
+    assert_eq!(
+        resolve_audio_device_from_env(&overrides),
+        "Yeti X",
+        "leading/trailing whitespace must be trimmed before CPAL lookup",
+    );
+}
+
+#[test]
+fn resolve_audio_device_from_env_collapses_blank_override_to_empty() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
+    let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "   ".to_owned())];
+    assert_eq!(
+        resolve_audio_device_from_env(&overrides),
+        "",
+        "a whitespace-only override must collapse to '' (= system default)",
+    );
+}
+
+#[test]
+fn resolve_audio_device_from_env_trims_process_env_fallback() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // No worker-command override → process env is consulted, and it
+    // must be trimmed the same way the override path is.
+    let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "\tHeadset Mic\n");
+    assert_eq!(resolve_audio_device_from_env(&[]), "Headset Mic");
+}
+
 #[test]
 fn resolve_audio_device_from_env_ignores_unrelated_overrides() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

@@ -22,7 +22,10 @@
 //! Default builds neither pull cpal nor touch stdin.
 
 #[cfg(feature = "audio-in-rust")]
-use crate::audio::{default_silero_loader, spawn_bridge, BridgeError, BridgeHandle};
+use crate::audio::{
+    default_silero_loader, spawn_bridge, spawn_bridge_pending_ready, BridgeError, BridgeHandle,
+    PendingBridge,
+};
 use crate::runtime::{audio_pipeline_available, audio_pipeline_requested};
 #[cfg(feature = "audio-in-rust")]
 use std::sync::mpsc::Receiver;
@@ -83,6 +86,25 @@ where
     spawn_bridge(device_name, stdin_writer, default_silero_loader())
 }
 
+/// Two-stage variant that defers opening the cpal capture stream until
+/// the Python worker signals it has a stdin reader live (iteration-3
+/// review finding #1).
+///
+/// The supervisor uses this on the rust-audio path: call here right
+/// after spawning the worker (parks the Silero model — model-load
+/// failure is still synchronous and fail-fast), then call
+/// [`PendingBridge::start`] once the worker's `state=ready` event is
+/// seen on stderr. No cpal stream is opened until then, so the OS pipe
+/// buffer can't fill with pre-ready audio that the worker would have
+/// drained as stale frames on the first PTT press.
+#[cfg(feature = "audio-in-rust")]
+pub fn prepare_audio_bridge_for_child<W>(stdin_writer: W) -> Result<PendingBridge, anyhow::Error>
+where
+    W: std::io::Write + Send + 'static,
+{
+    spawn_bridge_pending_ready(stdin_writer, default_silero_loader())
+}
+
 /// Microphone the Rust pipeline should open, resolved from the same
 /// effective worker env we're about to hand to the Python child.
 ///
@@ -99,14 +121,23 @@ where
 /// 2. The supervisor's own `std::env` (legacy / shell-exported case).
 /// 3. Empty string (= "system default").
 ///
-/// Returning empty for missing/blank preserves the existing contract.
+/// Iteration-3 review finding #4: trim surrounding whitespace and
+/// collapse a blank-only override to `""` ("system default") before
+/// returning. The Python capture path (`vp_capture._audio_device_setting`)
+/// applies the same `.strip()`, so without this the same saved setting
+/// would select the device on the Python backend but fail to match (or
+/// be treated as a literal "  Yeti  " device name) on the Rust backend.
+/// Returning empty for missing/blank preserves the "system default"
+/// contract that `audio::capture::start_capture` already honours.
 pub fn resolve_audio_device_from_env(env_overrides: &[(String, String)]) -> String {
     for (key, value) in env_overrides {
         if key == AUDIO_DEVICE_ENV {
-            return value.clone();
+            return value.trim().to_owned();
         }
     }
-    std::env::var(AUDIO_DEVICE_ENV).unwrap_or_default()
+    std::env::var(AUDIO_DEVICE_ENV)
+        .map(|value| value.trim().to_owned())
+        .unwrap_or_default()
 }
 
 /// Back-compat wrapper that consults only the process env. Retained

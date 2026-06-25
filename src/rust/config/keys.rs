@@ -107,17 +107,84 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the
 /// UI can warn that a restart is required.
+///
+/// Iteration-3 review finding #3: when the Rust audio backend is in
+/// play, `audio_device` is treated as restart-required because the
+/// supervisor opens the CPAL stream at worker start and does not
+/// listen for live device changes (the Python sounddevice path does).
+/// Without this, saving a different mic mid-session keeps the Rust
+/// pipeline bound to the old device until the next worker restart,
+/// silently overriding the user's selection. We do NOT add the key to
+/// the static [`RESTART_KEYS`] table because the Python paths
+/// (sounddevice/arecord) DO honour live changes and forcing a restart
+/// there would be a UX regression.
 pub fn restart_required_keys(before: &AppSettings, after: &AppSettings) -> Vec<&'static str> {
-    RESTART_KEYS
+    let mut keys: Vec<&'static str> = RESTART_KEYS
         .iter()
         .copied()
         .filter(|key| before.setting_value(key) != after.setting_value(key))
-        .collect()
+        .collect();
+    if crate::runtime::audio_pipeline_requested()
+        && crate::runtime::audio_pipeline_available()
+        && before.setting_value("audio_device") != after.setting_value("audio_device")
+        && !keys.contains(&"audio_device")
+    {
+        keys.push("audio_device");
+    }
+    keys
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Iteration-3 review finding #3: changing the microphone while
+    /// the Rust audio backend is active must require a restart, since
+    /// the supervisor opens the CPAL stream at worker start and does
+    /// not currently honour live device changes. Under the Python
+    /// sounddevice path the setting stays live.
+    #[test]
+    fn restart_required_keys_marks_audio_device_under_rust_backend() {
+        use crate::runtime::AUDIO_BACKEND_ENV;
+        use crate::test_env_lock::ENV_LOCK;
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var(AUDIO_BACKEND_ENV).ok();
+        let before = AppSettings::default();
+        let after = AppSettings {
+            audio_device: "Yeti X".to_owned(),
+            ..AppSettings::default()
+        };
+
+        // Sounddevice path (env unset) → audio_device stays live.
+        std::env::remove_var(AUDIO_BACKEND_ENV);
+        assert!(
+            restart_required_keys(&before, &after).is_empty(),
+            "audio_device must stay live on the default Python backend",
+        );
+
+        // Rust path. The dynamic gate only fires when the feature is
+        // also compiled in — mirror `audio_pipeline_available()` here
+        // so the test stays honest in both build modes.
+        std::env::set_var(AUDIO_BACKEND_ENV, "rust");
+        let keys = restart_required_keys(&before, &after);
+        if cfg!(feature = "audio-in-rust") {
+            assert_eq!(
+                keys,
+                vec!["audio_device"],
+                "rust backend must surface a live device change as restart-required",
+            );
+        } else {
+            assert!(
+                keys.is_empty(),
+                "without the audio-in-rust feature the env opt-in is ignored",
+            );
+        }
+
+        match prev {
+            Some(v) => std::env::set_var(AUDIO_BACKEND_ENV, v),
+            None => std::env::remove_var(AUDIO_BACKEND_ENV),
+        }
+    }
 
     #[test]
     fn restart_required_keys_reports_restart_only_changes() {

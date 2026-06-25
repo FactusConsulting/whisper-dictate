@@ -32,7 +32,9 @@ pub mod vad;
 pub use capture::{AudioChunk, CaptureHandle};
 pub use pipe::{event_to_json_line, write_events};
 pub use resampler::{FrameResampler, FRAME_SIZE, OUTPUT_RATE};
-pub use stdin_bridge::{spawn_bridge, BridgeError, BridgeHandle};
+pub use stdin_bridge::{
+    spawn_bridge, spawn_bridge_pending_ready, BridgeError, BridgeHandle, PendingBridge,
+};
 pub use vad::{SileroVad, SmoothedVad, VadEvent};
 
 /// Bundled Silero v4 ONNX bytes used by [`AudioPipeline::start`] when the
