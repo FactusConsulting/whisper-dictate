@@ -27,6 +27,20 @@ pub enum Command {
     },
     /// Check runtime dependencies and platform readiness.
     Doctor,
+    /// Run the golden benchmark corpus through the configured backend and
+    /// print a one-line `[benchmark] ...` summary. Same code path as the
+    /// "Run benchmark" button — the corpus is resolved relative to the app
+    /// root (or per-user appdata) and the configured backend is used.
+    #[command(alias = "benchmark")]
+    Bench,
+    /// Record reference audio for a golden-corpus item from the configured
+    /// microphone and save it to `<appdata>/benchmark/audio/<id>.wav`.
+    /// `id` must match `[A-Za-z0-9._-]+` (the same filename-stem allowlist the
+    /// UI picker enforces).
+    CorpusRecord {
+        /// Corpus item id (filename stem under `<appdata>/benchmark/audio/`).
+        id: String,
+    },
     /// Install or repair local runtime dependencies.
     Install,
     /// Run the Ubuntu Wayland desktop setup helper.
@@ -505,5 +519,30 @@ mod tests {
     fn parses_devices_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "devices"]);
         assert_eq!(cli.command, Some(Command::Devices));
+    }
+
+    #[test]
+    fn parses_bench_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "bench"]);
+        assert_eq!(cli.command, Some(Command::Bench));
+    }
+
+    #[test]
+    fn parses_benchmark_alias_subcommand() {
+        // `benchmark` is exposed as an alias of `bench` so users (and the
+        // older docs) can spell it out without the parser tripping.
+        let cli = Cli::parse_from(["whisper-dictate", "benchmark"]);
+        assert_eq!(cli.command, Some(Command::Bench));
+    }
+
+    #[test]
+    fn parses_corpus_record_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "corpus-record", "da-001"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::CorpusRecord {
+                id: "da-001".to_owned(),
+            })
+        );
     }
 }

@@ -9,6 +9,13 @@ pub mod audio;
 // root rather than under `audio/` because it has no cpal/ONNX deps and
 // must compile in stock builds for tests + future callers.
 pub mod audio_dsp;
+// Pure scoring / reporting port of `vp_benchmark` + `vp_benchmark_report`
+// (Wave 6 of #348). The full benchmark orchestrator stays in Python because it
+// drives the heavyweight STT backends; this module owns the WER/CER/term
+// matching + summary line shaping that's worth cross-checking in Rust, plus
+// the thin `bench` CLI handler that shells out to the existing worker
+// command.
+pub mod benchmark;
 pub mod cli;
 pub mod cloud_api;
 pub mod command_hook;
@@ -21,6 +28,12 @@ pub mod config;
 // `dictate-ops` JSON-RPC subcommand the Python caller shells out to
 // when `VOICEPI_DICTATE_BACKEND=rust` (default keeps Python).
 pub mod dictate;
+// Pure-logic port of the `--record-corpus-item` user tool (Wave 6 of #348).
+// Audio capture stays in Python (reuses the negotiated `vp_capture` path);
+// this module owns the corpus-id safety guard + the duration heuristic +
+// the thin `corpus-record` CLI handler that shells out to the existing worker
+// command.
+pub mod corpus_record;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
 // Python-removal roadmap #348). Gated behind `audio-in-rust` so the default
 // build does not pull cpal — the audio capture feature already requires the
