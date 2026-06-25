@@ -202,6 +202,26 @@ impl SileroVad {
     pub fn is_voice(&mut self, frame: &[f32]) -> Result<bool, anyhow::Error> {
         Ok(self.probability(frame)? >= self.threshold)
     }
+
+    /// Zero the inner Silero VAD's recurrent state (`h`/`c` LSTM
+    /// tensors). Called from [`SmoothedVad::reset`] so a mid-utterance
+    /// cancel doesn't bleed LSTM context from the discarded audio into
+    /// the next recording's first VAD decisions (PR #335 iteration-2
+    /// review finding #3). The smoothing-only wrapper fields are
+    /// reset alongside this in `SmoothedVad::reset`.
+    ///
+    /// No-op for the RMS and AlwaysError test backends: they are
+    /// stateless across calls.
+    pub fn reset(&mut self) {
+        match &mut self.backend {
+            Backend::Silero(inner) => inner.reset(),
+            Backend::Rms => {}
+            #[cfg(test)]
+            Backend::AlwaysError => {}
+            #[cfg(test)]
+            Backend::ErrorAfter(_) => {}
+        }
+    }
 }
 
 /// State machine that wraps [`SileroVad`] with prefill, onset debounce and
@@ -246,6 +266,13 @@ impl SmoothedVad {
         self.in_speech = false;
         self.voice_run = 0;
         self.silence_run = 0;
+        // Iteration-2 review finding #3: also zero the inner Silero
+        // VAD's LSTM recurrent state (`h`/`c` tensors). Without this,
+        // a cancel mid-utterance leaves the next recording's first
+        // VAD decisions biased by audio the user explicitly threw
+        // away — typically a clipped onset or a spurious early
+        // SpeechStart on the residual phoneme context.
+        self.inner.reset();
         was_in_speech
     }
 

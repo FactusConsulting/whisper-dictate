@@ -130,3 +130,138 @@ fn pipeline_detects_speech_in_synthetic_sine_recording() {
         "expected ~50+ Frame events inside the utterance, got {frames}",
     );
 }
+
+/// Iteration-2 review finding #3: cancelling mid-utterance must zero
+/// the Silero LSTM recurrent state. Without that reset, the LSTM
+/// `h`/`c` tensors carry phoneme context from the cancelled audio
+/// into the next recording, so the first frames after the cancel can
+/// be biased — typically a spurious `SpeechStart` while feeding pure
+/// silence right after the cancel.
+///
+/// This test feeds the real Silero ONNX model 600 ms of loud sine to
+/// drive it deep into voice context, calls `SmoothedVad::reset()`
+/// (the supervisor's cancel hook), then feeds 30+ frames of pure
+/// silence (≥ 900 ms — well past `ONSET_FRAMES`'s 2-frame debounce
+/// and Silero's own context window) and asserts NO `SpeechStart` is
+/// emitted in that silence window.
+#[test]
+fn reset_zeroes_silero_lstm_so_post_cancel_silence_does_not_re_trigger() {
+    use whisper_dictate_app::audio::FRAME_SIZE;
+
+    // Build a smoothed VAD on top of the real Silero model — the bug
+    // only manifests on a backend that has recurrent state. The RMS
+    // stub is stateless and would never reproduce the issue.
+    let silero =
+        SileroVad::from_embedded_bytes(include_bytes!("../../../assets/silero_vad.onnx"))
+            .expect("load embedded Silero model");
+    let mut vad = SmoothedVad::new(silero);
+
+    // Reuse the companion test's signal generator + resampler so we
+    // know it converges to a SpeechStart against the real Silero
+    // model (verified by `pipeline_detects_speech_in_synthetic_sine_recording`).
+    // We need a leading silence segment because Silero scores the
+    // first few frames against an uninitialised LSTM, where the bias
+    // can suppress an instant SpeechStart even for a clear sine.
+    let priming_input = make_input(); // 0.6 s silence + 1.5 s sine + 0.6 s silence
+    // Resample once into 16 kHz / 480-sample frames so we can split
+    // them into "feed-then-cancel" vs. "post-cancel silence" segments.
+    let frames_16k: Vec<Vec<f32>> = {
+        let mut resampler = FrameResampler::new(INPUT_RATE).expect("resampler");
+        let mut out: Vec<Vec<f32>> = Vec::new();
+        for chunk in priming_input.chunks(480) {
+            resampler.push(chunk, |frame| out.push(frame.to_vec()));
+        }
+        resampler.finish(|frame| out.push(frame.to_vec()));
+        out
+    };
+    // Feed frames until in_speech goes true, then a few more so the
+    // LSTM is deeply biased toward voice. Stop at the point we'd
+    // expect the cancel — well before the trailing silence so the
+    // test does not depend on the natural SpeechEnd path.
+    let mut entered = false;
+    let mut after_entry = 0usize;
+    let mut consumed = 0usize;
+    for frame in &frames_16k {
+        let _ = vad.feed(frame).expect("vad feed during voice");
+        consumed += 1;
+        if vad.in_speech() {
+            if !entered {
+                entered = true;
+            }
+            after_entry += 1;
+            if after_entry >= 15 {
+                break;
+            }
+        }
+    }
+    assert!(
+        entered,
+        "test setup must drive the VAD into in_speech before reset; \
+         consumed {consumed} of {} primed frames — investigate before \
+         changing the test",
+        frames_16k.len(),
+    );
+
+    // Cancel mid-utterance — this is what the supervisor calls on PTT
+    // release / explicit cancel. The wrapper state clears AND, per the
+    // fix, the Silero LSTM state is zeroed.
+    let was_in_speech = vad.reset();
+    assert!(was_in_speech, "reset() must report it cancelled an utterance");
+
+    // Pump 30 frames of silence to clear any residual hangover state
+    // — without this, the SmoothedVad might still be processing the
+    // pre-reset voice context via wrapper-level smoothing (although
+    // reset clears `in_speech` directly). Also asserts the basic
+    // user-observable invariant: post-cancel silence must not trip a
+    // spurious SpeechStart.
+    let silence_frame = vec![0.0f32; FRAME_SIZE];
+    let mut spurious_starts = 0;
+    for _ in 0..30 {
+        match vad.feed(&silence_frame).expect("vad feed during silence") {
+            VadEvent::SpeechStart(_) => spurious_starts += 1,
+            VadEvent::SpeechFrame(_) | VadEvent::SpeechEnd | VadEvent::Silence => {}
+        }
+    }
+    assert_eq!(
+        spurious_starts, 0,
+        "post-cancel silence must not produce SpeechStart",
+    );
+    assert!(
+        !vad.in_speech(),
+        "VAD must remain out of speech throughout the post-cancel silence",
+    );
+
+    // Property check that catches the LSTM-bleed bug independently
+    // of Silero's onset threshold: feed the same primed voice signal
+    // and measure the SpeechStart offset against a FRESH VAD on
+    // identical input. With a polluted LSTM, the post-cancel run
+    // converges SOONER (the LSTM is already "warm" with voice
+    // context). We tolerate a small jitter for Silero numerical
+    // noise but flag a > 5-frame difference as the bug.
+    let mut fresh_vad = SmoothedVad::new(
+        SileroVad::from_embedded_bytes(include_bytes!("../../../assets/silero_vad.onnx"))
+            .expect("load embedded Silero model"),
+    );
+    let onset_fresh = first_speech_start_offset(&mut fresh_vad, &frames_16k)
+        .expect("fresh vad must produce SpeechStart on the primed signal");
+    let onset_reset = first_speech_start_offset(&mut vad, &frames_16k)
+        .expect("reset vad must produce SpeechStart on the primed signal");
+    let drift = (onset_reset as i32 - onset_fresh as i32).abs();
+    assert!(
+        drift <= 5,
+        "post-reset SpeechStart offset {onset_reset} drifts >5 frames \
+         from the fresh-vad baseline {onset_fresh} — LSTM recurrent \
+         state was not zeroed on reset",
+    );
+}
+
+/// Feed `frames` to `vad` and return the index of the frame whose
+/// feed produced a `SpeechStart`. `None` if no `SpeechStart` fires.
+fn first_speech_start_offset(vad: &mut SmoothedVad, frames: &[Vec<f32>]) -> Option<usize> {
+    for (i, frame) in frames.iter().enumerate() {
+        if let VadEvent::SpeechStart(_) = vad.feed(frame).expect("vad feed") {
+            return Some(i);
+        }
+    }
+    None
+}
