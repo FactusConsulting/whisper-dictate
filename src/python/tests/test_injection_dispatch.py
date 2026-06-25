@@ -401,3 +401,98 @@ class InjectWaylandDispatchTests(_InjectBase):
         self.assertIn("fallback ydotool", out.getvalue())
 
 
+class InjectViaRustBackendMixinTests(_InjectBase):
+    """Mixin-level dispatch through `_inject_via_rust_backend` (Codex P1/P2)."""
+
+    def _rust_target(self, mode="auto", title=None, process=None):
+        t = self._target(mode=mode, title=title, process=process)
+        # _target binds the platform predicates/methods but not the rust
+        # delegate — bind it now so InjectMixin._inject can find it.
+        mixin = self.inject.InjectMixin
+        t._inject_via_rust_backend = mixin._inject_via_rust_backend.__get__(
+            t, type(t)
+        )
+        # Capture the inject_via_rust shellout calls so we can assert on
+        # the (mode, text) actually delegated.
+        t._rust_calls = []
+
+        def _fake_inject(text, **kwargs):
+            t._rust_calls.append({"text": text, **kwargs})
+            return True
+
+        return t, _fake_inject
+
+    def test_paste_path_populates_clipboard_before_delegating(self):
+        """P1 #1 — Rust paste backend doesn't own the clipboard; we must copy."""
+        t, fake = self._rust_target(mode="paste")
+        with _env(VOICEPI_INJECTION_BACKEND="rust",
+                  VOICEPI_RUST_INJECTOR="/bin/whisper-dictate",
+                  WAYLAND_DISPLAY=None), \
+                patch("whisper_dictate.vp_inject.inject_via_rust", side_effect=fake), \
+                patch("whisper_dictate.vp_inject._CLIPBOARD_RESTORE_ENABLED",
+                      False), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "rust-paste-text")
+
+        self.assertEqual(t._last_inject_strategy, "rust-paste")
+        # Clipboard pre-populated BEFORE the rust shellout.
+        self.assertEqual(self.clip.copied, ["rust-paste-text"])
+        self.assertEqual(len(t._rust_calls), 1)
+        self.assertEqual(t._rust_calls[0]["mode"], "paste")
+        self.assertEqual(t._rust_calls[0]["text"], "rust-paste-text")
+
+    def test_auto_preserves_type_strategy_on_x11_plain_ascii(self):
+        """P2 #1 — `auto` on X11 with plain ASCII text should TYPE, not paste."""
+        t, fake = self._rust_target(mode="auto")
+        with _env(VOICEPI_INJECTION_BACKEND="rust",
+                  VOICEPI_RUST_INJECTOR="/bin/whisper-dictate",
+                  WAYLAND_DISPLAY=None), \
+                patch.object(self.inject.os, "name", "posix"), \
+                patch("whisper_dictate.vp_inject_rust.os.name", "posix"), \
+                patch("whisper_dictate.vp_inject.inject_via_rust", side_effect=fake), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "hello")
+
+        self.assertEqual(t._last_inject_strategy, "rust-typing")
+        self.assertEqual(t._rust_calls[0]["mode"], "typing")
+        # Typing path must NOT touch the clipboard.
+        self.assertEqual(self.clip.copied, [])
+
+    def test_auto_pastes_on_windows(self):
+        """P2 #1 — `auto` on Windows always pastes (pynput drops on burst)."""
+        t, fake = self._rust_target(mode="auto")
+        with _env(VOICEPI_INJECTION_BACKEND="rust",
+                  VOICEPI_RUST_INJECTOR="/bin/whisper-dictate",
+                  WAYLAND_DISPLAY=None), \
+                patch.object(self.inject.os, "name", "nt"), \
+                patch("whisper_dictate.vp_inject_rust.os.name", "nt"), \
+                patch("whisper_dictate.vp_inject.inject_via_rust", side_effect=fake), \
+                patch("whisper_dictate.vp_inject._CLIPBOARD_RESTORE_ENABLED",
+                      False), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "hello")
+
+        self.assertEqual(t._last_inject_strategy, "rust-paste")
+        self.assertEqual(t._rust_calls[0]["mode"], "paste")
+        self.assertEqual(self.clip.copied, ["hello"])
+
+    def test_releases_stale_modifiers_before_delegating(self):
+        """P2 #2 — physical Ctrl held from a PTT chord must be released first."""
+        t, fake = self._rust_target(mode="paste")
+        with _env(VOICEPI_INJECTION_BACKEND="rust",
+                  VOICEPI_RUST_INJECTOR="/bin/whisper-dictate",
+                  WAYLAND_DISPLAY=None), \
+                patch("whisper_dictate.vp_inject.inject_via_rust", side_effect=fake), \
+                patch("whisper_dictate.vp_inject._CLIPBOARD_RESTORE_ENABLED",
+                      False), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "hi")
+
+        # `_release_stale_modifiers` emits a `release` event for each of the
+        # known modifier keys via the fake Controller. Assert Ctrl + Shift
+        # are both released. (These are the rc.3 "Jeg deppP" symptoms.)
+        released = {e[1] for e in t._kb.events if e[0] == "release"}
+        self.assertIn(self.kbmod.Key.ctrl, released)
+        self.assertIn(self.kbmod.Key.shift, released)
+
+

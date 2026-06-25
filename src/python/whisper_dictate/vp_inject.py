@@ -24,6 +24,8 @@ import time
 from whisper_dictate.vp_feedback import notify_error
 from whisper_dictate.vp_inject_rust import (
     inject_via_rust,
+    populate_clipboard_for_rust_paste,
+    resolve_rust_inject_mode,
     rust_injection_backend_enabled,
 )
 from whisper_dictate.vp_keys_solo import is_bare_modifier_binding
@@ -293,17 +295,53 @@ class InjectMixin:
             print(f"[ydotool] error: {e}", flush=True)
             return False
 
-    def _inject_via_rust_backend(self, text: str) -> bool:
+    def _inject_via_rust_backend(self, text: str, on_wayland: bool = False) -> bool:
         """Phase 2.1 path: shell out to `whisper-dictate inject` for the whole
         injection. Active only when ``VOICEPI_INJECTION_BACKEND=rust`` is set
         (default: False). Returns True on success, False to fall back to the
         existing Python path so a missing/unhealthy Rust binary never breaks
         the worker. Strategy label distinguishes the Rust path in worker logs
         without changing existing strategy semantics.
+
+        Codex review fixes (PR #351) live in :mod:`vp_inject_rust`:
+          * P1 — :func:`populate_clipboard_for_rust_paste` copies text into
+            pyperclip before the paste handoff (the Rust backend only sends
+            the keystroke; it doesn't own the clipboard).
+          * P2 — :func:`resolve_rust_inject_mode` preserves the ``auto``
+            strategy heuristics that the Python path used so the delegated
+            run picks the same paste-vs-type that Python would have.
+          * P2 — :meth:`_release_stale_modifiers` drops physical Ctrl/Shift
+            still down from a PTT chord so the delegated paste / type lands
+            clean.
         """
-        mode = "paste" if (self.mode in ("auto", "paste")) else "type"
+        mode = resolve_rust_inject_mode(
+            self.mode,
+            text,
+            on_wayland=on_wayland,
+            wayland_text_prefers_paste=self._wayland_text_prefers_paste,
+            text_prefers_paste=self._text_prefers_paste,
+            target_prefers_paste=self._target_prefers_paste,
+            ptt_is_bare_modifier=self._ptt_is_bare_modifier,
+        )
         # The Rust dispatcher's `typing` arm maps to the Python `type` mode.
         rust_mode = "paste" if mode == "paste" else "typing"
+
+        # P2: drop stale PTT modifiers before any synthetic input fires.
+        try:
+            self._release_stale_modifiers()
+        except Exception as exc:
+            # Mirror _paste()'s permissive philosophy: log + continue. The
+            # injection itself is more important than this cleanup step.
+            print(f"[inject] stale-modifier release failed: {exc}", flush=True)
+
+        # P1: Rust paste backend assumes the clipboard already holds the text.
+        if rust_mode == "paste" and not populate_clipboard_for_rust_paste(
+            text,
+            restore_enabled=_CLIPBOARD_RESTORE_ENABLED,
+            restore_after_delay=_restore_clipboard_after_delay,
+        ):
+            return False
+
         ok = inject_via_rust(
             text,
             mode=rust_mode,
@@ -576,7 +614,9 @@ class InjectMixin:
             return
 
         try:
-            if rust_injection_backend_enabled() and self._inject_via_rust_backend(text):
+            if rust_injection_backend_enabled() and self._inject_via_rust_backend(
+                text, on_wayland=on_wayland
+            ):
                 return
             if on_wayland:
                 self._inject_wayland(text)

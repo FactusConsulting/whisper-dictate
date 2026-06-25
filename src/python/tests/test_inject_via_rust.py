@@ -166,3 +166,177 @@ class InjectViaRustTests(TestCase):
         with _env(VOICEPI_RUST_INJECTOR="/bin/whisper-dictate"), \
                 patch.object(subprocess, "run", side_effect=fake_run):
             self.assertFalse(vp_inject_rust.inject_via_rust("hi"))
+
+
+class ResolveRustInjectModeTests(TestCase):
+    """Codex P2 #1 — `auto` strategy must survive the Rust handoff."""
+
+    @staticmethod
+    def _resolve(user_mode, text, on_wayland, **overrides):
+        defaults = dict(
+            wayland_text_prefers_paste=lambda _t: False,
+            text_prefers_paste=lambda _t: False,
+            target_prefers_paste=lambda: False,
+            ptt_is_bare_modifier=lambda: False,
+        )
+        defaults.update(overrides)
+        return vp_inject_rust.resolve_rust_inject_mode(
+            user_mode, text, on_wayland=on_wayland, **defaults
+        )
+
+    def test_explicit_paste_passes_through(self):
+        self.assertEqual(self._resolve("paste", "hi", on_wayland=False), "paste")
+
+    def test_explicit_type_passes_through(self):
+        self.assertEqual(self._resolve("type", "hi", on_wayland=False), "type")
+
+    def test_auto_types_plain_ascii_on_x11_macos(self):
+        # On non-Windows with no special signals, auto should type.
+        with patch("whisper_dictate.vp_inject_rust.os.name", "posix"):
+            self.assertEqual(self._resolve("auto", "hi", on_wayland=False), "type")
+
+    def test_auto_always_pastes_on_windows(self):
+        # Windows: auto always pastes (pynput's per-char type drops).
+        with patch("whisper_dictate.vp_inject_rust.os.name", "nt"):
+            self.assertEqual(self._resolve("auto", "hi", on_wayland=False), "paste")
+
+    def test_auto_pastes_when_text_prefers_paste(self):
+        with patch("whisper_dictate.vp_inject_rust.os.name", "posix"):
+            self.assertEqual(
+                self._resolve(
+                    "auto", "på", on_wayland=False,
+                    text_prefers_paste=lambda _t: True,
+                ),
+                "paste",
+            )
+
+    def test_auto_pastes_when_target_prefers_paste(self):
+        with patch("whisper_dictate.vp_inject_rust.os.name", "posix"):
+            self.assertEqual(
+                self._resolve(
+                    "auto", "hi", on_wayland=False,
+                    target_prefers_paste=lambda: True,
+                ),
+                "paste",
+            )
+
+    def test_auto_pastes_when_ptt_is_bare_modifier(self):
+        with patch("whisper_dictate.vp_inject_rust.os.name", "posix"):
+            self.assertEqual(
+                self._resolve(
+                    "auto", "hi", on_wayland=False,
+                    ptt_is_bare_modifier=lambda: True,
+                ),
+                "paste",
+            )
+
+    def test_auto_wayland_types_plain_ascii(self):
+        # Wayland branch: plain ASCII with no PTT-modifier signal -> type.
+        self.assertEqual(self._resolve("auto", "hi", on_wayland=True), "type")
+
+    def test_auto_wayland_pastes_when_text_prefers_paste(self):
+        self.assertEqual(
+            self._resolve(
+                "auto", "på", on_wayland=True,
+                wayland_text_prefers_paste=lambda _t: True,
+            ),
+            "paste",
+        )
+
+    def test_auto_wayland_pastes_on_bare_modifier_ptt(self):
+        self.assertEqual(
+            self._resolve(
+                "auto", "hi", on_wayland=True,
+                ptt_is_bare_modifier=lambda: True,
+            ),
+            "paste",
+        )
+
+
+class PopulateClipboardForRustPasteTests(TestCase):
+    """Codex P1 #1 — Rust paste backend needs the clipboard pre-populated."""
+
+    def setUp(self):
+        # Fake pyperclip so `import pyperclip` inside the function resolves
+        # to a controllable double — no native dep required in CI.
+        import sys as _sys
+        import types as _types
+
+        self.pyperclip = _types.ModuleType("pyperclip")
+        self.pyperclip.copied = []
+        self.pyperclip.stored = "prev-clip"
+
+        def _copy(text):
+            self.pyperclip.copied.append(text)
+
+        def _paste():
+            return self.pyperclip.stored
+
+        self.pyperclip.copy = _copy
+        self.pyperclip.paste = _paste
+        self._restore_real = _sys.modules.get("pyperclip")
+        _sys.modules["pyperclip"] = self.pyperclip
+
+    def tearDown(self):
+        import sys as _sys
+        if self._restore_real is None:
+            _sys.modules.pop("pyperclip", None)
+        else:
+            _sys.modules["pyperclip"] = self._restore_real
+
+    def test_copies_text_to_clipboard(self):
+        ok = vp_inject_rust.populate_clipboard_for_rust_paste(
+            "hello", restore_enabled=False,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(self.pyperclip.copied, ["hello"])
+
+    def test_returns_false_when_pyperclip_missing(self):
+        # Replace with a module that raises on import — easier: pop and
+        # have the import fail via a sentinel raising attribute access.
+        import sys as _sys
+        _sys.modules.pop("pyperclip", None)
+
+        class _Boom:
+            def __getattr__(self, _name):
+                raise ImportError("pyperclip not installed")
+
+        # Setting to a normal module that raises on copy() exercises the
+        # outer try/except. To exercise the import-error branch we need
+        # the import itself to fail — simulate by deleting and blocking.
+        import importlib
+
+        class _Finder:
+            def find_spec(self, name, _path, _target=None):
+                if name == "pyperclip":
+                    raise ImportError("pyperclip not installed")
+                return None
+
+        finder = _Finder()
+        _sys.meta_path.insert(0, finder)
+        try:
+            importlib.invalidate_caches()
+            ok = vp_inject_rust.populate_clipboard_for_rust_paste("hi")
+            self.assertFalse(ok)
+        finally:
+            _sys.meta_path.remove(finder)
+
+    def test_schedules_restore_when_enabled(self):
+        calls: list = []
+
+        def fake_restore(pyperclip_mod, injected, previous):
+            calls.append((injected, previous))
+
+        ok = vp_inject_rust.populate_clipboard_for_rust_paste(
+            "hello",
+            restore_enabled=True,
+            restore_after_delay=fake_restore,
+        )
+        self.assertTrue(ok)
+        # Thread is daemon; give it a moment to run.
+        import time
+        for _ in range(50):
+            if calls:
+                break
+            time.sleep(0.01)
+        self.assertEqual(calls, [("hello", "prev-clip")])

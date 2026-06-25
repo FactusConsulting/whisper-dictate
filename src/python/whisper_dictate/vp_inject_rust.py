@@ -1,7 +1,7 @@
 """Phase 2.1 (issue #348) Rust-injector shell-out helpers.
 
 Lives in its own module so ``vp_inject.py`` stays under the 500-LOC repo
-limit. Two responsibilities:
+limit. Responsibilities:
 
 * :func:`rust_injection_backend_enabled` — the on/off switch driven by the
   ``VOICEPI_INJECTION_BACKEND`` environment variable.
@@ -9,6 +9,12 @@ limit. Two responsibilities:
   ``whisper-dictate inject``. Returns a bool so the caller can fall back to
   the existing Python path on any failure (binary missing, transport error,
   helper-reported ``ok=False``).
+* :func:`resolve_rust_inject_mode` — auto-strategy resolver shared with
+  the Python path. Hoisted out of ``vp_inject.py`` so it stays unit-testable
+  without a Dictate instance and so the mixin file stays slim.
+* :func:`populate_clipboard_for_rust_paste` — copies text into pyperclip
+  (with a delayed restore) so the Rust paste backend, which only sends the
+  Ctrl+V keystroke, has something to paste.
 
 Module-level functions so unit tests can drive them directly with a stubbed
 ``subprocess.run`` — no mixin instance required.
@@ -18,6 +24,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
+from typing import Callable, Optional
 
 
 # Public env contract — also referenced from vp_inject.py for the dispatch
@@ -93,3 +101,79 @@ def inject_via_rust(
         err = response.get("error") or "unknown error"
         print(f"[inject] rust injector reported failure: {err}", flush=True)
     return ok
+
+
+def resolve_rust_inject_mode(
+    user_mode: str,
+    text: str,
+    *,
+    on_wayland: bool,
+    wayland_text_prefers_paste: Callable[[str], bool],
+    text_prefers_paste: Callable[[str], bool],
+    target_prefers_paste: Callable[[], bool],
+    ptt_is_bare_modifier: Callable[[], bool],
+) -> str:
+    """Pick ``"paste"`` or ``"type"`` for the Rust dispatcher.
+
+    Codex P2 (PR #351): the original delegation collapsed ``auto`` to
+    ``paste`` unconditionally, losing the per-text / per-target heuristics
+    that the Python path used. This mirrors ``_inject_other`` /
+    ``_inject_wayland`` so the Rust path picks the same strategy the Python
+    path would have. The predicate callables let the mixin keep its existing
+    methods without exposing them as module-level functions.
+    """
+    if user_mode == "paste":
+        return "paste"
+    if user_mode == "type":
+        return "type"
+    # user_mode == "auto"
+    if on_wayland:
+        return "paste" if (
+            wayland_text_prefers_paste(text) or ptt_is_bare_modifier()
+        ) else "type"
+    return "paste" if (
+        os.name == "nt"
+        or target_prefers_paste()
+        or text_prefers_paste(text)
+        or ptt_is_bare_modifier()
+    ) else "type"
+
+
+def populate_clipboard_for_rust_paste(
+    text: str,
+    *,
+    restore_enabled: bool = True,
+    restore_after_delay: Optional[Callable] = None,
+) -> bool:
+    """Copy ``text`` to the clipboard before delegating paste to Rust.
+
+    Codex P1 (PR #351): the Rust paste backend only sends the Ctrl+V
+    keystroke — it doesn't own the clipboard. Without this step the
+    delegated paste fired on an empty (or stale) clipboard. Returns
+    True if the clipboard was populated; False (and skips the restore
+    thread) when pyperclip is unavailable so the caller can decide
+    whether to fall back to the Python path.
+    """
+    try:
+        import pyperclip  # type: ignore[import-not-found]
+    except Exception as exc:
+        print(f"[inject] pyperclip unavailable for rust paste: {exc}", flush=True)
+        return False
+    try:
+        previous: Optional[str] = None
+        try:
+            previous = pyperclip.paste()
+        except Exception:
+            pass
+        pyperclip.copy(text)
+        if restore_enabled and previous is not None and restore_after_delay is not None:
+            t = threading.Thread(
+                target=restore_after_delay,
+                args=(pyperclip, text, previous),
+                daemon=True,
+            )
+            t.start()
+        return True
+    except Exception as exc:
+        print(f"[inject] clipboard populate for rust paste failed: {exc}", flush=True)
+        return False
