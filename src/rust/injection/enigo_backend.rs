@@ -30,7 +30,11 @@ pub trait InjectorBackend {
 
 /// Send the configured paste keystroke. Pure logic over the backend trait;
 /// the actual `enigo::Enigo` impl lives behind `cfg(feature = "rust-injection")`.
-pub fn send_paste_shortcut<B: InjectorBackend>(
+///
+/// `?Sized` lets the dispatcher pass a `&mut dyn InjectorBackend` straight
+/// through without an extra level of generics — important now that
+/// `Injector` accepts trait-object backends (P1 #2 from PR #351 review).
+pub fn send_paste_shortcut<B: InjectorBackend + ?Sized>(
     backend: &mut B,
     shortcut: PasteShortcut,
 ) -> Result<()> {
