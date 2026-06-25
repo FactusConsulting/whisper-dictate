@@ -72,7 +72,8 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                  lang: str | None, *, json_output: bool = False,
                  metrics_jsonl: str | None = None, model_name: str = "",
                  device: str = "", compute_type: str = "",
-                 model_load_s: float | None = None):
+                 model_load_s: float | None = None,
+                 audio_source: str = "sounddevice"):
         self.model = model
         self.key = key
         self.mode = mode  # "auto" | "type" | "paste" | "print"
@@ -83,6 +84,12 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self.device = device
         self.compute_type = compute_type
         self.stt_backend = STT_BACKEND
+        # Source of audio frames for capture. "sounddevice" (default) opens
+        # cpal/PortAudio via vp_capture; "rust-stdin" reads JSON-line events
+        # piped in from the Rust controller (see vp_rust_audio_source). Only
+        # set to "rust-stdin" when the supervisor was launched with
+        # VOICEPI_AUDIO_BACKEND=rust AND the audio-in-rust feature is built in.
+        self._audio_source = audio_source
         self._config_mtime = config_mtime()
         self._effective_config = effective_config()
         self.parakeet_min_seconds = float(
@@ -500,7 +507,13 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self.audio_ducker.enter()
         _emit_worker_event("status", state="opening")
         try:
-            if vp_capture._arecord_device():
+            if getattr(self, "_audio_source", "sounddevice") == "rust-stdin":
+                # audio-in-rust: the Rust controller drives capture and pipes
+                # frames into our stdin. The mixin spawns a reader thread that
+                # accumulates frames into self.frames between speech_start /
+                # speech_end events.
+                self._capture_backend, self._audio_input_device = self._start_rust_stdin()
+            elif vp_capture._arecord_device():
                 self._capture_backend, self._audio_input_device = self._start_arecord()
             else:
                 self._capture_backend, self._audio_input_device = self._start_sounddevice()

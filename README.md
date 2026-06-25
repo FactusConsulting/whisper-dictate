@@ -123,8 +123,38 @@ default UI build:
 | `ui-egui-glow`       | yes     | egui via the glow (OpenGL) backend — shipping renderer. |
 | `ui-egui-wgpu`       | no      | egui via the wgpu backend — continuously-validated exit route. |
 | `whisper-rs-local`   | no      | Compiles in [whisper-rs] (whisper.cpp bindings) for local CPU inference. See below. |
+| `audio-in-rust`      | no      | Compiles in the Rust-side capture pipeline (cpal + Silero VAD). Opt-in at runtime via `VOICEPI_AUDIO_BACKEND=rust`. See below. |
 
 [whisper-rs]: https://crates.io/crates/whisper-rs
+
+### Rust audio capture (experimental)
+
+Behind the **`audio-in-rust`** cargo feature, the crate ships a self-contained
+audio capture pipeline (cpal microphone capture → rubato resample → Silero v4
+VAD → JSON-line events). When the runtime supervisor launches the Python
+worker, it spawns the pipeline in a worker thread and pipes encoded frames
+into the worker's stdin (the worker reads them via `RustStdinAudioSource`
+instead of opening sounddevice).
+
+To enable for a build:
+
+```bash
+cargo build --features audio-in-rust --release
+```
+
+At runtime, opt in by exporting the env var **before** launching the app:
+
+```bash
+export VOICEPI_AUDIO_BACKEND=rust   # bash / Linux / macOS
+$env:VOICEPI_AUDIO_BACKEND = "rust" # PowerShell / Windows
+```
+
+Default builds and the unset / non-`rust` env value go through the existing
+Python sounddevice path unchanged — there is no behaviour change for users who
+haven't both compiled the feature in and set the env var. To roll back at
+runtime, unset the env var (the supervisor logs which path is active on every
+worker start). The feature is Phase 1 (single-utterance capture + frame
+forwarding); follow-up work will surface the Rust VAD's utterance boundaries.
 
 ### Local Whisper (experimental)
 

@@ -777,6 +777,18 @@ class CaptureMixin:
             capture_channels=self._capture_channels,
         )
 
+    def _start_rust_stdin(self) -> tuple[str, str]:
+        """Read audio frames from stdin (audio-in-rust feature).
+
+        Thin shim that delegates to :mod:`vp_capture_rust_stdin` so the
+        already-1k-line :mod:`vp_capture` stays under the project's
+        modularity guideline. See that module for the wire-format /
+        threading contract.
+        """
+        from .vp_capture_rust_stdin import start_rust_stdin_capture
+        self._cap_warned = False
+        return start_rust_stdin_capture(self)
+
     def _start_arecord(self) -> tuple[str, str]:
         self._capture_backend = "arecord"
         self._cap_warned = False
@@ -1116,6 +1128,19 @@ class CaptureMixin:
                 print(f"[cap] stream stop error (ignored): {exc}", flush=True)
             finally:
                 self._stream = None
+        # audio-in-rust: best-effort wait on the rust-stdin reader thread so
+        # the last appended frames are flushed before the transcribe step.
+        # The thread exits on its own once `self.recording` flips False or
+        # the Rust controller closes stdin; we bound the wait so a wedged
+        # reader can't hang the worker on PTT release.
+        rust_thread = getattr(self, "_rust_stdin_thread", None)
+        if rust_thread is not None:
+            try:
+                rust_thread.join(timeout=1.0)
+            except Exception as exc:
+                print(f"[cap] rust-stdin join error (ignored): {exc}", flush=True)
+            finally:
+                self._rust_stdin_thread = None
 
     def _recording_seconds(self, pcm) -> float:
         if self._record_started:

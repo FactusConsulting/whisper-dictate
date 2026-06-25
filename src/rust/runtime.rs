@@ -350,6 +350,13 @@ pub struct RuntimeSupervisor {
     tx: Sender<RuntimeEvent>,
     rx: Receiver<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
+    /// Active Rust→Python audio bridge, only `Some` when the worker was
+    /// spawned with the Rust capture backend. `None` for the default
+    /// Python sounddevice path AND for stock builds without the
+    /// `audio-in-rust` cargo feature (the field is then dead state, but
+    /// keeping a single field shape avoids cfg-gating the whole struct).
+    #[cfg(feature = "audio-in-rust")]
+    audio_bridge: Option<crate::audio::BridgeHandle>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -367,6 +374,8 @@ impl RuntimeSupervisor {
             tx,
             rx,
             repaint_notifier: None,
+            #[cfg(feature = "audio-in-rust")]
+            audio_bridge: None,
         }
     }
 
@@ -396,16 +405,52 @@ impl RuntimeSupervisor {
             return Err(anyhow!("runtime is already running"));
         }
 
+        // Phase-1 rollout (PR #341 — wiring the Rust audio pipeline):
+        // If the user opted in via VOICEPI_AUDIO_BACKEND=rust AND this
+        // binary was built with the `audio-in-rust` cargo feature, we
+        // splice the Rust capture path into the worker's stdin and ask
+        // Python to read frames from there. Default builds and the
+        // env-var-unset case go through the exact same code path as
+        // before — see `audio_spawn::should_use_rust_audio_backend` for
+        // the precise gate. To disable in an emergency: unset the env
+        // var, or rebuild without `--features audio-in-rust`.
+        let use_rust_audio = audio_spawn::should_use_rust_audio_backend();
+        let warn_unavailable = audio_pipeline_requested() && !audio_pipeline_available();
+        if warn_unavailable {
+            let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                "[runtime] {}",
+                audio_spawn::requested_but_unavailable_warning(),
+            )));
+        }
+
         self.state = RuntimeState::Starting;
-        let display = command.display();
-        let mut process = Command::new(&command.program);
+        let mut effective_command = command;
+        if use_rust_audio {
+            effective_command
+                .args
+                .push("--audio-source=rust-stdin".to_owned());
+        }
+        let display = effective_command.display();
+        let mut process = Command::new(&effective_command.program);
         process
-            .args(&command.args)
-            .current_dir(&command.working_dir)
+            .args(&effective_command.args)
+            .current_dir(&effective_command.working_dir)
             .env(WORKER_EVENTS_ENV, "1")
-            .envs(command.env.iter().map(|(key, value)| (key, value)))
+            .envs(
+                effective_command
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key, value)),
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if use_rust_audio {
+            // Only the Rust path needs to write to the worker's stdin
+            // (JSON frame events). Inherit otherwise — the Python path
+            // doesn't read stdin and a piped+unused stdin can confuse
+            // some libraries that probe `isatty()` on launch.
+            process.stdin(Stdio::piped());
+        }
         configure_piped_python_stdio(&mut process);
         configure_background_process(&mut process);
         let mut child = process.spawn()?;
@@ -427,6 +472,41 @@ impl RuntimeSupervisor {
             );
         }
 
+        #[cfg(feature = "audio-in-rust")]
+        if use_rust_audio {
+            // SAFETY of the unwrap: we asked for `stdin(Stdio::piped())`
+            // above so `child.stdin` is guaranteed `Some` immediately
+            // after spawn. The `?` below propagates a pipeline / model
+            // load failure as a synchronous error — the supervisor
+            // sees a failed `start()` rather than a half-started worker
+            // with no audio.
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow!("audio-in-rust: child stdin was not piped"))?;
+            match audio_spawn::spawn_audio_bridge_for_child(stdin) {
+                Ok((bridge, errors)) => {
+                    self.audio_bridge = Some(bridge);
+                    self.spawn_audio_bridge_error_watch(errors);
+                }
+                Err(err) => {
+                    // The bridge couldn't even start (model load or
+                    // capture open failed). Kill the worker we just
+                    // spawned and surface a typed error so the UI can
+                    // tell the user to switch backends. Reset state to
+                    // Stopped so the next start() attempt isn't blocked.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    self.state = RuntimeState::Stopped;
+                    return Err(anyhow!(
+                        "failed to start Rust audio pipeline: {err}; \
+                         unset VOICEPI_AUDIO_BACKEND to fall back to the \
+                         Python sounddevice path"
+                    ));
+                }
+            }
+        }
+
         self.state = RuntimeState::Running;
         self.child = Some(child);
         let _ = self.tx.send(RuntimeEvent::Started { command: display });
@@ -436,7 +516,65 @@ impl RuntimeSupervisor {
         Ok(())
     }
 
+    /// Watch the audio bridge's error channel in a background thread
+    /// and translate any [`crate::audio::BridgeError`] into a
+    /// [`RuntimeEvent::Error`] (UI surfaces it) or a stderr trace
+    /// (expected `WorkerClosed` on PTT release). Stops as soon as the
+    /// bridge's channel closes — the bridge sends AT MOST ONE error
+    /// per run, so this watcher is a tight one-shot loop. Fire-and-
+    /// forget: dropping the bridge closes the channel and the watcher
+    /// exits naturally.
+    #[cfg(feature = "audio-in-rust")]
+    fn spawn_audio_bridge_error_watch(
+        &self,
+        errors: std::sync::mpsc::Receiver<crate::audio::BridgeError>,
+    ) {
+        let tx = self.tx.clone();
+        let notifier = self.repaint_notifier.clone();
+        // Flag-up the active backend on the supervisor channel so the
+        // user can tell from the runtime log which path actually ran.
+        let _ = tx.send(RuntimeEvent::Stderr(
+            "[runtime] audio-in-rust: Rust capture pipeline active for this run".to_owned(),
+        ));
+        thread::spawn(move || {
+            use crate::audio::BridgeError;
+            while let Ok(err) = errors.recv() {
+                let event = match err {
+                    // WorkerClosed = the Python child closed stdin
+                    // (normal teardown). Surface as a stderr trace,
+                    // not an Error event, so the UI doesn't pop a
+                    // false-positive failure banner on every PTT release.
+                    BridgeError::WorkerClosed => RuntimeEvent::Stderr(
+                        "[runtime] audio-in-rust: worker closed audio stdin (normal teardown)"
+                            .to_owned(),
+                    ),
+                    BridgeError::Io(msg) => RuntimeEvent::Error(format!(
+                        "audio-in-rust: failed writing to worker stdin: {msg}"
+                    )),
+                    BridgeError::Pipeline(msg) => {
+                        RuntimeEvent::Error(format!("audio-in-rust: capture pipeline error: {msg}"))
+                    }
+                };
+                let _ = tx.send(event);
+                if let Some(notifier) = notifier.as_ref() {
+                    notifier();
+                }
+            }
+        });
+    }
+
     pub fn stop(&mut self) -> Result<()> {
+        // Stop the Rust audio bridge BEFORE killing the worker. The
+        // bridge closes its end of the stdin pipe; the worker's
+        // RustStdinAudioSource sees EOF and finishes the current
+        // utterance (no half-buffered audio). If we killed the worker
+        // first the bridge would race the kill with a write and emit
+        // a spurious `WorkerClosed` event.
+        #[cfg(feature = "audio-in-rust")]
+        if let Some(mut bridge) = self.audio_bridge.take() {
+            bridge.stop();
+        }
+
         let Some(mut child) = self.child.take() else {
             self.state = RuntimeState::Stopped;
             return Ok(());
@@ -475,6 +613,14 @@ impl RuntimeSupervisor {
                 Ok(Some(status)) => {
                     self.state = RuntimeState::Stopped;
                     self.child = None;
+                    // The worker exited (crash, --doctor finished,
+                    // user-killed, …). Tear the audio bridge down so
+                    // it doesn't keep cpal open against a missing
+                    // reader. Same teardown order as `stop()`.
+                    #[cfg(feature = "audio-in-rust")]
+                    if let Some(mut bridge) = self.audio_bridge.take() {
+                        bridge.stop();
+                    }
                     let _ = self.tx.send(RuntimeEvent::Exited {
                         code: status.code(),
                     });
@@ -483,6 +629,10 @@ impl RuntimeSupervisor {
                 Err(err) => {
                     self.state = RuntimeState::Stopped;
                     self.child = None;
+                    #[cfg(feature = "audio-in-rust")]
+                    if let Some(mut bridge) = self.audio_bridge.take() {
+                        bridge.stop();
+                    }
                     let _ = self.tx.send(RuntimeEvent::Error(err.to_string()));
                 }
             }
@@ -1135,10 +1285,14 @@ fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
         .then(|| root.to_path_buf())
 }
 
+pub mod audio_spawn;
+
 #[cfg(test)]
 mod app_root_tests;
 #[cfg(test)]
 mod audio_backend_tests;
+#[cfg(test)]
+mod audio_spawn_tests;
 #[cfg(test)]
 mod desktop_entry_tests;
 #[cfg(test)]
