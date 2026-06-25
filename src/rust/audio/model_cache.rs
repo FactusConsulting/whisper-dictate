@@ -84,10 +84,7 @@ pub(crate) fn cache_or_temp_model_path(model_bytes: &[u8]) -> Result<PathBuf, an
 /// here because the cached file is read at most once per process at
 /// startup — a concurrent reader on the same machine is not part of
 /// our model.
-fn replace_atomic(
-    tmp: &std::path::Path,
-    target: &std::path::Path,
-) -> Result<(), std::io::Error> {
+fn replace_atomic(tmp: &std::path::Path, target: &std::path::Path) -> Result<(), std::io::Error> {
     #[cfg(windows)]
     {
         match std::fs::rename(tmp, target) {

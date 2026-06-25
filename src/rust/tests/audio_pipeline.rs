@@ -151,9 +151,8 @@ fn reset_zeroes_silero_lstm_so_post_cancel_silence_does_not_re_trigger() {
     // Build a smoothed VAD on top of the real Silero model — the bug
     // only manifests on a backend that has recurrent state. The RMS
     // stub is stateless and would never reproduce the issue.
-    let silero =
-        SileroVad::from_embedded_bytes(include_bytes!("../../../assets/silero_vad.onnx"))
-            .expect("load embedded Silero model");
+    let silero = SileroVad::from_embedded_bytes(include_bytes!("../../../assets/silero_vad.onnx"))
+        .expect("load embedded Silero model");
     let mut vad = SmoothedVad::new(silero);
 
     // Reuse the companion test's signal generator + resampler so we
@@ -163,8 +162,8 @@ fn reset_zeroes_silero_lstm_so_post_cancel_silence_does_not_re_trigger() {
     // first few frames against an uninitialised LSTM, where the bias
     // can suppress an instant SpeechStart even for a clear sine.
     let priming_input = make_input(); // 0.6 s silence + 1.5 s sine + 0.6 s silence
-    // Resample once into 16 kHz / 480-sample frames so we can split
-    // them into "feed-then-cancel" vs. "post-cancel silence" segments.
+                                      // Resample once into 16 kHz / 480-sample frames so we can split
+                                      // them into "feed-then-cancel" vs. "post-cancel silence" segments.
     let frames_16k: Vec<Vec<f32>> = {
         let mut resampler = FrameResampler::new(INPUT_RATE).expect("resampler");
         let mut out: Vec<Vec<f32>> = Vec::new();
@@ -206,7 +205,10 @@ fn reset_zeroes_silero_lstm_so_post_cancel_silence_does_not_re_trigger() {
     // release / explicit cancel. The wrapper state clears AND, per the
     // fix, the Silero LSTM state is zeroed.
     let was_in_speech = vad.reset();
-    assert!(was_in_speech, "reset() must report it cancelled an utterance");
+    assert!(
+        was_in_speech,
+        "reset() must report it cancelled an utterance"
+    );
 
     // Pump 30 frames of silence to clear any residual hangover state
     // — without this, the SmoothedVad might still be processing the

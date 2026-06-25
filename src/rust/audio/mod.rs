@@ -342,13 +342,17 @@ mod tests {
         LOADER_RAN.store(false, Ordering::SeqCst);
         let result = AudioPipeline::start("__nonexistent_device_finding_4_test__", || {
             LOADER_RAN.store(true, Ordering::SeqCst);
-            Err(anyhow::anyhow!("synthetic model-load failure for finding-4 test"))
+            Err(anyhow::anyhow!(
+                "synthetic model-load failure for finding-4 test"
+            ))
         });
         assert!(
             LOADER_RAN.load(Ordering::SeqCst),
             "model loader must run during start()",
         );
-        let err = result.err().expect("start must return Err when loader fails");
+        let err = result
+            .err()
+            .expect("start must return Err when loader fails");
         let msg = format!("{err:#}");
         // The error must be our synthetic loader error, NOT a cpal
         // device-lookup error referencing the device name — proving
@@ -417,9 +421,7 @@ mod tests {
         chunk_tx
             .send(AudioChunk::Samples(vec![0.5; 12_000]))
             .expect("send samples");
-        chunk_tx
-            .send(AudioChunk::EndOfStream)
-            .expect("send eos");
+        chunk_tx.send(AudioChunk::EndOfStream).expect("send eos");
         drop(chunk_tx);
         let handle = std::thread::spawn(move || {
             run_pump(48_000, silero, chunk_rx, event_tx);
@@ -458,10 +460,14 @@ mod tests {
             .iter()
             .position(|e| matches!(e, PipelineEvent::DeviceError(_)))
             .expect("DeviceError present (asserted above)");
-        for (i, ev) in events.iter().enumerate().skip(err_idx + 1) {
-            panic!(
-                "no events allowed after DeviceError, but events[{i}] = {ev:?} in: {events:?}",
-            );
+        // Only the FIRST event after the DeviceError matters for the
+        // diagnostic — the loop variant above would only ever run one
+        // iteration anyway. Pulling that element out via `.get(...)`
+        // sidesteps the never-loop clippy lint and keeps the panic
+        // message identical.
+        if let Some(ev) = events.get(err_idx + 1) {
+            let i = err_idx + 1;
+            panic!("no events allowed after DeviceError, but events[{i}] = {ev:?} in: {events:?}",);
         }
     }
 }
