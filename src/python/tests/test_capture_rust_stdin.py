@@ -145,38 +145,130 @@ class RustStdinCaptureGlueTests(unittest.TestCase):
         # The valid frame after the corrupt line landed.
         self.assertEqual(len(mixin.frames), 1)
 
-    def test_recording_flag_flip_exits_reader_cleanly(self):
-        # Frame, then we set recording=False BEFORE EOF. The reader
-        # checks `recording` per event and must exit even though the
-        # stream has more bytes left.
-        first = _frame_line(np.zeros(FRAME_SAMPLES, dtype="<f4")) + "\n"
-        # A controllable stream that blocks on the second read until
-        # we've flipped `recording`.
+    def test_reader_drops_frames_while_recording_false_then_appends_again(self):
+        """Iteration-2 finding #2 + #4: the reader is long-lived and
+        drops frames when ``recording`` is False, so:
+
+        * No abandoned blocked thread between presses (the previous
+          design spawned a fresh reader per press and tried to
+          join+abandon it on release).
+        * No stale audio from inter-press silence leaks into the next
+          press's ``mixin.frames``.
+
+        Drive the reader through three phases on a single gated
+        stream: record one frame, release PTT, idle frame must NOT
+        land, re-press, second recording frame MUST land — all served
+        by the SAME thread.
+        """
+
         class _GatedStream:
-            def __init__(self, head: str, gate: threading.Event):
-                self._chunks = [head]
-                self._gate = gate
+            """Yields lines one at a time, each gated on a per-line event."""
+
+            def __init__(self, items):
+                # items: list[(line, threading.Event)] — when the gate
+                # fires we yield the line. A `None` line ends the stream.
+                self._items = list(items)
 
             def __iter__(self):
                 return self
 
             def __next__(self):
-                if self._chunks:
-                    return self._chunks.pop(0)
-                # Wait for the test to release us with a final EOF.
-                self._gate.wait(timeout=2.0)
-                raise StopIteration
+                if not self._items:
+                    raise StopIteration
+                line, gate = self._items.pop(0)
+                gate.wait(timeout=2.0)
+                if line is None:
+                    raise StopIteration
+                return line
 
-        gate = threading.Event()
+        first_press = _frame_line(np.zeros(FRAME_SAMPLES, dtype="<f4")) + "\n"
+        idle_frame = _frame_line(np.full(FRAME_SAMPLES, 0.25, dtype="<f4")) + "\n"
+        second_press = _frame_line(np.full(FRAME_SAMPLES, 0.5, dtype="<f4")) + "\n"
+        g1, g2, g3, eof = (
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+        )
+
         mixin = _FakeMixin()
-        start_rust_stdin_capture(mixin, stream=_GatedStream(first, gate))
+        # mixin.recording starts True (set by _FakeMixin.__init__) =
+        # simulating "PTT pressed". Start the reader.
+        start_rust_stdin_capture(
+            mixin,
+            stream=_GatedStream(
+                [
+                    (first_press, g1),
+                    (idle_frame, g2),
+                    (second_press, g3),
+                    (None, eof),
+                ]
+            ),
+        )
+        reader = mixin._rust_stdin_thread
+        self.assertTrue(reader.is_alive())
+
+        # Press 1: gate the first frame and verify it lands.
+        g1.set()
         self.assertTrue(_wait_for(lambda: len(mixin.frames) >= 1))
-        # Flip the recording flag (the supervisor / PTT release does this)
-        # then release the gate so the iterator returns StopIteration.
+
+        # PTT released → recording False. Gate the idle frame; the
+        # reader must stay alive (long-lived contract) but the frame
+        # must NOT be appended.
         mixin.recording = False
-        gate.set()
-        mixin._rust_stdin_thread.join(timeout=2.0)
-        self.assertFalse(mixin._rust_stdin_thread.is_alive())
+        g2.set()
+        # Give the reader a beat to process the dropped frame; we can't
+        # easily observe "did nothing" so settle on a small sleep.
+        time.sleep(0.1)
+        self.assertEqual(
+            len(mixin.frames), 1,
+            "idle frame must be dropped, not appended",
+        )
+        self.assertTrue(
+            reader.is_alive(),
+            "iteration-2 finding #2: reader must survive recording=False",
+        )
+
+        # Press 2: re-arm recording, release the second frame, verify
+        # it lands — proves the SAME thread serves both presses.
+        mixin.recording = True
+        g3.set()
+        self.assertTrue(_wait_for(lambda: len(mixin.frames) >= 2))
+        # And no second thread was spawned (the cached one is reused).
+        self.assertIs(mixin._rust_stdin_thread, reader)
+
+        # Tear down: close the stream and verify the reader exits on
+        # its own.
+        eof.set()
+        reader.join(timeout=2.0)
+        self.assertFalse(reader.is_alive())
+
+    def test_second_start_call_reuses_existing_reader_thread(self):
+        """Iteration-2 finding #2: ``start_rust_stdin_capture`` is
+        idempotent — calling it a second time (next PTT press) must
+        NOT spawn a second reader thread. Two readers competing for
+        ``for line in sys.stdin`` would interleave bytes between
+        themselves and break the wire contract.
+        """
+        # An endlessly-blocking stream so the first reader stays parked
+        # on `next(stream)` for the duration of the test.
+        class _BlockingStream:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                threading.Event().wait()  # blocks forever
+
+        mixin = _FakeMixin()
+        start_rust_stdin_capture(mixin, stream=_BlockingStream())
+        first_thread = mixin._rust_stdin_thread
+        self.assertTrue(first_thread.is_alive())
+        # Second call (simulates the next PTT press) — must reuse.
+        start_rust_stdin_capture(mixin, stream=_BlockingStream())
+        self.assertIs(
+            mixin._rust_stdin_thread, first_thread,
+            "second start must reuse the already-running reader",
+        )
 
 
 if __name__ == "__main__":

@@ -1128,19 +1128,20 @@ class CaptureMixin:
                 print(f"[cap] stream stop error (ignored): {exc}", flush=True)
             finally:
                 self._stream = None
-        # audio-in-rust: best-effort wait on the rust-stdin reader thread so
-        # the last appended frames are flushed before the transcribe step.
-        # The thread exits on its own once `self.recording` flips False or
-        # the Rust controller closes stdin; we bound the wait so a wedged
-        # reader can't hang the worker on PTT release.
-        rust_thread = getattr(self, "_rust_stdin_thread", None)
-        if rust_thread is not None:
-            try:
-                rust_thread.join(timeout=1.0)
-            except Exception as exc:
-                print(f"[cap] rust-stdin join error (ignored): {exc}", flush=True)
-            finally:
-                self._rust_stdin_thread = None
+        # audio-in-rust (iteration-2 review finding #2): do NOT join or
+        # clear the rust-stdin reader thread on PTT release. The thread
+        # is long-lived (one per worker process) — see
+        # :mod:`vp_capture_rust_stdin` for the rationale. Joining with
+        # a timeout used to abandon the thread when it was blocked on
+        # stdin during silence, and the next press would then spawn a
+        # second reader that raced the abandoned one for the next
+        # frame. Now the same reader keeps running and simply drops
+        # frames while ``self.recording`` is False, so there is
+        # nothing to tear down between presses; the reader exits
+        # naturally when the supervisor closes stdin at worker
+        # shutdown. We keep the attribute name reachable via
+        # ``getattr`` so debugging/log code that inspects it stays
+        # safe (``None`` until the first press, the live thread after).
 
     def _recording_seconds(self, pcm) -> float:
         if self._record_started:
