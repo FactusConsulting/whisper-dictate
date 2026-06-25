@@ -76,6 +76,7 @@ fn run() -> anyhow::Result<()> {
         Command::Privacy => privacy::handle_privacy(),
         Command::Health => health::handle_health(),
         Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
+        Command::Inject => injection::handle_inject(),
     }
 }
 

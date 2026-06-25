@@ -167,6 +167,12 @@ pub enum Command {
         #[arg(long)]
         probe: bool,
     },
+    /// Phase 2.1 cross-platform injection: reads a JSON request envelope on
+    /// stdin and writes a JSON response on stdout. Gated at runtime by
+    /// VOICEPI_INJECTION_BACKEND=rust (the Python worker decides whether to
+    /// shell out). Hidden because it's a worker-only RPC.
+    #[command(hide = true)]
+    Inject,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -436,5 +442,11 @@ mod tests {
 
         let cli = Cli::parse_from(["whisper-dictate", "transcribe-wav", "--probe"]);
         assert_eq!(cli.command, Some(Command::TranscribeWav { probe: true }));
+    }
+
+    #[test]
+    fn parses_hidden_inject_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "inject"]);
+        assert_eq!(cli.command, Some(Command::Inject));
     }
 }

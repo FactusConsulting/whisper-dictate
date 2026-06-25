@@ -5,6 +5,11 @@ Dictate(InjectMixin) keeps identical behaviour (same `self.` state set
 in Dictate.__init__; Python MRO resolves the methods unchanged). Not
 unit-tested (subprocess/OS-heavy) — verified by import-sanity + the
 suite importing Dictate, and smoke-tested on Linux.
+
+Phase 2.1 (issue #348): when VOICEPI_INJECTION_BACKEND=rust is set the
+mixin shells out to `whisper-dictate inject` for the whole injection
+(cross-platform via the `rust-injection` cargo feature). The Python path
+remains the default and is byte-identical to today.
 """
 from __future__ import annotations
 
@@ -17,6 +22,10 @@ import threading
 import time
 
 from whisper_dictate.vp_feedback import notify_error
+from whisper_dictate.vp_inject_rust import (
+    inject_via_rust,
+    rust_injection_backend_enabled,
+)
 from whisper_dictate.vp_keys_solo import is_bare_modifier_binding
 from whisper_dictate.vp_windows import (
     SELF_INJECTION_PROCESSES as _SELF_INJECTION_PROCESSES,
@@ -284,6 +293,28 @@ class InjectMixin:
             print(f"[ydotool] error: {e}", flush=True)
             return False
 
+    def _inject_via_rust_backend(self, text: str) -> bool:
+        """Phase 2.1 path: shell out to `whisper-dictate inject` for the whole
+        injection. Active only when ``VOICEPI_INJECTION_BACKEND=rust`` is set
+        (default: False). Returns True on success, False to fall back to the
+        existing Python path so a missing/unhealthy Rust binary never breaks
+        the worker. Strategy label distinguishes the Rust path in worker logs
+        without changing existing strategy semantics.
+        """
+        mode = "paste" if (self.mode in ("auto", "paste")) else "type"
+        # The Rust dispatcher's `typing` arm maps to the Python `type` mode.
+        rust_mode = "paste" if mode == "paste" else "typing"
+        ok = inject_via_rust(
+            text,
+            mode=rust_mode,
+            target_title=getattr(self, "_inject_target_title", None),
+            target_process=getattr(self, "_inject_target_process", None),
+            xkb_layout=getattr(self, "_xkb_layout", None),
+        )
+        if ok:
+            self._last_inject_strategy = f"rust-{rust_mode}"
+        return ok
+
     def _try_rust_inject(self, mode: str, text: str = "") -> bool:
         helper = os.environ.get("VOICEPI_RUST_INJECTOR")
         if not helper:
@@ -545,6 +576,8 @@ class InjectMixin:
             return
 
         try:
+            if rust_injection_backend_enabled() and self._inject_via_rust_backend(text):
+                return
             if on_wayland:
                 self._inject_wayland(text)
             else:
