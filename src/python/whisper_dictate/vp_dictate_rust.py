@@ -126,9 +126,16 @@ def rust_validate_backend(backend: str) -> tuple[str, str] | None:
         # On a known-invalid backend the Rust helper returns the
         # `invalid VOICEPI_STT_BACKEND=...` message verbatim on stderr —
         # raise so the caller surfaces it like the Python path does.
+        # The Rust launcher (`main.rs`) wraps every error with an
+        # `error: ` prefix via `eprintln!("error: {err}")`; strip it so
+        # the caller's `argparse.ap.error(...)` (which adds its own
+        # `error: ` prefix) doesn't end up emitting `error: error: ...`.
         err = (result.stderr or "").strip()
         if "invalid VOICEPI_STT_BACKEND" in err:
-            raise ValueError(err.splitlines()[-1] if err else "invalid backend")
+            line = err.splitlines()[-1] if err else "invalid backend"
+            if line.startswith("error: "):
+                line = line[len("error: "):]
+            raise ValueError(line)
         if err:
             print(f"[rust:dictate-ops] {err}", file=sys.stderr, flush=True)
         return None

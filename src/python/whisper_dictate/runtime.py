@@ -512,16 +512,31 @@ def _validate_backend_opt_rust(backend: str) -> str:
     if rust_result is not None:
         canonical, _label = rust_result
         return canonical
-    # vp_transcribe is the source of truth for VALID_STT_BACKENDS; import it
-    # locally so this helper works even before _load_runtime_modules() has
-    # materialised the module-level lazy re-export (the test path imports
-    # runtime + calls this helper directly without going through main()).
-    from whisper_dictate.vp_transcribe import VALID_STT_BACKENDS as _VALID
+    # Pure-Python membership check. We DELIBERATELY avoid importing
+    # vp_transcribe here: importing it materialises the ML stack (numpy
+    # + faster_whisper) at module-import time, which would break the
+    # runtime module's lazy-dependency contract and make this helper
+    # unusable from the lightweight `--help` / unit-test paths that run
+    # before `_load_runtime_modules()` has materialised the lazy global.
+    # When the lazy global IS already populated (post-startup), we use
+    # it; otherwise we fall back to a local copy of the small tuple. The
+    # `globals().get` lookup does NOT trigger `__getattr__`, so a cold
+    # import path stays import-free. The canonical definition still
+    # lives in vp_transcribe (see VALID_STT_BACKENDS there); the two
+    # are kept in sync by `test_valid_backends_local_copy_matches_canonical`.
+    _VALID = globals().get("VALID_STT_BACKENDS") or _VALID_STT_BACKENDS_LOCAL
     if backend not in _VALID:
         raise ValueError(
             "invalid VOICEPI_STT_BACKEND="
             f"{backend!r}; expected one of {', '.join(_VALID)}")
     return backend
+
+
+# Local mirror of `vp_transcribe.VALID_STT_BACKENDS`, used by the lightweight
+# validation path above so that callers running before `_load_runtime_modules()`
+# (e.g. unit tests, `--help`) don't drag the heavy ML stack in for a pure
+# membership check. A dedicated unit test keeps the two definitions in sync.
+_VALID_STT_BACKENDS_LOCAL: tuple[str, ...] = ("whisper", "parakeet", "openai")
 
 
 def _resolve_model_name(a, backend: str) -> tuple[str, str]:

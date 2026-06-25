@@ -89,9 +89,11 @@ pub fn should_skip(
         min_record_seconds
     };
     // `len(pcm) < SR * min_seconds` — same comparison Python performs against
-    // the channel-selected, post-resample int16 buffer.
-    let min_samples = (SR as f64 * min_seconds) as usize;
-    if samples < min_samples {
+    // the channel-selected, post-resample int16 buffer. We compare as `f64`
+    // (rather than truncating `SR * min_seconds` to `usize`) so a fractional
+    // threshold like `0.50001` rejects a clip at the truncated sample count
+    // the same way Python does — otherwise we'd accept clips Python drops.
+    if (samples as f64) < (SR as f64) * min_seconds {
         return SkipDecision::TooShort;
     }
     if backend == "parakeet" && recording_s < parakeet_min_seconds {
@@ -185,6 +187,25 @@ mod tests {
         // the generic min_record gate (held-key duration is irrelevant).
         assert_eq!(
             should_skip(16_000, 0.4, 0.5, 1.5, "openai"),
+            SkipDecision::Keep,
+        );
+    }
+
+    #[test]
+    fn fractional_min_record_seconds_drops_clip_at_truncated_sample_count() {
+        // Regression for PR #359: a non-integral threshold like 0.50001
+        // produces `SR * min_seconds = 8000.16`. Python's
+        // `len(pcm) < SR * min_seconds` (float comparison) drops a clip of
+        // exactly 8000 samples; the previous Rust code truncated the
+        // threshold to `usize` (8000) and would have kept that clip.
+        assert_eq!(
+            should_skip(8_000, 0.5, 0.50001, 1.5, "whisper"),
+            SkipDecision::TooShort,
+        );
+        // One sample over the float threshold (8001) is still below 8000.16
+        // when compared as float? Actually 8001 > 8000.16, so it's kept.
+        assert_eq!(
+            should_skip(8_001, 0.5, 0.50001, 1.5, "whisper"),
             SkipDecision::Keep,
         );
     }

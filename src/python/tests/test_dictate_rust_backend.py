@@ -179,6 +179,31 @@ class ValidateBackendTests(_EnvSnapshot):
         self.assertIn("invalid VOICEPI_STT_BACKEND", str(cm.exception))
         self.assertIn("groq", str(cm.exception))
 
+    def test_helper_error_prefix_stripped_before_raising(self) -> None:
+        # Regression for PR #359: the Rust launcher emits errors via
+        # `eprintln!("error: {err}")`, so stderr starts with `error: `.
+        # The ValueError message MUST NOT keep that prefix, because the
+        # caller does `ap.error(str(e))` and argparse adds its own
+        # `error: ` prefix, which would yield `error: error: invalid ...`.
+        os.environ["VOICEPI_DICTATE_BACKEND"] = "rust"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
+        stderr = (
+            "error: invalid VOICEPI_STT_BACKEND=\"groq\"; "
+            "expected one of whisper, parakeet, openai"
+        )
+        with mock.patch.object(
+            vp_dictate_rust.subprocess, "run",
+            return_value=_fake_completed(returncode=1, stderr=stderr),
+        ):
+            with self.assertRaises(ValueError) as cm:
+                vp_dictate_rust.rust_validate_backend("groq")
+        msg = str(cm.exception)
+        self.assertFalse(
+            msg.startswith("error:"),
+            f"ValueError message must not retain Rust launcher prefix: {msg!r}",
+        )
+        self.assertTrue(msg.startswith("invalid VOICEPI_STT_BACKEND"), msg)
+
     def test_other_failure_returns_none_for_fallback(self) -> None:
         os.environ["VOICEPI_DICTATE_BACKEND"] = "rust"
         os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
@@ -317,6 +342,48 @@ class ValidateBackendOptRustTests(_EnvSnapshot):
             with self.assertRaises(ValueError) as cm:
                 runtime._validate_backend_opt_rust("groq")
         self.assertIn("groq", str(cm.exception))
+
+    def test_lightweight_validation_does_not_import_vp_transcribe(self) -> None:
+        # Regression for PR #359: this helper is reachable from the
+        # lightweight `--help` and unit-test paths that run BEFORE
+        # `_load_runtime_modules()` materialises the ML stack. The
+        # fallback Python membership check must therefore NOT import
+        # `vp_transcribe` (which imports numpy + faster_whisper at
+        # module-import time). We assert by:
+        #   1. clearing any cached `runtime.VALID_STT_BACKENDS` so the
+        #      lazy `__getattr__` would have to re-import,
+        #   2. stubbing `vp_transcribe` out of `sys.modules` so a re-import
+        #      would crash with ImportError.
+        # If the helper still returns a correct answer, it must have used
+        # the local copy and skipped the import.
+        from whisper_dictate import runtime
+        os.environ.pop("VOICEPI_DICTATE_BACKEND", None)
+        runtime_globals = vars(runtime)
+        prior_valid = runtime_globals.pop("VALID_STT_BACKENDS", None)
+        try:
+            with mock.patch.dict(sys.modules, {"whisper_dictate.vp_transcribe": None}):
+                # `whisper` is valid — must not raise, must not import vp_transcribe.
+                self.assertEqual(runtime._validate_backend_opt_rust("whisper"), "whisper")
+                # `groq` is rejected — error wording must still be byte-identical.
+                with self.assertRaises(ValueError) as cm:
+                    runtime._validate_backend_opt_rust("groq")
+                self.assertIn("invalid VOICEPI_STT_BACKEND", str(cm.exception))
+                self.assertIn("groq", str(cm.exception))
+        finally:
+            if prior_valid is not None:
+                runtime_globals["VALID_STT_BACKENDS"] = prior_valid
+
+    def test_local_valid_backends_match_canonical_definition(self) -> None:
+        # The local mirror must stay in sync with vp_transcribe's authoritative
+        # tuple — otherwise the lightweight path could diverge from the post-
+        # `_load_runtime_modules()` path. This is the sync-guard test referenced
+        # by the comment in `_validate_backend_opt_rust`.
+        from whisper_dictate import runtime
+        from whisper_dictate.vp_transcribe import VALID_STT_BACKENDS
+        self.assertEqual(
+            tuple(runtime._VALID_STT_BACKENDS_LOCAL),
+            tuple(VALID_STT_BACKENDS),
+        )
 
 
 class BackendLabelOptRustTests(_EnvSnapshot):
