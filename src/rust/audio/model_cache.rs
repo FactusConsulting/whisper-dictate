@@ -89,17 +89,16 @@ fn replace_atomic(tmp: &std::path::Path, target: &std::path::Path) -> Result<(),
     {
         match std::fs::rename(tmp, target) {
             Ok(()) => Ok(()),
-            Err(_) => {
-                // The error kind on Windows for "destination exists" is
-                // unstable across stdlib versions; treat any rename
-                // failure as "destination is in the way" and retry
-                // after deleting. If `remove_file` ALSO fails (file
-                // doesn't exist, locked, etc.) the second rename's
-                // error is what the caller sees, which is the most
-                // informative diagnostic.
+            // Only the "destination exists" case warrants the
+            // delete-then-retry dance; unrelated errors (path too long,
+            // disk full, permission denied, etc.) must surface as-is
+            // so callers and operators see the real diagnostic instead
+            // of a spurious `remove_file` side effect.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let _ = std::fs::remove_file(target);
                 std::fs::rename(tmp, target)
             }
+            Err(e) => Err(e),
         }
     }
     #[cfg(not(windows))]
@@ -134,6 +133,17 @@ fn user_cache_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialises any test in this module that mutates process-global
+    /// environment variables. Cargo runs tests in parallel by default
+    /// and stdlib reads of the same variables (or other tests doing
+    /// the same dance) would race. Holding this lock for the full
+    /// override-mutate-restore window keeps the writes safe; the
+    /// `unsafe` blocks around `set_var` / `remove_var` document that
+    /// the soundness obligation introduced by the Rust 2024 edition
+    /// is discharged by this lock.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Iteration-2 review finding #2: on Windows, `std::fs::rename`
     /// fails when the destination already exists, so a re-run of
@@ -151,6 +161,11 @@ mod tests {
     /// against any future refactor that bypasses `replace_atomic`.
     #[test]
     fn cache_replaces_stale_file_with_new_bytes() {
+        // Take the env lock before touching any process-global
+        // variable; held across the entire test so the cache resolver
+        // reads our scratch values, not whatever another test set.
+        let _guard = ENV_LOCK.lock().unwrap();
+
         // Point the cache resolver at a per-test scratch dir so we
         // don't touch the real user cache. The expected on-disk path
         // is computed by the resolver itself so this test stays
@@ -202,6 +217,12 @@ mod tests {
     /// returning the previous value for later restoration. The dir
     /// is chosen so that `user_cache_dir()` returns a sub-path of
     /// `scratch` on every supported platform.
+    ///
+    /// SAFETY: the caller MUST hold [`ENV_LOCK`] for the entire
+    /// override/restore window. Without that, the `set_var` here
+    /// races with any concurrent stdlib env read in other tests —
+    /// undefined behaviour under the Rust 2024 edition rules that
+    /// gate `set_var` behind `unsafe`.
     fn override_cache_env(scratch: &std::path::Path) -> Option<std::ffi::OsString> {
         #[cfg(windows)]
         let var = "LOCALAPPDATA";
@@ -211,10 +232,17 @@ mod tests {
         let var = "XDG_CACHE_HOME";
 
         let prev = std::env::var_os(var);
-        std::env::set_var(var, scratch);
+        // SAFETY: ENV_LOCK is held by the caller for the full
+        // override/restore window — see the doc comment.
+        unsafe {
+            std::env::set_var(var, scratch);
+        }
         prev
     }
 
+    /// Restore the previous env-var value captured by
+    /// [`override_cache_env`]. Same locking contract: caller MUST
+    /// hold [`ENV_LOCK`].
     fn restore_cache_env(prev: Option<std::ffi::OsString>) {
         #[cfg(windows)]
         let var = "LOCALAPPDATA";
@@ -222,9 +250,13 @@ mod tests {
         let var = "HOME";
         #[cfg(all(not(windows), not(target_os = "macos")))]
         let var = "XDG_CACHE_HOME";
-        match prev {
-            Some(v) => std::env::set_var(var, v),
-            None => std::env::remove_var(var),
+        // SAFETY: ENV_LOCK is held by the caller — see the doc
+        // comment on `override_cache_env`.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(var, v),
+                None => std::env::remove_var(var),
+            }
         }
     }
 }
