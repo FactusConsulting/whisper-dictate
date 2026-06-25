@@ -6,7 +6,8 @@
 //! ```sh
 //! cargo run --release --features whisper-rs-local --example whisper_local -- \
 //!     --model /path/to/ggml-tiny.en.bin \
-//!     --wav   /path/to/audio_16khz_mono.wav
+//!     --wav   /path/to/audio_16khz_mono.wav \
+//!     [--language da]   # optional; omit or "auto" → auto-detect
 //! ```
 //!
 //! This is intentionally tiny: it proves the library API works end-to-end
@@ -39,11 +40,16 @@ fn main() -> anyhow::Result<()> {
         /// Path to a 16 kHz mono PCM WAV file.
         #[arg(long)]
         wav: PathBuf,
+        /// Optional language code (e.g. `en`, `da`, `de`). Omit or pass
+        /// `auto` to auto-detect with a multilingual model. The `.en`
+        /// models are English-only regardless of this flag.
+        #[arg(long)]
+        language: Option<String>,
     }
 
     let args = Args::parse();
     let whisper = LocalWhisper::new(&args.model)?;
-    let text = whisper.transcribe_wav(&args.wav)?;
+    let text = whisper.transcribe_wav(&args.wav, args.language.as_deref())?;
     println!("{}", text.trim());
     Ok(())
 }

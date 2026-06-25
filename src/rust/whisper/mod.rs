@@ -89,15 +89,25 @@ impl LocalWhisper {
     /// with a descriptive error rather than being silently resampled —
     /// resampling is a runtime-wiring concern and out of scope for the
     /// library-level spike.
-    pub fn transcribe_wav(&self, wav_path: &Path) -> Result<String> {
+    ///
+    /// `language` controls whisper.cpp's language hint:
+    /// - `None` or `Some("auto")` — let whisper.cpp auto-detect (multilingual
+    ///   models only; the `.en` models are English-only regardless).
+    /// - `Some("en")`, `Some("da")`, … — force the given BCP-47-ish code
+    ///   that whisper.cpp recognises. Invalid codes surface as a clean
+    ///   inference error from whisper.cpp rather than silently transcribing
+    ///   as English.
+    pub fn transcribe_wav(&self, wav_path: &Path, language: Option<&str>) -> Result<String> {
         let samples = decode_wav_16k_mono(wav_path)?;
-        self.transcribe_samples(&samples)
+        self.transcribe_samples(&samples, language)
     }
 
     /// Run inference on an already-decoded f32 PCM buffer (16 kHz mono,
     /// `[-1.0, 1.0]` range). Exposed for tests and the runnable example so
     /// they can build buffers without round-tripping through a WAV file.
-    pub fn transcribe_samples(&self, samples: &[f32]) -> Result<String> {
+    ///
+    /// See [`Self::transcribe_wav`] for `language` semantics.
+    pub fn transcribe_samples(&self, samples: &[f32], language: Option<&str>) -> Result<String> {
         if samples.is_empty() {
             return Err(anyhow!("cannot transcribe an empty audio buffer"));
         }
@@ -115,6 +125,23 @@ impl LocalWhisper {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+
+        // Language hint: whisper-rs defaults to "en", which silently mis-
+        // transcribes non-English audio on multilingual models. Pass the
+        // caller's choice through; `None` and `Some("auto")` both mean
+        // "auto-detect" per whisper.cpp's convention.
+        let lang_for_whisper = match language {
+            None => None,
+            Some("auto") => None,
+            Some(other) => Some(other),
+        };
+        params.set_language(lang_for_whisper);
+        if lang_for_whisper.is_none() {
+            // Belt and braces: setting language to None already triggers
+            // auto-detect, but enabling the explicit flag matches whisper.cpp
+            // examples and is safer if the upstream default ever changes.
+            params.set_detect_language(true);
+        }
 
         state
             .full(params, samples)
@@ -160,12 +187,24 @@ pub fn decode_wav_16k_mono(wav_path: &Path) -> Result<Vec<f32>> {
     // exposes integer PCM as i32 (sign-extended from the actual bit depth)
     // and float PCM as f32; we cover the two we are likely to encounter
     // from any standard recorder.
-    let samples: Vec<f32> = match spec.sample_format {
+    let mut samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader
             .samples::<f32>()
             .collect::<Result<Vec<_>, _>>()
             .with_context(|| format!("failed to read float samples from {}", wav_path.display()))?,
         hound::SampleFormat::Int => {
+            // Guard against malformed/exotic WAVs claiming bit depths that
+            // would either overflow our shift (`1i64 << 63` panics in debug)
+            // or that hound can't decode into i32 anyway. WAV PCM tops out
+            // at 32-bit integer in practice; reject anything wider with a
+            // clean error instead of crashing.
+            if spec.bits_per_sample == 0 || spec.bits_per_sample > 32 {
+                return Err(anyhow!(
+                    "integer WAV bit depth {} is not supported (must be 1..=32); {}",
+                    spec.bits_per_sample,
+                    wav_path.display()
+                ));
+            }
             // Compute the full-scale magnitude in i64 to avoid overflow when
             // bits_per_sample == 32: `i32::pow(2, 31)` panics in debug and
             // wraps to i32::MIN in release, which would silently invert every
@@ -180,6 +219,38 @@ pub fn decode_wav_16k_mono(wav_path: &Path) -> Result<Vec<f32>> {
                 })?
         }
     };
+
+    // Float WAVs are *spec'd* to range in [-1.0, 1.0] but real-world files
+    // (loud masters, 0-dBFS exports, mixdowns that preserve headroom) often
+    // ship outside that range. Whisper expects normalised audio; out-of-range
+    // peaks produce silently wrong transcriptions on otherwise valid input.
+    //
+    // Reject NaN/Inf up front (we can't meaningfully scale them), then
+    // divide by max-abs if any sample exceeds 1.0. We don't *amplify* quiet
+    // files (max < 1.0) — they may be intentionally low and whisper handles
+    // silence-padded windows fine. Integer paths already produce values in
+    // [-1, 1] by construction, but the normalisation pass is cheap and
+    // protects against a future int decoder change too.
+    if matches!(spec.sample_format, hound::SampleFormat::Float) {
+        let mut max_abs: f32 = 0.0;
+        for &s in &samples {
+            if !s.is_finite() {
+                return Err(anyhow!(
+                    "float WAV {} contains a non-finite sample (NaN/Inf)",
+                    wav_path.display()
+                ));
+            }
+            let a = s.abs();
+            if a > max_abs {
+                max_abs = a;
+            }
+        }
+        if max_abs > 1.0 {
+            for s in &mut samples {
+                *s /= max_abs;
+            }
+        }
+    }
 
     if samples.is_empty() {
         return Err(anyhow!(
@@ -447,10 +518,145 @@ mod tests {
         };
 
         let whisper = LocalWhisper::new(Path::new(&model)).expect("load model");
-        let text = whisper.transcribe_wav(Path::new(&wav)).expect("transcribe");
+        // Default to auto-detect for the spike: works for both `.en` and
+        // multilingual models on a "hello world" recording.
+        let text = whisper
+            .transcribe_wav(Path::new(&wav), None)
+            .expect("transcribe");
         assert!(
             text.to_lowercase().contains("hello"),
             "transcript missing 'hello': {text:?}"
+        );
+    }
+
+    /// Float WAVs above 0 dBFS (loud masters, headroom-preserving exports)
+    /// must be scaled down to [-1, 1] so whisper sees the normalised range
+    /// it expects. The earlier code passed the raw values straight through,
+    /// silently mis-transcribing on peak-3.0 inputs.
+    #[test]
+    fn decode_wav_normalizes_out_of_range_float_samples() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("loud_float.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: WHISPER_SAMPLE_RATE_HZ,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        // Peak at +3.0, also write a smaller positive sample so we can
+        // confirm relative dynamics are preserved (not just clipped).
+        w.write_sample(3.0f32).unwrap();
+        w.write_sample(-1.5f32).unwrap();
+        w.write_sample(0.75f32).unwrap();
+        w.finalize().unwrap();
+
+        let samples = decode_wav_16k_mono(&path).expect("decode float WAV");
+        assert_eq!(samples.len(), 3);
+        for (i, &s) in samples.iter().enumerate() {
+            assert!(
+                s.abs() <= 1.0 + f32::EPSILON,
+                "sample {i} = {s} not in [-1, 1] after normalisation"
+            );
+        }
+        // 3.0 → 1.0 (peak), -1.5 → -0.5, 0.75 → 0.25. Within rounding slack.
+        assert!((samples[0] - 1.0).abs() < 1e-5, "peak: {}", samples[0]);
+        assert!((samples[1] + 0.5).abs() < 1e-5, "mid:  {}", samples[1]);
+        assert!((samples[2] - 0.25).abs() < 1e-5, "low:  {}", samples[2]);
+    }
+
+    /// Quiet float WAVs (all samples below 1.0) must NOT be amplified — the
+    /// low level may be intentional and whisper handles silence-padded
+    /// windows just fine. Only out-of-range peaks trigger renormalisation.
+    #[test]
+    fn decode_wav_does_not_amplify_quiet_float_samples() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("quiet_float.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: WHISPER_SAMPLE_RATE_HZ,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        w.write_sample(0.1f32).unwrap();
+        w.write_sample(-0.05f32).unwrap();
+        w.finalize().unwrap();
+
+        let samples = decode_wav_16k_mono(&path).expect("decode quiet float WAV");
+        assert!((samples[0] - 0.1).abs() < 1e-6, "amplified: {}", samples[0]);
+        assert!(
+            (samples[1] + 0.05).abs() < 1e-6,
+            "amplified: {}",
+            samples[1]
+        );
+    }
+
+    /// Non-finite float samples (NaN/Inf) can't be meaningfully normalised
+    /// or transcribed — reject them with a clean error instead of feeding
+    /// poisoned input to whisper.cpp.
+    #[test]
+    fn decode_wav_rejects_non_finite_float_samples() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("nan_float.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: WHISPER_SAMPLE_RATE_HZ,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        w.write_sample(0.5f32).unwrap();
+        w.write_sample(f32::NAN).unwrap();
+        w.finalize().unwrap();
+
+        let err = decode_wav_16k_mono(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-finite"),
+            "expected non-finite rejection, got: {msg}"
+        );
+    }
+
+    /// Synthesise a minimal WAV header advertising a 64-bit integer PCM
+    /// depth so the decoder's bit-depth guard fires before the unsupported
+    /// shift `1i64 << 63`. hound's writer won't produce this (it caps at
+    /// 32-bit), so we hand-craft the RIFF chunks. The exact data payload
+    /// doesn't matter — we only need to get past header parsing into the
+    /// `samples::<i32>()` path.
+    #[test]
+    fn decode_wav_rejects_oversized_integer_bit_depth() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("huge_bits.wav");
+        let mut f = std::fs::File::create(&path).unwrap();
+        // RIFF header
+        f.write_all(b"RIFF").unwrap();
+        f.write_all(&36u32.to_le_bytes()).unwrap(); // file size - 8 (rough)
+        f.write_all(b"WAVE").unwrap();
+        // fmt chunk: PCM, 1 channel, 16 kHz, 64 bits per sample
+        f.write_all(b"fmt ").unwrap();
+        f.write_all(&16u32.to_le_bytes()).unwrap(); // chunk size
+        f.write_all(&1u16.to_le_bytes()).unwrap(); // PCM (integer)
+        f.write_all(&1u16.to_le_bytes()).unwrap(); // mono
+        f.write_all(&16_000u32.to_le_bytes()).unwrap(); // sample rate
+        f.write_all(&128_000u32.to_le_bytes()).unwrap(); // byte rate (placeholder)
+        f.write_all(&8u16.to_le_bytes()).unwrap(); // block align
+        f.write_all(&64u16.to_le_bytes()).unwrap(); // bits per sample — the trap
+                                                    // data chunk (empty)
+        f.write_all(b"data").unwrap();
+        f.write_all(&0u32.to_le_bytes()).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        // hound may reject the header itself (it does not advertise 64-bit
+        // int support) — that's still a clean error, not a panic. Accept
+        // either our explicit guard message or hound's own rejection.
+        let err = decode_wav_16k_mono(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bit depth") || msg.contains("bits") || msg.contains("WAV"),
+            "expected a clean bit-depth/format error, got: {msg}"
         );
     }
 }
