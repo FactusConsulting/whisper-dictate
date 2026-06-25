@@ -307,6 +307,23 @@ def openai_chat_completion(
     prompt: str,
     timeout_ms: int,
 ) -> tuple[str, int]:
+    """OpenAI-compatible /chat/completions client.
+
+    When ``VOICEPI_EXTERNAL_API_BACKEND=rust`` is set AND the bundled Rust
+    helper is resolvable from ``VOICEPI_RUST_INJECTOR``, shell out to the
+    Rust ``external-api`` subcommand (Wave 4-B of #348). Any helper failure
+    falls back to the Python implementation below so default installs and
+    error paths stay byte-identical.
+    """
+    rust = _rust_openai_chat_completion(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        prompt=prompt,
+        timeout_ms=timeout_ms,
+    )
+    if rust is not None:
+        return rust
     settings = ExternalApiSettings("openai", model, base_url.rstrip("/"), api_key, timeout_ms)
     _require_api_key(settings)
     t0 = time.monotonic()
@@ -332,3 +349,79 @@ def openai_chat_completion(
         return "", latency_ms
     message = choices[0].get("message") if isinstance(choices[0], dict) else {}
     return str((message or {}).get("content", "")).strip(), latency_ms
+
+
+def _rust_external_api_enabled() -> bool:
+    backend = (os.environ.get("VOICEPI_EXTERNAL_API_BACKEND") or "").strip().lower()
+    return backend == "rust"
+
+
+def _rust_openai_chat_completion(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    timeout_ms: int,
+) -> tuple[str, int] | None:
+    """Shell out to ``whisper-dictate external-api`` for chat completion.
+
+    Returns ``(text, latency_ms)`` on success, ``None`` on any failure so the
+    caller falls back to the in-process Python path. The Rust helper enforces
+    the same "non-empty API key required" precondition, so a missing key
+    yields a non-zero exit and falls back to Python — which then raises the
+    familiar :class:`RuntimeError` so tests that assert on that exception
+    keep passing.
+    """
+    if not _rust_external_api_enabled():
+        return None
+    helper = helper_path()
+    if not helper:
+        return None
+    if not (api_key or "").strip():
+        # The Rust helper would refuse on an empty key, but so will the
+        # Python fallback — let Python raise the documented RuntimeError
+        # message instead of swallowing it via a silent fallback.
+        return None
+    payload = {
+        "action": "chat_completion",
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "prompt": prompt,
+        "timeout_ms": int(timeout_ms),
+    }
+    try:
+        # +5s safety margin so the Rust child has time to surface its own
+        # timeout error instead of the Python subprocess killing it first.
+        result = subprocess.run(
+            [helper, "external-api"],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=max(2.0, timeout_ms / 1000.0 + 5.0),
+            shell=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - helper failures must not break post-processing
+        print(f"[rust:external-api] {exc}", flush=True)
+        return None
+    if result.returncode != 0:
+        err = (result.stderr or "").strip()
+        if err:
+            print(f"[rust:external-api] {err}", flush=True)
+        return None
+    try:
+        obj = json.loads(result.stdout or "{}")
+    except Exception as exc:  # noqa: BLE001 - bad JSON is a helper bug, fall back
+        print(f"[rust:external-api] invalid JSON: {exc}", flush=True)
+        return None
+    if not isinstance(obj, dict):
+        return None
+    text = str(obj.get("text") or "").strip()
+    try:
+        latency_ms = int(obj.get("latency_ms") or 0)
+    except (TypeError, ValueError):
+        latency_ms = 0
+    return text, latency_ms
