@@ -299,6 +299,26 @@ class HealthGradeTests(unittest.TestCase):
         }
         self.assertEqual(health_grade(metrics), GRADE_FAIR)
 
+    def test_fair_when_audio_input_status_missing(self):
+        # Codex P3 (PR #342): a missing audio_input_status is incomplete info,
+        # so even with high confidence + clean SNR we must not claim "good".
+        metrics = {
+            "audio_snr_db": 42.0,
+            "segments": _segments(-0.10),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
+    def test_fair_when_audio_input_status_empty_string(self):
+        # Same as above but the key is present with an empty value — the
+        # `str(value or "").strip()` coercion produces "" either way, so both
+        # branches must agree the payload is incomplete.
+        metrics = {
+            "audio_input_status": "",
+            "audio_snr_db": 42.0,
+            "segments": _segments(-0.10),
+        }
+        self.assertEqual(health_grade(metrics), GRADE_FAIR)
+
     def test_good_for_openai_when_confidence_unavailable_but_audio_is_clean(self):
         metrics = {
             "audio_input_status": "good",
