@@ -7,7 +7,8 @@
 //! cargo run --release --features whisper-rs-local --example whisper_local -- \
 //!     --model /path/to/ggml-tiny.en.bin \
 //!     --wav   /path/to/audio_16khz_mono.wav \
-//!     [--language da]   # optional; omit or "auto" → auto-detect
+//!     [--language da]                    # optional; omit or "auto" → auto-detect
+//!     [--initial-prompt "..."]           # optional context hint
 //! ```
 //!
 //! This is intentionally tiny: it proves the library API works end-to-end
@@ -45,11 +46,19 @@ fn main() -> anyhow::Result<()> {
         /// models are English-only regardless of this flag.
         #[arg(long)]
         language: Option<String>,
+        /// Optional context hint fed to whisper.cpp before decoding
+        /// (jargon, names, custom dictionary terms).
+        #[arg(long)]
+        initial_prompt: Option<String>,
     }
 
     let args = Args::parse();
     let whisper = LocalWhisper::new(&args.model)?;
-    let text = whisper.transcribe_wav(&args.wav, args.language.as_deref())?;
+    let text = whisper.transcribe_wav(
+        &args.wav,
+        args.language.as_deref(),
+        args.initial_prompt.as_deref(),
+    )?;
     println!("{}", text.trim());
     Ok(())
 }

@@ -25,6 +25,13 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+// JSON-over-stdio dispatcher for the hidden `transcribe-wav` sub-command. The
+// Python worker shells out to this when `VOICEPI_TRANSCRIBE_BACKEND=rust` is
+// set. Kept in its own submodule so the request/response types + env-var
+// resolution stay independently unit-testable from the inference path.
+pub mod dispatch;
+pub use dispatch::{handle_transcribe_wav, MODEL_PATH_ENV};
+
 /// Sample rate Whisper expects on its input PCM buffer (16 kHz mono).
 pub const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
 
@@ -97,17 +104,36 @@ impl LocalWhisper {
     ///   that whisper.cpp recognises. Invalid codes surface as a clean
     ///   inference error from whisper.cpp rather than silently transcribing
     ///   as English.
-    pub fn transcribe_wav(&self, wav_path: &Path, language: Option<&str>) -> Result<String> {
+    ///
+    /// `initial_prompt` is an optional context hint fed to whisper.cpp before
+    /// the first decode window (the same `--prompt` knob the whisper.cpp CLI
+    /// exposes). Pass `None` to disable; an empty `Some("")` is also treated as
+    /// `None` so the caller can plumb an unconditional `Option<&str>` derived
+    /// from upstream config without an explicit empty-string check. Used by
+    /// the Python wiring layer to feed the dictionary-derived term hint that
+    /// `vp_transcribe.py` already builds.
+    pub fn transcribe_wav(
+        &self,
+        wav_path: &Path,
+        language: Option<&str>,
+        initial_prompt: Option<&str>,
+    ) -> Result<String> {
         let samples = decode_wav_16k_mono(wav_path)?;
-        self.transcribe_samples(&samples, language)
+        self.transcribe_samples(&samples, language, initial_prompt)
     }
 
     /// Run inference on an already-decoded f32 PCM buffer (16 kHz mono,
     /// `[-1.0, 1.0]` range). Exposed for tests and the runnable example so
     /// they can build buffers without round-tripping through a WAV file.
     ///
-    /// See [`Self::transcribe_wav`] for `language` semantics.
-    pub fn transcribe_samples(&self, samples: &[f32], language: Option<&str>) -> Result<String> {
+    /// See [`Self::transcribe_wav`] for `language` and `initial_prompt`
+    /// semantics.
+    pub fn transcribe_samples(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        initial_prompt: Option<&str>,
+    ) -> Result<String> {
         if samples.is_empty() {
             return Err(anyhow!("cannot transcribe an empty audio buffer"));
         }
@@ -141,6 +167,17 @@ impl LocalWhisper {
             // auto-detect, but enabling the explicit flag matches whisper.cpp
             // examples and is safer if the upstream default ever changes.
             params.set_detect_language(true);
+        }
+
+        // Optional initial prompt. whisper.cpp tokenises this and seeds the
+        // decoder with the tokens, biasing rare-word recognition (jargon,
+        // names, custom dictionary terms). Empty strings are dropped so a
+        // caller plumbing an unconditional `Option<&str>` from config doesn't
+        // ship a useless empty prompt that wastes a tokenisation pass.
+        if let Some(prompt) = initial_prompt {
+            if !prompt.is_empty() {
+                params.set_initial_prompt(prompt);
+            }
         }
 
         state
@@ -519,9 +556,10 @@ mod tests {
 
         let whisper = LocalWhisper::new(Path::new(&model)).expect("load model");
         // Default to auto-detect for the spike: works for both `.en` and
-        // multilingual models on a "hello world" recording.
+        // multilingual models on a "hello world" recording. No initial prompt
+        // — the dictionary hint is applied by the Python wiring layer.
         let text = whisper
-            .transcribe_wav(Path::new(&wav), None)
+            .transcribe_wav(Path::new(&wav), None, None)
             .expect("transcribe");
         assert!(
             text.to_lowercase().contains("hello"),

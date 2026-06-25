@@ -9,8 +9,10 @@ import os
 import json
 import re
 import subprocess
+import tempfile
 import threading
 import time
+import wave
 from dataclasses import dataclass, field
 from importlib import resources
 from typing import Any
@@ -112,6 +114,15 @@ STT_BACKEND = (get_value("VOICEPI_STT_BACKEND", "whisper") or "whisper").strip()
 if STT_BACKEND == "faster-whisper":
     STT_BACKEND = "whisper"
 
+# Phase 1.2 of the Python-removal roadmap (#348): when this env var is set to
+# "rust" AND the Rust binary was compiled with `--features whisper-rs-local`,
+# the local Whisper backend dispatches through the Rust helper subprocess
+# instead of the in-process faster-whisper bindings. Any other value (or
+# unset) keeps the existing behaviour byte-identically — gate is checked
+# inside load_stt_model so a live config change picks up next utterance.
+TRANSCRIBE_BACKEND_ENV = "VOICEPI_TRANSCRIBE_BACKEND"
+TRANSCRIBE_BACKEND_RUST = "rust"
+
 _DictionaryCacheKey = tuple[str | None, str | None, str | None, str | None, str | None, str]
 _DICTIONARY_PROMPT_CACHE: dict[_DictionaryCacheKey, DictionaryRuntimeResult] = {}
 
@@ -192,11 +203,229 @@ def _assert_local_backend(backend: str, *, feature: str = "STT") -> None:
             "choose a local backend, a loopback endpoint, or disable local-only mode.")
 
 
+@dataclass
+class _RustSegment:
+    """Minimal segment shim mirroring the duck-typed surface that
+    ``_transcribe_detail`` / ``_drop_hallucinated_segments`` read off
+    faster-whisper segments.
+
+    The Rust backend returns only the concatenated transcript text (no
+    per-segment timings or confidences yet — those are out of scope for the
+    Phase 1.2 wiring; richer metadata lands once we move the post-flow into
+    Rust too). The downstream Python code tolerates missing attributes via
+    ``getattr(..., default)``, so leaving optional fields as ``None`` is
+    enough to keep the existing pipeline working.
+    """
+    text: str
+    start: float | None = None
+    end: float | None = None
+    avg_logprob: float = 0.0
+    no_speech_prob: float = 0.0
+
+
+@dataclass
+class _RustInfo:
+    language: str | None = None
+    language_probability: float | None = None
+
+
+def _rust_helper_binary() -> str | None:
+    """Resolve the whisper-dictate binary used as the Rust transcription helper.
+
+    Reuses ``VOICEPI_RUST_INJECTOR`` (set by the supervisor for every Python
+    worker — see runtime.py) so we don't introduce a second discovery path.
+    Returns ``None`` when the helper isn't available; the caller falls back
+    to in-process faster-whisper.
+    """
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR")
+    return helper or None
+
+
+def _rust_transcribe_enabled() -> bool:
+    """True when the runtime opted into the Rust transcription backend.
+
+    Checked fresh on every model load so a config edit + reload picks up the
+    flip without restarting the supervisor.
+    """
+    value = (os.environ.get(TRANSCRIBE_BACKEND_ENV) or "").strip().lower()
+    return value == TRANSCRIBE_BACKEND_RUST
+
+
+def _rust_helper_supports_transcribe(helper: str, *, timeout_s: float = 10.0) -> bool:
+    """Probe ``whisper-dictate transcribe-wav --probe`` and return True iff the
+    helper exits zero.
+
+    The supervisor sets ``VOICEPI_RUST_INJECTOR`` for every Python worker even
+    on a stock build (it's the same binary used for redact/profile/etc.), so
+    presence of the env var does NOT imply this binary was compiled with the
+    ``whisper-rs-local`` feature. Without this probe a stock build paired with
+    ``VOICEPI_TRANSCRIBE_BACKEND=rust`` would happily select
+    :class:`RustWhisperShellModel` and then fail the FIRST dictation when the
+    real shell-out exits non-zero with "feature not compiled in" — far worse
+    than detecting the mismatch up-front and quietly using faster-whisper.
+
+    Any error (binary missing, timeout, non-zero exit) is treated as "not
+    supported" — we'd rather fall back silently than refuse to dictate.
+    """
+    try:
+        r = subprocess.run(
+            [helper, "transcribe-wav", "--probe"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_s,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def _write_temp_wav_16khz_mono(audio: np.ndarray) -> str:
+    """Materialise ``audio`` (float32 in [-1, 1]) to a 16 kHz mono int16 WAV
+    on disk and return the path.
+
+    Mirrors ``vp_parakeet._write_wav`` so the Rust helper sees the same WAV
+    shape as the other shell-out backends (the helper's `decode_wav_16k_mono`
+    enforces this). Caller is responsible for deleting the file.
+    """
+    fd, path = tempfile.mkstemp(prefix="voicepi-rust-stt-", suffix=".wav")
+    os.close(fd)
+    clipped = np.clip(audio, -1.0, 1.0)
+    pcm = (clipped * 32767.0).astype(np.int16)
+    with wave.open(path, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(SR)
+        wav.writeframes(pcm.tobytes())
+    return path
+
+
+class RustWhisperShellModel:
+    """faster-whisper-shaped wrapper around the Rust ``transcribe-wav`` helper.
+
+    Implements the subset of the faster-whisper ``WhisperModel.transcribe``
+    surface that ``_transcribe_detail`` and ``transcribe_preview`` actually
+    consume: a single ``transcribe(audio, language=..., initial_prompt=..., ...)``
+    call returning ``(segments_iter, info)``. All other faster-whisper kwargs
+    (beam size, temperatures, VAD parameters, the hallucination guards) are
+    silently accepted and ignored — the Rust helper currently exposes only
+    language + initial prompt, and the Python-side post-filters
+    (``_drop_hallucinated_segments``, dictionary replacements, speech-rate
+    guard) still run unchanged on the returned text.
+
+    Keeping the wrapper here rather than building a separate runtime branch
+    means the Phase 1.2 toggle is a single env-var check inside
+    ``load_stt_model`` — every other piece of the transcription pipeline
+    (preview thread, locking, telemetry) keeps working without changes.
+    """
+
+    def __init__(self, helper: str):
+        self._helper = helper
+
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        *,
+        language: str | None = None,
+        initial_prompt: str | None = None,
+        **_ignored: Any,
+    ):
+        # Materialise the in-memory audio to a temp WAV — the helper's
+        # decoder is the only on-disk loader we have right now (Phase 1.2
+        # explicitly reuses the WAV-on-disk IPC the audio capture already
+        # uses; raw-frame IPC is a later optimisation in Wave 7).
+        wav_path = _write_temp_wav_16khz_mono(
+            audio.reshape(-1).astype(np.float32))
+        try:
+            payload = _run_rust_transcribe(
+                self._helper, wav_path,
+                language=language,
+                initial_prompt=initial_prompt,
+            )
+        finally:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+        text = str(payload.get("text", ""))
+        # Trim surrounding whitespace so the Python concatenation logic in
+        # ``_transcribe_detail`` (``re.sub(r"\s+", " ", ...)``) still produces
+        # the same output shape as a faster-whisper single-segment return.
+        return [_RustSegment(text=text)], _RustInfo()
+
+
+def _run_rust_transcribe(
+    helper: str,
+    wav_path: str,
+    *,
+    language: str | None,
+    initial_prompt: str | None,
+    timeout_s: float = 300.0,
+) -> dict:
+    """Invoke ``whisper-dictate transcribe-wav`` and return the parsed JSON.
+
+    Raises ``RuntimeError`` on any failure (process error, non-JSON output,
+    or non-dict payload). Bubbling these up rather than silently falling back
+    matches the explicit-opt-in design of ``VOICEPI_TRANSCRIBE_BACKEND=rust``:
+    the user asked for the Rust backend, so if it can't deliver, fail loudly
+    instead of silently re-using the Python path and producing different
+    results.
+    """
+    request = {
+        "action": "transcribe_wav",
+        "wav_path": wav_path,
+        "language": language or "",
+        "initial_prompt": initial_prompt or "",
+    }
+    try:
+        r = subprocess.run(
+            [helper, "transcribe-wav"],
+            input=json.dumps(request, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout_s,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"Rust transcribe-wav timed out after {timeout_s:.0f}s") from e
+    except OSError as e:
+        raise RuntimeError(f"failed to launch Rust transcribe-wav: {e}") from e
+    if r.returncode != 0:
+        err = (r.stderr or "").strip() or f"exit {r.returncode}"
+        raise RuntimeError(f"Rust transcribe-wav failed: {err}")
+    raw = (r.stdout or "").strip()
+    if not raw:
+        raise RuntimeError("Rust transcribe-wav returned empty stdout")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"Rust transcribe-wav returned invalid JSON: {e}") from e
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"Rust transcribe-wav returned non-object payload: {type(payload).__name__}")
+    return payload
+
+
 def load_stt_model(model_name: str, device: str, compute_type: str):
     """Load the selected STT backend lazily.
 
     The default path preserves the existing faster-whisper behaviour. The
     Parakeet path imports NeMo only after VOICEPI_STT_BACKEND=parakeet is set.
+
+    When ``VOICEPI_TRANSCRIBE_BACKEND=rust`` is set AND the local Whisper
+    backend is selected (``VOICEPI_STT_BACKEND=whisper``, the default), the
+    in-process faster-whisper bindings are replaced by a wrapper that shells
+    out to ``whisper-dictate transcribe-wav`` — Phase 1.2 of the
+    Python-removal roadmap (#348). The Rust path needs ``VOICEPI_RUST_INJECTOR``
+    to point at a whisper-dictate binary built with
+    ``--features whisper-rs-local``; if either is missing we fall through to
+    the in-process path so a misconfigured override doesn't break dictation.
     """
     backend = STT_BACKEND
     _assert_local_backend(backend)
@@ -210,6 +439,32 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
     if backend == "openai":
         from whisper_dictate.vp_external_api import ExternalTranscriptionModel
         return ExternalTranscriptionModel(model_name)
+    if backend == "whisper" and _rust_transcribe_enabled():
+        helper = _rust_helper_binary()
+        if helper and _rust_helper_supports_transcribe(helper):
+            print(
+                f"[stt] {TRANSCRIBE_BACKEND_ENV}={TRANSCRIBE_BACKEND_RUST}: "
+                f"dispatching local Whisper through Rust helper",
+                flush=True,
+            )
+            return RustWhisperShellModel(helper)
+        # Fall through to faster-whisper with a diagnostic — the explicit
+        # opt-in was honoured at the env-var level but the helper is either
+        # missing or doesn't support `transcribe-wav` (stock build without the
+        # whisper-rs-local feature). Log clearly so the user knows the env
+        # var was effectively ignored.
+        if not helper:
+            reason = "VOICEPI_RUST_INJECTOR not set"
+        else:
+            reason = (
+                f"helper at {helper!r} does not support transcribe-wav "
+                "(stock build without whisper-rs-local)"
+            )
+        print(
+            f"[stt] {TRANSCRIBE_BACKEND_ENV}={TRANSCRIBE_BACKEND_RUST} ignored: "
+            f"{reason}; using in-process faster-whisper",
+            flush=True,
+        )
     from faster_whisper import WhisperModel
     return WhisperModel(model_name, device=device, compute_type=compute_type)
 

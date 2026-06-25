@@ -92,8 +92,27 @@ def preview_enabled(preview_seconds: float, stt_backend: str) -> bool:
     Gated on a positive interval AND the LOCAL whisper backend. The cloud
     ("openai") backend is excluded so previews never hit a paid API; Parakeet is
     skipped for now.
+
+    The Rust shell-out backend (``VOICEPI_TRANSCRIBE_BACKEND=rust``) is also
+    excluded: it is a one-shot subprocess (writes a WAV, reloads the GGML
+    model, runs inference, exits) with no streaming surface. Running previews
+    against it would spawn a helper, reload the model, and burn CPU/disk every
+    few seconds — and because each preview holds ``TRANSCRIBE_LOCK`` it would
+    also delay the final pass on key release. Disable it cleanly here rather
+    than wedge a cheap path into ``RustWhisperShellModel``; previews come
+    back once the streaming Rust backend lands in Wave 7.
     """
-    return preview_seconds > 0 and (stt_backend or "").strip().lower() in PREVIEW_BACKENDS
+    if preview_seconds <= 0:
+        return False
+    if (stt_backend or "").strip().lower() not in PREVIEW_BACKENDS:
+        return False
+    # Lazy import — vp_transcribe pulls in numpy/faster-whisper and we keep
+    # this module light on import; the env-var check itself is cheap.
+    try:
+        from whisper_dictate.vp_transcribe import _rust_transcribe_enabled
+    except ImportError:
+        return True
+    return not _rust_transcribe_enabled()
 
 
 class PreviewEngine:

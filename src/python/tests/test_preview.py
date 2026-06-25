@@ -322,17 +322,38 @@ class PreviewEngineTests(unittest.TestCase):
     # ── gating helper ─────────────────────────────────────────────────────────
 
     def test_preview_enabled_gating(self):
+        import os
         enabled = self.preview.preview_enabled
-        # Local whisper backend with a positive interval → enabled.
-        self.assertTrue(enabled(3.0, "whisper"))
-        # Disabled when interval is 0 (or negative).
-        self.assertFalse(enabled(0.0, "whisper"))
-        self.assertFalse(enabled(-1.0, "whisper"))
-        # Cloud (paid API) and Parakeet are never previewed.
-        self.assertFalse(enabled(3.0, "openai"))
-        self.assertFalse(enabled(3.0, "parakeet"))
-        # Case / whitespace tolerant.
-        self.assertTrue(enabled(3.0, "  Whisper "))
+        # Local whisper backend with a positive interval → enabled (env-var
+        # clean so the rust-shellout gate doesn't fire).
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VOICEPI_TRANSCRIBE_BACKEND", None)
+            self.assertTrue(enabled(3.0, "whisper"))
+            # Disabled when interval is 0 (or negative).
+            self.assertFalse(enabled(0.0, "whisper"))
+            self.assertFalse(enabled(-1.0, "whisper"))
+            # Cloud (paid API) and Parakeet are never previewed.
+            self.assertFalse(enabled(3.0, "openai"))
+            self.assertFalse(enabled(3.0, "parakeet"))
+            # Case / whitespace tolerant.
+            self.assertTrue(enabled(3.0, "  Whisper "))
+
+    def test_preview_disabled_for_rust_shell_backend(self):
+        """``VOICEPI_TRANSCRIBE_BACKEND=rust`` swaps in a one-shot subprocess
+        wrapper that reloads the GGML model on every call — running the live
+        preview against it would spawn a helper + reload the model every few
+        seconds AND hold ``TRANSCRIBE_LOCK`` long enough to delay the final
+        pass. Previews must stay disabled until streaming Rust lands."""
+        import os
+        enabled = self.preview.preview_enabled
+        with patch.dict(os.environ,
+                        {"VOICEPI_TRANSCRIBE_BACKEND": "rust"}):
+            self.assertFalse(enabled(3.0, "whisper"))
+            self.assertFalse(enabled(3.0, "Whisper"))
+        # Any other value of the env var leaves preview enabled.
+        with patch.dict(os.environ,
+                        {"VOICEPI_TRANSCRIBE_BACKEND": "python"}):
+            self.assertTrue(enabled(3.0, "whisper"))
 
     def test_start_noop_when_interval_zero(self):
         owner = self._owner()
