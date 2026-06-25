@@ -139,7 +139,7 @@ instead of opening sounddevice).
 To enable for a build:
 
 ```bash
-cargo build --features audio-in-rust --release
+cargo build --manifest-path src/rust/Cargo.toml --features audio-in-rust --release
 ```
 
 At runtime, opt in by exporting the env var **before** launching the app:
