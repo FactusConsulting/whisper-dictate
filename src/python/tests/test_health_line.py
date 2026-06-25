@@ -1,4 +1,16 @@
-"""Unit tests for the per-utterance ``[health]`` line (Basic diagnostics)."""
+"""Unit tests for the per-utterance ``[health]`` line (Basic diagnostics).
+
+The pure-logic units (``format_health_line`` / ``health_grade``) were ported to
+Rust in PR #342, but the production caller — ``vp_dictate._emit_health_line``
+(see ``src/python/whisper_dictate/vp_dictate.py``) — still calls the Python
+implementation in ``whisper_dictate.vp_health``. Until that call-site is
+switched to the Rust helper, the Python module IS the code that emits
+``[health]`` lines at runtime, so this behaviour matrix exercises real
+production paths (no-text warnings, post-fallback warnings, missing-status
+grading, ...) -- it is not duplicate coverage of the Rust port. Per Codex
+review on PR #350, the matrix is preserved until ``format_health_line`` /
+``health_grade`` actually delegate to Rust.
+"""
 from __future__ import annotations
 
 import os
