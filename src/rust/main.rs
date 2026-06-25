@@ -77,6 +77,7 @@ fn run() -> anyhow::Result<()> {
         Command::Health => health::handle_health(),
         Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
         Command::Inject => injection::handle_inject(),
+        Command::Devices => handle_devices_command(),
     }
 }
 
@@ -115,4 +116,19 @@ fn handle_transcribe_wav(_probe: bool) -> anyhow::Result<()> {
          unavailable - unset VOICEPI_TRANSCRIBE_BACKEND or install a build \
          with the feature enabled"
     ))
+}
+
+#[cfg(feature = "audio-in-rust")]
+fn handle_devices_command() -> anyhow::Result<()> {
+    whisper_dictate_app::devices::handle_devices()
+}
+
+#[cfg(not(feature = "audio-in-rust"))]
+fn handle_devices_command() -> anyhow::Result<()> {
+    // Stable, machine-readable refusal so the Python shell-out can detect
+    // "not built with cpal" and fall back to its own enumeration without
+    // parsing a free-form error message. Exits non-zero so subprocess.run's
+    // returncode check trips the fallback path in vp_devices.
+    println!("{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-in-rust feature\"}}");
+    std::process::exit(2);
 }

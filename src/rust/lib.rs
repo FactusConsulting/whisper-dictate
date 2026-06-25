@@ -8,6 +8,13 @@ pub mod cli;
 pub mod cloud_api;
 pub mod command_hook;
 pub mod config;
+// Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
+// Python-removal roadmap #348). Gated behind `audio-in-rust` so the default
+// build does not pull cpal — the audio capture feature already requires the
+// same native deps (libasound on Linux), so sharing the gate keeps the dep
+// graph clean. See `src/rust/devices.rs` for the API + JSON envelope.
+#[cfg(feature = "audio-in-rust")]
+pub mod devices;
 pub mod dictionary;
 pub mod formatting;
 pub mod health;

@@ -173,6 +173,11 @@ pub enum Command {
     /// shell out). Hidden because it's a worker-only RPC.
     #[command(hide = true)]
     Inject,
+    /// Enumerate input audio devices as JSON. Built into binaries with the
+    /// `audio-in-rust` feature; binaries without the feature print a structured
+    /// error and exit non-zero so the Python caller can fall back to its own
+    /// path. Used by `vp_devices.py` when `VOICEPI_DEVICES_BACKEND=rust`.
+    Devices,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -448,5 +453,11 @@ mod tests {
     fn parses_hidden_inject_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "inject"]);
         assert_eq!(cli.command, Some(Command::Inject));
+    }
+
+    #[test]
+    fn parses_devices_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "devices"]);
+        assert_eq!(cli.command, Some(Command::Devices));
     }
 }

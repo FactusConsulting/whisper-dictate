@@ -22,7 +22,10 @@ resolution still prefers the default host API first and then falls back by name.
 """
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
 
 
 def _default_input_index(sd) -> int | None:
@@ -449,6 +452,81 @@ def select_input_devices(devices, hostapis, *, is_windows: bool, default_index: 
     return result
 
 
+def _rust_list_input_devices() -> list[dict] | None:
+    """Shell out to ``whisper-dictate devices`` for the picker list.
+
+    Active only when ``VOICEPI_DEVICES_BACKEND=rust`` AND the binary path is
+    resolvable from ``VOICEPI_RUST_INJECTOR`` (the same env var every other
+    Rust shell-out uses). Returns the parsed device list on success, or
+    ``None`` on ANY failure (binary missing, helper exited non-zero, JSON
+    invalid, key missing) — the caller then falls back to the Python
+    sounddevice path so behaviour never regresses.
+
+    Phase 2.2.z of the Python-removal roadmap (#348). Default behaviour is
+    unchanged; the shell-out is opt-in via the env var so we can flip
+    individual machines onto Rust enumeration without touching Python.
+    """
+    backend = (os.environ.get("VOICEPI_DEVICES_BACKEND") or "").strip().lower()
+    if backend != "rust":
+        return None
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR") or ""
+    if not helper:
+        return None
+    try:
+        result = subprocess.run(
+            [helper, "devices"],
+            input=json.dumps({"action": "list"}, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=5.0,
+            shell=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - helper failures must not break the picker
+        print(f"[rust:devices] {exc}", file=sys.stderr, flush=True)
+        return None
+    if result.returncode != 0:
+        err = (result.stderr or "").strip()
+        if err:
+            print(f"[rust:devices] {err}", file=sys.stderr, flush=True)
+        return None
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except Exception as exc:  # noqa: BLE001 - bad JSON is a helper bug, fall back
+        print(f"[rust:devices] invalid JSON: {exc}", file=sys.stderr, flush=True)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("devices")
+    if not isinstance(raw, list):
+        return None
+    out: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            index = int(entry.get("index", 0))
+        except (TypeError, ValueError):
+            index = 0
+        try:
+            channels = int(entry.get("max_input_channels") or 0)
+        except (TypeError, ValueError):
+            channels = 0
+        if channels <= 0:
+            continue
+        out.append({
+            "index": index,
+            "name": name,
+            "max_input_channels": channels,
+            "default": bool(entry.get("default", False)),
+        })
+    return out
+
+
 def list_input_devices(sd) -> list[dict]:
     """Return input devices for the picker, enumerated from a single host API.
 
@@ -457,7 +535,14 @@ def list_input_devices(sd) -> list[dict]:
     :func:`select_input_devices`; this just reads the live sounddevice tables and
     delegates. Pure over an injected ``sd`` so it is unit-testable with a stubbed
     sounddevice.
+
+    When ``VOICEPI_DEVICES_BACKEND=rust`` is set AND the Rust helper succeeds,
+    its enumeration is returned instead — see :func:`_rust_list_input_devices`.
+    Any helper failure silently falls back to the sounddevice path.
     """
+    rust_devices = _rust_list_input_devices()
+    if rust_devices is not None:
+        return rust_devices
     default_index = _default_input_index(sd)
     devices = sd.query_devices()
     try:
