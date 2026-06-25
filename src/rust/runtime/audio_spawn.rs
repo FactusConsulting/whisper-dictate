@@ -30,7 +30,7 @@ use std::sync::mpsc::Receiver;
 /// Env var the Python worker uses to select a specific microphone. We
 /// honour the same name on the Rust side so the user's saved choice
 /// applies to BOTH backends — see `vp_capture._audio_device_setting`.
-const AUDIO_DEVICE_ENV: &str = "VOICEPI_AUDIO_DEVICE";
+pub const AUDIO_DEVICE_ENV: &str = "VOICEPI_AUDIO_DEVICE";
 
 /// Effective gate: ARE we using the Rust audio backend for this run?
 ///
@@ -67,23 +67,56 @@ pub fn requested_but_unavailable_warning() -> String {
 /// The `stdin_writer` is taken by ownership — typically `child.stdin`
 /// drained via `Option::take()`. A unit-test harness can pass any
 /// `Write + Send + 'static` here (a captured `Vec<u8>` channel etc).
+///
+/// `device_name` is the microphone identifier resolved by the caller
+/// from the effective worker command env (see
+/// [`resolve_audio_device_from_env`]). Empty string means "system
+/// default" — `audio::capture::start_capture` honours that contract.
 #[cfg(feature = "audio-in-rust")]
 pub fn spawn_audio_bridge_for_child<W>(
     stdin_writer: W,
+    device_name: &str,
 ) -> Result<(BridgeHandle, Receiver<BridgeError>), anyhow::Error>
 where
     W: std::io::Write + Send + 'static,
 {
-    let device = resolved_audio_device();
-    spawn_bridge(&device, stdin_writer, default_silero_loader())
+    spawn_bridge(device_name, stdin_writer, default_silero_loader())
 }
 
-/// Microphone the Rust pipeline should open. Mirrors the Python
-/// worker's resolution (env var first, else system default). Empty
-/// string means "system default" — `audio::capture::start_capture`
-/// understands that contract.
-pub fn resolved_audio_device() -> String {
+/// Microphone the Rust pipeline should open, resolved from the same
+/// effective worker env we're about to hand to the Python child.
+///
+/// Iteration-2 review finding #1: previously this read directly from
+/// `std::env`, which silently ignored a `VOICEPI_AUDIO_DEVICE` value
+/// that the user selected through Settings (the UI persists it to the
+/// on-disk config; `config::worker_env_overrides()` materialises it
+/// into the `WorkerCommand.env` we then pass to the child). Resolution
+/// order:
+///
+/// 1. `env_overrides` (the `WorkerCommand.env` slice the supervisor
+///    will pass to the child — same source of truth the Python worker
+///    sees via `_audio_device_setting`).
+/// 2. The supervisor's own `std::env` (legacy / shell-exported case).
+/// 3. Empty string (= "system default").
+///
+/// Returning empty for missing/blank preserves the existing contract.
+pub fn resolve_audio_device_from_env(env_overrides: &[(String, String)]) -> String {
+    for (key, value) in env_overrides {
+        if key == AUDIO_DEVICE_ENV {
+            return value.clone();
+        }
+    }
     std::env::var(AUDIO_DEVICE_ENV).unwrap_or_default()
+}
+
+/// Back-compat wrapper that consults only the process env. Retained
+/// for tests and any external caller that doesn't yet have a
+/// `WorkerCommand` in hand; production code should prefer
+/// [`resolve_audio_device_from_env`] so the saved device choice
+/// applies on Windows installs where the env var is set in config,
+/// not in the parent shell.
+pub fn resolved_audio_device() -> String {
+    resolve_audio_device_from_env(&[])
 }
 
 // Tests for this module live in `audio_spawn_tests.rs` so they share a

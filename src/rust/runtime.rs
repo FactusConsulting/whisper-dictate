@@ -2,7 +2,11 @@ use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(feature = "audio-in-rust")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+#[cfg(feature = "audio-in-rust")]
+use std::sync::Arc;
 use std::thread;
 
 use anyhow::{anyhow, Result};
@@ -357,6 +361,15 @@ pub struct RuntimeSupervisor {
     /// keeping a single field shape avoids cfg-gating the whole struct).
     #[cfg(feature = "audio-in-rust")]
     audio_bridge: Option<crate::audio::BridgeHandle>,
+    /// Set by the bridge-error watcher thread when it observes a
+    /// terminal `BridgeError::Io` / `BridgeError::Pipeline` event
+    /// (iteration-2 review finding #3). The watcher cannot mutate
+    /// `self`, so it raises this flag; the next `poll()` call sees it
+    /// and tears the worker down (kills the child, drops the bridge,
+    /// emits `Exited { code: None }`) so the UI flips back to Stopped
+    /// instead of leaving a half-dead worker that won't transcribe.
+    #[cfg(feature = "audio-in-rust")]
+    bridge_terminal: Arc<AtomicBool>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -376,6 +389,8 @@ impl RuntimeSupervisor {
             repaint_notifier: None,
             #[cfg(feature = "audio-in-rust")]
             audio_bridge: None,
+            #[cfg(feature = "audio-in-rust")]
+            bridge_terminal: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -484,7 +499,11 @@ impl RuntimeSupervisor {
                 .stdin
                 .take()
                 .ok_or_else(|| anyhow!("audio-in-rust: child stdin was not piped"))?;
-            match audio_spawn::spawn_audio_bridge_for_child(stdin) {
+            // Resolve the device from the SAME env the Python child is
+            // about to see (iteration-2 review finding #1), so a saved
+            // Settings choice applies to both backends.
+            let device = audio_spawn::resolve_audio_device_from_env(&effective_command.env);
+            match audio_spawn::spawn_audio_bridge_for_child(stdin, &device) {
                 Ok((bridge, errors)) => {
                     self.audio_bridge = Some(bridge);
                     self.spawn_audio_bridge_error_watch(errors);
@@ -531,6 +550,7 @@ impl RuntimeSupervisor {
     ) {
         let tx = self.tx.clone();
         let notifier = self.repaint_notifier.clone();
+        let terminal = self.bridge_terminal.clone();
         // Flag-up the active backend on the supervisor channel so the
         // user can tell from the runtime log which path actually ran.
         let _ = tx.send(RuntimeEvent::Stderr(
@@ -539,6 +559,15 @@ impl RuntimeSupervisor {
         thread::spawn(move || {
             use crate::audio::BridgeError;
             while let Ok(err) = errors.recv() {
+                // Iteration-2 review finding #3: `Io` and `Pipeline`
+                // are TERMINAL — the writer has already dropped the
+                // child's stdin handle and exited, so even if the
+                // worker is technically still alive it can no longer
+                // receive audio. Raise the teardown flag so the next
+                // `poll()` kills the child and surfaces an `Exited`,
+                // flipping the UI back to Stopped instead of leaving
+                // the user staring at a running-but-deaf worker.
+                let is_terminal = matches!(err, BridgeError::Io(_) | BridgeError::Pipeline(_));
                 let event = match err {
                     // WorkerClosed = the Python child closed stdin
                     // (normal teardown). Surface as a stderr trace,
@@ -556,6 +585,9 @@ impl RuntimeSupervisor {
                     }
                 };
                 let _ = tx.send(event);
+                if is_terminal {
+                    terminal.store(true, Ordering::SeqCst);
+                }
                 if let Some(notifier) = notifier.as_ref() {
                     notifier();
                 }
@@ -607,7 +639,48 @@ impl RuntimeSupervisor {
         self.start(command)
     }
 
+    /// Test-only hook (crate-visible): simulate the bridge-error
+    /// watcher observing a terminal `BridgeError::Io` /
+    /// `BridgeError::Pipeline`. The next `poll()` will then run the
+    /// iteration-2 review finding #3 teardown path (kill the child,
+    /// drop the bridge, synthesize `Exited`). Crate-visible so
+    /// `runtime/bridge_terminal_tests.rs` can exercise the path
+    /// without spinning up a real cpal failure.
+    #[cfg(all(test, feature = "audio-in-rust"))]
+    #[doc(hidden)]
+    pub(crate) fn trigger_bridge_terminal_for_tests(&self) {
+        self.bridge_terminal.store(true, Ordering::SeqCst);
+    }
+
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
+        // Iteration-2 review finding #3: act on a terminal bridge error
+        // BEFORE the regular try_wait. The bridge watcher has already
+        // emitted a `RuntimeEvent::Error` describing the failure; here
+        // we follow up with the teardown the watcher couldn't perform
+        // from a background thread (it has no `&mut self`). Kill the
+        // child, drop the bridge handle, and synthesize an `Exited`
+        // so the UI flips back to Stopped on its next poll.
+        #[cfg(feature = "audio-in-rust")]
+        if self.bridge_terminal.swap(false, Ordering::SeqCst) {
+            if let Some(mut bridge) = self.audio_bridge.take() {
+                bridge.stop();
+            }
+            if let Some(mut child) = self.child.take() {
+                let _ = kill_child(&mut child);
+                let exit_code = child.wait().ok().and_then(|status| status.code());
+                self.state = RuntimeState::Stopped;
+                let _ = self.tx.send(RuntimeEvent::Exited { code: exit_code });
+                if let Some(notifier) = self.repaint_notifier.as_ref() {
+                    notifier();
+                }
+            } else {
+                // No child to kill (already exited): just be sure
+                // state reflects stopped.
+                self.state = RuntimeState::Stopped;
+            }
+            return self.rx.try_iter().collect();
+        }
+
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -1293,6 +1366,8 @@ mod app_root_tests;
 mod audio_backend_tests;
 #[cfg(test)]
 mod audio_spawn_tests;
+#[cfg(all(test, feature = "audio-in-rust"))]
+mod bridge_terminal_tests;
 #[cfg(test)]
 mod desktop_entry_tests;
 #[cfg(test)]

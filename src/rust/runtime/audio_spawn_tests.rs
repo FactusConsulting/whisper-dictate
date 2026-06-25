@@ -17,13 +17,12 @@
 //! Silero half is exercised by `tests/audio_pipeline.rs`.
 
 use crate::runtime::audio_spawn::{
-    requested_but_unavailable_warning, resolved_audio_device, should_use_rust_audio_backend,
+    requested_but_unavailable_warning, resolve_audio_device_from_env, resolved_audio_device,
+    should_use_rust_audio_backend, AUDIO_DEVICE_ENV,
 };
 use crate::runtime::AUDIO_BACKEND_ENV;
 use crate::test_env_lock::ENV_LOCK;
 use std::env;
-
-const AUDIO_DEVICE_ENV: &str = "VOICEPI_AUDIO_DEVICE";
 
 struct EnvGuard {
     key: &'static str,
@@ -114,5 +113,64 @@ fn resolved_audio_device_defaults_to_empty_for_unset_env() {
     assert!(
         resolved_audio_device().is_empty(),
         "unset VOICEPI_AUDIO_DEVICE must resolve to '' (= system default)",
+    );
+}
+
+/// Iteration-2 review finding #1: the supervisor must read the device
+/// from the EFFECTIVE worker env (i.e. the same `WorkerCommand.env`
+/// it'll pass to the Python child), not just `std::env`. On a typical
+/// Windows install the user picks a microphone in Settings and the
+/// choice is persisted to the on-disk config, which
+/// `config::worker_env_overrides()` materialises into the command env
+/// — the parent shell typically never sets the variable, so a `std::env`
+/// lookup alone returns "" and the Rust backend silently opens the
+/// system default mic.
+#[test]
+fn resolve_audio_device_from_env_prefers_worker_command_env() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Even if the process env says something else (typical: shell
+    // doesn't export it at all), the worker-command override wins.
+    let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "system-shell-mic");
+    let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "Saved Settings Mic".to_owned())];
+    assert_eq!(
+        resolve_audio_device_from_env(&overrides),
+        "Saved Settings Mic",
+    );
+}
+
+#[test]
+fn resolve_audio_device_from_env_falls_back_to_process_env() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // No override in the command env → process env is the next-best
+    // source so legacy shell-export workflows keep working.
+    let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "Process Env Mic");
+    assert_eq!(
+        resolve_audio_device_from_env(&[]),
+        "Process Env Mic",
+        "process env must serve as the legacy fallback",
+    );
+}
+
+#[test]
+fn resolve_audio_device_from_env_returns_empty_when_neither_set() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
+    assert!(
+        resolve_audio_device_from_env(&[]).is_empty(),
+        "neither source set → empty string = system default",
+    );
+}
+
+#[test]
+fn resolve_audio_device_from_env_ignores_unrelated_overrides() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
+    let overrides = vec![
+        ("VOICEPI_MODEL".to_owned(), "small".to_owned()),
+        ("PYTHONPATH".to_owned(), "/somewhere".to_owned()),
+    ];
+    assert!(
+        resolve_audio_device_from_env(&overrides).is_empty(),
+        "unrelated env keys must not be mistaken for the device override",
     );
 }
