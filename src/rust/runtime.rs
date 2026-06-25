@@ -2,7 +2,11 @@ use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(feature = "audio-in-rust")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+#[cfg(feature = "audio-in-rust")]
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{anyhow, Result};
@@ -350,6 +354,33 @@ pub struct RuntimeSupervisor {
     tx: Sender<RuntimeEvent>,
     rx: Receiver<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
+    /// Active Rust→Python audio bridge, only `Some` when the worker was
+    /// spawned with the Rust capture backend AND the worker has emitted
+    /// `state=ready` (so the Python stdin reader is up). Wrapped in
+    /// `Arc<Mutex<...>>` because a background "ready-watch" thread
+    /// installs the handle here on receipt of the worker's ready event
+    /// (iteration-3 review finding #1) — see `spawn_ready_watch`.
+    /// `None` for the default Python sounddevice path AND for stock
+    /// builds without the `audio-in-rust` cargo feature.
+    #[cfg(feature = "audio-in-rust")]
+    audio_bridge: Arc<Mutex<Option<crate::audio::BridgeHandle>>>,
+    /// Set by the bridge-error watcher thread when it observes a
+    /// terminal `BridgeError::Io` / `BridgeError::Pipeline` event
+    /// (iteration-2 review finding #3). The watcher cannot mutate
+    /// `self`, so it raises this flag; the next `poll()` call sees it
+    /// and tears the worker down (kills the child, drops the bridge,
+    /// emits `Exited { code: None }`) so the UI flips back to Stopped
+    /// instead of leaving a half-dead worker that won't transcribe.
+    #[cfg(feature = "audio-in-rust")]
+    bridge_terminal: Arc<AtomicBool>,
+    /// Iteration-3 review finding #1 race-guard: set by `stop()` /
+    /// `poll()` teardown so the in-flight ready-watch thread (which
+    /// may be mid-`pending.start()`) can detect that the supervisor
+    /// no longer wants the bridge and discard the newly-opened handle
+    /// instead of installing it into a stopped supervisor. Reset by
+    /// `start()` on the next run.
+    #[cfg(feature = "audio-in-rust")]
+    bridge_cancel: Arc<AtomicBool>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -367,6 +398,12 @@ impl RuntimeSupervisor {
             tx,
             rx,
             repaint_notifier: None,
+            #[cfg(feature = "audio-in-rust")]
+            audio_bridge: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "audio-in-rust")]
+            bridge_terminal: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "audio-in-rust")]
+            bridge_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -395,20 +432,103 @@ impl RuntimeSupervisor {
         if self.child.is_some() {
             return Err(anyhow!("runtime is already running"));
         }
+        // Reset the iteration-3 ready-watch cancel flag from any
+        // previous run so a fresh start can install the freshly-built
+        // bridge.
+        #[cfg(feature = "audio-in-rust")]
+        self.bridge_cancel.store(false, Ordering::SeqCst);
+
+        // Phase-1 rollout (PR #341 — wiring the Rust audio pipeline):
+        // If the user opted in via VOICEPI_AUDIO_BACKEND=rust AND this
+        // binary was built with the `audio-in-rust` cargo feature, we
+        // splice the Rust capture path into the worker's stdin and ask
+        // Python to read frames from there. Default builds and the
+        // env-var-unset case go through the exact same code path as
+        // before — see `audio_spawn::should_use_rust_audio_backend` for
+        // the precise gate. To disable in an emergency: unset the env
+        // var, or rebuild without `--features audio-in-rust`.
+        let use_rust_audio = audio_spawn::should_use_rust_audio_backend();
+        let warn_unavailable = audio_pipeline_requested() && !audio_pipeline_available();
+        if warn_unavailable {
+            let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                "[runtime] {}",
+                audio_spawn::requested_but_unavailable_warning(),
+            )));
+        }
 
         self.state = RuntimeState::Starting;
-        let display = command.display();
-        let mut process = Command::new(&command.program);
+        let mut effective_command = command;
+        if use_rust_audio {
+            effective_command
+                .args
+                .push("--audio-source=rust-stdin".to_owned());
+        }
+        let display = effective_command.display();
+        let mut process = Command::new(&effective_command.program);
         process
-            .args(&command.args)
-            .current_dir(&command.working_dir)
+            .args(&effective_command.args)
+            .current_dir(&effective_command.working_dir)
             .env(WORKER_EVENTS_ENV, "1")
-            .envs(command.env.iter().map(|(key, value)| (key, value)))
+            .envs(
+                effective_command
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key, value)),
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if use_rust_audio {
+            // Only the Rust path needs to write to the worker's stdin
+            // (JSON frame events). Inherit otherwise — the Python path
+            // doesn't read stdin and a piped+unused stdin can confuse
+            // some libraries that probe `isatty()` on launch.
+            process.stdin(Stdio::piped());
+        }
         configure_piped_python_stdio(&mut process);
         configure_background_process(&mut process);
         let mut child = process.spawn()?;
+
+        // Iteration-3 review finding #1: when the rust-audio backend
+        // is active we need to know when the worker's stdin reader is
+        // live so we can defer opening cpal until then (no pre-ready
+        // frames piling up in the OS pipe buffer). The Python worker
+        // emits `state=ready` on its stderr after model load and right
+        // before constructing `Dictate` (which spawns the stdin reader
+        // in __init__). Wire the stderr streamer to ping a one-shot
+        // channel on that event; an on-the-fly ready-watch thread
+        // installs the BridgeHandle once it sees the ping.
+        #[cfg(feature = "audio-in-rust")]
+        let ready_signal: Option<Sender<()>> = if use_rust_audio {
+            let (ready_tx, ready_rx) = mpsc::channel::<()>();
+            // Bridge prep up-front so a missing Silero ONNX still
+            // fails-fast (synchronous Err from `start()`). The cpal
+            // stream is NOT opened here — that's deferred to the
+            // ready-watch thread below.
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow!("audio-in-rust: child stdin was not piped"))?;
+            let pending = match audio_spawn::prepare_audio_bridge_for_child(stdin) {
+                Ok(p) => p,
+                Err(err) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    self.state = RuntimeState::Stopped;
+                    return Err(anyhow!(
+                        "failed to prepare Rust audio pipeline: {err}; \
+                         unset VOICEPI_AUDIO_BACKEND to fall back to the \
+                         Python sounddevice path"
+                    ));
+                }
+            };
+            let device = audio_spawn::resolve_audio_device_from_env(&effective_command.env);
+            self.spawn_ready_watch(pending, device, ready_rx);
+            Some(ready_tx)
+        } else {
+            None
+        };
+        #[cfg(not(feature = "audio-in-rust"))]
+        let ready_signal: Option<Sender<()>> = None;
 
         if let Some(stdout) = child.stdout.take() {
             stream_lines(
@@ -416,6 +536,7 @@ impl RuntimeSupervisor {
                 self.tx.clone(),
                 RuntimeStream::Stdout,
                 self.repaint_notifier.clone(),
+                None,
             );
         }
         if let Some(stderr) = child.stderr.take() {
@@ -424,6 +545,7 @@ impl RuntimeSupervisor {
                 self.tx.clone(),
                 RuntimeStream::Stderr,
                 self.repaint_notifier.clone(),
+                ready_signal,
             );
         }
 
@@ -436,7 +558,189 @@ impl RuntimeSupervisor {
         Ok(())
     }
 
+    /// Iteration-3 review finding #1: park the prepared [`PendingBridge`]
+    /// on a background thread that waits for the Python worker's
+    /// `state=ready` event before opening cpal and starting the writer.
+    /// This avoids the race where the supervisor would otherwise emit
+    /// VAD-detected speech frames into the child's stdin DURING the
+    /// child's model load (the Python reader doesn't exist until
+    /// `Dictate.__init__`, which runs after the model is ready).
+    ///
+    /// On `ready_rx` ping: open cpal, install the live `BridgeHandle`
+    /// into `self.audio_bridge`, and start the error-watcher. If the
+    /// receiver hangs up before a ping (worker died / supervisor
+    /// stopped during model load), the `PendingBridge` is dropped here
+    /// — no cpal stream is ever opened, preserving the user's
+    /// mic-permission state.
+    #[cfg(feature = "audio-in-rust")]
+    fn spawn_ready_watch(
+        &self,
+        pending: crate::audio::PendingBridge,
+        device: String,
+        ready_rx: Receiver<()>,
+    ) {
+        let tx = self.tx.clone();
+        let notifier = self.repaint_notifier.clone();
+        let bridge_slot = self.audio_bridge.clone();
+        let terminal = self.bridge_terminal.clone();
+        let cancel = self.bridge_cancel.clone();
+        thread::spawn(move || {
+            if ready_rx.recv().is_err() {
+                // Worker died (or `stop()` torpedoed the streamer)
+                // before emitting ready. Drop the pending bridge —
+                // cpal never opened, so the user's mic-permission
+                // state is preserved for the next run.
+                let _ = tx.send(RuntimeEvent::Stderr(
+                    "[runtime] audio-in-rust: worker exited before ready; \
+                     bridge cancelled (no cpal stream opened)"
+                        .to_owned(),
+                ));
+                drop(pending);
+                return;
+            }
+            // Race-guard: if `stop()` ran while we were parked on the
+            // ready signal, don't open cpal — the supervisor is on its
+            // way down and doesn't want the bridge any more.
+            if cancel.load(Ordering::SeqCst) {
+                drop(pending);
+                return;
+            }
+            match pending.start(&device) {
+                Ok((bridge, errors)) => {
+                    // Recheck the cancel flag AFTER cpal opened. If
+                    // `stop()` raced us between the load above and
+                    // here, the supervisor already locked the bridge
+                    // slot and moved on with nothing to teardown.
+                    // Drop the freshly-built handle ourselves to close
+                    // cpal + the writer instead of installing it into
+                    // a stopped supervisor.
+                    if cancel.load(Ordering::SeqCst) {
+                        drop(bridge);
+                        return;
+                    }
+                    if let Ok(mut slot) = bridge_slot.lock() {
+                        *slot = Some(bridge);
+                    }
+                    let _ = tx.send(RuntimeEvent::Stderr(
+                        "[runtime] audio-in-rust: Rust capture pipeline active for this run"
+                            .to_owned(),
+                    ));
+                    Self::run_bridge_error_loop(errors, tx, notifier, terminal);
+                }
+                Err(err) => {
+                    // cpal open failed (mic in use / unplugged) AFTER
+                    // the worker came up ready. Surface as an Error
+                    // event and flag the supervisor for teardown so the
+                    // UI stops claiming we're recording. Same teardown
+                    // path as a runtime bridge error.
+                    let _ = tx.send(RuntimeEvent::Error(format!(
+                        "audio-in-rust: failed to open capture stream: {err}; \
+                         unset VOICEPI_AUDIO_BACKEND to fall back"
+                    )));
+                    terminal.store(true, Ordering::SeqCst);
+                    if let Some(notifier) = notifier.as_ref() {
+                        notifier();
+                    }
+                }
+            }
+        });
+    }
+
+    /// Watch the audio bridge's error channel in a background thread
+    /// and translate any [`crate::audio::BridgeError`] into a
+    /// [`RuntimeEvent::Error`] (UI surfaces it) or a stderr trace
+    /// (expected `WorkerClosed` on PTT release). Stops as soon as the
+    /// bridge's channel closes — the bridge sends AT MOST ONE error
+    /// per run, so this watcher is a tight one-shot loop. Fire-and-
+    /// forget: dropping the bridge closes the channel and the watcher
+    /// exits naturally.
+    #[cfg(feature = "audio-in-rust")]
+    #[allow(dead_code)] // Retained for tests; production path uses run_bridge_error_loop directly.
+    fn spawn_audio_bridge_error_watch(
+        &self,
+        errors: std::sync::mpsc::Receiver<crate::audio::BridgeError>,
+    ) {
+        let tx = self.tx.clone();
+        let notifier = self.repaint_notifier.clone();
+        let terminal = self.bridge_terminal.clone();
+        // Flag-up the active backend on the supervisor channel so the
+        // user can tell from the runtime log which path actually ran.
+        let _ = tx.send(RuntimeEvent::Stderr(
+            "[runtime] audio-in-rust: Rust capture pipeline active for this run".to_owned(),
+        ));
+        thread::spawn(move || {
+            Self::run_bridge_error_loop(errors, tx, notifier, terminal);
+        });
+    }
+
+    /// Pure error-translation loop. Extracted so the iteration-3
+    /// ready-watch thread (which already owns the bridge-creation
+    /// site) can drive it inline without spawning a second thread —
+    /// and so unit tests can drive it without a real bridge.
+    #[cfg(feature = "audio-in-rust")]
+    fn run_bridge_error_loop(
+        errors: std::sync::mpsc::Receiver<crate::audio::BridgeError>,
+        tx: Sender<RuntimeEvent>,
+        notifier: Option<RepaintNotifier>,
+        terminal: Arc<AtomicBool>,
+    ) {
+        use crate::audio::BridgeError;
+        while let Ok(err) = errors.recv() {
+            // Iteration-2 review finding #3: `Io` and `Pipeline` are
+            // TERMINAL — the writer has already dropped the child's
+            // stdin handle and exited, so even if the worker is
+            // technically still alive it can no longer receive audio.
+            // Raise the teardown flag so the next `poll()` kills the
+            // child and surfaces an `Exited`, flipping the UI back to
+            // Stopped instead of leaving the user staring at a
+            // running-but-deaf worker.
+            let is_terminal = matches!(err, BridgeError::Io(_) | BridgeError::Pipeline(_));
+            let event = match err {
+                // WorkerClosed = the Python child closed stdin (normal
+                // teardown). Surface as a stderr trace, not an Error
+                // event, so the UI doesn't pop a false-positive failure
+                // banner on every PTT release.
+                BridgeError::WorkerClosed => RuntimeEvent::Stderr(
+                    "[runtime] audio-in-rust: worker closed audio stdin (normal teardown)"
+                        .to_owned(),
+                ),
+                BridgeError::Io(msg) => RuntimeEvent::Error(format!(
+                    "audio-in-rust: failed writing to worker stdin: {msg}"
+                )),
+                BridgeError::Pipeline(msg) => {
+                    RuntimeEvent::Error(format!("audio-in-rust: capture pipeline error: {msg}"))
+                }
+            };
+            let _ = tx.send(event);
+            if is_terminal {
+                terminal.store(true, Ordering::SeqCst);
+            }
+            if let Some(notifier) = notifier.as_ref() {
+                notifier();
+            }
+        }
+    }
+
     pub fn stop(&mut self) -> Result<()> {
+        // Stop the Rust audio bridge BEFORE killing the worker. The
+        // bridge closes its end of the stdin pipe; the worker's
+        // RustStdinAudioSource sees EOF and finishes the current
+        // utterance (no half-buffered audio). If we killed the worker
+        // first the bridge would race the kill with a write and emit
+        // a spurious `WorkerClosed` event.
+        #[cfg(feature = "audio-in-rust")]
+        {
+            // Iteration-3 race-guard: tell any in-flight ready-watch
+            // thread to abort BEFORE we look at the slot. If it's
+            // mid-`pending.start()`, it'll see this and drop the
+            // freshly-built handle on completion instead of
+            // installing it into a stopped supervisor.
+            self.bridge_cancel.store(true, Ordering::SeqCst);
+            if let Some(mut bridge) = self.audio_bridge.lock().ok().and_then(|mut s| s.take()) {
+                bridge.stop();
+            }
+        }
+
         let Some(mut child) = self.child.take() else {
             self.state = RuntimeState::Stopped;
             return Ok(());
@@ -469,12 +773,67 @@ impl RuntimeSupervisor {
         self.start(command)
     }
 
+    /// Test-only hook (crate-visible): simulate the bridge-error
+    /// watcher observing a terminal `BridgeError::Io` /
+    /// `BridgeError::Pipeline`. The next `poll()` will then run the
+    /// iteration-2 review finding #3 teardown path (kill the child,
+    /// drop the bridge, synthesize `Exited`). Crate-visible so
+    /// `runtime/bridge_terminal_tests.rs` can exercise the path
+    /// without spinning up a real cpal failure.
+    #[cfg(all(test, feature = "audio-in-rust"))]
+    #[doc(hidden)]
+    pub(crate) fn trigger_bridge_terminal_for_tests(&self) {
+        self.bridge_terminal.store(true, Ordering::SeqCst);
+    }
+
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
+        // Iteration-2 review finding #3: act on a terminal bridge error
+        // BEFORE the regular try_wait. The bridge watcher has already
+        // emitted a `RuntimeEvent::Error` describing the failure; here
+        // we follow up with the teardown the watcher couldn't perform
+        // from a background thread (it has no `&mut self`). Kill the
+        // child, drop the bridge handle, and synthesize an `Exited`
+        // so the UI flips back to Stopped on its next poll.
+        #[cfg(feature = "audio-in-rust")]
+        if self.bridge_terminal.swap(false, Ordering::SeqCst) {
+            self.bridge_cancel.store(true, Ordering::SeqCst);
+            if let Some(mut bridge) = self.audio_bridge.lock().ok().and_then(|mut s| s.take()) {
+                bridge.stop();
+            }
+            if let Some(mut child) = self.child.take() {
+                let _ = kill_child(&mut child);
+                let exit_code = child.wait().ok().and_then(|status| status.code());
+                self.state = RuntimeState::Stopped;
+                let _ = self.tx.send(RuntimeEvent::Exited { code: exit_code });
+                if let Some(notifier) = self.repaint_notifier.as_ref() {
+                    notifier();
+                }
+            } else {
+                // No child to kill (already exited): just be sure
+                // state reflects stopped.
+                self.state = RuntimeState::Stopped;
+            }
+            return self.rx.try_iter().collect();
+        }
+
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     self.state = RuntimeState::Stopped;
                     self.child = None;
+                    // The worker exited (crash, --doctor finished,
+                    // user-killed, …). Tear the audio bridge down so
+                    // it doesn't keep cpal open against a missing
+                    // reader. Same teardown order as `stop()`.
+                    #[cfg(feature = "audio-in-rust")]
+                    {
+                        self.bridge_cancel.store(true, Ordering::SeqCst);
+                        if let Some(mut bridge) =
+                            self.audio_bridge.lock().ok().and_then(|mut s| s.take())
+                        {
+                            bridge.stop();
+                        }
+                    }
                     let _ = self.tx.send(RuntimeEvent::Exited {
                         code: status.code(),
                     });
@@ -483,6 +842,15 @@ impl RuntimeSupervisor {
                 Err(err) => {
                     self.state = RuntimeState::Stopped;
                     self.child = None;
+                    #[cfg(feature = "audio-in-rust")]
+                    {
+                        self.bridge_cancel.store(true, Ordering::SeqCst);
+                        if let Some(mut bridge) =
+                            self.audio_bridge.lock().ok().and_then(|mut s| s.take())
+                        {
+                            bridge.stop();
+                        }
+                    }
                     let _ = self.tx.send(RuntimeEvent::Error(err.to_string()));
                 }
             }
@@ -966,14 +1334,30 @@ fn stream_lines<R>(
     tx: Sender<RuntimeEvent>,
     stream: RuntimeStream,
     repaint_notifier: Option<RepaintNotifier>,
+    ready_signal: Option<Sender<()>>,
 ) where
     R: std::io::Read + Send + 'static,
 {
     thread::spawn(move || {
+        let mut ready_signal = ready_signal;
         for line in BufReader::new(reader).lines() {
             match line {
                 Ok(line) => {
                     let event = runtime_event_from_line(line, stream);
+                    // Iteration-3 review finding #1: when the rust-audio
+                    // backend is active, fire the one-shot ready signal
+                    // the moment we see the worker's first ready event.
+                    // The supervisor's ready-watch thread is parked on
+                    // the matching receiver; it will then open cpal and
+                    // start producing frames into the now-live Python
+                    // stdin reader.
+                    if let RuntimeEvent::Worker(worker) = &event {
+                        if worker.state.as_deref() == Some("ready") {
+                            if let Some(signal) = ready_signal.take() {
+                                let _ = signal.send(());
+                            }
+                        }
+                    }
                     let _ = tx.send(event);
                     if let Some(notifier) = repaint_notifier.as_ref() {
                         notifier();
@@ -1135,10 +1519,16 @@ fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
         .then(|| root.to_path_buf())
 }
 
+pub mod audio_spawn;
+
 #[cfg(test)]
 mod app_root_tests;
 #[cfg(test)]
 mod audio_backend_tests;
+#[cfg(test)]
+mod audio_spawn_tests;
+#[cfg(all(test, feature = "audio-in-rust"))]
+mod bridge_terminal_tests;
 #[cfg(test)]
 mod desktop_entry_tests;
 #[cfg(test)]

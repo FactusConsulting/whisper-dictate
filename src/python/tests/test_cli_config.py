@@ -402,6 +402,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_benchmark_paths.py",
             "vp_benchmark_report.py",
             "vp_capture.py",
+            "vp_capture_rust_stdin.py",
             "vp_cli.py",
             "vp_config.py",
             "vp_corpus_profile.py",

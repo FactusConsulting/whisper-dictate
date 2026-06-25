@@ -595,6 +595,8 @@ def _run_session(a, model, lang, backend: str, dev: str, ctype: str,
             device=dev,
             compute_type=ctype,
             model_load_s=model_load_s,
+            # See vp_cli.build_arg_parser: defaults to "sounddevice".
+            audio_source=getattr(a, "audio_source", "sounddevice"),
         ).run()
     except KeyboardInterrupt:
         print("\nbye")

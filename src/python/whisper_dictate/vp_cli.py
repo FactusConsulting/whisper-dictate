@@ -334,6 +334,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "
                          "auto = NVIDIA GPU if present, else CPU")
     ap.add_argument("--app-root", default=None, help=argparse.SUPPRESS)
+    # Experimental Rust capture pipeline (audio-in-rust feature). When set,
+    # the Rust controller pipes JSON-line audio events into stdin and the
+    # capture path reads from there instead of opening sounddevice. The
+    # `sounddevice` value is the explicit default and exists so a downstream
+    # test or operator can pin it without relying on the absent-flag default.
+    # See src/python/whisper_dictate/vp_rust_audio_source.py for the wire
+    # format and src/rust/audio/stdin_bridge.rs for the sender. Hidden from
+    # the public --help until the rollout completes.
+    ap.add_argument("--audio-source", default="sounddevice",
+                    choices=["sounddevice", "rust-stdin"],
+                    help=argparse.SUPPRESS)
     ap.set_defaults(mode=INJECT_MODE)
     return ap
 

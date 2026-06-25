@@ -324,6 +324,76 @@ fn supervisor_passes_command_env_to_worker_without_logging_secret() {
     )));
 }
 
+/// Iteration-2 review finding #6: the audio-in-rust path adds
+/// `Stdio::piped()` on the worker's stdin and the supervisor writes
+/// to it from the bridge thread. Windows named-pipe semantics differ
+/// from Unix (chunked writes, handle inheritance via
+/// `STARTUPINFO.hStdInput`, hidden child window via
+/// `CREATE_NO_WINDOW`), so we pin the round-trip end-to-end on
+/// Windows CI here. The test does NOT depend on the `audio-in-rust`
+/// cargo feature: it mirrors what the supervisor does — spawn a
+/// Python child with piped stdin, write bytes, verify the child read
+/// them and printed them back on stdout — so a regression in the
+/// supervisor's Windows pipe-handling shows up even in default
+/// builds.
+#[cfg(windows)]
+#[test]
+fn windows_child_reads_piped_stdin_written_by_parent() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let Some(python) = test_python() else {
+        return;
+    };
+    // Mirror what `RuntimeSupervisor::start` does for the
+    // audio-in-rust path: Stdio::piped() on stdin + the hidden-window
+    // creation flag. We bypass the supervisor itself because it owns
+    // stdin internally (the audio bridge takes it on spawn), so we
+    // drive a bare Command here and just prove the pipe round-trips.
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut child = Command::new(python)
+        .args([
+            "-c",
+            // The child reads a line, prints it back, and exits.
+            // sys.stdin.readline blocks until the parent writes — if
+            // the Windows pipe handle wasn't inherited correctly the
+            // read would never return and the test would time out.
+            "import sys; line = sys.stdin.readline(); print(f'got:{line.strip()}', flush=True)",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .expect("spawn python with piped stdin on Windows");
+
+    {
+        let stdin = child.stdin.as_mut().expect("piped stdin is Some");
+        stdin
+            .write_all(b"hello-from-rust\n")
+            .expect("Windows pipe write succeeds");
+        stdin.flush().expect("Windows pipe flush succeeds");
+    }
+    // Dropping stdin closes the Windows pipe handle so the child sees
+    // EOF after the line above — same teardown shape the
+    // `BridgeHandle::stop` path uses for the real bridge.
+    drop(child.stdin.take());
+
+    let output = child
+        .wait_with_output()
+        .expect("child terminates after stdin EOF");
+    assert!(
+        output.status.success(),
+        "child exited non-zero on Windows: {:?}",
+        output.status,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("got:hello-from-rust"),
+        "Windows piped child must echo the parent's stdin line; got: {stdout:?}",
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn cleanup_stale_desktop_processes_stops_worker_from_same_app_root() {

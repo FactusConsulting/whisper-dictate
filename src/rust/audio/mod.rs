@@ -26,12 +26,29 @@ pub mod capture;
 pub(crate) mod model_cache;
 pub mod pipe;
 pub mod resampler;
+pub mod stdin_bridge;
 pub mod vad;
 
 pub use capture::{AudioChunk, CaptureHandle};
 pub use pipe::{event_to_json_line, write_events};
 pub use resampler::{FrameResampler, FRAME_SIZE, OUTPUT_RATE};
+pub use stdin_bridge::{
+    spawn_bridge, spawn_bridge_pending_ready, BridgeError, BridgeHandle, PendingBridge,
+};
 pub use vad::{SileroVad, SmoothedVad, VadEvent};
+
+/// Bundled Silero v4 ONNX bytes used by [`AudioPipeline::start`] when the
+/// supervisor (or another caller) wants the default model loader. Re-exported
+/// here so callers don't need to know the asset path; see `assets/silero_vad.onnx`.
+pub const EMBEDDED_SILERO_BYTES: &[u8] = include_bytes!("../../../assets/silero_vad.onnx");
+
+/// Convenience for the supervisor / integration tests: construct the
+/// default Silero VAD from the embedded ONNX bytes. Returned as a
+/// closure so callers can pass it straight to [`AudioPipeline::start`]
+/// without re-implementing the loader.
+pub fn default_silero_loader() -> impl FnOnce() -> Result<SileroVad, anyhow::Error> {
+    || SileroVad::from_embedded_bytes(EMBEDDED_SILERO_BYTES)
+}
 
 /// Events emitted by the assembled pipeline. Mirrors the JSON message
 /// vocabulary the Python `vp_capture` rust-stdin reader expects, so the

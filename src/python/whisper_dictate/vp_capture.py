@@ -777,6 +777,18 @@ class CaptureMixin:
             capture_channels=self._capture_channels,
         )
 
+    def _start_rust_stdin(self) -> tuple[str, str]:
+        """Read audio frames from stdin (audio-in-rust feature).
+
+        Thin shim that delegates to :mod:`vp_capture_rust_stdin` so the
+        already-1k-line :mod:`vp_capture` stays under the project's
+        modularity guideline. See that module for the wire-format /
+        threading contract.
+        """
+        from .vp_capture_rust_stdin import start_rust_stdin_capture
+        self._cap_warned = False
+        return start_rust_stdin_capture(self)
+
     def _start_arecord(self) -> tuple[str, str]:
         self._capture_backend = "arecord"
         self._cap_warned = False
@@ -1116,6 +1128,20 @@ class CaptureMixin:
                 print(f"[cap] stream stop error (ignored): {exc}", flush=True)
             finally:
                 self._stream = None
+        # audio-in-rust (iteration-2 review finding #2): do NOT join or
+        # clear the rust-stdin reader thread on PTT release. The thread
+        # is long-lived (one per worker process) — see
+        # :mod:`vp_capture_rust_stdin` for the rationale. Joining with
+        # a timeout used to abandon the thread when it was blocked on
+        # stdin during silence, and the next press would then spawn a
+        # second reader that raced the abandoned one for the next
+        # frame. Now the same reader keeps running and simply drops
+        # frames while ``self.recording`` is False, so there is
+        # nothing to tear down between presses; the reader exits
+        # naturally when the supervisor closes stdin at worker
+        # shutdown. We keep the attribute name reachable via
+        # ``getattr`` so debugging/log code that inspects it stays
+        # safe (``None`` until the first press, the live thread after).
 
     def _recording_seconds(self, pcm) -> float:
         if self._record_started:
