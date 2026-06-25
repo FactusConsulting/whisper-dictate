@@ -1,75 +1,17 @@
-//! Pure corpus → dictionary training helpers (port of
-//! `vp_dictionary_training.py`, Wave 4-A of the Python-removal roadmap #348).
-//!
-//! Two flavours of "grow the prompt vocabulary":
-//!
-//! 1. [`extract_candidate_terms`] mines proper nouns / technical tokens out of
-//!    corpus reference TEXT — capitalised tokens, multi-word capitalised runs
-//!    ("Claude Code"), all-caps acronyms ("MCP", "RAG"), digit-mixed identifiers
-//!    ("large-v3"), studly-caps product names ("vLLM"). Each term counted once
-//!    per corpus item, frequency-filtered, curated terms always kept.
-//! 2. [`suggest_terms_from_misses`] surfaces the domain terms the benchmark
-//!    GOT WRONG (annotated `term_misses`) as SUGGESTED additions — preview-only.
-//!
-//! [`merge_terms`] is the common case-insensitive append helper used to turn
-//! the candidate list into a [`MergePreview`] (what would be added vs already
-//! present) without writing the file.
+//! Mine domain-term candidates from corpus reference text. The heuristic mix:
+//! capitalised tokens, multi-word capitalised runs ("Claude Code"), all-caps
+//! acronyms ("MCP", "RAG"), digit-mixed identifiers ("large-v3"), studly-caps
+//! product names ("vLLM"). Each term is counted once per corpus item;
+//! frequency-filtered via `min_count`; curated terms (`item_terms`) are always
+//! kept regardless of `min_count`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
-/// A proposed dictionary term plus *why* it was proposed (for the preview).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TermCandidate {
-    pub term: String,
-    #[serde(default = "default_one")]
-    pub count: usize,
-    #[serde(default)]
-    pub reason: String,
-    #[serde(default)]
-    pub samples: Vec<String>,
-}
+use super::{normalize, words, TermCandidate};
 
-/// A SUGGESTED dictionary term from benchmark misses (preview, confirm first).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TermSuggestion {
-    pub term: String,
-    #[serde(default = "default_one")]
-    pub count: usize,
-    #[serde(default)]
-    pub samples: Vec<String>,
-    #[serde(default)]
-    pub already_in_dictionary: bool,
-}
-
-/// Outcome of merging candidates into the existing dictionary (no IO done).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct MergePreview {
-    #[serde(default)]
-    pub added: Vec<String>,
-    #[serde(default)]
-    pub skipped_existing: Vec<String>,
-    #[serde(default)]
-    pub result_terms: Vec<String>,
-    #[serde(default)]
-    pub existing_count: usize,
-}
-
-impl MergePreview {
-    pub fn added_count(&self) -> usize {
-        self.added.len()
-    }
-}
-
-fn default_one() -> usize {
-    1
-}
-
-static WORD_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[\wÀ-ɏ]+(?:[.\-][\wÀ-ɏ]+)*").unwrap());
 static SEGMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"[^,;:.!?()\[\]{}"']+"#).unwrap());
 
@@ -93,20 +35,6 @@ fn is_stopword(token: &str) -> bool {
     STOPWORDS.iter().any(|word| *word == lower)
 }
 
-fn normalize(term: &str) -> String {
-    term.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-fn words(text: &str) -> Vec<String> {
-    WORD_RE
-        .find_iter(text)
-        .map(|m| m.as_str().to_owned())
-        .collect()
-}
-
 fn first_char_is_upper(token: &str) -> bool {
     token
         .chars()
@@ -115,7 +43,7 @@ fn first_char_is_upper(token: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_capitalized_token(token: &str) -> bool {
+pub(super) fn is_capitalized_token(token: &str) -> bool {
     if token.is_empty() || !first_char_is_upper(token) {
         return false;
     }
@@ -297,8 +225,8 @@ impl CandidateAccumulator {
 }
 
 /// Mine domain-term candidates from corpus reference texts (pure). See the
-/// module docs for the heuristic mix; `min_count` filters one-off noise (curated
-/// terms always survive regardless of `min_count`).
+/// module docs for the heuristic mix; `min_count` filters one-off noise
+/// (curated terms always survive regardless of `min_count`).
 pub fn extract_candidate_terms(
     texts: &[String],
     item_terms: Option<&[Vec<String>]>,
@@ -325,164 +253,6 @@ fn aligned_ids(item_ids: Option<&[String]>, n: usize) -> Vec<String> {
         ids.resize(n, String::new());
     }
     ids
-}
-
-/// Append candidate terms to `existing`, deduping case-insensitively. Mirrors
-/// the Python `merge_terms` — `candidates` may be plain strings; existing
-/// terms are preserved in order; the `skipped_existing` list is deduped by
-/// normalised form so "Kubectl" + "kubectl" against an existing "kubectl"
-/// register only once as a skip.
-pub fn merge_terms(existing: &[String], candidates: &[String]) -> MergePreview {
-    let existing_terms: Vec<String> = existing
-        .iter()
-        .map(|t| t.trim().to_owned())
-        .filter(|t| !t.is_empty())
-        .collect();
-    let mut seen: HashSet<String> = existing_terms.iter().map(|t| normalize(t)).collect();
-    let mut skipped_seen: HashSet<String> = HashSet::new();
-    let mut preview = MergePreview {
-        result_terms: existing_terms.clone(),
-        existing_count: existing_terms.len(),
-        ..MergePreview::default()
-    };
-    for candidate in candidates {
-        let term = candidate.trim();
-        let norm = normalize(term);
-        if norm.is_empty() {
-            continue;
-        }
-        if seen.contains(&norm) {
-            if skipped_seen.insert(norm) {
-                preview.skipped_existing.push(term.to_owned());
-            }
-            continue;
-        }
-        seen.insert(norm);
-        preview.added.push(term.to_owned());
-        preview.result_terms.push(term.to_owned());
-    }
-    preview
-}
-
-/// One annotated benchmark result row (what `suggest_terms_from_misses` cares
-/// about). Untyped beyond `term_misses` so the Python emitter is free to add
-/// columns without breaking the wire contract.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct BenchmarkRow {
-    #[serde(default)]
-    pub corpus_id: Option<String>,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub source_file: Option<String>,
-    /// Either a single missed term or a list (the Python emitter does both).
-    #[serde(default)]
-    pub term_misses: TermMissesField,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(untagged)]
-pub enum TermMissesField {
-    #[default]
-    None,
-    One(String),
-    Many(Vec<String>),
-}
-
-impl BenchmarkRow {
-    fn corpus_id(&self) -> String {
-        self.corpus_id
-            .clone()
-            .or_else(|| self.id.clone())
-            .or_else(|| self.source_file.clone())
-            .unwrap_or_default()
-    }
-
-    fn term_misses(&self) -> Vec<String> {
-        match &self.term_misses {
-            TermMissesField::None => Vec::new(),
-            TermMissesField::One(term) => {
-                let trimmed = term.trim();
-                if trimmed.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![trimmed.to_owned()]
-                }
-            }
-            TermMissesField::Many(terms) => terms
-                .iter()
-                .filter_map(|t| {
-                    let trimmed = t.trim();
-                    (!trimmed.is_empty()).then(|| trimmed.to_owned())
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Surface domain terms the benchmark got wrong as SUGGESTED additions (pure).
-/// Counts per row, frequency-filters by `min_count`, flags terms already in the
-/// caller-supplied dictionary, sorts by descending count then case-insensitive
-/// term. Suggestions are NEVER auto-applied — the CLI confirms first.
-pub fn suggest_terms_from_misses(
-    rows: &[BenchmarkRow],
-    existing_terms: &[String],
-    min_count: usize,
-) -> Vec<TermSuggestion> {
-    let known: HashSet<String> = existing_terms
-        .iter()
-        .map(|t| normalize(t))
-        .filter(|t| !t.is_empty())
-        .collect();
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut insertion: Vec<String> = Vec::new();
-    let mut surface: BTreeMap<String, String> = BTreeMap::new();
-    let mut samples: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-    for row in rows {
-        let sample = row.corpus_id();
-        for term in row.term_misses() {
-            let norm = normalize(&term);
-            if norm.is_empty() {
-                continue;
-            }
-            if counts
-                .insert(norm.clone(), counts.get(&norm).copied().unwrap_or(0) + 1)
-                .is_none()
-            {
-                insertion.push(norm.clone());
-                surface.insert(norm.clone(), term.clone());
-            }
-            if !sample.is_empty() {
-                let entry = samples.entry(norm.clone()).or_default();
-                if !entry.iter().any(|s| s == &sample) {
-                    entry.push(sample.clone());
-                }
-            }
-        }
-    }
-    let threshold = std::cmp::max(1, min_count);
-    let mut suggestions: Vec<TermSuggestion> = insertion
-        .iter()
-        .filter_map(|norm| {
-            let count = *counts.get(norm).unwrap_or(&0);
-            if count < threshold {
-                return None;
-            }
-            Some(TermSuggestion {
-                term: surface.get(norm).cloned().unwrap_or_else(|| norm.clone()),
-                count,
-                samples: samples.get(norm).cloned().unwrap_or_default(),
-                already_in_dictionary: known.contains(norm),
-            })
-        })
-        .collect();
-    suggestions.sort_by(|a, b| {
-        b.count
-            .cmp(&a.count)
-            .then_with(|| a.term.to_lowercase().cmp(&b.term.to_lowercase()))
-    });
-    suggestions
 }
 
 #[cfg(test)]
@@ -640,105 +410,5 @@ mod tests {
         let terms: HashSet<String> = cands.iter().map(|c| c.term.clone()).collect();
         assert!(!terms.contains("X"));
         assert!(terms.contains("Kubernetes"));
-    }
-
-    #[test]
-    fn merge_appends_new_terms() {
-        let preview = merge_terms(
-            &["Existing".to_owned()],
-            &["New".to_owned(), "Another".to_owned()],
-        );
-        assert_eq!(preview.added, vec!["New", "Another"]);
-        assert_eq!(preview.result_terms, vec!["Existing", "New", "Another"]);
-        assert_eq!(preview.existing_count, 1);
-    }
-
-    #[test]
-    fn merge_dedup_case_insensitive_against_existing() {
-        let preview = merge_terms(
-            &["Claude Code".to_owned()],
-            &["claude code".to_owned(), "Codex".to_owned()],
-        );
-        assert_eq!(preview.added, vec!["Codex"]);
-        assert!(preview.skipped_existing.contains(&"claude code".to_owned()));
-    }
-
-    #[test]
-    fn merge_skipped_existing_deduped_case_insensitively() {
-        let preview = merge_terms(
-            &["kubectl".to_owned()],
-            &[
-                "Kubectl".to_owned(),
-                "kubectl".to_owned(),
-                "KUBECTL".to_owned(),
-            ],
-        );
-        assert!(preview.added.is_empty());
-        assert_eq!(preview.skipped_existing.len(), 1);
-    }
-
-    #[test]
-    fn merge_dedup_within_candidates() {
-        let preview = merge_terms(&[], &["MCP".to_owned(), "mcp".to_owned(), "RAG".to_owned()]);
-        assert_eq!(preview.added, vec!["MCP", "RAG"]);
-    }
-
-    #[test]
-    fn merge_blank_candidates_ignored() {
-        let preview = merge_terms(&[], &["  ".to_owned(), "".to_owned(), "Real".to_owned()]);
-        assert_eq!(preview.added, vec!["Real"]);
-    }
-
-    fn miss_rows() -> Vec<BenchmarkRow> {
-        let raw = r#"[
-            {"corpus_id":"da-tech-004","term_misses":["merge","deploy"]},
-            {"corpus_id":"da-tech-001","term_misses":["merge"]},
-            {"corpus_id":"en-tech-002","term_misses":["NVIDIA Parakeet"]},
-            {"corpus_id":"x","term_misses":[]},
-            {"corpus_id":"y"}
-        ]"#;
-        serde_json::from_str(raw).unwrap()
-    }
-
-    #[test]
-    fn suggest_counts_and_sorts_misses() {
-        let suggestions = suggest_terms_from_misses(&miss_rows(), &[], 1);
-        let merge = suggestions.iter().find(|s| s.term == "merge").unwrap();
-        let deploy = suggestions.iter().find(|s| s.term == "deploy").unwrap();
-        assert_eq!(merge.count, 2);
-        assert_eq!(deploy.count, 1);
-        assert_eq!(suggestions[0].term, "merge");
-    }
-
-    #[test]
-    fn suggest_flags_terms_already_in_dictionary() {
-        let suggestions = suggest_terms_from_misses(&miss_rows(), &["Deploy".to_owned()], 1);
-        let deploy = suggestions.iter().find(|s| s.term == "deploy").unwrap();
-        assert!(deploy.already_in_dictionary);
-        let merge = suggestions.iter().find(|s| s.term == "merge").unwrap();
-        assert!(!merge.already_in_dictionary);
-    }
-
-    #[test]
-    fn suggest_min_count_filters() {
-        let suggestions = suggest_terms_from_misses(&miss_rows(), &[], 2);
-        let terms: HashSet<String> = suggestions.iter().map(|s| s.term.clone()).collect();
-        assert_eq!(terms, HashSet::from(["merge".to_owned()]));
-    }
-
-    #[test]
-    fn suggest_string_term_misses_field_is_tolerated() {
-        let raw = r#"[{"corpus_id":"z","term_misses":"merge"}]"#;
-        let rows: Vec<BenchmarkRow> = serde_json::from_str(raw).unwrap();
-        let suggestions = suggest_terms_from_misses(&rows, &[], 1);
-        assert_eq!(suggestions.len(), 1);
-        assert_eq!(suggestions[0].term, "merge");
-    }
-
-    #[test]
-    fn suggest_samples_record_corpus_ids() {
-        let suggestions = suggest_terms_from_misses(&miss_rows(), &[], 1);
-        let merge = suggestions.iter().find(|s| s.term == "merge").unwrap();
-        assert!(merge.samples.iter().any(|s| s == "da-tech-004"));
     }
 }
