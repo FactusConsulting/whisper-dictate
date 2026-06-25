@@ -11,6 +11,11 @@ pub mod config;
 pub mod dictionary;
 pub mod formatting;
 pub mod health;
+// Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier
+// matcher and the stage state machine compile unconditionally so their unit
+// tests run on every CI job; the OS listener layer is gated behind the
+// `rust-hotkeys` cargo feature. See src/rust/hotkey/mod.rs for the rollout.
+pub mod hotkey;
 pub mod injection;
 pub mod model_capacity;
 pub mod privacy;

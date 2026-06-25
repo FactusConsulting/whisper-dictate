@@ -6,6 +6,7 @@ device: key-name resolution, the quit-key fallback, evdev availability probing,
 and the run() backend-dispatch decision (Wayland evdev vs X11 pynput vs the
 Wayland-without-evdev exit).
 """
+import os
 import types as _types
 
 from helpers import (
@@ -2014,6 +2015,56 @@ class PynputSideSpecificToggleTests(unittest.TestCase):
             ln.on_press(_FakeModKey("ctrl_r"))    # WRONG side
         self.assertEqual(ln._owner.started, 0)
         self.assertFalse(ln._recording)
+
+
+class RustHotkeyBackendGateTests(unittest.TestCase):
+    """When the Rust supervisor owns PTT, the Python listener must be inert.
+
+    Issue #318: the supervisor sets ``VOICEPI_PYTHON_HOTKEY=0`` in the worker
+    env when it has installed the Rust hotkey coordinator. ``KeyBackendMixin.run``
+    must short-circuit BEFORE touching pynput/evdev so the worker stays alive
+    (its lifetime is the listener's lifetime today) but consumes no key events.
+    Without the flag set, behaviour is byte-identical to before — covered by
+    the rest of this file's tests, all of which run with no env override.
+    """
+
+    def test_run_short_circuits_when_supervisor_owns_hotkey(self):
+        target = _Target(key="ctrl_r")
+        # Inject a sleep that raises KeyboardInterrupt on first call so the
+        # parked loop unblocks immediately. The original signal handler is
+        # restored by patch on exit.
+        with patch.dict(os.environ, {"VOICEPI_PYTHON_HOTKEY": "0"}, clear=False), \
+                patch.object(vp_keys.time, "sleep", side_effect=KeyboardInterrupt):
+            target.run()  # must not raise — KeyboardInterrupt is the exit path
+        # The fake target's start/stop/cancel hooks must never have fired:
+        # the Rust supervisor owns PTT in this mode, so Python sees no events.
+        self.assertEqual(target.started, 0)
+        self.assertEqual(target.stopped, 0)
+        self.assertEqual(target.cancelled, 0)
+
+    def test_run_uses_pynput_when_flag_unset(self):
+        # Sanity guard for the gate: with no env override, run() must still
+        # call into the pynput backend (this is the default shipping path).
+        # We stub out _run_pynput so the test doesn't actually open a global
+        # hook — the flag check is what we care about.
+        target = _Target(key="ctrl_r")
+        # Make sure the flag is NOT set (clear any leftover from other tests).
+        env = {k: v for k, v in os.environ.items() if k != "VOICEPI_PYTHON_HOTKEY"}
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(vp_keys.KeyBackendMixin, "_run_pynput") as fake_pynput:
+            target.run()
+        fake_pynput.assert_called_once_with(["ctrl_r"])
+
+    def test_run_short_circuits_only_on_exact_zero_string(self):
+        # Defensive: the gate matches "0" exactly (after strip), so any other
+        # truthy / non-zero value falls through to the regular pynput path.
+        # This documents the contract — the supervisor sets "0" and nothing
+        # else triggers the no-op mode.
+        target = _Target(key="ctrl_r")
+        with patch.dict(os.environ, {"VOICEPI_PYTHON_HOTKEY": "1"}, clear=False), \
+                patch.object(vp_keys.KeyBackendMixin, "_run_pynput") as fake_pynput:
+            target.run()
+        fake_pynput.assert_called_once_with(["ctrl_r"])
 
 
 if __name__ == "__main__":

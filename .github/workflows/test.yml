@@ -150,7 +150,9 @@ jobs:
             libxcb-render0-dev \
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
-            libxkbcommon-dev
+            libxkbcommon-dev \
+            libxi-dev \
+            libxtst-dev
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: clippy
@@ -167,6 +169,12 @@ jobs:
         run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings
       - name: Rust tests
         run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
+      - name: Rust tests (rust-hotkeys feature)
+        # Issue #318: the Rust PTT coordinator is gated behind the
+        # `rust-hotkeys` cargo feature. Build & test it on Linux only — rdev's
+        # Linux backend needs libxi-dev / libxtst-dev (installed above);
+        # Windows already has every dep in the SDK.
+        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys
       - name: Rust CLI smoke
         run: |
           cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help

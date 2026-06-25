@@ -25,6 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb-shape0-dev \
         libxcb-xfixes0-dev \
         libxkbcommon-dev \
+        libxi-dev \
+        libxtst-dev \
         cmake \
         clang \
         libclang-dev \

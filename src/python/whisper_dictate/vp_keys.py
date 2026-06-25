@@ -560,6 +560,26 @@ class KeyBackendMixin:
         print("\nbye", flush=True)
 
     def run(self):
+        # When the Rust supervisor has installed its own PTT coordinator
+        # (issue #318 — `VOICEPI_HOTKEY_BACKEND=rust` on a binary built with
+        # `--features rust-hotkeys`), the supervisor sets `VOICEPI_PYTHON_HOTKEY=0`
+        # on this worker's environment so the Python listener becomes a NO-OP:
+        # the global hotkey is owned by Rust, the worker only ever sees start/
+        # stop commands. We park the thread on a long sleep so the Dictate run
+        # loop stays alive (its lifetime is the listener's lifetime today) and
+        # exits cleanly on Ctrl+C. Without the flag set, behaviour is byte-
+        # identical to before.
+        if os.environ.get("VOICEPI_PYTHON_HOTKEY", "").strip() == "0":
+            print(f"whisper-dictate [lang={self.lang or 'auto'}] (rust hotkey backend). "
+                  f"PTT owned by supervisor; Python listener idle.", flush=True)
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                pass
+            print("\nbye", flush=True)
+            return
+
         # Support chord keys: 'shift_r+ctrl_r' means hold both simultaneously.
         # On Wayland: use evdev (reads /dev/input/event* — global, layout-agnostic).
         # On X11: fall back to pynput's xorg backend.

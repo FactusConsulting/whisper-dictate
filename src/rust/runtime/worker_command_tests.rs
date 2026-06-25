@@ -197,6 +197,67 @@ fn doctor_command_adds_doctor_argument() {
 }
 
 #[test]
+fn worker_command_does_not_auto_disable_python_hotkey_when_env_var_set() {
+    // P1 #1 regression: previously `worker_command_with_args` injected
+    // `VOICEPI_PYTHON_HOTKEY=0` whenever VOICEPI_HOTKEY_BACKEND=rust AND
+    // the feature was compiled in — but nothing checked that the Rust
+    // listener had actually started. The supervisor now opts in
+    // explicitly via `disable_python_hotkey` ONLY after a successful
+    // install, so the env-var alone must never park Python.
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
+
+    let command = worker_command("/tmp/whisper-dictate");
+
+    assert!(
+        !command
+            .env
+            .iter()
+            .any(|(k, _)| k == "VOICEPI_PYTHON_HOTKEY"),
+        "worker_command must not auto-disable the Python hotkey based on \
+         env-var alone — the supervisor calls disable_python_hotkey only \
+         after the Rust listener is confirmed wired (PR #344 P1 #1)"
+    );
+}
+
+#[test]
+fn disable_python_hotkey_adds_the_flag() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    disable_python_hotkey(&mut command);
+
+    let value = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_PYTHON_HOTKEY")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(value, Some("0"));
+}
+
+#[test]
+fn disable_python_hotkey_is_idempotent() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    disable_python_hotkey(&mut command);
+    disable_python_hotkey(&mut command);
+
+    let count = command
+        .env
+        .iter()
+        .filter(|(k, _)| k == "VOICEPI_PYTHON_HOTKEY")
+        .count();
+    assert_eq!(count, 1, "calling twice must not duplicate the flag");
+}
+
+#[test]
 fn benchmark_command_adds_run_benchmark_argument_with_app_root_and_config() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
