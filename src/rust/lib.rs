@@ -4,6 +4,11 @@
 // src/rust/audio/mod.rs for the wiring + the PR description for the rollout.
 #[cfg(feature = "audio-in-rust")]
 pub mod audio;
+// Pure noise-floor / SNR / gain / silence-trim DSP — Wave 4-C port of
+// `src/python/whisper_dictate/vp_audio.py` (#348). Lives at the crate
+// root rather than under `audio/` because it has no cpal/ONNX deps and
+// must compile in stock builds for tests + future callers.
+pub mod audio_dsp;
 pub mod cli;
 pub mod cloud_api;
 pub mod command_hook;
