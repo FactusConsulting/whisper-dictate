@@ -150,8 +150,23 @@ pub enum Command {
     /// non-zero with a clear "feature not compiled in" message so the Python
     /// caller falls back to its own path. JSON request on stdin, JSON
     /// response on stdout — see `src/rust/whisper/dispatch.rs`.
+    ///
+    /// The `--probe` flag short-circuits before reading stdin / the model env
+    /// var: it exits 0 on a feature-enabled build and non-zero on a stock
+    /// build, so the Python caller can cheaply check whether the binary
+    /// actually supports the Rust backend before committing to it for a
+    /// dictation.
     #[command(hide = true)]
-    TranscribeWav,
+    TranscribeWav {
+        /// Probe-only mode: do not read stdin or run inference; exit 0 iff
+        /// the binary was built with `--features whisper-rs-local`. Used by
+        /// the Python wiring to gate `RustWhisperShellModel` so an
+        /// accidentally-enabled `VOICEPI_TRANSCRIBE_BACKEND=rust` against a
+        /// stock build falls back to faster-whisper instead of failing the
+        /// first dictation.
+        #[arg(long)]
+        probe: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -417,6 +432,9 @@ mod tests {
         assert_eq!(cli.command, Some(Command::Health));
 
         let cli = Cli::parse_from(["whisper-dictate", "transcribe-wav"]);
-        assert_eq!(cli.command, Some(Command::TranscribeWav));
+        assert_eq!(cli.command, Some(Command::TranscribeWav { probe: false }));
+
+        let cli = Cli::parse_from(["whisper-dictate", "transcribe-wav", "--probe"]);
+        assert_eq!(cli.command, Some(Command::TranscribeWav { probe: true }));
     }
 }

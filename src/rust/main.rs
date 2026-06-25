@@ -75,7 +75,7 @@ fn run() -> anyhow::Result<()> {
         Command::ApplyProfile => profiles::handle_apply_profile(),
         Command::Privacy => privacy::handle_privacy(),
         Command::Health => health::handle_health(),
-        Command::TranscribeWav => handle_transcribe_wav(),
+        Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
     }
 }
 
@@ -83,21 +83,35 @@ fn run() -> anyhow::Result<()> {
 ///
 /// Real implementation lives in `whisper::dispatch` and is only compiled in
 /// behind the `whisper-rs-local` feature (which pulls in whisper.cpp + CMake).
-/// In a stock build the binary still exposes the sub-command — keeping the
-/// CLI surface stable across feature builds — but exits non-zero with a
+/// In a stock build the binary still exposes the sub-command - keeping the
+/// CLI surface stable across feature builds - but exits non-zero with a
 /// clear "feature not compiled in" message so the Python caller knows to
 /// fall back to its in-process path.
+///
+/// `--probe` short-circuits before reading stdin or the model env var: it
+/// exits 0 on a feature-enabled build and non-zero on a stock build, so the
+/// Python wiring can cheaply check whether shelling out to this binary will
+/// actually do whisper inference before committing to it for a dictation.
+/// Note: ASCII-only strings here so the stderr message renders cleanly under
+/// PowerShell / cmd.exe / hidden launchers and Rust UI subprocess logs
+/// (AGENTS.md Windows-output rule).
 #[cfg(feature = "whisper-rs-local")]
-fn handle_transcribe_wav() -> anyhow::Result<()> {
+fn handle_transcribe_wav(probe: bool) -> anyhow::Result<()> {
+    if probe {
+        // Feature compiled in - probe succeeds without doing any work.
+        return Ok(());
+    }
     whisper_dictate_app::whisper::handle_transcribe_wav()
 }
 
 #[cfg(not(feature = "whisper-rs-local"))]
-fn handle_transcribe_wav() -> anyhow::Result<()> {
+fn handle_transcribe_wav(_probe: bool) -> anyhow::Result<()> {
+    // Same error for probe and real call: the Python caller treats any
+    // non-zero exit as "Rust backend unavailable, fall back to in-process".
     Err(anyhow::anyhow!(
         "this build of whisper-dictate was compiled without the \
          `whisper-rs-local` feature; the Rust transcription backend is \
-         unavailable — unset VOICEPI_TRANSCRIBE_BACKEND or install a build \
+         unavailable - unset VOICEPI_TRANSCRIBE_BACKEND or install a build \
          with the feature enabled"
     ))
 }

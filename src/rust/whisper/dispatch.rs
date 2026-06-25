@@ -119,14 +119,21 @@ fn dispatch(model_path: &Path, request: TranscribeRequest) -> Result<TranscribeR
             let whisper = LocalWhisper::new(model_path).with_context(|| {
                 format!("failed to load whisper model from {}", model_path.display())
             })?;
-            // Normalise "" / "auto" / None → None at the dispatch boundary so
-            // the library layer below only sees the two states it cares about.
+            // Normalise the language and prompt at the dispatch boundary so
+            // the library layer below only sees the states it cares about.
             // The mirror of this normalisation in `LocalWhisper::transcribe_*`
             // is belt-and-braces — keeping both means a direct library caller
             // (the example binary, future test code) still gets the right
             // behaviour on an empty-string prompt.
-            let lang_for_call = normalise_optional(language.as_deref());
-            let prompt_for_call = normalise_optional(initial_prompt.as_deref());
+            //
+            // The two fields normalise differently: `language` has an `auto`
+            // sentinel meaning "let the model detect" (mapped to None), but
+            // `initial_prompt` is free-form user text — collapsing a literal
+            // "auto" prompt to None would silently drop a valid user prompt
+            // that happens to equal that word (it would still be applied on
+            // the faster-whisper path).
+            let lang_for_call = normalise_language(language.as_deref());
+            let prompt_for_call = normalise_prompt(initial_prompt.as_deref());
             let text =
                 whisper.transcribe_wav(Path::new(&wav_path), lang_for_call, prompt_for_call)?;
             Ok(TranscribeResponse { text })
@@ -134,14 +141,24 @@ fn dispatch(model_path: &Path, request: TranscribeRequest) -> Result<TranscribeR
     }
 }
 
-/// Treat `None`, `Some("")`, and `Some("auto")` (only meaningful for
-/// `language`, harmless for `initial_prompt` since "auto" isn't a real prompt
-/// users would pick) as "no value". One helper for both fields keeps the
-/// boundary normalisation consistent.
-fn normalise_optional(value: Option<&str>) -> Option<&str> {
+/// Treat `None`, `Some("")`, and `Some("auto")` as "no language pinned" — the
+/// `auto` sentinel is meaningful here and mirrors the Python config UI.
+fn normalise_language(value: Option<&str>) -> Option<&str> {
     match value {
         None => None,
         Some("") | Some("auto") => None,
+        Some(other) => Some(other),
+    }
+}
+
+/// Treat only `None` and `Some("")` as "no prompt". A literal `"auto"` is a
+/// valid prompt token (the user or a dictionary entry might legitimately ask
+/// the model to bias toward that word) and must reach the inference call
+/// unchanged, matching the faster-whisper path's behaviour.
+fn normalise_prompt(value: Option<&str>) -> Option<&str> {
+    match value {
+        None => None,
+        Some("") => None,
         Some(other) => Some(other),
     }
 }
@@ -237,12 +254,23 @@ mod tests {
     }
 
     #[test]
-    fn normalise_optional_collapses_empty_and_auto() {
-        assert_eq!(normalise_optional(None), None);
-        assert_eq!(normalise_optional(Some("")), None);
-        assert_eq!(normalise_optional(Some("auto")), None);
-        assert_eq!(normalise_optional(Some("en")), Some("en"));
-        assert_eq!(normalise_optional(Some("Codex")), Some("Codex"));
+    fn normalise_language_collapses_empty_and_auto() {
+        assert_eq!(normalise_language(None), None);
+        assert_eq!(normalise_language(Some("")), None);
+        assert_eq!(normalise_language(Some("auto")), None);
+        assert_eq!(normalise_language(Some("en")), Some("en"));
+        assert_eq!(normalise_language(Some("da")), Some("da"));
+    }
+
+    #[test]
+    fn normalise_prompt_preserves_literal_auto() {
+        // None and empty collapse, but a literal "auto" is a valid prompt
+        // (user/dictionary may inject the word) — it must reach the model
+        // unchanged so behaviour matches the faster-whisper path.
+        assert_eq!(normalise_prompt(None), None);
+        assert_eq!(normalise_prompt(Some("")), None);
+        assert_eq!(normalise_prompt(Some("auto")), Some("auto"));
+        assert_eq!(normalise_prompt(Some("Codex")), Some("Codex"));
     }
 
     #[test]

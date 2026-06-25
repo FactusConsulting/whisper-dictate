@@ -84,8 +84,11 @@ class RustTranscribeBackendToggleTests(unittest.TestCase):
         vp = _fresh_vp_transcribe()
         # Force STT backend to local whisper for this load (load_stt_model
         # reads it via the module-level constant, which the test patches).
+        # The probe must succeed for the rust shell model to be chosen.
         with patch.object(vp, "STT_BACKEND", "whisper"), \
                 patch.object(vp, "_assert_local_backend", lambda *_a, **_k: None), \
+                patch.object(vp, "_rust_helper_supports_transcribe",
+                             return_value=True), \
                 patch.dict(os.environ, {
                     vp.TRANSCRIBE_BACKEND_ENV: "rust",
                     "VOICEPI_RUST_INJECTOR": "/path/to/whisper-dictate",
@@ -112,6 +115,87 @@ class RustTranscribeBackendToggleTests(unittest.TestCase):
             os.environ.pop("VOICEPI_RUST_INJECTOR", None)
             model = vp.load_stt_model("tiny.en", "cpu", "int8")
         self.assertIsInstance(model, _Whisper)
+
+    def test_load_stt_model_falls_back_when_helper_probe_fails(self):
+        """Stock builds set VOICEPI_RUST_INJECTOR (it's the same binary used
+        for redact/profile helpers) but `transcribe-wav --probe` exits
+        non-zero because the whisper-rs-local feature isn't compiled in. The
+        loader MUST detect this up-front via the probe and fall back to
+        faster-whisper, otherwise the FIRST dictation fails when the real
+        shell-out exits with "feature not compiled in"."""
+        vp = _fresh_vp_transcribe()
+        fw = types.ModuleType("faster_whisper")
+
+        class _Whisper:
+            def __init__(self, *a, **k):
+                self.args = a
+                self.kwargs = k
+
+        fw.WhisperModel = _Whisper
+        with patch.dict(sys.modules, {"faster_whisper": fw}), \
+                patch.object(vp, "STT_BACKEND", "whisper"), \
+                patch.object(vp, "_assert_local_backend", lambda *_a, **_k: None), \
+                patch.object(vp, "_rust_helper_supports_transcribe",
+                             return_value=False), \
+                patch.dict(os.environ, {
+                    vp.TRANSCRIBE_BACKEND_ENV: "rust",
+                    "VOICEPI_RUST_INJECTOR": "/path/to/whisper-dictate",
+                }):
+            model = vp.load_stt_model("tiny.en", "cpu", "int8")
+        # Probe failed → faster-whisper, not RustWhisperShellModel.
+        self.assertIsInstance(model, _Whisper)
+        self.assertNotIsInstance(model, vp.RustWhisperShellModel)
+
+
+class RustHelperProbeTests(unittest.TestCase):
+    """The probe shells out to ``whisper-dictate transcribe-wav --probe`` and
+    treats any non-zero exit / spawn error / timeout as "not supported", so the
+    caller can cleanly fall back to in-process faster-whisper without raising."""
+
+    def setUp(self):
+        sys.modules["numpy"] = real_numpy()
+        self.vp = _fresh_vp_transcribe()
+
+    def test_probe_returns_true_on_zero_exit(self):
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["shell"] = kwargs.get("shell")
+            return _completed(0, "", "")
+
+        with patch.object(self.vp.subprocess, "run", side_effect=fake_run):
+            ok = self.vp._rust_helper_supports_transcribe("/path/to/whisper-dictate")
+
+        self.assertTrue(ok)
+        self.assertEqual(captured["cmd"], ["/path/to/whisper-dictate",
+                                            "transcribe-wav", "--probe"])
+        # shell=False is mandatory on Windows so a helper path with spaces
+        # (e.g. "C:/Program Files/whisper-dictate.exe") cannot be cmd-injected.
+        self.assertFalse(captured["shell"])
+
+    def test_probe_returns_false_on_nonzero_exit(self):
+        with patch.object(self.vp.subprocess, "run",
+                          return_value=_completed(
+                              1, "", "feature not compiled in")):
+            self.assertFalse(
+                self.vp._rust_helper_supports_transcribe("/r"))
+
+    def test_probe_returns_false_on_oserror(self):
+        with patch.object(self.vp.subprocess, "run",
+                          side_effect=FileNotFoundError("no such binary")):
+            self.assertFalse(
+                self.vp._rust_helper_supports_transcribe("/missing"))
+
+    def test_probe_returns_false_on_timeout(self):
+        import subprocess as _sub
+
+        def boom(*_a, **_k):
+            raise _sub.TimeoutExpired(cmd="rust", timeout=1.0)
+
+        with patch.object(self.vp.subprocess, "run", side_effect=boom):
+            self.assertFalse(
+                self.vp._rust_helper_supports_transcribe("/r", timeout_s=1.0))
 
 
 class RustTranscribeShellOutTests(unittest.TestCase):
@@ -311,6 +395,68 @@ class RustWhisperShellModelTests(unittest.TestCase):
         request = json.loads(captured["input"])
         self.assertFalse(os.path.isfile(request["wav_path"]),
                          f"wav not cleaned up on error: {request['wav_path']}")
+
+
+@unittest.skipUnless(sys.platform == "win32",
+                     "Windows-specific subprocess invocation test")
+class WindowsHelperSubprocessTests(unittest.TestCase):
+    """Windows-first verification (per AGENTS.md) for the Rust transcription
+    helper shell-out: covers the platform-specific pitfalls (shell=False so a
+    `C:/Program Files/...` path isn't cmd-rewritten; argv list so paths with
+    spaces survive; UTF-8 stdio with errors="replace" so a cp1252 stderr line
+    can't crash the JSON decode). subprocess.run is stubbed, but the asserts
+    pin the exact call shape that goes to the OS."""
+
+    def setUp(self):
+        sys.modules["numpy"] = real_numpy()
+        self.vp = _fresh_vp_transcribe()
+
+    def test_probe_call_shape_is_windows_safe(self):
+        helper = r"C:\Program Files\WhisperDictate\whisper-dictate.exe"
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["shell"] = kwargs.get("shell")
+            captured["encoding"] = kwargs.get("encoding")
+            captured["errors"] = kwargs.get("errors")
+            return _completed(0, "", "")
+
+        with patch.object(self.vp.subprocess, "run", side_effect=fake_run):
+            ok = self.vp._rust_helper_supports_transcribe(helper)
+
+        self.assertTrue(ok)
+        # argv list, helper path preserved literally with spaces — no quoting
+        # gymnastics, no cmd.exe wrapper.
+        self.assertEqual(captured["cmd"],
+                         [helper, "transcribe-wav", "--probe"])
+        self.assertFalse(captured["shell"],
+                         "shell=True under Windows + a path with spaces is a "
+                         "well-known cmd-injection / quoting hazard")
+
+    def test_transcribe_call_shape_is_windows_safe(self):
+        helper = r"C:\Program Files\WhisperDictate\whisper-dictate.exe"
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["shell"] = kwargs.get("shell")
+            captured["encoding"] = kwargs.get("encoding")
+            captured["errors"] = kwargs.get("errors")
+            return _completed(0, '{"text": "hello"}', "")
+
+        with patch.object(self.vp.subprocess, "run", side_effect=fake_run):
+            payload = self.vp._run_rust_transcribe(
+                helper, r"C:\Users\me\AppData\Local\Temp\u.wav",
+                language="en", initial_prompt=None)
+
+        self.assertEqual(payload, {"text": "hello"})
+        self.assertEqual(captured["cmd"], [helper, "transcribe-wav"])
+        self.assertFalse(captured["shell"])
+        self.assertEqual(captured["encoding"], "utf-8")
+        # errors="replace" so a stray cp1252 byte from a broken helper can't
+        # raise UnicodeDecodeError before the JSON parser ever runs.
+        self.assertEqual(captured["errors"], "replace")
 
 
 class _WriteTempWavTests(unittest.TestCase):

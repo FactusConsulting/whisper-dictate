@@ -251,6 +251,37 @@ def _rust_transcribe_enabled() -> bool:
     return value == TRANSCRIBE_BACKEND_RUST
 
 
+def _rust_helper_supports_transcribe(helper: str, *, timeout_s: float = 10.0) -> bool:
+    """Probe ``whisper-dictate transcribe-wav --probe`` and return True iff the
+    helper exits zero.
+
+    The supervisor sets ``VOICEPI_RUST_INJECTOR`` for every Python worker even
+    on a stock build (it's the same binary used for redact/profile/etc.), so
+    presence of the env var does NOT imply this binary was compiled with the
+    ``whisper-rs-local`` feature. Without this probe a stock build paired with
+    ``VOICEPI_TRANSCRIBE_BACKEND=rust`` would happily select
+    :class:`RustWhisperShellModel` and then fail the FIRST dictation when the
+    real shell-out exits non-zero with "feature not compiled in" — far worse
+    than detecting the mismatch up-front and quietly using faster-whisper.
+
+    Any error (binary missing, timeout, non-zero exit) is treated as "not
+    supported" — we'd rather fall back silently than refuse to dictate.
+    """
+    try:
+        r = subprocess.run(
+            [helper, "transcribe-wav", "--probe"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_s,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
 def _write_temp_wav_16khz_mono(audio: np.ndarray) -> str:
     """Materialise ``audio`` (float32 in [-1, 1]) to a 16 kHz mono int16 WAV
     on disk and return the path.
@@ -410,7 +441,7 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
         return ExternalTranscriptionModel(model_name)
     if backend == "whisper" and _rust_transcribe_enabled():
         helper = _rust_helper_binary()
-        if helper:
+        if helper and _rust_helper_supports_transcribe(helper):
             print(
                 f"[stt] {TRANSCRIBE_BACKEND_ENV}={TRANSCRIBE_BACKEND_RUST}: "
                 f"dispatching local Whisper through Rust helper",
@@ -418,12 +449,20 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
             )
             return RustWhisperShellModel(helper)
         # Fall through to faster-whisper with a diagnostic — the explicit
-        # opt-in was honoured at the env-var level but we have no helper to
-        # call, so we'd rather log a clear "fell back" line than silently
-        # behave like a stock build.
+        # opt-in was honoured at the env-var level but the helper is either
+        # missing or doesn't support `transcribe-wav` (stock build without the
+        # whisper-rs-local feature). Log clearly so the user knows the env
+        # var was effectively ignored.
+        if not helper:
+            reason = "VOICEPI_RUST_INJECTOR not set"
+        else:
+            reason = (
+                f"helper at {helper!r} does not support transcribe-wav "
+                "(stock build without whisper-rs-local)"
+            )
         print(
             f"[stt] {TRANSCRIBE_BACKEND_ENV}={TRANSCRIBE_BACKEND_RUST} ignored: "
-            "VOICEPI_RUST_INJECTOR not set; using in-process faster-whisper",
+            f"{reason}; using in-process faster-whisper",
             flush=True,
         )
     from faster_whisper import WhisperModel
