@@ -141,6 +141,9 @@ pub enum Command {
     /// Internal helper used by the Python worker for local-only checks.
     #[command(hide = true)]
     Privacy,
+    /// Internal helper: render the `[health]` line or compute the 4-level grade.
+    #[command(hide = true)]
+    Health,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -401,5 +404,8 @@ mod tests {
 
         let cli = Cli::parse_from(["whisper-dictate", "privacy"]);
         assert_eq!(cli.command, Some(Command::Privacy));
+
+        let cli = Cli::parse_from(["whisper-dictate", "health"]);
+        assert_eq!(cli.command, Some(Command::Health));
     }
 }

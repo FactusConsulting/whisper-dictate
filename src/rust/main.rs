@@ -4,8 +4,8 @@ use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command};
 use whisper_dictate_app::{
-    cloud_api, command_hook, config, dictionary, formatting, injection, model_capacity, privacy,
-    profiles, redaction, runtime, telemetry, ui,
+    cloud_api, command_hook, config, dictionary, formatting, health, injection, model_capacity,
+    privacy, profiles, redaction, runtime, telemetry, ui,
 };
 
 fn main() {
@@ -74,5 +74,6 @@ fn run() -> anyhow::Result<()> {
         Command::RedactText => redaction::handle_redact_text(),
         Command::ApplyProfile => profiles::handle_apply_profile(),
         Command::Privacy => privacy::handle_privacy(),
+        Command::Health => health::handle_health(),
     }
 }

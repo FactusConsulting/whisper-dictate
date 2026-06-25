@@ -10,6 +10,7 @@ pub mod command_hook;
 pub mod config;
 pub mod dictionary;
 pub mod formatting;
+pub mod health;
 pub mod injection;
 pub mod model_capacity;
 pub mod privacy;
