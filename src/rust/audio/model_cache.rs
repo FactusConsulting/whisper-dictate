@@ -89,17 +89,16 @@ fn replace_atomic(tmp: &std::path::Path, target: &std::path::Path) -> Result<(),
     {
         match std::fs::rename(tmp, target) {
             Ok(()) => Ok(()),
-            Err(_) => {
-                // The error kind on Windows for "destination exists" is
-                // unstable across stdlib versions; treat any rename
-                // failure as "destination is in the way" and retry
-                // after deleting. If `remove_file` ALSO fails (file
-                // doesn't exist, locked, etc.) the second rename's
-                // error is what the caller sees, which is the most
-                // informative diagnostic.
+            // Only the "destination exists" case warrants the
+            // delete-then-retry dance; unrelated errors (path too long,
+            // disk full, permission denied, etc.) must surface as-is
+            // so callers and operators see the real diagnostic instead
+            // of a spurious `remove_file` side effect.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let _ = std::fs::remove_file(target);
                 std::fs::rename(tmp, target)
             }
+            Err(e) => Err(e),
         }
     }
     #[cfg(not(windows))]
@@ -134,6 +133,14 @@ fn user_cache_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Use the CRATE-WIDE env lock, not a module-local one. The Rust 2024
+    // `unsafe` contract on `set_var` / `remove_var` requires no concurrent
+    // reader anywhere in the process — a module-local lock cannot guarantee
+    // that against env-mutating tests in OTHER modules (config, runtime, ui).
+    // Codex flagged the previous module-local lock as unsound for exactly
+    // this reason (PR #340 iteration-2 finding #1). See
+    // `crate::test_env_lock` for the full contract.
+    use crate::test_env_lock::ENV_LOCK;
 
     /// Iteration-2 review finding #2: on Windows, `std::fs::rename`
     /// fails when the destination already exists, so a re-run of
@@ -151,6 +158,11 @@ mod tests {
     /// against any future refactor that bypasses `replace_atomic`.
     #[test]
     fn cache_replaces_stale_file_with_new_bytes() {
+        // Take the env lock before touching any process-global
+        // variable; held across the entire test so the cache resolver
+        // reads our scratch values, not whatever another test set.
+        let _guard = ENV_LOCK.lock().unwrap();
+
         // Point the cache resolver at a per-test scratch dir so we
         // don't touch the real user cache. The expected on-disk path
         // is computed by the resolver itself so this test stays
@@ -198,10 +210,70 @@ mod tests {
         );
     }
 
+    /// Regression for iteration-2 review finding #2 on PR #340: the Windows
+    /// branch of `replace_atomic` was previously a blanket retry that swallowed
+    /// every error and re-ran after `remove_file(target)`. It now retries
+    /// ONLY on `ErrorKind::AlreadyExists` and surfaces every other error
+    /// untouched, so unrelated failures (permission denied, path too long,
+    /// disk full, etc.) reach the caller with their real diagnostic AND
+    /// without a spurious delete of the target file as a side effect.
+    ///
+    /// We trigger a NotFound by renaming from a path that doesn't exist on
+    /// disk; the kernel surfaces that consistently on all platforms, and on
+    /// Windows specifically it goes through the new narrowed match arm. We
+    /// then assert (a) the returned error is NOT AlreadyExists, and (b) the
+    /// pre-existing target file is still on disk with its original bytes —
+    /// proving the no-retry / no-remove-file behaviour.
+    #[test]
+    fn replace_atomic_passes_through_non_already_exists_errors() {
+        let tmp_root = tempfile::tempdir().expect("create temp dir");
+        // Source path that DOES NOT exist on disk — `rename` returns
+        // `ErrorKind::NotFound`, exercising the non-AlreadyExists branch.
+        let missing_tmp = tmp_root.path().join(".does-not-exist.partial");
+        assert!(
+            !missing_tmp.exists(),
+            "test precondition: tmp path must not exist",
+        );
+
+        // Pre-existing target with sentinel bytes so we can detect if the
+        // (now-removed) blanket retry path snuck back in and deleted it.
+        let target = tmp_root.path().join("silero_vad.onnx");
+        let sentinel = b"PRE-EXISTING-TARGET-MUST-SURVIVE".to_vec();
+        std::fs::write(&target, &sentinel).expect("seed target");
+
+        let err = replace_atomic(&missing_tmp, &target)
+            .expect_err("rename from missing source must fail");
+
+        assert_ne!(
+            err.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "non-AlreadyExists errors must surface as-is, not be remapped",
+        );
+        // The old blanket-retry implementation would have called
+        // `remove_file(&target)` and then re-failed; the new code returns
+        // the original error without touching the target. Verify both by
+        // re-reading the bytes.
+        assert!(
+            target.exists(),
+            "target must NOT be deleted on non-AlreadyExists error"
+        );
+        let on_disk = std::fs::read(&target).expect("read target after failed rename");
+        assert_eq!(
+            on_disk, sentinel,
+            "target bytes must be untouched when replace_atomic fails with non-AlreadyExists",
+        );
+    }
+
     /// Override the cache-dir env var to the test scratch dir,
     /// returning the previous value for later restoration. The dir
     /// is chosen so that `user_cache_dir()` returns a sub-path of
     /// `scratch` on every supported platform.
+    ///
+    /// SAFETY: the caller MUST hold [`ENV_LOCK`] for the entire
+    /// override/restore window. Without that, the `set_var` here
+    /// races with any concurrent stdlib env read in other tests —
+    /// undefined behaviour under the Rust 2024 edition rules that
+    /// gate `set_var` behind `unsafe`.
     fn override_cache_env(scratch: &std::path::Path) -> Option<std::ffi::OsString> {
         #[cfg(windows)]
         let var = "LOCALAPPDATA";
@@ -211,10 +283,17 @@ mod tests {
         let var = "XDG_CACHE_HOME";
 
         let prev = std::env::var_os(var);
-        std::env::set_var(var, scratch);
+        // SAFETY: ENV_LOCK is held by the caller for the full
+        // override/restore window — see the doc comment.
+        unsafe {
+            std::env::set_var(var, scratch);
+        }
         prev
     }
 
+    /// Restore the previous env-var value captured by
+    /// [`override_cache_env`]. Same locking contract: caller MUST
+    /// hold [`ENV_LOCK`].
     fn restore_cache_env(prev: Option<std::ffi::OsString>) {
         #[cfg(windows)]
         let var = "LOCALAPPDATA";
@@ -222,9 +301,13 @@ mod tests {
         let var = "HOME";
         #[cfg(all(not(windows), not(target_os = "macos")))]
         let var = "XDG_CACHE_HOME";
-        match prev {
-            Some(v) => std::env::set_var(var, v),
-            None => std::env::remove_var(var),
+        // SAFETY: ENV_LOCK is held by the caller — see the doc
+        // comment on `override_cache_env`.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(var, v),
+                None => std::env::remove_var(var),
+            }
         }
     }
 }

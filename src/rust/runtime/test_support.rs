@@ -1,8 +1,11 @@
 use super::*;
 use std::ffi::{OsStr, OsString};
-use std::sync::Mutex;
 
-pub(super) static ENV_LOCK: Mutex<()> = Mutex::new(());
+// Re-export the crate-wide env lock under the historical name. Per-module
+// locks cannot serialise against tests in OTHER modules that mutate the same
+// process env, so they violate the soundness contract `env::set_var` requires
+// under the Rust 2024 edition. See `crate::test_env_lock` for the full story.
+pub(super) use crate::test_env_lock::ENV_LOCK;
 
 pub(super) fn runtime_module_args() -> Vec<String> {
     vec![
