@@ -17,6 +17,12 @@ const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 const RUST_INJECTOR_ENV: &str = "VOICEPI_RUST_INJECTOR";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
+/// Opt-in switch for the experimental Rust-side capture pipeline (cpal +
+/// rubato + Silero via vad-rs). Read at supervisor start. Has no effect
+/// unless the binary was compiled with the `audio-in-rust` cargo feature
+/// AND the env var is set to a truthy value. See
+/// [`audio_pipeline_requested`] for the parsing.
+pub const AUDIO_BACKEND_ENV: &str = "VOICEPI_AUDIO_BACKEND";
 const PYTHON_UTF8_ENV: &str = "PYTHONUTF8";
 const PYTHON_IO_ENCODING_ENV: &str = "PYTHONIOENCODING";
 const PYTHONPATH_ENV: &str = "PYTHONPATH";
@@ -781,6 +787,25 @@ pub fn doctor_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--doctor".to_owned()])
 }
 
+/// Whether the user requested the Rust-side audio pipeline via
+/// `VOICEPI_AUDIO_BACKEND=rust`. Returns false for unset / empty / any
+/// non-`rust` value. Pure helper so the gate is unit-testable without
+/// spawning a worker.
+pub fn audio_pipeline_requested() -> bool {
+    env::var(AUDIO_BACKEND_ENV)
+        .map(|value| value.trim().eq_ignore_ascii_case("rust"))
+        .unwrap_or(false)
+}
+
+/// Whether the running binary can actually serve the request. The Rust
+/// pipeline is gated behind the `audio-in-rust` cargo feature so a stock
+/// build returns false even if the env var is set. The supervisor logs
+/// a one-line warning and falls back to the Python sounddevice path in
+/// that case so the user is never silently surprised.
+pub fn audio_pipeline_available() -> bool {
+    cfg!(feature = "audio-in-rust")
+}
+
 /// Worker command that lists input (microphone) devices as JSON and exits
 /// without loading a model or opening audio. Drives the Speech tab's "Refresh
 /// devices" action.
@@ -1112,6 +1137,8 @@ fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod app_root_tests;
+#[cfg(test)]
+mod audio_backend_tests;
 #[cfg(test)]
 mod desktop_entry_tests;
 #[cfg(test)]

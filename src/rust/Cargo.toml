@@ -29,6 +29,15 @@ ui-egui-wgpu = ["eframe/wgpu"]
 # (see roadmap issue #317 sub-task 1); the module lives in `src/rust/whisper`
 # and is wired nowhere in the runtime yet.
 whisper-rs-local = ["dep:whisper-rs", "dep:hound"]
+# Experimental Rust-side audio pipeline (cpal capture → rubato resample →
+# Silero v4 VAD via vad-rs/ort). OFF by default so a stock build doesn't
+# pull in the ONNX runtime or the native cpal backends. When the supervisor
+# is launched with VOICEPI_AUDIO_BACKEND=rust AND this feature was compiled
+# in, the Rust controller spawns the pipeline in a worker thread and pipes
+# encoded frames into the Python worker via stdin (--audio-source=rust-stdin).
+# See src/rust/audio/ for the implementation and the PR description for the
+# rollout plan.
+audio-in-rust = ["dep:cpal", "dep:rubato", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
 
 [dependencies]
 anyhow = "1.0"
@@ -59,6 +68,29 @@ ureq = { version = "3.3", features = ["json"] }
 # [features] keeps them out of the default build entirely.
 whisper-rs = { version = "0.16", optional = true }
 hound = { version = "3.5", optional = true }
+
+# --- audio-in-rust feature deps (all OPTIONAL; not pulled in for default builds)
+# cpal: cross-platform microphone capture (WASAPI on Windows, ALSA on Linux).
+# rubato: fixed-frame FFT resampler (input chunk size → fixed output frame).
+# vad-rs: Silero v5 wrapper around `ort` (ONNX Runtime); `default-features = false`
+#   to skip the libsamplerate-based `helpers` feature — we already resample with
+#   rubato and don't want a second native sample-rate dep on Windows.
+# base64: compact encoding of f32 frames over the Rust→Python stdin link.
+# tempfile: vad-rs only accepts a file path; we materialise the embedded
+#   silero_vad.onnx bytes to a temp file at startup.
+cpal = { version = "0.18", optional = true }
+rubato = { version = "0.16", optional = true }
+vad-rs = { version = "0.1", optional = true, default-features = false }
+base64 = { version = "0.22", optional = true }
+tempfile = { version = "3.14", optional = true }
+# `ort-sys` is a transitive dep of `vad-rs → ort` (vad-rs pins ort to
+# `=2.0.0-rc.9`). Without an explicit pin here, cargo resolves the
+# unconstrained `ort-sys` dep up to rc.12, which broke API compatibility
+# with `ort` rc.9 (200+ build errors). Pin it back to rc.9 so the ABI lines
+# up; this is a workaround for a vad-rs version-range gap and should drop
+# out when vad-rs publishes against a newer ort. The dep itself is unused
+# by our code — we depend on it only for the version pin.
+ort-sys = { version = "=2.0.0-rc.9", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }
