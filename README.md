@@ -153,12 +153,24 @@ bindgen links against:
   (`xcode-select --install`) — they bundle clang, libclang and the
   build essentials. Install `cmake` via Homebrew (`brew install
   cmake`).
-- **Windows:** install [CMake] and [LLVM] (the LLVM installer adds
-  `libclang.dll`; if bindgen can't find it, point at the install dir
-  with `LIBCLANG_PATH=C:\Program Files\LLVM\bin`). The pre-built
-  installer for the app shipped from CI does **not** include local
-  Whisper — this section is for developers building from source with
-  `--features whisper-rs-local`.
+- **Windows:** three things — Rust's default `x86_64-pc-windows-msvc`
+  target builds whisper.cpp from source via CMake using the **MSVC**
+  toolchain (`cl.exe` / `link.exe`), then `bindgen` runs against
+  whisper.cpp's headers using `libclang.dll`:
+  1. [Visual Studio Build Tools] with the **"Desktop development with
+     C++"** workload (this ships `cl.exe`, `link.exe`, `rc.exe` and the
+     Windows SDK that CMake's MSVC generator needs). The "Build Tools"
+     standalone installer is enough — full Visual Studio is not
+     required. LLVM/clang alone will *not* satisfy the default Rust
+     target; `bindgen` still fails further down if MSVC is missing.
+  2. [CMake] on `PATH`.
+  3. [LLVM] (the LLVM installer adds `libclang.dll`; if bindgen can't
+     find it, point at the install dir with
+     `LIBCLANG_PATH=C:\Program Files\LLVM\bin`).
+
+  The pre-built installer for the app shipped from CI does **not**
+  include local Whisper — this section is for developers building from
+  source with `--features whisper-rs-local`.
 
 (The `.devcontainer/` image already includes all of the Linux deps
 above, so the easiest path on any host is `devcontainer up` and build
@@ -171,6 +183,7 @@ Make sure you download the **GGML** variant (filename starts with
 
 [CMake]: https://cmake.org/download/
 [LLVM]: https://releases.llvm.org/download.html
+[Visual Studio Build Tools]: https://visualstudio.microsoft.com/downloads/?q=build+tools
 
 Run the example against a 16 kHz mono WAV:
 
@@ -180,7 +193,8 @@ cargo run --release \
     --features whisper-rs-local \
     --example whisper_local -- \
     --model /path/to/ggml-tiny.en.bin \
-    --wav   /path/to/audio_16khz_mono.wav
+    --wav   /path/to/audio_16khz_mono.wav \
+    # --language da   # optional; omit or "auto" → auto-detect
 ```
 
 The unit test `transcribes_hello_world_when_model_available` skips
