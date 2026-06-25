@@ -131,12 +131,16 @@ def health_grade(metrics: dict[str, Any]) -> str:
         return GRADE_POOR
 
     # fair: not poor, but a known degradation OR a missing signal we'd need to
-    # promote it. We never claim "good"/"perfect" on incomplete information.
+    # promote it. We never claim "good"/"perfect" on incomplete information —
+    # a missing/empty ``audio_input_status`` is treated like a missing SNR
+    # (Codex P3 on PR #342: an empty status used to silently promote partial
+    # payloads such as ``{segments: [...], audio_snr_db: 42}`` to "good").
     if (
         band == "ok"
         or (band == "n/a" and not confidence_n_a_is_neutral)
         or post_fallback
         or status == "hot"
+        or not status
         or snr is None
     ):
         return GRADE_FAIR
