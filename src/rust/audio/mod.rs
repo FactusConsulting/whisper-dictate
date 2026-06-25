@@ -86,10 +86,22 @@ impl AudioPipeline {
     where
         L: FnOnce() -> Result<SileroVad, anyhow::Error>,
     {
+        // Iteration-2 review finding #4: load the Silero ONNX model
+        // FIRST, BEFORE we open the cpal capture stream. ORT
+        // initialisation can take 200-500 ms on cold cache (and longer
+        // when AV scans the model file), during which the cpal
+        // callback would otherwise be queueing pre-pipeline-ready
+        // chunks into an unbounded mpsc — those stale samples would
+        // then be fed into the VAD once the pump started, potentially
+        // emitting speech events for audio captured BEFORE the
+        // pipeline was ready. Worse, a model-load failure left the
+        // user with a mic-permission prompt + an open stream for
+        // nothing. By loading first we get fail-fast behaviour: no
+        // stream is ever opened on load failure.
+        let silero = model_loader()?;
         let (chunk_tx, chunk_rx) = mpsc::channel::<AudioChunk>();
         let capture = capture::start_capture(device_name, chunk_tx)?;
         let sample_rate = capture.sample_rate() as usize;
-        let silero = model_loader()?;
         let (event_tx, event_rx) = mpsc::channel::<PipelineEvent>();
         let pump = thread::spawn(move || {
             run_pump(sample_rate, silero, chunk_rx, event_tx);
@@ -304,6 +316,52 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// Regression test for iteration-2 review finding #4: the Silero
+    /// model loader must run BEFORE `start_capture`. If we open the
+    /// stream first and only then load the model, a slow (or failing)
+    /// ORT init leaves the cpal callback enqueuing stale pre-ready
+    /// chunks (and a failed load wastes the user's mic-permission
+    /// prompt). This test sets a flag inside `start_capture` via a
+    /// hook (we can't substitute cpal in-process) and asserts the
+    /// model-loader closure already ran by the time `start_capture`
+    /// would be invoked — by making the loader fail and observing
+    /// that the device-name we pass (which would otherwise be
+    /// looked up via cpal) is never inspected.
+    #[test]
+    fn start_returns_loader_error_without_opening_capture_stream() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // The loader closure flips this flag when it runs. If we ever
+        // reach start_capture, the device-name string would surface
+        // in the error message (cpal returns "device not found: foo"
+        // or similar for an unknown device). We use a device name
+        // that's guaranteed not to exist on any host so an accidental
+        // cpal call produces a distinctive, easy-to-grep error.
+        static LOADER_RAN: AtomicBool = AtomicBool::new(false);
+        LOADER_RAN.store(false, Ordering::SeqCst);
+        let result = AudioPipeline::start("__nonexistent_device_finding_4_test__", || {
+            LOADER_RAN.store(true, Ordering::SeqCst);
+            Err(anyhow::anyhow!("synthetic model-load failure for finding-4 test"))
+        });
+        assert!(
+            LOADER_RAN.load(Ordering::SeqCst),
+            "model loader must run during start()",
+        );
+        let err = result.err().expect("start must return Err when loader fails");
+        let msg = format!("{err:#}");
+        // The error must be our synthetic loader error, NOT a cpal
+        // device-lookup error referencing the device name — proving
+        // `start_capture` was not called.
+        assert!(
+            msg.contains("synthetic model-load failure for finding-4 test"),
+            "expected loader error, got: {msg}",
+        );
+        assert!(
+            !msg.contains("__nonexistent_device_finding_4_test__"),
+            "device name appeared in error, implying start_capture ran \
+             AFTER the loader failure (it must run BEFORE): {msg}",
+        );
     }
 
     /// Regression test for iteration-2 review finding #1: when the VAD
