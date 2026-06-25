@@ -192,9 +192,17 @@ pub(crate) fn run_pump(
                         alive = on_frame(frame, &event_tx);
                     }
                 });
-                // If we were mid-utterance, fire a final SpeechEnd so the
-                // Python side flushes its buffer.
-                if vad_state.in_speech() {
+                // Iteration-2 review finding #1: if the flush above tripped
+                // a VAD error, `alive` is now `false` because `on_frame`
+                // already emitted the terminal `DeviceError`. The wire
+                // contract documents `DeviceError` as terminal — "no
+                // further messages will arrive" (see
+                // vp_rust_audio_source.py module doc) — so we MUST NOT
+                // tack on a final `SpeechEnd` here. The Python decoder
+                // would otherwise treat that EOS-shaped event as a
+                // legitimate flush of an utterance whose audio errored
+                // mid-way.
+                if alive && vad_state.in_speech() {
                     let _ = event_tx.send(PipelineEvent::SpeechEnd);
                 }
                 return;
@@ -295,6 +303,107 @@ mod tests {
                     "no events allowed after DeviceError, got {other:?} in events: {events:?}",
                 ),
             }
+        }
+    }
+
+    /// Regression test for iteration-2 review finding #1: when the VAD
+    /// errors out during the EndOfStream flush AFTER the pump entered
+    /// `in_speech == true`, the previous code emitted a final
+    /// `SpeechEnd` because the `if vad_state.in_speech()` check ignored
+    /// the `alive` flag. The wire contract is that `DeviceError` is
+    /// terminal — no further events (including `SpeechEnd`) may follow.
+    /// This test:
+    ///   1. Drives the pump with above-threshold "voice" frames until
+    ///      `SpeechStart` fires (i.e. `in_speech == true`).
+    ///   2. Sends `EndOfStream`. The flush emits more 16 kHz frames; the
+    ///      `ErrorAfter` backend has burned through its success budget,
+    ///      so the first flushed frame errors → `DeviceError`, `alive`
+    ///      is false.
+    ///   3. Asserts that NO `SpeechEnd` follows the `DeviceError`.
+    #[test]
+    fn vad_error_during_eos_flush_does_not_emit_speech_end() {
+        // First, count how many frames a "Samples then EOS" pair produces
+        // when the VAD never errors. This is the budget we need to size
+        // the error trigger against. We use the RMS stub so frames are
+        // always above-threshold (loud sine surrogate via constant 0.5).
+        let frames_per_run = {
+            use crate::audio::resampler::FrameResampler;
+            let mut r = FrameResampler::new(48_000).expect("resampler");
+            let mut total = 0usize;
+            r.push(&vec![0.5; 12_000], |_| total += 1);
+            let frames_after_push = total;
+            r.finish(|_| total += 1);
+            let frames_after_flush = total - frames_after_push;
+            (frames_after_push, frames_after_flush)
+        };
+        let (chunk_push, chunk_flush) = frames_per_run;
+        // Sanity: the push must give us at least ONSET_FRAMES (=2) so
+        // in_speech becomes true BEFORE EOS, AND the flush must emit at
+        // least one frame so the EOS-branch resampler.finish callback
+        // actually runs the VAD (i.e. exercises the bug-prone branch).
+        assert!(
+            chunk_push >= 2,
+            "test setup: push must produce >=2 frames to enter in_speech; got {chunk_push}",
+        );
+        assert!(
+            chunk_flush >= 1,
+            "test setup: flush must produce >=1 frame to invoke the EOS-branch VAD; got {chunk_flush}",
+        );
+
+        // Now drive the real pump with an error budget = chunk_push,
+        // so all push frames succeed (in_speech becomes true) and the
+        // FIRST flush frame in the EOS branch errors.
+        let (chunk_tx, chunk_rx) = mpsc::channel::<AudioChunk>();
+        let (event_tx, event_rx) = mpsc::channel::<PipelineEvent>();
+        let silero = SileroVad::error_after_for_tests(chunk_push);
+        chunk_tx
+            .send(AudioChunk::Samples(vec![0.5; 12_000]))
+            .expect("send samples");
+        chunk_tx
+            .send(AudioChunk::EndOfStream)
+            .expect("send eos");
+        drop(chunk_tx);
+        let handle = std::thread::spawn(move || {
+            run_pump(48_000, silero, chunk_rx, event_tx);
+        });
+        let mut events: Vec<PipelineEvent> = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            match event_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(ev) => events.push(ev),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let _ = handle.join();
+
+        // Sanity: SpeechStart fired (in_speech == true at EOS time) AND
+        // a DeviceError appears (the EOS flush tripped it) — without
+        // both, the test isn't exercising the bug condition.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, PipelineEvent::SpeechStart)),
+            "test setup must trigger SpeechStart before VAD errors; got: {events:?}",
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, PipelineEvent::DeviceError(_))),
+            "EOS flush must trip a DeviceError; got: {events:?}",
+        );
+        // Contract: no SpeechEnd (or any other event) after the
+        // DeviceError. The pre-fix code would have emitted SpeechEnd
+        // here because `if vad_state.in_speech()` was checked without
+        // also checking the `alive` flag.
+        let err_idx = events
+            .iter()
+            .position(|e| matches!(e, PipelineEvent::DeviceError(_)))
+            .expect("DeviceError present (asserted above)");
+        for (i, ev) in events.iter().enumerate().skip(err_idx + 1) {
+            panic!(
+                "no events allowed after DeviceError, but events[{i}] = {ev:?} in: {events:?}",
+            );
         }
     }
 }

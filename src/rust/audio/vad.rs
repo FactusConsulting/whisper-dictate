@@ -78,6 +78,13 @@ enum Backend {
     /// regression test for the "DeviceError is terminal" wire contract.
     #[cfg(test)]
     AlwaysError,
+    /// Returns the same fixed voice probability (above-threshold) for
+    /// the first `n` calls, then errors on every subsequent call. Used
+    /// by the iteration-2 regression test that drives the pump into
+    /// in-speech BEFORE the VAD starts erroring, so the EOS-flush
+    /// branch with `in_speech == true` is exercised.
+    #[cfg(test)]
+    ErrorAfter(std::cell::Cell<usize>),
 }
 
 /// Thin wrapper that returns a single voice/silence decision for one
@@ -145,6 +152,18 @@ impl SileroVad {
         }
     }
 
+    /// Test stub: report above-threshold "voice" for the first `n`
+    /// frames, then error on every frame after that. Lets the pump
+    /// regression test enter `in_speech == true` and THEN trip a VAD
+    /// error inside the EOS-flush branch (iteration-2 finding #1).
+    #[cfg(test)]
+    pub(crate) fn error_after_for_tests(n: usize) -> Self {
+        Self {
+            threshold: VOICE_THRESHOLD,
+            backend: Backend::ErrorAfter(std::cell::Cell::new(n)),
+        }
+    }
+
     /// Voice probability for one 480-sample / 30 ms frame at 16 kHz.
     pub fn probability(&mut self, frame: &[f32]) -> Result<f32, anyhow::Error> {
         debug_assert_eq!(frame.len(), FRAME_SAMPLES);
@@ -165,6 +184,17 @@ impl SileroVad {
             }
             #[cfg(test)]
             Backend::AlwaysError => Err(anyhow::anyhow!("synthetic vad failure for tests")),
+            #[cfg(test)]
+            Backend::ErrorAfter(remaining) => {
+                let n = remaining.get();
+                if n == 0 {
+                    Err(anyhow::anyhow!("synthetic vad failure after-N for tests"))
+                } else {
+                    remaining.set(n - 1);
+                    // Above-threshold so the smoothed wrapper enters speech.
+                    Ok(0.95)
+                }
+            }
         }
     }
 
