@@ -26,7 +26,11 @@ suggest-from-benchmark-misses
 """
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -296,6 +300,76 @@ class _CandidateAccumulator:
         return candidates
 
 
+def _rust_dictionary_ops(op: str, params: dict) -> Any | None:
+    """Shell out to ``whisper-dictate dictionary-ops`` (Wave 4-A fallback).
+
+    Active only when ``VOICEPI_DICTIONARY_BACKEND=rust`` AND a binary path is
+    resolvable from ``VOICEPI_RUST_INJECTOR`` (every other Rust shell-out uses
+    the same env var). Returns the parsed JSON response on success, or ``None``
+    on ANY failure (binary missing, helper exited non-zero, JSON invalid) — the
+    caller then falls back to the in-process Python path so behaviour never
+    regresses. Default install behaviour is unchanged; the shell-out is opt-in.
+    """
+    backend = (os.environ.get("VOICEPI_DICTIONARY_BACKEND") or "").strip().lower()
+    if backend != "rust":
+        return None
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR") or ""
+    if not helper:
+        return None
+    try:
+        result = subprocess.run(
+            [helper, "dictionary-ops"],
+            input=json.dumps({"op": op, "params": params}, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=10.0,
+            shell=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - helper failures must not break training
+        print(f"[rust:dictionary-ops] {exc}", file=sys.stderr, flush=True)
+        return None
+    if result.returncode != 0:
+        err = (result.stderr or "").strip()
+        if err:
+            print(f"[rust:dictionary-ops] {err}", file=sys.stderr, flush=True)
+        return None
+    try:
+        return json.loads(result.stdout or "{}")
+    except Exception as exc:  # noqa: BLE001 - bad JSON is a helper bug, fall back
+        print(f"[rust:dictionary-ops] invalid JSON: {exc}", file=sys.stderr, flush=True)
+        return None
+
+
+def _term_candidate_from_payload(entry: dict) -> TermCandidate | None:
+    """Build a :class:`TermCandidate` from a Rust dictionary-ops payload entry.
+
+    Defensive against missing/extra fields so a future Rust change adding new
+    columns doesn't crash the Python caller; returns ``None`` for entries that
+    don't even carry a ``term`` string (which the caller drops on the floor).
+    """
+    if not isinstance(entry, dict):
+        return None
+    term = str(entry.get("term") or "").strip()
+    if not term:
+        return None
+    try:
+        count = int(entry.get("count", 1))
+    except (TypeError, ValueError):
+        count = 1
+    samples_raw = entry.get("samples") or []
+    samples: tuple[str, ...] = tuple(
+        str(s) for s in samples_raw if isinstance(s, str) and s
+    )
+    return TermCandidate(
+        term=term,
+        count=count,
+        reason=str(entry.get("reason") or ""),
+        samples=samples,
+    )
+
+
 def extract_candidate_terms(
     texts: Iterable[str],
     *,
@@ -322,8 +396,32 @@ def extract_candidate_terms(
     most-mentioned domain terms preview first.
     """
     texts = list(texts)
-    curated_per_item = list(item_terms) if item_terms is not None else []
+    curated_per_item = (
+        [list(group) for group in item_terms] if item_terms is not None else []
+    )
     ids = _aligned_ids(item_ids, len(texts))
+
+    rust_payload = _rust_dictionary_ops(
+        "extract_candidate_terms",
+        {
+            "texts": texts,
+            "item_terms": curated_per_item or None,
+            "item_ids": ids if any(ids) else None,
+            "min_count": int(min_count),
+        },
+    )
+    if isinstance(rust_payload, dict) and isinstance(
+        rust_payload.get("candidates"), list
+    ):
+        candidates = [
+            cand
+            for cand in (
+                _term_candidate_from_payload(entry)
+                for entry in rust_payload["candidates"]
+            )
+            if cand is not None
+        ]
+        return candidates
 
     acc = _CandidateAccumulator()
     for index, (text, sample_id) in enumerate(zip(texts, ids)):
@@ -343,13 +441,36 @@ def merge_terms(existing: Iterable[str], candidates: Iterable[Any]) -> MergePrev
     here (that is the CLI's job, gated behind preview/confirmation).
     """
     existing_terms = [str(t).strip() for t in existing if str(t).strip()]
+    candidates_list = list(candidates)
+    rust_payload = _rust_dictionary_ops(
+        "merge_terms",
+        {
+            "existing": existing_terms,
+            "candidates": [
+                {"term": c.term} if isinstance(c, TermCandidate) else str(c)
+                for c in candidates_list
+            ],
+        },
+    )
+    if isinstance(rust_payload, dict) and isinstance(rust_payload.get("added"), list):
+        return MergePreview(
+            added=[str(t) for t in rust_payload.get("added") or []],
+            skipped_existing=[
+                str(t) for t in rust_payload.get("skipped_existing") or []
+            ],
+            result_terms=[str(t) for t in rust_payload.get("result_terms") or []],
+            existing_count=int(
+                rust_payload.get("existing_count") or len(existing_terms)
+            ),
+        )
+
     seen = {_normalize(t) for t in existing_terms}
     skipped_seen: set[str] = set()
     preview = MergePreview(
         result_terms=list(existing_terms),
         existing_count=len(existing_terms),
     )
-    for candidate in candidates:
+    for candidate in candidates_list:
         term = candidate.term if isinstance(candidate, TermCandidate) else str(candidate)
         term = term.strip()
         norm = _normalize(term)
@@ -396,12 +517,50 @@ def suggest_terms_from_misses(
     present in ``existing_terms``, and sorted by descending count then term. These
     are NEVER auto-applied — the CLI previews them and the caller confirms.
     """
-    known = {_normalize(t) for t in existing_terms if _normalize(t)}
+    rows_list = list(rows)
+    existing_list = [str(t) for t in existing_terms]
+    rust_payload = _rust_dictionary_ops(
+        "suggest_terms_from_misses",
+        {
+            "rows": rows_list,
+            "existing_terms": existing_list,
+            "min_count": int(min_count),
+        },
+    )
+    if isinstance(rust_payload, dict) and isinstance(
+        rust_payload.get("suggestions"), list
+    ):
+        out: list[TermSuggestion] = []
+        for entry in rust_payload["suggestions"]:
+            if not isinstance(entry, dict):
+                continue
+            term = str(entry.get("term") or "").strip()
+            if not term:
+                continue
+            try:
+                count = int(entry.get("count", 1))
+            except (TypeError, ValueError):
+                count = 1
+            samples_raw = entry.get("samples") or []
+            samples_tuple = tuple(
+                str(s) for s in samples_raw if isinstance(s, str) and s
+            )
+            out.append(
+                TermSuggestion(
+                    term=term,
+                    count=count,
+                    samples=samples_tuple,
+                    already_in_dictionary=bool(entry.get("already_in_dictionary")),
+                )
+            )
+        return out
+
+    known = {_normalize(t) for t in existing_list if _normalize(t)}
     counts: Counter = Counter()
     surface: dict[str, str] = {}
     samples: dict[str, list[str]] = {}
 
-    for row in rows:
+    for row in rows_list:
         sample = _row_corpus_id(row)
         for term in _row_term_misses(row):
             norm = _normalize(term)

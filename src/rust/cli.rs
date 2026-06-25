@@ -50,6 +50,13 @@ pub enum Command {
     /// Internal helper used by the Python worker for dictionary prompt and replacements.
     #[command(hide = true)]
     DictionaryRuntime,
+    /// Internal helper used by the Python worker for the dictionary training /
+    /// suggestion ops (Wave 4-A shell-out fallback for
+    /// `VOICEPI_DICTIONARY_BACKEND=rust`). Reads a JSON envelope on stdin
+    /// (`{"op": "...", "params": {...}}`) and writes a JSON response on
+    /// stdout. See `src/rust/dictionary/ops.rs` for the op catalogue.
+    #[command(hide = true)]
+    DictionaryOps,
     /// Inspect local dictation history without starting Python.
     History {
         #[command(subcommand)]
@@ -314,6 +321,12 @@ mod tests {
     fn parses_hidden_dictionary_runtime_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "dictionary-runtime"]);
         assert_eq!(cli.command, Some(Command::DictionaryRuntime));
+    }
+
+    #[test]
+    fn parses_hidden_dictionary_ops_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "dictionary-ops"]);
+        assert_eq!(cli.command, Some(Command::DictionaryOps));
     }
 
     #[test]

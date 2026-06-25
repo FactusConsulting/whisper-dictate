@@ -32,6 +32,7 @@ fn run() -> anyhow::Result<()> {
         Command::Config { command } => config::handle_command(command),
         Command::Dictionary { command } => dictionary::handle_command(command),
         Command::DictionaryRuntime => dictionary::handle_runtime(),
+        Command::DictionaryOps => dictionary::handle_ops(),
         Command::History { command } => telemetry::handle_history_command(command),
         Command::InjectText {
             mode,

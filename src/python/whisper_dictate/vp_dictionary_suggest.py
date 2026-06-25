@@ -362,11 +362,98 @@ def _suggestions_from_state(state: _SuggestionState) -> list[ReplacementSuggesti
     return sorted(grouped, key=lambda s: (-s.count, -s.confidence, s.target.casefold()))
 
 
+def _rust_suggest_replacements(
+    rows: list[dict[str, Any]], min_confidence: float
+) -> list[ReplacementSuggestion] | None:
+    """Shell out to ``whisper-dictate dictionary-ops`` for fuzzy replacements.
+
+    Gated by ``VOICEPI_DICTIONARY_BACKEND=rust`` + ``VOICEPI_RUST_INJECTOR``.
+    Returns ``None`` on ANY failure so the caller falls back to the in-process
+    Python implementation. The Rust side gets the live snapshot we already
+    loaded at import (``DICTIONARY``) so the term/replacement filtering matches
+    byte-for-byte with the Python path; Rust's normalisation rules are mirrored
+    in ``src/rust/dictionary/suggest.rs``.
+    """
+    backend = (os.environ.get("VOICEPI_DICTIONARY_BACKEND") or "").strip().lower()
+    if backend != "rust":
+        return None
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR") or ""
+    if not helper:
+        return None
+    payload = {
+        "op": "suggest_replacements_from_rows",
+        "params": {
+            "rows": rows,
+            "dictionary": {
+                "terms": [str(t) for t in DICTIONARY.terms],
+                "replacements": {str(k): str(v) for k, v in DICTIONARY.replacements.items()},
+            },
+            "min_confidence": float(min_confidence),
+        },
+    }
+    try:
+        result = subprocess.run(
+            [helper, "dictionary-ops"],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=15.0,
+            shell=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - helper failures fall back to Python
+        import sys
+        print(f"[rust:dictionary-ops] {exc}", file=sys.stderr, flush=True)
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        body = json.loads(result.stdout or "{}")
+    except Exception:  # noqa: BLE001 - malformed JSON, fall back
+        return None
+    raw = body.get("suggestions") if isinstance(body, dict) else None
+    if not isinstance(raw, list):
+        return None
+    suggestions: list[ReplacementSuggestion] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "").strip()
+        target = str(entry.get("target") or "").strip()
+        if not source or not target:
+            continue
+        try:
+            count = int(entry.get("count", 0))
+        except (TypeError, ValueError):
+            count = 0
+        try:
+            confidence = float(entry.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        samples_raw = entry.get("samples") or []
+        samples = [str(s) for s in samples_raw if isinstance(s, str) and s]
+        suggestions.append(
+            ReplacementSuggestion(
+                source=source,
+                target=target,
+                count=count,
+                confidence=confidence,
+                reason=str(entry.get("reason") or ""),
+                samples=samples,
+            )
+        )
+    return suggestions
+
+
 def suggest_replacements_from_rows(
     rows: list[dict[str, Any]],
     *,
     min_confidence: float = 0.62,
 ) -> list[ReplacementSuggestion]:
+    rust_suggestions = _rust_suggest_replacements(rows, min_confidence)
+    if rust_suggestions is not None:
+        return rust_suggestions
     targets = _known_targets(rows)
     state = _SuggestionState(existing=_existing_replacement_pairs())
 
