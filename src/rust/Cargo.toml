@@ -38,6 +38,14 @@ whisper-rs-local = ["dep:whisper-rs", "dep:hound"]
 # See src/rust/audio/ for the implementation and the PR description for the
 # rollout plan.
 audio-in-rust = ["dep:cpal", "dep:rubato", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
+# Experimental Rust-side PTT hotkey coordinator (issue #318). Owns the global
+# key-event loop in Rust via `rdev` and serialises lifecycle events through a
+# stage state machine so press/release races (#254, #274) become unrepresentable.
+# OFF by default — pynput in src/python/whisper_dictate/vp_keys.py stays the
+# shipping path for this PR. Activate at runtime with VOICEPI_HOTKEY_BACKEND=rust
+# AND a binary built with `--features rust-hotkeys`; otherwise the supervisor's
+# behaviour is byte-identical to today.
+rust-hotkeys = ["dep:rdev"]
 
 [dependencies]
 anyhow = "1.0"
@@ -91,6 +99,13 @@ tempfile = { version = "3.14", optional = true }
 # out when vad-rs publishes against a newer ort. The dep itself is unused
 # by our code — we depend on it only for the version pin.
 ort-sys = { version = "=2.0.0-rc.9", optional = true }
+
+# --- rust-hotkeys feature dep (OPTIONAL; not pulled in for default builds)
+# rdev: cross-platform global key event listener (X11 / Windows / macOS via the
+# accessibility API). The native handles are not Send, so the manager thread
+# owns the listen() call and exposes a Send-friendly mpsc API to the rest of
+# the runtime — see src/rust/hotkey/manager.rs.
+rdev = { version = "0.5", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }

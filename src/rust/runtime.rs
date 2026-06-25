@@ -767,11 +767,88 @@ pub fn worker_command_with_args(
     if let Ok(exe) = env::current_exe() {
         env.push((RUST_INJECTOR_ENV.to_owned(), exe.display().to_string()));
     }
+    // Rust hotkey backend (issue #318): when the supervisor is going to own
+    // the global PTT key loop, tell the Python worker to keep its listener
+    // idle. The flag is read by `whisper_dictate.vp_keys.KeyBackendMixin.run`
+    // and parks the worker thread on a long sleep. Without both the env var
+    // AND the `rust-hotkeys` feature compiled in, the variable is never set
+    // and the Python listener runs as before — byte-identical to today.
+    if rust_hotkey_backend_active() {
+        env.push(("VOICEPI_PYTHON_HOTKEY".to_owned(), "0".to_owned()));
+    }
     WorkerCommand {
         program: python_program(),
         args,
         working_dir: app_root,
         env,
+    }
+}
+
+/// Whether the user requested the Rust-side hotkey backend via
+/// `VOICEPI_HOTKEY_BACKEND=rust`. Pure helper so the gate is unit-testable.
+/// Delegates to [`crate::hotkey::rust_hotkey_backend_requested`].
+pub fn rust_hotkey_backend_requested() -> bool {
+    crate::hotkey::rust_hotkey_backend_requested()
+}
+
+/// True when the user requested the Rust hotkey backend AND the binary was
+/// built with the `rust-hotkeys` feature. The supervisor uses this to decide
+/// whether to install the Rust hotkey subsystem and silence the Python
+/// listener; both must be true, otherwise we stay on pynput (and log a
+/// one-line warning if only the env var is set — handled at install time).
+pub fn rust_hotkey_backend_active() -> bool {
+    crate::hotkey::rust_hotkey_backend_requested() && crate::hotkey::rust_hotkey_backend_available()
+}
+
+/// Install the Rust hotkey subsystem at supervisor startup, if requested.
+///
+/// Returns `Some(handle)` when the env var was set and the feature is
+/// compiled in (the caller owns the handle for the lifetime of the
+/// supervisor). Returns `None` and logs a one-line warning when the env var
+/// is set but the feature is not compiled in (the supervisor stays on the
+/// pynput path). Returns `None` silently when the env var is unset — the
+/// stock no-op case.
+///
+/// `action_sink` is invoked on the coordinator thread for every
+/// [`crate::hotkey::coordinator::CoordinatorAction`] the state machine
+/// emits; the caller is responsible for translating those into worker
+/// start / stop commands (today: by sending a stdin line or signalling the
+/// already-running worker, depending on the host).
+///
+/// The caller MUST send
+/// [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`] via
+/// [`crate::hotkey::HotkeyHandle::processing_finished`] when the worker
+/// finishes transcription — otherwise the coordinator stays parked in
+/// [`crate::hotkey::coordinator::Stage::Processing`] and ignores the next
+/// press.
+pub fn maybe_install_rust_hotkey<F>(
+    key_names: Vec<String>,
+    action_sink: F,
+) -> Option<crate::hotkey::HotkeyHandle>
+where
+    F: FnMut(crate::hotkey::coordinator::CoordinatorAction) + Send + 'static,
+{
+    if !crate::hotkey::rust_hotkey_backend_requested() {
+        return None;
+    }
+    if !crate::hotkey::rust_hotkey_backend_available() {
+        eprintln!(
+            "[hotkey] VOICEPI_HOTKEY_BACKEND=rust was set but this binary was \
+             built without --features rust-hotkeys; falling back to the Python \
+             listener (pynput). Rebuild with the feature to use the Rust backend."
+        );
+        return None;
+    }
+    let cfg = crate::hotkey::HotkeyConfig { key_names };
+    match crate::hotkey::install_hotkey(cfg, action_sink) {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            eprintln!(
+                "[hotkey] Rust hotkey backend install failed: {err}; \
+                 falling back to the Python listener (pynput)."
+            );
+            None
+        }
     }
 }
 
