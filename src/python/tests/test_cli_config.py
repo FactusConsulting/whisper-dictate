@@ -409,6 +409,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_corpus_record.py",
             "vp_device_test.py",
             "vp_dictate.py",
+            "vp_dictate_rust.py",
             "vp_devices.py",
             "vp_dictionary_store.py",
             "vp_dictionary_suggest.py",

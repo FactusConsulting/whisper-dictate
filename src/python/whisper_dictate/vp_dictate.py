@@ -47,6 +47,36 @@ STT_BACKEND = ""
 _transcribe_detail = None
 is_hallucination = None
 
+# Restart-required keys mirrored in src/rust/dictate/restart.rs.
+# Sorted alphabetically so the printed warning order is stable and matches
+# the Rust ``changed_restart_keys`` op (which iterates the sorted const).
+_RESTART_REQUIRED_KEYS = (
+    "compute_type", "device", "key", "model", "parakeet_model", "stt_backend",
+)
+
+
+def _changed_restart_keys_opt_rust(
+    before: dict[str, str], after: dict[str, str],
+) -> list[str]:
+    """Return the restart-required keys whose value changed.
+
+    Wave 5 (#348): the canonical diff lives in
+    ``src/rust/dictate/restart.rs``. When ``VOICEPI_DICTATE_BACKEND=rust``
+    is set AND a Rust helper is resolvable, we shell out to
+    ``whisper-dictate dictate-ops`` so the warning text matches the
+    upcoming Wave 8 supervisor byte-for-byte. The default install keeps
+    the in-Python diff so behaviour is unchanged for everyone who hasn't
+    opted in.
+    """
+    from whisper_dictate.vp_dictate_rust import rust_changed_restart_keys
+    rust_changed = rust_changed_restart_keys(before, after)
+    if rust_changed is not None:
+        return rust_changed
+    return [
+        k for k in _RESTART_REQUIRED_KEYS
+        if before.get(k) != after.get(k)
+    ]
+
 
 def _load_runtime_modules() -> None:
     """Populate the lazy numpy + transcribe-backend globals used by Dictate.
@@ -196,8 +226,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
 
     def _report_restart_required(self, after: dict[str, str]) -> None:
         """Warn once about changed settings that only take effect on restart."""
-        restart_keys = {"stt_backend", "model", "parakeet_model", "device", "compute_type", "key"}
-        changed_restart = [k for k in sorted(restart_keys) if self._effective_config.get(k) != after.get(k)]
+        changed_restart = _changed_restart_keys_opt_rust(self._effective_config, after)
         if changed_restart and not self._restart_required_reported:
             print(
                 "[config] updated settings require restart/model reload: "
