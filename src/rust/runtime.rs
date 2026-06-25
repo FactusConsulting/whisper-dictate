@@ -767,21 +767,48 @@ pub fn worker_command_with_args(
     if let Ok(exe) = env::current_exe() {
         env.push((RUST_INJECTOR_ENV.to_owned(), exe.display().to_string()));
     }
-    // Rust hotkey backend (issue #318): when the supervisor is going to own
-    // the global PTT key loop, tell the Python worker to keep its listener
-    // idle. The flag is read by `whisper_dictate.vp_keys.KeyBackendMixin.run`
-    // and parks the worker thread on a long sleep. Without both the env var
-    // AND the `rust-hotkeys` feature compiled in, the variable is never set
-    // and the Python listener runs as before — byte-identical to today.
-    if rust_hotkey_backend_active() {
-        env.push(("VOICEPI_PYTHON_HOTKEY".to_owned(), "0".to_owned()));
-    }
+    // NB: the Rust-hotkey "park Python listener" flag (VOICEPI_PYTHON_HOTKEY=0)
+    // used to be added here automatically based on env-var + feature gates,
+    // but that's unsound — the gates only say what the user *requested*,
+    // not whether the Rust listener actually came up. If we disabled
+    // Python before confirming Rust was wired, a startup failure (no X
+    // display, missing macOS accessibility permission, ...) left BOTH
+    // backends inert and PTT permanently broken (Codex P1 on PR #344).
+    // The supervisor now calls [`disable_python_hotkey`] explicitly only
+    // AFTER `maybe_install_rust_hotkey` returns a live handle.
     WorkerCommand {
         program: python_program(),
         args,
         working_dir: app_root,
         env,
     }
+}
+
+/// Set the `VOICEPI_PYTHON_HOTKEY=0` env var on `command` so the spawned
+/// Python worker's `KeyBackendMixin.run` parks itself instead of installing
+/// pynput/evdev. The supervisor MUST only call this after it has
+/// successfully installed the Rust hotkey subsystem
+/// ([`maybe_install_rust_hotkey`] returned `Ok`) — otherwise neither
+/// backend will be listening and PTT will be broken for the entire session.
+///
+/// Idempotent: if the flag is already present in `command.env`, the value
+/// is replaced.
+///
+/// **Known limitation (PR #344 P2 #7).** The Rust backend only owns the
+/// PTT chord; the user-configurable multi-press quit key
+/// (`VOICEPI_QUIT_KEY` / `VOICEPI_QUIT_COUNT`, default 3× Esc) lives in
+/// the Python listener that this flag parks. When the Rust backend is
+/// active, users can still quit via Ctrl+C from the terminal and via the
+/// UI tray menu, but the configured multi-press hotkey is inactive. A
+/// follow-up will carry the quit binding into the Rust path; the warning
+/// emitted at install time documents the current state.
+pub fn disable_python_hotkey(command: &mut WorkerCommand) {
+    const KEY: &str = "VOICEPI_PYTHON_HOTKEY";
+    if let Some(slot) = command.env.iter_mut().find(|(k, _)| k == KEY) {
+        slot.1 = "0".to_owned();
+        return;
+    }
+    command.env.push((KEY.to_owned(), "0".to_owned()));
 }
 
 /// Whether the user requested the Rust-side hotkey backend via
@@ -802,27 +829,30 @@ pub fn rust_hotkey_backend_active() -> bool {
 
 /// Install the Rust hotkey subsystem at supervisor startup, if requested.
 ///
-/// Returns `Some(handle)` when the env var was set and the feature is
-/// compiled in (the caller owns the handle for the lifetime of the
-/// supervisor). Returns `None` and logs a one-line warning when the env var
-/// is set but the feature is not compiled in (the supervisor stays on the
-/// pynput path). Returns `None` silently when the env var is unset — the
-/// stock no-op case.
+/// Returns `Some(handle)` ONLY when the env var was set, the feature is
+/// compiled in, AND every layer (target validation, listener startup,
+/// register) succeeded — the caller can then safely call
+/// [`disable_python_hotkey`] on its worker command to park the Python
+/// listener. Returns `None` (and logs a one-line warning when there's
+/// something to warn about) in every other case: the supervisor MUST
+/// leave the Python listener wired in that case, otherwise PTT is dead.
 ///
 /// `action_sink` is invoked on the coordinator thread for every
 /// [`crate::hotkey::coordinator::CoordinatorAction`] the state machine
 /// emits; the caller is responsible for translating those into worker
-/// start / stop commands (today: by sending a stdin line or signalling the
-/// already-running worker, depending on the host).
+/// start / stop commands (today: by sending a stdin line or signalling
+/// the already-running worker, depending on the host).
 ///
 /// The caller MUST send
-/// [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`] via
+/// [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`]
+/// (with the matching recording id) via
 /// [`crate::hotkey::HotkeyHandle::processing_finished`] when the worker
 /// finishes transcription — otherwise the coordinator stays parked in
 /// [`crate::hotkey::coordinator::Stage::Processing`] and ignores the next
 /// press.
 pub fn maybe_install_rust_hotkey<F>(
     key_names: Vec<String>,
+    mode: crate::hotkey::coordinator::Mode,
     action_sink: F,
 ) -> Option<crate::hotkey::HotkeyHandle>
 where
@@ -839,9 +869,22 @@ where
         );
         return None;
     }
-    let cfg = crate::hotkey::HotkeyConfig { key_names };
+    let cfg = crate::hotkey::HotkeyConfig { key_names, mode };
     match crate::hotkey::install_hotkey(cfg, action_sink) {
-        Ok(handle) => Some(handle),
+        Ok(handle) => {
+            // P2 #7: the Rust backend only owns the PTT chord; the
+            // configured multi-press quit key (VOICEPI_QUIT_KEY /
+            // VOICEPI_QUIT_COUNT, default 3× Esc) lives in the Python
+            // listener that the supervisor is about to park. Warn so
+            // users who rely on the hotkey quit know it's inactive.
+            eprintln!(
+                "[hotkey] Rust backend active; the configured multi-press \
+                 quit key (VOICEPI_QUIT_KEY / VOICEPI_QUIT_COUNT) is \
+                 currently only honoured by the Python listener. Quit \
+                 via Ctrl+C in the terminal or the tray menu."
+            );
+            Some(handle)
+        }
         Err(err) => {
             eprintln!(
                 "[hotkey] Rust hotkey backend install failed: {err}; \
