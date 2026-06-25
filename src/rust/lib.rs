@@ -17,6 +17,11 @@ pub mod profiles;
 pub mod redaction;
 pub mod runtime;
 pub mod telemetry;
+// Shared crate-wide lock for tests that mutate process env vars. Lives at the
+// crate root so every module's `test_support` can re-export the same lock —
+// see the module's docs for why a single lock is the only sound design.
+#[cfg(test)]
+pub(crate) mod test_env_lock;
 pub mod ui;
 // Local Whisper inference (CPU-only spike, roadmap issue #317 sub-task 1).
 // Gated behind the `whisper-rs-local` cargo feature so the default build

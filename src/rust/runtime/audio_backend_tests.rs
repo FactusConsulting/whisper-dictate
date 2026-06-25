@@ -7,13 +7,14 @@
 //! [`audio_pipeline_available`]: super::audio_pipeline_available
 
 use crate::runtime::{audio_pipeline_available, audio_pipeline_requested, AUDIO_BACKEND_ENV};
+use crate::test_env_lock::ENV_LOCK;
 use std::env;
-use std::sync::Mutex;
 
-// Env-var mutation is process-global; serialize the tests so one doesn't
-// see another's value mid-flight. Using a module-local Mutex (rather than
-// `serial_test`) keeps the existing test dep list unchanged.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+// Env-var mutation is process-global; serialise on the crate-wide lock so
+// tests in this module don't race AGAINST tests in other modules touching the
+// same process env. A module-local Mutex would only serialise within this
+// file and fail to discharge the `unsafe` contract `env::set_var` carries
+// under Rust 2024 — see `crate::test_env_lock`.
 
 struct EnvGuard {
     key: &'static str,

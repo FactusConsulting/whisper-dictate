@@ -133,17 +133,14 @@ fn user_cache_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Serialises any test in this module that mutates process-global
-    /// environment variables. Cargo runs tests in parallel by default
-    /// and stdlib reads of the same variables (or other tests doing
-    /// the same dance) would race. Holding this lock for the full
-    /// override-mutate-restore window keeps the writes safe; the
-    /// `unsafe` blocks around `set_var` / `remove_var` document that
-    /// the soundness obligation introduced by the Rust 2024 edition
-    /// is discharged by this lock.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Use the CRATE-WIDE env lock, not a module-local one. The Rust 2024
+    // `unsafe` contract on `set_var` / `remove_var` requires no concurrent
+    // reader anywhere in the process — a module-local lock cannot guarantee
+    // that against env-mutating tests in OTHER modules (config, runtime, ui).
+    // Codex flagged the previous module-local lock as unsound for exactly
+    // this reason (PR #340 iteration-2 finding #1). See
+    // `crate::test_env_lock` for the full contract.
+    use crate::test_env_lock::ENV_LOCK;
 
     /// Iteration-2 review finding #2: on Windows, `std::fs::rename`
     /// fails when the destination already exists, so a re-run of
@@ -210,6 +207,60 @@ mod tests {
         assert_eq!(
             on_disk, new_bytes,
             "stale cache must be replaced with new bytes (Windows rename bug)",
+        );
+    }
+
+    /// Regression for iteration-2 review finding #2 on PR #340: the Windows
+    /// branch of `replace_atomic` was previously a blanket retry that swallowed
+    /// every error and re-ran after `remove_file(target)`. It now retries
+    /// ONLY on `ErrorKind::AlreadyExists` and surfaces every other error
+    /// untouched, so unrelated failures (permission denied, path too long,
+    /// disk full, etc.) reach the caller with their real diagnostic AND
+    /// without a spurious delete of the target file as a side effect.
+    ///
+    /// We trigger a NotFound by renaming from a path that doesn't exist on
+    /// disk; the kernel surfaces that consistently on all platforms, and on
+    /// Windows specifically it goes through the new narrowed match arm. We
+    /// then assert (a) the returned error is NOT AlreadyExists, and (b) the
+    /// pre-existing target file is still on disk with its original bytes —
+    /// proving the no-retry / no-remove-file behaviour.
+    #[test]
+    fn replace_atomic_passes_through_non_already_exists_errors() {
+        let tmp_root = tempfile::tempdir().expect("create temp dir");
+        // Source path that DOES NOT exist on disk — `rename` returns
+        // `ErrorKind::NotFound`, exercising the non-AlreadyExists branch.
+        let missing_tmp = tmp_root.path().join(".does-not-exist.partial");
+        assert!(
+            !missing_tmp.exists(),
+            "test precondition: tmp path must not exist",
+        );
+
+        // Pre-existing target with sentinel bytes so we can detect if the
+        // (now-removed) blanket retry path snuck back in and deleted it.
+        let target = tmp_root.path().join("silero_vad.onnx");
+        let sentinel = b"PRE-EXISTING-TARGET-MUST-SURVIVE".to_vec();
+        std::fs::write(&target, &sentinel).expect("seed target");
+
+        let err = replace_atomic(&missing_tmp, &target)
+            .expect_err("rename from missing source must fail");
+
+        assert_ne!(
+            err.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "non-AlreadyExists errors must surface as-is, not be remapped",
+        );
+        // The old blanket-retry implementation would have called
+        // `remove_file(&target)` and then re-failed; the new code returns
+        // the original error without touching the target. Verify both by
+        // re-reading the bytes.
+        assert!(
+            target.exists(),
+            "target must NOT be deleted on non-AlreadyExists error"
+        );
+        let on_disk = std::fs::read(&target).expect("read target after failed rename");
+        assert_eq!(
+            on_disk, sentinel,
+            "target bytes must be untouched when replace_atomic fails with non-AlreadyExists",
         );
     }
 
