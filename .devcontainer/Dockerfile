@@ -25,7 +25,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb-shape0-dev \
         libxcb-xfixes0-dev \
         libxkbcommon-dev \
+        cmake \
+        clang \
+        libclang-dev \
     && rm -rf /var/lib/apt/lists/*
+# cmake + clang + libclang-dev are extra-vs-CI deps required ONLY by the
+# opt-in `whisper-rs-local` cargo feature (whisper.cpp is compiled from
+# source via the whisper-rs-sys build script, which also needs libclang
+# for bindgen). Default-feature builds don't touch them, so keeping these
+# in the container costs disk but no runtime fragility. See the README
+# "Local Whisper (experimental)" section.
 
 USER vscode
 

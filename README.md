@@ -113,6 +113,97 @@ python -m pytest src/python/tests src/tests/python -q
 For Rust, clippy/fmt, and a CI-matched environment, use the dev container in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Build features
+
+The Rust crate exposes a small set of opt-in cargo features beyond the
+default UI build:
+
+| Feature              | Default | What it does |
+|----------------------|---------|--------------|
+| `ui-egui-glow`       | yes     | egui via the glow (OpenGL) backend — shipping renderer. |
+| `ui-egui-wgpu`       | no      | egui via the wgpu backend — continuously-validated exit route. |
+| `whisper-rs-local`   | no      | Compiles in [whisper-rs] (whisper.cpp bindings) for local CPU inference. See below. |
+
+[whisper-rs]: https://crates.io/crates/whisper-rs
+
+### Local Whisper (experimental)
+
+Behind the **`whisper-rs-local`** cargo feature, the crate ships a
+small `whisper` module that loads a GGML Whisper model and transcribes
+a 16 kHz mono WAV. This is the CPU-only spike from roadmap issue
+[#317] sub-task 1 — it is **not** wired into the runtime yet; the
+Python transcription path is still the only thing the app uses at
+runtime.
+
+> **Model format:** only the GGML container (`ggml-*.bin`) works.
+> whisper.cpp does not yet read llama.cpp's newer GGUF format, and
+> loading a `.gguf` file is rejected up front with a clean error.
+
+Enabling the feature pulls in whisper.cpp and compiles it from source,
+*and* runs `bindgen` against whisper.cpp's headers — so the build host
+needs both a C/C++ toolchain *and* the libclang shared library that
+bindgen links against:
+
+- **Linux / WSL:** `cmake`, `clang`, **`libclang-dev`**
+  (Debian/Ubuntu: `apt install cmake clang libclang-dev`; equivalent
+  packages on other distros). The libclang dev package is the usual
+  blocker — it ships the headers bindgen needs, not just the `clang`
+  binary.
+- **macOS:** install the Xcode command-line tools
+  (`xcode-select --install`) — they bundle clang, libclang and the
+  build essentials. Install `cmake` via Homebrew (`brew install
+  cmake`).
+- **Windows:** three things — Rust's default `x86_64-pc-windows-msvc`
+  target builds whisper.cpp from source via CMake using the **MSVC**
+  toolchain (`cl.exe` / `link.exe`), then `bindgen` runs against
+  whisper.cpp's headers using `libclang.dll`:
+  1. [Visual Studio Build Tools] with the **"Desktop development with
+     C++"** workload (this ships `cl.exe`, `link.exe`, `rc.exe` and the
+     Windows SDK that CMake's MSVC generator needs). The "Build Tools"
+     standalone installer is enough — full Visual Studio is not
+     required. LLVM/clang alone will *not* satisfy the default Rust
+     target; `bindgen` still fails further down if MSVC is missing.
+  2. [CMake] on `PATH`.
+  3. [LLVM] (the LLVM installer adds `libclang.dll`; if bindgen can't
+     find it, point at the install dir with
+     `LIBCLANG_PATH=C:\Program Files\LLVM\bin`).
+
+  The pre-built installer for the app shipped from CI does **not**
+  include local Whisper — this section is for developers building from
+  source with `--features whisper-rs-local`.
+
+(The `.devcontainer/` image already includes all of the Linux deps
+above, so the easiest path on any host is `devcontainer up` and build
+inside it.)
+
+Grab a model from the [whisper.cpp release page on Hugging Face][whisper-models]
+— `ggml-tiny.en.bin` (~75 MB) is enough to validate the integration.
+Make sure you download the **GGML** variant (filename starts with
+`ggml-` and ends with `.bin`); GGUF variants will be rejected.
+
+[CMake]: https://cmake.org/download/
+[LLVM]: https://releases.llvm.org/download.html
+[Visual Studio Build Tools]: https://visualstudio.microsoft.com/downloads/?q=build+tools
+
+Run the example against a 16 kHz mono WAV:
+
+```bash
+cargo run --release \
+    --manifest-path src/rust/Cargo.toml \
+    --features whisper-rs-local \
+    --example whisper_local -- \
+    --model /path/to/ggml-tiny.en.bin \
+    --wav   /path/to/audio_16khz_mono.wav \
+    # --language da   # optional; omit or "auto" → auto-detect
+```
+
+The unit test `transcribes_hello_world_when_model_available` skips
+unless both `WHISPER_TEST_MODEL_PATH` and `WHISPER_TEST_WAV_PATH` are
+set, so CI is unaffected.
+
+[#317]: https://github.com/FactusConsulting/whisper-dictate/issues/317
+[whisper-models]: https://huggingface.co/ggerganov/whisper.cpp
+
 ## License
 
 MIT - see [LICENSE](LICENSE).
