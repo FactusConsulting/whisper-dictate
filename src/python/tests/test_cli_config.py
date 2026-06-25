@@ -423,6 +423,7 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_health.py",
             "vp_history.py",
             "vp_inject.py",
+            "vp_inject_rust.py",
             "vp_keymap.py",
             "vp_keys.py",
             "vp_keys_capture.py",
