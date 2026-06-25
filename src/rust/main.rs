@@ -75,5 +75,29 @@ fn run() -> anyhow::Result<()> {
         Command::ApplyProfile => profiles::handle_apply_profile(),
         Command::Privacy => privacy::handle_privacy(),
         Command::Health => health::handle_health(),
+        Command::TranscribeWav => handle_transcribe_wav(),
     }
+}
+
+/// Dispatch the hidden `transcribe-wav` sub-command.
+///
+/// Real implementation lives in `whisper::dispatch` and is only compiled in
+/// behind the `whisper-rs-local` feature (which pulls in whisper.cpp + CMake).
+/// In a stock build the binary still exposes the sub-command — keeping the
+/// CLI surface stable across feature builds — but exits non-zero with a
+/// clear "feature not compiled in" message so the Python caller knows to
+/// fall back to its in-process path.
+#[cfg(feature = "whisper-rs-local")]
+fn handle_transcribe_wav() -> anyhow::Result<()> {
+    whisper_dictate_app::whisper::handle_transcribe_wav()
+}
+
+#[cfg(not(feature = "whisper-rs-local"))]
+fn handle_transcribe_wav() -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "this build of whisper-dictate was compiled without the \
+         `whisper-rs-local` feature; the Rust transcription backend is \
+         unavailable — unset VOICEPI_TRANSCRIBE_BACKEND or install a build \
+         with the feature enabled"
+    ))
 }

@@ -144,6 +144,14 @@ pub enum Command {
     /// Internal helper: render the `[health]` line or compute the 4-level grade.
     #[command(hide = true)]
     Health,
+    /// Internal helper used by the Python worker for local Whisper inference
+    /// when `VOICEPI_TRANSCRIBE_BACKEND=rust`. Only does real work when the
+    /// binary was built with `--features whisper-rs-local`; otherwise exits
+    /// non-zero with a clear "feature not compiled in" message so the Python
+    /// caller falls back to its own path. JSON request on stdin, JSON
+    /// response on stdout — see `src/rust/whisper/dispatch.rs`.
+    #[command(hide = true)]
+    TranscribeWav,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -407,5 +415,8 @@ mod tests {
 
         let cli = Cli::parse_from(["whisper-dictate", "health"]);
         assert_eq!(cli.command, Some(Command::Health));
+
+        let cli = Cli::parse_from(["whisper-dictate", "transcribe-wav"]);
+        assert_eq!(cli.command, Some(Command::TranscribeWav));
     }
 }

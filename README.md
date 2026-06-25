@@ -160,10 +160,18 @@ forwarding); follow-up work will surface the Rust VAD's utterance boundaries.
 
 Behind the **`whisper-rs-local`** cargo feature, the crate ships a
 small `whisper` module that loads a GGML Whisper model and transcribes
-a 16 kHz mono WAV. This is the CPU-only spike from roadmap issue
-[#317] sub-task 1 — it is **not** wired into the runtime yet; the
-Python transcription path is still the only thing the app uses at
-runtime.
+a 16 kHz mono WAV (originally the CPU-only spike from roadmap issue
+[#317] sub-task 1). As of Phase 1.2 of the Python-removal roadmap
+([#348]), it is *optionally* wired into the runtime: when the binary is
+built with `--features whisper-rs-local` AND the runtime is launched
+with `VOICEPI_TRANSCRIBE_BACKEND=rust`, local Whisper transcription
+dispatches through the Rust helper (`whisper-dictate transcribe-wav`)
+instead of the in-process faster-whisper bindings. Without the
+env-var opt-in, behaviour is byte-identical to a stock build. The Rust
+backend reads the model file path from `VOICEPI_WHISPER_MODEL_PATH` (no
+default — set it explicitly to a `ggml-*.bin` file); the Python
+orchestrator still owns the rest of the post-flow (dictionary, redaction,
+injection).
 
 > **Model format:** only the GGML container (`ggml-*.bin`) works.
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
@@ -232,6 +240,7 @@ unless both `WHISPER_TEST_MODEL_PATH` and `WHISPER_TEST_WAV_PATH` are
 set, so CI is unaffected.
 
 [#317]: https://github.com/FactusConsulting/whisper-dictate/issues/317
+[#348]: https://github.com/FactusConsulting/whisper-dictate/issues/348
 [whisper-models]: https://huggingface.co/ggerganov/whisper.cpp
 
 ## License
