@@ -141,6 +141,20 @@ pub enum Command {
     /// Internal helper used by the Python worker for local-only checks.
     #[command(hide = true)]
     Privacy,
+    /// Internal helper used by the Python worker for post-STT formatting /
+    /// LLM cleanup. JSON envelope on stdin, JSON response on stdout — see
+    /// `src/rust/postprocess.rs`. Gated at runtime by
+    /// `VOICEPI_POSTPROCESS_BACKEND=rust`; default install keeps the Python
+    /// path.
+    #[command(hide = true)]
+    Postprocess,
+    /// Internal helper used by the Python worker for OpenAI-compatible chat
+    /// completion (post-processor cloud backend) + transcription prompt
+    /// capping. JSON envelope on stdin, JSON response on stdout — see
+    /// `src/rust/cloud_api/chat.rs`. Gated at runtime by
+    /// `VOICEPI_EXTERNAL_API_BACKEND=rust`.
+    #[command(hide = true)]
+    ExternalApi,
     /// Internal helper: render the `[health]` line or compute the 4-level grade.
     #[command(hide = true)]
     Health,
@@ -438,6 +452,12 @@ mod tests {
 
         let cli = Cli::parse_from(["whisper-dictate", "privacy"]);
         assert_eq!(cli.command, Some(Command::Privacy));
+
+        let cli = Cli::parse_from(["whisper-dictate", "postprocess"]);
+        assert_eq!(cli.command, Some(Command::Postprocess));
+
+        let cli = Cli::parse_from(["whisper-dictate", "external-api"]);
+        assert_eq!(cli.command, Some(Command::ExternalApi));
 
         let cli = Cli::parse_from(["whisper-dictate", "health"]);
         assert_eq!(cli.command, Some(Command::Health));

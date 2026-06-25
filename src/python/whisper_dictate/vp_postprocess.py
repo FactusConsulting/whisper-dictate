@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import time
 import urllib.parse
 import urllib.request
@@ -10,7 +12,7 @@ from dataclasses import dataclass, field
 
 from whisper_dictate.vp_config import apply_config_to_environ, config_snapshot, get_value
 from whisper_dictate.vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
-from whisper_dictate.vp_rust import run_json_helper
+from whisper_dictate.vp_rust import helper_path, run_json_helper
 
 apply_config_to_environ()
 
@@ -351,6 +353,87 @@ def _extract_final_text(output: str, source_text: str) -> str:
     return out
 
 
+def _rust_postprocess_enabled() -> bool:
+    backend = (get_value("VOICEPI_POSTPROCESS_BACKEND") or "").strip().lower()
+    return backend == "rust"
+
+
+def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> PostprocessResult | None:
+    """Shell out to ``whisper-dictate postprocess`` for the full pipeline.
+
+    Returns the parsed :class:`PostprocessResult` on success, ``None`` on any
+    failure so the caller falls back to the in-process Python path. Active
+    only when ``VOICEPI_POSTPROCESS_BACKEND=rust`` is set AND the helper is
+    resolvable from ``VOICEPI_RUST_INJECTOR`` — the same opt-in pattern every
+    other Rust shell-out uses (Wave 4-B of #348).
+    """
+    if not _rust_postprocess_enabled():
+        return None
+    helper = helper_path()
+    if not helper:
+        return None
+    payload = {
+        "action": "process",
+        "text": text,
+        "settings": {
+            "processor": settings.processor,
+            "mode": settings.mode,
+            "model": settings.model,
+            "base_url": settings.base_url,
+            "timeout_ms": int(settings.timeout_ms),
+            "max_input_chars": int(settings.max_input_chars),
+            "max_output_chars": int(settings.max_output_chars),
+            "api_key": settings.api_key,
+            "redact": bool(settings.redact),
+            "redact_terms": settings.redact_terms,
+            "local_only": _local_only_enabled(),
+        },
+    }
+    # The Rust pipeline applies the same length-scaled timeout the Python path
+    # does, so give the child enough wall-clock budget to surface its own
+    # timeout error instead of the Python subprocess killing it first.
+    helper_timeout = max(2.0, effective_timeout_ms(settings.timeout_ms, len(text)) / 1000.0 + 5.0)
+    try:
+        result = subprocess.run(
+            [helper, "postprocess"],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=helper_timeout,
+            shell=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - helper failures must not break post-processing
+        print(f"[rust:postprocess] {exc}", flush=True)
+        return None
+    if result.returncode != 0:
+        err = (result.stderr or "").strip()
+        if err:
+            print(f"[rust:postprocess] {err}", flush=True)
+        return None
+    try:
+        obj = json.loads(result.stdout or "{}")
+    except Exception as exc:  # noqa: BLE001 - bad JSON is a helper bug, fall back
+        print(f"[rust:postprocess] invalid JSON: {exc}", flush=True)
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return PostprocessResult(
+        text=str(obj.get("text", text)),
+        raw_text=str(obj.get("raw_text", text)),
+        changed=bool(obj.get("changed", False)),
+        provider=str(obj.get("provider", settings.processor)),
+        mode=str(obj.get("mode", normalize_mode(settings.mode))),
+        model=str(obj.get("model", settings.model)),
+        latency_ms=int(obj.get("latency_ms", 0) or 0),
+        fallback=bool(obj.get("fallback", False)),
+        error=str(obj.get("error", "") or ""),
+        redacted=bool(obj.get("redacted", False)),
+        redactions=list(obj.get("redactions") or []) or None,
+    )
+
+
 def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> PostprocessResult:
     settings = settings or load_postprocess_settings()
     mode = normalize_mode(settings.mode)
@@ -363,6 +446,10 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
             mode=mode,
             model=settings.model,
         )
+
+    rust_result = _rust_postprocess_text(text, settings)
+    if rust_result is not None:
+        return rust_result
 
     validate_postprocess_settings(settings)
     clipped = text[: settings.max_input_chars]

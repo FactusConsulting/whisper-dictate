@@ -25,6 +25,13 @@ pub mod health;
 pub mod hotkey;
 pub mod injection;
 pub mod model_capacity;
+// Rust port of `vp_postprocess.py` (Wave 4-B of #348). Owns the full
+// post-STT formatting / LLM cleanup pipeline: settings validation,
+// cloud-safe redaction, prompt construction, provider call (local
+// Ollama via /api/generate or OpenAI-compatible /chat/completions),
+// extract-final-text and the redaction restore. Python shells out via
+// the `postprocess` subcommand when VOICEPI_POSTPROCESS_BACKEND=rust.
+pub mod postprocess;
 pub mod privacy;
 pub mod profiles;
 pub mod redaction;

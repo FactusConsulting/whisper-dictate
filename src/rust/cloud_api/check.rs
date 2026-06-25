@@ -1,15 +1,16 @@
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+//! Cloud "API reachable + model listed" checks used by the desktop UI.
+//!
+//! These hit the `/models` (transcription provider) and `/chat/completions`
+//! (post-processing provider) endpoints with a probe payload to validate the
+//! configured API key, base URL and model id before the user records anything.
+
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use serde::Serialize;
 use serde_json::Value;
 
+use crate::cloud_api::http::{check_status, http_error, parse_timeout_ms, USER_AGENT};
 use crate::config::AppSettings;
-
-const USER_AGENT: &str =
-    "whisper-dictate/0.3 (+https://github.com/FactusConsulting/whisper-dictate)";
-const GROQ_TRANSCRIPTION_PROMPT_LIMIT: usize = 896;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloudApiCheck {
@@ -215,134 +216,6 @@ pub fn check_post_api(check: &PostApiCheck) -> Result<PostApiCheckResult> {
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CloudTranscriptionResult {
-    pub text: String,
-    pub language: Option<String>,
-}
-
-pub fn handle_cloud_transcribe(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    audio_wav_path: &Path,
-    language: Option<&str>,
-    prompt: Option<&str>,
-    timeout_ms: u64,
-) -> Result<()> {
-    let result = cloud_transcribe(
-        base_url,
-        api_key,
-        model,
-        &std::fs::read(audio_wav_path)?,
-        language,
-        prompt,
-        timeout_ms,
-    )?;
-    println!("{}", serde_json::to_string(&result)?);
-    Ok(())
-}
-
-pub fn cloud_transcribe(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    audio_wav: &[u8],
-    language: Option<&str>,
-    prompt: Option<&str>,
-    timeout_ms: u64,
-) -> Result<CloudTranscriptionResult> {
-    if api_key.trim().is_empty() {
-        return Err(anyhow!("cloud transcription API key is empty"));
-    }
-    if model.trim().is_empty() {
-        return Err(anyhow!("cloud transcription model is empty"));
-    }
-
-    let base_url = base_url.trim_end_matches('/');
-    let mut fields = vec![("model", model.to_owned())];
-    if let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) {
-        fields.push(("language", language.to_owned()));
-    }
-    if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
-        fields.push((
-            "prompt",
-            cap_transcription_prompt(prompt, base_url).to_owned(),
-        ));
-    }
-    let (body, boundary) = multipart_audio_body(&fields, audio_wav);
-    let url = format!("{base_url}/audio/transcriptions");
-    let mut response = ureq::post(&url)
-        .header("Authorization", &format!("Bearer {api_key}"))
-        .header(
-            "Content-Type",
-            &format!("multipart/form-data; boundary={boundary}"),
-        )
-        .header("User-Agent", USER_AGENT)
-        .config()
-        .timeout_global(Some(Duration::from_millis(timeout_ms.max(1000))))
-        .http_status_as_error(false)
-        .build()
-        .send(&body[..])
-        .map_err(|err| anyhow!("cloud transcription failed: {}", http_error(err)))?;
-    check_status(&mut response)
-        .map_err(|detail| anyhow!("cloud transcription failed: {detail}"))?;
-    let body: Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|err| anyhow!("cloud transcription returned invalid JSON: {err}"))?;
-    Ok(CloudTranscriptionResult {
-        text: body
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_owned(),
-        language: body
-            .get("language")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    })
-}
-
-fn cap_transcription_prompt<'a>(prompt: &'a str, base_url: &str) -> &'a str {
-    if !base_url.to_ascii_lowercase().contains("api.groq.com")
-        || prompt.len() <= GROQ_TRANSCRIPTION_PROMPT_LIMIT
-    {
-        return prompt;
-    }
-    prompt[..GROQ_TRANSCRIPTION_PROMPT_LIMIT].trim_end()
-}
-
-fn multipart_audio_body(fields: &[(&str, String)], audio_wav: &[u8]) -> (Vec<u8>, String) {
-    let boundary = format!(
-        "----whisper-dictate-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
-    );
-    let mut body = Vec::new();
-    for (name, value) in fields {
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
-        );
-        body.extend_from_slice(value.as_bytes());
-        body.extend_from_slice(b"\r\n");
-    }
-    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    body.extend_from_slice(
-        b"Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n",
-    );
-    body.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
-    body.extend_from_slice(audio_wav);
-    body.extend_from_slice(b"\r\n");
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    (body, boundary)
-}
-
 fn model_ids(value: &Value) -> Vec<String> {
     value
         .get("data")
@@ -352,59 +225,6 @@ fn model_ids(value: &Value) -> Vec<String> {
         .filter_map(|item| item.get("id").and_then(Value::as_str))
         .map(str::to_owned)
         .collect()
-}
-
-fn parse_timeout_ms(raw: &str, default: u64) -> u64 {
-    raw.trim()
-        .parse::<u64>()
-        .ok()
-        .filter(|value| *value >= 100)
-        .unwrap_or(default)
-}
-
-/// Turn a non-2xx response into a descriptive error string, mirroring the
-/// previous `ureq::Error::Status` handling. Requests are issued with
-/// `http_status_as_error(false)`, so 4xx/5xx responses arrive here as `Ok`
-/// and we surface the status code, the `Retry-After` header, and the (best
-/// effort) response body — including the dedicated 429 rate-limit message.
-/// Returns `Ok(())` for success (2xx) responses.
-fn check_status(response: &mut ureq::http::Response<ureq::Body>) -> Result<(), String> {
-    let code = response.status().as_u16();
-    if (200..300).contains(&code) {
-        return Ok(());
-    }
-    let retry_after = response
-        .headers()
-        .get("Retry-After")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let detail = response.body_mut().read_to_string().unwrap_or_default();
-    if code == 429 {
-        return Err(rate_limit_message(retry_after.as_deref(), &detail));
-    }
-    if detail.trim().is_empty() {
-        Err(format!("HTTP {code}"))
-    } else {
-        Err(format!("HTTP {code}: {}", detail.trim()))
-    }
-}
-
-/// Describe a transport-level `ureq::Error` (timeout, DNS, TLS, IO, …). HTTP
-/// status codes are handled separately by [`check_status`], since requests
-/// opt out of `http_status_as_error`.
-fn http_error(err: ureq::Error) -> String {
-    err.to_string()
-}
-
-fn rate_limit_message(retry_after: Option<&str>, detail: &str) -> String {
-    let mut message = "HTTP 429 Too Many Requests: rate limited by provider".to_owned();
-    if let Some(seconds) = retry_after.filter(|value| !value.trim().is_empty()) {
-        message.push_str(&format!(" (retry after {}s)", seconds.trim()));
-    }
-    if !detail.trim().is_empty() {
-        message.push_str(&format!(": {}", detail.trim()));
-    }
-    message
 }
 
 #[cfg(test)]
@@ -474,16 +294,6 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_message_includes_retry_after_and_detail() {
-        let message = rate_limit_message(Some(" 12 "), r#"{"error":"rate limit"}"#);
-
-        assert!(message.contains("HTTP 429 Too Many Requests"));
-        assert!(message.contains("rate limited"));
-        assert!(message.contains("retry after 12s"));
-        assert!(message.contains("rate limit"));
-    }
-
-    #[test]
     fn cloud_result_summary_reports_missing_model_without_failing() {
         let result = CloudApiCheckResult {
             provider: "Groq".to_owned(),
@@ -493,38 +303,5 @@ mod tests {
         };
 
         assert!(result.summary().contains("was not listed"));
-    }
-
-    #[test]
-    fn multipart_audio_body_contains_model_language_and_file() {
-        let (body, boundary) = multipart_audio_body(
-            &[
-                ("model", "gpt-4o-mini-transcribe".to_owned()),
-                ("language", "da".to_owned()),
-            ],
-            b"RIFF....WAVE",
-        );
-        let body = String::from_utf8_lossy(&body);
-
-        assert!(body.contains(&format!("--{boundary}")));
-        assert!(body.contains("name=\"model\""));
-        assert!(body.contains("gpt-4o-mini-transcribe"));
-        assert!(body.contains("name=\"language\""));
-        assert!(body.contains("filename=\"audio.wav\""));
-        assert!(body.contains("Content-Type: audio/wav"));
-    }
-
-    #[test]
-    fn groq_transcription_prompt_is_capped() {
-        let prompt = "x".repeat(GROQ_TRANSCRIPTION_PROMPT_LIMIT + 20);
-
-        assert_eq!(
-            cap_transcription_prompt(&prompt, "https://api.groq.com/openai/v1").len(),
-            GROQ_TRANSCRIPTION_PROMPT_LIMIT
-        );
-        assert_eq!(
-            cap_transcription_prompt(&prompt, "https://api.openai.com/v1").len(),
-            GROQ_TRANSCRIPTION_PROMPT_LIMIT + 20
-        );
     }
 }
