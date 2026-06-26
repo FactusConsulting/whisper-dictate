@@ -1,6 +1,12 @@
 //! WAV decoding helpers for the local Whisper inference path.
 //!
-//! Extracted from `local.rs` to keep module sizes under the 500-LOC cap.
+//! Extracted from `local.rs` to keep module sizes under the 500-LOC cap,
+//! then promoted to an unconditional sibling of `local/` so the pure
+//! WAV-decode logic is compiled and unit-tested on every CI run — even
+//! without the `whisper-rs-local` feature (which requires CMake + C++).
+//!
+//! The only dependency is [`hound`], a pure-Rust WAV reader with no system
+//! requirements.
 
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
@@ -113,3 +119,7 @@ pub fn decode_wav_16k_mono(wav_path: &Path) -> Result<Vec<f32>> {
     }
     Ok(samples)
 }
+
+#[cfg(test)]
+#[path = "wav_tests.rs"]
+mod tests;

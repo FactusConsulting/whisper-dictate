@@ -23,9 +23,9 @@
 //! - [`wav`] — WAV decoding helpers (`decode_wav_16k_mono`, `WHISPER_SAMPLE_RATE_HZ`)
 //! - This file — `LocalWhisper` struct, inference, GGUF guard
 
-mod wav;
-
-pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
+// WAV decode helpers live in the unconditional `whisper::wav` module so they
+// are compiled and tested without the `whisper-rs-local` CMake dependency.
+pub use super::wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;

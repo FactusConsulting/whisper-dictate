@@ -25,6 +25,9 @@
 pub mod idle;
 pub mod model_manager;
 pub mod models_cli;
+/// WAV decode helpers (16 kHz mono). Compiled unconditionally so the pure
+/// WAV logic is unit-tested without the `whisper-rs-local` / CMake build.
+pub mod wav;
 
 #[cfg(feature = "whisper-rs-local")]
 pub mod dispatch;
@@ -32,8 +35,9 @@ pub mod dispatch;
 mod local;
 
 pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV};
+pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
 #[cfg(feature = "whisper-rs-local")]
 pub use dispatch::{handle_transcribe_wav, MODEL_PATH_ENV};
 #[cfg(feature = "whisper-rs-local")]
-pub use local::{decode_wav_16k_mono, LocalWhisper, WHISPER_SAMPLE_RATE_HZ};
+pub use local::LocalWhisper;
