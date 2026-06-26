@@ -276,6 +276,35 @@ impl HotkeyHandle {
         self.coordinator.send(event);
     }
 
+    /// Suspend key tracking: unregister the PTT binding from the manager and
+    /// send [`coordinator::CoordinatorEvent::Cancel`] to the coordinator so
+    /// any in-flight [`coordinator::Stage::Recording`] is reset to Idle.
+    ///
+    /// Call this in `RuntimeSupervisor::stop()` so PTT presses while the
+    /// runtime is down do not accumulate stale state. A coordinator stuck in
+    /// [`coordinator::Stage::Processing`] (transcription was in-flight when
+    /// stop fired) is not fully reset by Cancel — it transitions to Idle on
+    /// the next [`coordinator::CoordinatorEvent::ProcessingFinished`]. That is
+    /// acceptable because Python stays enabled for actual recording lifecycle
+    /// (Fix 1, PR #373) so correctness is unaffected.
+    pub fn suspend(&self) {
+        let _ = self.manager.unregister();
+        self.coordinator.send(CoordinatorEvent::Cancel);
+    }
+
+    /// Resume key tracking with the given PTT key names. Call this in
+    /// `RuntimeSupervisor::start()` after a prior `suspend()` so the manager
+    /// resumes emitting tracker outputs for the (possibly updated) PTT chord.
+    ///
+    /// If `register` fails (manager thread gone), the error is logged and
+    /// the previous (empty) tracker stays in place; PTT will be silent until
+    /// the next successful resume.
+    pub fn resume(&self, key_names: Vec<String>) {
+        if let Err(err) = self.manager.register(key_names) {
+            eprintln!("[hotkey] failed to re-register hotkey binding on resume: {err}");
+        }
+    }
+
     /// Tear the subsystem down cleanly. Idempotent.
     pub fn shutdown(mut self) {
         self.shutdown_inner();
@@ -305,6 +334,10 @@ impl Drop for HotkeyHandle {
 impl HotkeyHandle {
     /// No-op: the stub handle cannot have anything to shut down.
     pub fn shutdown(self) {}
+    /// No-op: stub build has no manager to suspend.
+    pub fn suspend(&self) {}
+    /// No-op: stub build has no manager to resume.
+    pub fn resume(&self, _key_names: Vec<String>) {}
 }
 
 /// Has the user requested the Rust hotkey backend via env var? Pure helper

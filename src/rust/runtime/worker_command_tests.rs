@@ -358,3 +358,89 @@ fn install_rust_hotkey_from_command_reads_toggle_mode_from_env() {
         "VOICEPI_HOTKEY_BACKEND not set → must return None"
     );
 }
+
+// -----------------------------------------------------------------------
+// P2 #373 finding 2: parse_toggle_value accepts all truthy variants.
+// -----------------------------------------------------------------------
+
+#[test]
+fn parse_toggle_value_accepts_all_truthy_variants() {
+    // P2 #373 finding 2: the Rust-side toggle parser must honour the same
+    // truthy values as the Python config layer and shell tooling.
+    for truthy in &[
+        "true", "True", "TRUE", "1", "yes", "Yes", "YES", "on", "On", "ON",
+    ] {
+        assert!(
+            parse_toggle_value(truthy),
+            "parse_toggle_value({truthy:?}) should be true",
+        );
+    }
+}
+
+#[test]
+fn parse_toggle_value_rejects_falsy_values() {
+    for falsy in &[
+        "false", "False", "FALSE", "0", "no", "off", "", "  ", "rust", "toggle",
+    ] {
+        assert!(
+            !parse_toggle_value(falsy),
+            "parse_toggle_value({falsy:?}) should be false",
+        );
+    }
+}
+
+#[test]
+fn parse_toggle_value_trims_whitespace() {
+    assert!(parse_toggle_value("  true  "));
+    assert!(parse_toggle_value(" 1 "));
+    assert!(!parse_toggle_value("  false  "));
+}
+
+// -----------------------------------------------------------------------
+// P2 #373 finding 1/3: extract_hotkey_key_names helper.
+// -----------------------------------------------------------------------
+
+#[test]
+fn extract_hotkey_key_names_splits_plus_separated_keys() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    command
+        .env
+        .push(("VOICEPI_KEY".to_owned(), "ctrl_l+shift_r".to_owned()));
+
+    let names = extract_hotkey_key_names(&command);
+    assert_eq!(names, vec!["ctrl_l", "shift_r"]);
+}
+
+#[test]
+fn extract_hotkey_key_names_returns_empty_when_key_missing() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+
+    let names = extract_hotkey_key_names(&command);
+    assert!(names.is_empty(), "no VOICEPI_KEY → empty vec");
+}
+
+#[test]
+fn extract_hotkey_key_names_trims_whitespace_around_segments() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    command
+        .env
+        .push(("VOICEPI_KEY".to_owned(), " ctrl_l + f9 ".to_owned()));
+
+    let names = extract_hotkey_key_names(&command);
+    assert_eq!(names, vec!["ctrl_l", "f9"]);
+}
