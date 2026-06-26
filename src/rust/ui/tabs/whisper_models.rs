@@ -13,7 +13,7 @@
 
 use super::super::*;
 use crate::whisper::model_manager::{self, ModelEntry};
-use crate::whisper::models_cli::{human_bytes, resolved_model_path};
+use crate::whisper::models_cli::human_bytes;
 
 impl WhisperDictateApp {
     /// Render the "Whisper model download" section inside the Speech tab's
@@ -59,7 +59,9 @@ impl WhisperDictateApp {
             job.as_ref().map(|j| &j.status),
             Some(crate::ui::whisper_models_state::DownloadStatus::InProgress),
         );
-        let already_cached = resolved_model_path(entry.name).is_some();
+        // P1: use the metadata-keyed verify cache so we never SHA-256 a
+        // multi-hundred-MB model file on the UI thread during a repaint.
+        let already_cached = self.whisper_model_downloads.is_verified_fast(entry);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(entry.name).strong().monospace());
             ui.label(format!(
@@ -71,7 +73,16 @@ impl WhisperDictateApp {
         ui.horizontal(|ui| {
             let (status_text, status_color) =
                 whisper_model_status_label(already_cached, job.as_ref(), ui.visuals().text_color());
-            ui.colored_label(status_color, status_text);
+            let status_resp = ui.colored_label(status_color, status_text);
+            // P3: surface the stored failure reason on hover so users can
+            // distinguish a retryable network error from a SHA-256 mismatch.
+            if let Some(crate::ui::whisper_models_state::DownloadJob {
+                status: crate::ui::whisper_models_state::DownloadStatus::Failed(ref msg),
+                ..
+            }) = job.as_ref()
+            {
+                status_resp.on_hover_text(msg.as_str());
+            }
             // Disable the button while ANY download is running so the user
             // can't kick off three multi-hundred-MB downloads at once. The
             // already-cached case still allows a redownload (useful if the
@@ -107,26 +118,39 @@ impl WhisperDictateApp {
             }
         });
         if let Some(job) = &job {
-            if let crate::ui::whisper_models_state::DownloadStatus::InProgress = job.status {
-                let fraction = job.fraction();
-                ui.horizontal(|ui| match fraction {
-                    Some(f) => {
-                        ui.add(
-                            egui::ProgressBar::new(f)
-                                .desired_width(220.0)
-                                .show_percentage(),
-                        );
-                        ui.label(format!(
-                            "{} / {}",
-                            human_bytes(job.downloaded),
-                            human_bytes(job.total.unwrap_or(job.downloaded)),
-                        ));
-                    }
-                    None => {
-                        ui.add(egui::Spinner::new());
-                        ui.label(format!("{} downloaded", human_bytes(job.downloaded)));
-                    }
-                });
+            match &job.status {
+                crate::ui::whisper_models_state::DownloadStatus::InProgress => {
+                    let fraction = job.fraction();
+                    ui.horizontal(|ui| match fraction {
+                        Some(f) => {
+                            ui.add(
+                                egui::ProgressBar::new(f)
+                                    .desired_width(220.0)
+                                    .show_percentage(),
+                            );
+                            ui.label(format!(
+                                "{} / {}",
+                                human_bytes(job.downloaded),
+                                human_bytes(job.total.unwrap_or(job.downloaded)),
+                            ));
+                        }
+                        None => {
+                            ui.add(egui::Spinner::new());
+                            ui.label(format!("{} downloaded", human_bytes(job.downloaded)));
+                        }
+                    });
+                }
+                // P2: show the cached path so users can copy it or confirm
+                // which file the transcription backend will pick up.
+                crate::ui::whisper_models_state::DownloadStatus::Done(path) => {
+                    ui.label(
+                        egui::RichText::new(path.display().to_string())
+                            .small()
+                            .weak()
+                            .monospace(),
+                    );
+                }
+                crate::ui::whisper_models_state::DownloadStatus::Failed(_) => {}
             }
         }
     }

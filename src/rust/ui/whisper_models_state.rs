@@ -56,6 +56,14 @@ impl DownloadJob {
     }
 }
 
+/// Mtime + size fingerprint from the last successful SHA-256 verification.
+#[derive(Debug, Clone)]
+struct VerifyCacheEntry {
+    mtime: std::time::SystemTime,
+    len: u64,
+    verified: bool,
+}
+
 /// In-flight downloads keyed by catalog name. `Arc<Mutex<…>>` clones share
 /// the same map so the worker thread's progress updates land in the same
 /// place the UI thread reads.
@@ -67,6 +75,11 @@ pub struct WhisperModelDownloads {
 #[derive(Debug, Default)]
 struct DownloadsInner {
     jobs: HashMap<&'static str, DownloadJob>,
+    /// Cached verification results: mtime+size fingerprint → verdict.
+    /// Avoids rehashing multi-hundred-MB models on every egui repaint.
+    verify_cache: HashMap<&'static str, VerifyCacheEntry>,
+    /// Names whose SHA-256 is being computed on a background thread.
+    verify_running: std::collections::HashSet<&'static str>,
 }
 
 impl WhisperModelDownloads {
@@ -126,6 +139,20 @@ impl WhisperModelDownloads {
     /// Mark `name`'s job as successfully completed.
     pub fn finish_ok(&self, name: &'static str, path: PathBuf) {
         if let Ok(mut state) = self.inner.lock() {
+            // Populate the verify cache immediately so the next render frame
+            // sees "Downloaded" without scheduling a background re-hash.
+            if let Ok(meta) = path.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    state.verify_cache.insert(
+                        name,
+                        VerifyCacheEntry {
+                            mtime,
+                            len: meta.len(),
+                            verified: true,
+                        },
+                    );
+                }
+            }
             state.jobs.insert(
                 name,
                 DownloadJob {
@@ -160,6 +187,85 @@ impl WhisperModelDownloads {
             name,
         })
     }
+
+    /// Fast cached check: is this catalog entry present and verified?
+    ///
+    /// Returns `true` when the file exists and its last SHA-256 check passed,
+    /// and the file's mtime + size haven't changed since. Returns `false`
+    /// while a background verify is in flight (scheduled automatically on first
+    /// call after a cache miss), or when the file is absent.
+    ///
+    /// This replaces a synchronous `verify_sha256` call on the UI thread,
+    /// which blocked the Settings window for seconds on every repaint.
+    pub fn is_verified_fast(
+        &self,
+        entry: &'static crate::whisper::model_manager::ModelEntry,
+    ) -> bool {
+        let path = match crate::whisper::model_manager::model_path(entry) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        if !path.is_file() {
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.verify_cache.remove(entry.name);
+                inner.verify_running.remove(entry.name);
+            }
+            return false;
+        }
+        let meta = match path.metadata() {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        let mtime = match meta.modified() {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let len = meta.len();
+
+        {
+            let Ok(mut inner) = self.inner.lock() else {
+                return false;
+            };
+            if let Some(cached) = inner.verify_cache.get(entry.name) {
+                if cached.mtime == mtime && cached.len == len {
+                    return cached.verified;
+                }
+            }
+            // Cache miss or stale metadata: schedule a background verify.
+            if !inner.verify_running.insert(entry.name) {
+                // Already running — keep returning false until it finishes.
+                return false;
+            }
+        }
+
+        let state = self.clone();
+        std::thread::Builder::new()
+            .name(format!("whisper-verify-{}", entry.name))
+            .spawn(move || {
+                let verified = crate::whisper::model_manager::is_downloaded(entry);
+                let Ok(mut inner) = state.inner.lock() else {
+                    return;
+                };
+                if let Ok(path2) = crate::whisper::model_manager::model_path(entry) {
+                    if let Ok(meta2) = path2.metadata() {
+                        if let Ok(mt) = meta2.modified() {
+                            inner.verify_cache.insert(
+                                entry.name,
+                                VerifyCacheEntry {
+                                    mtime: mt,
+                                    len: meta2.len(),
+                                    verified,
+                                },
+                            );
+                        }
+                    }
+                }
+                inner.verify_running.remove(entry.name);
+            })
+            .ok();
+
+        false
+    }
 }
 
 struct ProgressBinding {
@@ -184,7 +290,13 @@ impl DownloadProgress for ProgressBinding {
 /// `name` ends up in `Done(path)`; on failure in `Failed(msg)`. The worker
 /// thread is detached — egui polls the shared state each frame, so there is
 /// no join handle to manage and no channel to drain.
+///
+/// Returns `false` (and does not spawn) when `VOICEPI_LOCAL_ONLY` is set so
+/// the UI never initiates outbound network requests in privacy mode.
 pub fn spawn_download(state: &WhisperModelDownloads, name: &'static str) -> bool {
+    if crate::whisper::model_manager::is_local_only() {
+        return false;
+    }
     if !state.start(name) {
         return false;
     }
@@ -341,6 +453,19 @@ mod tests {
         let cb = state.progress_callback("tiny.en");
         cb.on_progress(42, Some(100));
         assert!(state.job("tiny.en").is_none());
+    }
+
+    #[test]
+    fn is_verified_fast_returns_bool_without_panicking_for_absent_file() {
+        // On CI (and most developer machines) the real cache dir won't contain
+        // a downloaded model. Calling is_verified_fast must return false
+        // without panicking, blocking, or spinning on a missing file.
+        let state = WhisperModelDownloads::new();
+        let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
+        // Just assert it doesn't panic and returns a bool.
+        let result = state.is_verified_fast(entry);
+        // May be true on a developer machine with the model cached; false elsewhere.
+        let _ = result;
     }
 
     #[test]

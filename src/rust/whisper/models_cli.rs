@@ -54,6 +54,13 @@ pub(crate) fn print_list<W: std::io::Write, F: Fn(&ModelEntry) -> bool>(
 }
 
 fn download(name: &str) -> Result<()> {
+    // P1: refuse before making any network calls when local-only mode is active.
+    if model_manager::is_local_only() {
+        anyhow::bail!(
+            "model download blocked: VOICEPI_LOCAL_ONLY is set; \
+             disable local-only mode to allow outbound model downloads"
+        );
+    }
     let entry = model_manager::find(name).ok_or_else(|| {
         let names: Vec<&str> = model_manager::CATALOG.iter().map(|e| e.name).collect();
         anyhow::anyhow!("unknown model '{name}'; available: {}", names.join(", "))
@@ -61,6 +68,9 @@ fn download(name: &str) -> Result<()> {
     if model_manager::is_downloaded(entry) {
         let path = model_manager::model_path(entry)?;
         eprintln!("{name} already downloaded at {}", path.display());
+        // P2: emit the path to stdout even on idempotent runs so scripts
+        // that capture stdout to get the model path work consistently.
+        println!("{}", path.display());
         return Ok(());
     }
     eprintln!(
@@ -69,8 +79,11 @@ fn download(name: &str) -> Result<()> {
         entry.url
     );
     let progress = StderrProgress::default();
-    let path = model_manager::download_model(entry, &progress)?;
+    // P3: ensure the carriage-return progress line is terminated whether the
+    // download succeeds or fails, so the error message starts on a fresh line.
+    let result = model_manager::download_model(entry, &progress);
     progress.finish_line();
+    let path = result?;
     eprintln!("Saved to {}", path.display());
     println!("{}", path.display());
     Ok(())

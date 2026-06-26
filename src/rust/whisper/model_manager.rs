@@ -74,8 +74,8 @@ pub struct ModelEntry {
 
 /// Curated catalog of CPU-friendly English GGML models. Order matches the UI
 /// presentation: smallest / fastest first so the cheapest option is the
-/// default eye-line pick. SHA-256 values mirror upstream
-/// `models/download-ggml-model.sh` at the time of writing — re-verify on bumps.
+/// default eye-line pick. SHA-256 values are pinned to the current
+/// `ggerganov/whisper.cpp` HuggingFace main branch — re-verify when bumping.
 pub const CATALOG: &[ModelEntry] = &[
     ModelEntry {
         name: "tiny.en",
@@ -97,7 +97,7 @@ pub const CATALOG: &[ModelEntry] = &[
         name: "small.en",
         filename: "ggml-small.en.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
-        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
         size_bytes: 487_600_000,
         description: "English, balanced accuracy & speed (~488 MB)",
     },
@@ -182,6 +182,16 @@ pub fn verify_sha256(path: &Path, expected_hex: &str) -> Result<()> {
     Ok(())
 }
 
+/// Returns `true` when local-only mode is active (`VOICEPI_LOCAL_ONLY` env var
+/// set to `"1"`, `"true"`, `"True"`, or `"TRUE"`). Used to gate outbound
+/// model downloads; callers that would initiate network requests must check
+/// this before proceeding.
+pub fn is_local_only() -> bool {
+    std::env::var("VOICEPI_LOCAL_ONLY")
+        .map(|v| matches!(v.trim(), "1" | "true" | "True" | "TRUE"))
+        .unwrap_or(false)
+}
+
 /// Callback the download path invokes as bytes land. Implemented by the UI
 /// (Arc<Mutex<...>> over a shared progress struct) and by the CLI (writes a
 /// percentage line to stderr). `total` is the `Content-Length` value when the
@@ -197,13 +207,28 @@ impl DownloadProgress for () {
     fn on_progress(&self, _downloaded: u64, _total: Option<u64>) {}
 }
 
+/// TCP connect timeout for model downloads.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// End-to-end timeout for model downloads. 15 min covers ggml-small.en.bin
+/// (~488 MB) at ≈0.5 Mbps with headroom.
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
 /// Download `entry` to its cache path, streaming via `ureq` and reporting
 /// progress through `cb`. Returns the final on-disk path on success.
 ///
 /// The download writes to `<filename>.partial` first; on successful SHA-256
 /// verification the partial is atomically renamed into the real cache path.
 /// On any failure the partial is removed so the next attempt starts clean.
+///
+/// Errors immediately when `VOICEPI_LOCAL_ONLY` is set; the caller must gate
+/// its UI affordances on `is_local_only()` as well for a consistent UX.
 pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<PathBuf> {
+    if is_local_only() {
+        return Err(anyhow!(
+            "model download blocked: VOICEPI_LOCAL_ONLY is set; \
+             disable local-only mode to allow outbound model downloads"
+        ));
+    }
     let target = model_path(entry)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -214,7 +239,13 @@ pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<P
         })?;
     }
     let partial = partial_path(&target);
-    let response = ureq::get(entry.url)
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(CONNECT_TIMEOUT))
+        .timeout_global(Some(DOWNLOAD_TIMEOUT))
+        .build()
+        .into();
+    let response = agent
+        .get(entry.url)
         .header("User-Agent", USER_AGENT)
         .call()
         .map_err(|err| anyhow!("download request failed: {err}"))?;
@@ -306,9 +337,20 @@ pub(crate) fn stream_download_to<R: Read>(
     Ok(())
 }
 
+/// Return a per-process, per-call temporary path for a partial download.
+///
+/// Uses `<target>.<pid>-<seq>.partial` (process-ID + monotonic sequence) so
+/// two simultaneous invocations (CLI + UI, or two CLI calls) never collide on
+/// the same partial file. The `.partial` suffix is stable so cleanup scripts
+/// can still glob for stale partials.
 fn partial_path(target: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let suffix = format!(".{pid}-{seq}.partial");
     let mut s = target.as_os_str().to_owned();
-    s.push(".partial");
+    s.push(suffix.as_str());
     PathBuf::from(s)
 }
 
