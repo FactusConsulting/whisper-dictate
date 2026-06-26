@@ -1,5 +1,12 @@
 name: sonar
 
+# Runs Sonar (Clippy JSON + Rust LCOV + Python coverage XML) on every push to
+# main and every pull request. Uploads results to SonarCloud.
+#
+# Required-status-check context: NONE in the protected-branch ruleset. The
+# SonarCloud Quality Gate appears as its own external check on PRs and is
+# tracked separately (see [[sonarcloud-quality-gate]] in user memory).
+
 on:
   push:
     branches: [main]

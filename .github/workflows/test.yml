@@ -1,5 +1,19 @@
 name: tests
 
+# Primary CI gate. Runs the full Python + Rust + smoke suite on every push to
+# main and every pull request, and is invoked via workflow_call from release.yml
+# so a tag never ships if any of these jobs fail.
+#
+# Required-status-check contexts (per the protected-branch ruleset — do NOT
+# rename these job/matrix ids without updating the ruleset):
+#   - unit                      (jobs.unit)
+#   - lint-workflows            (jobs.lint-workflows)
+#   - smoke (ubuntu-latest)     (jobs.smoke matrix)
+#   - smoke (windows-2025)      (jobs.smoke matrix)
+#   - rust  (ubuntu-latest)     (jobs.rust  matrix)
+#   - rust  (windows-2025)      (jobs.rust  matrix)
+# The groq-integration job is NOT required (live API; skips without secret).
+
 on:
   push:
     branches: [main]
