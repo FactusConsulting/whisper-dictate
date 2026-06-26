@@ -529,12 +529,16 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             )
 
     def test_spellcheck_is_pr_only_and_limited_to_docs(self):
-        workflow = Path(".github/workflows/spellcheck.yml").read_text(encoding="utf-8")
+        # spellcheck.yml was merged into docs.yml alongside markdown-lint.
+        # The cspell JOB stays PR-only via a job-level
+        # `if: github.event_name == 'pull_request'`, because the sibling
+        # markdownlint job DOES run on main pushes.
+        workflow = Path(".github/workflows/docs.yml").read_text(encoding="utf-8")
         config = Path("cspell.json").read_text(encoding="utf-8")
 
         self.assertIn("pull_request:", workflow)
-        self.assertNotIn("push:", workflow)
         self.assertNotIn("workflow_call:", workflow)
+        self.assertIn("if: github.event_name == 'pull_request'", workflow)
         self.assertIn("npx --yes cspell@", workflow)
         self.assertIn("--config cspell.json", workflow)
         self.assertIn('README.md AGENTS.md CONTRIBUTING.md "docs/**/*.md"', workflow)
