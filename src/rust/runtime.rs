@@ -1413,11 +1413,21 @@ pub fn decode_capped_output(bytes: &[u8]) -> String {
 }
 
 pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
-    let status = Command::new(&command.program)
+    let mut process = Command::new(&command.program);
+    process
         .args(&command.args)
         .current_dir(&command.working_dir)
-        .envs(command.env.iter().map(|(key, value)| (key, value)))
-        .status()?;
+        .envs(command.env.iter().map(|(key, value)| (key, value)));
+    // Force the worker's stdio to UTF-8 so foreground commands like
+    // `whisper-dictate bench > out.txt` or `whisper-dictate corpus-record <id>`
+    // do not mojibake / EncodingError on Windows when the inherited console
+    // code page is non-UTF-8 (cp1252 / cp437 / Shift-JIS …). The Python
+    // worker writes `ensure_ascii=False` JSONL with Danish corpus text and
+    // user dictionary terms; matches the `configure_piped_python_stdio` the
+    // captured/background paths already set, so all foreground workers see
+    // the same encoding regardless of how the user shells in.
+    configure_piped_python_stdio(&mut process);
+    let status = process.status()?;
     exit_status_to_result(status)
 }
 

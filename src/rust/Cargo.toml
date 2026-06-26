@@ -58,6 +58,11 @@ rust-injection = ["dep:enigo"]
 
 [dependencies]
 anyhow = "1.0"
+# Unicode default case-folding (full C+F mappings — `ß → ss`, `İ → i\u{307}`,
+# ligatures, etc.). Used by `benchmark::scoring` to keep WER/CER/term-match
+# behaviour bit-identical to Python's `str.casefold()` (the corpus side of
+# the port).
+caseless = "0.2"
 clap = { version = "4.5", features = ["derive"] }
 # eframe 0.34 flipped its DEFAULT renderer from glow (OpenGL) to wgpu. We ship on
 # glow and keep wgpu as a continuously-validated exit route, so the renderer is

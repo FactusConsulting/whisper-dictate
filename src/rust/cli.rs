@@ -39,6 +39,12 @@ pub enum Command {
     /// UI picker enforces).
     CorpusRecord {
         /// Corpus item id (filename stem under `<appdata>/benchmark/audio/`).
+        ///
+        /// `allow_hyphen_values` is required so clap accepts manifest ids that
+        /// happen to start with `-` (e.g. `-sample`). The full allowlist is
+        /// then enforced by `corpus_record::is_safe_corpus_id` BEFORE shelling
+        /// out — defence in depth on top of the worker's own guard.
+        #[arg(allow_hyphen_values = true)]
         id: String,
     },
     /// Install or repair local runtime dependencies.
@@ -542,6 +548,22 @@ mod tests {
             cli.command,
             Some(Command::CorpusRecord {
                 id: "da-001".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn corpus_record_accepts_hyphen_leading_id() {
+        // Regression for the Codex P3 finding on PR #360: a manifest item whose
+        // safe id starts with `-` (e.g. `-sample`) must reach the validator
+        // rather than getting rejected by clap as a stray flag. The full
+        // `[A-Za-z0-9._-]+` allowlist is then enforced by
+        // `corpus_record::is_safe_corpus_id` BEFORE shelling out.
+        let cli = Cli::parse_from(["whisper-dictate", "corpus-record", "-sample"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::CorpusRecord {
+                id: "-sample".to_owned(),
             })
         );
     }
