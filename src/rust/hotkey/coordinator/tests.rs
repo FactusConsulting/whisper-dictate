@@ -454,3 +454,123 @@ fn mismatched_processing_finished_in_processing_is_dropped() {
     assert_eq!(ignored, None);
     assert_eq!(s.stage, Stage::Processing(1));
 }
+
+// -----------------------------------------------------------------------
+// P2 #346 finding 3: cancel during Processing clears pending_press.
+// -----------------------------------------------------------------------
+
+#[test]
+fn cancel_during_processing_clears_pending_press_latch() {
+    // Scenario: press → release → Processing; user presses again (latch set);
+    // then cancel arrives. Without the fix, pending_press stays true and
+    // ProcessingFinished would trigger an unwanted restart.
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    step(&mut s, hold_options(), t0, CoordinatorEvent::Press);
+    step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(300),
+        CoordinatorEvent::Release,
+    );
+    assert_eq!(s.stage, Stage::Processing(1));
+    // User presses PTT again during Processing → latch.
+    step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(400),
+        CoordinatorEvent::Press,
+    );
+    assert!(s.pending_press, "latch must be set before cancel");
+    // Cancel arrives (foreign key press, etc.).
+    let cancel_result = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(450),
+        CoordinatorEvent::Cancel,
+    );
+    assert_eq!(cancel_result, None, "cancel in Processing emits no action");
+    assert!(!s.pending_press, "cancel must wipe the pending_press latch");
+    // ProcessingFinished must NOT auto-start a new recording.
+    let finish = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(800),
+        CoordinatorEvent::ProcessingFinished(1),
+    );
+    assert_eq!(finish, None, "no restart after cancel wiped the latch");
+    assert_eq!(s.stage, Stage::Idle);
+}
+
+// -----------------------------------------------------------------------
+// P2 #346 finding 5: toggle press during Processing latches and fires on
+// completion despite the natural key-up that follows the tap.
+// -----------------------------------------------------------------------
+
+#[test]
+fn toggle_press_during_processing_survives_key_release() {
+    // In toggle mode the stop action is a second key press (press #2) — and
+    // the natural release after that press must NOT wipe the pending_press
+    // latch that a subsequent tap (press #3) sets while still in Processing.
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    // Press #1 → Recording.
+    step(&mut s, toggle_options(), t0, CoordinatorEvent::Press);
+    assert_eq!(s.stage, Stage::Recording(1));
+    // Release #1 (toggle: no-op while Recording).
+    step(
+        &mut s,
+        toggle_options(),
+        t0 + Duration::from_millis(500),
+        CoordinatorEvent::Release,
+    );
+    assert_eq!(s.stage, Stage::Recording(1));
+    // Press #2 → stop and transcribe (→ Processing).
+    step(
+        &mut s,
+        toggle_options(),
+        t0 + Duration::from_millis(1000),
+        CoordinatorEvent::Press,
+    );
+    assert_eq!(s.stage, Stage::Processing(1));
+    // Release #2 — natural key-up after the stop tap. Must NOT touch
+    // pending_press even though nothing is latched yet.
+    step(
+        &mut s,
+        toggle_options(),
+        t0 + Duration::from_millis(1050),
+        CoordinatorEvent::Release,
+    );
+    assert!(!s.pending_press);
+    // Press #3 — user taps to queue a new recording while still in Processing.
+    step(
+        &mut s,
+        toggle_options(),
+        t0 + Duration::from_millis(1500),
+        CoordinatorEvent::Press,
+    );
+    assert!(s.pending_press, "press #3 must latch");
+    // Release #3 — natural key-up after the toggle tap. In toggle mode this
+    // must NOT clear the latch (unlike hold-to-talk where a release during
+    // Processing means the user is no longer holding).
+    step(
+        &mut s,
+        toggle_options(),
+        t0 + Duration::from_millis(1550),
+        CoordinatorEvent::Release,
+    );
+    assert!(
+        s.pending_press,
+        "release in toggle mode must not wipe the latch"
+    );
+    // ProcessingFinished → pending press fires → Recording(2).
+    let restart = step(
+        &mut s,
+        toggle_options(),
+        t0 + Duration::from_millis(2000),
+        CoordinatorEvent::ProcessingFinished(1),
+    );
+    assert_eq!(restart, Some(CoordinatorAction::StartRecording(2)));
+    assert_eq!(s.stage, Stage::Recording(2));
+    assert!(!s.pending_press);
+}
