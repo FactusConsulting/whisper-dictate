@@ -226,6 +226,31 @@ pub enum Command {
     /// error and exit non-zero so the Python caller can fall back to its own
     /// path. Used by `vp_devices.py` when `VOICEPI_DEVICES_BACKEND=rust`.
     Devices,
+    /// Manage local Whisper model files (catalog, download, verify).
+    ///
+    /// Backwards compatibility: `VOICEPI_WHISPER_MODEL_PATH` still wins for the
+    /// inference path; this subcommand only manages files in the
+    /// `whisper-models/` user-cache directory. See `whisper::model_manager`.
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ModelsCommand {
+    /// List the curated download catalog with each entry's name, file size,
+    /// description, and whether a verified copy is already in the user cache.
+    List,
+    /// Download a catalog entry into the user cache. Verifies SHA-256 after
+    /// the download completes; on mismatch the partial file is deleted.
+    Download {
+        /// Catalog name (e.g. `tiny.en`, `base.en`, `small.en`). Use
+        /// `models list` to see what's available.
+        name: String,
+    },
+    /// Print the cache directory where downloaded models are stored.
+    Path,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -548,6 +573,41 @@ mod tests {
             cli.command,
             Some(Command::CorpusRecord {
                 id: "da-001".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_models_list_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "models", "list"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Models {
+                command: ModelsCommand::List,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_models_download_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "models", "download", "tiny.en"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Models {
+                command: ModelsCommand::Download {
+                    name: "tiny.en".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_models_path_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "models", "path"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Models {
+                command: ModelsCommand::Path,
             })
         );
     }

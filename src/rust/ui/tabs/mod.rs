@@ -23,6 +23,7 @@ mod speech;
 mod system;
 mod top_status_layout;
 mod update_badge;
+mod whisper_models;
 
 // The inline Test-API ✓/✗/testing indicator render shell (post.rs + speech.rs
 // reach it via `super::*`). The pure classifier + parts builder it wraps are

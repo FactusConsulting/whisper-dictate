@@ -30,6 +30,10 @@ impl WhisperDictateApp {
         ui.add_space(6.0);
 
         // --- Whisper group -----------------------------------------------
+        // The download section needs `&mut self` so it can't live inside the
+        // `scope_group`'s `FnOnce(&mut egui::Ui)` (which borrows self for the
+        // closure capture). Render the existing model picker via the group
+        // first, then drop the closure scope before invoking the section.
         scope_group(
             ui,
             palette,
@@ -52,6 +56,9 @@ impl WhisperDictateApp {
                 );
             },
         );
+        // Wave 7-B: in-app GGML model downloader. Sits next to the model
+        // picker so users discover it where they already pick a model.
+        self.whisper_model_download_section(ui);
 
         ui.add_space(6.0);
 

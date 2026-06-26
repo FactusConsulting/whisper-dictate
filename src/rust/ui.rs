@@ -55,6 +55,7 @@ mod theme;
 mod tray;
 mod update_check;
 mod upgrade_hint;
+mod whisper_models_state;
 mod widgets;
 mod widgets_combo;
 mod window_list;
@@ -443,6 +444,12 @@ struct WhisperDictateApp {
     /// have not yet logged any state (so the very first computed state is
     /// always logged as the baseline). See `sync_tray` in `ui/app.rs`.
     pub(in crate::ui) last_logged_tray_state: Option<TrayState>,
+    /// Live download state for the Settings tab's "Whisper model" section
+    /// (Wave 7-B). Shared via `Arc<Mutex<…>>` with each download worker
+    /// thread so progress updates land in the same map the UI polls.
+    /// Empty when no downloads have been kicked off this session — never
+    /// persisted.
+    pub(in crate::ui) whisper_model_downloads: whisper_models_state::WhisperModelDownloads,
 }
 
 impl Default for WhisperDictateApp {
@@ -545,6 +552,7 @@ impl Default for WhisperDictateApp {
             choco_pkg_dir_exists: None,
             tray: TrayManager::new(),
             last_logged_tray_state: None,
+            whisper_model_downloads: whisper_models_state::WhisperModelDownloads::new(),
         }
     }
 }

@@ -6,7 +6,7 @@ use whisper_dictate_app::cli::{Cli, Command};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, formatting,
     health, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
-    telemetry, ui,
+    telemetry, ui, whisper,
 };
 
 fn main() {
@@ -85,6 +85,7 @@ fn run() -> anyhow::Result<()> {
         Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
         Command::Inject => injection::handle_inject(),
         Command::Devices => handle_devices_command(),
+        Command::Models { command } => whisper::models_cli::handle(command),
     }
 }
 
