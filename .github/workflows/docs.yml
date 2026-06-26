@@ -1,0 +1,71 @@
+name: docs
+
+# Docs-only lint pipeline: merges what used to be two separate workflows
+# (markdown-lint.yml + spellcheck.yml) into one file with two jobs.
+#
+# Triggers (path-filtered so code-only PRs skip this entirely):
+#   - push to main and pull_request when Markdown files, the lint configs, or
+#     this workflow itself change.
+#
+# Jobs:
+#   - markdownlint: structural Markdown lint (runs on main pushes AND PRs so a
+#                   broken doc landing on main is caught). Uses
+#                   .markdownlint-cli2.jsonc for globs + ignores, so the CI
+#                   result matches `npx markdownlint-cli2` locally.
+#   - cspell:       English spelling feedback for docs. PR-only by design — it
+#                   helps reviewers catch typos before merge but must not gate
+#                   release tags or ordinary main pushes.
+#
+# Required-status-check contexts: NONE. Neither job is in the protected-branch
+# ruleset; the gate is `unit`, `lint-workflows`, `smoke (...)`, `rust (...)`
+# (all in test.yml). Renaming/removing jobs here is therefore safe.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - '.markdownlint-cli2.jsonc'
+      - 'cspell.json'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '.markdownlint-cli2.jsonc'
+      - 'cspell.json'
+      - '.github/workflows/docs.yml'
+
+# Cancel superseded PR runs; main pushes get a unique group so they aren't cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  markdownlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+      # The repo's .markdownlint-cli2.jsonc holds the globs + ignores, so this is
+      # the same command (and result) as running `npx markdownlint-cli2` locally.
+      - run: npx --yes markdownlint-cli2@0.22.1
+
+  cspell:
+    # PR-only by design: English spelling feedback should help review docs before
+    # merge, but it must not gate release tags or ordinary main pushes.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+      - name: Spellcheck English docs
+        run: >
+          npx --yes cspell@8.17.5
+          --config cspell.json
+          README.md AGENTS.md CONTRIBUTING.md "docs/**/*.md"
