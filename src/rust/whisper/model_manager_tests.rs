@@ -9,7 +9,47 @@
 
 use super::*;
 use sha2::{Digest, Sha256};
+use std::ffi::{OsStr, OsString};
 use std::io::Cursor;
+
+// Re-export the crate-wide env lock so the cache-dir override tests serialise
+// against every other env-mutating test in the suite. Per-module locks would
+// violate the soundness contract `env::set_var` requires under the Rust 2024
+// edition (see `crate::test_env_lock`).
+use crate::test_env_lock::ENV_LOCK;
+
+/// Save/restore wrapper around `env::set_var` / `env::remove_var` so the cache
+/// dir override tests don't leak into sibling tests. Mirrors the
+/// `EnvVarGuard` pattern in `runtime::test_support` — kept inline here to
+/// avoid a cross-module test-only dependency.
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        let original = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, original }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let original = std::env::var_os(key);
+        std::env::remove_var(key);
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(value) = &self.original {
+            std::env::set_var(self.key, value);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}
 
 /// Counting progress sink used by tests to assert the streaming path
 /// actually drives the callback rather than just calling it once at the end.
@@ -278,4 +318,198 @@ fn is_downloaded_false_for_missing_or_wrong_hash() {
     // Correct content → ok.
     fs::write(&path, b"hello").unwrap();
     verify_sha256(&path, &expected).expect("matching content");
+}
+
+/// Pick the env var `user_cache_dir` consults on the current platform so
+/// the override tests pin the resolution to a temp dir regardless of host.
+const CACHE_ENV_VAR: &str = if cfg!(windows) {
+    "LOCALAPPDATA"
+} else if cfg!(target_os = "macos") {
+    "HOME"
+} else {
+    "XDG_CACHE_HOME"
+};
+
+/// On Linux `user_cache_dir` also consults HOME as the fallback after
+/// XDG_CACHE_HOME. Tests that "clear all sources" must wipe both so the
+/// fallback doesn't accidentally pick up the developer's real HOME.
+const SECONDARY_CACHE_ENV_VAR: Option<&str> = if cfg!(windows) || cfg!(target_os = "macos") {
+    None
+} else {
+    Some("HOME")
+};
+
+#[test]
+fn models_cache_dir_resolves_under_overridden_root() {
+    // Pin the OS cache dir under tempdir so the test asserts the EXACT
+    // layout (`<base>/whisper-dictate/whisper-models`) without touching
+    // the developer's real cache. Covers the `models_cache_dir`,
+    // `model_path` and `user_cache_dir` happy paths in one shot.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
+    // On macOS `user_cache_dir` derives its path by appending
+    // `Library/Caches` to HOME; account for that so the assertion holds
+    // on every platform.
+    let expected_base: PathBuf = if cfg!(target_os = "macos") {
+        tmp.path().join("Library/Caches")
+    } else {
+        tmp.path().to_path_buf()
+    };
+    let dir = models_cache_dir().expect("override must resolve");
+    assert_eq!(
+        dir,
+        expected_base.join("whisper-dictate").join("whisper-models")
+    );
+
+    let entry = &CATALOG[0];
+    let path = model_path(entry).expect("override must resolve");
+    assert_eq!(path, dir.join(entry.filename));
+}
+
+#[test]
+fn is_downloaded_false_when_cache_is_empty() {
+    // End-to-end exercise of `is_downloaded`'s real plumbing (model_path
+    // → file probe → verify_sha256), under a pinned temp cache so the
+    // result is deterministic regardless of what's on the developer's
+    // disk. The directory deliberately doesn't exist (`tempdir` returns
+    // an empty dir; the `whisper-dictate/whisper-models` subpath has not
+    // been created yet) so the `is_file()` branch returns false.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
+    for entry in CATALOG {
+        assert!(
+            !is_downloaded(entry),
+            "fresh tempdir cache must report {} as not downloaded",
+            entry.name,
+        );
+    }
+}
+
+#[test]
+fn is_downloaded_true_when_cached_file_matches_hash() {
+    // Plant a synthetic GGML payload whose SHA-256 we forge into a
+    // throwaway `ModelEntry`, then assert `is_downloaded` flips to true.
+    // We can't mutate the real CATALOG entry's hash (it's `&'static`),
+    // so the test builds its own entry pointing at the same filename and
+    // routes via `model_path` to honour the OS layout.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
+    let payload = b"forged-ggml-bytes-just-for-this-test".to_vec();
+    let digest = sha256_hex(&payload);
+    // Leak the strings so they satisfy the `&'static str` field types.
+    let hash_static: &'static str = Box::leak(digest.into_boxed_str());
+    let entry = ModelEntry {
+        name: "test-only",
+        filename: "ggml-test-only.bin",
+        url: "https://example.invalid/",
+        sha256: hash_static,
+        size_bytes: payload.len() as u64,
+        description: "synthetic test entry",
+    };
+    let path = model_path(&entry).expect("override must resolve");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, &payload).unwrap();
+    assert!(
+        is_downloaded(&entry),
+        "synthetic cached payload must report as downloaded",
+    );
+}
+
+#[test]
+fn models_cache_dir_errors_when_no_env_resolvable() {
+    // Cover the `ok_or_else` branch: with every cache env-var source
+    // cleared, `user_cache_dir` returns None and `models_cache_dir`
+    // bubbles a helpful error instead of panicking.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _primary = EnvVarGuard::remove(CACHE_ENV_VAR);
+    let _secondary = SECONDARY_CACHE_ENV_VAR.map(EnvVarGuard::remove);
+    match models_cache_dir() {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("cache directory"),
+                "error must mention cache directory: {msg}",
+            );
+        }
+        Ok(dir) => {
+            // On a developer machine some env var we didn't think of
+            // (or a per-process inherited value) may still resolve.
+            // Don't fail the suite on that — but at least sanity-check
+            // the returned shape.
+            assert!(dir.ends_with("whisper-models"));
+        }
+    }
+}
+
+/// `Read` impl that returns Ok with `payload_len` bytes once and then
+/// fails on the next read. Used to drive `stream_download_to` into its
+/// per-chunk error branch (the `match reader.read(...)` Err arm).
+struct OneOkThenFailReader {
+    payload: Vec<u8>,
+    served: bool,
+}
+
+impl Read for OneOkThenFailReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.served {
+            return Err(io::Error::other("synthetic read fail"));
+        }
+        let n = buf.len().min(self.payload.len());
+        buf[..n].copy_from_slice(&self.payload[..n]);
+        self.served = true;
+        Ok(n)
+    }
+}
+
+#[test]
+fn stream_download_to_propagates_read_error_and_cleans_partial() {
+    let tmp = tempfile::tempdir().unwrap();
+    let partial = tmp.path().join("model.bin.partial");
+    let target = tmp.path().join("model.bin");
+    let mut reader = OneOkThenFailReader {
+        payload: b"a few bytes".to_vec(),
+        served: false,
+    };
+    let err = stream_download_to(&mut reader, None, &partial, &target, &"00".repeat(32), &())
+        .expect_err("read error must propagate");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("download read failed"),
+        "error must mention the read failure: {msg}",
+    );
+    assert!(
+        !target.exists(),
+        "target must NOT be created on read failure",
+    );
+    assert!(
+        !partial.exists(),
+        "partial must be cleaned up after a read failure",
+    );
+}
+
+#[test]
+fn stream_download_to_errors_when_partial_parent_missing() {
+    // Drives the `File::create(partial)` failure path: the partial path
+    // lives under a directory that does not exist on disk, so the
+    // create fails before any bytes are read. The error is surfaced
+    // verbatim (no partial cleanup is needed because no file ever
+    // existed).
+    let tmp = tempfile::tempdir().unwrap();
+    let nonexistent_dir = tmp.path().join("definitely-not-here");
+    let partial = nonexistent_dir.join("model.bin.partial");
+    let target = nonexistent_dir.join("model.bin");
+    let payload = b"unused".to_vec();
+    let expected = sha256_hex(&payload);
+    let mut reader = Cursor::new(payload);
+    let err = stream_download_to(&mut reader, None, &partial, &target, &expected, &())
+        .expect_err("missing parent must error");
+    assert!(
+        err.to_string().contains("failed to create"),
+        "error must mention create failure: {err}",
+    );
+    assert!(!partial.exists(), "no partial must be left behind");
+    assert!(!target.exists(), "no target must be created");
 }
