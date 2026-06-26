@@ -328,14 +328,82 @@ fn is_local_only_reads_env_var() {
 }
 
 #[test]
-fn download_model_blocked_when_local_only() {
+fn download_model_blocked_when_local_only_via_env() {
     let _lock = ENV_LOCK.lock().expect("env lock poisoned");
     let _g = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
+    // Also ensure config doesn't interfere by pointing config at empty dir.
+    let tmp_cfg = tempfile::tempdir().unwrap();
+    let cfg_path = tmp_cfg.path().join("config.json");
+    let _gcfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
     let entry = &CATALOG[0];
     let err = download_model(entry, &()).expect_err("must fail in local-only mode");
     assert!(
-        err.to_string().contains("VOICEPI_LOCAL_ONLY"),
-        "error must mention the env var: {err}"
+        err.to_string().contains("local-only mode"),
+        "error must mention local-only mode: {err}"
+    );
+}
+
+#[test]
+fn download_model_blocked_when_local_only_via_config() {
+    // P1: persisted `local_only: 1` in settings.json must block downloads
+    // even without the VOICEPI_LOCAL_ONLY env var.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    let tmp_cfg = tempfile::tempdir().unwrap();
+    let cfg_path = tmp_cfg.path().join("config.json");
+    std::fs::write(&cfg_path, r#"{"local_only":"1"}"#).unwrap();
+    let _gcfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
+    let entry = &CATALOG[0];
+    let err = download_model(entry, &()).expect_err("must fail when config sets local_only");
+    assert!(
+        err.to_string().contains("local-only mode"),
+        "error must mention local-only mode: {err}"
+    );
+}
+
+#[test]
+fn is_local_only_reads_persisted_config() {
+    // P1: when env var is unset but config.json has "local_only":"1",
+    // is_local_only() must return true.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    let tmp_cfg = tempfile::tempdir().unwrap();
+    let cfg_path = tmp_cfg.path().join("config.json");
+    std::fs::write(&cfg_path, r#"{"local_only":"1"}"#).unwrap();
+    let _gcfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
+    assert!(
+        is_local_only(),
+        "config local_only=1 must activate local-only mode even without env var"
+    );
+}
+
+#[test]
+fn download_timeout_uses_default_when_env_absent() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g = EnvVarGuard::remove("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS");
+    assert_eq!(
+        download_timeout(),
+        std::time::Duration::from_secs(DEFAULT_DOWNLOAD_TIMEOUT_SECS),
+        "default timeout must be used when env var is unset"
+    );
+}
+
+#[test]
+fn download_timeout_env_override_is_respected() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g = EnvVarGuard::set("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS", "7200");
+    assert_eq!(
+        download_timeout(),
+        std::time::Duration::from_secs(7200),
+        "env override must be used when set"
+    );
+    drop(_g);
+    // Garbage value falls back to default.
+    let _g2 = EnvVarGuard::set("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS", "not-a-number");
+    assert_eq!(
+        download_timeout(),
+        std::time::Duration::from_secs(DEFAULT_DOWNLOAD_TIMEOUT_SECS),
+        "invalid env override must fall back to default"
     );
 }
 

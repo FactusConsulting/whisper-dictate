@@ -101,12 +101,15 @@ fn resolve_model_path_from_env() -> Result<PathBuf> {
              whisper.cpp model file"
         ));
     }
-    // Fallback: first catalog model whose file exists in the cache directory.
-    // We check only file existence here (not SHA-256) to keep startup fast;
-    // the SHA-256 was already verified at download time.
+    // Fallback: first catalog model that exists in the cache directory AND
+    // whose SHA-256 matches the catalog.  Verifying before selecting means a
+    // truncated or corrupt file is skipped (the next catalog entry is tried)
+    // rather than being passed to whisper-rs where it produces a confusing
+    // load error.  The OS page cache makes repeated reads of the same file
+    // fast; this check runs once per process launch, not once per transcription.
     for entry in crate::whisper::model_manager::CATALOG {
-        if let Ok(path) = crate::whisper::model_manager::model_path(entry) {
-            if path.is_file() {
+        if crate::whisper::model_manager::is_downloaded(entry) {
+            if let Ok(path) = crate::whisper::model_manager::model_path(entry) {
                 return Ok(path);
             }
         }
@@ -336,9 +339,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_path_falls_back_to_cache_dir() {
-        // Place a synthetic file where the cache dir would put tiny.en, then
-        // verify resolve_model_path_from_env picks it up without an env var.
+    fn resolve_model_path_skips_corrupt_cached_file() {
+        // P2: a file that exists but fails SHA-256 verification must be
+        // skipped; the function must NOT return a corrupt cached path.
+        // After the fix, `is_downloaded` gates the fallback, so a file with
+        // wrong content is skipped and the function errors (no valid model).
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::remove_var(MODEL_PATH_ENV);
@@ -353,11 +358,17 @@ mod tests {
             tmp.path().join("whisper-dictate/whisper-models")
         };
         std::fs::create_dir_all(&cache_subdir).unwrap();
-        let fake_model = cache_subdir.join("ggml-tiny.en.bin");
-        std::fs::write(&fake_model, b"fake").unwrap();
+        // Plant a file with wrong content — SHA-256 won't match the catalog.
+        let corrupt_model = cache_subdir.join("ggml-tiny.en.bin");
+        std::fs::write(&corrupt_model, b"corrupt-contents").unwrap();
 
-        let path = resolve_model_path_from_env().expect("should find cached model");
-        assert_eq!(path, fake_model, "fallback must return cached model path");
+        // Must fail: corrupt file is skipped, no valid model found.
+        let err =
+            resolve_model_path_from_env().expect_err("corrupt cached file must not be returned");
+        assert!(
+            err.to_string().contains(MODEL_PATH_ENV),
+            "error must name the missing-model env var: {err}"
+        );
 
         match saved_cache {
             Some(v) => env::set_var(CACHE_ENV_VAR, v),

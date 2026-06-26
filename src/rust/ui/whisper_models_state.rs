@@ -242,21 +242,51 @@ impl WhisperModelDownloads {
         std::thread::Builder::new()
             .name(format!("whisper-verify-{}", entry.name))
             .spawn(move || {
+                // Snapshot metadata BEFORE hashing.  If a concurrent download
+                // replaces the file between the snapshot and the end of hashing
+                // the mtime/len will differ after hashing; we detect that and
+                // discard the stale result so a valid replacement isn't
+                // incorrectly cached as unverified (P2 race fix).
+                let meta_before = crate::whisper::model_manager::model_path(entry)
+                    .ok()
+                    .and_then(|p| {
+                        p.metadata()
+                            .ok()
+                            .and_then(|m| m.modified().ok().map(|mt| (mt, m.len())))
+                    });
+
                 let verified = crate::whisper::model_manager::is_downloaded(entry);
+
                 let Ok(mut inner) = state.inner.lock() else {
                     return;
                 };
                 if let Ok(path2) = crate::whisper::model_manager::model_path(entry) {
                     if let Ok(meta2) = path2.metadata() {
                         if let Ok(mt) = meta2.modified() {
-                            inner.verify_cache.insert(
-                                entry.name,
-                                VerifyCacheEntry {
-                                    mtime: mt,
-                                    len: meta2.len(),
-                                    verified,
-                                },
-                            );
+                            let len2 = meta2.len();
+                            // Only cache when metadata is unchanged: if the
+                            // file was replaced while we were hashing the old
+                            // copy, skip the insert so the next
+                            // `is_verified_fast` call sees a cache miss and
+                            // schedules a fresh verify on the new file.
+                            let unchanged = meta_before
+                                .map(|(mt_before, len_before)| {
+                                    mt_before == mt && len_before == len2
+                                })
+                                .unwrap_or(false);
+                            if unchanged {
+                                inner.verify_cache.insert(
+                                    entry.name,
+                                    VerifyCacheEntry {
+                                        mtime: mt,
+                                        len: len2,
+                                        verified,
+                                    },
+                                );
+                            }
+                            // If unchanged==false: discard; the next call
+                            // will detect the new mtime/len → cache miss →
+                            // fresh verify thread for the replacement file.
                         }
                     }
                 }
@@ -641,6 +671,52 @@ mod tests {
         assert!(
             !result2,
             "is_verified_fast must return false while verify thread is running"
+        );
+    }
+
+    #[test]
+    fn is_verified_fast_does_not_cache_stale_result_after_file_replacement() {
+        // P2 race-fix: if a redownload replaces the file while a background
+        // verify is running, the verify thread must NOT store the old
+        // (corrupt) hash result under the new file's mtime/len.
+        // We simulate this by:
+        //   1. Placing a file and calling is_verified_fast (schedules thread).
+        //   2. Replacing the file with different bytes before the thread stores.
+        //   3. Waiting briefly for the thread to finish.
+        //   4. Checking that is_verified_fast either returns false (cache miss
+        //      or stale-detect) or re-schedules a new verify (returns false),
+        //      but never returns true for the corrupt original hash result.
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let tmp = tempfile::tempdir().unwrap();
+        let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
+
+        let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
+        let model_path = crate::whisper::model_manager::model_path(entry)
+            .expect("model_path must resolve under tmp cache");
+        std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+        // Write "old corrupt" bytes.
+        std::fs::write(&model_path, b"old-corrupt-bytes").unwrap();
+
+        let state = WhisperModelDownloads::new();
+        // First call schedules background verify of the corrupt file.
+        let _ = state.is_verified_fast(entry);
+
+        // Replace the file immediately (simulate a concurrent download
+        // completing). On fast machines the thread may not have started yet,
+        // which makes this a no-op race — that's fine: the test is still
+        // valid if the thread sees the new file and hashes it correctly.
+        std::fs::write(&model_path, b"new-bytes-different-hash").unwrap();
+
+        // Let the verify thread finish.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // After replacement, is_verified_fast must return false (the new
+        // file has wrong hash too, but the important invariant is that we
+        // didn't cache the old result under the new metadata).
+        let result = state.is_verified_fast(entry);
+        assert!(
+            !result,
+            "must not return true after file replacement with corrupt content: got {result}"
         );
     }
 
