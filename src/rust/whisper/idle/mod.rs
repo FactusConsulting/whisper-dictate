@@ -60,6 +60,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+#[cfg(feature = "whisper-rs-local")]
 use crate::whisper::LocalWhisper;
 
 mod env;
@@ -241,6 +242,7 @@ impl<M: Send + 'static> IdleUnloadingModel<M> {
     }
 }
 
+#[cfg(feature = "whisper-rs-local")]
 impl IdleUnloadingModel<LocalWhisper> {
     /// Convenience constructor for the production wiring: pin `M` to
     /// [`LocalWhisper`] and build the loader from a model path.
