@@ -203,11 +203,7 @@ fn enumerate_all_hosts() -> Vec<DeviceInfo> {
 /// `max(reported index) + 1` so synthetic indices never collide with the
 /// default host's cpal-native indices even when the native range is sparse.
 pub(crate) fn next_synthetic_from(devices: &[DeviceInfo]) -> usize {
-    devices
-        .iter()
-        .map(|d| d.index)
-        .max()
-        .map_or(0, |m| m + 1)
+    devices.iter().map(|d| d.index).max().map_or(0, |m| m + 1)
 }
 
 /// Look up the default input device's index inside the host's `input_devices()`
