@@ -116,7 +116,7 @@ tempfile = { version = "3.14", optional = true }
 # up; this is a workaround for a vad-rs version-range gap and should drop
 # out when vad-rs publishes against a newer ort. The dep itself is unused
 # by our code — we depend on it only for the version pin.
-ort-sys = { version = "=2.0.0-rc.9", optional = true }
+ort-sys = { version = "=2.0.0-rc.12", optional = true }
 
 # --- rust-hotkeys feature dep (OPTIONAL; not pulled in for default builds)
 # rdev: cross-platform global key event listener (X11 / Windows / macOS via the
