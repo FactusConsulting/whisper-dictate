@@ -141,6 +141,11 @@ pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceI
 /// merge them into a single list de-duplicated by name. The default host's
 /// entries keep their cpal-native indices so the capture path's numeric-index
 /// selector still resolves the same physical device.
+///
+/// When `VOICEPI_AUDIO_BACKEND=rust` the Rust capture path calls
+/// `cpal::default_host()` and cannot open devices from other hosts. In that
+/// configuration only the default host's devices are returned so the picker
+/// never advertises a mic that capture would fail to open.
 fn enumerate_all_hosts() -> Vec<DeviceInfo> {
     let default_host = cpal::default_host();
     let default_host_id = default_host.id();
@@ -157,13 +162,18 @@ fn enumerate_all_hosts() -> Vec<DeviceInfo> {
         &mut seen_names,
     );
 
-    // After the default host comes everything else cpal knows about, in
-    // ALL_HOSTS order. Non-default-host devices keep their cpal-native index
-    // (within that host's enumeration) BUT they live in a different host's
-    // index space than the capture path uses — see [`DeviceInfo::index`].
-    // They are still useful for name-based selection (the picker's primary
-    // matching mode), which is exactly what the Python multi-host enumeration
-    // provides on non-Windows.
+    // When Rust capture is active it uses cpal::default_host() and cannot
+    // resolve non-default-host devices, so skip them entirely.
+    let rust_capture = std::env::var("VOICEPI_AUDIO_BACKEND")
+        .ok()
+        .map(|v| v.trim().eq_ignore_ascii_case("rust"))
+        .unwrap_or(false);
+    if rust_capture {
+        return out;
+    }
+
+    // Non-default-host devices are useful for name-based selection so a saved
+    // mic exposed only via JACK/ASIO still shows up in the picker.
     for host_id in cpal::available_hosts() {
         if host_id == default_host_id {
             continue;
@@ -171,9 +181,11 @@ fn enumerate_all_hosts() -> Vec<DeviceInfo> {
         let Ok(host) = cpal::host_from_id(host_id) else {
             continue;
         };
-        // Use the next-free index for non-default-host entries so they don't
-        // collide with the default host's cpal-native indices.
-        let mut next_synthetic = out.len();
+        // Synthetic index starts AFTER the highest cpal-native index already
+        // in `out`, not just after `out.len()`. The default host may have gaps
+        // (blank-name or zero-channel devices were skipped) so `out.len()` can
+        // be lower than the max native index and cause a collision.
+        let mut next_synthetic = next_synthetic_from(&out);
         append_host_devices(
             &host,
             /*default_input_index=*/ None,
@@ -185,6 +197,17 @@ fn enumerate_all_hosts() -> Vec<DeviceInfo> {
     }
 
     out
+}
+
+/// Returns the first synthetic index to use for non-default-host devices:
+/// `max(reported index) + 1` so synthetic indices never collide with the
+/// default host's cpal-native indices even when the native range is sparse.
+pub(crate) fn next_synthetic_from(devices: &[DeviceInfo]) -> usize {
+    devices
+        .iter()
+        .map(|d| d.index)
+        .max()
+        .map_or(0, |m| m + 1)
 }
 
 /// Look up the default input device's index inside the host's `input_devices()`
@@ -532,5 +555,27 @@ mod tests {
             DevicesRequest::Find { query } => assert_eq!(query, "jabra"),
             other => panic!("expected Find, got {other:?}"),
         }
+    }
+
+    // ----- finding #3: synthetic index based on max reported index -----------
+
+    #[test]
+    fn next_synthetic_from_empty_is_zero() {
+        assert_eq!(next_synthetic_from(&[]), 0);
+    }
+
+    #[test]
+    fn next_synthetic_from_contiguous() {
+        let devs = vec![make(0, "A", false), make(1, "B", false), make(2, "C", true)];
+        assert_eq!(next_synthetic_from(&devs), 3);
+    }
+
+    #[test]
+    fn next_synthetic_from_sparse_default_host_indices() {
+        // cpal indices 0 and 5 with a gap (1..4 were blank/zero-channel and
+        // skipped). out.len() == 2 but max index == 5; the first synthetic
+        // index must be 6, not 2, to avoid colliding with native index 5.
+        let devs = vec![make(0, "Mic A", false), make(5, "Mic B", true)];
+        assert_eq!(next_synthetic_from(&devs), 6);
     }
 }

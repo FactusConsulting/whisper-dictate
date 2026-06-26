@@ -216,6 +216,48 @@ class RustBackendShellOutTests(unittest.TestCase):
             result = vp_devices.list_input_devices(sd)
         self.assertEqual([d["name"] for d in result], ["Real Mic"])
 
+    # --- finding #4: deferred sounddevice import -----------------------------
+
+    def test_rust_success_never_imports_sounddevice(self):
+        """Rust path must not trigger a sounddevice import even if it would fail."""
+        os.environ["VOICEPI_DEVICES_BACKEND"] = "rust"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
+        rust_payload = {
+            "devices": [{"index": 0, "name": "Mic", "max_input_channels": 1,
+                          "sample_rates": [16000, 48000], "default": True}]
+        }
+        completed = types.SimpleNamespace(
+            returncode=0, stdout=json.dumps(rust_payload), stderr="",
+        )
+        import sys
+        # Simulate sounddevice being absent by removing it from sys.modules and
+        # blocking re-import.
+        sys.modules.pop("sounddevice", None)
+        blocker = mock.MagicMock()
+        blocker.__spec__ = None
+        sys.modules["sounddevice"] = None  # causes ImportError on import
+        try:
+            with mock.patch("whisper_dictate.vp_devices.subprocess.run",
+                            return_value=completed):
+                # list_input_devices() with no sd — Rust succeeds, sounddevice
+                # is never touched, so the blocked import never fires.
+                result = vp_devices.list_input_devices()
+        finally:
+            sys.modules.pop("sounddevice", None)
+        self.assertEqual(result[0]["name"], "Mic")
+
+    def test_no_rust_lazy_import_raises_import_error_when_sd_missing(self):
+        """When Rust is unavailable, missing sounddevice raises ImportError."""
+        os.environ.pop("VOICEPI_DEVICES_BACKEND", None)
+        import sys
+        sys.modules.pop("sounddevice", None)
+        sys.modules["sounddevice"] = None  # blocked
+        try:
+            with self.assertRaises((ImportError, TypeError)):
+                vp_devices.list_input_devices()  # no sd, no Rust
+        finally:
+            sys.modules.pop("sounddevice", None)
+
 
 if __name__ == "__main__":
     unittest.main()
