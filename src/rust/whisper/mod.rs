@@ -11,11 +11,18 @@
 //!   whisper.cpp, so it is gated behind `whisper-rs-local`.
 //! - [`local`] — the [`LocalWhisper`] type wrapping `whisper-rs`. Also
 //!   feature-gated since it links whisper.cpp.
+//! - [`idle`] — `IdleUnloadingModel` library primitive (#325, Wave 7-A).
+//!   Wraps a loaded model behind a configurable idle timer + background
+//!   watcher. Compiled unconditionally so the lifecycle state machine is
+//!   unit-tested on every CI run against a fake model. Awaits in-process
+//!   runtime wiring (wave 8) — has no runtime effect under today's
+//!   subprocess-per-utterance dispatcher.
 //!
 //! The split keeps the cache/download machinery independent of the heavy
 //! whisper.cpp dep, so a stock `cargo build` still ships the UI and CLI
 //! affordances even without CMake / a C++ toolchain on the build host.
 
+pub mod idle;
 pub mod model_manager;
 pub mod models_cli;
 
@@ -23,6 +30,8 @@ pub mod models_cli;
 pub mod dispatch;
 #[cfg(feature = "whisper-rs-local")]
 mod local;
+
+pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV};
 
 #[cfg(feature = "whisper-rs-local")]
 pub use dispatch::{handle_transcribe_wav, MODEL_PATH_ENV};
