@@ -30,7 +30,10 @@ pub const CEILING_MS: u64 = 30_000;
 pub fn effective_timeout_ms(base_ms: u64, text_chars: i64) -> u64 {
     let chars = u64::try_from(text_chars.max(0)).unwrap_or(0);
     let scaled = base_ms.saturating_add(chars.saturating_mul(PER_CHAR_MS));
-    scaled.clamp(base_ms, CEILING_MS)
+    // Cap the floor at CEILING_MS so that a user-supplied base_ms above the
+    // ceiling does not produce a clamp(min > max) panic.
+    let floor = base_ms.min(CEILING_MS);
+    scaled.clamp(floor, CEILING_MS)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,6 +282,14 @@ mod tests {
         assert_eq!(effective_timeout_ms(4000, 1300), 30000);
         assert_eq!(effective_timeout_ms(4000, 100_000), 30000);
         assert_eq!(effective_timeout_ms(4000, -5), 4000);
+    }
+
+    #[test]
+    fn effective_timeout_caps_when_base_exceeds_ceiling() {
+        // base_ms > CEILING_MS must not panic and must return the ceiling.
+        assert_eq!(effective_timeout_ms(CEILING_MS + 1, 0), CEILING_MS);
+        assert_eq!(effective_timeout_ms(60_000, 0), CEILING_MS);
+        assert_eq!(effective_timeout_ms(u64::MAX / 2, 0), CEILING_MS);
     }
 
     #[test]

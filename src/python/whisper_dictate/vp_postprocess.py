@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -405,17 +406,17 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
             shell=False,
         )
     except Exception as exc:  # noqa: BLE001 - helper failures must not break post-processing
-        print(f"[rust:postprocess] {exc}", flush=True)
+        print(f"[rust:postprocess] {exc}", file=sys.stderr, flush=True)
         return None
     if result.returncode != 0:
         err = (result.stderr or "").strip()
         if err:
-            print(f"[rust:postprocess] {err}", flush=True)
+            print(f"[rust:postprocess] {err}", file=sys.stderr, flush=True)
         return None
     try:
         obj = json.loads(result.stdout or "{}")
     except Exception as exc:  # noqa: BLE001 - bad JSON is a helper bug, fall back
-        print(f"[rust:postprocess] invalid JSON: {exc}", flush=True)
+        print(f"[rust:postprocess] invalid JSON: {exc}", file=sys.stderr, flush=True)
         return None
     if not isinstance(obj, dict):
         return None

@@ -107,7 +107,13 @@ pub(crate) fn cap_transcription_prompt<'a>(prompt: &'a str, base_url: &str) -> &
     {
         return prompt;
     }
-    prompt[..GROQ_TRANSCRIPTION_PROMPT_LIMIT].trim_end()
+    // Walk backward from the byte limit to the nearest char boundary so we
+    // never split a multi-byte UTF-8 sequence.
+    let end = (0..=GROQ_TRANSCRIPTION_PROMPT_LIMIT.min(prompt.len()))
+        .rev()
+        .find(|&i| prompt.is_char_boundary(i))
+        .unwrap_or(0);
+    prompt[..end].trim_end()
 }
 
 fn multipart_audio_body(fields: &[(&str, String)], audio_wav: &[u8]) -> (Vec<u8>, String) {
@@ -174,5 +180,21 @@ mod tests {
             cap_transcription_prompt(&prompt, "https://api.openai.com/v1").len(),
             GROQ_TRANSCRIPTION_PROMPT_LIMIT + 20
         );
+    }
+
+    #[test]
+    fn groq_cap_does_not_split_multibyte_chars() {
+        // Build a prompt where the limit byte lands inside a 3-byte UTF-8
+        // sequence (U+4E2D "中" = 0xE4 0xB8 0xAD). Fill with ASCII up to
+        // LIMIT-2, then append "中" so bytes LIMIT-2..LIMIT+1 form the
+        // codepoint. The cap must step back to LIMIT-2, not panic.
+        let ascii_part = "a".repeat(GROQ_TRANSCRIPTION_PROMPT_LIMIT - 2);
+        let prompt = format!("{ascii_part}中中中");
+        assert!(prompt.len() > GROQ_TRANSCRIPTION_PROMPT_LIMIT);
+
+        let capped = cap_transcription_prompt(&prompt, "https://api.groq.com/openai/v1");
+        // Result must be valid UTF-8 and at most LIMIT bytes.
+        assert!(capped.len() <= GROQ_TRANSCRIPTION_PROMPT_LIMIT);
+        assert!(std::str::from_utf8(capped.as_bytes()).is_ok());
     }
 }

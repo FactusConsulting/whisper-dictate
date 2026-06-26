@@ -5,6 +5,7 @@
 //! HTTP servers and so the rest of [`crate::postprocess`] stays under the
 //! 500-LOC ceiling.
 
+use caseless::Caseless;
 use regex::{Regex, RegexBuilder};
 use std::sync::OnceLock;
 
@@ -76,7 +77,9 @@ fn collapse_whitespace(text: &str) -> String {
             last_was_space = false;
         }
     }
-    out.trim().to_lowercase()
+    // Use Unicode default case folding (mirrors Python str.casefold()) so that
+    // characters like German ß → "ss" and Turkish İ → "i" compare correctly.
+    out.trim().chars().default_case_fold().collect()
 }
 
 /// Pull the "final" rewrite out of a model response that echoed the original
@@ -168,5 +171,22 @@ mod tests {
     fn extract_final_text_returns_empty_when_inputs_are_empty() {
         assert_eq!(extract_final_text("", "source"), "");
         assert_eq!(extract_final_text("output", ""), "output");
+    }
+
+    #[test]
+    fn extract_final_text_handles_unicode_case_folding() {
+        // German ß case-folds to "ss" — source and prefix must still match.
+        let source = "Straße";
+        let rewritten = "Strasse";
+        let output = format!("{source}\n\nbecomes\n\n{rewritten}");
+        assert_eq!(extract_final_text(&output, source), rewritten);
+
+        // Turkish dotless i: lower-case İ case-folds to "i\u{307}" which
+        // differs from ASCII 'i'. Both sides go through collapse_whitespace so
+        // the comparison stays symmetric.
+        let source2 = "İstanbul";
+        let rewritten2 = "Istanbul";
+        let output2 = format!("{source2}\n\nbecomes\n\n{rewritten2}");
+        assert_eq!(extract_final_text(&output2, source2), rewritten2);
     }
 }
