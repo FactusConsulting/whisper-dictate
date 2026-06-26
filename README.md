@@ -177,20 +177,27 @@ injection).
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
 > loading a `.gguf` file is rejected up front with a clean error.
 
-#### Idle model unload
+#### Idle model unload (library primitive — not yet active)
 
 A loaded GGML model holds 1-2 GB resident (≈75 MB for `tiny`, ~1.5 GB
-for `medium`). Set **`VOICEPI_WHISPER_IDLE_UNLOAD_S`** to drop the model
-from RAM after `N` seconds of inactivity; the next dictation
-transparently reloads from disk (a one-shot cost paid only after the
-idle window has elapsed). Recommended values: `30`, `300`, `1800`,
-`3600`. Set to `0` (or unset the variable) to keep the model resident
-forever — that is the default and matches historical behaviour
-byte-for-byte. Negative or non-numeric values are rejected so a typo in
-the wrapper that sets the variable surfaces loudly rather than silently
-falling back to "never". Wired through the library primitive
-`whisper::IdleUnloadingModel`; in-process wiring lands with the
-runtime-side worker port.
+for `medium`). The library primitive `whisper::IdleUnloadingModel`
+wraps a loaded model behind a background watcher that drops it after a
+configurable idle window; the next transcribe call transparently
+reloads from disk. The intended knob is
+**`VOICEPI_WHISPER_IDLE_UNLOAD_S`** (seconds; `0` or unset = never
+unload; recommended values once wired: `30`, `300`, `1800`, `3600`;
+negative, non-numeric, or non-UTF-8 values are rejected so a typo in
+the wrapper that sets the variable surfaces loudly rather than
+silently falling back to "never").
+
+**Status: the wrapper is landed but not yet wired into the active
+transcribe path.** Today's `VOICEPI_TRANSCRIBE_BACKEND=rust` dispatcher
+spawns a fresh `whisper-dictate transcribe-wav` subprocess per
+utterance (so the model never lives between calls regardless of this
+setting). Setting `VOICEPI_WHISPER_IDLE_UNLOAD_S` has no runtime
+effect until the future in-process worker port consumes
+`IdleUnloadingModel`; until then this section documents the contract
+that worker will honour, not behaviour you can opt into yet.
 
 Enabling the feature pulls in whisper.cpp and compiles it from source,
 *and* runs `bindgen` against whisper.cpp's headers — so the build host
