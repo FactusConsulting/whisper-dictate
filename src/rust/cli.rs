@@ -27,6 +27,26 @@ pub enum Command {
     },
     /// Check runtime dependencies and platform readiness.
     Doctor,
+    /// Run the golden benchmark corpus through the configured backend and
+    /// print a one-line `[benchmark] ...` summary. Same code path as the
+    /// "Run benchmark" button — the corpus is resolved relative to the app
+    /// root (or per-user appdata) and the configured backend is used.
+    #[command(alias = "benchmark")]
+    Bench,
+    /// Record reference audio for a golden-corpus item from the configured
+    /// microphone and save it to `<appdata>/benchmark/audio/<id>.wav`.
+    /// `id` must match `[A-Za-z0-9._-]+` (the same filename-stem allowlist the
+    /// UI picker enforces).
+    CorpusRecord {
+        /// Corpus item id (filename stem under `<appdata>/benchmark/audio/`).
+        ///
+        /// `allow_hyphen_values` is required so clap accepts manifest ids that
+        /// happen to start with `-` (e.g. `-sample`). The full allowlist is
+        /// then enforced by `corpus_record::is_safe_corpus_id` BEFORE shelling
+        /// out — defence in depth on top of the worker's own guard.
+        #[arg(allow_hyphen_values = true)]
+        id: String,
+    },
     /// Install or repair local runtime dependencies.
     Install,
     /// Run the Ubuntu Wayland desktop setup helper.
@@ -505,5 +525,46 @@ mod tests {
     fn parses_devices_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "devices"]);
         assert_eq!(cli.command, Some(Command::Devices));
+    }
+
+    #[test]
+    fn parses_bench_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "bench"]);
+        assert_eq!(cli.command, Some(Command::Bench));
+    }
+
+    #[test]
+    fn parses_benchmark_alias_subcommand() {
+        // `benchmark` is exposed as an alias of `bench` so users (and the
+        // older docs) can spell it out without the parser tripping.
+        let cli = Cli::parse_from(["whisper-dictate", "benchmark"]);
+        assert_eq!(cli.command, Some(Command::Bench));
+    }
+
+    #[test]
+    fn parses_corpus_record_subcommand() {
+        let cli = Cli::parse_from(["whisper-dictate", "corpus-record", "da-001"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::CorpusRecord {
+                id: "da-001".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn corpus_record_accepts_hyphen_leading_id() {
+        // Regression for the Codex P3 finding on PR #360: a manifest item whose
+        // safe id starts with `-` (e.g. `-sample`) must reach the validator
+        // rather than getting rejected by clap as a stray flag. The full
+        // `[A-Za-z0-9._-]+` allowlist is then enforced by
+        // `corpus_record::is_safe_corpus_id` BEFORE shelling out.
+        let cli = Cli::parse_from(["whisper-dictate", "corpus-record", "-sample"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::CorpusRecord {
+                id: "-sample".to_owned(),
+            })
+        );
     }
 }

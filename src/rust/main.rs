@@ -4,8 +4,9 @@ use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command};
 use whisper_dictate_app::{
-    cloud_api, command_hook, config, dictate, dictionary, formatting, health, injection,
-    model_capacity, postprocess, privacy, profiles, redaction, runtime, telemetry, ui,
+    benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, formatting,
+    health, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
+    telemetry, ui,
 };
 
 fn main() {
@@ -26,6 +27,8 @@ fn run() -> anyhow::Result<()> {
         Command::Ui | Command::Settings => ui::run(),
         Command::Run { args } => runtime::run_terminal(args),
         Command::Doctor => runtime::doctor(),
+        Command::Bench => benchmark::handle_bench(),
+        Command::CorpusRecord { id } => corpus_record::handle_corpus_record(&id),
         Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
         Command::ModelCapacity { json } => model_capacity::handle_command(json),

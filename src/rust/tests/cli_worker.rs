@@ -270,6 +270,62 @@ fn worker_failure_does_not_print_rust_backtrace() {
     assert!(!stderr.contains("Stack backtrace"));
 }
 
+#[test]
+fn foreground_worker_inherits_utf8_stdio_envs() {
+    // Regression for the Codex P2 finding on PR #360: the foreground worker
+    // path (`run_foreground`) must apply the same `PYTHONUTF8=1` /
+    // `PYTHONIOENCODING=utf-8` envs that the captured / supervised paths set,
+    // so commands like `whisper-dictate bench > out.txt` or
+    // `whisper-dictate corpus-record <id>` do not mojibake the Danish corpus
+    // text or `ensure_ascii=False` JSONL when the inherited console code page
+    // is non-UTF-8 (Windows cp1252 / Shift-JIS / ...).
+    //
+    // Drives `doctor` (which goes through `run_foreground`) against a fake
+    // Python worker that prints the two env vars; the assertion is the
+    // foreground child saw the UTF-8 envs in its environment.
+    let Some(python) = test_python() else {
+        eprintln!("skipping: no Python launcher found on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir
+        .path()
+        .join("src")
+        .join("python")
+        .join("whisper_dictate");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    let worker = package.join("runtime.py");
+    fs::write(
+        &worker,
+        "import os, sys\n\
+         print(os.environ.get('PYTHONUTF8', '<unset>'))\n\
+         print(os.environ.get('PYTHONIOENCODING', '<unset>'))\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("doctor")
+        .env("VOICEPI_APP_ROOT", dir.path())
+        .env("VOICEPI_PYTHON", python)
+        .env_remove("PYTHONUTF8")
+        .env_remove("PYTHONIOENCODING")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "doctor failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.first().copied(), Some("1"), "stdout: {stdout}");
+    assert_eq!(lines.get(1).copied(), Some("utf-8"), "stdout: {stdout}");
+}
+
 fn command_with_stdin(args: &[&str], stdin: &str) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .args(args)
