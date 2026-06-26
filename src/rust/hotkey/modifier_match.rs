@@ -40,7 +40,9 @@ pub fn modifier_family(name: &str) -> Option<&'static str> {
     match name {
         "ctrl" | "ctrl_l" | "ctrl_r" => Some("ctrl"),
         "shift" | "shift_l" | "shift_r" => Some("shift"),
-        "alt" | "alt_l" | "alt_r" | "alt_gr" => Some("alt"),
+        // `right_alt` / `ralt` are accepted aliases for `alt_gr` / `alt_r`
+        // (P2 #346 finding 4): some users and documentation use these names.
+        "alt" | "alt_l" | "alt_r" | "alt_gr" | "right_alt" | "ralt" => Some("alt"),
         "cmd" | "cmd_l" | "cmd_r" => Some("cmd"),
         _ => None,
     }
@@ -52,12 +54,13 @@ fn is_generic_modifier(name: &str) -> bool {
     matches!(name, "ctrl" | "shift" | "alt" | "cmd")
 }
 
-/// `alt_gr` and `alt_r` are the same physical key on every supported layout;
-/// canonicalise both spellings to `alt_r` for side comparisons so a binding
-/// captured as one matches a press delivered as the other.
+/// `alt_gr`, `right_alt`, and `ralt` are all the same physical key on every
+/// supported layout; canonicalise every alias to `alt_r` for side comparisons
+/// so a binding captured as one form matches a press delivered as another
+/// (P2 #346 finding 4).
 pub fn canonical_side(name: &str) -> &str {
     match name {
-        "alt_gr" => "alt_r",
+        "alt_gr" | "right_alt" | "ralt" => "alt_r",
         other => other,
     }
 }
@@ -261,5 +264,40 @@ mod tests {
         assert_eq!(modifier_family("shift"), Some("shift"));
         assert_eq!(modifier_family("f9"), None);
         assert_eq!(modifier_family("a"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // P2 #346 finding 4: right_alt / ralt aliases.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn right_alt_ralt_are_same_family_as_alt() {
+        assert_eq!(modifier_family("right_alt"), Some("alt"));
+        assert_eq!(modifier_family("ralt"), Some("alt"));
+    }
+
+    #[test]
+    fn right_alt_ralt_canonical_side_is_alt_r() {
+        assert_eq!(canonical_side("right_alt"), "alt_r");
+        assert_eq!(canonical_side("ralt"), "alt_r");
+        // Existing alt_gr still maps correctly.
+        assert_eq!(canonical_side("alt_gr"), "alt_r");
+    }
+
+    #[test]
+    fn right_alt_matches_alt_gr_target_and_vice_versa() {
+        // A press reported as "right_alt" must satisfy an "alt_gr" binding
+        // (and vice versa) since they are the same physical key.
+        assert!(modifier_matches("right_alt", "alt_gr"));
+        assert!(modifier_matches("alt_gr", "right_alt"));
+        assert!(modifier_matches("ralt", "alt_gr"));
+        assert!(modifier_matches("right_alt", "ralt"));
+    }
+
+    #[test]
+    fn right_alt_does_not_satisfy_alt_l_target() {
+        // right_alt / ralt are right-side only; left-Alt binding must not fire.
+        assert!(!modifier_matches("right_alt", "alt_l"));
+        assert!(!modifier_matches("ralt", "alt_l"));
     }
 }

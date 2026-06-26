@@ -276,6 +276,35 @@ impl HotkeyHandle {
         self.coordinator.send(event);
     }
 
+    /// Suspend key tracking: unregister the PTT binding from the manager and
+    /// send [`coordinator::CoordinatorEvent::Cancel`] to the coordinator so
+    /// any in-flight [`coordinator::Stage::Recording`] is reset to Idle.
+    ///
+    /// Call this in `RuntimeSupervisor::stop()` so PTT presses while the
+    /// runtime is down do not accumulate stale state. A coordinator stuck in
+    /// [`coordinator::Stage::Processing`] (transcription was in-flight when
+    /// stop fired) is not fully reset by Cancel — it transitions to Idle on
+    /// the next [`coordinator::CoordinatorEvent::ProcessingFinished`]. That is
+    /// acceptable because Python stays enabled for actual recording lifecycle
+    /// (Fix 1, PR #373) so correctness is unaffected.
+    pub fn suspend(&self) {
+        let _ = self.manager.unregister();
+        self.coordinator.send(CoordinatorEvent::Cancel);
+    }
+
+    /// Resume key tracking with the given PTT key names. Call this in
+    /// `RuntimeSupervisor::start()` after a prior `suspend()` so the manager
+    /// resumes emitting tracker outputs for the (possibly updated) PTT chord.
+    ///
+    /// If `register` fails (manager thread gone), the error is logged and
+    /// the previous (empty) tracker stays in place; PTT will be silent until
+    /// the next successful resume.
+    pub fn resume(&self, key_names: Vec<String>) {
+        if let Err(err) = self.manager.register(key_names) {
+            eprintln!("[hotkey] failed to re-register hotkey binding on resume: {err}");
+        }
+    }
+
     /// Tear the subsystem down cleanly. Idempotent.
     pub fn shutdown(mut self) {
         self.shutdown_inner();
@@ -305,6 +334,10 @@ impl Drop for HotkeyHandle {
 impl HotkeyHandle {
     /// No-op: the stub handle cannot have anything to shut down.
     pub fn shutdown(self) {}
+    /// No-op: stub build has no manager to suspend.
+    pub fn suspend(&self) {}
+    /// No-op: stub build has no manager to resume.
+    pub fn resume(&self, _key_names: Vec<String>) {}
 }
 
 /// Has the user requested the Rust hotkey backend via env var? Pure helper
@@ -448,5 +481,75 @@ mod env_tests {
             Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
             None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
         }
+    }
+
+    /// `rust_hotkey_backend_available` reflects the feature gate, not an env
+    /// var, so it is constant per binary build. On a stock build it must
+    /// always be false; on a `rust-hotkeys` build it must always be true.
+    #[test]
+    fn backend_available_reflects_feature_gate() {
+        // This assertion is always true by the cfg definition:
+        assert_eq!(
+            rust_hotkey_backend_available(),
+            cfg!(feature = "rust-hotkeys"),
+            "backend_available must equal the rust-hotkeys feature flag"
+        );
+    }
+
+    /// When the user sets `VOICEPI_HOTKEY_BACKEND=rust` but the binary was
+    /// built without `--features rust-hotkeys`, `backend_available` must be
+    /// false (the env var controls `requested`, not `available`).
+    #[test]
+    #[cfg(not(feature = "rust-hotkeys"))]
+    fn backend_available_is_false_on_stock_build_regardless_of_env() {
+        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
+
+        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "rust");
+        assert!(
+            !rust_hotkey_backend_available(),
+            "backend_available must be false on a stock build even when env var is set"
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
+            None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // HotkeyConfig constructor and stub install_hotkey (non-feature builds).
+    // -----------------------------------------------------------------------
+
+    /// `HotkeyConfig::hold_to_talk` is the primary public constructor; verify
+    /// that it populates both fields correctly. This test runs on all build
+    /// configurations (the constructor is not feature-gated).
+    #[test]
+    fn hold_to_talk_constructor_sets_key_names_and_mode() {
+        let keys = vec!["ctrl_l".to_owned(), "f9".to_owned()];
+        let cfg = HotkeyConfig::hold_to_talk(keys.clone());
+        assert_eq!(cfg.key_names, keys);
+        assert!(
+            matches!(cfg.mode, coordinator::Mode::HoldToTalk),
+            "hold_to_talk constructor must set Mode::HoldToTalk"
+        );
+    }
+
+    /// On a stock build (no `rust-hotkeys` feature) `install_hotkey` must
+    /// immediately return `InstallError::Unsupported` so the supervisor can
+    /// log a one-line warning and keep the pynput path active. No threads
+    /// are spawned and no OS resources are acquired.
+    #[test]
+    #[cfg(not(feature = "rust-hotkeys"))]
+    fn install_hotkey_stub_returns_unsupported_error() {
+        let cfg = HotkeyConfig::hold_to_talk(vec!["ctrl_l".to_owned()]);
+        let err = match install_hotkey(cfg, |_| {}) {
+            Ok(_) => panic!("stub install_hotkey must never return Ok"),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(err, InstallError::Unsupported),
+            "stock build must return InstallError::Unsupported, got: {err}"
+        );
     }
 }

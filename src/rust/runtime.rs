@@ -381,6 +381,19 @@ pub struct RuntimeSupervisor {
     /// `start()` on the next run.
     #[cfg(feature = "audio-in-rust")]
     bridge_cancel: Arc<AtomicBool>,
+    /// Live Rust hotkey handle, installed the first time `start()` is called
+    /// when `VOICEPI_HOTKEY_BACKEND=rust` is set AND the binary was built
+    /// with the `rust-hotkeys` feature. `None` when the backend is not
+    /// requested or the install failed (supervisor stays on pynput then).
+    ///
+    /// Only installed once per process lifetime: the rdev listener thread
+    /// cannot be cleanly stopped, so subsequent `restart()` calls reuse the
+    /// existing handle. The coordinator retains its state machine across
+    /// restarts — that is fine because the coordinator only cares about
+    /// key-press events, not about which Python worker run they arrive in.
+    ///
+    /// P2 #346 finding 1.
+    hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -404,6 +417,7 @@ impl RuntimeSupervisor {
             bridge_terminal: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "audio-in-rust")]
             bridge_cancel: Arc::new(AtomicBool::new(false)),
+            hotkey_handle: None,
         }
     }
 
@@ -463,6 +477,38 @@ impl RuntimeSupervisor {
                 .args
                 .push("--audio-source=rust-stdin".to_owned());
         }
+
+        // P2 #346 finding 1 / P1 #373: wire the Rust hotkey installer on the
+        // first start() call when the user has opted in via
+        // `VOICEPI_HOTKEY_BACKEND=rust`. Only installed once — the rdev
+        // listener thread cannot be cleanly stopped so subsequent restart()
+        // calls reuse the existing handle.
+        //
+        // Python stays enabled regardless of whether the Rust coordinator
+        // installs successfully: the coordinator today only logs actions
+        // ([hotkey] lines) and no IPC drives the worker's actual recording
+        // lifecycle. Disabling Python before that IPC is wired would leave
+        // PTT completely silent. Follow-up work will wire the IPC and THEN
+        // gate disable_python_hotkey on a live action-sink connection.
+        if self.hotkey_handle.is_none() {
+            if let Some(handle) =
+                install_rust_hotkey_from_command(&effective_command, self.tx.clone())
+            {
+                self.hotkey_handle = Some(handle);
+            }
+        } else if let Some(handle) = self.hotkey_handle.as_ref() {
+            // Fix 3 (#373): Resume the manager with the (possibly new) PTT
+            // key names so a changed binding takes effect without restarting
+            // the whole process. The coordinator mode (hold-to-talk vs.
+            // toggle) is fixed at install time; mode changes require an app
+            // restart. Python handles the recording lifecycle so correctness
+            // is unaffected by this limitation.
+            let key_names = extract_hotkey_key_names(&effective_command);
+            if !key_names.is_empty() {
+                handle.resume(key_names);
+            }
+        }
+
         let display = effective_command.display();
         let mut process = Command::new(&effective_command.program);
         process
@@ -739,6 +785,18 @@ impl RuntimeSupervisor {
             if let Some(mut bridge) = self.audio_bridge.lock().ok().and_then(|mut s| s.take()) {
                 bridge.stop();
             }
+        }
+
+        // Fix 4 (#373): suspend Rust hotkey tracking while the worker is
+        // down so PTT presses during a stopped period don't leave the
+        // coordinator in Recording state at the next start(). The manager
+        // unregisters its binding so no tracker outputs flow; Cancel resets
+        // Recording → Idle. A coordinator stuck in Processing (transcription
+        // was in-flight at stop) remains there until the next
+        // ProcessingFinished — that is acceptable because Python handles
+        // actual recording so correctness is unaffected.
+        if let Some(handle) = self.hotkey_handle.as_ref() {
+            handle.suspend();
         }
 
         let Some(mut child) = self.child.take() else {
@@ -1152,6 +1210,38 @@ pub fn worker_command_with_args(
     }
 }
 
+/// Parse a `VOICEPI_TOGGLE` env-var value to a boolean. Accepts the same
+/// set of truthy strings that the Python config layer and shell tooling use:
+/// `"true"`, `"1"`, `"yes"`, `"on"` — all case-insensitive. Returns `false`
+/// for any other value, including empty string.
+///
+/// Extracted as a standalone helper so it can be unit-tested independently
+/// of the full command-build pipeline (Codex P2 finding, PR #373).
+pub(crate) fn parse_toggle_value(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes" | "on"
+    )
+}
+
+/// Extract PTT key names from a [`WorkerCommand`]'s environment: split
+/// `VOICEPI_KEY` on `+`, trim whitespace, drop empty segments. Returns an
+/// empty `Vec` when the env var is absent or blank — callers use this as a
+/// "no hotkey configured" sentinel.
+pub(crate) fn extract_hotkey_key_names(command: &WorkerCommand) -> Vec<String> {
+    command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_KEY")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("")
+        .split('+')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Set the `VOICEPI_PYTHON_HOTKEY=0` env var on `command` so the spawned
 /// Python worker's `KeyBackendMixin.run` parks itself instead of installing
 /// pynput/evdev. The supervisor MUST only call this after it has
@@ -1199,17 +1289,20 @@ pub fn rust_hotkey_backend_active() -> bool {
 ///
 /// Returns `Some(handle)` ONLY when the env var was set, the feature is
 /// compiled in, AND every layer (target validation, listener startup,
-/// register) succeeded — the caller can then safely call
-/// [`disable_python_hotkey`] on its worker command to park the Python
-/// listener. Returns `None` (and logs a one-line warning when there's
-/// something to warn about) in every other case: the supervisor MUST
-/// leave the Python listener wired in that case, otherwise PTT is dead.
+/// register) succeeded. Returns `None` (and logs a one-line warning when
+/// there's something to warn about) in every other case.
+///
+/// **Python is NOT disabled** even on a successful install. The coordinator
+/// today only logs coordinator actions ([`crate::hotkey::coordinator::CoordinatorAction`]
+/// as `[hotkey]` lines); no IPC yet drives the worker's actual recording
+/// lifecycle. Disabling Python before that IPC is wired would leave PTT
+/// completely silent. Follow-up work will wire the IPC and then add the
+/// disable step. Until then both backends run side-by-side (PR #373 Fix 1).
 ///
 /// `action_sink` is invoked on the coordinator thread for every
 /// [`crate::hotkey::coordinator::CoordinatorAction`] the state machine
 /// emits; the caller is responsible for translating those into worker
-/// start / stop commands (today: by sending a stdin line or signalling
-/// the already-running worker, depending on the host).
+/// start / stop commands (today: logging only — see above).
 ///
 /// The caller MUST send
 /// [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`]
@@ -1261,6 +1354,58 @@ where
             None
         }
     }
+}
+
+/// Extract the PTT key names and toggle mode from a [`WorkerCommand`]'s
+/// environment, then call [`maybe_install_rust_hotkey`] with a logging
+/// action sink. Returns the live handle on success so the caller can call
+/// [`disable_python_hotkey`]; returns `None` when the backend is not
+/// requested, not available, or the key config is missing / empty.
+///
+/// The action sink logs each [`crate::hotkey::coordinator::CoordinatorAction`]
+/// as a `[hotkey]`-prefixed `RuntimeEvent::Stderr` line. Full IPC integration
+/// with the Python worker (start/stop recording signals) is planned as
+/// follow-up work; for now the coordinator state machine runs and the key
+/// presses are tracked even though the Python worker still manages its own
+/// recording lifecycle.
+///
+/// P2 #346 finding 1.
+fn install_rust_hotkey_from_command(
+    command: &WorkerCommand,
+    tx: std::sync::mpsc::Sender<RuntimeEvent>,
+) -> Option<crate::hotkey::HotkeyHandle> {
+    let key_names = extract_hotkey_key_names(command);
+    if key_names.is_empty() {
+        return None;
+    }
+    // P2 #373 finding 2: accept all truthy values (`true`, `1`, `yes`, `on`,
+    // case-insensitive) instead of only `"True"` and `"1"`.
+    let toggle = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_TOGGLE")
+        .map(|(_, v)| parse_toggle_value(v))
+        .unwrap_or(false);
+    let mode = if toggle {
+        crate::hotkey::coordinator::Mode::Toggle
+    } else {
+        crate::hotkey::coordinator::Mode::HoldToTalk
+    };
+    maybe_install_rust_hotkey(key_names, mode, move |action| {
+        use crate::hotkey::coordinator::CoordinatorAction;
+        let msg = match action {
+            CoordinatorAction::StartRecording(id) => {
+                format!("[hotkey] start_recording id={id}")
+            }
+            CoordinatorAction::StopAndTranscribe(id) => {
+                format!("[hotkey] stop_and_transcribe id={id}")
+            }
+            CoordinatorAction::CancelRecording(id) => {
+                format!("[hotkey] cancel_recording id={id}")
+            }
+        };
+        let _ = tx.send(RuntimeEvent::Stderr(msg));
+    })
 }
 
 pub fn default_worker_command() -> WorkerCommand {
@@ -1661,6 +1806,8 @@ mod audio_spawn_tests;
 mod bridge_terminal_tests;
 #[cfg(test)]
 mod desktop_entry_tests;
+#[cfg(test)]
+mod hotkey_supervisor_tests;
 #[cfg(test)]
 mod install_plan_tests;
 #[cfg(test)]

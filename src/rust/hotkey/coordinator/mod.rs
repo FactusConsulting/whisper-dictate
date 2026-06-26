@@ -299,10 +299,19 @@ pub(super) fn step(
             }
         }
         (CoordinatorEvent::Release, Stage::Processing(_)) => {
-            // User let go of the key during Processing. Clear any pending
-            // press so we don't auto-restart on Processing completion —
-            // the press they made earlier is no longer held.
-            state.pending_press = false;
+            // Hold-to-talk: user let go of the PTT key during Processing.
+            // Clear the pending latch — the held-press that triggered it
+            // is no longer in effect, so we must NOT auto-restart when
+            // ProcessingFinished arrives.
+            //
+            // Toggle mode: a key-up during Processing is the natural
+            // follow-through of a quick tap (press #N → stop, release of
+            // #N) and must NOT wipe a latch set by that same press. Clearing
+            // it here would silently drop the queued start that the user
+            // just requested (P2 #346 finding 5).
+            if !matches!(options.mode, Mode::Toggle) {
+                state.pending_press = false;
+            }
             None
         }
         (CoordinatorEvent::Release, Stage::Idle) => {
@@ -317,7 +326,11 @@ pub(super) fn step(
             Some(CoordinatorAction::CancelRecording(id))
         }
         (CoordinatorEvent::Cancel, _) => {
-            // Nothing to cancel in Idle / Processing.
+            // Nothing to cancel in Idle / Processing, but wipe the pending
+            // latch so a cancel that arrives while in Processing doesn't
+            // trigger a spurious restart when ProcessingFinished fires
+            // (P2 #346 finding 3).
+            state.pending_press = false;
             None
         }
         (CoordinatorEvent::ProcessingFinished(done_id), Stage::Processing(active_id)) => {

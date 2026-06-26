@@ -235,15 +235,18 @@ fn manager_loop(rx: Receiver<ManagerCommand>, tracker: Arc<Mutex<KeyTracker>>) {
 }
 
 /// Convert an `rdev::Event` into the platform-agnostic [`RawKeyEvent`] the
-/// tracker consumes. Returns `None` for events we don't care about (mouse,
-/// unhandled `Key::Unknown`).
+/// tracker consumes. Returns `None` only for non-keyboard events (mouse,
+/// etc.); unknown key variants get a synthetic `__rdev_<Debug>` name so the
+/// tracker can still detect foreign-key holds for bare-modifier rule 1/2
+/// (P2 #346 finding 2). PTT-target matching never collides with these names
+/// since every PTT-able name is in `key_to_name`.
 fn raw_from_rdev(event: &rdev::Event) -> Option<RawKeyEvent> {
     let (key, kind) = match event.event_type {
         rdev::EventType::KeyPress(k) => (k, RawKeyKind::Press),
         rdev::EventType::KeyRelease(k) => (k, RawKeyKind::Release),
         _ => return None,
     };
-    let name = key_to_name(key)?;
+    let name = key_to_name(key).unwrap_or_else(|| format!("__rdev_{key:?}"));
     Some(RawKeyEvent {
         name,
         kind,
@@ -256,9 +259,40 @@ fn raw_from_rdev(event: &rdev::Event) -> Option<RawKeyEvent> {
 /// [`is_rdev_supported_name`] for the install-time validator that rejects
 /// such bindings up front (P2 finding #6).
 const RDEV_SUPPORTED_NAMES: &[&str] = &[
-    "ctrl_l", "ctrl_r", "ctrl", "shift_l", "shift_r", "shift", "alt_l", "alt", "alt_gr", "cmd_l",
-    "cmd_r", "cmd", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-    "space", "esc", "tab", "enter",
+    "ctrl_l",
+    "ctrl_r",
+    "ctrl",
+    "shift_l",
+    "shift_r",
+    "shift",
+    "alt_l",
+    "alt",
+    "alt_gr",
+    // `right_alt` and `ralt` are accepted aliases for `alt_gr` / AltGr
+    // (P2 #346 finding 4): rdev maps both to K::AltGr → "alt_gr" via
+    // `key_to_name`, and `modifier_family` / `canonical_side` treat them
+    // as equivalent to `alt_r`, so the tracker matches correctly.
+    "right_alt",
+    "ralt",
+    "cmd_l",
+    "cmd_r",
+    "cmd",
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11",
+    "f12",
+    "space",
+    "esc",
+    "tab",
+    "enter",
 ];
 
 /// True if `name` is one of the PTT-binding names the rdev driver can
@@ -418,5 +452,53 @@ mod tests {
                 "rdev driver claims to support {name} — update the test or the map",
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // P2 #346 finding 4: right_alt / ralt aliases.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn right_alt_and_ralt_aliases_are_accepted_by_validator() {
+        // Users and documentation sometimes refer to AltGr as "right_alt"
+        // or "ralt". The install-time validator must accept these so the
+        // Rust backend doesn't reject a valid AltGr PTT binding.
+        for name in ["right_alt", "ralt"] {
+            assert!(
+                is_rdev_supported_name(name),
+                "{name} should be accepted as an AltGr alias (P2 #346 finding 4)",
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // P2 #346 finding 2: unmapped (ordinary) keys reach the tracker.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn raw_from_rdev_produces_event_for_unmapped_key() {
+        // Keys not in key_to_name (e.g. letter keys) must still produce a
+        // RawKeyEvent so the tracker can detect foreign-key holds and emit
+        // ChordCancel for bare-modifier bindings (rule 2). Previously
+        // raw_from_rdev returned None for these, silently dropping them.
+        use rdev::{Event, EventType};
+
+        let press_a = Event {
+            event_type: EventType::KeyPress(rdev::Key::KeyA),
+            time: std::time::SystemTime::UNIX_EPOCH,
+            name: None,
+        };
+        let raw = raw_from_rdev(&press_a);
+        assert!(
+            raw.is_some(),
+            "ordinary key press must produce a RawKeyEvent for foreign-key tracking"
+        );
+        let raw = raw.unwrap();
+        assert!(
+            raw.name.starts_with("__rdev_"),
+            "unmapped key should use synthetic __rdev_ name, got {:?}",
+            raw.name
+        );
+        assert_eq!(raw.kind, RawKeyKind::Press);
     }
 }
