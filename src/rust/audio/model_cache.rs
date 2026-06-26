@@ -14,6 +14,8 @@
 
 use std::path::PathBuf;
 
+use crate::os_cache::{replace_atomic, user_cache_dir};
+
 /// Resolve where to materialise the bundled Silero ONNX model on disk.
 ///
 /// Preferred path: the OS user-cache directory under `whisper-dictate/`.
@@ -71,65 +73,6 @@ pub(crate) fn cache_or_temp_model_path(model_bytes: &[u8]) -> Result<PathBuf, an
     Ok(path)
 }
 
-/// Rename `tmp` to `target`, replacing `target` if it already exists.
-///
-/// `std::fs::rename` is atomic on POSIX (replaces the destination in
-/// one syscall) but on Windows it FAILS with `ERROR_ALREADY_EXISTS`
-/// when the destination exists. That broke the model-upgrade path on
-/// Windows: a re-run with a different-sized embedded model would write
-/// the partial file, fail to rename, and fall through to the
-/// tempfile-leak path (PR #335 iteration-2 review finding #2). To
-/// recover, on Windows we delete the destination first and then
-/// rename. The small window between the delete and the rename is fine
-/// here because the cached file is read at most once per process at
-/// startup — a concurrent reader on the same machine is not part of
-/// our model.
-fn replace_atomic(tmp: &std::path::Path, target: &std::path::Path) -> Result<(), std::io::Error> {
-    #[cfg(windows)]
-    {
-        match std::fs::rename(tmp, target) {
-            Ok(()) => Ok(()),
-            // Only the "destination exists" case warrants the
-            // delete-then-retry dance; unrelated errors (path too long,
-            // disk full, permission denied, etc.) must surface as-is
-            // so callers and operators see the real diagnostic instead
-            // of a spurious `remove_file` side effect.
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let _ = std::fs::remove_file(target);
-                std::fs::rename(tmp, target)
-            }
-            Err(e) => Err(e),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(tmp, target)
-    }
-}
-
-/// Best-effort OS-conventional user cache directory. We avoid the
-/// `dirs` crate to keep the dependency surface small — the rules below
-/// match its `cache_dir()` on the three platforms we ship on:
-/// `%LOCALAPPDATA%` on Windows, `$HOME/Library/Caches` on macOS,
-/// `$XDG_CACHE_HOME` (or `$HOME/.cache`) on Linux.
-fn user_cache_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
-    }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-            return Some(PathBuf::from(xdg));
-        }
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +83,7 @@ mod tests {
     // Codex flagged the previous module-local lock as unsound for exactly
     // this reason (PR #340 iteration-2 finding #1). See
     // `crate::test_env_lock` for the full contract.
+    use crate::os_cache::{replace_atomic, user_cache_dir};
     use crate::test_env_lock::ENV_LOCK;
 
     /// Iteration-2 review finding #2: on Windows, `std::fs::rename`

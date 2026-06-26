@@ -22,8 +22,7 @@
 //!   AFTER the file is on disk. A mismatch deletes the partial download so the
 //!   next attempt starts clean.
 //! - **Atomicity**: writes to `<name>.partial` first, renames into place on
-//!   verified success (Windows-friendly via `replace_atomic` style — see
-//!   `audio::model_cache` for the same pattern).
+//!   verified success (Windows-friendly via `crate::os_cache::replace_atomic`).
 //!
 //! This module is compiled **unconditionally** (no `whisper-rs-local` feature
 //! gate) so the CLI `models list` / `models download` subcommands and the UI
@@ -32,8 +31,10 @@
 //! still requires the feature.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+use crate::os_cache::{replace_atomic, user_cache_dir};
 
 use anyhow::{anyhow, Context, Result};
 use sha2::{Digest, Sha256};
@@ -111,7 +112,7 @@ pub fn find(name: &str) -> Option<&'static ModelEntry> {
 /// Resolve the OS-conventional user-cache subdirectory we store Whisper
 /// models in.
 ///
-/// Mirrors `audio::model_cache::user_cache_dir` (`%LOCALAPPDATA%` on Windows,
+/// Uses [`crate::os_cache::user_cache_dir`] (`%LOCALAPPDATA%` on Windows,
 /// `~/Library/Caches` on macOS, `$XDG_CACHE_HOME`/`~/.cache` on Linux) and
 /// nests one extra `whisper-models/` segment under the shared
 /// `whisper-dictate/` namespace so the bundled Silero VAD model and the
@@ -387,51 +388,6 @@ fn partial_path(target: &Path) -> PathBuf {
     let mut s = target.as_os_str().to_owned();
     s.push(suffix.as_str());
     PathBuf::from(s)
-}
-
-/// Cross-platform "rename, replacing the destination if it exists". Same
-/// dance `audio::model_cache::replace_atomic` does — on POSIX `rename` is
-/// atomic and overwrites; on Windows we delete-then-rename on the
-/// `AlreadyExists` case only (so unrelated errors surface untouched).
-fn replace_atomic(tmp: &Path, target: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    {
-        match fs::rename(tmp, target) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(target);
-                fs::rename(tmp, target)
-            }
-            Err(e) => Err(e),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        fs::rename(tmp, target)
-    }
-}
-
-/// Resolve the OS-conventional user cache directory. Duplicated from
-/// `audio::model_cache` so this module doesn't introduce a cross-module
-/// dependency on a feature-gated module (`audio` only compiles with
-/// `audio-in-rust`). The rules match `dirs::cache_dir` for our three
-/// platforms.
-fn user_cache_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
-    }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-            return Some(PathBuf::from(xdg));
-        }
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))
-    }
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
