@@ -482,4 +482,38 @@ mod env_tests {
             None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
         }
     }
+
+    /// `rust_hotkey_backend_available` reflects the feature gate, not an env
+    /// var, so it is constant per binary build. On a stock build it must
+    /// always be false; on a `rust-hotkeys` build it must always be true.
+    #[test]
+    fn backend_available_reflects_feature_gate() {
+        // This assertion is always true by the cfg definition:
+        assert_eq!(
+            rust_hotkey_backend_available(),
+            cfg!(feature = "rust-hotkeys"),
+            "backend_available must equal the rust-hotkeys feature flag"
+        );
+    }
+
+    /// When the user sets `VOICEPI_HOTKEY_BACKEND=rust` but the binary was
+    /// built without `--features rust-hotkeys`, `backend_available` must be
+    /// false (the env var controls `requested`, not `available`).
+    #[test]
+    #[cfg(not(feature = "rust-hotkeys"))]
+    fn backend_available_is_false_on_stock_build_regardless_of_env() {
+        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
+
+        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "rust");
+        assert!(
+            !rust_hotkey_backend_available(),
+            "backend_available must be false on a stock build even when env var is set"
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
+            None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
+        }
+    }
 }

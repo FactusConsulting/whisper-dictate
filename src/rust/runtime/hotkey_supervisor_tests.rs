@@ -26,7 +26,7 @@ fn start_does_not_inject_python_hotkey_disable_flag() {
     let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "ctrl_l");
 
     // Build a command the way start() would, and confirm the flag is absent.
-    let mut command = worker_command("/tmp/whisper-dictate");
+    let command = worker_command("/tmp/whisper-dictate");
     // install_rust_hotkey_from_command is a no-op in headless env (rdev
     // listener refuses to start), so the flag must remain absent regardless.
     let (tx, _rx) = std::sync::mpsc::channel();
@@ -79,6 +79,47 @@ fn extract_hotkey_key_names_handles_blank_key_as_empty() {
     assert!(
         names.is_empty(),
         "blank VOICEPI_KEY must produce empty key_names (no install)"
+    );
+}
+
+// -----------------------------------------------------------------------
+// P2 #373: rust_hotkey_backend_active — the conjunction of requested AND
+// available. Verified here since it lives in runtime.rs (not hotkey/).
+// -----------------------------------------------------------------------
+
+#[test]
+fn backend_active_returns_false_when_not_requested() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _backend_guard = EnvVarGuard::remove("VOICEPI_HOTKEY_BACKEND");
+
+    assert!(
+        !rust_hotkey_backend_active(),
+        "backend_active must be false when VOICEPI_HOTKEY_BACKEND is unset"
+    );
+}
+
+#[test]
+fn backend_active_returns_false_when_set_to_non_rust_value() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "pynput");
+
+    assert!(
+        !rust_hotkey_backend_active(),
+        "backend_active must be false when backend is set to pynput (not rust)"
+    );
+}
+
+/// When `VOICEPI_HOTKEY_BACKEND=rust` but the feature is absent, the
+/// available gate must block activation.
+#[test]
+#[cfg(not(feature = "rust-hotkeys"))]
+fn backend_active_returns_false_when_requested_but_feature_absent() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
+
+    assert!(
+        !rust_hotkey_backend_active(),
+        "backend_active must be false when feature is not compiled in"
     );
 }
 
