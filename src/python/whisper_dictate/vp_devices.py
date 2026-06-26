@@ -527,22 +527,26 @@ def _rust_list_input_devices() -> list[dict] | None:
     return out
 
 
-def list_input_devices(sd) -> list[dict]:
+def list_input_devices(sd=None) -> list[dict]:
     """Return input devices for the picker, enumerated from a single host API.
 
     Each entry is ``{"index", "name", "max_input_channels", "default"}``. The
     real work (host-API selection + filtering) lives in
     :func:`select_input_devices`; this just reads the live sounddevice tables and
-    delegates. Pure over an injected ``sd`` so it is unit-testable with a stubbed
-    sounddevice.
+    delegates. Pass ``sd`` explicitly for unit tests (stubbed sounddevice);
+    leave it as ``None`` in production — sounddevice is imported lazily and
+    only when the Rust device-listing shortcut is unavailable.
 
     When ``VOICEPI_DEVICES_BACKEND=rust`` is set AND the Rust helper succeeds,
-    its enumeration is returned instead — see :func:`_rust_list_input_devices`.
+    its enumeration is returned without ever importing sounddevice.
     Any helper failure silently falls back to the sounddevice path.
     """
     rust_devices = _rust_list_input_devices()
     if rust_devices is not None:
         return rust_devices
+    if sd is None:
+        import sounddevice as _sd  # noqa: PLC0415
+        sd = _sd
     default_index = _default_input_index(sd)
     devices = sd.query_devices()
     try:

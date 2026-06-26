@@ -114,17 +114,20 @@ def print_windows() -> int:
 def print_audio_devices() -> int:
     """Print the input-device list as JSON and return a process exit code.
 
-    Cheap: imports sounddevice lazily and never loads a model or opens a stream.
-    On success prints a JSON array and returns 0; if sounddevice is unavailable
-    (or querying fails) prints ``{"error": "..."}`` and returns 1.
+    When ``VOICEPI_DEVICES_BACKEND=rust`` is set and the Rust helper succeeds,
+    sounddevice is never imported. sounddevice is only imported lazily inside
+    :func:`~whisper_dictate.vp_devices.list_input_devices` when the Rust path
+    is unavailable — so this function works even if sounddevice is missing, as
+    long as the Rust helper is reachable.
+
+    On success prints a JSON array and returns 0. If both Rust listing and
+    sounddevice are unavailable, prints ``{"error": "..."}`` and returns 1.
     """
     try:
-        import sounddevice as sd
-    except Exception as exc:  # noqa: BLE001 - report cleanly to the caller
+        devices = list_input_devices()
+    except ImportError as exc:
         print(json.dumps({"error": f"sounddevice unavailable: {exc}"}), flush=True)
         return 1
-    try:
-        devices = list_input_devices(sd)
     except Exception as exc:  # noqa: BLE001 - report cleanly to the caller
         print(json.dumps({"error": f"could not query audio devices: {exc}"}), flush=True)
         return 1
