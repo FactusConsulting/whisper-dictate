@@ -516,4 +516,40 @@ mod env_tests {
             None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
         }
     }
+
+    // -----------------------------------------------------------------------
+    // HotkeyConfig constructor and stub install_hotkey (non-feature builds).
+    // -----------------------------------------------------------------------
+
+    /// `HotkeyConfig::hold_to_talk` is the primary public constructor; verify
+    /// that it populates both fields correctly. This test runs on all build
+    /// configurations (the constructor is not feature-gated).
+    #[test]
+    fn hold_to_talk_constructor_sets_key_names_and_mode() {
+        let keys = vec!["ctrl_l".to_owned(), "f9".to_owned()];
+        let cfg = HotkeyConfig::hold_to_talk(keys.clone());
+        assert_eq!(cfg.key_names, keys);
+        assert!(
+            matches!(cfg.mode, coordinator::Mode::HoldToTalk),
+            "hold_to_talk constructor must set Mode::HoldToTalk"
+        );
+    }
+
+    /// On a stock build (no `rust-hotkeys` feature) `install_hotkey` must
+    /// immediately return `InstallError::Unsupported` so the supervisor can
+    /// log a one-line warning and keep the pynput path active. No threads
+    /// are spawned and no OS resources are acquired.
+    #[test]
+    #[cfg(not(feature = "rust-hotkeys"))]
+    fn install_hotkey_stub_returns_unsupported_error() {
+        let cfg = HotkeyConfig::hold_to_talk(vec!["ctrl_l".to_owned()]);
+        let err = match install_hotkey(cfg, |_| {}) {
+            Ok(_) => panic!("stub install_hotkey must never return Ok"),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(err, InstallError::Unsupported),
+            "stock build must return InstallError::Unsupported, got: {err}"
+        );
+    }
 }
