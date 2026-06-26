@@ -177,6 +177,21 @@ injection).
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
 > loading a `.gguf` file is rejected up front with a clean error.
 
+#### Idle model unload
+
+A loaded GGML model holds 1-2 GB resident (≈75 MB for `tiny`, ~1.5 GB
+for `medium`). Set **`VOICEPI_WHISPER_IDLE_UNLOAD_S`** to drop the model
+from RAM after `N` seconds of inactivity; the next dictation
+transparently reloads from disk (a one-shot cost paid only after the
+idle window has elapsed). Recommended values: `30`, `300`, `1800`,
+`3600`. Set to `0` (or unset the variable) to keep the model resident
+forever — that is the default and matches historical behaviour
+byte-for-byte. Negative or non-numeric values are rejected so a typo in
+the wrapper that sets the variable surfaces loudly rather than silently
+falling back to "never". Wired through the library primitive
+`whisper::IdleUnloadingModel`; in-process wiring lands with the
+runtime-side worker port.
+
 Enabling the feature pulls in whisper.cpp and compiles it from source,
 *and* runs `bindgen` against whisper.cpp's headers — so the build host
 needs both a C/C++ toolchain *and* the libclang shared library that
