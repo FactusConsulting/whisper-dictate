@@ -69,8 +69,10 @@ pub mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_env_lock;
 pub mod ui;
-// Local Whisper inference (CPU-only spike, roadmap issue #317 sub-task 1).
-// Gated behind the `whisper-rs-local` cargo feature so the default build
-// never pulls in whisper.cpp / CMake.
-#[cfg(feature = "whisper-rs-local")]
+// Local Whisper integration. The catalog / download / cache machinery under
+// `whisper::model_manager` is always compiled in (lightweight: ureq + sha2,
+// already in the dep graph), so the `models` CLI subcommand and the Settings
+// tab download UI work on every binary. The whisper.cpp inference + the
+// `transcribe-wav` dispatcher still sit behind the `whisper-rs-local`
+// feature (which pulls whisper.cpp / CMake).
 pub mod whisper;

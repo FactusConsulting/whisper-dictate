@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::whisper::LocalWhisper;
+use super::local::LocalWhisper;
 
 /// Env var the Python wiring sets to point at a downloaded GGML model file.
 pub const MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";

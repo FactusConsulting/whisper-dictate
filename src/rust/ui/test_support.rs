@@ -71,6 +71,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         choco_pkg_dir_exists: None,
         tray: TrayManager::new(),
         last_logged_tray_state: None,
+        whisper_model_downloads: crate::ui::whisper_models_state::WhisperModelDownloads::new(),
     }
 }
 
