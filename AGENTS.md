@@ -75,19 +75,81 @@ requires.
 ## Pull request review
 
 **HARD GATE — do not merge with unaddressed automated-review comments.**
-CI green is not enough; fetch and triage Copilot/SonarCloud comments first.
+CI green is not enough; fetch and triage Codex / Copilot / SonarCloud
+comments first.
 
-- Before merging, wait for the Copilot review to land, then fetch comments:
+- Before merging, wait for the auto-review to land (Codex typically posts
+  within 5-15 minutes of CI completing). Fetch ALL inline comments — use
+  `--paginate` because `per_page` defaults to 30 and a busy PR easily
+  exceeds that:
 
   ```sh
-  gh api repos/<owner>/<repo>/pulls/<pr>/comments \
-    --jq '.[] | select(.user.login|test("copilot";"i")) | select(.in_reply_to_id==null) | "[\(.path):\(.line // .original_line)] \(.body)"'
+  gh api --paginate repos/<owner>/<repo>/pulls/<pr>/comments \
+    --jq '.[] | select(.user.login | test("codex|copilot|sonar"; "i")) | select(.in_reply_to_id == null) | "[\(.path):\(.line // .original_line)] \(.body)"'
   ```
 
-  Fix each comment or record an explicit dismissal reason. Use
-  `.line // .original_line` because outdated comments may have null `.line`.
-- After pushing changes, re-request the review
-  (`gh pr edit <pr> --add-reviewer @copilot`) and re-check before merging.
+  Use `.line // .original_line` because outdated comments may have null
+  `.line`. The login filter covers Codex, Copilot, AND SonarCloud
+  (whose inline comments come from `sonarqubecloud[bot]`) — all three
+  are auto-review sources gated by this rule.
+
+- **For EVERY inline review comment, before merging, do all three:**
+  1. **Fix or explicitly decline** the suggestion (push a follow-up commit, or
+     post a reply explaining why it's not actionable / a false positive).
+  2. **Mark the thread resolved** via the GraphQL `resolveReviewThread`
+     mutation:
+
+     ```sh
+     gh api graphql -f query='mutation { resolveReviewThread(input: { threadId: "PRRT_..." }) { thread { isResolved } } }'
+     ```
+
+     Get thread ids via the paginated GraphQL query below. A PR with
+     more than 50 review threads needs cursor pagination
+     (`pageInfo { hasNextPage endCursor }` + `after: "..."`); the
+     example below shows the first-page form and you must loop on
+     `hasNextPage`. Always select BOTH `line` and `originalLine` so
+     outdated threads (whose `line` may be null) still match the comment
+     they belong to:
+
+     ```sh
+     gh api graphql -f query='
+       query($owner: String!, $name: String!, $pr: Int!, $cursor: String) {
+         repository(owner: $owner, name: $name) {
+           pullRequest(number: $pr) {
+             reviewThreads(first: 50, after: $cursor) {
+               pageInfo { hasNextPage endCursor }
+               nodes {
+                 id
+                 isResolved
+                 comments(first: 1) {
+                   nodes { databaseId path line originalLine }
+                 }
+               }
+             }
+           }
+         }
+       }' -F owner=... -F name=... -F pr=...
+     ```
+
+  3. **React with 👍 or 👎** on the original comment so the reviewer can
+     score signal quality going forward:
+
+     ```sh
+     # 👍 if the finding was a real bug we fixed
+     gh api repos/<owner>/<repo>/pulls/comments/<comment_id>/reactions -f content='+1'
+     # 👎 if the finding was a false positive / we explicitly decided not to act
+     gh api repos/<owner>/<repo>/pulls/comments/<comment_id>/reactions -f content='-1'
+     ```
+
+  The fix-reply with the resolving commit SHA goes on the same thread via
+  `POST /repos/<owner>/<repo>/pulls/<pr>/comments` with
+  `in_reply_to=<comment_id>` so the audit trail stays inline. Apply to
+  every PR including admin-merged dependency bumps.
+
+- After pushing changes, the next auto-review will see the new HEAD; no
+  manual re-request is needed in this repo (Codex auto-review is configured
+  to fire on every push to a PR branch).
+
 - Apply this gate to every PR, including scripted or batch merges.
 
 ## Model economy
