@@ -59,9 +59,19 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      # On non-PR triggers (push to main, workflow_call from a tag release)
+      # there is no PR-files API to consult and the docs-only skip is not
+      # the intent anyway — every job must run. Skip the filter step
+      # entirely (see `if:` on the action below) and default the output to
+      # `true` so downstream gates evaluate as "real changes present".
+      # Before this fallback the release pipeline startup-failed on tag
+      # push: the filter step would have nothing to diff against and the
+      # downstream `Fail required check` step would fire (P0 follow-up to
+      # #398 surfaced by the v1.19.0-rc.1 release attempt).
+      code: ${{ steps.filter.outputs.code || 'true' }}
     steps:
       - uses: actions/checkout@v6
+        if: github.event_name == 'pull_request'
         with:
           ref: ${{ inputs.ref }}
       # Pin to v4.0.1 (Node 24) — GitHub started defaulting JavaScript
@@ -71,6 +81,10 @@ jobs:
       # would skip every required check downstream — P2 #398 follow-up.
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
+        # PR-scoped only: paths-filter needs the PR-files API for an
+        # accurate diff. On a push or workflow_call (release), skip the
+        # action and fall through to the `|| 'true'` default above.
+        if: github.event_name == 'pull_request'
         with:
           # `code` = "anything that ISN'T just prose docs/license/gitignore
           # changed". `predicate-quantifier: every` makes negations actually

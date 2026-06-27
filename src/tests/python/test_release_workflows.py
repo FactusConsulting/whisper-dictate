@@ -299,6 +299,71 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             " typed as string so manual-wrapper string forwarding lints.",
         )
 
+    def test_release_tests_call_forwards_paths_filter_permissions(self):
+        # The release pipeline gates on `test.yml` via `workflow_call`. The
+        # called workflow's `changes` job (paths-filter) needs
+        # `pull-requests: read` so reusable-workflow permission resolution
+        # can satisfy it without exceeding the caller. When the `tests:`
+        # call had no `permissions:` block, the entire release startup-failed
+        # on tag push with zero jobs spawned (observed on v1.19.0-rc.1).
+        # Lock both scopes into the forwarded permissions so this can't
+        # silently regress and brick the next release cut.
+        release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        import yaml as _yaml
+
+        workflow = _yaml.safe_load(release)
+        tests_job = workflow["jobs"]["tests"]
+        self.assertEqual(
+            tests_job.get("uses"), "./.github/workflows/test.yml",
+            "release.yml `tests` must call the reusable test workflow",
+        )
+        perms = tests_job.get("permissions") or {}
+        self.assertEqual(perms.get("contents"), "read")
+        self.assertEqual(
+            perms.get("pull-requests"), "read",
+            "release.yml `tests` call must forward `pull-requests: read` so"
+            " the reusable `changes` job (dorny/paths-filter) is permitted"
+            " under the caller's permission cap — otherwise tag-push"
+            " releases startup_failure.",
+        )
+
+    def test_test_yml_changes_job_is_pr_scoped_with_default_true(self):
+        # Paths-filter only makes sense for pull_request events (it needs the
+        # PR-files API for an accurate diff). On push to main / workflow_call
+        # from a tag release, the filter step is skipped and the `code` output
+        # defaults to `true` so every downstream gate runs. Without this
+        # fallback the release pipeline either startup_failures or the
+        # `Fail required check` step fires on the tag push.
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        import yaml as _yaml
+
+        loaded = _yaml.safe_load(workflow)
+        changes = loaded["jobs"]["changes"]
+
+        self.assertEqual(
+            changes.get("outputs", {}).get("code"),
+            "${{ steps.filter.outputs.code || 'true' }}",
+            "`changes.outputs.code` must default to 'true' when the filter"
+            " step is skipped (non-PR events have no PR-files API).",
+        )
+        filter_step = next(
+            s for s in changes["steps"]
+            if isinstance(s.get("uses"), str) and "dorny/paths-filter" in s["uses"]
+        )
+        self.assertEqual(
+            filter_step.get("if"), "github.event_name == 'pull_request'",
+            "dorny/paths-filter must only run on pull_request events.",
+        )
+        checkout_step = next(
+            s for s in changes["steps"]
+            if isinstance(s.get("uses"), str) and s["uses"].startswith("actions/checkout")
+        )
+        self.assertEqual(
+            checkout_step.get("if"), "github.event_name == 'pull_request'",
+            "The checkout that feeds paths-filter must also be PR-scoped so"
+            " the job is a cheap no-op on push/workflow_call.",
+        )
+
     def test_rust_crate_is_flat_single_crate_under_src_rust(self):
         # The Rust code lives directly under src/rust as a single crate — no
         # workspace wrapper and no nested per-crate subdirectory.
