@@ -444,3 +444,161 @@ fn extract_hotkey_key_names_trims_whitespace_around_segments() {
     let names = extract_hotkey_key_names(&command);
     assert_eq!(names, vec!["ctrl_l", "f9"]);
 }
+
+// -----------------------------------------------------------------------
+// P3 #376: audio_devices_command must propagate VOICEPI_DEVICES_BACKEND=rust
+// when the parent env has VOICEPI_AUDIO_BACKEND=rust, so the Python picker
+// uses the Rust enumeration that respects rust-capture's default-host limit.
+// -----------------------------------------------------------------------
+
+/// Look up a value by key in a `WorkerCommand.env` Vec. Returns the LAST
+/// occurrence because that's the one the spawned Python worker sees (the
+/// stdlib `Command::env` semantics collapse on last-write-wins).
+fn lookup_env<'a>(command: &'a super::WorkerCommand, key: &str) -> Option<&'a str> {
+    command
+        .env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn audio_devices_command_propagates_devices_backend_when_audio_backend_rust() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", "rust");
+    let _devices_guard = EnvVarGuard::remove("VOICEPI_DEVICES_BACKEND");
+
+    let command = audio_devices_command();
+
+    assert_eq!(
+        lookup_env(&command, "VOICEPI_DEVICES_BACKEND"),
+        Some("rust"),
+        "VOICEPI_AUDIO_BACKEND=rust must auto-set VOICEPI_DEVICES_BACKEND=rust \
+         so the Python picker uses the Rust enumeration (P3 #376)"
+    );
+}
+
+#[test]
+fn audio_devices_command_propagation_is_case_insensitive_on_value() {
+    // VOICEPI_AUDIO_BACKEND values are matched case-insensitively by
+    // audio_pipeline_requested, so the propagation must follow the same rule.
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _devices_guard = EnvVarGuard::remove("VOICEPI_DEVICES_BACKEND");
+    for value in ["Rust", "RUST", "  rust  ", "rUsT"] {
+        let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", value);
+        let command = audio_devices_command();
+        assert_eq!(
+            lookup_env(&command, "VOICEPI_DEVICES_BACKEND"),
+            Some("rust"),
+            "VOICEPI_AUDIO_BACKEND={value:?} should also propagate"
+        );
+    }
+}
+
+#[test]
+fn audio_devices_command_skips_propagation_when_audio_backend_unset() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _audio_guard = EnvVarGuard::remove("VOICEPI_AUDIO_BACKEND");
+    let _devices_guard = EnvVarGuard::remove("VOICEPI_DEVICES_BACKEND");
+
+    let command = audio_devices_command();
+
+    assert!(
+        lookup_env(&command, "VOICEPI_DEVICES_BACKEND").is_none(),
+        "default Python audio path: must not silently turn on Rust devices \
+         backend without an explicit opt-in"
+    );
+}
+
+#[test]
+fn audio_devices_command_skips_propagation_when_audio_backend_is_python() {
+    // Any non-rust value (including the documented "python" sentinel)
+    // means the user has NOT opted into Rust capture; the picker stays
+    // on sounddevice so it can offer non-default-host devices.
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _devices_guard = EnvVarGuard::remove("VOICEPI_DEVICES_BACKEND");
+    for value in ["python", "Python", "PYTHON", "off", "0", ""] {
+        let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", value);
+        let command = audio_devices_command();
+        assert!(
+            lookup_env(&command, "VOICEPI_DEVICES_BACKEND").is_none(),
+            "VOICEPI_AUDIO_BACKEND={value:?} must not propagate (non-rust)"
+        );
+    }
+}
+
+#[test]
+fn audio_devices_command_skips_propagation_when_process_env_already_sets_devices_backend() {
+    // A user that has explicitly exported VOICEPI_DEVICES_BACKEND=python in
+    // their shell (e.g. to force sounddevice for a debug session even while
+    // Rust capture is active) must NOT have it silently overridden. The
+    // spawned worker inherits the process env, so as long as the propagator
+    // does not push an entry into command.env, the worker sees `python`.
+    // The propagator therefore detects the process-env value and skips —
+    // verified here by asserting no entry was added to command.env (so
+    // inheritance wins, not an override).
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", "rust");
+    let _devices_guard = EnvVarGuard::set("VOICEPI_DEVICES_BACKEND", "python");
+
+    let command = audio_devices_command();
+
+    assert!(
+        lookup_env(&command, "VOICEPI_DEVICES_BACKEND").is_none(),
+        "propagator must NOT add an override to command.env when the \
+         process env already mentions VOICEPI_DEVICES_BACKEND — \
+         inheritance from process env carries the user's explicit choice"
+    );
+}
+
+#[test]
+fn audio_devices_command_propagation_is_idempotent_against_pre_populated_command_env() {
+    // Belt-and-braces: if a future caller (or a test) pre-populates the
+    // worker command with a VOICEPI_DEVICES_BACKEND entry, the propagator
+    // must leave it untouched rather than appending a second entry — even
+    // when VOICEPI_AUDIO_BACKEND=rust would otherwise trigger the
+    // propagation. Two entries would still pick the last write at spawn
+    // time but would be confusing in `--worker-env` dumps and would mask
+    // bugs in upstream callers.
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", "rust");
+    let _devices_guard = EnvVarGuard::remove("VOICEPI_DEVICES_BACKEND");
+
+    let mut command = audio_devices_command();
+    let initial_count = command
+        .env
+        .iter()
+        .filter(|(k, _)| k == "VOICEPI_DEVICES_BACKEND")
+        .count();
+    assert_eq!(
+        initial_count, 1,
+        "fresh audio_devices_command should add exactly one \
+         VOICEPI_DEVICES_BACKEND entry under VOICEPI_AUDIO_BACKEND=rust"
+    );
+
+    // Re-running the propagator must be a no-op.
+    super::propagate_rust_devices_backend(&mut command);
+    let after_count = command
+        .env
+        .iter()
+        .filter(|(k, _)| k == "VOICEPI_DEVICES_BACKEND")
+        .count();
+    assert_eq!(
+        after_count, 1,
+        "propagator must be idempotent — re-running it cannot \
+         duplicate VOICEPI_DEVICES_BACKEND"
+    );
+}
