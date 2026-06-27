@@ -473,6 +473,22 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             " exercises the same code path the shipping installer takes",
         )
 
+    def test_release_linux_deps_cover_audio_in_rust_alsa_chain(self):
+        # The `audio-in-rust` feature pulls in cpal -> alsa-sys, which needs
+        # `libasound2-dev` to find `alsa.pc` via pkg-config at build time.
+        # rc.2 flipped audio-in-rust into the shipping `--features` list, but
+        # the release.yml Linux apt step initially shipped without libasound,
+        # which made the release job hard-fail at `cargo build` with
+        # "Package \'alsa\', required by \'virtual:world\', not found".
+        # test.yml\'s rust matrix already installs it (line ~320); pinning
+        # release.yml in lockstep keeps the rc-N -> release pipeline gated.
+        release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "libasound2-dev", release,
+            "release.yml Linux apt step must install libasound2-dev for the"
+            " audio-in-rust cpal/alsa-sys build chain shipped in rc.2.",
+        )
+
     def test_rust_crate_is_flat_single_crate_under_src_rust(self):
         # The Rust code lives directly under src/rust as a single crate — no
         # workspace wrapper and no nested per-crate subdirectory.
