@@ -301,7 +301,8 @@ jobs:
             libxcb-xfixes0-dev \
             libxkbcommon-dev \
             libxi-dev \
-            libxtst-dev
+            libxtst-dev \
+            libasound2-dev
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RUST == 'true'
         with:
@@ -330,6 +331,18 @@ jobs:
         # Windows already has every dep in the SDK.
         if: env.RUN_RUST == 'true'
         run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys
+      - name: Rust tests (audio-in-rust feature)
+        # Issue #316 / Wave 4-C: the Rust audio pipeline (cpal capture ->
+        # rubato resample -> Silero VAD via vad-rs/ort) is gated behind
+        # the `audio-in-rust` cargo feature. Build & test on BOTH
+        # platforms because cpal's WASAPI (Windows) and ALSA (Linux)
+        # backends are different code paths. ort-sys is pinned in
+        # Cargo.toml to a vad-rs-compatible version; this step
+        # verifies the pinned combination still links cleanly on both
+        # runners. Prep step for flipping the feature into the shipping
+        # installer (Wave 8 follow-up).
+        if: env.RUN_RUST == 'true'
+        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features audio-in-rust
       - name: Rust CLI smoke
         if: env.RUN_RUST == 'true'
         run: |

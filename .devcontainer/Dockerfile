@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxkbcommon-dev \
         libxi-dev \
         libxtst-dev \
+        libasound2-dev \
         cmake \
         clang \
         libclang-dev \

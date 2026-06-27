@@ -13,8 +13,19 @@
 //! [`cache_or_temp_model_path`].
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::os_cache::{replace_atomic, user_cache_dir};
+
+/// Process-local counter that gives every call to
+/// [`cache_or_temp_model_path`] a unique tmp filename. Without this,
+/// two concurrent calls (e.g. two whisper-dictate processes racing on
+/// first-run model materialization, or two tests running in parallel
+/// inside the same test binary) collide on the fixed `.partial` path:
+/// the second `File::create` truncates the first caller's tmp inode to
+/// zero bytes before the first caller's `replace_atomic` renames it
+/// into the cache target, so the cached file ends up empty.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Resolve where to materialise the bundled Silero ONNX model on disk.
 ///
@@ -48,8 +59,16 @@ pub(crate) fn cache_or_temp_model_path(model_bytes: &[u8]) -> Result<PathBuf, an
                 return Ok(target);
             }
             // Write atomically via a sibling temp file so a crashed
-            // half-write never leaves a corrupt model in place.
-            let tmp = cache_dir.join(".silero_vad.onnx.partial");
+            // half-write never leaves a corrupt model in place. Per-call
+            // unique filename (process id + atomic counter) so concurrent
+            // callers don't truncate each other's tmp inode in the window
+            // between `File::create` and `replace_atomic`.
+            let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let tmp = cache_dir.join(format!(
+                ".silero_vad.onnx.partial.{}.{}",
+                std::process::id(),
+                counter,
+            ));
             if let Ok(mut f) = std::fs::File::create(&tmp) {
                 if f.write_all(model_bytes).is_ok() && f.flush().is_ok() {
                     drop(f);
