@@ -181,6 +181,95 @@ class ConfigTests(unittest.TestCase):
 
         snapshot.assert_not_called()
 
+class HotkeyAliasNormalisationTests(unittest.TestCase):
+    """apply_config_to_environ must normalise rdev aliases in VOICEPI_KEY.
+
+    When the config file contains ``"key": "right_alt"`` or ``"key": "ralt"``
+    (accepted by the Rust validator for user convenience), pynput does not know
+    these names and exits with ``unknown key`` at startup.  The fix rewrites
+    them to ``alt_gr`` (the canonical pynput name) inside
+    ``apply_config_to_environ`` so the Python worker never sees the raw alias.
+    """
+
+    def setUp(self):
+        self._saved = {
+            k: os.environ.pop(k, None)
+            for k in ("VOICEPI_CONFIG", "VOICEPI_KEY")
+        }
+        for n in ("vp_config",):
+            sys.modules.pop(n, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        sys.modules.pop("vp_config", None)
+
+    def _apply(self, config_key_value: str) -> str:
+        """Write a config with ``key=<config_key_value>``, call
+        ``apply_config_to_environ()``, and return the resulting
+        ``VOICEPI_KEY`` env value."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "config.json")
+            os.environ["VOICEPI_CONFIG"] = path
+            from whisper_dictate import vp_config
+            vp_config.save_config({"key": config_key_value})
+            vp_config.apply_config_to_environ()
+            return os.environ.get("VOICEPI_KEY", "")
+
+    def test_right_alt_is_normalised_to_alt_gr(self):
+        self.assertEqual(self._apply("right_alt"), "alt_gr")
+
+    def test_ralt_is_normalised_to_alt_gr(self):
+        self.assertEqual(self._apply("ralt"), "alt_gr")
+
+    def test_alias_matching_is_case_insensitive(self):
+        self.assertEqual(self._apply("Right_Alt"), "alt_gr")
+        self.assertEqual(self._apply("RALT"), "alt_gr")
+
+    def test_non_alias_key_passes_through_unchanged(self):
+        self.assertEqual(self._apply("ctrl_r"), "ctrl_r")
+        self.assertEqual(self._apply("f9"), "f9")
+        self.assertEqual(self._apply("alt_gr"), "alt_gr")
+
+    def test_chord_with_alias_is_normalised_per_segment(self):
+        self.assertEqual(self._apply("ctrl_r+right_alt"), "ctrl_r+alt_gr")
+        self.assertEqual(self._apply("shift_r+ralt"), "shift_r+alt_gr")
+
+    def test_normalise_hotkey_chord_helper_directly(self):
+        from whisper_dictate import vp_config
+        fn = vp_config._normalise_hotkey_chord
+        self.assertEqual(fn("right_alt"), "alt_gr")
+        self.assertEqual(fn("ralt"), "alt_gr")
+        self.assertEqual(fn("ctrl_r+right_alt"), "ctrl_r+alt_gr")
+        self.assertEqual(fn("ctrl_r"), "ctrl_r")
+        self.assertEqual(fn(""), "")
+
+    def _get_value(self, config_key_value: str) -> str | None:
+        """Write a config with ``key=<config_key_value>`` and return
+        ``get_value('VOICEPI_KEY')`` — the path vp_cli.KEY uses."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "config.json")
+            os.environ["VOICEPI_CONFIG"] = path
+            from whisper_dictate import vp_config
+            vp_config.save_config({"key": config_key_value})
+            return vp_config.get_value("VOICEPI_KEY")
+
+    def test_get_value_normalises_right_alt(self):
+        self.assertEqual(self._get_value("right_alt"), "alt_gr")
+
+    def test_get_value_normalises_ralt(self):
+        self.assertEqual(self._get_value("ralt"), "alt_gr")
+
+    def test_get_value_normalises_chord_with_alias(self):
+        self.assertEqual(self._get_value("ctrl_r+right_alt"), "ctrl_r+alt_gr")
+
+    def test_get_value_passes_through_non_alias(self):
+        self.assertEqual(self._get_value("ctrl_r"), "ctrl_r")
+        self.assertEqual(self._get_value("alt_gr"), "alt_gr")
+
+
 class WindowsStdioEncodingTests(unittest.TestCase):
     def test_windows_stdio_keeps_interactive_console_native(self):
         voice_pi = load_voice_pi()

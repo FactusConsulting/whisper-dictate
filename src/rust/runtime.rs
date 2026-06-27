@@ -1190,6 +1190,7 @@ pub fn worker_command_with_args(
         python_source_root(&app_root).display().to_string(),
     )];
     env.extend(config::worker_env_overrides());
+    normalise_hotkey_aliases_for_python(&mut env);
     if let Ok(exe) = env::current_exe() {
         env.push((RUST_INJECTOR_ENV.to_owned(), exe.display().to_string()));
     }
@@ -1222,6 +1223,45 @@ pub(crate) fn parse_toggle_value(v: &str) -> bool {
         v.trim().to_ascii_lowercase().as_str(),
         "true" | "1" | "yes" | "on"
     )
+}
+
+/// Normalise rdev-specific PTT-key aliases in the worker command's
+/// `VOICEPI_KEY` to their canonical pynput-compatible names so the Python
+/// listener doesn't terminate the worker at startup when it tries to
+/// resolve them against `pynput.keyboard.Key.<name>`.
+///
+/// Today this maps `right_alt` and `ralt` → `alt_gr` (the canonical
+/// right-Alt name pynput knows). The Rust hotkey backend accepts both
+/// aliases for user-facing convenience (P2 #346 finding 4); without this
+/// post-processing a user that configured `right_alt` would crash the
+/// Python worker even when the Rust listener took over the hotkey
+/// lifecycle, because pynput resolves the keyname at startup BEFORE the
+/// listener registers (so `VOICEPI_PYTHON_HOTKEY=0` does not save us).
+///
+/// Applied to every `+`-separated segment so chord bindings like
+/// `ctrl_r+right_alt` work too. P3 #383.
+pub(crate) fn normalise_hotkey_aliases_for_python(env: &mut [(String, String)]) {
+    for (key, value) in env.iter_mut() {
+        if key == "VOICEPI_KEY" {
+            *value = normalise_hotkey_chord_for_python(value);
+        }
+    }
+}
+
+/// Pure helper for [`normalise_hotkey_aliases_for_python`] — split out so
+/// the alias transformation can be unit-tested without constructing a
+/// full WorkerCommand env vector. Preserves the input's `+` separators
+/// and per-segment formatting; only the matched aliases are rewritten.
+pub(crate) fn normalise_hotkey_chord_for_python(raw: &str) -> String {
+    raw.split('+')
+        .map(
+            |segment| match segment.trim().to_ascii_lowercase().as_str() {
+                "right_alt" | "ralt" => "alt_gr".to_owned(),
+                _ => segment.to_owned(),
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// Extract PTT key names from a [`WorkerCommand`]'s environment: split
