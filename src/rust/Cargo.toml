@@ -98,7 +98,7 @@ serde_json = "1.0"
 # SHA-256 integrity check on downloaded whisper.cpp GGML models
 # (`whisper::model_manager`). Already a transitive dep of `keyring-core` /
 # `eframe` on most platforms, so the direct pin doesn't grow the dep graph.
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2.0"
 keyring-core = "1.0"
 ureq = { version = "3.3", features = ["json"] }
