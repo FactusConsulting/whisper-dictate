@@ -86,9 +86,11 @@ pub(in crate::ui) fn trim_runtime_log(log: &mut String) {
 impl eframe::App for WhisperDictateApp {
     // egui 0.34 renamed the required `App` method from `update(&Context, ..)` to
     // `ui(&mut Ui, ..)`; the old `update` is now a deprecated default. The panels
-    // are now shown *inside* the root `ui` via `show_inside(ui, ..)` (was
-    // `show(ctx, ..)`), and `SidePanel`/`TopBottomPanel` are unified into `Panel`
-    // (`Panel::left`/`top`/`bottom`, `exact_width`/`exact_height` → `exact_size`).
+    // are now shown *inside* the root `ui` via `show(ui, ..)` (was
+    // `show(ctx, ..)`; egui 0.35 collapsed the short-lived `show_inside`
+    // back into `show` for the `Ui` overload), and `SidePanel`/`TopBottomPanel`
+    // are unified into `Panel` (`Panel::left`/`top`/`bottom`,
+    // `exact_width`/`exact_height` → `exact_size`).
     // The `Context` (still needed for the tray, theme, repaint and the sidebar
     // bridge painter) is taken from `ui.ctx()`. Layout/visuals are unchanged.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -147,7 +149,7 @@ impl eframe::App for WhisperDictateApp {
                 .frame(egui::Frame::default().fill(palette.panel_bg).inner_margin(
                     egui::Margin::symmetric(EDGE_MARGIN as i8, EDGE_MARGIN as i8),
                 ))
-                .show_inside(ui, |ui| self.compact_panel(ui, palette));
+                .show(ui, |ui| self.compact_panel(ui, palette));
             return;
         }
 
@@ -163,7 +165,7 @@ impl eframe::App for WhisperDictateApp {
                     .stroke(egui::Stroke::NONE)
                     .inner_margin(egui::Margin::symmetric(14, 14)),
             )
-            .show_inside(ui, |ui| self.sidebar(ui, palette));
+            .show(ui, |ui| self.sidebar(ui, palette));
 
         egui::Panel::top("runtime_status")
             .resizable(false)
@@ -174,7 +176,7 @@ impl eframe::App for WhisperDictateApp {
                     .stroke(egui::Stroke::new(0.8, palette.border_soft))
                     .inner_margin(egui::Margin::symmetric(16, TOP_PANEL_V_MARGIN as i8)),
             )
-            .show_inside(ui, |ui| self.top_status_bar(ui, palette));
+            .show(ui, |ui| self.top_status_bar(ui, palette));
 
         // Thin global status bar: saved/unsaved state + the latest message,
         // on every tab, replacing the per-page Messages card.
@@ -189,13 +191,13 @@ impl eframe::App for WhisperDictateApp {
                     // up with the content above it.
                     .inner_margin(egui::Margin::symmetric(EDGE_MARGIN as i8, 4)),
             )
-            .show_inside(ui, |ui| self.status_message_bar(ui, palette));
+            .show(ui, |ui| self.status_message_bar(ui, palette));
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(palette.panel_bg).inner_margin(
                 egui::Margin::symmetric(EDGE_MARGIN as i8, EDGE_MARGIN as i8),
             ))
-            .show_inside(ui, |ui| match self.selected_tab {
+            .show(ui, |ui| match self.selected_tab {
                 Tab::Log => self.runtime_tab(ui),
                 Tab::Speech => self.settings_panel(ui, Self::core_tab),
                 Tab::Quality => self.settings_panel(ui, Self::quality_tab),
