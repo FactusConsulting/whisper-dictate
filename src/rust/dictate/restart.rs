@@ -18,13 +18,8 @@ use std::collections::BTreeMap;
 /// `Dictate._report_restart_required` in
 /// `src/python/whisper_dictate/vp_dictate.py`. **Sorted alphabetically**
 /// to keep the order the Python loop emits (`sorted(restart_keys)`).
-pub const RESTART_REQUIRED_KEYS: &[&str] = &[
-    "compute_type",
-    "device",
-    "key",
-    "model",
-    "stt_backend",
-];
+pub const RESTART_REQUIRED_KEYS: &[&str] =
+    &["compute_type", "device", "key", "model", "stt_backend"];
 
 /// Return the alphabetically-sorted subset of [`RESTART_REQUIRED_KEYS`]
 /// whose value differs between `before` and `after`. Missing keys are

@@ -109,8 +109,11 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
 /// (Wave 8 of #348) added the parakeet_* entries here. Independent of
 /// [`SETTINGS_KEYS`] so the typed [`AppSettings`] does NOT have to keep
 /// (now-unused) fields for them.
-pub(crate) const DEPRECATED_KEYS: &[&str] =
-    &["parakeet_model", "parakeet_min_seconds", "parakeet_force_pc"];
+pub(crate) const DEPRECATED_KEYS: &[&str] = &[
+    "parakeet_model",
+    "parakeet_min_seconds",
+    "parakeet_force_pc",
+];
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the
 /// UI can warn that a restart is required.

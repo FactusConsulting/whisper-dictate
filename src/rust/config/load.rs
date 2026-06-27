@@ -199,10 +199,14 @@ fn migrate_parakeet_backend(
     defaults: &AppSettings,
 ) {
     let parakeet_backend = settings.stt_backend.eq_ignore_ascii_case("parakeet");
-    let legacy_keys: Vec<&'static str> = ["parakeet_model", "parakeet_min_seconds", "parakeet_force_pc"]
-        .into_iter()
-        .filter(|key| object.contains_key(*key))
-        .collect();
+    let legacy_keys: Vec<&'static str> = [
+        "parakeet_model",
+        "parakeet_min_seconds",
+        "parakeet_force_pc",
+    ]
+    .into_iter()
+    .filter(|key| object.contains_key(*key))
+    .collect();
 
     if parakeet_backend {
         eprintln!(
