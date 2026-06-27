@@ -31,6 +31,16 @@ ui-egui-wgpu = ["eframe/wgpu"]
 # Note: `hound` (WAV decode) is an unconditional dep so the WAV helpers in
 # `whisper::wav` compile and are unit-tested on every CI run without CMake.
 whisper-rs-local = ["dep:whisper-rs"]
+# Vulkan GPU acceleration for `whisper-rs-local` (Wave 7-C of #348). Pulls
+# in whisper.cpp's Vulkan backend at compile time — works on Windows AND
+# Linux from a single feature (vendor-agnostic, no NVIDIA-only CUDA DLLs).
+# Requires the Vulkan SDK on the build host on top of the `whisper-rs-local`
+# prerequisites. OFF by default; runtime selection is via `VOICEPI_WHISPER_GPU`
+# (see `src/rust/whisper/gpu.rs`). On a build without this feature the env
+# var still parses but the resolver in `should_use_gpu` always returns
+# false, so users that set `VOICEPI_WHISPER_GPU=vulkan` on a stock binary
+# silently fall back to CPU rather than refusing to run.
+whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
 # Experimental Rust-side audio pipeline (cpal capture → rubato resample →
 # Silero v4 VAD via vad-rs/ort). OFF by default so a stock build doesn't
 # pull in the ONNX runtime or the native cpal backends. When the supervisor

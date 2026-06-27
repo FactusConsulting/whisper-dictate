@@ -17,6 +17,7 @@
     "/<[^>]+>/g"
   ],
   "words": [
+    "agnostically",
     "autostart",
     "autodetection",
     "arecord",
@@ -73,6 +74,7 @@
     "tenkeyless",
     "transcriptions",
     "uinput",
+    "Unrecognised",
     "venv",
     "VOICEPI",
     "Vosk",
