@@ -246,6 +246,29 @@ class HotkeyAliasNormalisationTests(unittest.TestCase):
         self.assertEqual(fn("ctrl_r"), "ctrl_r")
         self.assertEqual(fn(""), "")
 
+    def _get_value(self, config_key_value: str) -> str | None:
+        """Write a config with ``key=<config_key_value>`` and return
+        ``get_value('VOICEPI_KEY')`` — the path vp_cli.KEY uses."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "config.json")
+            os.environ["VOICEPI_CONFIG"] = path
+            from whisper_dictate import vp_config
+            vp_config.save_config({"key": config_key_value})
+            return vp_config.get_value("VOICEPI_KEY")
+
+    def test_get_value_normalises_right_alt(self):
+        self.assertEqual(self._get_value("right_alt"), "alt_gr")
+
+    def test_get_value_normalises_ralt(self):
+        self.assertEqual(self._get_value("ralt"), "alt_gr")
+
+    def test_get_value_normalises_chord_with_alias(self):
+        self.assertEqual(self._get_value("ctrl_r+right_alt"), "ctrl_r+alt_gr")
+
+    def test_get_value_passes_through_non_alias(self):
+        self.assertEqual(self._get_value("ctrl_r"), "ctrl_r")
+        self.assertEqual(self._get_value("alt_gr"), "alt_gr")
+
 
 class WindowsStdioEncodingTests(unittest.TestCase):
     def test_windows_stdio_keeps_interactive_console_native(self):

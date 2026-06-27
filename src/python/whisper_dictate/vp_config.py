@@ -59,7 +59,10 @@ class ConfigSnapshot:
         if setting:
             value = self.data.get(setting.key)
             if value not in (None, ""):
-                return str(value)
+                raw = str(value)
+                if env == "VOICEPI_KEY":
+                    raw = _normalise_hotkey_chord(raw)
+                return raw
         value = os.environ.get(env)
         if value not in (None, ""):
             return value
