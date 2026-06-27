@@ -1,3 +1,10 @@
+# DEPRECATED Wave 6: the user-facing CLI now routes through the Rust
+# subcommands `whisper-dictate dictionary build-from-corpus` /
+# `whisper-dictate dictionary suggest-terms` (this PR). The pure logic mirrored
+# here remains the transitional fallback (`VOICEPI_RUST_INJECTOR` unset /
+# missing binary) and is kept for the Wave 4-A `dictionary-ops` shell-out
+# path; scheduled for deletion in Wave 8 finale once the Rust binary is the
+# only entry point.
 """Pure logic for corpus->dictionary training (Feature A of the 1.13 wave).
 
 Two ways to grow the Whisper-prompt dictionary from the golden corpus, both pure

@@ -179,6 +179,97 @@ fn dictionary_runtime_helper_returns_prompt_terms_and_changes() {
 }
 
 #[test]
+fn dictionary_build_from_corpus_emits_json_preview_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = dir.path().join("corpus.json");
+    fs::write(
+        &manifest,
+        r#"{
+          "version": 1,
+          "items": [
+            {"id":"da-tech-001","language":"da","category":"mixed_technical",
+             "text":"Skift backend til Parakeet.","terms":["Parakeet"]},
+            {"id":"da-prod-001","language":"da","category":"product_names",
+             "text":"Claude Code og Codex.","terms":["Claude Code","Codex"]}
+          ]
+        }"#,
+    )
+    .unwrap();
+    let dict = dir.path().join("dictionary.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .args(["dictionary", "build-from-corpus", "--benchmark-corpus"])
+        .arg(&manifest)
+        .arg("--dictionary")
+        .arg(&dict)
+        .arg("--json")
+        .output()
+        .expect("subcommand failed to launch");
+
+    assert!(
+        output.status.success(),
+        "build-from-corpus exited non-zero\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The dictionary file MUST NOT exist after a preview run — that contract
+    // is what makes the preview safe to wire into automation without a
+    // separate dry-run flag.
+    assert!(!dict.exists(), "preview must not write the dictionary file");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["command"], "build-from-corpus");
+    assert_eq!(value["applied"], false);
+    let added = value["added"].as_array().unwrap();
+    assert!(added.iter().any(|t| t == "Parakeet"));
+    assert!(added.iter().any(|t| t == "Claude Code"));
+}
+
+#[test]
+fn dictionary_suggest_terms_emits_json_preview_with_already_in_dictionary_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let dict = dir.path().join("dictionary.json");
+    fs::write(&dict, r#"{"terms":["deploy"],"replacements":{}}"#).unwrap();
+    let jsonl = dir.path().join("results.jsonl");
+    fs::write(
+        &jsonl,
+        "{\"corpus_id\":\"a\",\"term_misses\":[\"merge\",\"deploy\"]}\n\
+         {\"corpus_id\":\"b\",\"term_misses\":[\"NVIDIA Parakeet\"]}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .args(["dictionary", "suggest-terms"])
+        .arg(&jsonl)
+        .arg("--dictionary")
+        .arg(&dict)
+        .arg("--json")
+        .output()
+        .expect("subcommand failed to launch");
+
+    assert!(
+        output.status.success(),
+        "suggest-terms exited non-zero\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["command"], "suggest-from-benchmark-misses");
+    assert_eq!(value["applied"], false);
+    let new_terms = value["new_terms"].as_array().unwrap();
+    assert!(new_terms.iter().any(|t| t == "merge"));
+    assert!(new_terms.iter().any(|t| t == "NVIDIA Parakeet"));
+    // "deploy" is already in the dictionary, so it MUST be reported with
+    // already_in_dictionary=true and excluded from new_terms.
+    assert!(!new_terms.iter().any(|t| t == "deploy"));
+    let suggestions = value["suggestions"].as_array().unwrap();
+    let deploy = suggestions
+        .iter()
+        .find(|s| s["term"] == "deploy")
+        .expect("deploy must be in suggestions");
+    assert_eq!(deploy["already_in_dictionary"], true);
+}
+
+#[test]
 fn redact_text_helper_reads_json_stdin_and_omits_values_from_text() {
     let output = command_with_stdin(
         &["redact-text"],

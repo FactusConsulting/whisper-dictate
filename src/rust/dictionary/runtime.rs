@@ -169,6 +169,51 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
                 path.display()
             );
         }
+        DictionaryCommand::BuildFromCorpus {
+            benchmark_corpus,
+            app_root,
+            dictionary,
+            language,
+            category,
+            min_count,
+            apply,
+            json,
+        } => {
+            let opts = super::training::BuildFromCorpusOptions {
+                corpus_manifest: benchmark_corpus,
+                app_root: app_root.map(PathBuf::from),
+                appdata: Some(config::platform_config_dir()),
+                dictionary_path: dictionary,
+                language,
+                category,
+                min_count,
+                apply,
+                as_json: json,
+            };
+            let rc = super::training::run_build_from_corpus(opts);
+            if rc != 0 {
+                std::process::exit(rc);
+            }
+        }
+        DictionaryCommand::SuggestTerms {
+            jsonl,
+            dictionary,
+            min_count,
+            apply,
+            json,
+        } => {
+            let opts = super::training::SuggestFromMissesOptions {
+                jsonl_path: PathBuf::from(jsonl),
+                dictionary_path: dictionary,
+                min_count,
+                apply,
+                as_json: json,
+            };
+            let rc = super::training::run_suggest_from_misses(opts);
+            if rc != 0 {
+                std::process::exit(rc);
+            }
+        }
     }
     Ok(())
 }
