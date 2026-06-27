@@ -177,7 +177,7 @@ injection).
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
 > loading a `.gguf` file is rejected up front with a clean error.
 
-#### GPU acceleration (Vulkan, Wave 7-C)
+#### GPU acceleration (Vulkan)
 
 Behind the **`whisper-rs-vulkan`** cargo feature (which transitively
 enables `whisper-rs-local`), the same dispatch path runs on GPU via
