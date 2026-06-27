@@ -356,6 +356,189 @@ class RustWhisperShellModel:
         return [_RustSegment(text=text)], _RustInfo()
 
 
+class RustWhisperServerModel:
+    """Long-running in-process wrapper around ``whisper-dictate transcribe-server``.
+
+    Wave 8-A of #348: spawn the Rust helper ONCE per supervisor lifetime and
+    reuse the live subprocess for every transcribe call, so the GGML model is
+    loaded once and stays resident between utterances (subject to
+    ``VOICEPI_WHISPER_IDLE_UNLOAD_S``). Previously
+    :class:`RustWhisperShellModel` paid the cold-start cost (75 MB to 1.5 GB
+    model load) on EVERY utterance because each call spawned a fresh
+    ``transcribe-wav`` subprocess.
+
+    Same faster-whisper-shaped ``transcribe(audio, ...)`` surface as
+    :class:`RustWhisperShellModel`, so ``load_stt_model`` can swap in this
+    wrapper without touching the rest of the pipeline.
+
+    Thread-safe: a single ``threading.Lock`` around the stdin write + stdout
+    readline pair so concurrent preview + final transcribe calls (the only
+    realistic source of contention) cannot interleave their JSON envelopes
+    on the wire and tear up the response stream.
+    """
+
+    def __init__(self, helper: str):
+        self._helper = helper
+        # Suppress the noisy spawned-console banner that whisper.cpp prints
+        # to stderr on startup ("whisper_init_from_file: loading model ...")
+        # so the UI log stays focused on user-relevant events. Errors still
+        # reach us via the per-request `{"error":"..."}` envelope.
+        self._proc = subprocess.Popen(  # noqa: S603 - trusted helper path
+            [helper, "transcribe-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,  # line-buffered stdout so readline() doesn't block forever
+            shell=False,
+        )
+        self._lock = threading.Lock()
+        try:
+            self._ready = self._read_ready_line()
+        except Exception:
+            # If the ready handshake fails, tear the child down so we don't
+            # leak a half-started server when the caller catches and falls
+            # back to RustWhisperShellModel.
+            self.close()
+            raise
+
+    def _read_ready_line(self) -> dict:
+        """Read and parse the first stdout line — a ``ServerReady`` envelope.
+
+        Raises ``RuntimeError`` on EOF before any output (the helper crashed
+        before getting to the ready emit), invalid JSON, or a missing
+        ``ready: true`` field. Each of these maps to a clear log line on the
+        caller side so the fallback to per-utterance shell-out is auditable.
+        """
+        assert self._proc.stdout is not None  # mypy/pylance — PIPE = guaranteed
+        line = self._proc.stdout.readline()
+        if not line:
+            stderr = ""
+            if self._proc.stderr is not None:
+                try:
+                    stderr = self._proc.stderr.read(2048) or ""
+                except OSError:
+                    pass
+            raise RuntimeError(
+                f"transcribe-server exited before emitting ready line; "
+                f"stderr={stderr.strip()!r}"
+            )
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"transcribe-server ready line is not valid JSON: {line!r}: {e}"
+            ) from e
+        if not isinstance(payload, dict) or not payload.get("ready"):
+            raise RuntimeError(
+                f"transcribe-server first line missing ready=true: {payload!r}"
+            )
+        return payload
+
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        *,
+        language: str | None = None,
+        initial_prompt: str | None = None,
+        **_ignored: Any,
+    ):
+        wav_path = _write_temp_wav_16khz_mono(audio.reshape(-1).astype(np.float32))
+        try:
+            payload = self._exchange(wav_path, language, initial_prompt)
+        finally:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+        if "error" in payload:
+            raise RuntimeError(
+                f"Rust transcribe-server error: {payload['error']}"
+            )
+        text = str(payload.get("text", ""))
+        return [_RustSegment(text=text)], _RustInfo()
+
+    def _exchange(
+        self,
+        wav_path: str,
+        language: str | None,
+        initial_prompt: str | None,
+    ) -> dict:
+        """Send one JSON request to the server and read one JSON response.
+
+        The lock guarantees that a concurrent preview thread cannot
+        interleave its request mid-write or steal the response line
+        belonging to another caller. Pipe errors (the server crashed) and
+        unexpected EOFs surface as ``RuntimeError`` so the calling layer
+        can decide whether to retry / fall back.
+        """
+        request = {
+            "action": "transcribe_wav",
+            "wav_path": wav_path,
+            "language": language or "",
+            "initial_prompt": initial_prompt or "",
+        }
+        encoded = json.dumps(request, ensure_ascii=False) + "\n"
+        with self._lock:
+            assert self._proc.stdin is not None
+            assert self._proc.stdout is not None
+            try:
+                self._proc.stdin.write(encoded)
+                self._proc.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                raise RuntimeError(
+                    f"failed to write transcribe-server request: {e}"
+                ) from e
+            line = self._proc.stdout.readline()
+        if not line:
+            raise RuntimeError(
+                "transcribe-server exited mid-call (no response line); "
+                "the worker has died and the supervisor should respawn it"
+            )
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"transcribe-server response is not valid JSON: {line!r}: {e}"
+            ) from e
+
+    @property
+    def ready(self) -> dict:
+        """The parsed ``ServerReady`` envelope. Exposed for diagnostics
+        (UI/log) and tests that want to assert the resolved model path or
+        idle timeout the server actually adopted."""
+        return dict(self._ready)
+
+    def close(self) -> None:
+        """Close stdin (EOF triggers a clean exit on the Rust side) and
+        wait for the child. Force-kill after a short grace period so a
+        wedged worker can't block supervisor shutdown.
+        """
+        if self._proc.poll() is not None:
+            return
+        try:
+            if self._proc.stdin is not None:
+                self._proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            self._proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            try:
+                self._proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def __del__(self):  # noqa: D401 - best-effort cleanup, no docstring needed
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001 - destructor must not raise
+            pass
+
+
 def _run_rust_transcribe(
     helper: str,
     wav_path: str,
@@ -442,6 +625,29 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
     if backend == "whisper" and _rust_transcribe_enabled():
         helper = _rust_helper_binary()
         if helper and _rust_helper_supports_transcribe(helper):
+            # Wave 8-A of #348: prefer the long-running in-process
+            # ``transcribe-server`` (the model loads ONCE and stays resident
+            # between utterances) over per-utterance ``transcribe-wav``.
+            # On a binary that doesn't ship the server subcommand the spawn
+            # fails fast at the ready-line read and we fall through to the
+            # legacy ShellModel — same robustness behaviour as the
+            # `--probe` fallback to faster-whisper below.
+            try:
+                model = RustWhisperServerModel(helper)
+                print(
+                    f"[stt] {TRANSCRIBE_BACKEND_ENV}={TRANSCRIBE_BACKEND_RUST}: "
+                    f"dispatching local Whisper through long-running Rust "
+                    f"server (model={model.ready.get('model_path', '?')!r}, "
+                    f"idle_unload_s={model.ready.get('idle_unload_s', 0)})",
+                    flush=True,
+                )
+                return model
+            except Exception as e:  # noqa: BLE001 - any spawn/probe failure falls back
+                print(
+                    f"[stt] transcribe-server unavailable ({e}); "
+                    f"falling back to per-utterance transcribe-wav",
+                    flush=True,
+                )
             print(
                 f"[stt] {TRANSCRIBE_BACKEND_ENV}={TRANSCRIBE_BACKEND_RUST}: "
                 f"dispatching local Whisper through Rust helper",

@@ -83,6 +83,7 @@ fn run() -> anyhow::Result<()> {
         Command::ExternalApi => cloud_api::handle_external_api(),
         Command::Health => health::handle_health(),
         Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
+        Command::TranscribeServer => handle_transcribe_server(),
         Command::Inject => injection::handle_inject(),
         Command::Devices => handle_devices_command(),
         Command::Models { command } => whisper::models_cli::handle(command),
@@ -123,6 +124,25 @@ fn handle_transcribe_wav(_probe: bool) -> anyhow::Result<()> {
          `whisper-rs-local` feature; the Rust transcription backend is \
          unavailable - unset VOICEPI_TRANSCRIBE_BACKEND or install a build \
          with the feature enabled"
+    ))
+}
+
+/// Wave 8-A: long-running in-process Whisper worker. See
+/// [`whisper::dispatch::handle_transcribe_server`] for the wire protocol
+/// and the per-request error contract; the stock-build fallback mirrors
+/// `handle_transcribe_wav` above so the Python wrapper sees the same
+/// "backend unavailable" exit code for either subcommand.
+#[cfg(feature = "whisper-rs-local")]
+fn handle_transcribe_server() -> anyhow::Result<()> {
+    whisper_dictate_app::whisper::handle_transcribe_server()
+}
+
+#[cfg(not(feature = "whisper-rs-local"))]
+fn handle_transcribe_server() -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "this build of whisper-dictate was compiled without the \
+         `whisper-rs-local` feature; the long-running transcribe-server \
+         is unavailable - install a build with the feature enabled"
     ))
 }
 

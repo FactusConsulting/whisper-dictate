@@ -397,6 +397,331 @@ class RustWhisperShellModelTests(unittest.TestCase):
                          f"wav not cleaned up on error: {request['wav_path']}")
 
 
+# -----------------------------------------------------------------------
+# Wave 8-A of #348: long-running `transcribe-server` wrapper.
+# -----------------------------------------------------------------------
+
+
+class _FakeServerProcess:
+    """Stand-in for ``subprocess.Popen`` that scripts stdout responses and
+    records stdin writes — the same shape ``RustWhisperServerModel`` needs
+    so the live IPC contract can be tested without a real Rust binary."""
+
+    def __init__(self, scripted_lines, *, alive_after_each=True):
+        # scripted_lines is consumed left-to-right: each call to
+        # stdout.readline() pops the next line. When exhausted, readline
+        # returns "" (EOF), mimicking a dead child.
+        self._lines = list(scripted_lines)
+        self._stdin_writes = []
+        self._returncode = None
+        self._alive = True
+        self._alive_after_each = alive_after_each
+        self.stdin = self._Stdin(self)
+        self.stdout = self._Stdout(self)
+        self.stderr = self._Stderr()
+
+    def writes(self):
+        return list(self._stdin_writes)
+
+    def poll(self):
+        return self._returncode
+
+    def wait(self, timeout=None):
+        self._returncode = 0
+        return 0
+
+    def kill(self):
+        self._returncode = -9
+
+    def die(self, returncode=1):
+        """Simulate a crashed server: drain remaining scripted lines and
+        make subsequent reads return EOF."""
+        self._lines.clear()
+        self._alive = False
+        self._returncode = returncode
+
+    class _Stdin:
+        def __init__(self, parent):
+            self._parent = parent
+            self._closed = False
+
+        def write(self, data):
+            if self._closed or not self._parent._alive:
+                raise BrokenPipeError("fake server stdin closed")
+            self._parent._stdin_writes.append(data)
+            return len(data)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            self._closed = True
+
+    class _Stdout:
+        def __init__(self, parent):
+            self._parent = parent
+
+        def readline(self):
+            if not self._parent._lines:
+                return ""
+            return self._parent._lines.pop(0)
+
+    class _Stderr:
+        def read(self, n=-1):
+            return ""
+
+
+def _ready_line(*, model_path="/tmp/ggml-tiny.en.bin", idle_unload_s=0):
+    return json.dumps({
+        "ready": True,
+        "model_path": model_path,
+        "idle_unload_s": idle_unload_s,
+    }) + "\n"
+
+
+def _ok_line(text):
+    return json.dumps({"text": text}) + "\n"
+
+
+def _err_line(msg):
+    return json.dumps({"error": msg}) + "\n"
+
+
+class RustWhisperServerModelTests(unittest.TestCase):
+    """End-to-end tests for the long-running ``transcribe-server`` wrapper.
+
+    The Wave 8-A promise is "spawn once, transcribe many" — the tests
+    confirm that the wrapper reads the ready handshake exactly once and
+    reuses the live subprocess for every transcribe call, instead of
+    paying the model-load cost per utterance the way ShellModel does.
+    """
+
+    def setUp(self):
+        sys.modules["numpy"] = real_numpy()
+        self.vp = _fresh_vp_transcribe()
+
+    def _build(self, fake: _FakeServerProcess):
+        with patch.object(self.vp.subprocess, "Popen", return_value=fake):
+            return self.vp.RustWhisperServerModel("/path/to/whisper-dictate")
+
+    def test_ready_handshake_parses_and_exposes_config(self):
+        fake = _FakeServerProcess([
+            _ready_line(model_path="/m/ggml-small.en.bin", idle_unload_s=300),
+        ])
+        model = self._build(fake)
+        self.assertEqual(model.ready["model_path"], "/m/ggml-small.en.bin")
+        self.assertEqual(model.ready["idle_unload_s"], 300)
+        # No stdin writes during construction — the handshake is read-only.
+        self.assertEqual(fake.writes(), [])
+
+    def test_transcribe_round_trips_a_single_request(self):
+        import numpy as np
+
+        fake = _FakeServerProcess([
+            _ready_line(),
+            _ok_line("hello world"),
+        ])
+        model = self._build(fake)
+        audio = np.zeros(16000, dtype=np.float32)
+
+        segments, info = model.transcribe(audio, language="da", initial_prompt="Codex")
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].text, "hello world")
+        # Info object has the duck-typed attributes downstream reads.
+        self.assertIsNone(info.language)
+
+        # Exactly one JSON request on stdin, well-formed.
+        writes = fake.writes()
+        self.assertEqual(len(writes), 1)
+        self.assertTrue(writes[0].endswith("\n"))
+        req = json.loads(writes[0])
+        self.assertEqual(req["action"], "transcribe_wav")
+        self.assertEqual(req["language"], "da")
+        self.assertEqual(req["initial_prompt"], "Codex")
+        # Wav path is materialised at request time and cleaned up after.
+        self.assertFalse(os.path.isfile(req["wav_path"]),
+                         f"wav not cleaned: {req['wav_path']}")
+
+    def test_two_consecutive_transcribes_reuse_one_subprocess(self):
+        """The headline Wave 8-A promise: model loads ONCE, stays resident
+        between calls. A second transcribe must not spawn a new subprocess
+        nor re-read the ready handshake."""
+        import numpy as np
+
+        fake = _FakeServerProcess([
+            _ready_line(),
+            _ok_line("first"),
+            _ok_line("second"),
+        ])
+        model = self._build(fake)
+        audio = np.zeros(16000, dtype=np.float32)
+
+        seg1, _ = model.transcribe(audio, language=None, initial_prompt=None)
+        seg2, _ = model.transcribe(audio, language=None, initial_prompt=None)
+
+        self.assertEqual(seg1[0].text, "first")
+        self.assertEqual(seg2[0].text, "second")
+        # Two writes — one per call. No extra ready-line read.
+        self.assertEqual(len(fake.writes()), 2)
+
+    def test_transcribe_raises_on_per_request_error_envelope(self):
+        import numpy as np
+
+        fake = _FakeServerProcess([
+            _ready_line(),
+            _err_line("model file vanished"),
+        ])
+        model = self._build(fake)
+        audio = np.zeros(16000, dtype=np.float32)
+        with self.assertRaises(RuntimeError) as cm:
+            model.transcribe(audio, language=None, initial_prompt=None)
+        self.assertIn("model file vanished", str(cm.exception))
+
+    def test_transcribe_raises_on_unexpected_eof_mid_call(self):
+        """If the server dies after the ready line but before responding,
+        the wrapper must surface a clear error so the caller can re-spawn."""
+        import numpy as np
+
+        fake = _FakeServerProcess([
+            _ready_line(),
+            # No response line scripted — readline returns "" → EOF.
+        ])
+        model = self._build(fake)
+        audio = np.zeros(16000, dtype=np.float32)
+        with self.assertRaises(RuntimeError) as cm:
+            model.transcribe(audio, language=None, initial_prompt=None)
+        self.assertIn("exited mid-call", str(cm.exception))
+
+    def test_constructor_raises_when_server_dies_before_ready(self):
+        # No lines scripted → first readline returns "" → ready handshake
+        # fails. The wrapper must propagate the error so the caller falls
+        # back to ShellModel / faster-whisper.
+        fake = _FakeServerProcess([])
+        with patch.object(self.vp.subprocess, "Popen", return_value=fake):
+            with self.assertRaises(RuntimeError) as cm:
+                self.vp.RustWhisperServerModel("/r")
+        self.assertIn("ready line", str(cm.exception))
+
+    def test_constructor_raises_on_invalid_ready_json(self):
+        fake = _FakeServerProcess(["not json at all\n"])
+        with patch.object(self.vp.subprocess, "Popen", return_value=fake):
+            with self.assertRaises(RuntimeError) as cm:
+                self.vp.RustWhisperServerModel("/r")
+        self.assertIn("valid JSON", str(cm.exception))
+
+    def test_constructor_raises_when_ready_payload_missing_flag(self):
+        # Valid JSON but no `ready: true` — wrong shape, must error.
+        fake = _FakeServerProcess([json.dumps({"hello": "world"}) + "\n"])
+        with patch.object(self.vp.subprocess, "Popen", return_value=fake):
+            with self.assertRaises(RuntimeError) as cm:
+                self.vp.RustWhisperServerModel("/r")
+        self.assertIn("ready=true", str(cm.exception))
+
+    def test_transcribe_cleans_up_wav_on_response_error(self):
+        """The wav temp file must be removed even when the server returns
+        an error envelope — otherwise long sessions leak /tmp space."""
+        import numpy as np
+
+        fake = _FakeServerProcess([
+            _ready_line(),
+            _err_line("nope"),
+        ])
+        model = self._build(fake)
+        audio = np.zeros(16000, dtype=np.float32)
+        with self.assertRaises(RuntimeError):
+            model.transcribe(audio, language=None, initial_prompt=None)
+        wav_path = json.loads(fake.writes()[0])["wav_path"]
+        self.assertFalse(os.path.isfile(wav_path),
+                         f"wav leaked on error: {wav_path}")
+
+    def test_transcribe_accepts_and_ignores_faster_whisper_kwargs(self):
+        """Same surface guarantee as ShellModel — _transcribe_detail passes
+        a ton of faster-whisper kwargs the Rust path doesn't honour yet;
+        they must be silently accepted so the calling code stays uniform."""
+        import numpy as np
+
+        fake = _FakeServerProcess([_ready_line(), _ok_line("x")])
+        model = self._build(fake)
+        audio = np.zeros(16000, dtype=np.float32)
+        segments, _ = model.transcribe(
+            audio,
+            language=None,
+            initial_prompt=None,
+            beam_size=5,
+            temperature=[0.0, 0.2],
+            condition_on_previous_text=True,
+            no_speech_threshold=0.45,
+            log_prob_threshold=-1.0,
+            vad_filter=True,
+            vad_parameters={"threshold": 0.3},
+            word_timestamps=True,
+            hallucination_silence_threshold=2.0,
+        )
+        self.assertEqual(segments[0].text, "x")
+
+    def test_close_drains_pipe_and_waits_for_child(self):
+        fake = _FakeServerProcess([_ready_line()])
+        model = self._build(fake)
+        # Sanity: child reports alive before close.
+        self.assertIsNone(fake.poll())
+        model.close()
+        # Wait was called → returncode set.
+        self.assertEqual(fake.poll(), 0)
+
+    def test_close_is_idempotent(self):
+        fake = _FakeServerProcess([_ready_line()])
+        model = self._build(fake)
+        model.close()
+        model.close()  # must not raise
+
+
+class LoadStTModelPrefersServerWhenAvailableTests(unittest.TestCase):
+    """``load_stt_model`` wiring: when ``VOICEPI_TRANSCRIBE_BACKEND=rust`` is
+    set and the helper supports the long-running mode, the server is
+    preferred over the per-utterance ShellModel. When the server handshake
+    fails (e.g. older binary without the subcommand) we fall back to
+    ShellModel rather than skipping the Rust path entirely."""
+
+    def setUp(self):
+        sys.modules["numpy"] = real_numpy()
+        self.vp = _fresh_vp_transcribe()
+
+    def test_load_stt_model_returns_server_when_handshake_succeeds(self):
+        fake = _FakeServerProcess([
+            _ready_line(model_path="/m/ggml.bin", idle_unload_s=120),
+        ])
+        with patch.object(self.vp, "STT_BACKEND", "whisper"), \
+                patch.object(self.vp, "_assert_local_backend", lambda *_a, **_k: None), \
+                patch.object(self.vp, "_rust_helper_supports_transcribe",
+                             return_value=True), \
+                patch.object(self.vp.subprocess, "Popen", return_value=fake), \
+                patch.dict(os.environ, {
+                    self.vp.TRANSCRIBE_BACKEND_ENV: "rust",
+                    "VOICEPI_RUST_INJECTOR": "/path/to/whisper-dictate",
+                }):
+            model = self.vp.load_stt_model("base", "cpu", "int8")
+        self.assertIsInstance(model, self.vp.RustWhisperServerModel)
+        self.assertEqual(model.ready["model_path"], "/m/ggml.bin")
+
+    def test_load_stt_model_falls_back_to_shell_when_server_handshake_fails(self):
+        # No ready line → server constructor raises → caller falls back to
+        # ShellModel. The user gets the per-utterance path instead of
+        # losing dictation entirely.
+        fake = _FakeServerProcess([])
+        with patch.object(self.vp, "STT_BACKEND", "whisper"), \
+                patch.object(self.vp, "_assert_local_backend", lambda *_a, **_k: None), \
+                patch.object(self.vp, "_rust_helper_supports_transcribe",
+                             return_value=True), \
+                patch.object(self.vp.subprocess, "Popen", return_value=fake), \
+                patch.dict(os.environ, {
+                    self.vp.TRANSCRIBE_BACKEND_ENV: "rust",
+                    "VOICEPI_RUST_INJECTOR": "/path/to/whisper-dictate",
+                }):
+            model = self.vp.load_stt_model("base", "cpu", "int8")
+        self.assertIsInstance(model, self.vp.RustWhisperShellModel)
+
+
 @unittest.skipUnless(sys.platform == "win32",
                      "Windows-specific subprocess invocation test")
 class WindowsHelperSubprocessTests(unittest.TestCase):

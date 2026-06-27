@@ -1,82 +1,118 @@
-//! JSON-envelope dispatcher for the hidden `transcribe-wav` sub-command.
+//! Subcommand entry points for `whisper-dictate transcribe-wav` (single-shot)
+//! and `whisper-dictate transcribe-server` (long-running in-process worker).
 //!
-//! This is the runtime-wiring layer for Phase 1.2 of the Python-removal
-//! roadmap (#348). The Python `vp_transcribe.py` worker shells out to
-//! `whisper-dictate transcribe-wav` (only when `VOICEPI_TRANSCRIBE_BACKEND=rust`
-//! is set — see the constraint in the PR description) and reads the resulting
-//! transcript back from stdout. By keeping the protocol JSON-over-stdio we
-//! match the same shape every other Rust↔Python helper uses (`health`,
-//! `redact-text`, `apply-profile`, `privacy`, `dictionary-runtime`), so the
-//! existing Python subprocess wrapper code carries over almost verbatim.
+//! ## Why two modes
 //!
-//! Request envelope (single JSON object on stdin):
+//! `transcribe-wav` is the historical Phase 1.2 shape (one request per
+//! process invocation). Every call reloads the GGML model from disk —
+//! 75 MB to 1.5 GB depending on size — so a dictation session pays the
+//! cold-start cost on every utterance. The Python wrapper
+//! `vp_transcribe.py::RustWhisperShellModel` shells out per call.
 //!
-//! ```json
-//! {
-//!   "action": "transcribe_wav",
-//!   "wav_path": "/tmp/voicepi-utterance-1234.wav",
-//!   "language": "en",                  // optional; "auto" / "" / null → auto-detect
-//!   "initial_prompt": "Codex Aurelia"  // optional; "" / null → no prompt
-//! }
-//! ```
+//! `transcribe-server` (Wave 8-A of #348) keeps the worker alive between
+//! requests via a line-delimited JSON protocol on stdin/stdout. The model
+//! is wrapped in [`IdleUnloadingModel`] so it lazy-loads on first
+//! transcribe AND drops itself after `VOICEPI_WHISPER_IDLE_UNLOAD_S`
+//! seconds of inactivity, returning the RAM. The Python wrapper spawns
+//! the server ONCE per supervisor lifetime instead of once per utterance.
 //!
-//! Response envelope (single JSON object on stdout):
+//! Both modes share the same request/response envelope — defined in
+//! [`super::protocol`] so the always-compiled JSON contract can be
+//! unit-tested without whisper.cpp on the build host. The whisper-rs-local
+//! feature is only required for the wiring layer here (the actual model
+//! load + inference call).
 //!
-//! ```json
-//! { "text": "hello world" }
-//! ```
+//! ## Model resolution
 //!
-//! On error the process exits non-zero and writes the message to stderr — the
-//! same convention the other helpers use, so the Python fallback path (drop
-//! the rust backend and surface the error to the user) doesn't need a special
-//! case for this command.
+//! Both modes resolve the model file from `VOICEPI_WHISPER_MODEL_PATH` first,
+//! then fall back to the first verified entry in the user-cache
+//! `whisper-models/` directory. Setting the env var explicitly always
+//! wins so power users can pin a specific GGML file outside the catalog.
 //!
-//! The model file is located from `VOICEPI_WHISPER_MODEL_PATH`. Resolving it
-//! lazily (per-process) rather than at module load means tests can override
-//! the env var without re-importing.
+//! ## Per-request error handling
+//!
+//! `transcribe-wav` (single-shot) exits non-zero on any error — the
+//! historical contract; the Python wrapper treats a non-zero exit as
+//! "fall back to faster-whisper".
+//!
+//! `transcribe-server` (long-running) emits a `{"error": "..."}` line on
+//! per-request errors and CONTINUES serving — tearing the worker down on
+//! a single bad request would defeat the whole point of caching the
+//! loaded model. The per-request envelope shape lives in
+//! [`super::protocol::error_envelope`].
 
 use std::env;
-use std::io::{self, Read};
+use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 
+use super::idle::{parse_idle_timeout_from_env, IdleUnloadingModel};
 use super::local::LocalWhisper;
+use super::protocol::{
+    normalise_language, normalise_prompt, read_request_from_reader, serve_loop, ServerReady,
+    TranscribeRequest, TranscribeResponse,
+};
 
 /// Env var the Python wiring sets to point at a downloaded GGML model file.
 pub const MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";
 
-/// JSON request envelope. Matches the documented shape exactly; unknown
-/// fields are rejected by serde so a future schema bump can't silently
-/// produce wrong output.
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub enum TranscribeRequest {
-    /// Transcribe a 16 kHz mono WAV file from disk and return its text.
-    TranscribeWav {
-        wav_path: String,
-        #[serde(default)]
-        language: Option<String>,
-        #[serde(default)]
-        initial_prompt: Option<String>,
-    },
-}
-
-/// JSON response envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TranscribeResponse {
-    pub text: String,
-}
-
-/// Entry point used by `main.rs`. Reads one JSON request from stdin, runs
-/// inference, and prints one JSON response to stdout.
+/// Entry point used by `main.rs` for the single-shot `transcribe-wav`
+/// subcommand. Reads one JSON request from stdin, runs inference, and
+/// prints one JSON response to stdout.
 pub fn handle_transcribe_wav() -> Result<()> {
     let request = read_request_from_reader(&mut io::stdin().lock())?;
     let model_path = resolve_model_path_from_env()?;
     let response = dispatch(&model_path, request)?;
     println!("{}", serde_json::to_string(&response)?);
     Ok(())
+}
+
+/// Entry point used by `main.rs` for the long-running `transcribe-server`
+/// subcommand (Wave 8-A of #348).
+///
+/// Loads the model once (lazily, on the first transcribe call) and keeps
+/// it resident behind an [`IdleUnloadingModel`] that drops it after
+/// `VOICEPI_WHISPER_IDLE_UNLOAD_S` seconds of inactivity. Reads one JSON
+/// request per `\n`-terminated line from stdin, writes one JSON response
+/// per line to stdout. Per-request errors stay in-protocol (encoded as
+/// `{"error": "..."}` envelopes via [`super::protocol::error_envelope`])
+/// so the long-running worker survives bad requests.
+///
+/// Emits a [`ServerReady`] line first so the Python wrapper can confirm
+/// the binary supports the long-running mode and log the effective
+/// model + idle config before sending its first request. The model is
+/// NOT loaded at this point — first transcribe call triggers the load
+/// via [`IdleUnloadingModel::with_model`]'s lazy loader.
+pub fn handle_transcribe_server() -> Result<()> {
+    let model_path = resolve_model_path_from_env()?;
+    let idle = parse_idle_timeout_from_env()?;
+    let model = IdleUnloadingModel::for_local_whisper(model_path.clone(), idle);
+
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    // Emit ready before doing anything else so the Python wrapper sees
+    // life-signs even if the first transcribe call takes a while to
+    // load the model. The wrapper greps for `"ready":true` on the first
+    // line so the protocol stays stable.
+    let ready = ServerReady {
+        ready: true,
+        model_path: model_path.display().to_string(),
+        idle_unload_s: idle.map(|d| d.as_secs()).unwrap_or(0),
+    };
+    use std::io::Write;
+    writeln!(stdout, "{}", serde_json::to_string(&ready)?)
+        .context("failed to write transcribe-server ready line")?;
+    stdout
+        .flush()
+        .context("failed to flush transcribe-server ready line")?;
+
+    let stdin = io::stdin();
+    let stdin = stdin.lock();
+    let reader = BufReader::new(stdin);
+    serve_loop(reader, stdout, |wav_path, language, initial_prompt| {
+        model.with_model(|m| m.transcribe_wav(Path::new(wav_path), language, initial_prompt))
+    })
 }
 
 /// Resolve the model file path for inference.
@@ -94,8 +130,6 @@ fn resolve_model_path_from_env() -> Result<PathBuf> {
         if !trimmed.is_empty() {
             return Ok(PathBuf::from(trimmed));
         }
-        // Set but empty — give a clear error rather than silently falling
-        // through to the cache-dir search, which would be confusing.
         return Err(anyhow!(
             "{MODEL_PATH_ENV} is set but empty; point it at a GGML \
              whisper.cpp model file"
@@ -158,137 +192,10 @@ fn dispatch(model_path: &Path, request: TranscribeRequest) -> Result<TranscribeR
     }
 }
 
-/// Treat `None`, `Some("")`, and `Some("auto")` as "no language pinned" — the
-/// `auto` sentinel is meaningful here and mirrors the Python config UI.
-fn normalise_language(value: Option<&str>) -> Option<&str> {
-    match value {
-        None => None,
-        Some("") | Some("auto") => None,
-        Some(other) => Some(other),
-    }
-}
-
-/// Treat only `None` and `Some("")` as "no prompt". A literal `"auto"` is a
-/// valid prompt token (the user or a dictionary entry might legitimately ask
-/// the model to bias toward that word) and must reach the inference call
-/// unchanged, matching the faster-whisper path's behaviour.
-fn normalise_prompt(value: Option<&str>) -> Option<&str> {
-    match value {
-        None => None,
-        Some("") => None,
-        Some(other) => Some(other),
-    }
-}
-
-/// Parse a JSON request from an arbitrary reader. Exposed for unit tests so
-/// they don't have to splice stdin.
-fn read_request_from_reader<R: Read>(reader: &mut R) -> Result<TranscribeRequest> {
-    let mut raw = String::new();
-    reader
-        .read_to_string(&mut raw)
-        .context("failed to read transcribe-wav request from stdin")?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse transcribe-wav JSON request: {raw}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_env_lock::ENV_LOCK;
-
-    #[test]
-    fn parses_minimal_request() {
-        let mut input = br#"{"action":"transcribe_wav","wav_path":"/tmp/a.wav"}"#.as_slice();
-        let req = read_request_from_reader(&mut input).unwrap();
-        assert_eq!(
-            req,
-            TranscribeRequest::TranscribeWav {
-                wav_path: "/tmp/a.wav".to_owned(),
-                language: None,
-                initial_prompt: None,
-            }
-        );
-    }
-
-    #[test]
-    fn parses_request_with_language_and_prompt() {
-        let json = br#"{
-            "action": "transcribe_wav",
-            "wav_path": "C:/Users/foo/u.wav",
-            "language": "da",
-            "initial_prompt": "Codex Aurelia"
-        }"#;
-        let mut input = json.as_slice();
-        let req = read_request_from_reader(&mut input).unwrap();
-        assert_eq!(
-            req,
-            TranscribeRequest::TranscribeWav {
-                wav_path: "C:/Users/foo/u.wav".to_owned(),
-                language: Some("da".to_owned()),
-                initial_prompt: Some("Codex Aurelia".to_owned()),
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_action() {
-        let mut input = br#"{"action":"do_the_thing","wav_path":"x"}"#.as_slice();
-        let err = read_request_from_reader(&mut input).unwrap_err();
-        assert!(
-            err.to_string().contains("transcribe-wav JSON request"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_field_to_prevent_silent_schema_drift() {
-        // deny_unknown_fields guards against the case where a future Python
-        // worker sends a new key (e.g. `temperature`) that this build doesn't
-        // honour: we'd rather fail loudly so the user updates the Rust binary
-        // than silently ignore the request and produce wrong output.
-        let json = br#"{
-            "action": "transcribe_wav",
-            "wav_path": "/tmp/a.wav",
-            "temperature": 0.0
-        }"#;
-        let mut input = json.as_slice();
-        let err = read_request_from_reader(&mut input).unwrap_err();
-        assert!(
-            err.to_string().to_lowercase().contains("temperature")
-                || err.to_string().contains("unknown field"),
-            "expected unknown-field error, got: {err}"
-        );
-    }
-
-    #[test]
-    fn rejects_empty_input() {
-        let mut input = b"".as_slice();
-        let err = read_request_from_reader(&mut input).unwrap_err();
-        assert!(
-            err.to_string().contains("transcribe-wav JSON request"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn normalise_language_collapses_empty_and_auto() {
-        assert_eq!(normalise_language(None), None);
-        assert_eq!(normalise_language(Some("")), None);
-        assert_eq!(normalise_language(Some("auto")), None);
-        assert_eq!(normalise_language(Some("en")), Some("en"));
-        assert_eq!(normalise_language(Some("da")), Some("da"));
-    }
-
-    #[test]
-    fn normalise_prompt_preserves_literal_auto() {
-        // None and empty collapse, but a literal "auto" is a valid prompt
-        // (user/dictionary may inject the word) — it must reach the model
-        // unchanged so behaviour matches the faster-whisper path.
-        assert_eq!(normalise_prompt(None), None);
-        assert_eq!(normalise_prompt(Some("")), None);
-        assert_eq!(normalise_prompt(Some("auto")), Some("auto"));
-        assert_eq!(normalise_prompt(Some("Codex")), Some("Codex"));
-    }
 
     /// Pick the env var `user_cache_dir` consults on the current platform.
     const CACHE_ENV_VAR: &str = if cfg!(windows) {
