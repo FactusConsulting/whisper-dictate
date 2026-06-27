@@ -34,7 +34,48 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Compute which categories of files changed so the heavy jobs (rust matrix,
+  # python smoke, unit tests, groq integration) can skip themselves on
+  # docs-only PRs and save ~15 minutes of runner time per such PR. The
+  # `code` output is true iff anything OUTSIDE the documented exclusion
+  # set changed; on push to main / workflow_call we always run (the
+  # exclusions are PR-scoped only).
+  #
+  # Required-status-check contexts (rust/unit/smoke/lint-workflows) keep
+  # firing because their jobs still exist — they just exit immediately as
+  # `skipped` when `code == 'false'`. GitHub branch protection treats a
+  # skipped check on a job behind `if:` as success, so docs-only PRs stay
+  # mergeable without changing the ruleset.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          # `code` = "anything that ISN'T just docs/license/gitignore changed".
+          # Anchor with `**/*` to opt-in everything, then negate the docs
+          # paths so a README/CONFIGURATION.md/AGENTS.md/etc-only PR
+          # leaves the heavy jobs skipped. The .github/workflows/** is
+          # deliberately NOT excluded — a workflow YAML change must
+          # exercise the real CI, otherwise we ship a broken pipeline.
+          filters: |
+            code:
+              - '**/*'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!LICENSE'
+              - '!.gitignore'
+              - '!.editorconfig'
+              - '!.gitattributes'
+
   unit:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -52,6 +93,8 @@ jobs:
   # Groq's real API, so a network/quota hiccup must not block merges, and they
   # skip automatically when the GROQ_API_KEY secret is absent (e.g. fork PRs).
   groq-integration:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -100,6 +143,8 @@ jobs:
   smoke:
     # End-to-end import sanity: --help must stay cheap and avoid OS keyboard
     # backends. pynput is installed only for the Windows probe-key step.
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' || github.event_name != 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
@@ -143,6 +188,8 @@ jobs:
           fi
 
   rust:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' || github.event_name != 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
