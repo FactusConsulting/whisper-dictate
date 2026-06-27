@@ -16,6 +16,31 @@ from typing import Any
 
 CONFIG_ENV = "VOICEPI_CONFIG"
 
+# Rdev-specific aliases that pynput does not recognise.  The Rust backend
+# accepts them for user convenience, but pynput resolves the key name at
+# startup (before the listener registers), so an unknown name crashes the
+# worker even when VOICEPI_PYTHON_HOTKEY=0.  Normalise here so that a
+# config-backed ``right_alt`` is invisible to Python consumers.
+_HOTKEY_ALIASES: dict[str, str] = {
+    "right_alt": "alt_gr",
+    "ralt": "alt_gr",
+}
+
+
+def _normalise_hotkey_chord(raw: str) -> str:
+    """Rewrite rdev-specific aliases in a ``+``-separated chord string.
+
+    Each segment is lower-cased for the alias lookup; non-alias segments are
+    returned unchanged (original casing preserved) so ``Ctrl_R+Right_Alt``
+    becomes ``Ctrl_R+alt_gr``.
+    """
+    segments = raw.split("+")
+    out: list[str] = []
+    for seg in segments:
+        canonical = _HOTKEY_ALIASES.get(seg.strip().lower())
+        out.append(canonical if canonical is not None else seg)
+    return "+".join(out)
+
 
 @dataclass(frozen=True)
 class Setting:
@@ -162,6 +187,8 @@ def apply_config_to_environ() -> set[str]:
         if not setting:
             continue
         new_value = "" if value is None else str(value)
+        if setting.env == "VOICEPI_KEY" and new_value:
+            new_value = _normalise_hotkey_chord(new_value)
         if os.environ.get(setting.env) != new_value:
             os.environ[setting.env] = new_value
             changed.add(setting.env)
