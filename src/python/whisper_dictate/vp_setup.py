@@ -59,7 +59,9 @@ REDACTED = "***"
 # the Rust side here. SEE THE REPORT: ideally these move into the schema as a
 # `choices` field so both sides derive from one source.
 ENUM_CHOICES: dict[str, tuple[str, ...]] = {
-    "stt_backend": ("whisper", "parakeet", "openai"),
+    # Wave 8 of #348 dropped the "parakeet" entry; the wizard now only
+    # offers the two remaining backends.
+    "stt_backend": ("whisper", "openai"),
     "device": ("auto", "cuda", "cpu"),
     "compute_type": ("", "float32", "bfloat16", "float16", "int8_float16", "int8"),
     "inject_mode": ("auto", "type", "paste", "print"),

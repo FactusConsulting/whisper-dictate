@@ -6,14 +6,20 @@
 
 use serde_json::{Map, Value};
 
-use crate::config::keys::{DEFAULT_PARAKEET_MODEL, SETTINGS_KEYS};
+use crate::config::keys::{DEPRECATED_KEYS, SETTINGS_KEYS};
 use crate::config::settings::AppSettings;
 
 impl AppSettings {
     /// Serialize the typed settings into `object`, replacing the values for the
-    /// keys this app owns while leaving unrelated keys untouched.
+    /// keys this app owns while leaving unrelated keys untouched. Legacy keys
+    /// listed in [`DEPRECATED_KEYS`] (e.g. `parakeet_*` after the Wave 8 of
+    /// #348 backend removal) are stripped here as well, so they fade out of
+    /// users' config.json after one save round-trip.
     pub(crate) fn apply_to_object(&self, object: &mut Map<String, Value>) {
         for key in SETTINGS_KEYS {
+            object.remove(*key);
+        }
+        for key in DEPRECATED_KEYS {
             object.remove(*key);
         }
         set_string(object, "key", &self.key);
@@ -23,9 +29,6 @@ impl AppSettings {
         set_string(object, "stt_model", &self.stt_model);
         set_string(object, "stt_base_url", &self.stt_base_url);
         set_string(object, "stt_timeout_ms", &self.stt_timeout_ms);
-        if self.parakeet_model != DEFAULT_PARAKEET_MODEL {
-            set_string(object, "parakeet_model", &self.parakeet_model);
-        }
         set_string(object, "device", &self.device);
         set_string(object, "compute_type", &self.compute_type);
         set_string(object, "audio_device", &self.audio_device);
@@ -40,7 +43,6 @@ impl AppSettings {
         set_bool(object, "hallucination_guard", self.hallucination_guard);
         set_string(object, "max_chars_per_second", &self.max_chars_per_second);
         set_string(object, "min_record_seconds", &self.min_record_seconds);
-        set_string(object, "parakeet_min_seconds", &self.parakeet_min_seconds);
         set_string(object, "release_tail_ms", &self.release_tail_ms);
         set_string(object, "preview_seconds", &self.preview_seconds);
         set_string(object, "max_record_s", &self.max_record_s);
@@ -131,4 +133,30 @@ fn set_bool(object: &mut Map<String, Value>, key: &str, value: bool) {
         key.to_owned(),
         Value::String(if value { "1" } else { "0" }.to_owned()),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_to_object_strips_deprecated_parakeet_keys() {
+        // Wave 8 of #348: a saved config carrying the obsolete `parakeet_*`
+        // keys must lose them on the first save round-trip, so users don't
+        // keep tripping the migration warning on every launch.
+        let mut object: Map<String, Value> = serde_json::from_value(serde_json::json!({
+            "parakeet_model": "nvidia/parakeet-tdt-0.6b-v3",
+            "parakeet_min_seconds": "2.0",
+            "parakeet_force_pc": "1",
+            "unknown_preserved": "keep",
+        }))
+        .unwrap();
+
+        AppSettings::default().apply_to_object(&mut object);
+
+        assert!(!object.contains_key("parakeet_model"));
+        assert!(!object.contains_key("parakeet_min_seconds"));
+        assert!(!object.contains_key("parakeet_force_pc"));
+        assert_eq!(object["unknown_preserved"], "keep");
+    }
 }

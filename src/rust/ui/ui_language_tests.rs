@@ -57,8 +57,9 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     );
     assert_eq!(ui_text("en", UiTextKey::QualityGroupWhisper), "Whisper");
     assert_eq!(ui_text("da", UiTextKey::QualityGroupWhisper), "Whisper");
-    assert_eq!(ui_text("en", UiTextKey::QualityGroupParakeet), "Parakeet");
-    assert_eq!(ui_text("da", UiTextKey::QualityGroupParakeet), "Parakeet");
+    // Wave 8 of #348 removed the `QualityGroupParakeet` / `SpeechGroupParakeet`
+    // text keys together with the backend; the assertions for them are
+    // intentionally gone — the corresponding scope groups are no longer rendered.
     // UseDefaultPath key — used by the System tab "Use default path" button.
     assert_eq!(ui_text("en", UiTextKey::UseDefaultPath), "Use default path");
     assert_eq!(ui_text("da", UiTextKey::UseDefaultPath), "Brug standardsti");
@@ -70,14 +71,6 @@ fn ui_language_translates_primary_navigation_and_runtime_status() {
     assert_eq!(
         ui_text("da", UiTextKey::SpeechGroupWhisper),
         "Lokal Whisper"
-    );
-    assert_eq!(
-        ui_text("en", UiTextKey::SpeechGroupParakeet),
-        "Local NVIDIA Parakeet"
-    );
-    assert_eq!(
-        ui_text("da", UiTextKey::SpeechGroupParakeet),
-        "Lokal NVIDIA Parakeet"
     );
     assert_eq!(ui_text("en", UiTextKey::SpeechGroupOnline), "Cloud STT");
     assert_eq!(ui_text("da", UiTextKey::SpeechGroupOnline), "Cloud STT");

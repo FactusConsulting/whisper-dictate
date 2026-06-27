@@ -23,7 +23,6 @@ pub const RESTART_REQUIRED_KEYS: &[&str] = &[
     "device",
     "key",
     "model",
-    "parakeet_model",
     "stt_backend",
 ];
 
@@ -85,13 +84,26 @@ mod tests {
         let after = map([
             ("model", "large-v3-turbo"),
             ("device", "cuda"),
-            ("stt_backend", "parakeet"),
+            ("stt_backend", "openai"),
         ]);
         // Sorted: device, model, stt_backend.
         assert_eq!(
             changed_restart_keys(&before, &after),
             vec!["device", "model", "stt_backend"],
         );
+    }
+
+    #[test]
+    fn parakeet_model_no_longer_triggers_restart_after_wave_8_removal() {
+        // Wave 8 of #348 removed `parakeet_model` from the
+        // RESTART_REQUIRED_KEYS table together with the backend. A
+        // pre-Wave-8 config carrying a `parakeet_model = "..."` change
+        // must not flag a restart any more — the key is now treated
+        // exactly like any unknown setting.
+        assert!(!RESTART_REQUIRED_KEYS.contains(&"parakeet_model"));
+        let before = map([("parakeet_model", "nvidia/parakeet-tdt-0.6b-v3")]);
+        let after = map([("parakeet_model", "nvidia/parakeet-tdt-1.1b")]);
+        assert!(changed_restart_keys(&before, &after).is_empty());
     }
 
     #[test]

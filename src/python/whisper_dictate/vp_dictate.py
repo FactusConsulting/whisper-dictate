@@ -51,7 +51,7 @@ is_hallucination = None
 # Sorted alphabetically so the printed warning order is stable and matches
 # the Rust ``changed_restart_keys`` op (which iterates the sorted const).
 _RESTART_REQUIRED_KEYS = (
-    "compute_type", "device", "key", "model", "parakeet_model", "stt_backend",
+    "compute_type", "device", "key", "model", "stt_backend",
 )
 
 
@@ -122,8 +122,6 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         self._audio_source = audio_source
         self._config_mtime = config_mtime()
         self._effective_config = effective_config()
-        self.parakeet_min_seconds = float(
-            self._effective_config.get("parakeet_min_seconds", "1.5"))
         self.min_record_seconds = float(
             self._effective_config.get("min_record_seconds", "0.5"))
         self.release_tail_ms = int(float(
@@ -267,7 +265,6 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         vp_transcribe.BEAM_SIZE = int(after.get("beam_size", "1"))
         vp_transcribe.TEMPERATURES = vp_transcribe._parse_temperatures(after.get("temperature"))
         vp_transcribe.CONTEXT_MIN_SECONDS = float(after.get("context_min_seconds", "5"))
-        self.parakeet_min_seconds = float(after.get("parakeet_min_seconds", "1.5"))
         self.min_record_seconds = float(after.get("min_record_seconds", "0.5"))
         vp_transcribe.MAX_CHARS_PER_SECOND = float(after.get("max_chars_per_second", "30"))
         self.release_tail_ms = int(float(after.get("release_tail_ms", "200")))
@@ -351,12 +348,12 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         if len(pcm) < SR * min_seconds:  # too short — almost certainly a misfire
             print("  (too short — hold the key while you speak)", flush=True)
             return "too_short"
-        if self.stt_backend == "parakeet" and recording_s < self.parakeet_min_seconds:
-            print(
-                f"  (too short for Parakeet — speak at least {self.parakeet_min_seconds:.1f}s)",
-                flush=True,
-            )
-            return "too_short"
+        # Wave 8 of #348: the Parakeet-specific
+        # `recording_s < self.parakeet_min_seconds` branch was removed
+        # together with the backend. `recording_s` is retained in the
+        # signature so callers don't need to adapt this PR — it just no
+        # longer factors into the gating decision.
+        _ = recording_s
         return None
 
     def _transcribe_pcm(self, pcm: np.ndarray) -> "tuple[object, str | None]":
@@ -651,10 +648,10 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         """Begin the live partial-transcription preview for this recording.
 
         Only for the LOCAL whisper backend and a positive preview interval; the
-        cloud ("openai") backend would spam a paid API and Parakeet is skipped
-        for now. Read live (preview_seconds is refreshed by the live-config
-        reload that runs at the top of _start). Any failure here is non-fatal —
-        the preview is purely cosmetic.
+        cloud ("openai") backend would spam a paid API. Read live
+        (preview_seconds is refreshed by the live-config reload that runs at the
+        top of _start). Any failure here is non-fatal — the preview is purely
+        cosmetic.
         """
         if not preview_enabled(self.preview_seconds, self.stt_backend):
             return

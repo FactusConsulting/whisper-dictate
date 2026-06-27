@@ -332,7 +332,9 @@ class PreviewEngineTests(unittest.TestCase):
             # Disabled when interval is 0 (or negative).
             self.assertFalse(enabled(0.0, "whisper"))
             self.assertFalse(enabled(-1.0, "whisper"))
-            # Cloud (paid API) and Parakeet are never previewed.
+            # Cloud (paid API) is never previewed; the legacy "parakeet"
+            # token (Wave 8 of #348 dropped the backend) likewise stays
+            # disabled because it isn't in PREVIEW_BACKENDS.
             self.assertFalse(enabled(3.0, "openai"))
             self.assertFalse(enabled(3.0, "parakeet"))
             # Case / whitespace tolerant.

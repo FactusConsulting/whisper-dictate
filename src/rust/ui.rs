@@ -169,9 +169,13 @@ const GROQ_STT_MODELS: &[&str] = &[
     "distil-whisper-large-v3-en",
 ];
 const OPENAI_STT_MODELS: &[&str] = &["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
+// Wave 8 of #348 removed the `"parakeet"` entry here together with the
+// NeMo backend. A saved `stt_backend = "parakeet"` is migrated to whisper
+// at config-load time (see crate::config::load::migrate_parakeet_backend),
+// so the picker stays a closed set of the values the worker actually
+// accepts.
 const STT_BACKEND_OPTIONS: &[(&str, &str)] = &[
     ("whisper", "Local Whisper"),
-    ("parakeet", "Local NVIDIA Parakeet"),
     ("openai", "Cloud STT (Groq/OpenAI)"),
 ];
 const CLOUD_PROVIDER_OPTIONS: &[(&str, &str)] = &[
@@ -220,12 +224,6 @@ const GROQ_POST_MODELS: &[(&str, &str)] = &[
     ),
 ];
 const OPENAI_POST_MODELS: &[&str] = &["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"];
-const PARAKEET_MODELS: &[&str] = &[
-    "",
-    "nvidia/parakeet-tdt-0.6b-v3",
-    "nvidia/parakeet-tdt-1.1b",
-    "nvidia/parakeet-tdt-0.6b-v2",
-];
 
 pub fn run() -> Result<()> {
     // Pick the renderer by Cargo feature. We ship on glow (the `default`

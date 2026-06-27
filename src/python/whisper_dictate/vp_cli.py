@@ -238,7 +238,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "and term hits")
     ap.add_argument("--benchmark-backends", default=None,
                     help="comma-separated backend specs for benchmark runs, "
-                         "for example whisper:large-v3,parakeet")
+                         "for example whisper:large-v3,openai:gpt-4o-mini-transcribe")
     ap.add_argument("--benchmark-jsonl", default=None,
                     help="append benchmark JSONL results to this path instead "
                          "of stdout")
@@ -399,8 +399,8 @@ def _debug_rows(args, dev: str, ctype: str) -> list[tuple[str, str]]:
         ("beam_size",        f"{BEAM_SIZE}  (env VOICEPI_BEAM_SIZE={_env_preview('VOICEPI_BEAM_SIZE')})"),
         ("temperature",      f"{TEMPERATURES}  (env VOICEPI_TEMPERATURE={_env_preview('VOICEPI_TEMPERATURE')})"),
         ("context_min_s",    f"{CONTEXT_MIN_SECONDS}  (env VOICEPI_CONTEXT_MIN_SECONDS={_env_preview('VOICEPI_CONTEXT_MIN_SECONDS')})"),
-        ("parakeet_min_s",   f"{get_value('VOICEPI_PARAKEET_MIN_SECONDS', '1.5')}  "
-                             f"(env VOICEPI_PARAKEET_MIN_SECONDS={_env_preview('VOICEPI_PARAKEET_MIN_SECONDS')})"),
+        # Wave 8 of #348 removed the parakeet_min_s row together with the
+        # backend (no equivalent in the schema any more).
         ("release_tail_ms",  f"{get_value('VOICEPI_RELEASE_TAIL_MS', '200')}  "
                              f"(env VOICEPI_RELEASE_TAIL_MS={_env_preview('VOICEPI_RELEASE_TAIL_MS')})"),
         ("preview_seconds",  f"{get_value('VOICEPI_PREVIEW_SECONDS', '3')}  "

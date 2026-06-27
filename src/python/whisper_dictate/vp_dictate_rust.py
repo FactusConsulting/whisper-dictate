@@ -181,10 +181,10 @@ def rust_changed_restart_keys(
 def rust_should_skip(
     *,
     samples: int,
-    recording_s: float,
+    recording_s: float = 0.0,
     min_record_seconds: float,
-    parakeet_min_seconds: float,
-    backend: str,
+    parakeet_min_seconds: float = 1.5,
+    backend: str = "whisper",
 ) -> str | None | tuple[None, None]:
     """Decide whether to drop a captured clip, via the Rust helper.
 
@@ -194,9 +194,11 @@ def rust_should_skip(
       * ``(None, None)`` (a sentinel) when the helper is unavailable so
         the caller can distinguish "fall back to Python" from "keep".
 
-    Intentionally low-level: the caller stays responsible for printing the
-    hint + recording_s in the no-text event, so the Python orchestrator's
-    output stays byte-identical when the gate is on.
+    Wave 8 of #348 dropped the Parakeet backend; ``recording_s``,
+    ``parakeet_min_seconds`` and ``backend`` are kept on the signature for
+    one release of source-level back-compat with transitional callers, but
+    they no longer affect the decision (the Rust ``should_skip`` op tolerates
+    and ignores them in the wire format).
     """
     body = call_op(
         "should_skip",

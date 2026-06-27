@@ -57,20 +57,9 @@ const MODEL_PROFILES: &[ModelProfile] = &[
         setting_hint: "VOICEPI_MODEL=large-v3; VOICEPI_COMPUTE_TYPE=float16; VOICEPI_BEAM_SIZE=10",
         note: "Useful for hard audio; beam past 16 has diminishing returns.",
     },
-    ModelProfile {
-        name: "NVIDIA Parakeet 0.6B v3",
-        category: "stt",
-        required_free_mb: 7000,
-        setting_hint: "VOICEPI_STT_BACKEND=parakeet; VOICEPI_PARAKEET_MODEL=nvidia/parakeet-tdt-0.6b-v3",
-        note: "Very fast experimental STT; needs CUDA-enabled PyTorch.",
-    },
-    ModelProfile {
-        name: "NVIDIA Parakeet TDT 1.1B",
-        category: "stt",
-        required_free_mb: 12000,
-        setting_hint: "VOICEPI_STT_BACKEND=parakeet; VOICEPI_PARAKEET_MODEL=nvidia/parakeet-tdt-1.1b",
-        note: "English-heavy quality experiment; larger startup and VRAM footprint.",
-    },
+    // Wave 8 of #348 removed the NVIDIA Parakeet STT entries from this
+    // table along with the backend itself; only Whisper STT and Ollama
+    // post-processing profiles remain.
     ModelProfile {
         name: "Ollama Qwen2.5 3B",
         category: "post",
@@ -279,6 +268,15 @@ mod tests {
 
     #[test]
     fn estimates_model_fit_from_free_and_total_vram() {
+        // Profiles after the Wave 8 #348 Parakeet removal, in declaration order
+        // with a 10 000 MB GPU that has 4 000 MB free:
+        //   0: Whisper large-v3-turbo        (1.8 GB) — fits free  → "ok"
+        //   1: Whisper large-v3 quantized    (3.2 GB) — fits free  → "ok"
+        //   2: Whisper large-v3 float16      (5.0 GB) — fits total → "free-vram"
+        //   3: Whisper large-v3 fp16 hi-beam (8.0 GB) — fits total → "free-vram"
+        //   4: Ollama Qwen2.5 3B             (4.5 GB) — fits total → "free-vram"
+        //   5: Ollama Qwen2.5 7B Q4          (8.0 GB) — fits total → "free-vram"
+        //   6: Ollama Qwen2.5 14B Q4         (14  GB) — too small  → "too-small"
         let gpus = vec![GpuInfo {
             index: 0,
             name: "GPU".to_owned(),
@@ -290,8 +288,27 @@ mod tests {
         let fits = estimate_model_fits(&gpus);
 
         assert_eq!(fits[0].status, "ok");
-        assert_eq!(fits[4].status, "free-vram");
-        assert_eq!(fits[8].status, "too-small");
+        assert_eq!(fits[1].status, "ok");
+        assert_eq!(fits[2].status, "free-vram");
+        assert_eq!(fits[6].status, "too-small");
+    }
+
+    #[test]
+    fn model_profiles_no_longer_include_parakeet() {
+        // Wave 8 of #348 dropped the NVIDIA Parakeet STT profiles. Pin this
+        // so a future contributor that re-adds them notices.
+        for profile in MODEL_PROFILES {
+            assert!(
+                !profile.name.to_lowercase().contains("parakeet"),
+                "stale Parakeet profile: {}",
+                profile.name,
+            );
+            assert!(
+                !profile.setting_hint.contains("parakeet"),
+                "stale Parakeet hint: {}",
+                profile.setting_hint,
+            );
+        }
     }
 
     #[test]

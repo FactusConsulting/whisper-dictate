@@ -52,7 +52,11 @@ fn install_plan_accepts_legacy_named_requirements_file_from_old_bundles() {
 }
 
 #[test]
-fn install_plan_includes_parakeet_requirements_when_backend_requests_it() {
+fn install_plan_skips_legacy_parakeet_requirements_after_backend_removal() {
+    // Wave 8 of #348: the Parakeet backend (and `requirements/parakeet.txt`)
+    // were removed. Even if a stale file is sitting next to the venv from
+    // an older checkout, the installer must no longer pick it up — the
+    // optional-requirements hook only handles `requirements/gpu.txt` now.
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("requirements")).unwrap();
@@ -60,18 +64,15 @@ fn install_plan_includes_parakeet_requirements_when_backend_requests_it() {
     std::fs::write(dir.path().join("requirements").join("parakeet.txt"), "").unwrap();
 
     let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
-    let _backend_guard = EnvVarGuard::set(STT_BACKEND_ENV, "parakeet");
+    // The legacy env-var opt-in is gone; even setting it must NOT add an
+    // install command for parakeet requirements any more.
+    let _backend_guard = EnvVarGuard::set("VOICEPI_STT_BACKEND", "parakeet");
     let plan = InstallPlan::for_current_environment(dir.path().to_path_buf()).unwrap();
 
-    assert_eq!(plan.install_commands.len(), 3);
-    assert_eq!(
-        plan.install_commands[2].args[4],
-        dir.path()
-            .join("requirements")
-            .join("parakeet.txt")
-            .display()
-            .to_string()
-    );
+    // Base + pip-upgrade only — no third command for the legacy parakeet bundle.
+    assert_eq!(plan.install_commands.len(), 2);
+    let pip_install = plan.install_commands[1].args.last().unwrap();
+    assert!(!pip_install.contains("parakeet"));
 }
 
 #[test]
@@ -95,20 +96,6 @@ fn install_plan_includes_gpu_requirements_when_cuda_device_requests_it() {
             .display()
             .to_string()
     );
-}
-
-#[test]
-fn install_plan_skips_missing_parakeet_requirements() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("requirements")).unwrap();
-    std::fs::write(dir.path().join("requirements").join("cpu.txt"), "").unwrap();
-
-    let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
-    let _backend_guard = EnvVarGuard::set(STT_BACKEND_ENV, "parakeet");
-    let plan = InstallPlan::for_current_environment(dir.path().to_path_buf()).unwrap();
-
-    assert_eq!(plan.install_commands.len(), 2);
 }
 
 #[test]

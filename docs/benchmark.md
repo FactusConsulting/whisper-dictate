@@ -23,7 +23,7 @@ The script records each missing item to `benchmark\audio\<id>.wav`.
 ```powershell
 whisper-dictate run `
   --benchmark-corpus benchmark\corpus.json `
-  --benchmark-backends "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3" `
+  --benchmark-backends "whisper:large-v3,openai:gpt-4o-mini-transcribe" `
   --benchmark-jsonl benchmark\results.jsonl
 ```
 

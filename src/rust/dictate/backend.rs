@@ -5,18 +5,21 @@
 //! (right before the model load), so a shell-out cost is negligible — the
 //! `dictate-ops` JSON-RPC subcommand exposes both as ops the Python caller
 //! can opt into via `VOICEPI_DICTATE_BACKEND=rust`.
+//!
+//! Wave 8 of #348 removed the NeMo/Parakeet backend; only Whisper (local
+//! faster-whisper or the Rust whisper-rs helper) and OpenAI-compatible
+//! cloud STT remain.
 
 use std::fmt;
 
-/// The three backends recognised by the worker. Matches
-/// `vp_transcribe.VALID_STT_BACKENDS = ("whisper", "parakeet", "openai")`
-/// — the historical alias `"faster-whisper"` is normalised to `"whisper"`
-/// at the env-read site (`vp_transcribe.STT_BACKEND`) so it is not part
-/// of the public set here.
+/// The two backends recognised by the worker. Matches
+/// `vp_transcribe.VALID_STT_BACKENDS = ("whisper", "openai")` after the
+/// Wave 8 of #348 backend removal — the historical alias `"faster-whisper"`
+/// is normalised to `"whisper"` at the env-read site
+/// (`vp_transcribe.STT_BACKEND`) so it is not part of the public set here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendKind {
     Whisper,
-    Parakeet,
     Openai,
 }
 
@@ -26,7 +29,6 @@ impl BackendKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Whisper => "whisper",
-            Self::Parakeet => "parakeet",
             Self::Openai => "openai",
         }
     }
@@ -36,7 +38,6 @@ impl BackendKind {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Whisper => "Whisper",
-            Self::Parakeet => "NVIDIA Parakeet",
             Self::Openai => "External API",
         }
     }
@@ -44,11 +45,7 @@ impl BackendKind {
     /// Slice of every valid backend identifier (stable order — used by
     /// the validation error message).
     pub fn all() -> &'static [BackendKind] {
-        &[
-            BackendKind::Whisper,
-            BackendKind::Parakeet,
-            BackendKind::Openai,
-        ]
+        &[BackendKind::Whisper, BackendKind::Openai]
     }
 }
 
@@ -79,11 +76,12 @@ fn expected_csv() -> String {
 
 /// Parse + validate a backend identifier (case-insensitive; the historical
 /// `"faster-whisper"` alias is mapped to [`BackendKind::Whisper`], matching
-/// `vp_transcribe.STT_BACKEND` normalisation).
+/// `vp_transcribe.STT_BACKEND` normalisation). The legacy
+/// `"parakeet"` backend was removed in Wave 8 of #348 and now errors out
+/// the same as any unknown value.
 pub fn validate_backend(input: &str) -> Result<BackendKind, BackendLabelError> {
     match input.trim().to_lowercase().as_str() {
         "whisper" | "faster-whisper" => Ok(BackendKind::Whisper),
-        "parakeet" => Ok(BackendKind::Parakeet),
         "openai" => Ok(BackendKind::Openai),
         _ => Err(BackendLabelError {
             input: input.to_owned(),
@@ -108,11 +106,6 @@ mod tests {
     }
 
     #[test]
-    fn parakeet_label() {
-        assert_eq!(backend_label("parakeet").unwrap(), "NVIDIA Parakeet");
-    }
-
-    #[test]
     fn openai_label() {
         assert_eq!(backend_label("openai").unwrap(), "External API");
     }
@@ -133,13 +126,24 @@ mod tests {
     }
 
     #[test]
+    fn parakeet_backend_no_longer_validates() {
+        // Wave 8 of #348: Parakeet was dropped. A saved `stt_backend = "parakeet"`
+        // is migrated to "whisper" at load time (config::load::migrate_parakeet_backend),
+        // so this validator should now error for "parakeet" the same as any unknown.
+        let err = validate_backend("parakeet").unwrap_err();
+        assert_eq!(err.input, "parakeet");
+        let msg = err.to_string();
+        assert!(msg.contains("parakeet"));
+        assert!(!msg.contains("expected one of whisper, parakeet"));
+    }
+
+    #[test]
     fn unknown_backend_returns_error_naming_input_and_valid_options() {
         let err = validate_backend("groq").unwrap_err();
         assert_eq!(err.input, "groq");
         let msg = err.to_string();
         assert!(msg.contains("groq"));
         assert!(msg.contains("whisper"));
-        assert!(msg.contains("parakeet"));
         assert!(msg.contains("openai"));
     }
 
@@ -152,6 +156,7 @@ mod tests {
 
     #[test]
     fn display_uses_canonical_identifier() {
-        assert_eq!(format!("{}", BackendKind::Parakeet), "parakeet");
+        assert_eq!(format!("{}", BackendKind::Whisper), "whisper");
+        assert_eq!(format!("{}", BackendKind::Openai), "openai");
     }
 }

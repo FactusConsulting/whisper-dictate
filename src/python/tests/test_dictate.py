@@ -3,8 +3,9 @@
 The end-to-end loop is exercised by test_dictate_loop.py / test_capture.py and
 the source-layout guards by test_audio.py. These add focused coverage for the
 small pure helpers that live with the Dictate class: XKB layout normalisation,
-the too-short/Parakeet capture gate, and the lazy ``_load_runtime_modules``
-materialising this module's transcribe-side globals.
+the too-short capture gate, and the lazy ``_load_runtime_modules``
+materialising this module's transcribe-side globals. Wave 8 of #348 dropped
+the Parakeet branch of the skip gate together with the backend.
 """
 from helpers import (
     _capture_stdout,
@@ -55,10 +56,9 @@ class ShouldSkipPcmTests(unittest.TestCase):
             raise unittest.SkipTest(f"real numpy unavailable: {e}")
         vp_dictate._load_runtime_modules()
 
-    def _target(self, backend="whisper", parakeet_min=1.5, min_record=0.5):
+    def _target(self, backend="whisper", min_record=0.5):
         return types.SimpleNamespace(
-            stt_backend=backend, parakeet_min_seconds=parakeet_min,
-            min_record_seconds=min_record)
+            stt_backend=backend, min_record_seconds=min_record)
 
     def _pcm(self, samples):
         return self.np.zeros((samples, 1), dtype=self.np.int16)
@@ -76,18 +76,17 @@ class ShouldSkipPcmTests(unittest.TestCase):
             skip = vp_dictate.Dictate._should_skip_pcm(t, self._pcm(16000), 1.0)
         self.assertFalse(skip)
 
-    def test_parakeet_below_min_duration_is_skipped(self):
-        t = self._target(backend="parakeet", parakeet_min=1.5)
-        with _capture_stdout() as out:
-            skip = vp_dictate.Dictate._should_skip_pcm(t, self._pcm(16000), 1.0)
-        self.assertTrue(skip)
-        self.assertIn("too short for Parakeet", out.getvalue())
-
-    def test_parakeet_above_min_duration_is_kept(self):
-        t = self._target(backend="parakeet", parakeet_min=1.5)
+    def test_parakeet_backend_no_longer_alters_decision(self):
+        # Wave 8 of #348 removed the Parakeet-specific
+        # `recording_s < parakeet_min_seconds` branch together with the
+        # backend; the gate must now make the same decision for any backend
+        # token. A legacy ``stt_backend = "parakeet"`` is migrated to
+        # whisper at config-load time, but pin the fallback here so a stale
+        # value can never re-introduce a per-backend branch.
+        t = self._target(backend="parakeet")
         with _capture_stdout():
-            skip = vp_dictate.Dictate._should_skip_pcm(t, self._pcm(32000), 2.0)
-        self.assertFalse(skip)
+            self.assertFalse(
+                vp_dictate.Dictate._should_skip_pcm(t, self._pcm(16000), 1.0))
 
     def test_min_record_seconds_drops_clip_below_setting(self):
         # 0.45 s clip (7200 samples @ 16 kHz) dropped at the default 0.5 floor.

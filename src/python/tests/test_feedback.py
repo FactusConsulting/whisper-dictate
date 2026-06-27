@@ -299,7 +299,6 @@ class DictateHookTests(unittest.TestCase):
         d._first_audio_event.set()  # simulate audio already arrived
         d._last_audio_level_event = 0.0
         d.stt_backend = "whisper"
-        d.parakeet_min_seconds = 1.5
         d.preview_seconds = 0.0
         d.model = object()
         d.lang = "en"

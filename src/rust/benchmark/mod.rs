@@ -48,7 +48,7 @@ pub use scoring::{casefold, cer, levenshtein, normalize_words, term_report, wer,
 /// skipped for missing audio" hint triggers on identical events.
 pub const MISSING_AUDIO_REASON: &str = "audio file missing";
 
-const ALLOWED_BACKENDS: [&str; 3] = ["whisper", "parakeet", "openai"];
+const ALLOWED_BACKENDS: [&str; 2] = ["whisper", "openai"];
 
 /// Parsed `backend[:model]` entry. `model` is `None` when the spec omits the
 /// `:` separator OR when the trailing model is blank — matches Python's
@@ -88,7 +88,7 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
         };
         if !ALLOWED_BACKENDS.contains(&backend.as_str()) {
             return Err(anyhow!(
-                "unsupported benchmark backend '{backend}'; expected whisper, parakeet or openai"
+                "unsupported benchmark backend '{backend}'; expected whisper or openai"
             ));
         }
         out.push(BackendSpec {
@@ -120,20 +120,29 @@ mod tests {
 
     #[test]
     fn parse_backend_specs_supports_models() {
-        let specs = parse_backend_specs("whisper:large-v3, parakeet , openai:gpt-4o").unwrap();
-        assert_eq!(specs.len(), 3);
+        let specs = parse_backend_specs("whisper:large-v3, openai:gpt-4o").unwrap();
+        assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].backend, "whisper");
         assert_eq!(specs[0].model.as_deref(), Some("large-v3"));
-        assert_eq!(specs[1].backend, "parakeet");
-        assert_eq!(specs[1].model, None);
-        assert_eq!(specs[2].backend, "openai");
-        assert_eq!(specs[2].model.as_deref(), Some("gpt-4o"));
+        assert_eq!(specs[1].backend, "openai");
+        assert_eq!(specs[1].model.as_deref(), Some("gpt-4o"));
     }
 
     #[test]
     fn parse_backend_specs_rejects_unknown() {
         let err = parse_backend_specs("cloud:gpt-4o").unwrap_err();
         assert!(err.to_string().contains("unsupported benchmark backend"));
+    }
+
+    #[test]
+    fn parse_backend_specs_rejects_legacy_parakeet() {
+        // Wave 8 of #348 dropped the Parakeet backend, so `bench --backends`
+        // must error on the legacy spec instead of silently spawning a
+        // worker that immediately fails on the Python side.
+        let err = parse_backend_specs("parakeet").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("parakeet"));
+        assert!(msg.contains("expected whisper or openai"));
     }
 
     #[test]

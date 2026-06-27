@@ -27,8 +27,9 @@
 //!
 //! # Module layout
 //!
-//! - [`skip`] — `Dictate._should_skip_pcm` decision (too-short / Parakeet
-//!   minimum / `min_record_seconds` floor).
+//! - [`skip`] — `Dictate._should_skip_pcm` decision (`min_record_seconds`
+//!   floor; the legacy Parakeet-minimum branch was dropped together with
+//!   the backend in Wave 8 of #348).
 //! - [`restart`] — `Dictate._report_restart_required` diff against the
 //!   restart-required key set.
 //! - [`backend`] — `runtime._resolve_backend_and_device` /

@@ -22,8 +22,7 @@ previews therefore NEVER queue up. The cheap decode path
 condition_on_previous_text=False) is used so a preview is as fast as possible.
 
 The preview only runs for the LOCAL "whisper" backend. It is NEVER used for the
-"openai" cloud backend (that would spam a paid API), and "parakeet" is skipped
-for now.
+"openai" cloud backend (that would spam a paid API).
 
 numpy / vp_transcribe stay lazy: importing this module must not drag in the
 heavy ML/audio stack. ``np`` / ``transcribe_preview`` / ``TRANSCRIBE_LOCK`` are
@@ -66,8 +65,8 @@ PREVIEW_MAX_AUDIO_S = 15.0
 # dictation); the cap only guards the event payload against runaway essays.
 PREVIEW_TEXT_CHARS = 600
 
-# faster-whisper / CTranslate2 give "whisper"; the cloud + Parakeet backends do
-# not run a local model we can cheaply re-decode mid-recording.
+# faster-whisper / CTranslate2 give "whisper"; the cloud backend does not run
+# a local model we can cheaply re-decode mid-recording.
 PREVIEW_BACKENDS = ("whisper",)
 
 
@@ -90,8 +89,7 @@ def preview_enabled(preview_seconds: float, stt_backend: str) -> bool:
     """True when the live preview should run for this session.
 
     Gated on a positive interval AND the LOCAL whisper backend. The cloud
-    ("openai") backend is excluded so previews never hit a paid API; Parakeet is
-    skipped for now.
+    ("openai") backend is excluded so previews never hit a paid API.
 
     The Rust shell-out backend (``VOICEPI_TRANSCRIBE_BACKEND=rust``) is also
     excluded: it is a one-shot subprocess (writes a WAV, reloads the GGML

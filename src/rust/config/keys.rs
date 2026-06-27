@@ -4,12 +4,14 @@
 //! owns (used to wipe stale entries before re-serializing). [`RESTART_KEYS`] is
 //! the subset whose change requires a worker restart; it must stay consistent
 //! with the schema's `live` flag (guarded by a test in the parent module).
+//!
+//! [`DEPRECATED_KEYS`] is the subset of legacy keys we ACTIVELY strip on save
+//! so they fade out of users' config.json after one save round-trip. The
+//! Parakeet/NeMo backend removal in Wave 8 of #348 added the parakeet_*
+//! entries here; migration code in [`crate::config::load`] also logs a one-
+//! line warning and switches `stt_backend = "parakeet"` to the default.
 
 use crate::config::AppSettings;
-
-/// Default Parakeet model id. Kept here because both the typed defaults and the
-/// serializer (which omits the value when unchanged) reference it.
-pub(crate) const DEFAULT_PARAKEET_MODEL: &str = "nvidia/parakeet-tdt-0.6b-v3";
 
 /// Every config.json key managed by [`AppSettings`]. Used by the serializer to
 /// remove stale keys before writing the current typed values back.
@@ -21,7 +23,6 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "stt_model",
     "stt_base_url",
     "stt_timeout_ms",
-    "parakeet_model",
     "device",
     "compute_type",
     "audio_device",
@@ -36,7 +37,6 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "hallucination_guard",
     "max_chars_per_second",
     "min_record_seconds",
-    "parakeet_min_seconds",
     "release_tail_ms",
     "preview_seconds",
     "max_record_s",
@@ -95,7 +95,6 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "stt_model",
     "stt_base_url",
     "stt_timeout_ms",
-    "parakeet_model",
     "device",
     "compute_type",
     "local_only",
@@ -104,6 +103,14 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "quit_count",
     "quit_window_ms",
 ];
+
+/// Legacy config.json keys we now strip on save so they fade out of users'
+/// config.json after one save round-trip. The Parakeet/NeMo backend removal
+/// (Wave 8 of #348) added the parakeet_* entries here. Independent of
+/// [`SETTINGS_KEYS`] so the typed [`AppSettings`] does NOT have to keep
+/// (now-unused) fields for them.
+pub(crate) const DEPRECATED_KEYS: &[&str] =
+    &["parakeet_model", "parakeet_min_seconds", "parakeet_force_pc"];
 
 /// Report which [`RESTART_KEYS`] differ between two settings snapshots, so the
 /// UI can warn that a restart is required.

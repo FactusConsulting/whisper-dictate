@@ -536,17 +536,15 @@ def _validate_backend_opt_rust(backend: str) -> str:
 # validation path above so that callers running before `_load_runtime_modules()`
 # (e.g. unit tests, `--help`) don't drag the heavy ML stack in for a pure
 # membership check. A dedicated unit test keeps the two definitions in sync.
-_VALID_STT_BACKENDS_LOCAL: tuple[str, ...] = ("whisper", "parakeet", "openai")
+# Wave 8 of #348 dropped the `"parakeet"` entry together with the backend.
+_VALID_STT_BACKENDS_LOCAL: tuple[str, ...] = ("whisper", "openai")
 
 
 def _resolve_model_name(a, backend: str) -> tuple[str, str]:
     """Resolve the human label + concrete model name for the chosen backend."""
     label = _backend_label_opt_rust(backend)
     loaded_model_name = a.model
-    if backend == "parakeet":
-        from whisper_dictate.vp_parakeet import resolve_parakeet_model_name
-        loaded_model_name = resolve_parakeet_model_name(a.model)
-    elif backend == "openai":
+    if backend == "openai":
         from whisper_dictate.vp_external_api import load_stt_api_settings
         loaded_model_name = load_stt_api_settings(a.model).model
     return label, loaded_model_name
@@ -555,10 +553,11 @@ def _resolve_model_name(a, backend: str) -> tuple[str, str]:
 def _backend_label_opt_rust(backend: str) -> str:
     """Return the human label for ``backend``, optionally via the Rust helper.
 
-    Mirrors the Python fall-through (Parakeet/OpenAI/Whisper) byte-for-byte
-    when the gate is off. With ``VOICEPI_DICTATE_BACKEND=rust`` the label
-    comes from ``whisper-dictate dictate-ops`` so the canonical mapping
-    lives in one place — the Rust dictate module — ready for Wave 8.
+    Mirrors the Python fall-through (OpenAI/Whisper) byte-for-byte when the
+    gate is off. With ``VOICEPI_DICTATE_BACKEND=rust`` the label comes from
+    ``whisper-dictate dictate-ops`` so the canonical mapping lives in one
+    place — the Rust dictate module — ready for Wave 8. The NVIDIA Parakeet
+    backend was removed in Wave 8 of #348.
     """
     from whisper_dictate.vp_dictate_rust import rust_validate_backend
     try:
@@ -567,8 +566,6 @@ def _backend_label_opt_rust(backend: str) -> str:
         rust_result = None
     if rust_result is not None:
         return rust_result[1]
-    if backend == "parakeet":
-        return "NVIDIA Parakeet"
     if backend == "openai":
         return "External API"
     return "Whisper"

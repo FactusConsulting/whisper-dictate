@@ -171,13 +171,16 @@ class WizardBasicTrackTests(unittest.TestCase):
         self.assertIn("Wrote config to:", out)
 
     def test_invalid_enum_reprompts(self):
+        # Wave 8 of #348 dropped `"parakeet"` from the enum, so the wizard's
+        # invalid-reprompt flow now drives the user through ENUM_CHOICES with
+        # an explicit valid follow-up (openai).
         with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_STT_BACKEND=None):
-            # key=ENTER, model=ENTER, stt_backend: 'banana' (invalid) then 'parakeet'
+            # key=ENTER, model=ENTER, stt_backend: 'banana' (invalid) then 'openai'
             rc, config, out = self._run(
-                ["", "", "banana", "parakeet"] + [""] * 16 + ["n"]
+                ["", "", "banana", "openai"] + [""] * 16 + ["n"]
             )
         self.assertEqual(rc, 0)
-        self.assertEqual(config.get("stt_backend"), "parakeet")
+        self.assertEqual(config.get("stt_backend"), "openai")
         self.assertIn("not one of", out)
 
     # Fix 4: cloud provider ENTER-to-keep must not clobber existing stt_base_url
@@ -281,14 +284,17 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         self.assertNotIn("beam_size", config)
 
     def test_advanced_yes_walks_advanced_track(self):
-        # All basic ENTER, advanced => 'y'. The first advanced setting is
-        # parakeet_model (free text); set it and confirm the advanced track ran
-        # and the value persisted (basic-only would never reach it).
-        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_PARAKEET_MODEL=None):
-            answers = [""] * 8 + ["y"] + ["nvidia/parakeet-tdt-0.6b-v3"] + [""] * 60
+        # All basic ENTER, advanced => 'y'. Wave 8 of #348 dropped the
+        # parakeet_model entry that used to be the first advanced setting;
+        # the first remaining advanced setting in the stt-local category
+        # is now initial_prompt (free text), used here to confirm the
+        # advanced track ran and the value persisted (basic-only would
+        # never reach it).
+        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_INITIAL_PROMPT=None):
+            answers = [""] * 8 + ["y"] + ["Keep Codex CLI terms."] + [""] * 60
             rc, config, out = self._run(answers)
         self.assertEqual(rc, 0)
-        self.assertEqual(config.get("parakeet_model"), "nvidia/parakeet-tdt-0.6b-v3")
+        self.assertEqual(config.get("initial_prompt"), "Keep Codex CLI terms.")
         self.assertIn("Local speech-to-text", out)  # advanced category header shown
 
     def test_numeric_out_of_bounds_reprompts(self):

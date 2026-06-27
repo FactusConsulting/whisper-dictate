@@ -207,9 +207,9 @@ def parse_backend_specs(spec: str | Iterable[str] | None = None) -> list[Backend
         backend, sep, model = part.partition(":")
         backend = backend.strip().lower()
         model = model.strip() if sep else None
-        if backend not in ("whisper", "parakeet", "openai"):
+        if backend not in ("whisper", "openai"):
             raise ValueError(
-                f"unsupported benchmark backend {backend!r}; expected whisper, parakeet or openai")
+                f"unsupported benchmark backend {backend!r}; expected whisper or openai")
         out.append(BackendSpec(raw=part, backend=backend, model=model or None))
     if not out:
         raise ValueError("at least one benchmark backend is required")
@@ -248,10 +248,9 @@ def run_one(
     )
     env["VOICEPI_STT_BACKEND"] = spec.backend
     if spec.model:
-        if spec.backend == "parakeet":
-            env["VOICEPI_PARAKEET_MODEL"] = spec.model
-        else:
-            env["VOICEPI_MODEL"] = spec.model
+        # Wave 8 of #348: only whisper + openai remain, so the spec model
+        # always maps to VOICEPI_MODEL (no per-backend env-var routing).
+        env["VOICEPI_MODEL"] = spec.model
     if app_path:
         cmd = [python_exe, str(app_path)]
     else:
@@ -292,15 +291,8 @@ def run_one(
 
 def _load_model_for_spec(spec: BackendSpec) -> tuple[Any, str, str, str]:
     device, compute_type = _resolve_device(get_value("VOICEPI_DEVICE", "auto") or "auto")
-    if spec.backend == "parakeet":
-        from whisper_dictate.vp_parakeet import ParakeetModel, resolve_parakeet_model_name
-        model_name = resolve_parakeet_model_name(spec.model)
-        return (
-            ParakeetModel(model_name, device=device, compute_type=compute_type),
-            model_name,
-            device,
-            compute_type,
-        )
+    # Wave 8 of #348 removed the Parakeet branch here together with the
+    # backend; only the cloud and local Whisper paths remain.
     if spec.backend == "openai":
         from whisper_dictate.vp_external_api import ExternalTranscriptionModel
         model_name = spec.model or get_value("VOICEPI_STT_MODEL", "gpt-4o-mini-transcribe")

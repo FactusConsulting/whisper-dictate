@@ -90,8 +90,11 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn(".creation_flags(CREATE_NO_WINDOW);", script)
         self.assertIn("configure_background_process(&mut process);", script)
         self.assertIn("fn run_install_command(command: &PlannedCommand)", script)
+        # After Wave 8 of #348 removed `wants_parakeet_backend`, the next
+        # function after `run_install_command` in runtime.rs is
+        # `wants_cuda_runtime`. Use that as the slice upper bound.
         install_command = script.split("fn run_install_command", 1)[1].split(
-            "fn wants_parakeet_backend", 1
+            "fn wants_cuda_runtime", 1
         )[0]
         self.assertIn("configure_background_process(&mut process);", install_command)
 

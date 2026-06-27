@@ -10,7 +10,6 @@ impl WhisperDictateApp {
         // the active STT backend, so it's clear which knobs actually take effect.
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         let whisper = backend == SttBackendMode::Whisper;
-        let parakeet = backend == SttBackendMode::Parakeet;
         let language = self.settings.ui_language.clone();
 
         // --- All backends: capture/normalization/anti-hallucination gates that
@@ -99,7 +98,7 @@ impl WhisperDictateApp {
         // faster-whisper's model.transcribe(); the VAD threshold/min-silence/
         // speech-pad feed its vad_parameters. Live preview is gated to the local
         // whisper backend (vp_preview.PREVIEW_BACKENDS) so it never hits a paid
-        // cloud API or the Parakeet path.
+        // cloud API.
         scope_group(
             ui,
             palette,
@@ -144,7 +143,7 @@ impl WhisperDictateApp {
                     "preview_seconds",
                     "Live preview seconds",
                     &mut self.settings.preview_seconds,
-                    "While recording, transcribe the buffer this often (seconds) so the live card shows the sentence growing. 0 disables. LOCAL Whisper backend only — ignored for cloud STT and Parakeet. The final result at key release is unchanged.",
+                    "While recording, transcribe the buffer this often (seconds) so the live card shows the sentence growing. 0 disables. LOCAL Whisper backend only — ignored for cloud STT. The final result at key release is unchanged.",
                 );
                 numeric_help(
                     ui,
@@ -173,26 +172,8 @@ impl WhisperDictateApp {
             },
         );
 
-        ui.add_space(10.0);
-
-        // --- Parakeet: the only Parakeet-specific quality knob.
-        scope_group(
-            ui,
-            palette,
-            ui_text(&language, UiTextKey::QualityGroupParakeet),
-            "quality_parakeet",
-            |ui| {
-                numeric_enabled(
-                    ui,
-                    &language,
-                    parakeet,
-                    "parakeet_min_seconds",
-                    "Parakeet min seconds",
-                    &mut self.settings.parakeet_min_seconds,
-                    "Minimum captured audio length before Parakeet transcription is attempted. Used only with STT backend = parakeet.",
-                );
-            },
-        );
+        // Wave 8 of #348 removed the Parakeet-specific quality group
+        // ("Parakeet min seconds") together with the backend.
 
         ui.add_space(12.0);
         let show_initial_prompt_help = label_with_help(

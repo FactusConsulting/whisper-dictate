@@ -47,26 +47,24 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 |---|---|---|---|---|
 | `key` | `VOICEPI_KEY` | `ctrl_r` | Restart | Hold-to-talk hotkey, e.g. ctrl_r, alt_r, f9, or a chord like shift_r+ctrl_r. An all-bare-modifier binding fires only on that exact combo. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower. |
-| `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local faster-whisper), parakeet (local NVIDIA NeMo), or openai (external OpenAI-compatible cloud API). |
+| `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API). |
 | `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. |
-| `compute_type` | `VOICEPI_COMPUTE_TYPE` | _(unset)_ | Restart | Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU; ignored by Parakeet. |
+| `compute_type` | `VOICEPI_COMPUTE_TYPE` | _(unset)_ | Restart | Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Live | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
-| `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper; Parakeet v3 autodetects and ignores it. |
+| `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
 | `inject_mode` | `VOICEPI_INJECT_MODE` | `auto` | Live | Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only). |
 
-### Local speech-to-text (Whisper / Parakeet)
+### Local speech-to-text (Whisper)
 
 | Key | Env var | Default | Live/Restart | Description |
 |---|---|---|---|---|
-| `parakeet_model` | `VOICEPI_PARAKEET_MODEL` | _(unset)_ | Restart | Optional Parakeet/NeMo model override (e.g. nvidia/parakeet-tdt-0.6b-v3); takes precedence over model when stt_backend=parakeet. |
 | `initial_prompt` | `VOICEPI_INITIAL_PROMPT` | _(unset)_ | Live | Free-text vocabulary/context hint (up to ~1024 chars) biasing recognition toward your domain words and names. |
 | `beam_size` | `VOICEPI_BEAM_SIZE` | `1` | Live | Whisper beam-search width. 1 = fastest; wider = more accurate and slower (cheap on GPU). |
 | `temperature` | `VOICEPI_TEMPERATURE` | `0.0,0.2` | Live | Whisper decode-temperature fallback ladder (CSV floats). 0.0 locks to greedy decode for predictable output with no creative fallback. |
 | `context_min_seconds` | `VOICEPI_CONTEXT_MIN_SECONDS` | `5` | Live | Pass condition_on_previous_text only for utterances at least this long (seconds; 0 disables), keeping word boundaries on long sentences without short-clip hallucinations. |
-| `hallucination_guard` | `VOICEPI_HALLUCINATION_GUARD` | `1` | Live | Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for cloud/Parakeet. |
+| `hallucination_guard` | `VOICEPI_HALLUCINATION_GUARD` | `1` | Live | Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for the cloud backend. |
 | `max_chars_per_second` | `VOICEPI_MAX_CHARS_PER_SECOND` | `30` | Live | Speech-rate plausibility gate: drop a transcript whose chars/second exceeds this (0 disables). Real speech is ~15-25 chars/s; impossible rates flag a hallucination. |
 | `min_record_seconds` | `VOICEPI_MIN_RECORD_SECONDS` | `0.5` | Live | Discard recordings shorter than this as accidental key taps (effective floor max(0.3, value)), avoiding hallucinated credits on quiet sub-second taps. |
-| `parakeet_min_seconds` | `VOICEPI_PARAKEET_MIN_SECONDS` | `1.5` | Live | Parakeet only: ignore recordings shorter than this (seconds; 0 disables) because multilingual language autodetection is weaker on short clips. |
 | `preview_seconds` | `VOICEPI_PREVIEW_SECONDS` | `3` | Live | Local Whisper only: re-transcribe the buffer this often (seconds; 0 disables) so the live Runtime card shows the sentence growing. Display-only. |
 
 ### Cloud speech-to-text (OpenAI-compatible APIs)
@@ -219,7 +217,7 @@ modes run before any ML dependency loads).
   (for backup/migration). Useful for snapshotting a working setup or moving it
   to another machine.
 
-### Recipe A — Local STT on GPU (Whisper or Parakeet)
+### Recipe A — Local STT on GPU (Whisper)
 
 Run everything locally on an NVIDIA GPU. No network, no keys. See the
 [GPU VRAM sizing](#gpu-vram-sizing--what-to-set-per-card) table to pick
@@ -268,12 +266,11 @@ Notes:
   `whisper-dictate model-capacity` to see free VRAM and a fit table before
   loading. If the first transcription OOMs, drop `beam_size` or step
   `compute_type` down a tier (`float16` → `int8_float16`).
-- **Parakeet variant:** set `stt_backend=parakeet` and install the optional NeMo
-  requirements (see [Optional NVIDIA Parakeet backend](#optional-nvidia-parakeet-backend)).
-  With the default model the adapter uses `nvidia/parakeet-tdt-0.6b-v3`; override
-  with `parakeet_model`. Parakeet ignores `compute_type` and autodetects language
-  (so `lang` is a no-op), and keep `parakeet_min_seconds` above zero for short
-  push-to-talk clips.
+- **Parakeet:** the NeMo/Parakeet backend was removed in Wave 8 of #348.
+  Existing configs with `stt_backend = "parakeet"` are migrated to
+  `"whisper"` on the next launch; for the same Danish / mixed-Danish-English
+  use case, stay on `large-v3-turbo` (the default) and tune `beam_size` /
+  `temperature` from the Quality tab if needed.
 
 ### Recipe B — Cloud STT + API key (Groq or OpenAI)
 
@@ -570,7 +567,7 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
 | `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |
 | `--benchmark-corpus PATH` | off | manifest path | Run a benchmark corpus manifest and annotate results with reference text, WER/CER and technical-term hits/misses. |
-| `--benchmark-backends SPEC` | current backend | CSV specs | Backend/model specs for benchmarking, e.g. `whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3,openai:gpt-4o-mini-transcribe`. |
+| `--benchmark-backends SPEC` | current backend | CSV specs | Backend/model specs for benchmarking, e.g. `whisper:large-v3,openai:gpt-4o-mini-transcribe`. (Wave 8 of #348 removed the legacy `parakeet:...` spec together with the backend.) |
 | `--benchmark-jsonl PATH` | stdout | file path | Append benchmark JSONL results to a file instead of stdout. |
 | `--calibrate-mic [SECONDS]` | off | seconds, default `5` | Record a short mic sample, print pass/warn/fail audio diagnostics and recommended threshold settings, then exit. |
 | `--calibrate-file PATH` | off | audio path | Analyze an existing audio file with the same calibration logic. Combine with `--json` for structured output. |
@@ -609,37 +606,23 @@ One-off via terminal (the installer put the Rust controller on PATH):
 Or make your **own** shortcut whose Target is
 `%LOCALAPPDATA%\Programs\WhisperDictate\whisper-dictate.exe run --key ctrl_r --lang da`
 
-### Optional NVIDIA Parakeet backend
+### NVIDIA Parakeet backend (removed in Wave 8 of #348)
 
-The default backend remains faster-whisper. To try NVIDIA Parakeet, install the
-normal requirements first, then the optional NeMo requirements. This path is
-experimental on Windows because NeMo/PyTorch wheel compatibility depends on the
-local CUDA/Python combination:
+The optional NVIDIA Parakeet (NeMo) backend was dropped in Wave 8 of issue
+[#348](https://github.com/FactusConsulting/whisper-dictate/issues/348) along
+with the `requirements/parakeet.txt` install bundle and the
+`VOICEPI_PARAKEET_MODEL` / `VOICEPI_PARAKEET_MIN_SECONDS` env vars. It was
+unmaintained for ~6 months, there are no Rust NeMo bindings to migrate to
+under the Python-removal roadmap, and `whisper-large-v3-turbo` covers the
+Danish/mixed-Danish-English use case it was kept for.
 
-```powershell
-& "$env:USERPROFILE\whisper-dictate-venv\Scripts\python.exe" -m pip install `
-  -r "$env:LOCALAPPDATA\Programs\WhisperDictate\requirements\parakeet.txt"
-setx VOICEPI_STT_BACKEND parakeet
-```
-
-(Older installs may have `voice-pi-venv` instead of `whisper-dictate-venv`; both
-names keep working — the runtime prefers `whisper-dictate-venv` and only falls back to the legacy `voice-pi-venv` when the new directory is absent.)
-
-`VOICEPI_STT_BACKEND=parakeet` loads NeMo only when transcription starts, so
-`--help`, `--doctor`, and the default Whisper backend do not require Parakeet
-dependencies. With the default `VOICEPI_MODEL=large-v3-turbo`, the adapter uses
-`nvidia/parakeet-tdt-0.6b-v3`; set `VOICEPI_PARAKEET_MODEL` or `--model` to use
-another NeMo ASR model. The Settings UI intentionally lists only the practical
-choices: `nvidia/parakeet-tdt-0.6b-v3` for Danish/mixed Danish-English
-dictation, `nvidia/parakeet-tdt-1.1b` for pure English quality experiments, and
-`nvidia/parakeet-tdt-0.6b-v2` as a fast English-only baseline. v3 autodetects
-language; `VOICEPI_LANG=da` is a Whisper hint and does not force Parakeet to
-Danish. NVIDIA's model card does not publish a minimum utterance length for
-reliable language detection; keep `VOICEPI_PARAKEET_MIN_SECONDS` above zero for
-short push-to-talk clips and tune empirically. NeMo may emit training/dataloader
-/ffmpeg startup logs during model load and progress logs during transcription;
-whisper-dictate hides those by default and shows them only when
-`VOICEPI_STT_DEBUG=1`.
+**Migration:** the worker silently rewrites a saved
+`stt_backend = "parakeet"` to the schema default (`"whisper"`) on the next
+launch and strips the obsolete `parakeet_*` keys on the next save. There is
+no action required for existing users — the next start prints a single
+`[config]` warning line so the rewrite is visible. If you depended on the
+specific NeMo Danish behaviour, pin `model = large-v3` (full Whisper),
+`compute_type = float16` and bump `beam_size` to 5–8 in the Quality tab.
 
 ### Optional external API backends
 
@@ -945,9 +928,10 @@ module already wires up ydotool/uinput for Wayland.
 ## GPU VRAM sizing — what to set per card
 
 Run `whisper-dictate model-capacity` to inspect local NVIDIA GPU free/total
-VRAM and get a model-fit table for Whisper, Parakeet and local Ollama
-post-processing models. On Windows, the Settings UI exposes the same check on
-the Core tab as **Model fit**.
+VRAM and get a model-fit table for Whisper and local Ollama post-processing
+models. (The Parakeet rows were dropped in Wave 8 of #348 together with the
+backend.) On Windows, the Settings UI exposes the same check on the Core tab
+as **Model fit**.
 
 Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
 --format=csv` — browser/IDE/Discord eat 1–3 GB before whisper-dictate starts,

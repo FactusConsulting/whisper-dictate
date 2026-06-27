@@ -406,13 +406,27 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
 
         self.assertIn('reconfigure(encoding="utf-8", errors="replace")', script)
 
-    def test_runtime_has_parakeet_min_duration_and_backend_metrics(self):
-        # The live Dictate loop moved into vp_dictate.
+    def test_runtime_no_longer_carries_parakeet_min_duration_branch(self):
+        # Wave 8 of #348 removed the Parakeet backend, so the runtime branch
+        # (`recording_s < self.parakeet_min_seconds`) and the stdout line
+        # "too short for Parakeet" in vp_dictate._should_skip_pcm are gone.
+        # Pin the absence of the RUN-TIME branch (we tolerate a comment that
+        # documents the removal — the regex below only matches executable
+        # code, not lines starting with `#`).
+        import re
         with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:
             script = f.read()
+        code_lines = [
+            line for line in script.splitlines() if not line.lstrip().startswith("#")
+        ]
+        code = "\n".join(code_lines)
 
-        self.assertIn("self.parakeet_min_seconds", script)
-        self.assertIn("too short for Parakeet", script)
+        self.assertFalse(
+            re.search(r"\bself\.parakeet_min_seconds\b", code),
+            "vp_dictate still carries an executable reference to "
+            "self.parakeet_min_seconds; the Parakeet branch should be gone.",
+        )
+        self.assertNotIn("too short for Parakeet", code)
         self.assertIn('"stt_backend": self.stt_backend', script)
 
     def test_runtime_has_live_release_tail_padding(self):
@@ -424,11 +438,17 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn('after.get("release_tail_ms", "200")', script)
         self.assertIn("time.sleep(tail_s)", script)
 
-    def test_cli_debug_prints_parakeet_min_seconds(self):
+    def test_cli_debug_no_longer_prints_parakeet_min_seconds_row(self):
+        # Wave 8 of #348: the `parakeet_min_s` debug row + its
+        # VOICEPI_PARAKEET_MIN_SECONDS env-preview were removed from the
+        # effective-settings dump along with the backend. (A short note in
+        # a comment can still mention parakeet historically; the assertion
+        # targets the rendered string literals only.)
         with open("src/python/whisper_dictate/vp_cli.py", encoding="utf-8") as f:
             script = f.read()
 
-        self.assertIn("parakeet_min_s", script)
-        self.assertIn("VOICEPI_PARAKEET_MIN_SECONDS", script)
+        self.assertNotIn('"parakeet_min_s"', script)
+        self.assertNotIn("'parakeet_min_s'", script)
+        self.assertNotIn("VOICEPI_PARAKEET_MIN_SECONDS", script)
         self.assertIn("release_tail_ms", script)
         self.assertIn("VOICEPI_RELEASE_TAIL_MS", script)

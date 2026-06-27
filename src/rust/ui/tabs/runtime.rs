@@ -343,8 +343,10 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn backend_summary(&self) -> &str {
+        // Wave 8 of #348 removed the "Parakeet" backend; a saved value of
+        // `"parakeet"` migrates to `"whisper"` at config-load time, so the
+        // summary collapses to the two remaining choices.
         match self.settings.stt_backend.as_str() {
-            "parakeet" => "Parakeet",
             "openai" => self.current_cloud_provider().label(),
             _ => "Whisper",
         }
@@ -357,7 +359,7 @@ impl WhisperDictateApp {
                 icons::ICON_MODEL_TRAINING.codepoint,
                 compact_label(self.cloud_stt_model_summary(), 28),
             ),
-            SttBackendMode::Whisper | SttBackendMode::Parakeet => (
+            SttBackendMode::Whisper => (
                 ui_text(&self.settings.ui_language, UiTextKey::Compute),
                 icons::ICON_MEMORY.codepoint,
                 self.compute_summary(),

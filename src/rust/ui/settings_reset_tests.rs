@@ -5,7 +5,6 @@ fn changed_settings() -> AppSettings {
     AppSettings {
         stt_backend: "openai".to_owned(),
         model: "large-v3".to_owned(),
-        parakeet_model: "nvidia/parakeet-tdt-1.1b".to_owned(),
         stt_provider: "groq".to_owned(),
         stt_model: "whisper-large-v3".to_owned(),
         stt_base_url: "https://api.groq.com/openai/v1".to_owned(),
@@ -25,7 +24,6 @@ fn changed_settings() -> AppSettings {
         hallucination_guard: false,
         max_chars_per_second: "45".to_owned(),
         min_record_seconds: "0.8".to_owned(),
-        parakeet_min_seconds: "2.5".to_owned(),
         release_tail_ms: "350".to_owned(),
         preview_seconds: "5".to_owned(),
         max_record_s: "60".to_owned(),
@@ -86,7 +84,6 @@ fn speech_page_reset_restores_only_speech_settings() {
 
     assert_eq!(settings.stt_backend, defaults.stt_backend);
     assert_eq!(settings.model, defaults.model);
-    assert_eq!(settings.parakeet_model, defaults.parakeet_model);
     assert_eq!(settings.stt_provider, defaults.stt_provider);
     assert_eq!(settings.stt_model, defaults.stt_model);
     assert_eq!(settings.stt_base_url, defaults.stt_base_url);
@@ -117,7 +114,6 @@ fn quality_page_reset_restores_only_quality_settings() {
     assert_eq!(settings.context_min_seconds, defaults.context_min_seconds);
     assert_eq!(settings.max_chars_per_second, defaults.max_chars_per_second);
     assert_eq!(settings.min_record_seconds, defaults.min_record_seconds);
-    assert_eq!(settings.parakeet_min_seconds, defaults.parakeet_min_seconds);
     assert_eq!(settings.release_tail_ms, defaults.release_tail_ms);
     assert_eq!(settings.preview_seconds, defaults.preview_seconds);
     assert_eq!(settings.max_record_s, defaults.max_record_s);

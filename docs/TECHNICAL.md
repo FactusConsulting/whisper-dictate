@@ -61,7 +61,7 @@ User holds hotkey
 └───────────────────────────┬─────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ TRANSCRIPTION — faster-whisper or optional Parakeet          │
+│ TRANSCRIPTION — faster-whisper                               │
 │                                                             │
 │  Backend: VOICEPI_STT_BACKEND=whisper (default)              │
 │  Model: large-v3-turbo (default, fastest)                   │
@@ -69,7 +69,8 @@ User holds hotkey
 │  beam_size=1, temperature fallback [0.0, 0.2]               │
 │  condition_on_previous_text=False  (avoids hallucinations)  │
 │  no_speech_threshold=0.45  (lets quiet speech through)      │
-│  Optional: VOICEPI_STT_BACKEND=parakeet loads NeMo lazily    │
+│  Cloud: VOICEPI_STT_BACKEND=openai (OpenAI/Groq/custom)      │
+│  (Wave 8 of #348 removed the NeMo/Parakeet backend.)         │
 └───────────────────────────┬─────────────────────────────────┘
                             │ text string (e.g. "Rødgrød med fløde.")
                             ▼

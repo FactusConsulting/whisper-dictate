@@ -6,8 +6,9 @@ This repo is intentionally mixed Rust/Python. The rule of thumb is:
   process supervision, JSON helpers, platform-safe output and features that
   should run before Python ML dependencies load.
 - Python owns the live dictation worker where the core dependencies are still
-  Python libraries: `faster-whisper`, NeMo/Parakeet, NumPy, sounddevice,
-  pynput, evdev and audio/file decoding glue.
+  Python libraries: `faster-whisper`, NumPy, sounddevice, pynput, evdev and
+  audio/file decoding glue. (The NeMo/Parakeet adapter was dropped in Wave 8
+  of #348.)
 
 ## Rust
 
@@ -41,7 +42,7 @@ Python source lives in `src/python/whisper_dictate`.
 |---|---|---|
 | Worker orchestration | `runtime.py` | Live push-to-talk loop, hotkey lifecycle, audio capture start/stop, model loading, utterance lifecycle and legacy terminal command dispatch still depend on Python runtime libraries. |
 | Audio DSP/capture helpers | `vp_audio.py` | NumPy-based dBFS/SNR/gating and Linux audio-device probing are shared by live STT and calibration. |
-| STT adapters | `vp_transcribe.py`, `vp_external_api.py`, `vp_parakeet.py` | `faster-whisper`, OpenAI-compatible fallback, NeMo/Parakeet and audio-to-model glue are Python library boundaries. Rust owns privacy/dictionary/cloud helper paths around them where practical. |
+| STT adapters | `vp_transcribe.py`, `vp_external_api.py` | `faster-whisper` and OpenAI-compatible fallback are Python library boundaries. Rust owns privacy/dictionary/cloud helper paths around them where practical. (The `vp_parakeet.py` NeMo adapter was deleted in Wave 8 of #348.) |
 | Injection orchestration | `vp_inject.py` | Target-window detection, clipboard/pynput/ydotool fallback orchestration and focus restore still sit in the Python worker. Rust owns the keymap/helper path where parity exists. |
 | CLI compatibility | `vp_cli.py` | Argparse surface for `whisper-dictate run -- ...`, debug setting dump and Python-only direct execution compatibility. Public top-level subcommands should prefer Rust. |
 | Config compatibility/live reload | `vp_config.py` | Temporary Python compatibility layer for direct Python execution and live reload inside the worker. Normal Rust launches now export effective config into the worker environment before imports. |
@@ -70,7 +71,9 @@ Good Rust candidates:
 
 Keep in Python until there is a clear replacement:
 
-- `faster-whisper`, NeMo/Parakeet and model-specific audio transcription glue.
+- `faster-whisper` and model-specific audio transcription glue. (The Parakeet
+  / NeMo backend was removed in Wave 8 of #348 and is not coming back unless
+  a future wave finds a Rust-friendly NeMo path.)
 - NumPy/sounddevice/arecord capture and calibration paths.
 - pynput/evdev hotkey loops and target-window detection, especially on Windows
   where behavior must stay boring and predictable.

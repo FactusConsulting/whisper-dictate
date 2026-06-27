@@ -43,12 +43,16 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("provider.model_options()", script)
         self.assertIn('"gpt-4o-transcribe"', script)
         self.assertIn('"whisper-1"', script)
-        self.assertIn("const PARAKEET_MODELS: &[&str]", script)
-        self.assertIn('"nvidia/parakeet-tdt-0.6b-v3"', script)
-        self.assertIn('"nvidia/parakeet-tdt-1.1b"', script)
-        self.assertIn('"nvidia/parakeet-tdt-0.6b-v2"', script)
-        self.assertIn('"Parakeet model",', script)
-        self.assertIn("PARAKEET_MODELS", script)
+        # Wave 8 of #348 removed the Parakeet model picker and its const
+        # together with the backend. Pin the inverse so a future contributor
+        # who reintroduces a hard-coded NVIDIA model name here fails loudly.
+        self.assertNotIn("const PARAKEET_MODELS:", script)
+        self.assertNotIn("nvidia/parakeet-tdt-0.6b-v3", script)
+        self.assertNotIn("nvidia/parakeet-tdt-1.1b", script)
+        self.assertNotIn("nvidia/parakeet-tdt-0.6b-v2", script)
+        self.assertNotIn('"Parakeet model",', script)
+        self.assertNotIn(
+            '("parakeet", "Local NVIDIA Parakeet")', script)
         self.assertIn('GROQ_KEYS_URL: &str = "https://console.groq.com/keys"', api_keys)
         self.assertIn('OPENAI_KEYS_URL: &str = "https://platform.openai.com/api-keys"', api_keys)
         self.assertIn('"Cloud STT API key"', script)
@@ -165,14 +169,17 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("egui::Margin::symmetric(16, 14)", script)
 
     def test_rust_core_ui_groups_backend_specific_models_and_help(self):
+        # Wave 8 of #348 collapsed SttBackendMode to (Whisper, Cloud); the
+        # Parakeet variant + its "Local NVIDIA Parakeet" picker no longer
+        # ship.
         script = rust_ui_source()
 
         self.assertIn("enum SttBackendMode", script)
         self.assertIn("Local Whisper", script)
-        self.assertIn("Local NVIDIA Parakeet", script)
+        self.assertNotIn("Local NVIDIA Parakeet", script)
         self.assertIn("Cloud STT", script)
         self.assertIn("backend == SttBackendMode::Whisper", script)
-        self.assertIn("backend == SttBackendMode::Parakeet", script)
+        self.assertNotIn("SttBackendMode::Parakeet", script)
         self.assertIn("backend == SttBackendMode::Cloud", script)
         self.assertIn("backend != SttBackendMode::Cloud", script)
         self.assertIn("fn help_badge(", script)
@@ -338,7 +345,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         for label in (
             "STT backend",
             "Whisper model",
-            "Parakeet model",
+            # "Parakeet model" was removed in Wave 8 of #348 together with the backend.
             "Cloud STT model",
             "Linux keyboard layout",
             "Beam size",
@@ -422,15 +429,18 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertNotIn('"Dictation controls"', script)
         self.assertNotIn("Applies to local and cloud speech engines.", script)
         # New Speech tab scope-group structure (headings via UiTextKey, unique grid IDs).
+        # Wave 8 of #348 removed the SpeechGroupParakeet heading + "speech_parakeet"
+        # grid id together with the backend.
         self.assertIn("UiTextKey::SpeechGroupWhisper", script)
-        self.assertIn("UiTextKey::SpeechGroupParakeet", script)
+        self.assertNotIn("UiTextKey::SpeechGroupParakeet", script)
         self.assertIn("UiTextKey::SpeechGroupOnline", script)
         self.assertIn("UiTextKey::SpeechGroupGeneral", script)
         self.assertIn('"speech_whisper"', script)
-        self.assertIn('"speech_parakeet"', script)
+        self.assertNotIn('"speech_parakeet"', script)
         self.assertIn('"speech_online"', script)
         self.assertIn('"speech_general"', script)
-        # Device + Compute type are in the General group (shared by Whisper and Parakeet).
+        # Device + Compute type are in the General group, used by the local
+        # Whisper backend (Parakeet was dropped in Wave 8 of #348).
         self.assertIn("backend != SttBackendMode::Cloud", script)
         # Microphone + Refresh devices remain in the General group.
         self.assertIn('"Refresh devices"', script)
@@ -440,15 +450,11 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         """Encode the per-group field assignment so a future regrouping is caught."""
         script = rust_ui_source()
 
-        # Whisper group contains the Whisper model picker.
-        whisper_group = script.split('"speech_whisper"', 1)[1].split('"speech_parakeet"', 1)[0]
+        # Whisper group contains the Whisper model picker. Wave 8 of #348 dropped
+        # the Parakeet group, so the upper bound here is `speech_online`.
+        whisper_group = script.split('"speech_whisper"', 1)[1].split('"speech_online"', 1)[0]
         self.assertIn('"Whisper model"', whisper_group)
         self.assertIn("SttBackendMode::Whisper", whisper_group)
-
-        # Parakeet group contains the Parakeet model picker.
-        parakeet_group = script.split('"speech_parakeet"', 1)[1].split('"speech_online"', 1)[0]
-        self.assertIn('"Parakeet model"', parakeet_group)
-        self.assertIn("SttBackendMode::Parakeet", parakeet_group)
 
         # Online group contains cloud provider, model, URL, timeout, API key.
         # The key action buttons live in cloud_stt_key_section (a helper called
@@ -487,14 +493,15 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         from quality.rs; a future regrouping regression should fail this test."""
         script = rust_ui_source()
 
-        # Three scope_group headings driven by UiTextKey Quality group keys.
+        # Wave 8 of #348 collapsed the Quality tab to two scope_group headings
+        # (AllBackends + Whisper); the Parakeet group is gone.
         self.assertIn("UiTextKey::QualityGroupAllBackends", script)
         self.assertIn("UiTextKey::QualityGroupWhisper", script)
-        self.assertIn("UiTextKey::QualityGroupParakeet", script)
+        self.assertNotIn("UiTextKey::QualityGroupParakeet", script)
         # Exact grid id_salt values used by scope_group in quality.rs.
         self.assertIn('"quality_all_backends"', script)
         self.assertIn('"quality_whisper"', script)
-        self.assertIn('"quality_parakeet"', script)
+        self.assertNotIn('"quality_parakeet"', script)
         # text_scale_stepper must exist in the UI source (lives in system.rs after
         # the text_scale.rs refactor so it falls under the coverage exclusion).
         self.assertIn("fn text_scale_stepper(", script)

@@ -8,7 +8,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::io::platform_config_dir;
-use crate::config::keys::DEFAULT_PARAKEET_MODEL;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -19,7 +18,6 @@ pub struct AppSettings {
     pub stt_model: String,
     pub stt_base_url: String,
     pub stt_timeout_ms: String,
-    pub parakeet_model: String,
     pub device: String,
     pub compute_type: String,
     pub audio_device: String,
@@ -34,7 +32,6 @@ pub struct AppSettings {
     pub hallucination_guard: bool,
     pub max_chars_per_second: String,
     pub min_record_seconds: String,
-    pub parakeet_min_seconds: String,
     pub release_tail_ms: String,
     pub preview_seconds: String,
     pub max_record_s: String,
@@ -95,7 +92,6 @@ impl Default for AppSettings {
             stt_model: String::new(),
             stt_base_url: "https://api.openai.com/v1".to_owned(),
             stt_timeout_ms: "30000".to_owned(),
-            parakeet_model: DEFAULT_PARAKEET_MODEL.to_owned(),
             device: "auto".to_owned(),
             compute_type: String::new(),
             audio_device: String::new(),
@@ -110,7 +106,6 @@ impl Default for AppSettings {
             hallucination_guard: true,
             max_chars_per_second: "30".to_owned(),
             min_record_seconds: "0.5".to_owned(),
-            parakeet_min_seconds: "1.5".to_owned(),
             release_tail_ms: "200".to_owned(),
             preview_seconds: "3".to_owned(),
             max_record_s: "120".to_owned(),
@@ -194,7 +189,6 @@ impl AppSettings {
             "stt_model" => Some(&self.stt_model),
             "stt_base_url" => Some(&self.stt_base_url),
             "stt_timeout_ms" => Some(&self.stt_timeout_ms),
-            "parakeet_model" => Some(&self.parakeet_model),
             "device" => Some(&self.device),
             "compute_type" => Some(&self.compute_type),
             "local_only" => Some(if self.local_only { "1" } else { "0" }),
@@ -227,7 +221,6 @@ mod tests {
         assert_eq!(defaults.model, "large-v3-turbo");
         assert_eq!(defaults.stt_backend, "whisper");
         assert_eq!(defaults.stt_provider, "openai");
-        assert_eq!(defaults.parakeet_model, DEFAULT_PARAKEET_MODEL);
         assert_eq!(defaults.ui_theme, "dark");
         assert_eq!(defaults.ui_text_scale, "1.15");
         assert!(defaults.dictionary.ends_with("dictionary.json"));

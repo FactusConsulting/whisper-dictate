@@ -96,7 +96,6 @@ class DictateLoopTests(unittest.TestCase):
         d.frames = []
         d._record_started = 0.0
         d.stt_backend = "whisper"
-        d.parakeet_min_seconds = 1.5
         d.model = object()
         d.lang = "en"
         d.postprocess_settings = None

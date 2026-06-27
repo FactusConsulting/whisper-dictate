@@ -20,7 +20,6 @@ const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
 const RUST_INJECTOR_ENV: &str = "VOICEPI_RUST_INJECTOR";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
-const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 /// Opt-in switch for the experimental Rust-side capture pipeline (cpal +
 /// rubato + Silero via vad-rs). Read at supervisor start. Has no effect
 /// unless the binary was compiled with the `audio-in-rust` cargo feature
@@ -1057,18 +1056,10 @@ impl InstallPlan {
                 ));
             }
         }
-        if wants_parakeet_backend() {
-            if let Some(requirements) = first_existing_requirements(
-                &self.app_root,
-                &["requirements/parakeet.txt", "requirements-parakeet.txt"],
-            ) {
-                self.install_commands.push(pip_install_command(
-                    &self.venv_python,
-                    &requirements,
-                    &self.app_root,
-                ));
-            }
-        }
+        // Wave 8 of #348 removed the optional Parakeet/NeMo install
+        // step here together with the backend itself; the only optional
+        // requirements file the installer still appends is the CUDA
+        // bundle gated above on `wants_cuda_runtime()`.
     }
 
     fn run(&self) -> Result<()> {
@@ -1115,15 +1106,6 @@ fn run_install_command(command: &PlannedCommand) -> Result<()> {
     } else {
         Err(anyhow!("install command failed with status {status}"))
     }
-}
-
-fn wants_parakeet_backend() -> bool {
-    if env::var(STT_BACKEND_ENV).is_ok_and(|value| value.eq_ignore_ascii_case("parakeet")) {
-        return true;
-    }
-    config::load_settings()
-        .map(|settings| settings.stt_backend.eq_ignore_ascii_case("parakeet"))
-        .unwrap_or(false)
 }
 
 fn wants_cuda_runtime() -> bool {
