@@ -31,6 +31,8 @@ use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+use super::gpu::{self, GpuPolicy};
+
 /// Loaded whisper.cpp model + a per-call inference helper.
 ///
 /// One `LocalWhisper` owns the model weights; each `transcribe_wav` call
@@ -42,11 +44,17 @@ pub struct LocalWhisper {
 }
 
 impl LocalWhisper {
-    /// Load a GGML whisper.cpp model from disk (CPU-only).
+    /// Load a GGML whisper.cpp model from disk, picking GPU vs CPU according
+    /// to `VOICEPI_WHISPER_GPU` (see [`super::gpu::GPU_ENV`]).
     ///
     /// `model_path` should point to a file such as `ggml-small.en.bin` from
-    /// the [ggerganov/whisper.cpp releases]. GPU is explicitly disabled in
-    /// this spike — that lands in a later roadmap sub-task.
+    /// the [ggerganov/whisper.cpp releases]. The effective `use_gpu` is the
+    /// product of three things: the env-var policy, the compiled-in backend
+    /// feature (`whisper-rs-vulkan` as of Wave 7-C), and the resolution
+    /// rules in [`super::gpu::should_use_gpu`].
+    ///
+    /// For deterministic tests use [`Self::with_policy`] which takes the
+    /// policy explicitly instead of reading the env.
     ///
     /// **Only GGML is supported.** whisper.cpp has not yet picked up
     /// llama.cpp's GGUF container, so a GGUF file is rejected up front by a
@@ -54,6 +62,19 @@ impl LocalWhisper {
     ///
     /// [ggerganov/whisper.cpp releases]: https://huggingface.co/ggerganov/whisper.cpp
     pub fn new(model_path: &Path) -> Result<Self> {
+        let policy = gpu::parse_gpu_policy_from_env()?;
+        Self::with_policy(model_path, policy)
+    }
+
+    /// Load a GGML whisper.cpp model with an explicit [`GpuPolicy`].
+    ///
+    /// Bypasses the env-var read in [`Self::new`] so tests and callers that
+    /// already know the desired policy can pin it. The same compiled-in
+    /// feature gate from [`super::gpu::should_use_gpu`] still applies, so a
+    /// `Vulkan` policy on a build without `whisper-rs-vulkan` silently falls
+    /// back to CPU rather than erroring (matching the runtime "best effort"
+    /// promise of the env-var path).
+    pub fn with_policy(model_path: &Path, policy: GpuPolicy) -> Result<Self> {
         if !model_path.is_file() {
             return Err(anyhow!(
                 "whisper model file not found: {}",
@@ -75,7 +96,7 @@ impl LocalWhisper {
         })?;
 
         let params = WhisperContextParameters {
-            use_gpu: false,
+            use_gpu: gpu::should_use_gpu(policy),
             ..Default::default()
         };
 

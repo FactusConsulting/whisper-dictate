@@ -177,6 +177,32 @@ injection).
 > whisper.cpp does not yet read llama.cpp's newer GGUF format, and
 > loading a `.gguf` file is rejected up front with a clean error.
 
+#### GPU acceleration (Vulkan, Wave 7-C)
+
+Behind the **`whisper-rs-vulkan`** cargo feature (which transitively
+enables `whisper-rs-local`), the same dispatch path runs on GPU via
+whisper.cpp's Vulkan backend. Vulkan was chosen as the first backend
+because it covers both Windows AND Linux from a single feature flag,
+vendor-agnostically (no NVIDIA-only CUDA DLLs, no DirectML-only Windows
+gate). Builds require the [Vulkan SDK] on top of the `whisper-rs-local`
+prerequisites (CMake, C++ toolchain, libclang).
+
+Runtime selection is via **`VOICEPI_WHISPER_GPU`**:
+
+- *Unset* / `auto` / `default` — use GPU iff a backend is built in.
+- `off` / `cpu` / `0` / `false` / `no` — CPU only, even on a GPU-capable build.
+- `vulkan` — prefer Vulkan; falls back to CPU silently if the build
+  doesn't include `whisper-rs-vulkan` (the runtime UX is "best effort
+  with a clear log line").
+
+Matching is case-insensitive. Unrecognised values (e.g. `cuda`, `metal`,
+`directml`, `rocm`) are rejected with a hard error rather than a silent
+fallback so a typo surfaces loudly — same philosophy as
+`VOICEPI_WHISPER_IDLE_UNLOAD_S`. CUDA / Metal / DirectML backends are
+planned as additional features once Vulkan is bedded in.
+
+[Vulkan SDK]: https://vulkan.lunarg.com/sdk/home
+
 #### Idle model unload (library primitive — not yet active)
 
 A loaded GGML model holds 1-2 GB resident (≈75 MB for `tiny`, ~1.5 GB

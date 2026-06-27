@@ -17,11 +17,17 @@
 //!   unit-tested on every CI run against a fake model. Awaits in-process
 //!   runtime wiring (wave 8) — has no runtime effect under today's
 //!   subprocess-per-utterance dispatcher.
+//! - [`gpu`] — `GpuPolicy` env-var parsing for the Vulkan / future
+//!   DirectML / Metal backends (#348 Wave 7-C). Compiled unconditionally
+//!   so the env-var schema is the same on every build; `should_use_gpu`
+//!   uses `cfg!(feature = ...)` to gate the actual GPU codepath on the
+//!   compiled-in backend.
 //!
 //! The split keeps the cache/download machinery independent of the heavy
 //! whisper.cpp dep, so a stock `cargo build` still ships the UI and CLI
 //! affordances even without CMake / a C++ toolchain on the build host.
 
+pub mod gpu;
 pub mod idle;
 pub mod model_manager;
 pub mod models_cli;
@@ -34,6 +40,7 @@ pub mod dispatch;
 #[cfg(feature = "whisper-rs-local")]
 mod local;
 
+pub use gpu::{parse_gpu_policy_from_env, should_use_gpu, GpuPolicy, GPU_ENV};
 pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV};
 pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
