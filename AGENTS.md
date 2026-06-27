@@ -79,14 +79,19 @@ CI green is not enough; fetch and triage Codex / Copilot / SonarCloud
 comments first.
 
 - Before merging, wait for the auto-review to land (Codex typically posts
-  within 5-15 minutes of CI completing). Fetch all inline comments:
+  within 5-15 minutes of CI completing). Fetch ALL inline comments — use
+  `--paginate` because `per_page` defaults to 30 and a busy PR easily
+  exceeds that:
 
   ```sh
-  gh api repos/<owner>/<repo>/pulls/<pr>/comments \
-    --jq '.[] | select(.user.login | test("codex|copilot"; "i")) | select(.in_reply_to_id == null) | "[\(.path):\(.line // .original_line)] \(.body)"'
+  gh api --paginate repos/<owner>/<repo>/pulls/<pr>/comments \
+    --jq '.[] | select(.user.login | test("codex|copilot|sonar"; "i")) | select(.in_reply_to_id == null) | "[\(.path):\(.line // .original_line)] \(.body)"'
   ```
 
-  Use `.line // .original_line` because outdated comments may have null `.line`.
+  Use `.line // .original_line` because outdated comments may have null
+  `.line`. The login filter covers Codex, Copilot, AND SonarCloud
+  (whose inline comments come from `sonarqubecloud[bot]`) — all three
+  are auto-review sources gated by this rule.
 
 - **For EVERY inline review comment, before merging, do all three:**
   1. **Fix or explicitly decline** the suggestion (push a follow-up commit, or
@@ -98,8 +103,34 @@ comments first.
      gh api graphql -f query='mutation { resolveReviewThread(input: { threadId: "PRRT_..." }) { thread { isResolved } } }'
      ```
 
-     Get the thread id from
-     `gh api graphql -f query='query { repository(owner:"...",name:"...") { pullRequest(number:N) { reviewThreads(first:50) { nodes { id isResolved comments(first:1) { nodes { databaseId path line } } } } } } }'`.
+     Get thread ids via the paginated GraphQL query below. A PR with
+     more than 50 review threads needs cursor pagination
+     (`pageInfo { hasNextPage endCursor }` + `after: "..."`); the
+     example below shows the first-page form and you must loop on
+     `hasNextPage`. Always select BOTH `line` and `originalLine` so
+     outdated threads (whose `line` may be null) still match the comment
+     they belong to:
+
+     ```sh
+     gh api graphql -f query='
+       query($owner: String!, $name: String!, $pr: Int!, $cursor: String) {
+         repository(owner: $owner, name: $name) {
+           pullRequest(number: $pr) {
+             reviewThreads(first: 50, after: $cursor) {
+               pageInfo { hasNextPage endCursor }
+               nodes {
+                 id
+                 isResolved
+                 comments(first: 1) {
+                   nodes { databaseId path line originalLine }
+                 }
+               }
+             }
+           }
+         }
+       }' -F owner=... -F name=... -F pr=...
+     ```
+
   3. **React with 👍 or 👎** on the original comment so the reviewer can
      score signal quality going forward:
 
@@ -120,6 +151,7 @@ comments first.
   to fire on every push to a PR branch).
 
 - Apply this gate to every PR, including scripted or batch merges.
+
 ## Model economy
 
 For read-only information-gathering and simple mechanical comparisons (scanning files, looking up which secret holds which key, diffing across repos, summarizing configs), delegate to the cheapest *capable* sub-model your harness supports — Claude Code: the Task/Agent tool with Haiku or Sonnet; other harnesses: your equivalent, or skip if none. Keep design decisions, code edits, and irreversible actions on the primary model. Prefer correctness over economy — never use a model too weak for the task.
