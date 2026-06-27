@@ -119,7 +119,7 @@ whisper-rs = { version = "0.16", optional = true }
 # tempfile: vad-rs only accepts a file path; we materialise the embedded
 #   silero_vad.onnx bytes to a temp file at startup.
 cpal = { version = "0.18", optional = true }
-rubato = { version = "0.16", optional = true }
+rubato = { version = "3.0", optional = true }
 vad-rs = { version = "0.1", optional = true, default-features = false }
 base64 = { version = "0.22", optional = true }
 tempfile = { version = "3.14", optional = true }
