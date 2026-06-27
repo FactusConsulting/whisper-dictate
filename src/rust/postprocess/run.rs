@@ -23,17 +23,22 @@ pub const CEILING_MS: u64 = 30_000;
 /// Length-scaled HTTP timeout for a cleanup call.
 ///
 /// Mirrors the Python `effective_timeout_ms`:
-/// `clamp(base_ms + chars * PER_CHAR_MS, base_ms, CEILING_MS)`. The base
-/// acts as the floor — short inputs never drop below the configured base —
-/// and very long inputs cap at `CEILING_MS` so a giant dictation does not
-/// silently time out and fall back to raw text.
+/// `max(base_ms, min(scaled, CEILING_MS))`. The base acts as a hard floor
+/// — short inputs never drop below the configured base, AND a base raised
+/// above `CEILING_MS` is preserved unchanged (the user explicitly asked
+/// for that floor because their local post-processing model is slow).
+/// The ceiling only caps the per-character SCALING so a giant dictation
+/// does not silently push the timeout to absurd values. P3 #382: the
+/// settings schema allows `timeout_ms` up to 600 000, so the previous
+/// `clamp(base, ceiling)` form silently degraded users with raised floors
+/// when they switched to the Rust backend.
 pub fn effective_timeout_ms(base_ms: u64, text_chars: i64) -> u64 {
     let chars = u64::try_from(text_chars.max(0)).unwrap_or(0);
     let scaled = base_ms.saturating_add(chars.saturating_mul(PER_CHAR_MS));
-    // Cap the floor at CEILING_MS so that a user-supplied base_ms above the
-    // ceiling does not produce a clamp(min > max) panic.
-    let floor = base_ms.min(CEILING_MS);
-    scaled.clamp(floor, CEILING_MS)
+    // The ceiling only caps the SCALED-by-length value; the configured
+    // base is then the floor on top of that, so `base_ms = 60_000` yields
+    // 60 000 ms regardless of input length, matching the Python contract.
+    base_ms.max(scaled.min(CEILING_MS))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,11 +290,64 @@ mod tests {
     }
 
     #[test]
-    fn effective_timeout_caps_when_base_exceeds_ceiling() {
-        // base_ms > CEILING_MS must not panic and must return the ceiling.
-        assert_eq!(effective_timeout_ms(CEILING_MS + 1, 0), CEILING_MS);
-        assert_eq!(effective_timeout_ms(60_000, 0), CEILING_MS);
-        assert_eq!(effective_timeout_ms(u64::MAX / 2, 0), CEILING_MS);
+    fn effective_timeout_preserves_user_floor_above_ceiling() {
+        // P3 #382 contract: the settings schema allows timeout_ms up to
+        // 600 000 ms because some local post-processing models need it.
+        // The Rust path must therefore HONOUR a configured base above
+        // CEILING_MS rather than silently clamping it down — that would
+        // be a regression vs the Python `max(base, min(scaled, CEILING))`
+        // semantics. The ceiling only caps SCALING; the user-set base
+        // remains the floor.
+        assert_eq!(effective_timeout_ms(CEILING_MS + 1, 0), CEILING_MS + 1);
+        assert_eq!(effective_timeout_ms(60_000, 0), 60_000);
+        assert_eq!(effective_timeout_ms(600_000, 0), 600_000);
+        // And scaling still doesn't push above the floor when the floor
+        // is already huge — base wins both directions.
+        assert_eq!(effective_timeout_ms(60_000, 100_000), 60_000);
+        assert_eq!(effective_timeout_ms(60_000, 1_000_000), 60_000);
+    }
+
+    #[test]
+    fn effective_timeout_does_not_panic_on_extreme_base() {
+        // Belt-and-braces: u64::MAX/2 must not overflow or panic. The
+        // saturating arithmetic + the max() of base means the answer is
+        // just the gigantic base — no clamp(min > max) panic risk because
+        // we don't use `clamp` at all anymore (P3 #382).
+        let huge = u64::MAX / 2;
+        assert_eq!(effective_timeout_ms(huge, 0), huge);
+        assert_eq!(effective_timeout_ms(huge, 1000), huge);
+    }
+
+    #[test]
+    fn effective_timeout_python_parity_floor_above_ceiling() {
+        // Exact mirror of Python `max(base_ms, min(scaled, CEILING_MS))`
+        // for the cases the Codex finding called out — the Rust answer
+        // must match the Python answer for every (base, chars) combo so
+        // a user that switches backends gets the same timeout.
+        fn python_eq(base: u64, chars: i64) -> u64 {
+            let c = u64::try_from(chars.max(0)).unwrap_or(0);
+            let scaled = base.saturating_add(c.saturating_mul(PER_CHAR_MS));
+            // max(base, min(scaled, ceiling))
+            base.max(scaled.min(CEILING_MS))
+        }
+        for (base, chars) in [
+            (4_000_u64, 0_i64),
+            (4_000, 60),
+            (4_000, 1300),
+            (4_000, 100_000),
+            (CEILING_MS, 0),
+            (CEILING_MS + 1, 0),
+            (60_000, 0),
+            (60_000, 5000),
+            (600_000, 0),
+            (600_000, 10_000),
+        ] {
+            assert_eq!(
+                effective_timeout_ms(base, chars),
+                python_eq(base, chars),
+                "Rust vs Python parity broken for base={base} chars={chars}"
+            );
+        }
     }
 
     #[test]
