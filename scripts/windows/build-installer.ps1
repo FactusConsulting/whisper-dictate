@@ -42,7 +42,12 @@ function Get-VersionInfoVersion([string]$DisplayVersion) {
   # forms; the prerelease tag is fine in AppVersion / the output filename
   # but breaks the resource compile. Without this strip the local Windows
   # installer loop blows up during the RC window (P2 #406 Codex finding).
-  $numeric = $DisplayVersion -replace '-rc\.\d+$',''
+  #
+  # The lookahead `(?=$|\+)` matches `-rc.N` whether it terminates the
+  # version (`1.19.0-rc.1`) or precedes local build metadata
+  # (`1.19.0-rc.1+local.20260603073512.gabc1234` — the default path when
+  # `-Version` is not passed during the RC window).
+  $numeric = $DisplayVersion -replace '-rc\.\d+(?=$|\+)',''
   if ($numeric -match '^(\d+\.\d+\.\d+)\.(\d+)$') {
     return $numeric
   }
