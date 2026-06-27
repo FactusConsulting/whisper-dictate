@@ -96,6 +96,31 @@ where
         .find(|name| locator(name).is_some())
 }
 
+/// Like [`select_helper`] but skips helpers that cannot perform a paste
+/// shortcut even if installed. Today that is just `dotool`: its
+/// command-line surface doesn't expose the modifier-aware key chord that
+/// `wtype`/`kwtype`/`xdotool`/`ydotool` use for paste (see
+/// `linux_helpers::shortcut_to_helper_chord` which returns an error for
+/// `("dotool", _)`). Picking dotool for paste therefore reliably fails at
+/// the chord-builder layer — selecting the NEXT helper up front avoids
+/// the wasted spawn and gives the user the helper that actually works.
+///
+/// P3 #371 finding 1: dotool was eligible in `select_helper`, so a host
+/// with only `dotool` + `ydotool` installed would always pick dotool
+/// first for KDE/Other-Wayland chains and immediately error; this picker
+/// skips dotool so ydotool wins, which DOES have paste support via
+/// `wayland::paste_shortcut`.
+pub fn select_paste_helper<F>(session: LinuxSession, locator: F) -> Option<&'static str>
+where
+    F: Fn(&str) -> Option<PathBuf>,
+{
+    fallback_chain(session)
+        .iter()
+        .copied()
+        .filter(|name| *name != "dotool")
+        .find(|name| locator(name).is_some())
+}
+
 /// Default helper locator: `which`-style search across `$PATH`. Tested via the
 /// injected variant above; this wrapper only exists for the runtime.
 pub fn locate_on_path(name: &str) -> Option<PathBuf> {
@@ -236,5 +261,82 @@ mod tests {
         for name in ["kwtype", "wtype", "xdotool", "dotool", "ydotool"] {
             assert!(chain.contains(&name), "chain missing {name}");
         }
+    }
+
+    // -- P3 #371 finding 1: select_paste_helper skips dotool ---------------
+
+    #[test]
+    fn select_paste_helper_skips_dotool_even_when_installed() {
+        // dotool's paste chord is not implemented (shortcut_to_helper_chord
+        // returns Err for it), so selecting it for paste guarantees an
+        // immediate failure. The paste-aware selector must skip it and
+        // pick the next eligible helper.
+        let installed = ["dotool", "ydotool"];
+        let locator = |name: &str| {
+            installed
+                .contains(&name)
+                .then(|| PathBuf::from(format!("/usr/bin/{name}")))
+        };
+        assert_eq!(
+            select_paste_helper(LinuxSession::KdeWayland, locator),
+            Some("ydotool"),
+            "with dotool+ydotool installed, paste must pick ydotool — dotool has no paste chord"
+        );
+    }
+
+    #[test]
+    fn select_paste_helper_returns_none_when_only_dotool_present() {
+        // The whole point of the dotool exclusion: if dotool is the ONLY
+        // installed helper, the paste path must surface "no paste helper
+        // installed" cleanly rather than picking dotool and failing at
+        // the chord builder.
+        let locator = |name: &str| (name == "dotool").then(|| PathBuf::from("/usr/bin/dotool"));
+        assert_eq!(
+            select_paste_helper(LinuxSession::KdeWayland, locator),
+            None,
+            "dotool alone must not be eligible for paste"
+        );
+    }
+
+    #[test]
+    fn select_paste_helper_matches_select_helper_when_dotool_absent() {
+        // Belt-and-braces: when dotool is not installed, the paste selector
+        // must behave identically to the typing selector — same chain,
+        // same first hit.
+        let installed = ["wtype", "ydotool"];
+        let locator = |name: &str| {
+            installed
+                .contains(&name)
+                .then(|| PathBuf::from(format!("/usr/bin/{name}")))
+        };
+        for session in [
+            LinuxSession::KdeWayland,
+            LinuxSession::OtherWayland,
+            LinuxSession::X11,
+            LinuxSession::Unknown,
+        ] {
+            assert_eq!(
+                select_paste_helper(session, locator),
+                select_helper(session, locator),
+                "without dotool, select_paste_helper must mirror select_helper for {session:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn select_paste_helper_prefers_kwtype_over_dotool_on_kde() {
+        // Direct regression: KDE chain is [kwtype, wtype, dotool, ydotool].
+        // With kwtype and dotool installed, paste must pick kwtype (not
+        // dotool which appears earlier on the chain than ydotool).
+        let installed = ["kwtype", "dotool"];
+        let locator = |name: &str| {
+            installed
+                .contains(&name)
+                .then(|| PathBuf::from(format!("/usr/bin/{name}")))
+        };
+        assert_eq!(
+            select_paste_helper(LinuxSession::KdeWayland, locator),
+            Some("kwtype")
+        );
     }
 }
