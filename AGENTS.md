@@ -75,21 +75,51 @@ requires.
 ## Pull request review
 
 **HARD GATE — do not merge with unaddressed automated-review comments.**
-CI green is not enough; fetch and triage Copilot/SonarCloud comments first.
+CI green is not enough; fetch and triage Codex / Copilot / SonarCloud
+comments first.
 
-- Before merging, wait for the Copilot review to land, then fetch comments:
+- Before merging, wait for the auto-review to land (Codex typically posts
+  within 5-15 minutes of CI completing). Fetch all inline comments:
 
   ```sh
   gh api repos/<owner>/<repo>/pulls/<pr>/comments \
-    --jq '.[] | select(.user.login|test("copilot";"i")) | select(.in_reply_to_id==null) | "[\(.path):\(.line // .original_line)] \(.body)"'
+    --jq '.[] | select(.user.login | test("codex|copilot"; "i")) | select(.in_reply_to_id == null) | "[\(.path):\(.line // .original_line)] \(.body)"'
   ```
 
-  Fix each comment or record an explicit dismissal reason. Use
-  `.line // .original_line` because outdated comments may have null `.line`.
-- After pushing changes, re-request the review
-  (`gh pr edit <pr> --add-reviewer @copilot`) and re-check before merging.
-- Apply this gate to every PR, including scripted or batch merges.
+  Use `.line // .original_line` because outdated comments may have null `.line`.
 
+- **For EVERY inline review comment, before merging, do all three:**
+  1. **Fix or explicitly decline** the suggestion (push a follow-up commit, or
+     post a reply explaining why it's not actionable / a false positive).
+  2. **Mark the thread resolved** via the GraphQL `resolveReviewThread`
+     mutation:
+
+     ```sh
+     gh api graphql -f query='mutation { resolveReviewThread(input: { threadId: "PRRT_..." }) { thread { isResolved } } }'
+     ```
+
+     Get the thread id from
+     `gh api graphql -f query='query { repository(owner:"...",name:"...") { pullRequest(number:N) { reviewThreads(first:50) { nodes { id isResolved comments(first:1) { nodes { databaseId path line } } } } } } }'`.
+  3. **React with 👍 or 👎** on the original comment so the reviewer can
+     score signal quality going forward:
+
+     ```sh
+     # 👍 if the finding was a real bug we fixed
+     gh api repos/<owner>/<repo>/pulls/comments/<comment_id>/reactions -f content='+1'
+     # 👎 if the finding was a false positive / we explicitly decided not to act
+     gh api repos/<owner>/<repo>/pulls/comments/<comment_id>/reactions -f content='-1'
+     ```
+
+  The fix-reply with the resolving commit SHA goes on the same thread via
+  `POST /repos/<owner>/<repo>/pulls/<pr>/comments` with
+  `in_reply_to=<comment_id>` so the audit trail stays inline. Apply to
+  every PR including admin-merged dependency bumps.
+
+- After pushing changes, the next auto-review will see the new HEAD; no
+  manual re-request is needed in this repo (Codex auto-review is configured
+  to fire on every push to a PR branch).
+
+- Apply this gate to every PR, including scripted or batch merges.
 ## Model economy
 
 For read-only information-gathering and simple mechanical comparisons (scanning files, looking up which secret holds which key, diffing across repos, summarizing configs), delegate to the cheapest *capable* sub-model your harness supports — Claude Code: the Task/Agent tool with Haiku or Sonnet; other harnesses: your equivalent, or skip if none. Keep design decisions, code edits, and irreversible actions on the primary model. Prefer correctness over economy — never use a model too weak for the task.
