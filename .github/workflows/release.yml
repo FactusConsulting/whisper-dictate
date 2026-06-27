@@ -80,7 +80,9 @@ jobs:
             libxcb-render0-dev \
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
-            libxkbcommon-dev
+            libxkbcommon-dev \
+            libxi-dev \
+            libxtst-dev
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
@@ -98,7 +100,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build Rust desktop UI
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys
 
       - name: Build bundles
         run: |
