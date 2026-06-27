@@ -329,7 +329,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
         self.assertIn('&format!("whisper-dictate {}", runtime::version())', script)
         self.assertIn("app_version: runtime::version()", script)
-        self.assertIn('egui_material_icons = "0.6.0"', cargo)
+        self.assertIn('egui_material_icons = "0.7.0"', cargo)
         self.assertIn("egui_material_icons::initialize(&cc.egui_ctx)", script)
         self.assertIn("fn icon_text(", script)
         self.assertIn("fn icon(self) -> &'static str", script)
