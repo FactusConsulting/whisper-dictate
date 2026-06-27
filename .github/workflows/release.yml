@@ -98,7 +98,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build Rust desktop UI
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection
 
       - name: Build bundles
         run: |
