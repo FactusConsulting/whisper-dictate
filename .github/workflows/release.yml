@@ -21,6 +21,19 @@ jobs:
   # workflow_call). A tag must not ship if unit/rust/smoke/lint checks fail.
   tests:
     uses: ./.github/workflows/test.yml
+    # The called workflow's `changes` job (added in #398 for docs-only PR
+    # skipping) requests `pull-requests: read` so dorny/paths-filter can hit
+    # the PR-files API. Reusable workflows cannot exceed the permissions the
+    # caller grants -- when this `tests:` call had no `permissions:` block,
+    # the entire release workflow startup-failed on tag push (zero jobs
+    # spawned, conclusion: startup_failure) because the called job requested
+    # more than was offered. Forwarding the same two read scopes here makes
+    # the call valid; on a tag push there is no PR so paths-filter falls
+    # back to no-op (empty match set) and downstream jobs use the workflow
+    # `!cancelled()` gates to run regardless.
+    permissions:
+      contents: read
+      pull-requests: read
     with:
       # Gate on the tag being shipped. On tag push this equals the workflow ref;
       # on manual workflow_dispatch it is the explicit tag input, not the dispatch branch.
