@@ -126,7 +126,7 @@ jobs:
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust
 
       - name: Build installers
         if: steps.win-check.outputs.changed == 'true'
