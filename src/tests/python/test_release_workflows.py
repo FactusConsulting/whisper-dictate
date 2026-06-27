@@ -246,6 +246,59 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("ReleaseDate: __RELEASE_DATE__", installer)
         self.assertFalse(Path("manifests").exists())
 
+    def test_windows_installer_local_script_strips_rc_with_local_metadata(self):
+        # Regression for the P2 #406 Codex finding: during an RC window the
+        # default `Get-CrateVersion + Get-LocalBuildMetadata` path produces
+        # `1.19.0-rc.1+local.<stamp>.<sha>` — the `-rc.N` is in the MIDDLE,
+        # not at the end. The strip regex must match `-rc.N` followed by
+        # either end-of-string OR `+local.` (build metadata), otherwise the
+        # numeric/build-metadata patterns below fall through and the local
+        # installer loop throws. Asserts the regex carries the lookahead
+        # `(?=$|\\+)` instead of being anchored only to `$`.
+        script = Path("scripts/windows/build-installer.ps1").read_text(
+            encoding="utf-8"
+        )
+        # Old buggy pattern (anchored only to end-of-string) must be gone.
+        self.assertNotIn(r"'-rc\.\d+$'", script)
+        # New pattern strips before `+` too.
+        self.assertIn(r"'-rc\.\d+(?=$|\+)'", script)
+        # And the throw message must advertise the RC form so a future
+        # refactor doesn't silently drop RC-aware behavior.
+        self.assertIn("1.19.0-rc.1", script)
+
+    def test_standalone_windows_installer_derives_is_prerelease_from_tag(self):
+        # The manual `.github/workflows/windows-installer.yml` wrapper rebuilds
+        # the installer for a previously-shipped tag. release.yml forwards the
+        # release-job `outputs.is_prerelease`, but the standalone wrapper has
+        # no upstream job — it must derive the prerelease flag from the tag
+        # itself, otherwise an RC rebuild leaks the finals-only winget step.
+        # Regression for the second P2 #406 Codex finding.
+        standalone = Path(
+            ".github/workflows/windows-installer.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "is_prerelease: ${{ contains(github.event.inputs.tag, '-rc.')"
+            " && 'true' || 'false' }}",
+            standalone,
+        )
+        # And the reusable workflow it calls must still type the input as a
+        # string, so the and-or string-conversion above is the correct shape.
+        reusable = Path(
+            ".github/workflows/windows-installer-build.yml"
+        ).read_text(encoding="utf-8")
+        # Look for the input block: `is_prerelease:` followed by `type: string`
+        # within the same input definition. Allow lines in between for the
+        # description block.
+        match = re.search(
+            r"is_prerelease:\s*\n(?:[ \t]+[^\n]*\n)*?[ \t]+type:\s*string",
+            reusable,
+        )
+        self.assertIsNotNone(
+            match,
+            "windows-installer-build.yml `is_prerelease` input must be"
+            " typed as string so manual-wrapper string forwarding lints.",
+        )
+
     def test_rust_crate_is_flat_single_crate_under_src_rust(self):
         # The Rust code lives directly under src/rust as a single crate — no
         # workspace wrapper and no nested per-crate subdirectory.

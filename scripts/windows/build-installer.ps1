@@ -35,16 +35,29 @@ function Get-LocalBuildMetadata {
 }
 
 function Get-VersionInfoVersion([string]$DisplayVersion) {
-  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)\.(\d+)$') {
-    return $DisplayVersion
+  # Strip a semver prerelease suffix (e.g. `-rc.1`) before pattern-matching,
+  # mirroring what `.github/workflows/windows-installer-build.yml` does for
+  # VERSION_INFO. Inno Setup's VersionInfoVersion is a Windows
+  # `FILEVERSION`/`PRODUCTVERSION` field that only accepts numeric dotted
+  # forms; the prerelease tag is fine in AppVersion / the output filename
+  # but breaks the resource compile. Without this strip the local Windows
+  # installer loop blows up during the RC window (P2 #406 Codex finding).
+  #
+  # The lookahead `(?=$|\+)` matches `-rc.N` whether it terminates the
+  # version (`1.19.0-rc.1`) or precedes local build metadata
+  # (`1.19.0-rc.1+local.20260603073512.gabc1234` — the default path when
+  # `-Version` is not passed during the RC window).
+  $numeric = $DisplayVersion -replace '-rc\.\d+(?=$|\+)',''
+  if ($numeric -match '^(\d+\.\d+\.\d+)\.(\d+)$') {
+    return $numeric
   }
-  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)\+') {
+  if ($numeric -match '^(\d+\.\d+\.\d+)\+') {
     return "$($Matches[1]).1"
   }
-  if ($DisplayVersion -match '^(\d+\.\d+\.\d+)$') {
-    return $DisplayVersion
+  if ($numeric -match '^(\d+\.\d+\.\d+)$') {
+    return $numeric
   }
-  throw "Version must be numeric or semver build metadata, e.g. 0.3.25, 0.3.25.1, or 0.3.25+local.20260603073512.gabc1234. Got: $DisplayVersion"
+  throw "Version must be numeric, semver build metadata, or semver -rc.N, e.g. 0.3.25, 0.3.25.1, 0.3.25+local.20260603073512.gabc1234, or 1.19.0-rc.1. Got: $DisplayVersion"
 }
 
 if (-not $Version) {
