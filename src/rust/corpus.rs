@@ -157,12 +157,9 @@ pub fn resolve_corpus_manifest(
     if let Some(path) = explicit {
         return Some(path.to_path_buf());
     }
-    for candidate in corpus_search_paths(app_root, appdata) {
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+    corpus_search_paths(app_root, appdata)
+        .into_iter()
+        .find(|candidate| candidate.exists())
 }
 
 /// The manifest locations [`resolve_corpus_manifest`] checks, for error display.
