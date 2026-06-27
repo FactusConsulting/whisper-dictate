@@ -42,6 +42,13 @@ Source: "..\..\..\src\python\whisper_dictate\*.json"; DestDir: "{app}\src\python
 ; its own entry or it would be missing from the installed app.
 Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"; Flags: ignoreversion recursesubdirs
 Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
+; ONNX Runtime DLL(s) for the `audio-in-rust` feature (Wave 8 / rc.2):
+; vad-rs -> ort dynamically loads onnxruntime.dll at startup. ort's
+; `copy-dylibs` build feature drops it in target\release\ next to the
+; .exe; we just have to ship it next to the installed binary too.
+; `skipifsourcedoesntexist` keeps the local installer loop green for
+; dev builds without the audio-in-rust feature enabled.
+Source: "..\..\..\target\release\onnxruntime*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\docs\*.md";          DestDir: "{app}\docs"; Flags: ignoreversion

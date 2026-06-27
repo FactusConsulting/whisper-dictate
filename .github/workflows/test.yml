@@ -357,6 +357,18 @@ jobs:
         # installer (Wave 8 follow-up).
         if: env.RUN_RUST == 'true'
         run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features audio-in-rust
+      - name: Rust build (whisper-rs-local feature)
+        # rc.2 of Wave 8 (#348): the `whisper-rs-local` feature compiles
+        # whisper.cpp from source via whisper-rs and is now shipping in
+        # the release installer. Build-only (not `cargo test`) because
+        # whisper-rs's own integration tests want a GGML model fixture
+        # we don't ship; this step just confirms the C++/Rust link
+        # boundary still compiles on both runners. Without this gate the
+        # release pipeline (which builds `--features ...,whisper-rs-local`)
+        # would be the first place a whisper-rs API break surfaces, and
+        # that's too late.
+        if: env.RUN_RUST == 'true'
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local --release
       - name: Rust CLI smoke
         if: env.RUN_RUST == 'true'
         run: |

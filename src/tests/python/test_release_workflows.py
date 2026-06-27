@@ -377,6 +377,102 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             " the `changes` job is a cheap no-op on push/workflow_call.",
         )
 
+    def test_release_builds_ship_all_four_rust_backends(self):
+        # rc.2 of Wave 8 (#348): the release pipeline must build with
+        # rust-injection, rust-hotkeys, audio-in-rust, AND whisper-rs-local
+        # enabled so all four Rust backends actually ship. Earlier RCs only
+        # included rust-injection+rust-hotkeys; flipping the remaining two
+        # makes the in-process VAD pipeline and local-Whisper inference
+        # available out of the box. Lock the exact flag string in all three
+        # build invocations (Linux release.yml, Windows reusable installer,
+        # and the local-loop scripts/windows/build-installer.ps1) so a
+        # future edit can\'t silently drop one of them.
+        expected = (
+            "--features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+        )
+        for rel in (
+            ".github/workflows/release.yml",
+            ".github/workflows/windows-installer-build.yml",
+            "scripts/windows/build-installer.ps1",
+        ):
+            text = Path(rel).read_text(encoding="utf-8")
+            self.assertIn(
+                expected, text,
+                f"{rel} must build with all four shipping Rust backends",
+            )
+
+    def test_release_pipelines_bundle_onnx_runtime_next_to_binary(self):
+        # rc.2 of Wave 8 (#348): the `audio-in-rust` feature pulls in
+        # vad-rs -> ort, which dynamically loads onnxruntime.dll (Windows)
+        # / libonnxruntime.so* (Linux) at startup. ort\'s `copy-dylibs`
+        # build feature drops the dylib in target/release/ next to the
+        # executable; we then have to ship it next to the installed binary
+        # in EVERY shipping artifact: Inno installer, Windows portable
+        # ZIP, and the Linux release tarball. Without these bundling
+        # steps the app bricks at launch for every fresh user (OS loader
+        # fails before `main()` runs) — the regression we explicitly
+        # closed #404 to plan against.
+        inno = Path("packaging/windows/inno/whisper-dictate.iss").read_text(
+            encoding="utf-8",
+        )
+        self.assertRegex(
+            inno,
+            r'Source:\s*"\.\.\\\.\.\\\.\.\\target\\release\\onnxruntime\*\.dll";\s*DestDir:\s*"\{app\}";',
+            "Inno installer must ship onnxruntime*.dll next to whisper-dictate.exe",
+        )
+        # skipifsourcedoesntexist so a dev build without the audio-in-rust
+        # feature still compiles the .iss locally.
+        # Search the Source line for the flag.
+        self.assertIn(
+            "onnxruntime*.dll",
+            inno,
+        )
+        onnx_line = next(
+            line for line in inno.splitlines()
+            if "onnxruntime*.dll" in line and "Source:" in line
+        )
+        self.assertIn(
+            "skipifsourcedoesntexist", onnx_line,
+            "Inno onnxruntime Source line needs skipifsourcedoesntexist so"
+            " local dev builds without audio-in-rust still pack",
+        )
+
+        win_pack = Path(
+            ".github/workflows/windows-installer-build.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            r"Copy-Item target\release\onnxruntime*.dll $bundle",
+            win_pack,
+            "Windows ZIP must glob onnxruntime*.dll into the bundle",
+        )
+
+        linux_pack = Path(".github/workflows/release.yml").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "libonnxruntime.so",
+            linux_pack,
+            "Linux tarball must bundle libonnxruntime.so* next to the binary",
+        )
+
+    def test_test_yml_builds_whisper_rs_local_on_both_runners(self):
+        # rc.2 of Wave 8 (#348): adding `whisper-rs-local` to the release
+        # build means whisper.cpp must compile cleanly on both ubuntu-latest
+        # and windows-2025 runners. A build-only smoke step in the `rust`
+        # matrix job catches link/build breaks BEFORE the release pipeline
+        # hits them — without it the release tag is the first place a
+        # whisper-rs API break surfaces, which is the wrong gate.
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "Rust build (whisper-rs-local feature)", workflow,
+            "test.yml rust matrix must include a whisper-rs-local smoke step",
+        )
+        self.assertIn(
+            "--features whisper-rs-local --release", workflow,
+            "whisper-rs-local smoke must build the release profile so it"
+            " exercises the same code path the shipping installer takes",
+        )
+
     def test_rust_crate_is_flat_single_crate_under_src_rust(self):
         # The Rust code lives directly under src/rust as a single crate — no
         # workspace wrapper and no nested per-crate subdirectory.

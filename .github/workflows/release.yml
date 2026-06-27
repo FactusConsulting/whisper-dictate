@@ -113,7 +113,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build Rust desktop UI
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
 
       - name: Build bundles
         run: |
@@ -146,6 +146,15 @@ jobs:
             printf "%s\n" "$VERSION" > "$d/VERSION"
             if [ "${INCLUDE_RUST_UI:-0}" = "1" ]; then
               install -m 0755 target/release/whisper-dictate "$d/whisper-dictate"
+              # Ship ONNX Runtime next to the binary (Wave 8 / rc.2): the
+              # `audio-in-rust` feature pulls in vad-rs -> ort, which
+              # dynamically loads libonnxruntime.so* at startup. ort's
+              # `copy-dylibs` build feature drops it in target/release/
+              # next to the executable; we just have to ship it next to
+              # the installed binary too. Skip-if-missing keeps the
+              # bundle build green during local dev builds without the
+              # audio-in-rust feature.
+              find target/release -maxdepth 1 -name "libonnxruntime.so*" -exec install -m 0644 {} "$d/" \; 2>/dev/null || true
             fi
             [ -f "$d/scripts/install-rust-ui.sh" ] && chmod +x "$d/scripts/install-rust-ui.sh"
             zip -q -r "$zip_name" "$d"; rm -rf "$d"

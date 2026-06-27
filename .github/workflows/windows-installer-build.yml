@@ -126,7 +126,7 @@ jobs:
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
 
       - name: Build installers
         if: steps.win-check.outputs.changed == 'true'
@@ -164,6 +164,15 @@ jobs:
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
           Copy-Item target\release\whisper-dictate.exe $bundle
+          # Ship ONNX Runtime next to the .exe (Wave 8 / rc.2): the
+          # `audio-in-rust` feature pulls in vad-rs -> ort, which
+          # dynamically loads onnxruntime.dll at startup. ort's
+          # `copy-dylibs` build feature drops it in target/release/
+          # next to the executable. Glob so any ort version that
+          # ships related sidecar DLLs (providers/EP packs) lands
+          # too. ErrorAction SilentlyContinue keeps the ZIP build
+          # green during local dev runs without the feature on.
+          Copy-Item target\release\onnxruntime*.dll $bundle -ErrorAction SilentlyContinue
           # Ship the golden-benchmark manifest (corpus.json only — NOT the
           # user-local, gitignored audio) so "Run benchmark" resolves a corpus
           # out of the box. Mirrors the Inno installer's benchmark\corpus.json.
