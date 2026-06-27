@@ -18,10 +18,18 @@ use super::paste::PasteShortcut;
 /// `ydotool` itself takes the keymap-aware path in `super::wayland`.
 pub fn invoke_type(helper: &str, text: &str) -> Result<()> {
     if helper == "dotool" {
-        // dotool reads commands from stdin (`type <text>` per line).
+        // dotool's stdin protocol is line-oriented: one command per line,
+        // `type <text>` and `key <name>` are the relevant verbs. A literal
+        // newline embedded in `<text>` would terminate the `type` command
+        // and the following line would be reinterpreted as another
+        // command — at best garbling the output, at worst executing a
+        // crafted command. P3 #371 finding 3: split the input on '\n'
+        // and emit `type <line>` for each segment with `key enter` between
+        // them, so a transcript like "line one\nline two" types two lines
+        // exactly the way the user wrote them.
         let mut child = Command::new("dotool").stdin(Stdio::piped()).spawn()?;
         if let Some(mut stdin) = child.stdin.take() {
-            writeln!(stdin, "type {text}")?;
+            write_dotool_multiline(&mut stdin, text)?;
         }
         let status = child.wait()?;
         if !status.success() {
@@ -45,6 +53,32 @@ pub fn invoke_type(helper: &str, text: &str) -> Result<()> {
             "{helper} type failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
+    }
+    Ok(())
+}
+
+/// Write `text` to a dotool stdin pipe as a sequence of `type <segment>`
+/// and `key enter` commands, splitting on `\n` so embedded newlines are
+/// safely converted into Enter keypresses rather than terminating the
+/// `type` command mid-text.
+///
+/// Empty leading / trailing / consecutive newlines produce a `key enter`
+/// without a `type` line in between, matching the user's intent of "press
+/// Enter here". A trailing newline at the very end of `text` also produces
+/// a final `key enter` so the cursor ends up on the next line.
+///
+/// P3 #371 finding 3: pure helper so the line-splitting + escape semantics
+/// can be unit-tested without spawning dotool.
+fn write_dotool_multiline<W: Write>(stdin: &mut W, text: &str) -> std::io::Result<()> {
+    let mut first = true;
+    for segment in text.split('\n') {
+        if !first {
+            writeln!(stdin, "key enter")?;
+        }
+        if !segment.is_empty() {
+            writeln!(stdin, "type {segment}")?;
+        }
+        first = false;
     }
     Ok(())
 }
@@ -181,5 +215,99 @@ mod tests {
     #[test]
     fn unknown_helper_errors() {
         assert!(shortcut_to_helper_chord("xte", PasteShortcut::CtrlV).is_err());
+    }
+
+    // -- P3 #371 finding 3: multiline dotool escaping --------------------
+
+    fn dotool_script(text: &str) -> String {
+        let mut buf = Vec::new();
+        write_dotool_multiline(&mut buf, text).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn dotool_single_line_emits_one_type_command() {
+        // Baseline: a line with no embedded newline produces a single
+        // `type <text>` followed by a single trailing newline (which dotool
+        // requires as its command terminator). No spurious `key enter`.
+        assert_eq!(dotool_script("hello world"), "type hello world\n");
+    }
+
+    #[test]
+    fn dotool_multiline_splits_on_newlines_and_inserts_key_enter() {
+        // The headline contract: `line one\nline two` becomes two `type`
+        // commands separated by a `key enter`, so dotool types two lines
+        // exactly as the user wrote them — instead of treating "line two"
+        // as another dotool command after a stray newline terminated the
+        // `type` command mid-text.
+        assert_eq!(
+            dotool_script("line one\nline two"),
+            "type line one\nkey enter\ntype line two\n"
+        );
+    }
+
+    #[test]
+    fn dotool_three_lines_chains_two_key_enters() {
+        assert_eq!(
+            dotool_script("a\nb\nc"),
+            "type a\nkey enter\ntype b\nkey enter\ntype c\n"
+        );
+    }
+
+    #[test]
+    fn dotool_empty_line_between_text_emits_two_key_enters() {
+        // `foo\n\nbar` = the user pressed Enter twice between paragraphs.
+        // We emit `type foo`, two `key enter`s (one for each `\n`), and
+        // `type bar` — the empty middle segment skips its `type` but the
+        // separator still fires, matching the user's intent.
+        assert_eq!(
+            dotool_script("foo\n\nbar"),
+            "type foo\nkey enter\nkey enter\ntype bar\n"
+        );
+    }
+
+    #[test]
+    fn dotool_trailing_newline_ends_with_key_enter() {
+        assert_eq!(dotool_script("hi\n"), "type hi\nkey enter\n");
+    }
+
+    #[test]
+    fn dotool_leading_newline_starts_with_key_enter() {
+        assert_eq!(dotool_script("\nhi"), "key enter\ntype hi\n");
+    }
+
+    #[test]
+    fn dotool_only_newlines_produces_only_key_enters() {
+        assert_eq!(dotool_script("\n\n"), "key enter\nkey enter\n");
+    }
+
+    #[test]
+    fn dotool_empty_string_produces_no_output() {
+        // Defence in depth: an empty input must not write *anything* — not
+        // a stray `type ` command (which dotool would reject), not a bare
+        // newline. Splitting an empty string on '\n' yields one empty
+        // segment which our `if !segment.is_empty()` guard skips.
+        assert_eq!(dotool_script(""), "");
+    }
+
+    #[test]
+    fn dotool_handles_unicode_intact() {
+        // Danish characters and other non-ASCII pass through verbatim —
+        // dotool itself is byte-transparent, our writer only cares about
+        // '\n' splits.
+        assert_eq!(
+            dotool_script("ærøst\nfløde"),
+            "type ærøst\nkey enter\ntype fløde\n"
+        );
+    }
+
+    #[test]
+    fn dotool_carriage_return_alone_is_passed_through() {
+        // Documented limitation: only LF triggers the split, not CR. A
+        // lone '\r' is part of the `type` payload. The Python wrapper
+        // already normalises line endings before reaching us, so a
+        // stray CR in the dispatched text is a wrapper bug worth
+        // surfacing rather than silently swallowing.
+        assert_eq!(dotool_script("a\rb"), "type a\rb\n");
     }
 }

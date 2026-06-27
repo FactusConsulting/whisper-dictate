@@ -34,12 +34,20 @@ pub enum InjectMethod {
     /// Direct key-event injection. Slow but reliable for plain text.
     Typing,
     /// Copy to clipboard, send paste keystroke, restore previous clipboard.
-    Paste(PasteShortcut),
+    ///
+    /// `Some(shortcut)` is an EXPLICIT user choice — the dispatcher must
+    /// honour it even when the value coincidentally matches the platform
+    /// default. `None` means "no preference, pick the platform-appropriate
+    /// shortcut at dispatch time" — on Linux that means the terminal-aware
+    /// `for_linux_target` heuristic. P3 #371 finding 2: distinguishing
+    /// explicit-equals-default from "no preference" is impossible if the
+    /// caller has to express both as a bare `PasteShortcut` value.
+    Paste(Option<PasteShortcut>),
 }
 
 impl Default for InjectMethod {
     fn default() -> Self {
-        InjectMethod::Paste(PasteShortcut::default())
+        InjectMethod::Paste(None)
     }
 }
 
@@ -147,18 +155,18 @@ impl Injector {
         // ydotool already has a fully-featured layout-aware code path in
         // wayland.rs — reuse it when ydotool wins the chain. The other helpers
         // get a generic invocation through super::linux_helpers.
+        use super::fallback::select_paste_helper;
         use super::linux_helpers::{invoke_paste, invoke_type};
 
         let session = LinuxSession::detect();
-        let helper = select_helper(session, locate_on_path).ok_or_else(|| {
-            anyhow!(
-                "no Linux injection helper found on PATH (tried: {:?})",
-                super::fallback::fallback_chain(session)
-            )
-        })?;
-
         match method {
             InjectMethod::Typing => {
+                let helper = select_helper(session, locate_on_path).ok_or_else(|| {
+                    anyhow!(
+                        "no Linux injection helper found on PATH (tried: {:?})",
+                        super::fallback::fallback_chain(session)
+                    )
+                })?;
                 if helper == "ydotool" {
                     wayland_type(text, &self.xkb_layout)
                 } else {
@@ -166,17 +174,28 @@ impl Injector {
                 }
             }
             InjectMethod::Paste(shortcut) => {
+                // P3 #371 finding 1: dotool has no paste-chord support,
+                // so the paste-only helper picker filters it out.
+                let helper = select_paste_helper(session, locate_on_path).ok_or_else(|| {
+                    anyhow!(
+                        "no Linux paste helper found on PATH (tried: {:?}, dotool excluded — no paste chord)",
+                        super::fallback::fallback_chain(session)
+                    )
+                })?;
                 if helper == "ydotool" {
                     paste_shortcut(&self.target_title, &self.target_process)
                 } else {
-                    let chosen = if shortcut == PasteShortcut::default() {
+                    // P3 #371 finding 2: only fall back to the terminal-paste
+                    // heuristic when the caller did NOT pin an explicit
+                    // shortcut. `Some(CtrlV)` is an explicit user choice
+                    // that the heuristic must respect even though it
+                    // coincides with the platform default.
+                    let chosen = shortcut.unwrap_or_else(|| {
                         PasteShortcut::for_linux_target(target_prefers_terminal_paste(
                             &self.target_title,
                             &self.target_process,
                         ))
-                    } else {
-                        shortcut
-                    };
+                    });
                     invoke_paste(helper, chosen)
                 }
             }
@@ -210,7 +229,12 @@ fn inject_via_backend(
             // exercised by unit tests; this arm avoids double-copy when
             // Python already populated the clipboard via the existing
             // _paste() path.
-            super::enigo_backend::send_paste_shortcut(backend, shortcut)
+            //
+            // `None` (no explicit shortcut) collapses to `PasteShortcut::default()`
+            // for the enigo-backed Windows/macOS path — the Linux terminal-paste
+            // heuristic lives in `inject_on_linux`, which is the only path
+            // that can read the target title/process.
+            super::enigo_backend::send_paste_shortcut(backend, shortcut.unwrap_or_default())
         }
     }
 }
@@ -314,10 +338,19 @@ pub(crate) fn resolve_method(spec: &InjectMethodSpec) -> Result<InjectMethod> {
     Ok(match spec.mode {
         InjectMode::Typing => InjectMethod::Typing,
         InjectMode::Paste => {
+            // None / empty string ⇒ "no explicit preference" so the
+            // dispatcher gets to pick the platform-appropriate shortcut
+            // (terminal-aware on Linux, plain default on Windows/macOS).
+            // An explicit string is parsed and pinned with `Some(...)` —
+            // even when the parsed value equals `PasteShortcut::default()`
+            // (P3 #371 finding 2: caller-supplied default must not be
+            // confused with "no preference").
             let shortcut = match spec.shortcut.as_deref() {
-                None | Some("") => PasteShortcut::default(),
-                Some(raw) => PasteShortcut::parse(raw)
-                    .ok_or_else(|| anyhow!("unknown paste shortcut: {raw}"))?,
+                None | Some("") => None,
+                Some(raw) => Some(
+                    PasteShortcut::parse(raw)
+                        .ok_or_else(|| anyhow!("unknown paste shortcut: {raw}"))?,
+                ),
             };
             InjectMethod::Paste(shortcut)
         }
@@ -327,7 +360,11 @@ pub(crate) fn resolve_method(spec: &InjectMethodSpec) -> Result<InjectMethod> {
 fn method_label(method: InjectMethod) -> String {
     match method {
         InjectMethod::Typing => "typing".to_owned(),
-        InjectMethod::Paste(s) => format!("paste:{}", paste_label(s)),
+        InjectMethod::Paste(Some(s)) => format!("paste:{}", paste_label(s)),
+        // `None` = no explicit shortcut; the dispatcher is free to pick
+        // one at runtime. Surface that as `paste:auto` so the JSON
+        // response distinguishes it from an explicit caller-pinned value.
+        InjectMethod::Paste(None) => "paste:auto".to_owned(),
     }
 }
 
@@ -371,13 +408,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_method_defaults_to_paste_with_platform_shortcut() {
+    fn resolve_method_defaults_to_paste_with_no_explicit_shortcut() {
+        // Default spec (no shortcut field) ⇒ None so the dispatcher picks
+        // the platform-appropriate shortcut at runtime — including the
+        // Linux terminal-aware heuristic. P3 #371 finding 2: must be
+        // distinct from an explicit caller-supplied default.
         let spec = InjectMethodSpec::default();
-        let method = resolve_method(&spec).unwrap();
-        match method {
-            InjectMethod::Paste(s) => assert_eq!(s, PasteShortcut::default()),
-            _ => panic!("expected paste"),
-        }
+        assert_eq!(resolve_method(&spec).unwrap(), InjectMethod::Paste(None));
+    }
+
+    #[test]
+    fn resolve_method_empty_string_treated_as_no_preference() {
+        let spec = InjectMethodSpec {
+            mode: InjectMode::Paste,
+            shortcut: Some(String::new()),
+        };
+        assert_eq!(resolve_method(&spec).unwrap(), InjectMethod::Paste(None));
     }
 
     #[test]
@@ -397,7 +443,24 @@ mod tests {
         };
         assert_eq!(
             resolve_method(&spec).unwrap(),
-            InjectMethod::Paste(PasteShortcut::CtrlShiftV)
+            InjectMethod::Paste(Some(PasteShortcut::CtrlShiftV))
+        );
+    }
+
+    #[test]
+    fn resolve_method_preserves_explicit_default_value() {
+        // P3 #371 finding 2 regression guard: an explicitly-supplied
+        // "ctrl_v" (which happens to equal PasteShortcut::default() on
+        // Linux/Windows) must NOT collapse to None — the dispatcher
+        // must see Some(CtrlV) and honour it rather than running the
+        // terminal-paste heuristic.
+        let spec = InjectMethodSpec {
+            mode: InjectMode::Paste,
+            shortcut: Some("ctrl_v".to_owned()),
+        };
+        assert_eq!(
+            resolve_method(&spec).unwrap(),
+            InjectMethod::Paste(Some(PasteShortcut::CtrlV))
         );
     }
 
@@ -444,10 +507,18 @@ mod tests {
     #[test]
     fn method_label_includes_paste_shortcut_name() {
         assert_eq!(
-            method_label(InjectMethod::Paste(PasteShortcut::CtrlShiftV)),
+            method_label(InjectMethod::Paste(Some(PasteShortcut::CtrlShiftV))),
             "paste:ctrl_shift_v"
         );
         assert_eq!(method_label(InjectMethod::Typing), "typing");
+    }
+
+    #[test]
+    fn method_label_uses_auto_for_no_explicit_shortcut() {
+        // `paste:auto` distinguishes "caller did not pin a shortcut, the
+        // dispatcher picked one at runtime" from an explicit caller-pinned
+        // shortcut in the response JSON. P3 #371 finding 2 surface.
+        assert_eq!(method_label(InjectMethod::Paste(None)), "paste:auto");
     }
 
     #[test]
@@ -504,7 +575,7 @@ mod tests {
         let events = backend.events.clone();
         let mut injector = Injector::new().with_backend(Box::new(backend));
         injector
-            .inject_text("ignored", InjectMethod::Paste(PasteShortcut::CtrlV))
+            .inject_text("ignored", InjectMethod::Paste(Some(PasteShortcut::CtrlV)))
             .unwrap();
         let recorded = events.lock().unwrap().clone();
         assert_eq!(recorded.len(), 1, "expected single chord, got {recorded:?}");
@@ -512,6 +583,27 @@ mod tests {
             recorded[0].starts_with("chord:["),
             "expected chord event, got {:?}",
             recorded[0]
+        );
+    }
+
+    #[test]
+    fn inject_text_paste_with_none_uses_default_shortcut_on_backend_path() {
+        // The trait-backend path (Windows/macOS) can't read the target
+        // title/process so None collapses to PasteShortcut::default()
+        // there. Verify a chord is still emitted rather than the call
+        // panicking or no-op'ing — the Linux-specific terminal-aware
+        // heuristic lives in `inject_on_linux` and is exercised separately.
+        let backend = RecordingBackend::default();
+        let events = backend.events.clone();
+        let mut injector = Injector::new().with_backend(Box::new(backend));
+        injector
+            .inject_text("ignored", InjectMethod::Paste(None))
+            .unwrap();
+        let recorded = events.lock().unwrap().clone();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "expected single chord for Paste(None), got {recorded:?}"
         );
     }
 }
