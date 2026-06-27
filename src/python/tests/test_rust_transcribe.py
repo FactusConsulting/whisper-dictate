@@ -591,7 +591,7 @@ class RustWhisperServerModelTests(unittest.TestCase):
         audio = np.zeros(16000, dtype=np.float32)
         with self.assertRaises(RuntimeError) as cm:
             model.transcribe(audio, language=None, initial_prompt=None)
-        self.assertIn("exited mid-call", str(cm.exception))
+        self.assertIn("exited or timed out mid-call", str(cm.exception))
 
     def test_constructor_raises_when_server_dies_before_ready(self):
         # No lines scripted → first readline returns "" → ready handshake
@@ -674,6 +674,177 @@ class RustWhisperServerModelTests(unittest.TestCase):
         model = self._build(fake)
         model.close()
         model.close()  # must not raise
+
+    # -- P2 #395 follow-ups: timeout, respawn, Windows-specific shape ----
+
+    def test_transcribe_respawns_helper_after_a_per_call_death(self):
+        """Headline Codex P2 fix: a single EOF used to leave self._proc
+        permanently dead and every later utterance failed. The helper
+        must respawn on the NEXT transcribe call so the user pays one
+        failed utterance and dictation keeps working."""
+        import numpy as np
+
+        # First subprocess: ready, then dies mid-call (no response line).
+        dead = _FakeServerProcess([_ready_line()])
+        # Second subprocess (respawn): ready, then a real response.
+        alive = _FakeServerProcess([_ready_line(), _ok_line("recovered")])
+        popen_returns = iter([dead, alive])
+        audio = np.zeros(16000, dtype=np.float32)
+
+        with patch.object(self.vp.subprocess, "Popen",
+                          side_effect=lambda *a, **kw: next(popen_returns)):
+            model = self.vp.RustWhisperServerModel("/r")
+            # First call: dead subprocess -> RuntimeError.
+            with self.assertRaises(RuntimeError):
+                model.transcribe(audio, language=None, initial_prompt=None)
+            # Second call: must respawn the helper and succeed.
+            segments, _info = model.transcribe(audio, language=None,
+                                               initial_prompt=None)
+            self.assertEqual(segments[0].text, "recovered")
+        # And the second subprocess was actually used (one stdin write to
+        # the respawned helper, not piling up on the dead one).
+        self.assertEqual(len(alive.writes()), 1)
+
+    def test_transcribe_respawn_falls_back_to_shell_when_replacement_also_dies(self):
+        """If the respawn itself can't get past the ready handshake,
+        ensure_alive raises so the caller sees the failure and can fall
+        back to ShellModel / faster-whisper rather than getting stuck in
+        a tight respawn-loop."""
+        import numpy as np
+
+        dead1 = _FakeServerProcess([_ready_line()])
+        dead2 = _FakeServerProcess([])  # respawn can't even read ready
+        popen_returns = iter([dead1, dead2])
+        audio = np.zeros(16000, dtype=np.float32)
+
+        with patch.object(self.vp.subprocess, "Popen",
+                          side_effect=lambda *a, **kw: next(popen_returns)):
+            model = self.vp.RustWhisperServerModel("/r")
+            # First call: dies mid-response -> RuntimeError + mark dead.
+            with self.assertRaises(RuntimeError):
+                model.transcribe(audio, language=None, initial_prompt=None)
+            # Second call: respawn ALSO fails -> RuntimeError surfaces.
+            with self.assertRaises(RuntimeError):
+                model.transcribe(audio, language=None, initial_prompt=None)
+
+    def test_response_timeout_kills_subprocess_and_marks_dead(self):
+        """A wedged whisper.cpp call must NOT hold TRANSCRIBE_LOCK
+        indefinitely — the wrapper kills the subprocess after the
+        configured deadline and surfaces the failure so the caller can
+        log + respawn."""
+        import numpy as np
+
+        # Fake that never returns a response line (its readline() blocks
+        # forever in the reader thread). The wrapper's join(timeout=...)
+        # fires, the wrapper kills the proc, _read_with_timeout returns "".
+        class _BlockingProcess(_FakeServerProcess):
+            def __init__(self):
+                super().__init__([_ready_line()])
+                self._kill_called = False
+                self.stdout = self._BlockingStdout(self)
+
+            def kill(self):
+                self._kill_called = True
+                # Simulate kill: drain any pending lines so subsequent
+                # reads return EOF immediately.
+                self.stdout._wake.set()
+                super().kill()
+
+            class _BlockingStdout:
+                def __init__(self, parent):
+                    self._parent = parent
+                    import threading as _t
+                    self._wake = _t.Event()
+                    # Serve the ready line once; subsequent reads block
+                    # until _wake (set by kill()) and then return EOF.
+                    self._first = True
+
+                def readline(self):
+                    if self._first:
+                        self._first = False
+                        return _ready_line()
+                    self._wake.wait()
+                    return ""
+
+        fake = _BlockingProcess()
+        audio = np.zeros(16000, dtype=np.float32)
+        with patch.object(self.vp.subprocess, "Popen", return_value=fake):
+            model = self.vp.RustWhisperServerModel("/r")
+            # Pin a very short timeout for the test — 0.5 s is well above
+            # the cost of writing one stdin line and joining the reader
+            # thread, but bounded enough that the test runs in well under
+            # a second.
+            model._response_timeout_s = 0.5
+            with self.assertRaises(RuntimeError) as cm:
+                model.transcribe(audio, language=None, initial_prompt=None)
+        # Kill was invoked (so a real subprocess WOULD have been killed).
+        self.assertTrue(fake._kill_called,
+                        "wrapper must kill the subprocess on timeout")
+        # And the failure message names the timeout explicitly so the
+        # caller can distinguish it from other RuntimeError shapes.
+        self.assertIn("timed out", str(cm.exception))
+
+    def test_stderr_is_devnull_not_pipe(self):
+        """Per Codex P2 on #395: stderr MUST NOT be PIPE because we never
+        drain it; a non-empty PIPE eventually fills the OS pipe buffer
+        (~64 KB on Linux/Windows) and the helper blocks writing stderr,
+        deadlocking the stdout response we're waiting on."""
+        import numpy as np
+
+        seen_kwargs = {}
+
+        def capture_popen(cmd, **kwargs):
+            seen_kwargs.update(kwargs)
+            return _FakeServerProcess([_ready_line()])
+
+        with patch.object(self.vp.subprocess, "Popen", side_effect=capture_popen):
+            self.vp.RustWhisperServerModel("/r")
+        self.assertIs(
+            seen_kwargs.get("stderr"),
+            self.vp.subprocess.DEVNULL,
+            f"stderr must be DEVNULL (got {seen_kwargs.get('stderr')!r}); "
+            "PIPE without a drain thread deadlocks the response path"
+        )
+
+    def test_popen_uses_cross_platform_safe_call_shape(self):
+        """Per Codex P2 on #395 (Windows-coverage rule from AGENTS.md):
+        the long-running server's subprocess.Popen call must use the
+        same defensive options the per-utterance ShellModel uses —
+        ``shell=False`` (no shell injection), ``text=True`` +
+        ``encoding="utf-8"`` (Danish corpus text survives the
+        cp1252 Windows console), ``errors="replace"`` (a stray byte
+        never tears down the pipe). The helper path is also passed
+        as an args LIST (not a concatenated string) so a path with
+        spaces (the default Windows install at
+        ``C:/Program Files/WhisperDictate/whisper-dictate.exe``)
+        round-trips correctly."""
+        seen_args = {}
+
+        def capture_popen(cmd, **kwargs):
+            seen_args["cmd"] = cmd
+            seen_args["kwargs"] = kwargs
+            return _FakeServerProcess([_ready_line()])
+
+        helper_with_spaces = "C:\\Program Files\\WhisperDictate\\whisper-dictate.exe"
+        with patch.object(self.vp.subprocess, "Popen", side_effect=capture_popen):
+            self.vp.RustWhisperServerModel(helper_with_spaces)
+
+        # Helper path passed as args LIST element (not concatenated).
+        self.assertIsInstance(seen_args["cmd"], list,
+                              "cmd must be a list, not a shell string")
+        self.assertEqual(seen_args["cmd"][0], helper_with_spaces,
+                         "helper path must be the first list element")
+        self.assertEqual(seen_args["cmd"][1], "transcribe-server",
+                         "subcommand must be the second list element")
+        # Cross-platform call-shape defaults.
+        self.assertEqual(seen_args["kwargs"].get("shell"), False,
+                         "shell=False so a path with spaces isn't parsed")
+        self.assertEqual(seen_args["kwargs"].get("text"), True,
+                         "text=True so we get str not bytes")
+        self.assertEqual(seen_args["kwargs"].get("encoding"), "utf-8",
+                         "UTF-8 for Danish corpus text on Windows cp1252")
+        self.assertEqual(seen_args["kwargs"].get("errors"), "replace",
+                         "errors=replace so a stray byte doesn't crash readline")
 
 
 class LoadStTModelPrefersServerWhenAvailableTests(unittest.TestCase):
