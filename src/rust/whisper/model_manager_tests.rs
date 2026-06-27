@@ -10,7 +10,7 @@
 use super::*;
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
-use std::io::Cursor;
+use std::io::{self, Cursor};
 
 // Re-export the crate-wide env lock so the cache-dir override tests serialise
 // against every other env-mutating test in the suite. Per-module locks would
@@ -111,6 +111,14 @@ fn catalog_entries_are_well_formed() {
             "sha256 must be hex for {entry:?}"
         );
         assert!(entry.size_bytes > 0, "size_bytes must be > 0 for {entry:?}");
+        // All lowercase: normalize_hex lowercases on verify, but the catalog
+        // itself should already be lowercase so a typo is caught here rather
+        // than silently passing the normalised comparison.
+        assert_eq!(
+            entry.sha256,
+            entry.sha256.to_ascii_lowercase(),
+            "catalog sha256 must be lowercase for {entry:?}"
+        );
     }
 }
 
@@ -284,9 +292,119 @@ fn stream_download_to_replaces_existing_target_atomically() {
 }
 
 #[test]
-fn partial_path_appends_suffix() {
-    let p = partial_path(Path::new("/tmp/ggml-tiny.en.bin"));
-    assert_eq!(p, PathBuf::from("/tmp/ggml-tiny.en.bin.partial"));
+fn partial_path_is_unique_and_has_partial_suffix() {
+    let target = Path::new("/tmp/ggml-tiny.en.bin");
+    let p1 = partial_path(target);
+    let p2 = partial_path(target);
+    let s1 = p1.to_string_lossy();
+    let s2 = p2.to_string_lossy();
+    assert!(
+        s1.starts_with("/tmp/ggml-tiny.en.bin."),
+        "partial must start with target prefix: {s1}"
+    );
+    assert!(
+        s1.ends_with(".partial"),
+        "partial must end with .partial: {s1}"
+    );
+    // The sequence counter guarantees uniqueness within the same process so
+    // concurrent downloads (CLI + UI) never stomp the same partial file.
+    assert_ne!(s1, s2, "consecutive calls must produce different paths");
+}
+
+#[test]
+fn is_local_only_reads_env_var() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g1 = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
+    assert!(is_local_only(), "\"1\" must count as local-only");
+    drop(_g1);
+    let _g2 = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "true");
+    assert!(is_local_only(), "\"true\" must count as local-only");
+    drop(_g2);
+    let _g3 = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    assert!(!is_local_only(), "unset must not be local-only");
+    drop(_g3);
+    let _g4 = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "0");
+    assert!(!is_local_only(), "\"0\" must not be local-only");
+}
+
+#[test]
+fn download_model_blocked_when_local_only_via_env() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
+    // Also ensure config doesn't interfere by pointing config at empty dir.
+    let tmp_cfg = tempfile::tempdir().unwrap();
+    let cfg_path = tmp_cfg.path().join("config.json");
+    let _gcfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
+    let entry = &CATALOG[0];
+    let err = download_model(entry, &()).expect_err("must fail in local-only mode");
+    assert!(
+        err.to_string().contains("local-only mode"),
+        "error must mention local-only mode: {err}"
+    );
+}
+
+#[test]
+fn download_model_blocked_when_local_only_via_config() {
+    // P1: persisted `local_only: 1` in settings.json must block downloads
+    // even without the VOICEPI_LOCAL_ONLY env var.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    let tmp_cfg = tempfile::tempdir().unwrap();
+    let cfg_path = tmp_cfg.path().join("config.json");
+    std::fs::write(&cfg_path, r#"{"local_only":"1"}"#).unwrap();
+    let _gcfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
+    let entry = &CATALOG[0];
+    let err = download_model(entry, &()).expect_err("must fail when config sets local_only");
+    assert!(
+        err.to_string().contains("local-only mode"),
+        "error must mention local-only mode: {err}"
+    );
+}
+
+#[test]
+fn is_local_only_reads_persisted_config() {
+    // P1: when env var is unset but config.json has "local_only":"1",
+    // is_local_only() must return true.
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    let tmp_cfg = tempfile::tempdir().unwrap();
+    let cfg_path = tmp_cfg.path().join("config.json");
+    std::fs::write(&cfg_path, r#"{"local_only":"1"}"#).unwrap();
+    let _gcfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
+    assert!(
+        is_local_only(),
+        "config local_only=1 must activate local-only mode even without env var"
+    );
+}
+
+#[test]
+fn download_timeout_uses_default_when_env_absent() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g = EnvVarGuard::remove("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS");
+    assert_eq!(
+        download_timeout(),
+        std::time::Duration::from_secs(DEFAULT_DOWNLOAD_TIMEOUT_SECS),
+        "default timeout must be used when env var is unset"
+    );
+}
+
+#[test]
+fn download_timeout_env_override_is_respected() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g = EnvVarGuard::set("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS", "7200");
+    assert_eq!(
+        download_timeout(),
+        std::time::Duration::from_secs(7200),
+        "env override must be used when set"
+    );
+    drop(_g);
+    // Garbage value falls back to default.
+    let _g2 = EnvVarGuard::set("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS", "not-a-number");
+    assert_eq!(
+        download_timeout(),
+        std::time::Duration::from_secs(DEFAULT_DOWNLOAD_TIMEOUT_SECS),
+        "invalid env override must fall back to default"
+    );
 }
 
 #[test]

@@ -51,6 +51,11 @@ pub mod health;
 pub mod hotkey;
 pub mod injection;
 pub mod model_capacity;
+// Shared OS-cache helpers (`replace_atomic`, `user_cache_dir`) used by both
+// `audio::model_cache` (feature-gated) and `whisper::model_manager`
+// (unconditional). Extracted here to avoid a cross-module dependency that
+// crosses a feature boundary.
+pub(crate) mod os_cache;
 // Rust port of `vp_postprocess.py` (Wave 4-B of #348). Owns the full
 // post-STT formatting / LLM cleanup pipeline: settings validation,
 // cloud-safe redaction, prompt construction, provider call (local

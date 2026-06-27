@@ -23,12 +23,14 @@ default = ["ui-egui-glow"]
 ui-egui-glow = ["eframe/glow"]
 ui-egui-wgpu = ["eframe/wgpu"]
 # Local Whisper inference via the whisper.cpp bindings (`whisper-rs`).
-# OFF by default: enabling this feature pulls in whisper-rs + hound and
-# requires CMake and a C/C++ compiler (e.g. clang) on the build host, since
+# OFF by default: enabling this feature pulls in whisper-rs and requires
+# CMake and a C/C++ compiler (e.g. clang) on the build host, since
 # whisper-rs compiles whisper.cpp from source. This is the CPU-only spike
 # (see roadmap issue #317 sub-task 1); the module lives in `src/rust/whisper`
 # and is wired nowhere in the runtime yet.
-whisper-rs-local = ["dep:whisper-rs", "dep:hound"]
+# Note: `hound` (WAV decode) is an unconditional dep so the WAV helpers in
+# `whisper::wav` compile and are unit-tested on every CI run without CMake.
+whisper-rs-local = ["dep:whisper-rs"]
 # Experimental Rust-side audio pipeline (cpal capture → rubato resample →
 # Silero v4 VAD via vad-rs/ort). OFF by default so a stock build doesn't
 # pull in the ONNX runtime or the native cpal backends. When the supervisor
@@ -90,10 +92,12 @@ sha2 = "0.10"
 thiserror = "2.0"
 keyring-core = "1.0"
 ureq = { version = "3.3", features = ["json"] }
+# hound: pure-Rust WAV reader/writer, used by `whisper::wav` for 16 kHz mono
+# decoding. Unconditional so the WAV helpers are always available and covered.
+hound = "3.5"
 # Optional deps for the `whisper-rs-local` feature. `dep:` syntax in
 # [features] keeps them out of the default build entirely.
 whisper-rs = { version = "0.16", optional = true }
-hound = { version = "3.5", optional = true }
 
 # --- audio-in-rust feature deps (all OPTIONAL; not pulled in for default builds)
 # cpal: cross-platform microphone capture (WASAPI on Windows, ALSA on Linux).

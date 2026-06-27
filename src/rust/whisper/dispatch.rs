@@ -79,30 +79,47 @@ pub fn handle_transcribe_wav() -> Result<()> {
     Ok(())
 }
 
-/// Resolve the model file path from `VOICEPI_WHISPER_MODEL_PATH`.
+/// Resolve the model file path for inference.
 ///
-/// We do not silently fall back to a default cache directory: Phase 1.2 is
-/// only entered when the Python side has explicitly opted in via
-/// `VOICEPI_TRANSCRIBE_BACKEND=rust`, and that side already knows which model
-/// file it intends to use. Surfacing a clear "missing env var" error here is
-/// far less confusing than picking some arbitrary `~/.cache` path that may
-/// not exist or hold the model the user expects. A later sub-issue (Wave 7
-/// model download UI) will own the default location story.
+/// Checks, in order:
+/// 1. `VOICEPI_WHISPER_MODEL_PATH` — explicit override (unchanged behaviour).
+/// 2. The user-cache whisper-models directory (populated by `models download`
+///    or the Settings download UI) — tiny.en → base.en → small.en preference.
+///    This means a user who downloaded a model via the UI can start with
+///    `VOICEPI_TRANSCRIBE_BACKEND=rust` without a separate env-var step.
 fn resolve_model_path_from_env() -> Result<PathBuf> {
-    let raw = env::var(MODEL_PATH_ENV).map_err(|_| {
-        anyhow!(
-            "{MODEL_PATH_ENV} is not set; the Rust transcription backend needs \
-             a GGML whisper.cpp model path (e.g. ggml-small.en.bin)"
-        )
-    })?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+    // Primary: explicit env var override.
+    if let Ok(raw) = env::var(MODEL_PATH_ENV) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+        // Set but empty — give a clear error rather than silently falling
+        // through to the cache-dir search, which would be confusing.
         return Err(anyhow!(
             "{MODEL_PATH_ENV} is set but empty; point it at a GGML \
              whisper.cpp model file"
         ));
     }
-    Ok(PathBuf::from(trimmed))
+    // Fallback: first catalog model that exists in the cache directory AND
+    // whose SHA-256 matches the catalog.  Verifying before selecting means a
+    // truncated or corrupt file is skipped (the next catalog entry is tried)
+    // rather than being passed to whisper-rs where it produces a confusing
+    // load error.  The OS page cache makes repeated reads of the same file
+    // fast; this check runs once per process launch, not once per transcription.
+    for entry in crate::whisper::model_manager::CATALOG {
+        if crate::whisper::model_manager::is_downloaded(entry) {
+            if let Ok(path) = crate::whisper::model_manager::model_path(entry) {
+                return Ok(path);
+            }
+        }
+    }
+    Err(anyhow!(
+        "{MODEL_PATH_ENV} is not set and no model was found in the \
+         whisper-models cache directory; download a model via \
+         `whisper-dictate models download tiny.en` or set \
+         {MODEL_PATH_ENV} to point at a GGML whisper.cpp model file"
+    ))
 }
 
 /// Pure helper used by `handle_transcribe_wav`. Split out so the CLI plumbing
@@ -273,18 +290,34 @@ mod tests {
         assert_eq!(normalise_prompt(Some("Codex")), Some("Codex"));
     }
 
+    /// Pick the env var `user_cache_dir` consults on the current platform.
+    const CACHE_ENV_VAR: &str = if cfg!(windows) {
+        "LOCALAPPDATA"
+    } else if cfg!(target_os = "macos") {
+        "HOME"
+    } else {
+        "XDG_CACHE_HOME"
+    };
+
     #[test]
-    fn resolve_model_path_errors_when_env_missing() {
+    fn resolve_model_path_errors_when_env_missing_and_no_cache() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::remove_var(MODEL_PATH_ENV);
+        // Pin cache to a non-existent dir so the cache fallback also finds nothing.
+        let saved_cache = env::var_os(CACHE_ENV_VAR);
+        env::set_var(CACHE_ENV_VAR, "/definitely/not/a/real/dir/xyz");
 
         let err = resolve_model_path_from_env().unwrap_err();
         assert!(
-            err.to_string().contains(MODEL_PATH_ENV) && err.to_string().contains("not set"),
+            err.to_string().contains(MODEL_PATH_ENV),
             "unexpected error: {err}"
         );
 
+        match saved_cache {
+            Some(v) => env::set_var(CACHE_ENV_VAR, v),
+            None => env::remove_var(CACHE_ENV_VAR),
+        }
         if let Some(v) = saved {
             env::set_var(MODEL_PATH_ENV, v);
         }
@@ -302,6 +335,47 @@ mod tests {
         match saved {
             Some(v) => env::set_var(MODEL_PATH_ENV, v),
             None => env::remove_var(MODEL_PATH_ENV),
+        }
+    }
+
+    #[test]
+    fn resolve_model_path_skips_corrupt_cached_file() {
+        // P2: a file that exists but fails SHA-256 verification must be
+        // skipped; the function must NOT return a corrupt cached path.
+        // After the fix, `is_downloaded` gates the fallback, so a file with
+        // wrong content is skipped and the function errors (no valid model).
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var(MODEL_PATH_ENV).ok();
+        env::remove_var(MODEL_PATH_ENV);
+        let tmp = tempfile::tempdir().unwrap();
+        let saved_cache = env::var_os(CACHE_ENV_VAR);
+        env::set_var(CACHE_ENV_VAR, tmp.path());
+
+        let cache_subdir = if cfg!(target_os = "macos") {
+            tmp.path()
+                .join("Library/Caches/whisper-dictate/whisper-models")
+        } else {
+            tmp.path().join("whisper-dictate/whisper-models")
+        };
+        std::fs::create_dir_all(&cache_subdir).unwrap();
+        // Plant a file with wrong content — SHA-256 won't match the catalog.
+        let corrupt_model = cache_subdir.join("ggml-tiny.en.bin");
+        std::fs::write(&corrupt_model, b"corrupt-contents").unwrap();
+
+        // Must fail: corrupt file is skipped, no valid model found.
+        let err =
+            resolve_model_path_from_env().expect_err("corrupt cached file must not be returned");
+        assert!(
+            err.to_string().contains(MODEL_PATH_ENV),
+            "error must name the missing-model env var: {err}"
+        );
+
+        match saved_cache {
+            Some(v) => env::set_var(CACHE_ENV_VAR, v),
+            None => env::remove_var(CACHE_ENV_VAR),
+        }
+        if let Some(v) = saved {
+            env::set_var(MODEL_PATH_ENV, v);
         }
     }
 

@@ -22,8 +22,7 @@
 //!   AFTER the file is on disk. A mismatch deletes the partial download so the
 //!   next attempt starts clean.
 //! - **Atomicity**: writes to `<name>.partial` first, renames into place on
-//!   verified success (Windows-friendly via `replace_atomic` style — see
-//!   `audio::model_cache` for the same pattern).
+//!   verified success (Windows-friendly via `crate::os_cache::replace_atomic`).
 //!
 //! This module is compiled **unconditionally** (no `whisper-rs-local` feature
 //! gate) so the CLI `models list` / `models download` subcommands and the UI
@@ -32,8 +31,10 @@
 //! still requires the feature.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+use crate::os_cache::{replace_atomic, user_cache_dir};
 
 use anyhow::{anyhow, Context, Result};
 use sha2::{Digest, Sha256};
@@ -74,8 +75,8 @@ pub struct ModelEntry {
 
 /// Curated catalog of CPU-friendly English GGML models. Order matches the UI
 /// presentation: smallest / fastest first so the cheapest option is the
-/// default eye-line pick. SHA-256 values mirror upstream
-/// `models/download-ggml-model.sh` at the time of writing — re-verify on bumps.
+/// default eye-line pick. SHA-256 values are pinned to the current
+/// `ggerganov/whisper.cpp` HuggingFace main branch — re-verify when bumping.
 pub const CATALOG: &[ModelEntry] = &[
     ModelEntry {
         name: "tiny.en",
@@ -97,7 +98,7 @@ pub const CATALOG: &[ModelEntry] = &[
         name: "small.en",
         filename: "ggml-small.en.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
-        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
         size_bytes: 487_600_000,
         description: "English, balanced accuracy & speed (~488 MB)",
     },
@@ -111,7 +112,7 @@ pub fn find(name: &str) -> Option<&'static ModelEntry> {
 /// Resolve the OS-conventional user-cache subdirectory we store Whisper
 /// models in.
 ///
-/// Mirrors `audio::model_cache::user_cache_dir` (`%LOCALAPPDATA%` on Windows,
+/// Uses [`crate::os_cache::user_cache_dir`] (`%LOCALAPPDATA%` on Windows,
 /// `~/Library/Caches` on macOS, `$XDG_CACHE_HOME`/`~/.cache` on Linux) and
 /// nests one extra `whisper-models/` segment under the shared
 /// `whisper-dictate/` namespace so the bundled Silero VAD model and the
@@ -182,6 +183,31 @@ pub fn verify_sha256(path: &Path, expected_hex: &str) -> Result<()> {
     Ok(())
 }
 
+/// Returns `true` when local-only mode is active. Checks two sources in order:
+///
+/// 1. `VOICEPI_LOCAL_ONLY` environment variable (`"1"`, `"true"`, `"True"`,
+///    or `"TRUE"`) — fast, process-level override.
+/// 2. Persisted config `local_only: true` in `settings.json` — covers the
+///    common case where the user toggled the Settings switch and saved but did
+///    NOT export the env var in the calling shell (Privacy bug P1 fix).
+///
+/// Used to gate outbound model downloads; callers that would initiate network
+/// requests must check this before proceeding.
+pub fn is_local_only() -> bool {
+    // Fast path: env var takes precedence and avoids a config-file read.
+    if std::env::var("VOICEPI_LOCAL_ONLY")
+        .map(|v| matches!(v.trim(), "1" | "true" | "True" | "TRUE"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    // Fallback: persisted config setting.  `load_settings` reads from disk
+    // only at download time (not on every frame) so the cost is acceptable.
+    crate::config::load_settings()
+        .map(|s| s.local_only)
+        .unwrap_or(false)
+}
+
 /// Callback the download path invokes as bytes land. Implemented by the UI
 /// (Arc<Mutex<...>> over a shared progress struct) and by the CLI (writes a
 /// percentage line to stderr). `total` is the `Content-Length` value when the
@@ -197,13 +223,48 @@ impl DownloadProgress for () {
     fn on_progress(&self, _downloaded: u64, _total: Option<u64>) {}
 }
 
+/// TCP connect timeout for model downloads.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// End-to-end timeout for model downloads (default 60 minutes).
+///
+/// At 0.5 Mbit/s the models require roughly:
+///   tiny.en  (~78 MB)  → ~21 min
+///   base.en (~148 MB)  → ~39 min
+///   small.en (~488 MB) → ~130 min
+///
+/// The default 60-minute cap covers tiny.en and base.en on very slow
+/// connections. Users on slower links or downloading small.en can override
+/// via `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`.
+const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 3_600;
+
+fn download_timeout() -> std::time::Duration {
+    let secs = std::env::var("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_DOWNLOAD_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
 /// Download `entry` to its cache path, streaming via `ureq` and reporting
 /// progress through `cb`. Returns the final on-disk path on success.
 ///
 /// The download writes to `<filename>.partial` first; on successful SHA-256
 /// verification the partial is atomically renamed into the real cache path.
 /// On any failure the partial is removed so the next attempt starts clean.
+///
+/// Errors immediately when local-only mode is active (either the
+/// `VOICEPI_LOCAL_ONLY` env var or the persisted `local_only` config setting);
+/// the caller must gate its UI affordances on `is_local_only()` as well for a
+/// consistent UX.
 pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<PathBuf> {
+    if is_local_only() {
+        return Err(anyhow!(
+            "model download blocked: local-only mode is active \
+             (VOICEPI_LOCAL_ONLY env var or local_only setting); \
+             disable local-only mode to allow outbound model downloads"
+        ));
+    }
     let target = model_path(entry)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -214,7 +275,13 @@ pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<P
         })?;
     }
     let partial = partial_path(&target);
-    let response = ureq::get(entry.url)
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(CONNECT_TIMEOUT))
+        .timeout_global(Some(download_timeout()))
+        .build()
+        .into();
+    let response = agent
+        .get(entry.url)
         .header("User-Agent", USER_AGENT)
         .call()
         .map_err(|err| anyhow!("download request failed: {err}"))?;
@@ -306,55 +373,21 @@ pub(crate) fn stream_download_to<R: Read>(
     Ok(())
 }
 
+/// Return a per-process, per-call temporary path for a partial download.
+///
+/// Uses `<target>.<pid>-<seq>.partial` (process-ID + monotonic sequence) so
+/// two simultaneous invocations (CLI + UI, or two CLI calls) never collide on
+/// the same partial file. The `.partial` suffix is stable so cleanup scripts
+/// can still glob for stale partials.
 fn partial_path(target: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let suffix = format!(".{pid}-{seq}.partial");
     let mut s = target.as_os_str().to_owned();
-    s.push(".partial");
+    s.push(suffix.as_str());
     PathBuf::from(s)
-}
-
-/// Cross-platform "rename, replacing the destination if it exists". Same
-/// dance `audio::model_cache::replace_atomic` does — on POSIX `rename` is
-/// atomic and overwrites; on Windows we delete-then-rename on the
-/// `AlreadyExists` case only (so unrelated errors surface untouched).
-fn replace_atomic(tmp: &Path, target: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    {
-        match fs::rename(tmp, target) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(target);
-                fs::rename(tmp, target)
-            }
-            Err(e) => Err(e),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        fs::rename(tmp, target)
-    }
-}
-
-/// Resolve the OS-conventional user cache directory. Duplicated from
-/// `audio::model_cache` so this module doesn't introduce a cross-module
-/// dependency on a feature-gated module (`audio` only compiles with
-/// `audio-in-rust`). The rules match `dirs::cache_dir` for our three
-/// platforms.
-fn user_cache_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
-    }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    {
-        if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-            return Some(PathBuf::from(xdg));
-        }
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))
-    }
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
