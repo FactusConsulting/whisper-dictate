@@ -1538,7 +1538,15 @@ pub fn benchmark_command() -> WorkerCommand {
 /// Inherits the same `--app-root` (corpus resolution) + effective-config env
 /// (so the configured microphone is used) as every other worker command.
 pub fn record_corpus_item_command(id: &str) -> WorkerCommand {
-    default_worker_command_with_args(vec!["--record-corpus-item".to_owned(), id.to_owned()])
+    // P3 #372 finding 1: pass the id as a single `--flag=value` arg rather
+    // than two adjacent tokens. Python argparse processes `--flag value`
+    // by greedy lookahead, and a value that starts with `-` (legal in
+    // is_safe_corpus_id which allows `[A-Za-z0-9._-]`) can be parsed as
+    // an unknown flag — silently dropping or mis-routing the id. The
+    // `--flag=value` form is unambiguous regardless of how the value
+    // starts. `is_safe_corpus_id` upstream already forbids `=`, so the
+    // joined token is safe to round-trip through argparse.
+    default_worker_command_with_args(vec![format!("--record-corpus-item={id}")])
 }
 
 /// The app root used to resolve bundled resources (e.g. `benchmark/corpus.json`).

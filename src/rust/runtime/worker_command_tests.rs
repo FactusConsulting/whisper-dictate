@@ -602,3 +602,122 @@ fn audio_devices_command_propagation_is_idempotent_against_pre_populated_command
          duplicate VOICEPI_DEVICES_BACKEND"
     );
 }
+
+// -----------------------------------------------------------------------
+// P3 #372 finding 1: corpus_record id passed as `--flag=value` to argparse
+// so a leading-hyphen id is not mis-parsed as another flag.
+// -----------------------------------------------------------------------
+
+#[test]
+fn record_corpus_item_command_joins_id_with_equals_sign() {
+    // Argparse processes `--flag value` by greedy lookahead and treats a
+    // value starting with `-` as another flag. is_safe_corpus_id allows
+    // leading hyphens (its allowlist is [A-Za-z0-9._-]) so the worker
+    // command builder must use the unambiguous `--flag=value` form to
+    // round-trip such ids correctly through Python argparse.
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let command = super::record_corpus_item_command("-leading-hyphen");
+
+    assert!(
+        command
+            .args
+            .iter()
+            .any(|a| a == "--record-corpus-item=-leading-hyphen"),
+        "expected joined `--record-corpus-item=-leading-hyphen` token in args, got {:?}",
+        command.args
+    );
+    // And there must be no naked `--record-corpus-item` flag followed by a
+    // separate value token — argparse would parse `-leading-hyphen` as a
+    // flag in that case.
+    assert!(
+        !command.args.iter().any(|a| a == "--record-corpus-item"),
+        "must not emit the split `--record-corpus-item <id>` form; got {:?}",
+        command.args
+    );
+}
+
+#[test]
+fn record_corpus_item_command_joins_typical_id_too() {
+    // Belt-and-braces: the joined form is the only emitted form for every
+    // id, not just the hyphen-leading edge case. Catches a future refactor
+    // that re-introduces the split form for "normal-looking" ids and
+    // silently loses the hyphen protection.
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let command = super::record_corpus_item_command("da-001");
+
+    assert!(
+        command
+            .args
+            .iter()
+            .any(|a| a == "--record-corpus-item=da-001"),
+        "ordinary ids also use the joined form; got {:?}",
+        command.args
+    );
+}
+
+// -----------------------------------------------------------------------
+// P3 #372 finding 2: run_foreground must call configure_piped_python_stdio
+// so foreground subcommands (bench / corpus-record / doctor / models)
+// inherit UTF-8 stdio on Windows where the console code page defaults to
+// cp1252 / cp437 and mojibakes Danish corpus text. Existing UTF-8 test
+// covers run_capture; this regression guard covers run_foreground via
+// source inspection (the foreground path inherits stdout, so behavioural
+// tests would need to capture the parent process's piped output which is
+// elaborate; the source-inspection pattern matches the existing
+// `install_commands_use_background_process_flags` test next door).
+// -----------------------------------------------------------------------
+
+#[test]
+fn run_foreground_configures_python_utf8_stdio() {
+    let runtime = include_str!("../runtime.rs");
+    let run_foreground_body = runtime
+        .split_once("pub fn run_foreground(command: &WorkerCommand)")
+        .expect("run_foreground signature should still exist")
+        .1
+        .split_once("fn configure_background_process")
+        .expect("expected configure_background_process to follow run_foreground")
+        .0;
+
+    assert!(
+        run_foreground_body.contains("configure_piped_python_stdio(&mut process);"),
+        "run_foreground must call configure_piped_python_stdio so foreground \
+         subcommands (bench / corpus-record / doctor / models) get UTF-8 \
+         stdio — without it Danish corpus text mojibakes on Windows where \
+         the inherited console code page is cp1252 (P3 #372 finding 2)"
+    );
+}
+
+#[test]
+fn configure_piped_python_stdio_sets_both_utf8_envs() {
+    // The helper's CONTRACT (vs the call-site test above): both
+    // PYTHONUTF8=1 AND PYTHONIOENCODING=utf-8 must be set on the command.
+    // PYTHONUTF8 alone is not enough on Windows because Python reopens
+    // its stdio streams with the configured encoding before the env is
+    // read; PYTHONIOENCODING is the seatbelt. We inspect the function
+    // source directly because std::process::Command does not expose an
+    // env getter to assert against at runtime.
+    let runtime = include_str!("../runtime.rs");
+    let helper_body = runtime
+        .split_once("fn configure_piped_python_stdio(command: &mut Command)")
+        .expect("configure_piped_python_stdio signature should still exist")
+        .1
+        .split_once("fn exit_status_to_result")
+        .expect("expected exit_status_to_result to follow configure_piped_python_stdio")
+        .0;
+
+    assert!(
+        helper_body.contains(".env(PYTHON_UTF8_ENV,"),
+        "configure_piped_python_stdio must set PYTHONUTF8 (P3 #372 finding 2)"
+    );
+    assert!(
+        helper_body.contains(".env(PYTHON_IO_ENCODING_ENV,"),
+        "configure_piped_python_stdio must set PYTHONIOENCODING for Windows \
+         stdio reopen (P3 #372 finding 2)"
+    );
+}
