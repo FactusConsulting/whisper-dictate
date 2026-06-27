@@ -1,9 +1,9 @@
-//! Unit tests for the long-running transcribe-server JSON protocol.
+//! Unit tests for [`super`] (`whisper::protocol`).
 //!
-//! Lives in a sibling file so `protocol.rs` stays under the repo modularity
-//! gate (~500 LOC per file, per AGENTS.md). Declared from `protocol.rs` via
-//! `#[cfg(test)] mod tests;` so the test module is otherwise structurally
-//! identical to an inline one — the move is purely a file-size win.
+//! Kept in a sibling file (`protocol_tests.rs`) so `protocol.rs` stays under
+//! the repo's 500-LOC modularity gate (AGENTS.md). Declared via
+//! `#[cfg(test)] #[path = "protocol_tests.rs"] mod tests;` — identical to the
+//! `wav.rs` / `wav_tests.rs` convention already in this module.
 
 use super::*;
 

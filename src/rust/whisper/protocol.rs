@@ -197,4 +197,5 @@ pub(crate) fn error_envelope(message: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "protocol_tests.rs"]
 mod tests;
