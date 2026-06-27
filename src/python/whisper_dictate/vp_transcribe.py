@@ -432,19 +432,41 @@ class RustWhisperServerModel:
             shell=False,
         )
 
+    # Bounded handshake deadline so a wedged helper at startup (model load
+    # stuck, GPU init hang, ...) doesn't block `load_stt_model` forever.
+    # 60 s comfortably covers a cold large-v3 load on commodity CPU; a
+    # slower setup can extend it via the env var.
+    _DEFAULT_READY_TIMEOUT_S = float(
+        get_value("VOICEPI_TRANSCRIBE_SERVER_READY_TIMEOUT_S", "60") or "60"
+    )
+
     def _read_ready_line(self) -> dict:
         """Read and parse the first stdout line — a ``ServerReady`` envelope.
 
-        Raises ``RuntimeError`` on EOF before any output (the helper crashed
-        before getting to the ready emit), invalid JSON, or a missing
-        ``ready: true`` field. Each of these maps to a clear log line on the
-        caller side so the fallback to per-utterance shell-out is auditable.
+        Raises ``RuntimeError`` on:
+        - EOF before any output (the helper crashed before getting to the
+          ready emit),
+        - timeout (the helper is alive but never wrote the line — model
+          load wedge or pre-flush hang),
+        - invalid JSON,
+        - missing ``ready: true`` field.
+
+        Each of these maps to a clear log line on the caller side so the
+        fallback to per-utterance shell-out is auditable.
+
+        Per Codex P2 on #395: previously this read had no deadline and a
+        feature-enabled helper that never wrote the ready line blocked
+        `load_stt_model` forever — the per-request timeout only kicked in
+        for response reads. Now both the handshake AND the per-request
+        reads share `_read_response_line_with_timeout` (separate
+        defaults).
         """
         assert self._proc.stdout is not None  # mypy/pylance — PIPE = guaranteed
-        line = self._proc.stdout.readline()
+        line = self._read_response_line_with_timeout(self._DEFAULT_READY_TIMEOUT_S)
         if not line:
             raise RuntimeError(
-                "transcribe-server exited before emitting ready line"
+                "transcribe-server exited or timed out before emitting "
+                "ready line (within {:.0f}s)".format(self._DEFAULT_READY_TIMEOUT_S)
             )
         try:
             payload = json.loads(line)
@@ -561,7 +583,7 @@ class RustWhisperServerModel:
             ) from e
 
     def _read_response_line_with_timeout(self, timeout_s: float) -> str:
-        """Run ``self._proc.stdout.readline()`` with a bounded deadline.
+        """Run the subprocess's stdout.readline() with a bounded deadline.
 
         Cross-platform implementation: ``select`` doesn't work on Windows
         anonymous pipes, so we run the blocking ``readline`` in a daemon
@@ -570,12 +592,22 @@ class RustWhisperServerModel:
         unblocks, and the caller sees the empty line as a
         timeout-equivalent EOF (handled by the empty-line check in
         ``_exchange``). Returns the line on success, "" on timeout/EOF.
+
+        Per Codex P2 on #395: the proc + stdout handles are captured into
+        LOCALS before the reader thread starts, then both kill() and the
+        reader use those locals. Otherwise a slow-to-start reader could
+        outlive a timeout + ``_ensure_alive`` respawn cycle and steal the
+        ready/response line of the REPLACEMENT subprocess (the closure
+        would dereference ``self._proc`` at execution time, which by then
+        points at the new helper).
         """
+        proc = self._proc
+        stdout = proc.stdout
         result: list[str] = [""]
 
         def _reader() -> None:
             try:
-                result[0] = self._proc.stdout.readline() or ""
+                result[0] = stdout.readline() or ""
             except Exception:  # noqa: BLE001 - any reader failure -> empty
                 result[0] = ""
 
@@ -583,11 +615,12 @@ class RustWhisperServerModel:
         t.start()
         t.join(timeout=timeout_s)
         if t.is_alive():
-            # Reader still blocked -> kill the subprocess so the OS closes
-            # the pipe; the reader thread will then exit (we don't wait
-            # for it -- daemon=True keeps it from blocking shutdown).
+            # Reader still blocked -> kill THIS subprocess (not whatever
+            # self._proc happens to point at now — see the comment above).
+            # The killed proc's stdout closes, the reader unblocks, and
+            # this method returns "" so the caller marks the worker dead.
             try:
-                self._proc.kill()
+                proc.kill()
             except OSError:
                 pass
             return ""
