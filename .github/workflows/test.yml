@@ -302,7 +302,9 @@ jobs:
             libxkbcommon-dev \
             libxi-dev \
             libxtst-dev \
-            libasound2-dev
+            libasound2-dev \
+            cmake \
+            libclang-dev
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RUST == 'true'
         with:
@@ -343,6 +345,21 @@ jobs:
         # installer (Wave 8 follow-up).
         if: env.RUN_RUST == 'true'
         run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features audio-in-rust
+      - name: Rust tests (whisper-rs-local feature)
+        # Issue #317 / Wave 7: the local whisper.cpp inference path is
+        # gated behind `whisper-rs-local`. The crate compiles whisper.cpp
+        # from source via CMake and runs bindgen against its headers
+        # using libclang. CMake + libclang-dev are apt-installed on
+        # Linux (above); windows-2025 has both in the default runner
+        # image. End-to-end inference tests are env-gated on
+        # `WHISPER_TEST_MODEL_PATH` + `WHISPER_TEST_WAV_PATH` and skip
+        # in CI; this step verifies the build links cleanly and the
+        # always-compiled pieces (gpu policy, idle wrapper, model
+        # manager) still pass with the feature on. Prep step for
+        # flipping the feature into the shipping installer (Wave 8
+        # follow-up).
+        if: env.RUN_RUST == 'true'
+        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local
       - name: Rust CLI smoke
         if: env.RUN_RUST == 'true'
         run: |
