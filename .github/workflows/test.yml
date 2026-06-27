@@ -301,7 +301,8 @@ jobs:
             libxcb-xfixes0-dev \
             libxkbcommon-dev \
             libxi-dev \
-            libxtst-dev \n            libasound2-dev
+            libxtst-dev \
+            libasound2-dev
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RUST == 'true'
         with:
