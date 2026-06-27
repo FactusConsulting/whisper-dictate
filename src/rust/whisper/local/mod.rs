@@ -25,7 +25,10 @@
 
 // WAV decode helpers live in the unconditional `whisper::wav` module so they
 // are compiled and tested without the `whisper-rs-local` CMake dependency.
-pub use super::wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
+// `decode_wav_16k_mono` is what `LocalWhisper::transcribe_wav` actually calls;
+// the sample-rate constant is re-exported from `whisper::mod.rs` directly so
+// callers don't need to go through `whisper::local`.
+pub use super::wav::decode_wav_16k_mono;
 
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;

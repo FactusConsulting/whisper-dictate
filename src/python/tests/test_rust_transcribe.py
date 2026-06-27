@@ -397,8 +397,7 @@ class RustWhisperShellModelTests(unittest.TestCase):
                          f"wav not cleaned up on error: {request['wav_path']}")
 
 
-@unittest.skipUnless(sys.platform == "win32",
-                     "Windows-specific subprocess invocation test")
+
 class WindowsHelperSubprocessTests(unittest.TestCase):
     """Windows-first verification (per AGENTS.md) for the Rust transcription
     helper shell-out: covers the platform-specific pitfalls (shell=False so a

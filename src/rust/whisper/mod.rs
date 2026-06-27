@@ -6,9 +6,12 @@
 //!   **unconditionally** so the `models` CLI subcommand and the Settings tab
 //!   download UI work on every binary, including stock builds that do not
 //!   include the whisper.cpp inference path.
-//! - [`dispatch`] — JSON-over-stdio dispatcher for the hidden
-//!   `transcribe-wav` sub-command (Python ↔ Rust shell-out). Pulls in
+//! - [`dispatch`] — wiring layer for the hidden `transcribe-wav` (single-shot)
+//!   and `transcribe-server` (long-running, Wave 8-A) sub-commands. Pulls in
 //!   whisper.cpp, so it is gated behind `whisper-rs-local`.
+//! - [`protocol`] — always-compiled JSON envelope + the generic line-server
+//!   loop. Split out from `dispatch` so the wire-format contract is
+//!   unit-tested without whisper.cpp on the build host.
 //! - [`local`] — the [`LocalWhisper`] type wrapping `whisper-rs`. Also
 //!   feature-gated since it links whisper.cpp.
 //! - [`idle`] — `IdleUnloadingModel` library primitive (#325, Wave 7-A).
@@ -31,6 +34,7 @@ pub mod gpu;
 pub mod idle;
 pub mod model_manager;
 pub mod models_cli;
+pub mod protocol;
 /// WAV decode helpers (16 kHz mono). Compiled unconditionally so the pure
 /// WAV logic is unit-tested without the `whisper-rs-local` / CMake build.
 pub mod wav;
@@ -42,9 +46,10 @@ mod local;
 
 pub use gpu::{parse_gpu_policy_from_env, should_use_gpu, GpuPolicy, DEVICE_FALLBACK_ENV, GPU_ENV};
 pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV};
+pub use protocol::{ServerReady, TranscribeRequest, TranscribeResponse};
 pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
 #[cfg(feature = "whisper-rs-local")]
-pub use dispatch::{handle_transcribe_wav, MODEL_PATH_ENV};
+pub use dispatch::{handle_transcribe_server, handle_transcribe_wav, MODEL_PATH_ENV};
 #[cfg(feature = "whisper-rs-local")]
 pub use local::LocalWhisper;

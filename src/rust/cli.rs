@@ -215,6 +215,19 @@ pub enum Command {
         #[arg(long)]
         probe: bool,
     },
+    /// Long-running in-process Whisper worker. Reads one JSON request per
+    /// `\n`-terminated line from stdin, writes one JSON response per line to
+    /// stdout — same envelope as `transcribe-wav` but the GGML model is
+    /// loaded ONCE and stays resident between calls (subject to
+    /// `VOICEPI_WHISPER_IDLE_UNLOAD_S`). Per-request errors stay in-protocol
+    /// as `{"error":"..."}` envelopes so a single bad request does not tear
+    /// down the worker. See `src/rust/whisper/dispatch.rs::handle_transcribe_server`.
+    ///
+    /// First stdout line is a `ServerReady` envelope so the Python wrapper
+    /// can confirm the binary supports the long-running mode before sending
+    /// any requests. Wave 8-A of #348.
+    #[command(hide = true)]
+    TranscribeServer,
     /// Phase 2.1 cross-platform injection: reads a JSON request envelope on
     /// stdin and writes a JSON response on stdout. Gated at runtime by
     /// VOICEPI_INJECTION_BACKEND=rust (the Python worker decides whether to
@@ -538,6 +551,10 @@ mod tests {
 
         let cli = Cli::parse_from(["whisper-dictate", "transcribe-wav", "--probe"]);
         assert_eq!(cli.command, Some(Command::TranscribeWav { probe: true }));
+
+        // Wave 8-A: the long-running in-process worker subcommand.
+        let cli = Cli::parse_from(["whisper-dictate", "transcribe-server"]);
+        assert_eq!(cli.command, Some(Command::TranscribeServer));
     }
 
     #[test]
