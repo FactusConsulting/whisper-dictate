@@ -10,7 +10,7 @@
 use super::*;
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
-use std::io::Cursor;
+use std::io::{self, Cursor};
 
 // Re-export the crate-wide env lock so the cache-dir override tests serialise
 // against every other env-mutating test in the suite. Per-module locks would
