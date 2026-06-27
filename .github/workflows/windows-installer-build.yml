@@ -84,12 +84,21 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Also gate on the release/installer workflow files so a
+          # build-recipe change (e.g. adding --features rust-injection
+          # to the cargo build step) re-builds the installer even when
+          # no shipping source files changed. Without this a
+          # workflow-only release tag would silently skip the installer
+          # rebuild and the new flag would never reach Windows artifacts
+          # (P2 #400 Codex finding 2).
           changed=$(git diff --name-only "$prev" HEAD -- \
             src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
             src/ \
             requirements/ \
             scripts/ \
-            packaging/windows/)
+            packaging/windows/ \
+            .github/workflows/windows-installer-build.yml \
+            .github/workflows/release.yml)
           if [ -n "$changed" ]; then
             echo "changed=true"  >> "$GITHUB_OUTPUT"
             echo "Windows files changed since $prev:"
@@ -117,7 +126,7 @@ jobs:
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection
 
       - name: Build installers
         if: steps.win-check.outputs.changed == 'true'

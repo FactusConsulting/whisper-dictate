@@ -90,7 +90,9 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
   throw "cargo was not found. Install Rust, then rerun this script."
 }
 Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
-cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app
+# Keep this --features list in lockstep with .github/workflows/windows-installer-build.yml
+# so local installer builds match the artifact CI ships. P2 #400 Codex finding 4.
+cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --features rust-injection
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
 $versionFile = Join-Path $root 'VERSION'
