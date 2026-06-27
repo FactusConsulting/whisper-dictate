@@ -721,3 +721,125 @@ fn configure_piped_python_stdio_sets_both_utf8_envs() {
          stdio reopen (P3 #372 finding 2)"
     );
 }
+
+// -----------------------------------------------------------------------
+// P3 #383: rdev-specific PTT-key aliases (`right_alt`, `ralt`) must be
+// normalised to the canonical pynput name (`alt_gr`) before the worker
+// command's VOICEPI_KEY is forwarded to the Python worker — pynput
+// resolves the keyname against its catalogue at startup BEFORE the
+// listener registers, so an unknown name terminates the worker even when
+// VOICEPI_PYTHON_HOTKEY=0 has parked the listener.
+// -----------------------------------------------------------------------
+
+#[test]
+fn normalise_hotkey_chord_rewrites_right_alt_to_alt_gr() {
+    assert_eq!(
+        super::normalise_hotkey_chord_for_python("right_alt"),
+        "alt_gr"
+    );
+    assert_eq!(super::normalise_hotkey_chord_for_python("ralt"), "alt_gr");
+}
+
+#[test]
+fn normalise_hotkey_chord_is_case_insensitive_on_aliases() {
+    // The Rust validator accepts case-insensitively (matches the rest of
+    // the alias-handling); so must the normaliser.
+    for raw in ["Right_Alt", "RIGHT_ALT", "RAlt", "RALT", "  right_alt  "] {
+        assert_eq!(
+            super::normalise_hotkey_chord_for_python(raw),
+            "alt_gr",
+            "expected {raw:?} to normalise to alt_gr"
+        );
+    }
+}
+
+#[test]
+fn normalise_hotkey_chord_preserves_non_alias_names() {
+    // Canonical names that pynput already understands must pass through
+    // unchanged — including unrelated segments.
+    for raw in ["ctrl_r", "shift_l", "alt_gr", "alt_l", "f9", "space", "esc"] {
+        assert_eq!(
+            super::normalise_hotkey_chord_for_python(raw),
+            raw,
+            "{raw:?} must not be rewritten"
+        );
+    }
+}
+
+#[test]
+fn normalise_hotkey_chord_handles_chord_bindings() {
+    // Chord bindings (`+`-separated) must normalise per-segment — the
+    // alias can appear anywhere in the chord.
+    assert_eq!(
+        super::normalise_hotkey_chord_for_python("ctrl_r+right_alt"),
+        "ctrl_r+alt_gr"
+    );
+    assert_eq!(
+        super::normalise_hotkey_chord_for_python("shift_l+ralt+f9"),
+        "shift_l+alt_gr+f9"
+    );
+    assert_eq!(
+        super::normalise_hotkey_chord_for_python("ctrl_r+shift_r"),
+        "ctrl_r+shift_r"
+    );
+}
+
+#[test]
+fn normalise_hotkey_chord_leaves_empty_input_alone() {
+    assert_eq!(super::normalise_hotkey_chord_for_python(""), "");
+}
+
+#[test]
+fn normalise_hotkey_aliases_in_env_rewrites_voicepi_key() {
+    let mut env = vec![
+        ("VOICEPI_MODEL".to_owned(), "large-v3".to_owned()),
+        ("VOICEPI_KEY".to_owned(), "right_alt".to_owned()),
+        ("VOICEPI_DEVICE".to_owned(), "cuda".to_owned()),
+    ];
+    super::normalise_hotkey_aliases_for_python(&mut env);
+    let key_value = env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_KEY")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(key_value, Some("alt_gr"));
+    let model_value = env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_MODEL")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        model_value,
+        Some("large-v3"),
+        "unrelated entries must not be touched"
+    );
+}
+
+#[test]
+fn normalise_hotkey_aliases_in_env_is_noop_when_voicepi_key_missing() {
+    let original = vec![("VOICEPI_MODEL".to_owned(), "small".to_owned())];
+    let mut env = original.clone();
+    super::normalise_hotkey_aliases_for_python(&mut env);
+    assert_eq!(env, original, "no VOICEPI_KEY → vector unchanged");
+}
+
+#[test]
+fn worker_command_normalises_right_alt_in_voicepi_key() {
+    // End-to-end: a user with VOICEPI_KEY=right_alt in their process env
+    // must see the WorkerCommand emit VOICEPI_KEY=alt_gr so the Python
+    // worker's pynput resolution succeeds at startup (P3 #383).
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "right_alt");
+
+    let command = worker_command("/tmp/whisper-dictate");
+    let key_value = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_KEY")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        key_value,
+        Some("alt_gr"),
+        "VOICEPI_KEY=right_alt must be rewritten to alt_gr in the worker env"
+    );
+}
