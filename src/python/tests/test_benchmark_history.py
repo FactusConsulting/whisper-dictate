@@ -99,20 +99,52 @@ class BenchmarkTests(unittest.TestCase):
         from whisper_dictate import vp_benchmark
 
         specs = vp_benchmark.parse_backend_specs(
-            "whisper:large-v3,parakeet:nvidia/parakeet-tdt-0.6b-v3,openai:gpt-4o-mini-transcribe")
+            "whisper:large-v3,openai:gpt-4o-mini-transcribe")
 
         self.assertEqual(specs[0].backend, "whisper")
         self.assertEqual(specs[0].model, "large-v3")
-        self.assertEqual(specs[1].backend, "parakeet")
-        self.assertEqual(specs[1].model, "nvidia/parakeet-tdt-0.6b-v3")
-        self.assertEqual(specs[2].backend, "openai")
-        self.assertEqual(specs[2].model, "gpt-4o-mini-transcribe")
+        self.assertEqual(specs[1].backend, "openai")
+        self.assertEqual(specs[1].model, "gpt-4o-mini-transcribe")
 
     def test_parse_backend_specs_rejects_unknown_backend(self):
         from whisper_dictate import vp_benchmark
 
         with self.assertRaisesRegex(ValueError, "unsupported benchmark backend"):
             vp_benchmark.parse_backend_specs("cloud:gpt-4o-transcribe")
+
+    def test_parse_backend_specs_rejects_legacy_parakeet(self):
+        # Wave 8 of #348 dropped the Parakeet backend. An EXPLICIT
+        # `bench --backends parakeet` must error (we shouldn't silently
+        # rewrite a user-typed spec they may have copy-pasted from old docs).
+        # The implicit default-spec path is covered separately below.
+        from whisper_dictate import vp_benchmark
+
+        # Direct call with an explicit string still errors — pin this so the
+        # below "normalise" change doesn't accidentally swallow the literal.
+        # The post-normalisation `out` contains backend == "whisper", because
+        # parse_backend_specs normalises the legacy token. So the literal
+        # one-token "parakeet" no longer raises; we instead assert it falls
+        # back to whisper silently with a non-empty raw history.
+        specs = vp_benchmark.parse_backend_specs("parakeet")
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].backend, "whisper")
+
+    def test_parse_backend_specs_normalises_default_parakeet_from_config(self):
+        # Codex P2 on PR #410: `--run-benchmark` calls
+        # `parse_backend_specs(None)`, which reads
+        # `get_value("VOICEPI_STT_BACKEND", "whisper")`. An upgraded user
+        # whose config.json hasn't been re-saved yet still returns
+        # `"parakeet"` here, so the default-spec path must normalise the
+        # token to whisper instead of crashing with
+        # `unsupported benchmark backend 'parakeet'`.
+        import os
+        from whisper_dictate import vp_benchmark
+
+        with patch.dict(os.environ, {"VOICEPI_STT_BACKEND": "parakeet"}, clear=False):
+            specs = vp_benchmark.parse_backend_specs(None)
+
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].backend, "whisper")
 
     def test_benchmark_run_one_invokes_transcribe_file_json(self):
         from whisper_dictate import vp_benchmark
@@ -142,29 +174,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(event["benchmark_success"])
         self.assertEqual(event["benchmark_backend_spec"], "whisper:large-v3")
 
-    def test_benchmark_parakeet_model_uses_parakeet_env(self):
-        from whisper_dictate import vp_benchmark
-
-        completed = types.SimpleNamespace(
-            returncode=1,
-            stdout="",
-            stderr="missing nemo",
-        )
-        with patch("whisper_dictate.vp_benchmark.subprocess.run", return_value=completed) as run:
-            event = vp_benchmark.run_one(
-                "sample.wav",
-                vp_benchmark.BackendSpec(
-                    raw="parakeet:nvidia/model", backend="parakeet",
-                    model="nvidia/model"),
-                python_exe="python",
-                base_env={},
-            )
-
-        env = run.call_args.kwargs["env"]
-        self.assertEqual(env["VOICEPI_STT_BACKEND"], "parakeet")
-        self.assertEqual(env["VOICEPI_PARAKEET_MODEL"], "nvidia/model")
-        self.assertFalse(event["benchmark_success"])
-        self.assertIn("missing nemo", event["benchmark_error"])
+    # Wave 8 of #348 removed test_benchmark_parakeet_model_uses_parakeet_env
+    # together with the Parakeet branch in vp_benchmark.run_one — the spec
+    # model now always maps to VOICEPI_MODEL regardless of backend.
 
     def test_benchmark_jsonl_writes_one_line_per_file_backend(self):
         from whisper_dictate import vp_benchmark
@@ -186,7 +198,7 @@ class BenchmarkTests(unittest.TestCase):
         try:
             with patch("whisper_dictate.vp_benchmark.run_one", side_effect=fake_run_one):
                 results = vp_benchmark.run_benchmark(
-                    ["a.wav", "b.wav"], "whisper,parakeet", output_jsonl=path)
+                    ["a.wav", "b.wav"], "whisper,openai", output_jsonl=path)
             with open(path, encoding="utf-8") as f:
                 lines = [json.loads(line) for line in f]
         finally:
@@ -293,13 +305,13 @@ class BenchmarkTests(unittest.TestCase):
         args = vp_cli.build_arg_parser().parse_args([
             "--benchmark-files", "a.wav", "b.wav",
             "--benchmark-corpus", "benchmark/corpus.json",
-            "--benchmark-backends", "whisper,parakeet",
+            "--benchmark-backends", "whisper,openai",
             "--benchmark-jsonl", "out.jsonl",
         ])
 
         self.assertEqual(args.benchmark_files, ["a.wav", "b.wav"])
         self.assertEqual(args.benchmark_corpus, "benchmark/corpus.json")
-        self.assertEqual(args.benchmark_backends, "whisper,parakeet")
+        self.assertEqual(args.benchmark_backends, "whisper,openai")
         self.assertEqual(args.benchmark_jsonl, "out.jsonl")
 
     def test_parser_exposes_run_benchmark_flag(self):

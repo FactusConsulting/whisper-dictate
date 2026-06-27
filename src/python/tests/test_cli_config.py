@@ -431,7 +431,6 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_keys_capture_cli.py",
             "vp_keys_capture_io.py",
             "vp_keys_solo.py",
-            "vp_parakeet.py",
             "vp_postprocess.py",
             "vp_preview.py",
             "vp_rust.py",

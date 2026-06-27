@@ -24,7 +24,7 @@
       "key": "stt_backend",
       "default": "whisper",
       "live": false,
-      "description": "Speech-to-text engine: whisper (local faster-whisper), parakeet (local NVIDIA NeMo), or openai (external OpenAI-compatible cloud API).",
+      "description": "Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API).",
       "advanced": false,
       "category": "core"
     },
@@ -59,15 +59,6 @@
       "category": "stt-cloud"
     },
     {
-      "env": "VOICEPI_PARAKEET_MODEL",
-      "key": "parakeet_model",
-      "default": null,
-      "live": false,
-      "description": "Optional Parakeet/NeMo model override (e.g. nvidia/parakeet-tdt-0.6b-v3); takes precedence over model when stt_backend=parakeet.",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
       "env": "VOICEPI_DEVICE",
       "key": "device",
       "default": "auto",
@@ -81,7 +72,7 @@
       "key": "compute_type",
       "default": null,
       "live": false,
-      "description": "Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU; ignored by Parakeet.",
+      "description": "Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU.",
       "advanced": false,
       "category": "core"
     },
@@ -99,7 +90,7 @@
       "key": "lang",
       "default": null,
       "live": true,
-      "description": "Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper; Parakeet v3 autodetects and ignores it.",
+      "description": "Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper.",
       "advanced": false,
       "category": "core"
     },
@@ -177,7 +168,7 @@
       "key": "hallucination_guard",
       "default": "1",
       "live": true,
-      "description": "Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for cloud/Parakeet.",
+      "description": "Local Whisper only: enable word timestamps + hallucination_silence_threshold to skip long silent gaps where Whisper invents subtitle-style text. No-op for the cloud backend.",
       "advanced": true,
       "category": "stt-local"
     },
@@ -202,18 +193,6 @@
       "max": 5,
       "step": 0.1,
       "description": "Discard recordings shorter than this as accidental key taps (effective floor max(0.3, value)), avoiding hallucinated credits on quiet sub-second taps.",
-      "advanced": true,
-      "category": "stt-local"
-    },
-    {
-      "env": "VOICEPI_PARAKEET_MIN_SECONDS",
-      "key": "parakeet_min_seconds",
-      "default": "1.5",
-      "live": true,
-      "min": 0,
-      "max": 10,
-      "step": 0.1,
-      "description": "Parakeet only: ignore recordings shorter than this (seconds; 0 disables) because multilingual language autodetection is weaker on short clips.",
       "advanced": true,
       "category": "stt-local"
     },

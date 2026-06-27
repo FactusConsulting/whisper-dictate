@@ -90,8 +90,8 @@ VAD_SPEECH_PAD_MS = int(get_value("VOICEPI_VAD_SPEECH_PAD_MS", "200") or "200")
 # --- Trailing-silence hallucination guards (local Whisper only) ---
 # When on (default), ask faster-whisper to skip long silent gaps where it tends
 # to hallucinate "like and subscribe"-style text. This needs word timestamps
-# (small extra compute). Toggled from the UI; a no-op for cloud STT / Parakeet,
-# which never reach this code path.
+# (small extra compute). Toggled from the UI; a no-op for cloud STT, which
+# never reaches this code path.
 HALLUCINATION_GUARD = (get_value("VOICEPI_HALLUCINATION_GUARD", "1") or "1").strip().lower() not in (
     "", "0", "false", "no", "off")
 HALLUCINATION_SILENCE_S = float(get_value("VOICEPI_HALLUCINATION_SILENCE_S", "2.0") or "2.0")
@@ -109,9 +109,19 @@ SEGMENT_END_SLACK_S = 1.0
 MAX_CHARS_PER_SECOND = float(get_value("VOICEPI_MAX_CHARS_PER_SECOND", "30") or "30")
 STT_DEBUG = (get_value("VOICEPI_STT_DEBUG") or "").strip().lower() not in (
     "", "0", "false", "no", "off")
-VALID_STT_BACKENDS = ("whisper", "parakeet", "openai")
+# Wave 8 of #348 dropped the `"parakeet"` entry from this set together with
+# the NeMo/Parakeet backend; a saved `stt_backend = "parakeet"` is migrated
+# to whisper at config-load time (see Rust `config::load::migrate_parakeet_backend`).
+VALID_STT_BACKENDS = ("whisper", "openai")
 STT_BACKEND = (get_value("VOICEPI_STT_BACKEND", "whisper") or "whisper").strip().lower()
 if STT_BACKEND == "faster-whisper":
+    STT_BACKEND = "whisper"
+# Belt-and-braces: if a stale environment still carries
+# VOICEPI_STT_BACKEND=parakeet, fall back to the schema default rather than
+# crashing on the validation below. The Rust UI dropped the option and the
+# config loader migrates persistently, so this only matters when a Python
+# worker is launched from a shell that exported the legacy env var by hand.
+if STT_BACKEND == "parakeet":
     STT_BACKEND = "whisper"
 
 # Phase 1.2 of the Python-removal roadmap (#348): when this env var is set to
@@ -196,7 +206,7 @@ def _assert_local_backend(backend: str, *, feature: str = "STT") -> None:
     if helper and _rust_privacy_ok(helper, backend, feature, base_url):
         return
     if (_local_only_enabled()
-            and (backend or "").strip().lower() not in ("whisper", "faster-whisper", "parakeet")
+            and (backend or "").strip().lower() not in ("whisper", "faster-whisper")
             and not _is_loopback_url(base_url)):
         raise RuntimeError(
             f"VOICEPI_LOCAL_ONLY=1 blocks {feature} backend {backend!r}; "
@@ -286,9 +296,9 @@ def _write_temp_wav_16khz_mono(audio: np.ndarray) -> str:
     """Materialise ``audio`` (float32 in [-1, 1]) to a 16 kHz mono int16 WAV
     on disk and return the path.
 
-    Mirrors ``vp_parakeet._write_wav`` so the Rust helper sees the same WAV
-    shape as the other shell-out backends (the helper's `decode_wav_16k_mono`
-    enforces this). Caller is responsible for deleting the file.
+    Materialises a 16 kHz mono int16 WAV so the Rust helper's
+    `decode_wav_16k_mono` accepts it. Caller is responsible for deleting the
+    file.
     """
     fd, path = tempfile.mkstemp(prefix="voicepi-rust-stt-", suffix=".wav")
     os.close(fd)
@@ -721,7 +731,8 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
     """Load the selected STT backend lazily.
 
     The default path preserves the existing faster-whisper behaviour. The
-    Parakeet path imports NeMo only after VOICEPI_STT_BACKEND=parakeet is set.
+    NVIDIA Parakeet backend was removed in Wave 8 of #348 — use the local
+    Whisper backend or the OpenAI-compatible cloud backend.
 
     When ``VOICEPI_TRANSCRIBE_BACKEND=rust`` is set AND the local Whisper
     backend is selected (``VOICEPI_STT_BACKEND=whisper``, the default), the
@@ -738,9 +749,6 @@ def load_stt_model(model_name: str, device: str, compute_type: str):
         raise ValueError(
             "invalid VOICEPI_STT_BACKEND="
             f"{backend!r}; expected one of {', '.join(VALID_STT_BACKENDS)}")
-    if backend == "parakeet":
-        from whisper_dictate.vp_parakeet import ParakeetModel
-        return ParakeetModel(model_name, device=device, compute_type=compute_type)
     if backend == "openai":
         from whisper_dictate.vp_external_api import ExternalTranscriptionModel
         return ExternalTranscriptionModel(model_name)

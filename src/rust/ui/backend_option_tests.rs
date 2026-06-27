@@ -4,12 +4,28 @@ use super::*;
 #[test]
 fn stt_backend_mode_maps_only_active_backend() {
     assert_eq!(SttBackendMode::from_raw("whisper"), SttBackendMode::Whisper);
-    assert_eq!(
-        SttBackendMode::from_raw("parakeet"),
-        SttBackendMode::Parakeet
-    );
     assert_eq!(SttBackendMode::from_raw("openai"), SttBackendMode::Cloud);
     assert_eq!(SttBackendMode::from_raw(""), SttBackendMode::Whisper);
+}
+
+#[test]
+fn stt_backend_dropdown_no_longer_offers_parakeet() {
+    // Wave 8 of #348 removed the Parakeet entry from the picker. A user
+    // can no longer reach the legacy backend by clicking it; saved configs
+    // still carrying "parakeet" are migrated to whisper at load time.
+    for (value, _display) in STT_BACKEND_OPTIONS {
+        assert_ne!(*value, "parakeet");
+    }
+    let labels: Vec<&str> = STT_BACKEND_OPTIONS.iter().map(|(_, d)| *d).collect();
+    assert!(!labels.iter().any(|d| d.contains("Parakeet")));
+    // The legacy raw value must still degrade gracefully: from_raw maps
+    // anything that isn't `"openai"` to Whisper so a stale `"parakeet"`
+    // string slipping through (e.g. mid-migration) renders the Whisper
+    // settings instead of crashing.
+    assert_eq!(
+        SttBackendMode::from_raw("parakeet"),
+        SttBackendMode::Whisper
+    );
 }
 
 #[test]

@@ -48,7 +48,7 @@ pub use scoring::{casefold, cer, levenshtein, normalize_words, term_report, wer,
 /// skipped for missing audio" hint triggers on identical events.
 pub const MISSING_AUDIO_REASON: &str = "audio file missing";
 
-const ALLOWED_BACKENDS: [&str; 3] = ["whisper", "parakeet", "openai"];
+const ALLOWED_BACKENDS: [&str; 2] = ["whisper", "openai"];
 
 /// Parsed `backend[:model]` entry. `model` is `None` when the spec omits the
 /// `:` separator OR when the trailing model is blank — matches Python's
@@ -86,13 +86,27 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
             }
             None => (part.to_lowercase(), None),
         };
+        // Wave 8 of #348: a saved `stt_backend = "parakeet"` is migrated to
+        // whisper persistently at config-load time on the Rust side, but the
+        // System tab's "Run benchmark" path (which calls the Python
+        // `parse_backend_specs(None)` after reading
+        // `VOICEPI_STT_BACKEND` back through Python) can reach this layer
+        // before the save round-trip. Normalise here too so the two
+        // implementations stay in lock-step and a copy-pasted
+        // `--backends parakeet` from old docs lands on whisper instead of
+        // erroring (Codex P2 on PR #410).
+        let (backend, raw) = if backend == "parakeet" {
+            ("whisper".to_owned(), "whisper".to_owned())
+        } else {
+            (backend, part.to_owned())
+        };
         if !ALLOWED_BACKENDS.contains(&backend.as_str()) {
             return Err(anyhow!(
-                "unsupported benchmark backend '{backend}'; expected whisper, parakeet or openai"
+                "unsupported benchmark backend '{backend}'; expected whisper or openai"
             ));
         }
         out.push(BackendSpec {
-            raw: part.to_owned(),
+            raw,
             backend,
             model,
         });
@@ -120,20 +134,35 @@ mod tests {
 
     #[test]
     fn parse_backend_specs_supports_models() {
-        let specs = parse_backend_specs("whisper:large-v3, parakeet , openai:gpt-4o").unwrap();
-        assert_eq!(specs.len(), 3);
+        let specs = parse_backend_specs("whisper:large-v3, openai:gpt-4o").unwrap();
+        assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].backend, "whisper");
         assert_eq!(specs[0].model.as_deref(), Some("large-v3"));
-        assert_eq!(specs[1].backend, "parakeet");
-        assert_eq!(specs[1].model, None);
-        assert_eq!(specs[2].backend, "openai");
-        assert_eq!(specs[2].model.as_deref(), Some("gpt-4o"));
+        assert_eq!(specs[1].backend, "openai");
+        assert_eq!(specs[1].model.as_deref(), Some("gpt-4o"));
     }
 
     #[test]
     fn parse_backend_specs_rejects_unknown() {
         let err = parse_backend_specs("cloud:gpt-4o").unwrap_err();
         assert!(err.to_string().contains("unsupported benchmark backend"));
+    }
+
+    #[test]
+    fn parse_backend_specs_normalises_legacy_parakeet_to_whisper() {
+        // Wave 8 of #348 dropped the Parakeet backend, but the System
+        // tab's "Run benchmark" path can still flow a legacy
+        // `stt_backend = "parakeet"` through to this parser before the
+        // config save round-trip migrates it. Match the Python side
+        // (vp_benchmark.parse_backend_specs) and quietly normalise to
+        // whisper so an upgraded user benchmarks Whisper instead of hitting
+        // an "unsupported benchmark backend" error (Codex P2 on PR #410).
+        let specs = parse_backend_specs("parakeet").unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].backend, "whisper");
+        // The raw is rewritten too so the logged spec doesn't lie about
+        // which backend the run actually used.
+        assert_eq!(specs[0].raw, "whisper");
     }
 
     #[test]

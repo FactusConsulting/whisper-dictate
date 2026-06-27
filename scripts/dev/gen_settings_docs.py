@@ -56,7 +56,9 @@ def _die(message: str) -> None:
 # of the docs.
 CATEGORY_TITLES: dict[str, str] = {
     "core": "Core (the first-time-setup basics)",
-    "stt-local": "Local speech-to-text (Whisper / Parakeet)",
+    # Wave 8 of #348 dropped the Parakeet backend, so the title collapses
+    # to a Whisper-only label.
+    "stt-local": "Local speech-to-text (Whisper)",
     "stt-cloud": "Cloud speech-to-text (OpenAI-compatible APIs)",
     "audio": "Audio capture & voice activity",
     "postprocess": "Dictionary & post-processing",

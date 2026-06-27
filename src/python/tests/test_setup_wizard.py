@@ -171,13 +171,16 @@ class WizardBasicTrackTests(unittest.TestCase):
         self.assertIn("Wrote config to:", out)
 
     def test_invalid_enum_reprompts(self):
+        # Wave 8 of #348 dropped `"parakeet"` from the enum, so the wizard's
+        # invalid-reprompt flow now drives the user through ENUM_CHOICES with
+        # an explicit valid follow-up (openai).
         with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_STT_BACKEND=None):
-            # key=ENTER, model=ENTER, stt_backend: 'banana' (invalid) then 'parakeet'
+            # key=ENTER, model=ENTER, stt_backend: 'banana' (invalid) then 'openai'
             rc, config, out = self._run(
-                ["", "", "banana", "parakeet"] + [""] * 16 + ["n"]
+                ["", "", "banana", "openai"] + [""] * 16 + ["n"]
             )
         self.assertEqual(rc, 0)
-        self.assertEqual(config.get("stt_backend"), "parakeet")
+        self.assertEqual(config.get("stt_backend"), "openai")
         self.assertIn("not one of", out)
 
     # Fix 4: cloud provider ENTER-to-keep must not clobber existing stt_base_url
@@ -281,15 +284,47 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         self.assertNotIn("beam_size", config)
 
     def test_advanced_yes_walks_advanced_track(self):
-        # All basic ENTER, advanced => 'y'. The first advanced setting is
-        # parakeet_model (free text); set it and confirm the advanced track ran
-        # and the value persisted (basic-only would never reach it).
-        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_PARAKEET_MODEL=None):
-            answers = [""] * 8 + ["y"] + ["nvidia/parakeet-tdt-0.6b-v3"] + [""] * 60
+        # All basic ENTER, advanced => 'y'. Wave 8 of #348 dropped the
+        # parakeet_model entry that used to be the first advanced setting;
+        # the first remaining advanced setting in the stt-local category
+        # is now initial_prompt (free text), used here to confirm the
+        # advanced track ran and the value persisted (basic-only would
+        # never reach it).
+        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg, VOICEPI_INITIAL_PROMPT=None):
+            answers = [""] * 8 + ["y"] + ["Keep Codex CLI terms."] + [""] * 60
             rc, config, out = self._run(answers)
         self.assertEqual(rc, 0)
-        self.assertEqual(config.get("parakeet_model"), "nvidia/parakeet-tdt-0.6b-v3")
+        self.assertEqual(config.get("initial_prompt"), "Keep Codex CLI terms.")
         self.assertIn("Local speech-to-text", out)  # advanced category header shown
+
+    def test_legacy_parakeet_stt_backend_migrates_to_whisper_on_enter(self):
+        # Wave 8 of #348 + Codex P2 on PR #410: an upgraded user whose
+        # config.json still carries `stt_backend = "parakeet"` from before
+        # the backend removal must NOT have that value silently re-persisted
+        # when the wizard prompts and the user hits ENTER. Pin the
+        # normalisation at the wizard's _current() boundary so the
+        # all-ENTER headless path lands on whisper.
+        from whisper_dictate import vp_setup as vs
+
+        wiz = vs._Wizard(
+            lambda _p: "",
+            lambda _m: None,
+            existing={"stt_backend": "parakeet"},
+        )
+        row = next(r for r in vs._schema_rows() if r["key"] == "stt_backend")
+        # ENTER-to-keep would persist a non-default current value; the
+        # current value must now resolve to "whisper", not "parakeet".
+        self.assertEqual(wiz._current(row), "whisper")
+
+        # Drive the actual ENTER path to confirm config.json ends up with
+        # whisper (not parakeet).
+        wiz._prompt_one(row)
+        self.assertNotEqual(wiz.config.get("stt_backend"), "parakeet")
+        # The schema default IS whisper, so _prompt_one decides not to write
+        # the key at all (matches its "only persist a non-default value"
+        # contract). Either outcome — key absent OR key=="whisper" — is fine
+        # from the user's point of view; both leave them on the new default.
+        self.assertIn(wiz.config.get("stt_backend"), (None, "whisper"))
 
     def test_numeric_out_of_bounds_reprompts(self):
         # beam_size has min=1, max=10. Drive a single-setting validation via the

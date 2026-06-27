@@ -87,8 +87,8 @@ pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_H: i8 = 12;
 pub(in crate::ui) const SCOPE_GROUP_INNER_MARGIN_V: i8 = 10;
 
 /// A thin outlined box grouping a set of settings under a small heading. Used by
-/// the Quality tab to separate "All backends" / "Whisper" / "Parakeet" scopes so
-/// it is obvious which engine each knob affects. The body runs inside its own
+/// the Quality tab to separate "All backends" / "Whisper" scopes so it is
+/// obvious which engine each knob affects. The body runs inside its own
 /// 2-column settings grid (unique `grid_id`), keeping the labelled-row layout.
 fn scope_group(
     ui: &mut egui::Ui,

@@ -10,17 +10,19 @@ const SUPPORTED_XKB_LAYOUTS: &[&str] = &[
     "dk", "no", "se", "de", "fi", "es", "pt", "br", "pl", "ua", "us",
 ];
 
+/// Wave 8 of #348 collapsed the three-way enum to (Whisper, Cloud); the
+/// legacy `"parakeet"` raw value migrates to Whisper at config-load time
+/// (see crate::config::load::migrate_parakeet_backend), so the UI never
+/// sees it after one save round-trip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) enum SttBackendMode {
     Whisper,
-    Parakeet,
     Cloud,
 }
 
 impl SttBackendMode {
     pub(in crate::ui) fn from_raw(raw: &str) -> Self {
         match raw {
-            "parakeet" => Self::Parakeet,
             "openai" => Self::Cloud,
             _ => Self::Whisper,
         }

@@ -168,7 +168,7 @@ class ValidateBackendTests(_EnvSnapshot):
         os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
         stderr = (
             "error: invalid VOICEPI_STT_BACKEND=\"groq\"; "
-            "expected one of whisper, parakeet, openai"
+            "expected one of whisper, openai"
         )
         with mock.patch.object(
             vp_dictate_rust.subprocess, "run",
@@ -189,7 +189,7 @@ class ValidateBackendTests(_EnvSnapshot):
         os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
         stderr = (
             "error: invalid VOICEPI_STT_BACKEND=\"groq\"; "
-            "expected one of whisper, parakeet, openai"
+            "expected one of whisper, openai"
         )
         with mock.patch.object(
             vp_dictate_rust.subprocess, "run",
@@ -258,7 +258,7 @@ class ChangedRestartKeysOptRustTests(_EnvSnapshot):
         os.environ.pop("VOICEPI_DICTATE_BACKEND", None)
         changed = vp_dictate._changed_restart_keys_opt_rust(
             {"stt_backend": "whisper", "device": "cpu"},
-            {"stt_backend": "parakeet", "device": "cuda"},
+            {"stt_backend": "openai", "device": "cuda"},
         )
         self.assertEqual(changed, ["device", "stt_backend"])
 
@@ -333,7 +333,7 @@ class ValidateBackendOptRustTests(_EnvSnapshot):
         os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
         stderr = (
             "error: invalid VOICEPI_STT_BACKEND=\"groq\"; "
-            "expected one of whisper, parakeet, openai"
+            "expected one of whisper, openai"
         )
         with mock.patch.object(
             vp_dictate_rust.subprocess, "run",
@@ -396,11 +396,14 @@ class BackendLabelOptRustTests(_EnvSnapshot):
         os.environ.pop("VOICEPI_DICTATE_BACKEND", None)
         self.assertEqual(runtime._backend_label_opt_rust("whisper"), "Whisper")
 
-    def test_default_parakeet_label(self) -> None:
+    def test_default_legacy_parakeet_label_falls_back_to_whisper(self) -> None:
+        # Wave 8 of #348 dropped the NeMo/Parakeet backend. The label resolver
+        # now defaults the legacy value to the Whisper label so a stale env
+        # var doesn't surface "NVIDIA Parakeet" anywhere in the UI/log.
         from whisper_dictate import runtime
         os.environ.pop("VOICEPI_DICTATE_BACKEND", None)
         self.assertEqual(
-            runtime._backend_label_opt_rust("parakeet"), "NVIDIA Parakeet")
+            runtime._backend_label_opt_rust("parakeet"), "Whisper")
 
     def test_default_openai_label(self) -> None:
         from whisper_dictate import runtime
@@ -409,18 +412,23 @@ class BackendLabelOptRustTests(_EnvSnapshot):
             runtime._backend_label_opt_rust("openai"), "External API")
 
     def test_rust_overrides_label_when_enabled(self) -> None:
+        # The Rust helper's response is trusted verbatim; the only label it
+        # emits now (post Wave 8 of #348) is one of "Whisper" / "External API".
         from whisper_dictate import runtime
         os.environ["VOICEPI_DICTATE_BACKEND"] = "rust"
         os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
-        body = {"backend": "parakeet", "label": "NVIDIA Parakeet"}
+        body = {"backend": "openai", "label": "External API"}
         with mock.patch.object(
             vp_dictate_rust.subprocess, "run",
             return_value=_fake_completed(stdout=json.dumps(body)),
         ):
             self.assertEqual(
-                runtime._backend_label_opt_rust("parakeet"), "NVIDIA Parakeet")
+                runtime._backend_label_opt_rust("openai"), "External API")
 
     def test_rust_failure_falls_back_to_python_label(self) -> None:
+        # When the Rust helper is unavailable the in-Python fallback runs.
+        # Legacy ``"parakeet"`` now resolves to the Whisper label (Wave 8 of
+        # #348) so a stale env var no longer surfaces "NVIDIA Parakeet".
         from whisper_dictate import runtime
         os.environ["VOICEPI_DICTATE_BACKEND"] = "rust"
         os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
@@ -429,7 +437,7 @@ class BackendLabelOptRustTests(_EnvSnapshot):
             return_value=_fake_completed(returncode=2, stderr="oops"),
         ):
             self.assertEqual(
-                runtime._backend_label_opt_rust("parakeet"), "NVIDIA Parakeet")
+                runtime._backend_label_opt_rust("parakeet"), "Whisper")
 
 
 if __name__ == "__main__":

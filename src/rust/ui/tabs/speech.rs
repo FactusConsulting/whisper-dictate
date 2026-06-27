@@ -62,25 +62,10 @@ impl WhisperDictateApp {
 
         ui.add_space(6.0);
 
-        // --- Parakeet group ----------------------------------------------
-        scope_group(
-            ui,
-            palette,
-            ui_text(&language, UiTextKey::SpeechGroupParakeet),
-            "speech_parakeet",
-            |ui| {
-                combo_enabled(
-                    ui,
-                    backend == SttBackendMode::Parakeet,
-                    "Parakeet model",
-                    &mut self.settings.parakeet_model,
-                    PARAKEET_MODELS,
-                    "Local NVIDIA NeMo Parakeet model used only with STT backend = parakeet.",
-                );
-            },
-        );
-
-        ui.add_space(6.0);
+        // Wave 8 of #348: the Parakeet group has been removed together with
+        // the backend. The picker above no longer offers "Local NVIDIA
+        // Parakeet"; saved configs with `stt_backend = "parakeet"` are
+        // migrated to whisper at load time.
 
         // --- Online / Cloud STT group ------------------------------------
         let mut provider_id = self.current_cloud_provider().id().to_owned();
@@ -160,10 +145,9 @@ impl WhisperDictateApp {
         ui.add_space(6.0);
 
         // --- General group -----------------------------------------------
-        // Device and Compute type are passed to BOTH WhisperModel and
-        // ParakeetModel (see vp_transcribe.py load_stt_model), so they span
-        // both local backends and belong here rather than in either
-        // engine-specific group.
+        // Device and Compute type are passed to WhisperModel (see
+        // vp_transcribe.py load_stt_model) and belong here rather than in
+        // either engine-specific group.
         scope_group(
             ui,
             palette,
@@ -176,7 +160,7 @@ impl WhisperDictateApp {
                     "Device",
                     &mut self.settings.device,
                     &["auto", "cuda", "cpu"],
-                    "Local inference device. auto chooses CUDA when available, otherwise CPU. Used by Whisper and Parakeet.",
+                    "Local inference device. auto chooses CUDA when available, otherwise CPU. Used by the local Whisper backend.",
                 );
                 combo_enabled_labeled(
                     ui,
@@ -199,8 +183,7 @@ impl WhisperDictateApp {
                     ],
                     "Numeric precision the local Whisper model runs at. Higher precision is more \
                      accurate but slower and uses more VRAM/RAM; lower is faster and lighter for a \
-                     small accuracy cost. Auto picks a sensible default per device (GPU vs CPU). \
-                     Parakeet ignores this — it always uses its own precision.",
+                     small accuracy cost. Auto picks a sensible default per device (GPU vs CPU).",
                 );
                 self.microphone_settings(ui);
                 combo_help_labeled_short(

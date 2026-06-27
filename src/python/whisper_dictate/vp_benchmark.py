@@ -207,9 +207,22 @@ def parse_backend_specs(spec: str | Iterable[str] | None = None) -> list[Backend
         backend, sep, model = part.partition(":")
         backend = backend.strip().lower()
         model = model.strip() if sep else None
-        if backend not in ("whisper", "parakeet", "openai"):
+        # Wave 8 of #348: a saved `stt_backend = "parakeet"` is migrated to
+        # whisper persistently at config-load time on the Rust side, but the
+        # System tab's "Run benchmark" path can reach here BEFORE that save
+        # round-trip happens — `parse_backend_specs(None)` reads the legacy
+        # value back through Python's `get_value`. Normalise it the same way
+        # the supervisor would so an upgraded user benchmarks Whisper instead
+        # of hitting `unsupported benchmark backend 'parakeet'` (Codex P2 on
+        # PR #410). Keeps the spec list informative: we replace the backend
+        # token but preserve the raw input so the worker log still shows what
+        # the user supplied.
+        if backend == "parakeet":
+            backend = "whisper"
+            part = part.replace("parakeet", "whisper", 1) if "parakeet" in part else "whisper"
+        if backend not in ("whisper", "openai"):
             raise ValueError(
-                f"unsupported benchmark backend {backend!r}; expected whisper, parakeet or openai")
+                f"unsupported benchmark backend {backend!r}; expected whisper or openai")
         out.append(BackendSpec(raw=part, backend=backend, model=model or None))
     if not out:
         raise ValueError("at least one benchmark backend is required")
@@ -248,10 +261,9 @@ def run_one(
     )
     env["VOICEPI_STT_BACKEND"] = spec.backend
     if spec.model:
-        if spec.backend == "parakeet":
-            env["VOICEPI_PARAKEET_MODEL"] = spec.model
-        else:
-            env["VOICEPI_MODEL"] = spec.model
+        # Wave 8 of #348: only whisper + openai remain, so the spec model
+        # always maps to VOICEPI_MODEL (no per-backend env-var routing).
+        env["VOICEPI_MODEL"] = spec.model
     if app_path:
         cmd = [python_exe, str(app_path)]
     else:
@@ -292,15 +304,8 @@ def run_one(
 
 def _load_model_for_spec(spec: BackendSpec) -> tuple[Any, str, str, str]:
     device, compute_type = _resolve_device(get_value("VOICEPI_DEVICE", "auto") or "auto")
-    if spec.backend == "parakeet":
-        from whisper_dictate.vp_parakeet import ParakeetModel, resolve_parakeet_model_name
-        model_name = resolve_parakeet_model_name(spec.model)
-        return (
-            ParakeetModel(model_name, device=device, compute_type=compute_type),
-            model_name,
-            device,
-            compute_type,
-        )
+    # Wave 8 of #348 removed the Parakeet branch here together with the
+    # backend; only the cloud and local Whisper paths remain.
     if spec.backend == "openai":
         from whisper_dictate.vp_external_api import ExternalTranscriptionModel
         model_name = spec.model or get_value("VOICEPI_STT_MODEL", "gpt-4o-mini-transcribe")

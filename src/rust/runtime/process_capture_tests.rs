@@ -64,11 +64,13 @@ fn decode_capped_output_keeps_utf8_tail_with_marker() {
 #[test]
 fn install_commands_use_background_process_flags() {
     let runtime = include_str!("../runtime.rs");
+    // After Wave 8 of #348 removed `wants_parakeet_backend`, the next
+    // function below `run_install_command` is `wants_cuda_runtime`.
     let run_install_command = runtime
         .split_once("fn run_install_command")
         .unwrap()
         .1
-        .split_once("fn wants_parakeet_backend")
+        .split_once("fn wants_cuda_runtime")
         .unwrap()
         .0;
 

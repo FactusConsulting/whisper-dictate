@@ -17,12 +17,16 @@
 //!
 //! | op                      | response shape                                                            |
 //! |-------------------------|---------------------------------------------------------------------------|
-//! | `should_skip`           | `{ "decision": "keep"\|"too_short"\|"parakeet_too_short", "reason": "too_short"\|null, "hint": str\|null }` |
+//! | `should_skip`           | `{ "decision": "keep"\|"too_short", "reason": "too_short"\|null, "hint": str\|null }` |
 //! | `changed_restart_keys`  | `{ "changed": ["..."] }`                                                  |
-//! | `validate_backend`      | `{ "backend": "whisper"\|"parakeet"\|"openai", "label": "..." }`          |
+//! | `validate_backend`      | `{ "backend": "whisper"\|"openai", "label": "..." }`                      |
 //! | `is_truthy`             | `{ "truthy": bool }`                                                      |
 //! | `config_dump_enabled`   | `{ "enabled": bool }`                                                     |
 //! | `trace_enabled`         | `{ "enabled": bool }`                                                     |
+//!
+//! Wave 8 of #348 removed the NeMo/Parakeet backend, so `should_skip` no
+//! longer takes `recording_s`/`parakeet_min_seconds`/`backend` parameters
+//! and `validate_backend` no longer accepts `"parakeet"`.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read};
@@ -88,36 +92,36 @@ fn json_response<T: Serialize>(value: T) -> Result<String> {
 #[derive(Debug, Deserialize)]
 struct ShouldSkipParams {
     samples: usize,
-    recording_s: f64,
     min_record_seconds: f64,
-    parakeet_min_seconds: f64,
-    backend: String,
+    /// Wave-8 #348: ignored — kept in the wire format so a Python client
+    /// from a transitional release that still sends the legacy fields
+    /// doesn't fail to parse. Drop together with the Python caller when
+    /// Wave 5/8 lands the in-process supervisor.
+    #[serde(default)]
+    _recording_s: Option<f64>,
+    #[serde(default)]
+    _parakeet_min_seconds: Option<f64>,
+    #[serde(default)]
+    _backend: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct ShouldSkipResponse {
     /// Stable wire token for the decision variant.
     decision: &'static str,
-    /// `"too_short"` for either short-clip rejection, `None` for keep.
+    /// `"too_short"` for the short-clip rejection, `None` for keep.
     reason: Option<&'static str>,
-    /// Short user-facing hint (mirrors the stdout lines `_should_skip_pcm`
+    /// Short user-facing hint (mirrors the stdout line `_should_skip_pcm`
     /// prints). `None` when the clip is kept.
     hint: Option<&'static str>,
 }
 
 fn should_skip_op(params: Value) -> Result<ShouldSkipResponse> {
     let p: ShouldSkipParams = serde_json::from_value(params)?;
-    let d = should_skip(
-        p.samples,
-        p.recording_s,
-        p.min_record_seconds,
-        p.parakeet_min_seconds,
-        &p.backend,
-    );
+    let d = should_skip(p.samples, p.min_record_seconds);
     let decision = match d {
         SkipDecision::Keep => "keep",
         SkipDecision::TooShort => "too_short",
-        SkipDecision::ParakeetTooShort => "parakeet_too_short",
     };
     Ok(ShouldSkipResponse {
         decision,
@@ -241,10 +245,7 @@ mod tests {
             "should_skip",
             serde_json::json!({
                 "samples": 16_000,
-                "recording_s": 1.0,
                 "min_record_seconds": 0.5,
-                "parakeet_min_seconds": 1.5,
-                "backend": "whisper",
             }),
         );
         let v = parse(&resp);
@@ -259,10 +260,7 @@ mod tests {
             "should_skip",
             serde_json::json!({
                 "samples": 1000,
-                "recording_s": 0.06,
                 "min_record_seconds": 0.5,
-                "parakeet_min_seconds": 1.5,
-                "backend": "whisper",
             }),
         );
         let v = parse(&resp);
@@ -272,21 +270,24 @@ mod tests {
     }
 
     #[test]
-    fn should_skip_op_parakeet_branch() {
+    fn should_skip_op_tolerates_legacy_parakeet_params() {
+        // Wave 8 of #348: a transitional Python client may still send
+        // recording_s/parakeet_min_seconds/backend. They must be ignored
+        // (not parsed as required) so the op stays backwards-compatible
+        // until the Python caller is updated in the same release.
         let resp = run(
             "should_skip",
             serde_json::json!({
                 "samples": 16_000,
-                "recording_s": 1.0,
                 "min_record_seconds": 0.5,
+                "recording_s": 1.0,
                 "parakeet_min_seconds": 1.5,
                 "backend": "parakeet",
             }),
         );
         let v = parse(&resp);
-        assert_eq!(v["decision"], "parakeet_too_short");
-        assert_eq!(v["reason"], "too_short");
-        assert!(v["hint"].as_str().unwrap().contains("Parakeet"));
+        // Decision is now backend-agnostic — generic too-short gate only.
+        assert_eq!(v["decision"], "keep");
     }
 
     #[test]

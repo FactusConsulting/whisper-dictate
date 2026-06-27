@@ -11,6 +11,12 @@ use crate::config::settings::AppSettings;
 impl AppSettings {
     /// Build [`AppSettings`] from untyped config JSON, falling back to defaults
     /// for missing keys.
+    ///
+    /// Wave 8 (#348) drops the Parakeet/NeMo backend. Saved configs that still
+    /// carry `stt_backend = "parakeet"` are migrated to the schema default
+    /// (`"whisper"`) with a one-line warning on stderr; the obsolete
+    /// `parakeet_*` keys are dropped on the next save via
+    /// [`crate::config::keys::DEPRECATED_KEYS`].
     pub fn from_value(value: Value) -> Result<Self> {
         let defaults = Self::default();
         let mut settings = defaults.clone();
@@ -26,7 +32,8 @@ impl AppSettings {
                 .get("profiles")
                 .map(serde_json::to_string_pretty)
                 .transpose()?
-                .unwrap_or(defaults.profiles_json);
+                .unwrap_or_else(|| defaults.profiles_json.clone());
+            migrate_parakeet_backend(&mut settings, object, &defaults);
         }
         Ok(settings)
     }
@@ -51,7 +58,6 @@ impl AppSettings {
             };
         }
         self.stt_timeout_ms = string_value(object, "stt_timeout_ms", &defaults.stt_timeout_ms);
-        self.parakeet_model = string_value(object, "parakeet_model", &defaults.parakeet_model);
         self.device = string_value(object, "device", &defaults.device);
         self.compute_type = string_value(object, "compute_type", "");
         self.audio_device = string_value(object, "audio_device", "");
@@ -73,11 +79,6 @@ impl AppSettings {
         );
         self.min_record_seconds =
             string_value(object, "min_record_seconds", &defaults.min_record_seconds);
-        self.parakeet_min_seconds = string_value(
-            object,
-            "parakeet_min_seconds",
-            &defaults.parakeet_min_seconds,
-        );
         self.release_tail_ms = string_value(object, "release_tail_ms", &defaults.release_tail_ms);
         self.preview_seconds = string_value(object, "preview_seconds", &defaults.preview_seconds);
         self.max_record_s = string_value(object, "max_record_s", &defaults.max_record_s);
@@ -184,6 +185,47 @@ impl AppSettings {
     }
 }
 
+/// Wave 8 (#348) migration: the Parakeet/NeMo backend was dropped, so any
+/// saved `stt_backend = "parakeet"` is rewritten to the schema default
+/// (`"whisper"`) with a one-line warning. Also surfaces a warning when any
+/// legacy `parakeet_*` key is present (those are stripped on the next save
+/// via [`crate::config::keys::DEPRECATED_KEYS`]).
+///
+/// The migration is deliberately quiet on a fresh config: a user who never
+/// set the Parakeet backend never sees these warnings.
+fn migrate_parakeet_backend(
+    settings: &mut AppSettings,
+    object: &Map<String, Value>,
+    defaults: &AppSettings,
+) {
+    let parakeet_backend = settings.stt_backend.eq_ignore_ascii_case("parakeet");
+    let legacy_keys: Vec<&'static str> = [
+        "parakeet_model",
+        "parakeet_min_seconds",
+        "parakeet_force_pc",
+    ]
+    .into_iter()
+    .filter(|key| object.contains_key(*key))
+    .collect();
+
+    if parakeet_backend {
+        eprintln!(
+            "[config] stt_backend=\"parakeet\" is no longer supported \
+             (NeMo/Parakeet backend removed in Wave 8 of #348); migrating \
+             to stt_backend={:?}. Use whisper-large-v3-turbo for the same \
+             Danish/mixed-language use case.",
+            defaults.stt_backend,
+        );
+        settings.stt_backend = defaults.stt_backend.clone();
+    }
+    if !legacy_keys.is_empty() {
+        eprintln!(
+            "[config] dropping obsolete parakeet_* keys on next save: {}",
+            legacy_keys.join(", "),
+        );
+    }
+}
+
 fn string_value(object: &Map<String, Value>, key: &str, default: &str) -> String {
     object
         .get(key)
@@ -247,6 +289,61 @@ mod tests {
         assert_eq!(settings.model, "large-v3-turbo");
         assert_eq!(settings.context_min_seconds, "5");
         assert_eq!(settings.ui_text_scale, "1.15");
+    }
+
+    #[test]
+    fn parakeet_backend_migrates_to_default() {
+        // Wave 8 of #348: a saved `stt_backend = "parakeet"` is rewritten to
+        // the schema default ("whisper"), preserving everything else.
+        let value = serde_json::json!({
+            "stt_backend": "parakeet",
+            "lang": "da",
+        });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.stt_backend, "whisper");
+        assert_eq!(settings.lang, "da");
+    }
+
+    #[test]
+    fn parakeet_backend_migration_is_case_insensitive() {
+        // The legacy env-var path accepts uppercase + mixed case ("Parakeet",
+        // "PARAKEET"); the migration must catch those the same way. We do not
+        // try to trim whitespace — the wizard / Rust UI only ever writes
+        // canonical lowercase enum tokens, and a hand-edited
+        // " parakeet " would already fail validation downstream regardless of
+        // the migration.
+        for raw in ["PARAKEET", "Parakeet", "parakeet"] {
+            let value = serde_json::json!({ "stt_backend": raw });
+            let settings = AppSettings::from_value(value).unwrap();
+            assert_eq!(
+                settings.stt_backend, "whisper",
+                "stt_backend={raw:?} must migrate to whisper",
+            );
+        }
+    }
+
+    #[test]
+    fn obsolete_parakeet_keys_do_not_block_load() {
+        // A config carrying the deprecated parakeet_* keys still loads
+        // cleanly; the keys are stripped on the next save (see
+        // `apply_to_object` + DEPRECATED_KEYS).
+        let value = serde_json::json!({
+            "stt_backend": "whisper",
+            "parakeet_model": "nvidia/parakeet-tdt-0.6b-v3",
+            "parakeet_min_seconds": "2.0",
+            "parakeet_force_pc": "1",
+        });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.stt_backend, "whisper");
+    }
+
+    #[test]
+    fn fresh_whisper_config_skips_parakeet_migration_path() {
+        // Sanity check: a clean config never triggers the migration; the
+        // stderr warning would otherwise spam every healthy launch.
+        let value = serde_json::json!({ "stt_backend": "whisper" });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.stt_backend, "whisper");
     }
 
     #[test]

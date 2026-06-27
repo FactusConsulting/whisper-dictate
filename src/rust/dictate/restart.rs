@@ -18,14 +18,8 @@ use std::collections::BTreeMap;
 /// `Dictate._report_restart_required` in
 /// `src/python/whisper_dictate/vp_dictate.py`. **Sorted alphabetically**
 /// to keep the order the Python loop emits (`sorted(restart_keys)`).
-pub const RESTART_REQUIRED_KEYS: &[&str] = &[
-    "compute_type",
-    "device",
-    "key",
-    "model",
-    "parakeet_model",
-    "stt_backend",
-];
+pub const RESTART_REQUIRED_KEYS: &[&str] =
+    &["compute_type", "device", "key", "model", "stt_backend"];
 
 /// Return the alphabetically-sorted subset of [`RESTART_REQUIRED_KEYS`]
 /// whose value differs between `before` and `after`. Missing keys are
@@ -85,13 +79,26 @@ mod tests {
         let after = map([
             ("model", "large-v3-turbo"),
             ("device", "cuda"),
-            ("stt_backend", "parakeet"),
+            ("stt_backend", "openai"),
         ]);
         // Sorted: device, model, stt_backend.
         assert_eq!(
             changed_restart_keys(&before, &after),
             vec!["device", "model", "stt_backend"],
         );
+    }
+
+    #[test]
+    fn parakeet_model_no_longer_triggers_restart_after_wave_8_removal() {
+        // Wave 8 of #348 removed `parakeet_model` from the
+        // RESTART_REQUIRED_KEYS table together with the backend. A
+        // pre-Wave-8 config carrying a `parakeet_model = "..."` change
+        // must not flag a restart any more — the key is now treated
+        // exactly like any unknown setting.
+        assert!(!RESTART_REQUIRED_KEYS.contains(&"parakeet_model"));
+        let before = map([("parakeet_model", "nvidia/parakeet-tdt-0.6b-v3")]);
+        let after = map([("parakeet_model", "nvidia/parakeet-tdt-1.1b")]);
+        assert!(changed_restart_keys(&before, &after).is_empty());
     }
 
     #[test]

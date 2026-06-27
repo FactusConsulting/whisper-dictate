@@ -80,9 +80,11 @@ def check_rust_helper() -> Check:
 
 def check_backend() -> Check:
     backend = configured_backend()
-    valid = backend in ("whisper", "parakeet", "openai")
+    # Wave 8 of #348 dropped the Parakeet backend; the doctor's accepted set
+    # collapses to whisper + openai to match runtime/vp_transcribe.
+    valid = backend in ("whisper", "openai")
     # An invalid backend means the app can't transcribe at all → hard FAIL.
-    detail = backend if valid else f"{backend} (invalid; expected whisper/parakeet/openai)"
+    detail = backend if valid else f"{backend} (invalid; expected whisper/openai)"
     return Check("stt backend", valid, detail)
 
 
@@ -105,8 +107,8 @@ def audio_checks() -> list[Check]:
 def backend_checks(backend: str, *, ping: bool = True) -> list[Check]:
     if backend == "openai":
         return _cloud_checks(ping=ping)
-    if backend == "parakeet":
-        return [Check("nemo_toolkit", _import_ok("nemo.collections.asr"), "import nemo (parakeet)")]
+    # Wave 8 of #348 removed the Parakeet/NeMo branch here together with the
+    # backend.
     if backend != "whisper":
         return []  # unknown backend is already flagged by check_backend
     # whisper / faster-whisper (the default local backend)

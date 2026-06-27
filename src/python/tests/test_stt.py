@@ -645,17 +645,16 @@ class STTBackendTests(unittest.TestCase):
             delattr(package, attr)
 
     def setUp(self):
+        # Wave 8 of #348: VOICEPI_PARAKEET_MODEL + the vp_parakeet module are
+        # gone, so they no longer need clearing here.
         self._old = {k: os.environ.pop(k, None) for k in (
-            "VOICEPI_STT_BACKEND", "VOICEPI_MODEL", "VOICEPI_PARAKEET_MODEL",
+            "VOICEPI_STT_BACKEND", "VOICEPI_MODEL",
             "VOICEPI_STT_BASE_URL", "VOICEPI_STT_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
-        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio",
-                  "whisper_dictate.vp_parakeet"):
+        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio"):
             self._drop_package_module(n)
         for n in list(sys.modules):
-            if (n in ("vp_transcribe", "vp_audio", "vp_parakeet",
-                      "faster_whisper", "nemo")
-                    or n.startswith("nemo.")):
+            if n in ("vp_transcribe", "vp_audio", "faster_whisper"):
                 sys.modules.pop(n, None)
 
     def tearDown(self):
@@ -663,10 +662,20 @@ class STTBackendTests(unittest.TestCase):
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
-        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_parakeet"):
+        # Drop BOTH vp_transcribe AND vp_audio (which vp_transcribe imports
+        # transitively for the silence-trim helper) so a downstream test
+        # module that swaps numpy out for a fake during this class's runs
+        # forces vp_audio to re-import against the real numpy on its next
+        # use. Without the vp_audio cleanup, the stale module-level `np`
+        # reference points at the stub long after this class is done — the
+        # original (pre-Wave-8) suite's last test in this class only read a
+        # source file and never triggered the import, so this hazard didn't
+        # surface; Wave 8 of #348 made the last test exercise the real
+        # load_stt_model path.
+        for n in ("whisper_dictate.vp_transcribe", "whisper_dictate.vp_audio"):
             self._drop_package_module(n)
         for n in list(sys.modules):
-            if n in ("vp_transcribe", "vp_parakeet") or n.startswith("nemo."):
+            if n in ("vp_transcribe", "vp_audio"):
                 sys.modules.pop(n, None)
 
     def test_default_backend_loads_faster_whisper_without_nemo(self):
@@ -697,21 +706,31 @@ class STTBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "VOICEPI_STT_BACKEND"):
             vp_transcribe.load_stt_model("large-v3-turbo", "cpu", "int8")
 
-    def test_parakeet_missing_deps_error_is_actionable(self):
+    def test_parakeet_backend_is_quietly_migrated_to_whisper(self):
+        """Wave 8 of #348: ``VOICEPI_STT_BACKEND=parakeet`` is no longer a
+        valid choice — vp_transcribe rewrites it to ``"whisper"`` at module
+        import time so a stale shell-exported env var doesn't error out the
+        worker on launch. (Persistent migration of saved config.json values
+        lives in the Rust ``config::load`` layer.)
+        """
         os.environ["VOICEPI_STT_BACKEND"] = "parakeet"
         sys.modules["numpy"] = types.ModuleType("numpy")
+        fw = types.ModuleType("faster_whisper")
+
+        class WhisperModel:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        fw.WhisperModel = WhisperModel
+        sys.modules["faster_whisper"] = fw
+
         from whisper_dictate import vp_transcribe
 
-        real_import = __import__
-
-        def fake_import(name, *args, **kwargs):
-            if name == "nemo.collections.asr" or name.startswith("nemo"):
-                raise ImportError("no nemo")
-            return real_import(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=fake_import):
-            with self.assertRaisesRegex(RuntimeError, "requirements/parakeet.txt"):
-                vp_transcribe.load_stt_model("large-v3-turbo", "cuda", "float16")
+        self.assertEqual(vp_transcribe.STT_BACKEND, "whisper")
+        self.assertNotIn("parakeet", vp_transcribe.VALID_STT_BACKENDS)
+        # And the legacy backend value never reaches the load path.
+        model = vp_transcribe.load_stt_model("large-v3-turbo", "cpu", "int8")
+        self.assertIsInstance(model, WhisperModel)
 
     def test_openai_backend_uses_external_transcription_adapter(self):
         os.environ["VOICEPI_STT_BACKEND"] = "openai"
@@ -756,176 +775,13 @@ class STTBackendTests(unittest.TestCase):
                     "http://10.0.0.5:8000", "", None):
             self.assertFalse(vp_transcribe._is_loopback_url(url), str(url))
 
-    def test_parakeet_adapter_uses_nemo_stub_and_default_model(self):
-        calls = {}
-
-        fake_np = types.ModuleType("numpy")
-        fake_np.float32 = object()
-        sys.modules["numpy"] = fake_np
-        torch = types.ModuleType("torch")
-        torch.cuda = types.SimpleNamespace(is_available=lambda: True)
-        sys.modules["torch"] = torch
-
-        class FakeNemoModel:
-            def to(self, device):
-                calls["device"] = device
-
-            def eval(self):
-                calls["eval"] = True
-
-            def freeze(self):
-                calls["freeze"] = True
-
-            def transcribe(self, paths, batch_size=1):
-                calls["path"] = paths[0]
-                calls["path_exists_during_call"] = os.path.exists(paths[0])
-                calls["batch_size"] = batch_size
-                return [" hello"]
-
-        class ASRModel:
-            @staticmethod
-            def from_pretrained(model_name):
-                calls["model_name"] = model_name
-                return FakeNemoModel()
-
-        nemo = types.ModuleType("nemo")
-        collections = types.ModuleType("nemo.collections")
-        asr = types.ModuleType("nemo.collections.asr")
-        asr.models = types.SimpleNamespace(ASRModel=ASRModel)
-        collections.asr = asr
-        nemo.collections = collections
-        sys.modules["nemo"] = nemo
-        sys.modules["nemo.collections"] = collections
-        sys.modules["nemo.collections.asr"] = asr
-
-        from whisper_dictate import vp_parakeet
-        model = vp_parakeet.ParakeetModel("large-v3-turbo", device="cuda")
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            path = f.name
-
-        class FakeAudio:
-            def reshape(self, *_args):
-                return self
-
-            def astype(self, *_args):
-                return self
-
-        with patch.object(vp_parakeet, "_write_wav", return_value=path):
-            segments, info = model.transcribe(FakeAudio())
-
-        self.assertEqual(
-            calls["model_name"], "nvidia/parakeet-tdt-0.6b-v3")
-        self.assertEqual(calls["device"], "cuda")
-        self.assertTrue(calls["eval"])
-        self.assertTrue(calls["freeze"])
-        self.assertTrue(calls["path_exists_during_call"])
-        self.assertFalse(os.path.exists(calls["path"]))
-        self.assertEqual(calls["batch_size"], 1)
-        self.assertEqual(segments[0].text, "hello")
-        self.assertIsNone(info.language)
-
-    def test_parakeet_ignores_whisper_model_names_without_explicit_override(self):
-        calls = {}
-        fake_np = types.ModuleType("numpy")
-        sys.modules["numpy"] = fake_np
-        torch = types.ModuleType("torch")
-        torch.cuda = types.SimpleNamespace(is_available=lambda: True)
-        sys.modules["torch"] = torch
-
-        class ASRModel:
-            @staticmethod
-            def from_pretrained(model_name):
-                calls["model_name"] = model_name
-                return types.SimpleNamespace()
-
-        asr = types.ModuleType("nemo.collections.asr")
-        asr.models = types.SimpleNamespace(ASRModel=ASRModel)
-        sys.modules["nemo"] = types.ModuleType("nemo")
-        sys.modules["nemo.collections"] = types.ModuleType("nemo.collections")
-        sys.modules["nemo.collections.asr"] = asr
-
-        from whisper_dictate import vp_parakeet
-
-        vp_parakeet.ParakeetModel("large-v3", device="cuda")
-
-        self.assertEqual(
-            calls["model_name"], "nvidia/parakeet-tdt-0.6b-v3")
-
-    def test_parakeet_cuda_requires_cuda_enabled_torch(self):
-        fake_np = types.ModuleType("numpy")
-        sys.modules["numpy"] = fake_np
-        torch = types.ModuleType("torch")
-        torch.cuda = types.SimpleNamespace(is_available=lambda: False)
-        sys.modules["torch"] = torch
-
-        class ASRModel:
-            @staticmethod
-            def from_pretrained(model_name):
-                return types.SimpleNamespace()
-
-        asr = types.ModuleType("nemo.collections.asr")
-        asr.models = types.SimpleNamespace(ASRModel=ASRModel)
-        sys.modules["nemo"] = types.ModuleType("nemo")
-        sys.modules["nemo.collections"] = types.ModuleType("nemo.collections")
-        sys.modules["nemo.collections.asr"] = asr
-
-        from whisper_dictate import vp_parakeet
-
-        with self.assertRaisesRegex(RuntimeError, "CUDA-enabled PyTorch"):
-            vp_parakeet.ParakeetModel("large-v3", device="cuda")
-
-    def test_parakeet_accepts_explicit_nvidia_model_name(self):
-        from whisper_dictate import vp_parakeet
-
-        self.assertEqual(
-            vp_parakeet.resolve_parakeet_model_name("nvidia/custom-parakeet"),
-            "nvidia/custom-parakeet",
-        )
-
-    def test_parakeet_env_override_wins_over_whisper_model_name(self):
-        os.environ["VOICEPI_PARAKEET_MODEL"] = "nvidia/explicit-parakeet"
-        from whisper_dictate import vp_parakeet
-
-        self.assertEqual(
-            vp_parakeet.resolve_parakeet_model_name("large-v3"),
-            "nvidia/explicit-parakeet",
-        )
-
-    def test_parakeet_model_dropdown_options_are_exported(self):
-        from whisper_dictate import vp_parakeet
-
-        self.assertEqual(vp_parakeet.PARAKEET_MODELS[0], vp_parakeet.DEFAULT_MODEL)
-        self.assertEqual(vp_parakeet.PARAKEET_MODELS, [
-            "nvidia/parakeet-tdt-0.6b-v3",
-            "nvidia/parakeet-tdt-1.1b",
-            "nvidia/parakeet-tdt-0.6b-v2",
-        ])
-
-    def test_parakeet_suppresses_irrelevant_pydub_ffmpeg_warning(self):
-        from whisper_dictate import vp_parakeet
-
-        with open(vp_parakeet.__file__, encoding="utf-8") as f:
-            script = f.read()
-        self.assertIn("warnings.filterwarnings", script)
-        self.assertIn("Couldn't find ffmpeg or avconv", script)
-
-    def test_parakeet_quiets_nemo_output_unless_stt_debug_is_enabled(self):
-        from whisper_dictate import vp_parakeet
-
-        with open(vp_parakeet.__file__, encoding="utf-8") as f:
-            script = f.read()
-        self.assertIn("def _nemo_output_context", script)
-        self.assertIn('os.environ.get("VOICEPI_STT_DEBUG")', script)
-        self.assertIn("contextlib.redirect_stdout", script)
-        self.assertIn("contextlib.redirect_stderr", script)
-        self.assertIn("with _nemo_output_context():", script)
-
-    def test_parakeet_model_load_and_transcribe_are_quieted(self):
-        from whisper_dictate import vp_parakeet
-
-        with open(vp_parakeet.__file__, encoding="utf-8") as f:
-            script = f.read()
-        load = script.index("self._model = nemo_asr.models.ASRModel.from_pretrained")
-        transcribe = script.index("result = self._call_transcribe(path)")
-        self.assertLess(script.rfind("with _nemo_output_context():", 0, load), load)
-        self.assertLess(script.rfind("with _nemo_output_context():", 0, transcribe), transcribe)
+    # Wave 8 of #348 removed the eleven `test_parakeet_*` methods that
+    # exercised the now-deleted whisper_dictate.vp_parakeet adapter
+    # (ParakeetModel/resolve_parakeet_model_name/PARAKEET_MODELS, NeMo import
+    # error handling, CUDA-torch gating and the _nemo_output_context shim).
+    # The remaining backend coverage (whisper/openai) is exercised above by
+    # test_default_backend_loads_faster_whisper_without_nemo,
+    # test_invalid_backend_is_rejected,
+    # test_parakeet_backend_is_quietly_migrated_to_whisper and the openai-
+    # specific tests; the migration test pins the user-visible behaviour for
+    # anyone with a stale `VOICEPI_STT_BACKEND=parakeet` env var.

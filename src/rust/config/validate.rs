@@ -18,11 +18,7 @@ impl AppSettings {
 
     /// Reject values outside the allowed set for each enum-like field.
     fn validate_choices(&self) -> Result<()> {
-        validate_choice(
-            "stt_backend",
-            &self.stt_backend,
-            &["whisper", "parakeet", "openai"],
-        )?;
+        validate_choice("stt_backend", &self.stt_backend, &["whisper", "openai"])?;
         validate_choice("stt_provider", &self.stt_provider, &["groq", "openai"])?;
         validate_choice("device", &self.device, &["auto", "cuda", "cpu"])?;
         validate_choice(
@@ -93,7 +89,6 @@ impl AppSettings {
         validate_f32("preview_seconds", &self.preview_seconds)?;
         validate_f32("max_record_s", &self.max_record_s)?;
         validate_f32("context_min_seconds", &self.context_min_seconds)?;
-        validate_f32("parakeet_min_seconds", &self.parakeet_min_seconds)?;
         validate_f32("min_record_seconds", &self.min_record_seconds)?;
         validate_f32("max_chars_per_second", &self.max_chars_per_second)?;
         validate_f32("audio_ducking_level", &self.audio_ducking_level)?;

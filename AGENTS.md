@@ -49,9 +49,11 @@ categories below; skip stylistic preferences not encoded here.
   messages, and installer scripts must work under PowerShell, cmd.exe,
   hidden launchers, and the Rust UI's subprocess logs. Non-ASCII without a
   tested fallback is a defect.
-- **Whisper vs Parakeet config stay separate.** Parakeet must use its own
-  model defaults and dependency checks; reject any change that lets
-  Parakeet inherit Whisper names like `large-v3`.
+- **NeMo/Parakeet backend is gone.** Wave 8 of #348 removed the optional
+  Parakeet STT backend. Reject any new code that reintroduces
+  `stt_backend = "parakeet"`, `VOICEPI_PARAKEET_*` env vars, NeMo imports,
+  or `requirements/parakeet.txt`; saved configs that still carry the
+  legacy value are migrated to `"whisper"` at load time.
 - **Dictionary/prompt changes stay bounded.** Any change to dictionary
   loading, prompt construction, term selection, or replacements must
   preserve prompt length caps and include tests for `terms` AND
@@ -178,6 +180,7 @@ For read-only information-gathering and simple mechanical comparisons (scanning 
 - Keep terminal and subprocess output Windows-safe. New console output should
   be ASCII-safe or UTF-8-safe with a tested fallback, especially for PowerShell,
   cmd.exe, hidden launchers, and Rust UI subprocess logs.
-- Keep Whisper and Parakeet configuration separate. Parakeet must use its own
-  model defaults, dependency checks, and CUDA readiness checks rather than
-  inheriting Whisper model names such as `large-v3`.
+- NeMo/Parakeet backend removed (Wave 8 of #348). Reject any new code that
+  reintroduces `stt_backend = "parakeet"`, `VOICEPI_PARAKEET_*` env vars,
+  NeMo imports, or `requirements/parakeet.txt`; saved configs that still
+  carry the legacy value migrate to `"whisper"` at load time.
