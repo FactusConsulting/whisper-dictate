@@ -57,6 +57,7 @@
     "Ollama",
     "Parakeet",
     "parseable",
+    "setx",
     "PipeWire",
     "postinstall",
     "pyperclip",
