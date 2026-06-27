@@ -1442,8 +1442,67 @@ pub fn audio_pipeline_available() -> bool {
 /// Worker command that lists input (microphone) devices as JSON and exits
 /// without loading a model or opening audio. Drives the Speech tab's "Refresh
 /// devices" action.
+///
+/// When the supervisor's parent env has `VOICEPI_AUDIO_BACKEND=rust`, the
+/// command also exports `VOICEPI_DEVICES_BACKEND=rust` to the worker so
+/// the Python `list_input_devices` shells out to the Rust enumeration
+/// helper (`whisper-dictate devices`) instead of querying sounddevice.
+/// Without this propagation the picker would still surface non-default-host
+/// devices that the active Rust capture pipeline cannot open — a user that
+/// opted into Rust capture via the single documented env var would be left
+/// to discover the second `VOICEPI_DEVICES_BACKEND=rust` knob to keep the
+/// picker honest (P3 #376, late Codex finding on PR #369).
+///
+/// On a binary built WITHOUT `audio-in-rust` the Rust `devices` subcommand
+/// prints a structured error and exits non-zero, so the Python shell-out
+/// falls back to sounddevice transparently — the propagation is therefore
+/// safe to apply unconditionally and we do not gate it on the feature here.
 pub fn audio_devices_command() -> WorkerCommand {
-    default_worker_command_with_args(vec!["--list-audio-devices".to_owned()])
+    let mut command = default_worker_command_with_args(vec!["--list-audio-devices".to_owned()]);
+    if audio_pipeline_requested() {
+        propagate_rust_devices_backend(&mut command);
+    }
+    command
+}
+
+/// Append `VOICEPI_DEVICES_BACKEND=rust` to `command.env` when neither
+/// `command.env` nor the process env already mentions the variable. Split
+/// out so the precedence + idempotency contract is unit-testable and so
+/// any future worker command that needs to honour Rust capture's
+/// device-enumeration limit can share the helper.
+///
+/// Precedence (highest first):
+/// 1. **`command.env` already has the key** — caller pre-populated it
+///    (e.g. test setup, a derived-from-config override added upstream);
+///    we leave it alone and add nothing.
+/// 2. **Process env has `VOICEPI_DEVICES_BACKEND` set** — the user
+///    deliberately exported a value (typically `=python` to force the
+///    sounddevice path for a debug session even while Rust capture is
+///    active). The spawned worker inherits the process env, so adding
+///    `=rust` to `command.env` would silently override that intent.
+///    Skip the propagation so the user's explicit choice wins.
+/// 3. **Neither set** — add `VOICEPI_DEVICES_BACKEND=rust` so the Python
+///    picker shells out to the Rust enumeration.
+///
+/// We deliberately do not error on a `NotUnicode` process-env value: if
+/// the user set the variable to bytes we can't decode, that's a problem
+/// for the Python side to surface; from the propagator's point of view
+/// the variable IS set so we skip, which preserves whatever bytes the
+/// inherited env carries.
+fn propagate_rust_devices_backend(command: &mut WorkerCommand) {
+    if command
+        .env
+        .iter()
+        .any(|(key, _)| key == "VOICEPI_DEVICES_BACKEND")
+    {
+        return;
+    }
+    if env::var_os("VOICEPI_DEVICES_BACKEND").is_some() {
+        return;
+    }
+    command
+        .env
+        .push(("VOICEPI_DEVICES_BACKEND".to_owned(), "rust".to_owned()));
 }
 
 /// Worker command that lists visible top-level windows as JSON and exits.
