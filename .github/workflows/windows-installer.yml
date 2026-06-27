@@ -33,7 +33,7 @@ jobs:
       # (no `-rc.N` suffix) keep the historical 'false' behaviour and the
       # winget-generation step runs as before. P2 #406 Codex finding.
       force_build: true
-      is_prerelease: ${{ contains(github.event.inputs.tag, '-rc.') }}
+      is_prerelease: ${{ contains(github.event.inputs.tag, '-rc.') && 'true' || 'false' }}
     secrets:
       CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
       CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
