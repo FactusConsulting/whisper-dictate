@@ -19,10 +19,16 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+pub mod cli;
+mod cli_report;
 mod extract;
 mod merge;
 mod misses;
 
+pub use cli::{
+    run_build_from_corpus, run_suggest_from_misses, BuildFromCorpusOptions,
+    SuggestFromMissesOptions,
+};
 pub use extract::extract_candidate_terms;
 pub use merge::merge_terms;
 pub use misses::{suggest_terms_from_misses, BenchmarkRow};

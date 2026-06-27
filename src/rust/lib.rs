@@ -28,12 +28,21 @@ pub mod config;
 // `dictate-ops` JSON-RPC subcommand the Python caller shells out to
 // when `VOICEPI_DICTATE_BACKEND=rust` (default keeps Python).
 pub mod dictate;
+// Golden-corpus loader + manifest path resolution (Rust port of
+// `vp_benchmark.load_corpus` + `vp_benchmark_paths.resolve_corpus_manifest`,
+// Wave 6 follow-up to the dictionary-training CLI port). Used by the
+// `dictionary build-from-corpus` subcommand.
+pub mod corpus;
 // Pure-logic port of the `--record-corpus-item` user tool (Wave 6 of #348).
 // Audio capture stays in Python (reuses the negotiated `vp_capture` path);
 // this module owns the corpus-id safety guard + the duration heuristic +
 // the thin `corpus-record` CLI handler that shells out to the existing worker
 // command.
 pub mod corpus_record;
+// Pure corpus filter-profiles: select a subset of corpus items by
+// language/category (Rust port of `vp_corpus_profile.py`). Used by the
+// `dictionary build-from-corpus` subcommand to mirror the Python flags.
+pub mod corpus_profile;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
 // Python-removal roadmap #348). Gated behind `audio-in-rust` so the default
 // build does not pull cpal — the audio capture feature already requires the

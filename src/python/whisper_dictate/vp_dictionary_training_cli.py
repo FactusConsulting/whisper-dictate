@@ -1,3 +1,7 @@
+# DEPRECATED Wave 6: superseded by Rust subcommands `whisper-dictate dictionary
+# build-from-corpus` / `whisper-dictate dictionary suggest-terms` (this PR).
+# Kept in tree as a transitional fallback so installs without the new Rust
+# binary keep working; scheduled for deletion in Wave 8 finale.
 """CLI orchestration for corpus->dictionary training (Feature A + profile B).
 
 Glues the PURE logic (:mod:`vp_dictionary_training`, :mod:`vp_corpus_profile`) to

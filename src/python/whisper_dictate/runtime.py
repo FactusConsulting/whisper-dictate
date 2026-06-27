@@ -376,12 +376,20 @@ def _handle_dictionary_suggest(a, ap) -> None:
 def _handle_dictionary_training(a, ap) -> int:
     """Dispatch the two corpus->dictionary training commands (Feature A).
 
-    ``--dictionary-build-from-corpus`` grows the dictionary from corpus reference
-    TEXT (honouring the --language/--category profile); ``--dictionary-suggest-terms``
-    suggests terms from benchmark misses. Both honour --dictionary/--apply/
-    --min-count, preview by default, and read TEXT only — never record audio. The
-    orchestration functions report their own errors and return an exit code.
+    Wave 6 follow-up to the Python-removal roadmap (#348): the user-facing
+    flags ``--dictionary-build-from-corpus`` / ``--dictionary-suggest-terms``
+    now shell out to the Rust binary's ``dictionary build-from-corpus`` /
+    ``dictionary suggest-terms`` subcommands. The Python in-process path
+    (``vp_dictionary_training_cli.run_build_from_corpus`` /
+    ``run_suggest_from_misses``) is kept as a fallback for binaries that lack
+    the new subcommand (older installs, dev checkouts without a built Rust
+    helper) so behaviour never regresses. Both still honour --dictionary /
+    --apply / --min-count, preview by default, and read TEXT only — never
+    record audio.
     """
+    rc = _rust_dictionary_training(a)
+    if rc is not None:
+        return rc
     from whisper_dictate.vp_dictionary_training_cli import (
         run_build_from_corpus, run_suggest_from_misses,
     )
@@ -408,6 +416,88 @@ def _handle_dictionary_training(a, ap) -> int:
         # ap.error() prints usage and raises SystemExit(2); it never returns, so the
         # function ends here (no unreachable return follows).
         ap.error(str(e))
+
+
+def _rust_dictionary_training(a) -> int | None:
+    """Shell out to ``whisper-dictate dictionary build-from-corpus|suggest-terms``.
+
+    Returns the subprocess exit code on success, or ``None`` when the Rust
+    binary is unavailable (the env var is unset / the helper is missing) so
+    the caller falls back to the in-process Python path. Sets
+    ``VOICEPI_DICTIONARY_BACKEND=python`` for the child to force the
+    Wave 4-A in-process logic inside the helper (the env-gated shell-out
+    inside ``vp_dictionary_training`` would otherwise re-enter the same
+    binary recursively).
+    """
+    helper = os.environ.get("VOICEPI_RUST_INJECTOR") or ""
+    if not helper:
+        return None
+    if not Path(helper).exists():
+        return None
+    args = _rust_dictionary_training_args(a)
+    if args is None:
+        return None
+    env = dict(os.environ)
+    # Force the child's dictionary backend off Rust so the helper's own
+    # `dictionary-ops` shell-out (gated on VOICEPI_DICTIONARY_BACKEND=rust)
+    # does not re-enter the same binary on top of our subprocess.
+    env["VOICEPI_DICTIONARY_BACKEND"] = "python"
+    try:
+        result = subprocess.run(
+            [helper, "dictionary", *args],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            shell=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - helper failures fall back to Python
+        print(f"[rust:dictionary-training] {exc}", file=sys.stderr, flush=True)
+        return None
+    # The Rust subcommand prints the preview / JSON itself; we just relay
+    # its exit code to the caller (and ultimately to the process).
+    return result.returncode
+
+
+def _rust_dictionary_training_args(a) -> list[str] | None:
+    """Translate argparse flags into the Rust subcommand argv.
+
+    Returns None when no recognised training flag is present (defensive — the
+    dispatcher should only call this when one of them is set, but keeping
+    the fallback explicit avoids a silent miscall).
+    """
+    if getattr(a, "dictionary_suggest_terms", None):
+        args = ["suggest-terms", str(a.dictionary_suggest_terms)]
+        if a.dictionary is not None:
+            args.extend(["--dictionary", str(a.dictionary)])
+        if a.min_count and a.min_count != 1:
+            args.extend(["--min-count", str(a.min_count)])
+        if a.apply:
+            args.append("--apply")
+        if a.json:
+            args.append("--json")
+        return args
+    if getattr(a, "dictionary_build_from_corpus", False):
+        args = ["build-from-corpus"]
+        if a.benchmark_corpus:
+            args.extend(["--benchmark-corpus", str(a.benchmark_corpus)])
+        app_root = getattr(a, "app_root", None)
+        if app_root:
+            args.extend(["--app-root", str(app_root)])
+        if a.dictionary is not None:
+            args.extend(["--dictionary", str(a.dictionary)])
+        if a.language:
+            args.extend(["--language", str(a.language)])
+        if a.category:
+            args.extend(["--category", str(a.category)])
+        if a.min_count and a.min_count != 1:
+            args.extend(["--min-count", str(a.min_count)])
+        if a.apply:
+            args.append("--apply")
+        if a.json:
+            args.append("--json")
+        return args
+    return None
 
 
 def _run_utility_subcommands(a, ap) -> None:

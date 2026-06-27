@@ -42,8 +42,9 @@ pub use store::{
 };
 pub use suggest::{suggest_replacements_from_rows, ReplacementSuggestion};
 pub use training::{
-    extract_candidate_terms, merge_terms, suggest_terms_from_misses, MergePreview, TermCandidate,
-    TermSuggestion,
+    extract_candidate_terms, merge_terms, run_build_from_corpus, run_suggest_from_misses,
+    suggest_terms_from_misses, BuildFromCorpusOptions, MergePreview, SuggestFromMissesOptions,
+    TermCandidate, TermSuggestion,
 };
 
 /// The parsed dictionary: prompt vocabulary `terms` and deterministic

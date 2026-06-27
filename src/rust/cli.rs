@@ -290,6 +290,67 @@ pub enum DictionaryCommand {
         /// Replacement mapping, for example "lead death=lead dev".
         mapping: String,
     },
+    /// Extract domain terms from the golden-corpus reference TEXT (curated
+    /// terms + capitalised/multi-word/technical tokens) and append+dedup them
+    /// into the dictionary. PREVIEW by default; pass `--apply` to write.
+    /// Reads corpus TEXT only — it never records or touches audio. Honours
+    /// `--language` / `--category` for profile selection.
+    #[command(name = "build-from-corpus")]
+    BuildFromCorpus {
+        /// Path to the corpus manifest (`benchmark/corpus.json`). When omitted
+        /// the resolver searches `<app_root>/benchmark/corpus.json` and the
+        /// per-user appdata equivalent.
+        #[arg(long = "benchmark-corpus", value_name = "PATH")]
+        benchmark_corpus: Option<String>,
+        /// Override the app root used to resolve the corpus manifest. Hidden
+        /// because it mirrors the Python `--app-root` test helper.
+        #[arg(long, hide = true)]
+        app_root: Option<String>,
+        /// Dictionary file to read / append. Default: `$VOICEPI_DICTIONARY` or
+        /// the per-user `dictionary.json`.
+        #[arg(long, value_name = "PATH")]
+        dictionary: Option<String>,
+        /// Profile selector: restrict to these languages (e.g. `da` or
+        /// `da,en`).
+        #[arg(long)]
+        language: Option<String>,
+        /// Profile selector: restrict to these categories or friendly groups
+        /// (e.g. `technical`, `names`, `mixed_technical`).
+        #[arg(long)]
+        category: Option<String>,
+        /// Minimum corpus occurrence count for a term to be proposed (default
+        /// 1).
+        #[arg(long, default_value_t = 1)]
+        min_count: usize,
+        /// WRITE the changes instead of only previewing them.
+        #[arg(long)]
+        apply: bool,
+        /// Emit machine-readable JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read an annotated benchmark JSONL and SUGGEST the domain terms the
+    /// model missed (`term_misses`) as dictionary additions. PREVIEW by
+    /// default; pass `--apply` to add the new terms. Reads result TEXT only —
+    /// never records audio.
+    #[command(name = "suggest-terms")]
+    SuggestTerms {
+        /// Path to the annotated benchmark JSONL emitted by `--run-benchmark`.
+        jsonl: String,
+        /// Dictionary file to read / append. Default: `$VOICEPI_DICTIONARY` or
+        /// the per-user `dictionary.json`.
+        #[arg(long, value_name = "PATH")]
+        dictionary: Option<String>,
+        /// Minimum miss count for a term to be suggested (default 1).
+        #[arg(long, default_value_t = 1)]
+        min_count: usize,
+        /// WRITE the new terms instead of only previewing them.
+        #[arg(long)]
+        apply: bool,
+        /// Emit machine-readable JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -391,6 +452,91 @@ mod tests {
             Some(Command::Dictionary {
                 command: DictionaryCommand::Add {
                     term: "Codex".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_dictionary_build_from_corpus_with_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "dictionary",
+            "build-from-corpus",
+            "--benchmark-corpus",
+            "corpus.json",
+            "--language",
+            "da",
+            "--category",
+            "technical",
+            "--dictionary",
+            "d.json",
+            "--apply",
+            "--min-count",
+            "2",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Dictionary {
+                command: DictionaryCommand::BuildFromCorpus {
+                    benchmark_corpus: Some("corpus.json".to_owned()),
+                    app_root: None,
+                    dictionary: Some("d.json".to_owned()),
+                    language: Some("da".to_owned()),
+                    category: Some("technical".to_owned()),
+                    min_count: 2,
+                    apply: true,
+                    json: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_dictionary_build_from_corpus_with_defaults() {
+        // No flags besides the subcommand: every option falls back to its
+        // Python-default counterpart (no corpus override, no dict override,
+        // min_count=1, preview-only, no JSON).
+        let cli = Cli::parse_from(["whisper-dictate", "dictionary", "build-from-corpus"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Dictionary {
+                command: DictionaryCommand::BuildFromCorpus {
+                    benchmark_corpus: None,
+                    app_root: None,
+                    dictionary: None,
+                    language: None,
+                    category: None,
+                    min_count: 1,
+                    apply: false,
+                    json: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_dictionary_suggest_terms_with_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "dictionary",
+            "suggest-terms",
+            "results.jsonl",
+            "--dictionary",
+            "d.json",
+            "--apply",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Dictionary {
+                command: DictionaryCommand::SuggestTerms {
+                    jsonl: "results.jsonl".to_owned(),
+                    dictionary: Some("d.json".to_owned()),
+                    min_count: 1,
+                    apply: true,
+                    json: true,
                 },
             })
         );
