@@ -201,6 +201,14 @@ fallback so a typo surfaces loudly — same philosophy as
 `VOICEPI_WHISPER_IDLE_UNLOAD_S`. CUDA / Metal / DirectML backends are
 planned as additional features once Vulkan is bedded in.
 
+**Interaction with the legacy `VOICEPI_DEVICE`:** when
+`VOICEPI_WHISPER_GPU` is unset, `VOICEPI_DEVICE=cpu` (the long-standing
+"force CPU" setting on the Python `faster-whisper` path) is honoured as
+a fallback and maps to `off`. Other `VOICEPI_DEVICE` values (`auto`,
+`cuda`) do not affect the Rust backend's policy and fall through to
+`auto`. Setting `VOICEPI_WHISPER_GPU` explicitly always wins, so you
+can still force GPU on a `VOICEPI_DEVICE=cpu` setup if you want to.
+
 [Vulkan SDK]: https://vulkan.lunarg.com/sdk/home
 
 #### Idle model unload (library primitive — not yet active)

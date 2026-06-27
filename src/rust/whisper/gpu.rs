@@ -36,6 +36,22 @@ use anyhow::{anyhow, Result};
 /// ask for.
 pub const GPU_ENV: &str = "VOICEPI_WHISPER_GPU";
 
+/// Fallback env var consulted only when [`GPU_ENV`] is unset.
+///
+/// `VOICEPI_DEVICE` is the long-standing user-facing knob documented in
+/// `docs/CONFIGURATION.md` for forcing CPU vs CUDA on the Python
+/// `faster-whisper` path (`auto` | `cuda` | `cpu`). When a user has
+/// `VOICEPI_DEVICE=cpu` set to force CPU on the Python path and then
+/// opts into the Rust transcribe backend on a Vulkan-built binary, they
+/// expect the same "force CPU" intent to be honoured rather than being
+/// silently overridden by Auto picking Vulkan. So when [`GPU_ENV`] is
+/// unset we consult [`DEVICE_FALLBACK_ENV`]: `cpu` → [`GpuPolicy::Off`],
+/// every other value (or absent) → fall through to the default
+/// [`GpuPolicy::Auto`]. Explicit [`GPU_ENV`] always wins so the user can
+/// still force GPU on a `VOICEPI_DEVICE=cpu` setup if they really want
+/// to.
+pub const DEVICE_FALLBACK_ENV: &str = "VOICEPI_DEVICE";
+
 /// Which GPU policy to apply when constructing a
 /// [`whisper_rs::WhisperContextParameters`].
 ///
@@ -57,23 +73,54 @@ pub enum GpuPolicy {
     Vulkan,
 }
 
-/// Read [`GPU_ENV`] and parse it into a [`GpuPolicy`].
+/// Read [`GPU_ENV`] and parse it into a [`GpuPolicy`], falling back to
+/// [`DEVICE_FALLBACK_ENV`] when the explicit var is unset.
 ///
-/// See the constant's docs for the value grammar. The three error modes
-/// from [`std::env::var`] are handled distinctly:
+/// Precedence (highest first):
 ///
-/// - `NotPresent` → `Ok(GpuPolicy::Auto)` (no override, use the build's default).
-/// - `NotUnicode` → `Err` — an explicitly set value we can't decode is a
-///   configuration bug worth surfacing loudly.
-/// - `Ok(raw)` → delegate to [`parse_gpu_policy_str`].
+/// 1. **`VOICEPI_WHISPER_GPU` set** → that value is authoritative. An
+///    explicit `auto` here will pick GPU even when `VOICEPI_DEVICE=cpu`,
+///    matching the principle that a more-specific knob wins.
+/// 2. **`VOICEPI_DEVICE=cpu`** (case-insensitive, with `GPU_ENV` unset) →
+///    [`GpuPolicy::Off`]. Honours the long-standing "force CPU" intent
+///    users carried over from the Python faster-whisper path so they
+///    don't get an unexpected GPU activation when they flip to the Rust
+///    backend on a Vulkan build.
+/// 3. **Both unset, or `VOICEPI_DEVICE` is `auto`/`cuda`/anything else** →
+///    [`GpuPolicy::default()`] (Auto). `cuda` is **not** mapped to a
+///    specific GPU policy here — that's a Python faster-whisper detail,
+///    and Vulkan is the only backend the Rust path supports today; the
+///    feature-aware [`should_use_gpu`] resolver then decides whether
+///    Auto picks GPU or CPU based on the compiled-in backend.
+///
+/// The three error modes from [`std::env::var`] for [`GPU_ENV`] are
+/// handled distinctly: `NotPresent` → consult fallback; `NotUnicode` →
+/// hard error (a set-but-undecodable value is a configuration bug);
+/// `Ok` → delegate to [`parse_gpu_policy_str`].
 pub fn parse_gpu_policy_from_env() -> Result<GpuPolicy> {
     match std::env::var(GPU_ENV) {
-        Err(std::env::VarError::NotPresent) => Ok(GpuPolicy::default()),
+        Err(std::env::VarError::NotPresent) => Ok(device_fallback_policy()),
         Err(std::env::VarError::NotUnicode(raw)) => Err(anyhow!(
             "{GPU_ENV}={raw:?} is not valid UTF-8; \
              use 'auto', 'off', or 'vulkan'"
         )),
         Ok(raw) => parse_gpu_policy_str(&raw),
+    }
+}
+
+/// Resolve the fallback policy from [`DEVICE_FALLBACK_ENV`].
+///
+/// Returns [`GpuPolicy::Off`] iff `VOICEPI_DEVICE=cpu` (case-insensitive,
+/// after trim). Every other value — including `auto`, `cuda`, unset,
+/// blank, or `NotUnicode` — yields [`GpuPolicy::default()`] (Auto). We
+/// deliberately do not error on a non-UTF-8 `VOICEPI_DEVICE` here because
+/// the user did not explicitly opt into the Rust GPU policy via this
+/// variable; the existing Python path that owns `VOICEPI_DEVICE` will
+/// already surface a clean error if the value is unusable.
+fn device_fallback_policy() -> GpuPolicy {
+    match std::env::var(DEVICE_FALLBACK_ENV) {
+        Ok(raw) if raw.trim().eq_ignore_ascii_case("cpu") => GpuPolicy::Off,
+        _ => GpuPolicy::default(),
     }
 }
 
@@ -240,49 +287,146 @@ mod tests {
 
     // -- env-var integration ----------------------------------------------
 
+    /// RAII guard restoring both `VOICEPI_WHISPER_GPU` and
+    /// `VOICEPI_DEVICE` to their pre-test values, so each test in this
+    /// section can set/clear either var freely without leaking state.
+    /// Use behind the crate-wide [`ENV_LOCK`] (see the module's "Usage
+    /// rule" — every test that mutates env vars must hold that lock).
+    struct GpuEnvGuard {
+        saved_gpu: Option<String>,
+        saved_device: Option<String>,
+    }
+
+    impl GpuEnvGuard {
+        fn new() -> Self {
+            Self {
+                saved_gpu: std::env::var(GPU_ENV).ok(),
+                saved_device: std::env::var(DEVICE_FALLBACK_ENV).ok(),
+            }
+        }
+    }
+
+    impl Drop for GpuEnvGuard {
+        fn drop(&mut self) {
+            match &self.saved_gpu {
+                Some(v) => std::env::set_var(GPU_ENV, v),
+                None => std::env::remove_var(GPU_ENV),
+            }
+            match &self.saved_device {
+                Some(v) => std::env::set_var(DEVICE_FALLBACK_ENV, v),
+                None => std::env::remove_var(DEVICE_FALLBACK_ENV),
+            }
+        }
+    }
+
     #[test]
     fn parse_env_unset_means_auto() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var(GPU_ENV).ok();
+        let _env = GpuEnvGuard::new();
         std::env::remove_var(GPU_ENV);
+        std::env::remove_var(DEVICE_FALLBACK_ENV);
 
         let got = parse_gpu_policy_from_env().unwrap();
         assert_eq!(got, GpuPolicy::Auto);
-
-        if let Some(v) = saved {
-            std::env::set_var(GPU_ENV, v);
-        }
     }
 
     #[test]
     fn parse_env_reads_value() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var(GPU_ENV).ok();
+        let _env = GpuEnvGuard::new();
         std::env::set_var(GPU_ENV, "vulkan");
 
         let got = parse_gpu_policy_from_env().unwrap();
         assert_eq!(got, GpuPolicy::Vulkan);
-
-        match saved {
-            Some(v) => std::env::set_var(GPU_ENV, v),
-            None => std::env::remove_var(GPU_ENV),
-        }
     }
 
     #[test]
     fn parse_env_rejects_unknown_with_env_name_in_error() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var(GPU_ENV).ok();
+        let _env = GpuEnvGuard::new();
         std::env::set_var(GPU_ENV, "tensorrt");
 
         let err = parse_gpu_policy_from_env().unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains(GPU_ENV), "{msg}");
         assert!(msg.contains("tensorrt"), "{msg}");
+    }
 
-        match saved {
-            Some(v) => std::env::set_var(GPU_ENV, v),
-            None => std::env::remove_var(GPU_ENV),
+    // -- VOICEPI_DEVICE fallback (Codex #380 P2) --------------------------
+
+    #[test]
+    fn device_cpu_fallback_when_gpu_var_unset_means_off() {
+        // The headline contract: VOICEPI_DEVICE=cpu has historically been
+        // the "force CPU on local STT" knob (Python path), and a user that
+        // sets it expects Rust transcribe on a Vulkan build to honour the
+        // same intent rather than silently activating GPU via Auto.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = GpuEnvGuard::new();
+        std::env::remove_var(GPU_ENV);
+        std::env::set_var(DEVICE_FALLBACK_ENV, "cpu");
+
+        assert_eq!(parse_gpu_policy_from_env().unwrap(), GpuPolicy::Off);
+    }
+
+    #[test]
+    fn device_cpu_fallback_is_case_insensitive() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = GpuEnvGuard::new();
+        std::env::remove_var(GPU_ENV);
+        for value in ["CPU", "Cpu", "cPu", "  cpu  ", "\tCPU\n"] {
+            std::env::set_var(DEVICE_FALLBACK_ENV, value);
+            assert_eq!(
+                parse_gpu_policy_from_env().unwrap(),
+                GpuPolicy::Off,
+                "VOICEPI_DEVICE={value:?} should map to Off"
+            );
         }
+    }
+
+    #[test]
+    fn device_non_cpu_values_do_not_force_off() {
+        // cuda/auto/<empty>/blank/unknown must NOT silently turn into Off;
+        // they fall through to the default Auto so a user with
+        // VOICEPI_DEVICE=cuda on a Vulkan build still gets GPU.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = GpuEnvGuard::new();
+        std::env::remove_var(GPU_ENV);
+        for value in ["cuda", "CUDA", "auto", "Auto", "", "   ", "rocm", "gpu"] {
+            std::env::set_var(DEVICE_FALLBACK_ENV, value);
+            assert_eq!(
+                parse_gpu_policy_from_env().unwrap(),
+                GpuPolicy::Auto,
+                "VOICEPI_DEVICE={value:?} should fall through to Auto, not Off"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_gpu_var_wins_over_device_cpu_fallback() {
+        // A user that has VOICEPI_DEVICE=cpu but explicitly opts into GPU
+        // via VOICEPI_WHISPER_GPU=vulkan must get Vulkan — the more
+        // specific knob wins. Symmetry: same for `auto` and `off`.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = GpuEnvGuard::new();
+        std::env::set_var(DEVICE_FALLBACK_ENV, "cpu");
+
+        std::env::set_var(GPU_ENV, "vulkan");
+        assert_eq!(parse_gpu_policy_from_env().unwrap(), GpuPolicy::Vulkan);
+
+        std::env::set_var(GPU_ENV, "auto");
+        assert_eq!(parse_gpu_policy_from_env().unwrap(), GpuPolicy::Auto);
+
+        std::env::set_var(GPU_ENV, "off");
+        assert_eq!(parse_gpu_policy_from_env().unwrap(), GpuPolicy::Off);
+    }
+
+    #[test]
+    fn device_var_unset_and_gpu_unset_means_auto() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = GpuEnvGuard::new();
+        std::env::remove_var(GPU_ENV);
+        std::env::remove_var(DEVICE_FALLBACK_ENV);
+
+        assert_eq!(parse_gpu_policy_from_env().unwrap(), GpuPolicy::Auto);
     }
 }

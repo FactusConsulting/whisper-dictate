@@ -40,7 +40,7 @@ pub mod dispatch;
 #[cfg(feature = "whisper-rs-local")]
 mod local;
 
-pub use gpu::{parse_gpu_policy_from_env, should_use_gpu, GpuPolicy, GPU_ENV};
+pub use gpu::{parse_gpu_policy_from_env, should_use_gpu, GpuPolicy, DEVICE_FALLBACK_ENV, GPU_ENV};
 pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV};
 pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
