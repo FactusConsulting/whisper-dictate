@@ -297,6 +297,35 @@ class WizardAdvancedTrackTests(unittest.TestCase):
         self.assertEqual(config.get("initial_prompt"), "Keep Codex CLI terms.")
         self.assertIn("Local speech-to-text", out)  # advanced category header shown
 
+    def test_legacy_parakeet_stt_backend_migrates_to_whisper_on_enter(self):
+        # Wave 8 of #348 + Codex P2 on PR #410: an upgraded user whose
+        # config.json still carries `stt_backend = "parakeet"` from before
+        # the backend removal must NOT have that value silently re-persisted
+        # when the wizard prompts and the user hits ENTER. Pin the
+        # normalisation at the wizard's _current() boundary so the
+        # all-ENTER headless path lands on whisper.
+        from whisper_dictate import vp_setup as vs
+
+        wiz = vs._Wizard(
+            lambda _p: "",
+            lambda _m: None,
+            existing={"stt_backend": "parakeet"},
+        )
+        row = next(r for r in vs._schema_rows() if r["key"] == "stt_backend")
+        # ENTER-to-keep would persist a non-default current value; the
+        # current value must now resolve to "whisper", not "parakeet".
+        self.assertEqual(wiz._current(row), "whisper")
+
+        # Drive the actual ENTER path to confirm config.json ends up with
+        # whisper (not parakeet).
+        wiz._prompt_one(row)
+        self.assertNotEqual(wiz.config.get("stt_backend"), "parakeet")
+        # The schema default IS whisper, so _prompt_one decides not to write
+        # the key at all (matches its "only persist a non-default value"
+        # contract). Either outcome — key absent OR key=="whisper" — is fine
+        # from the user's point of view; both leave them on the new default.
+        self.assertIn(wiz.config.get("stt_backend"), (None, "whisper"))
+
     def test_numeric_out_of_bounds_reprompts(self):
         # beam_size has min=1, max=10. Drive a single-setting validation via the
         # wizard's validator to keep this independent of advanced ordering.

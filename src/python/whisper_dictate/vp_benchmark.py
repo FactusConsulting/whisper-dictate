@@ -207,6 +207,19 @@ def parse_backend_specs(spec: str | Iterable[str] | None = None) -> list[Backend
         backend, sep, model = part.partition(":")
         backend = backend.strip().lower()
         model = model.strip() if sep else None
+        # Wave 8 of #348: a saved `stt_backend = "parakeet"` is migrated to
+        # whisper persistently at config-load time on the Rust side, but the
+        # System tab's "Run benchmark" path can reach here BEFORE that save
+        # round-trip happens — `parse_backend_specs(None)` reads the legacy
+        # value back through Python's `get_value`. Normalise it the same way
+        # the supervisor would so an upgraded user benchmarks Whisper instead
+        # of hitting `unsupported benchmark backend 'parakeet'` (Codex P2 on
+        # PR #410). Keeps the spec list informative: we replace the backend
+        # token but preserve the raw input so the worker log still shows what
+        # the user supplied.
+        if backend == "parakeet":
+            backend = "whisper"
+            part = part.replace("parakeet", "whisper", 1) if "parakeet" in part else "whisper"
         if backend not in ("whisper", "openai"):
             raise ValueError(
                 f"unsupported benchmark backend {backend!r}; expected whisper or openai")

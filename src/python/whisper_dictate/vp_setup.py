@@ -259,10 +259,22 @@ class _Wizard:
         return self._input(prompt)
 
     def _current(self, row: dict) -> str | None:
-        """Current effective value: existing config/env, else schema default."""
+        """Current effective value: existing config/env, else schema default.
+
+        Wave 8 of #348: a saved ``stt_backend = "parakeet"`` (from an
+        upgrade of a pre-Wave-8 config) is normalised to ``"whisper"`` HERE
+        so the wizard's "ENTER to keep current" path doesn't silently
+        persist the now-removed backend back into config.json on an
+        all-defaults headless setup (Codex P2 on PR #410). The persistent
+        migration on the Rust side covers the launch path; this covers the
+        wizard path.
+        """
         key = row["key"]
         if key in self._existing:
-            return self._existing[key]
+            value = self._existing[key]
+            if key == "stt_backend" and value.strip().lower() == "parakeet":
+                return "whisper"
+            return value
         default = row.get("default")
         return None if default is None else str(default)
 

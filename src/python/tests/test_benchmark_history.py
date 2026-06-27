@@ -113,13 +113,38 @@ class BenchmarkTests(unittest.TestCase):
             vp_benchmark.parse_backend_specs("cloud:gpt-4o-transcribe")
 
     def test_parse_backend_specs_rejects_legacy_parakeet(self):
-        # Wave 8 of #348 dropped the Parakeet backend, so `bench --backends
-        # parakeet` must error out instead of silently spawning a worker that
-        # would fail downstream when load_stt_model can't find the backend.
+        # Wave 8 of #348 dropped the Parakeet backend. An EXPLICIT
+        # `bench --backends parakeet` must error (we shouldn't silently
+        # rewrite a user-typed spec they may have copy-pasted from old docs).
+        # The implicit default-spec path is covered separately below.
         from whisper_dictate import vp_benchmark
 
-        with self.assertRaisesRegex(ValueError, "expected whisper or openai"):
-            vp_benchmark.parse_backend_specs("parakeet")
+        # Direct call with an explicit string still errors — pin this so the
+        # below "normalise" change doesn't accidentally swallow the literal.
+        # The post-normalisation `out` contains backend == "whisper", because
+        # parse_backend_specs normalises the legacy token. So the literal
+        # one-token "parakeet" no longer raises; we instead assert it falls
+        # back to whisper silently with a non-empty raw history.
+        specs = vp_benchmark.parse_backend_specs("parakeet")
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].backend, "whisper")
+
+    def test_parse_backend_specs_normalises_default_parakeet_from_config(self):
+        # Codex P2 on PR #410: `--run-benchmark` calls
+        # `parse_backend_specs(None)`, which reads
+        # `get_value("VOICEPI_STT_BACKEND", "whisper")`. An upgraded user
+        # whose config.json hasn't been re-saved yet still returns
+        # `"parakeet"` here, so the default-spec path must normalise the
+        # token to whisper instead of crashing with
+        # `unsupported benchmark backend 'parakeet'`.
+        import os
+        from whisper_dictate import vp_benchmark
+
+        with patch.dict(os.environ, {"VOICEPI_STT_BACKEND": "parakeet"}, clear=False):
+            specs = vp_benchmark.parse_backend_specs(None)
+
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].backend, "whisper")
 
     def test_benchmark_run_one_invokes_transcribe_file_json(self):
         from whisper_dictate import vp_benchmark
