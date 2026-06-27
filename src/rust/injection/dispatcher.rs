@@ -25,7 +25,9 @@ use super::enigo_backend::InjectorBackend;
 use super::fallback::{locate_on_path, select_helper, LinuxSession};
 use super::paste::PasteShortcut;
 #[cfg(target_os = "linux")]
-use super::wayland::{paste_shortcut, target_prefers_terminal_paste, type_text as wayland_type};
+use super::wayland::{
+    paste_shortcut_for, target_prefers_terminal_paste, type_text as wayland_type,
+};
 
 /// Which strategy to use for a single injection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,7 +185,15 @@ impl Injector {
                     )
                 })?;
                 if helper == "ydotool" {
-                    paste_shortcut(&self.target_title, &self.target_process)
+                    // P2 #391 follow-up: ydotool path now also honours an
+                    // explicit `Some(shortcut)`. Previously `paste_shortcut`
+                    // unconditionally re-ran the terminal-target heuristic,
+                    // which silently downgraded `Some(CtrlV)` to Ctrl+V on
+                    // terminals (or upgraded Ctrl+Shift+V to itself on
+                    // non-terminals — wrong in both directions). The new
+                    // `paste_shortcut_for` falls back to the heuristic only
+                    // when the caller passed `None`.
+                    paste_shortcut_for(shortcut, &self.target_title, &self.target_process)
                 } else {
                     // P3 #371 finding 2: only fall back to the terminal-paste
                     // heuristic when the caller did NOT pin an explicit

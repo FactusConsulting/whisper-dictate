@@ -30,6 +30,12 @@ pub const WAYLAND_MODIFIER_RELEASES: &[&str] = &[
 ];
 pub const WAYLAND_CTRL_V: &[&str] = &["29:1", "47:1", "47:0", "29:0"];
 pub const WAYLAND_CTRL_SHIFT_V: &[&str] = &["29:1", "42:1", "47:1", "47:0", "42:0", "29:0"];
+/// `Shift+Insert` evdev sequence (terminal "plain text paste" on X11 / many
+/// GTK widgets). KEY_LEFTSHIFT=42, KEY_INSERT=110.
+pub const WAYLAND_SHIFT_INSERT: &[&str] = &["42:1", "110:1", "110:0", "42:0"];
+/// `Super+V` / `Meta+V` evdev sequence (macOS Cmd+V on cross-platform apps,
+/// `xremap`-style users). KEY_LEFTMETA=125, KEY_V=47.
+pub const WAYLAND_CMD_V: &[&str] = &["125:1", "47:1", "47:0", "125:0"];
 pub const LINUX_TERMINAL_TARGETS: &[&str] = &[
     "terminal",
     "ptyxis",
@@ -88,6 +94,11 @@ pub fn target_prefers_terminal_paste(target_title: &str, target_process: &str) -
 
 /// Assemble the `ydotool key` argument vector for the paste shortcut, with the
 /// PTT-chord release prelude already prepended.
+///
+/// This is the LEGACY entry point that always runs the terminal-target
+/// heuristic — kept for callers that genuinely have no explicit shortcut
+/// to pin (today only the test surface; the dispatcher uses
+/// [`paste_shortcut_args_for`]).
 pub fn paste_shortcut_args(target_title: &str, target_process: &str) -> Vec<&'static str> {
     let mut args = Vec::with_capacity(WAYLAND_MODIFIER_RELEASES.len() + WAYLAND_CTRL_SHIFT_V.len());
     args.extend_from_slice(WAYLAND_MODIFIER_RELEASES);
@@ -97,6 +108,54 @@ pub fn paste_shortcut_args(target_title: &str, target_process: &str) -> Vec<&'st
         args.extend_from_slice(WAYLAND_CTRL_V);
     }
     args
+}
+
+/// Assemble the `ydotool key` argument vector for a paste shortcut, honouring
+/// an explicit [`super::paste::PasteShortcut`] when given. When `shortcut`
+/// is `None`, the terminal-target heuristic decides between Ctrl+V and
+/// Ctrl+Shift+V (matching [`paste_shortcut_args`]). When `shortcut` is
+/// `Some(x)`, the explicit chord wins regardless of the target — closing
+/// the P2 #391 ydotool-path gap where an explicit `Some(CtrlV)` was
+/// silently downgraded by the terminal heuristic.
+///
+/// The PTT-chord release prelude ([`WAYLAND_MODIFIER_RELEASES`]) is always
+/// prepended so a still-held PTT modifier cannot accidentally turn the
+/// chord into a different shortcut.
+pub fn paste_shortcut_args_for(
+    shortcut: Option<super::paste::PasteShortcut>,
+    target_title: &str,
+    target_process: &str,
+) -> Vec<&'static str> {
+    let chord = paste_shortcut_chord(shortcut, target_title, target_process);
+    let mut args = Vec::with_capacity(WAYLAND_MODIFIER_RELEASES.len() + chord.len());
+    args.extend_from_slice(WAYLAND_MODIFIER_RELEASES);
+    args.extend_from_slice(chord);
+    args
+}
+
+/// Pure helper: pick the evdev-code slice for `shortcut`, falling back to
+/// the terminal-target heuristic when `shortcut` is `None`. Split out so
+/// the resolution is unit-testable without touching the release prelude
+/// or the `ydotool` command.
+fn paste_shortcut_chord(
+    shortcut: Option<super::paste::PasteShortcut>,
+    target_title: &str,
+    target_process: &str,
+) -> &'static [&'static str] {
+    use super::paste::PasteShortcut;
+    match shortcut {
+        Some(PasteShortcut::CtrlV) => WAYLAND_CTRL_V,
+        Some(PasteShortcut::CtrlShiftV) => WAYLAND_CTRL_SHIFT_V,
+        Some(PasteShortcut::ShiftInsert) => WAYLAND_SHIFT_INSERT,
+        Some(PasteShortcut::CmdV) => WAYLAND_CMD_V,
+        None => {
+            if target_prefers_terminal_paste(target_title, target_process) {
+                WAYLAND_CTRL_SHIFT_V
+            } else {
+                WAYLAND_CTRL_V
+            }
+        }
+    }
 }
 
 pub fn type_text(text: &str, xkb_layout: &str) -> Result<()> {
@@ -115,6 +174,22 @@ pub fn type_text(text: &str, xkb_layout: &str) -> Result<()> {
 
 pub fn paste_shortcut(target_title: &str, target_process: &str) -> Result<()> {
     run_ydotool(std::iter::once("key").chain(paste_shortcut_args(target_title, target_process)))
+}
+
+/// Run a `ydotool key` paste invocation that honours an explicit
+/// [`super::paste::PasteShortcut`]. Closes the P2 #391 gap where the
+/// ydotool path of the Linux dispatcher silently dropped the caller's
+/// shortcut and re-ran the terminal-target heuristic.
+pub fn paste_shortcut_for(
+    shortcut: Option<super::paste::PasteShortcut>,
+    target_title: &str,
+    target_process: &str,
+) -> Result<()> {
+    run_ydotool(std::iter::once("key").chain(paste_shortcut_args_for(
+        shortcut,
+        target_title,
+        target_process,
+    )))
 }
 
 fn run_ydotool<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<()> {
@@ -188,5 +263,87 @@ mod tests {
             "gnome-text-editor"
         ));
         assert!(paste_shortcut_args("Text Editor", "gnome-text-editor").ends_with(WAYLAND_CTRL_V));
+    }
+
+    // -- P2 #391 follow-up: explicit shortcut wins over terminal heuristic --
+
+    use super::super::paste::PasteShortcut;
+
+    #[test]
+    fn explicit_ctrl_v_wins_even_on_terminal_target() {
+        // The HEADLINE contract: an explicit `Some(CtrlV)` from the caller
+        // must NOT be downgraded to Ctrl+Shift+V just because the target
+        // looks like a terminal — `paste_shortcut_args_for` honours the
+        // explicit choice. The release prelude is still prepended so a
+        // still-held PTT modifier can't corrupt the chord.
+        let args = paste_shortcut_args_for(Some(PasteShortcut::CtrlV), "Konsole", "konsole");
+        assert!(args.starts_with(WAYLAND_MODIFIER_RELEASES));
+        assert!(args.ends_with(WAYLAND_CTRL_V));
+        assert!(
+            !args
+                .windows(WAYLAND_CTRL_SHIFT_V.len())
+                .any(|w| w == WAYLAND_CTRL_SHIFT_V),
+            "explicit CtrlV must not embed the Ctrl+Shift+V chord"
+        );
+    }
+
+    #[test]
+    fn explicit_ctrl_shift_v_wins_even_on_text_editor_target() {
+        let args = paste_shortcut_args_for(
+            Some(PasteShortcut::CtrlShiftV),
+            "Text Editor",
+            "gnome-text-editor",
+        );
+        assert!(args.starts_with(WAYLAND_MODIFIER_RELEASES));
+        assert!(args.ends_with(WAYLAND_CTRL_SHIFT_V));
+    }
+
+    #[test]
+    fn explicit_shift_insert_emits_dedicated_chord() {
+        // ShiftInsert previously had no Wayland evdev mapping — the
+        // ydotool path effectively didn't support it at all because the
+        // helper-only `invoke_paste` was bypassed. New `WAYLAND_SHIFT_INSERT`
+        // closes that gap.
+        let args = paste_shortcut_args_for(Some(PasteShortcut::ShiftInsert), "anything", "any.exe");
+        assert!(args.starts_with(WAYLAND_MODIFIER_RELEASES));
+        assert!(args.ends_with(WAYLAND_SHIFT_INSERT));
+        // And it must NOT include any of the V-key (KEY_V=47) chords.
+        assert!(!args.iter().any(|s| *s == "47:1" || *s == "47:0"));
+    }
+
+    #[test]
+    fn explicit_cmd_v_emits_dedicated_chord() {
+        let args = paste_shortcut_args_for(Some(PasteShortcut::CmdV), "anything", "any.exe");
+        assert!(args.starts_with(WAYLAND_MODIFIER_RELEASES));
+        assert!(args.ends_with(WAYLAND_CMD_V));
+        // Includes KEY_LEFTMETA=125 down then up.
+        assert!(args.contains(&"125:1"));
+        assert!(args.contains(&"125:0"));
+    }
+
+    #[test]
+    fn none_falls_back_to_terminal_heuristic_on_terminal_target() {
+        // `None` = no explicit preference, so the historical
+        // terminal-target heuristic still applies. Mirrors the legacy
+        // `paste_shortcut_args` behaviour for back-compat.
+        let args = paste_shortcut_args_for(None, "Konsole", "konsole");
+        assert!(args.ends_with(WAYLAND_CTRL_SHIFT_V));
+    }
+
+    #[test]
+    fn none_falls_back_to_ctrl_v_on_non_terminal_target() {
+        let args = paste_shortcut_args_for(None, "Text Editor", "gnome-text-editor");
+        assert!(args.ends_with(WAYLAND_CTRL_V));
+    }
+
+    #[test]
+    fn none_with_blank_target_defaults_to_ctrl_shift_v_like_legacy() {
+        // The legacy `paste_shortcut_args` treats an empty target as
+        // "probably a terminal" (Wayland obscures window identity);
+        // `paste_shortcut_args_for(None, ...)` must keep that exact
+        // behaviour for back-compat with users who never set a shortcut.
+        let args = paste_shortcut_args_for(None, "", "");
+        let legacy = paste_shortcut_args("", "");
+        assert_eq!(args, legacy);
     }
 }
