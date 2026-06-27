@@ -300,10 +300,16 @@ mod tests {
 
     // -- serve_loop + encode_response_or_error ---------------------------
 
+    /// A single recorded transcribe invocation: `(wav_path, language, prompt)`.
+    /// Pulled out as a type alias so the nested generics on `FakeTranscribe`
+    /// don't trip `clippy::type_complexity` on the windows-clippy lint step
+    /// (which runs `--tests`, unlike the default `cargo clippy` invocation).
+    type RecordedCall = (String, Option<String>, Option<String>);
+
     /// Recording fake: counts calls and returns canned text per call so the
     /// loop's request-routing can be tested without whisper.cpp.
     struct FakeTranscribe {
-        calls: std::sync::Mutex<Vec<(String, Option<String>, Option<String>)>>,
+        calls: std::sync::Mutex<Vec<RecordedCall>>,
         next_response: std::sync::Mutex<std::collections::VecDeque<Result<String>>>,
     }
 
@@ -326,7 +332,7 @@ mod tests {
                 .unwrap()
                 .push_back(Err(anyhow::anyhow!("{err}")));
         }
-        fn calls(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        fn calls(&self) -> Vec<RecordedCall> {
             self.calls.lock().unwrap().clone()
         }
         fn make_closure(&self) -> impl Fn(&str, Option<&str>, Option<&str>) -> Result<String> + '_ {
