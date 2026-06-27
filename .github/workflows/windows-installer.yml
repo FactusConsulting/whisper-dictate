@@ -27,10 +27,13 @@ jobs:
     with:
       tag: ${{ github.event.inputs.tag }}
       # Manual rebuilds always build (force past the Windows-relevant-changes
-      # gate) and always generate the winget manifests, matching this workflow's
-      # historical behavior. is_prerelease is left at its 'false' default so the
-      # winget-generation step runs (manual rebuilds are treated as finals).
+      # gate). is_prerelease is derived from the input tag so an RC tag
+      # rebuild (e.g. v1.19.0-rc.1) does NOT publish a winget manifest —
+      # winget is finals-only per the project's release process. Final tags
+      # (no `-rc.N` suffix) keep the historical 'false' behaviour and the
+      # winget-generation step runs as before. P2 #406 Codex finding.
       force_build: true
+      is_prerelease: ${{ contains(github.event.inputs.tag, '-rc.') }}
     secrets:
       CHOCOLATEY_NUGET_SOURCE: ${{ secrets.CHOCOLATEY_NUGET_SOURCE }}
       CHOCOLATEY_NUGET_API_KEY: ${{ secrets.CHOCOLATEY_NUGET_API_KEY }}
