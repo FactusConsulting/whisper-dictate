@@ -141,9 +141,21 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.epoch = self.epoch.wrapping_add(1);
         let id = self.epoch;
         self.state = SessionState::Opening { id };
-        wire::emit_status(writer, "opening", &[])?;
+        // If either emit fails, the caller never receives `id` and a
+        // subsequent `start()` would refuse with `AlreadyActive` -- the
+        // session would wedge unless something else reset it. Roll back
+        // to Idle on the failure path so the next press recovers cleanly.
+        // The epoch stays bumped (it's a monotonic counter; gaps are
+        // harmless). Codex P2 #413 mod.rs:144.
+        if let Err(e) = wire::emit_status(writer, "opening", &[]) {
+            self.state = SessionState::Idle;
+            return Err(e);
+        }
         self.state = SessionState::Recording { id };
-        wire::emit_status(writer, "recording", &self.capture_extras())?;
+        if let Err(e) = wire::emit_status(writer, "recording", &self.capture_extras()) {
+            self.state = SessionState::Idle;
+            return Err(e);
+        }
         Ok(id)
     }
 
@@ -222,6 +234,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             return Ok(UtteranceOutcome::NoAudio);
         }
 
+        // `recording_s` is reported on every no-text branch (Python:
+        // `recording_s=round(recording_s, 2)` on every `_emit_worker_event`
+        // call from `_stop_and_transcribe`'s no-text paths). Computed once
+        // up-front so the err/empty/hallucination branches below all see
+        // the same value. Codex P2 #413 mod.rs:254.
+        let recording_s = json!(wire::round2(buf.len() as f64 / SR as f64));
+
         // Status flip to `transcribing` mirrors the Python emit that
         // immediately precedes the skip-gate / transcribe call.
         wire::emit_status(writer, "transcribing", &self.capture_extras())?;
@@ -231,13 +250,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // stay in lock-step with `Dictate._should_skip_pcm`.
         let skip = crate::dictate::skip::should_skip(buf.len(), self.config.min_record_seconds);
         if let Some(reason) = skip.reason() {
-            let recording_s = buf.len() as f64 / SR as f64;
             wire::emit_status(
                 writer,
                 "no_text",
                 &[
                     ("reason", Value::from(reason)),
-                    ("recording_s", json!(wire::round2(recording_s))),
+                    ("recording_s", recording_s.clone()),
                 ],
             )?;
             return Ok(UtteranceOutcome::Skipped { reason });
@@ -252,6 +270,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                     &[
                         ("reason", Value::from("no_speech")),
                         ("error", Value::from(err.to_string())),
+                        ("recording_s", recording_s.clone()),
                     ],
                 )?;
                 Ok(UtteranceOutcome::NoText {
@@ -259,11 +278,29 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 })
             }
             Ok(result) if result.text.is_empty() => {
-                wire::emit_status(writer, "no_text", &[("reason", Value::from("empty"))])?;
-                Ok(UtteranceOutcome::NoText { reason: "empty" })
+                // Python distinguishes `too_quiet`, `no_speech`, `empty`
+                // from `result.gate` so the matching UI card fires.
+                // Codex P2 #413 mod.rs:263.
+                let reason = result.gate.unwrap_or("empty");
+                wire::emit_status(
+                    writer,
+                    "no_text",
+                    &[
+                        ("reason", Value::from(reason)),
+                        ("recording_s", recording_s.clone()),
+                    ],
+                )?;
+                Ok(UtteranceOutcome::NoText { reason })
             }
             Ok(result) if result.is_hallucination => {
-                wire::emit_status(writer, "no_text", &[("reason", Value::from("no_speech"))])?;
+                wire::emit_status(
+                    writer,
+                    "no_text",
+                    &[
+                        ("reason", Value::from("no_speech")),
+                        ("recording_s", recording_s.clone()),
+                    ],
+                )?;
                 Ok(UtteranceOutcome::NoText {
                     reason: "no_speech",
                 })

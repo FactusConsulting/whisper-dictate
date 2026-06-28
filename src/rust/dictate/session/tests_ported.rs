@@ -99,6 +99,9 @@ fn hallucination_is_filtered_and_not_injected() {
         .collect();
     assert_eq!(no_text.len(), 1);
     assert_eq!(no_text[0]["reason"], "no_speech");
+    // Codex P2 #413 mod.rs:254: every no-text branch (not just too-short)
+    // must report recording_s so the UI card has the clip duration.
+    assert!(no_text[0].get("recording_s").is_some());
 }
 
 #[test]

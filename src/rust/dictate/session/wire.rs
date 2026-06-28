@@ -59,6 +59,16 @@ pub(super) fn emit_utterance<W: Write>(
         Value::from(text.chars().count() as u64),
     );
     payload.insert("compute_ms".into(), Value::from(result.latency_ms));
+    // `compute_s` is the seconds-rounded mirror of `compute_ms` that
+    // existing consumers (`src/rust/ui/log_render.rs` +
+    // `src/rust/telemetry.rs`) still read; the Python emitter writes it
+    // alongside the milliseconds field, so we have to too or every
+    // Rust-session utterance loses its compute-time in the UI/history.
+    // Codex P2 #413.
+    payload.insert(
+        "compute_s".into(),
+        serde_json::json!(round2(result.latency_ms as f64 / 1000.0)),
+    );
     payload.insert(
         "audio_duration_s".into(),
         serde_json::json!(round2(result.duration_s)),
@@ -86,8 +96,50 @@ fn is_droppable(value: &Value) -> bool {
 
 fn write_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), SessionError> {
     writer.write_all(WORKER_EVENT_PREFIX.as_bytes())?;
-    serde_json::to_writer(&mut *writer, value).map_err(|e| SessionError::Io(e.to_string()))?;
+    // ASCII-escape non-ASCII payload bytes so the worker-event line is
+    // safe on Windows shells / hidden subprocess pipes with non-UTF-8
+    // code pages. The Python emitter goes through
+    // `json.dumps(..., ensure_ascii=True)` which produces the same shape;
+    // the existing `test_worker_event_drops_none_fields_and_ascii_encodes`
+    // characterisation test pins it. Codex P2 #413.
+    //
+    // Implementation: serialise to a String first (serde_json's compact
+    // form matches Python's `separators=(",", ":")`), then walk
+    // codepoint-by-codepoint replacing anything >= U+0080 with a
+    // `\uXXXX` BMP escape or a UTF-16 surrogate pair for astral. PR 1's
+    // `events::AsciiFormatter` does this inside a `serde_json::Formatter`
+    // impl; once PRs 1 + 2 are both in `main`, PR 3 swaps this helper for
+    // `events::emit_status` / `events::emit_utterance` directly so the
+    // two paths converge.
+    let serialised = serde_json::to_string(value).map_err(|e| SessionError::Io(e.to_string()))?;
+    write_ascii_escaped(writer, &serialised)?;
     writer.write_all(b"\n")?;
+    Ok(())
+}
+
+fn write_ascii_escaped<W: Write>(writer: &mut W, input: &str) -> Result<(), SessionError> {
+    let mut buf = String::with_capacity(input.len());
+    for ch in input.chars() {
+        let cp = ch as u32;
+        if cp < 0x80 {
+            buf.push(ch);
+            continue;
+        }
+        if cp < 0x10000 {
+            // BMP codepoint: single `\uXXXX` escape (lowercase hex,
+            // matching `json.dumps(ensure_ascii=True)`).
+            use std::fmt::Write as _;
+            write!(&mut buf, "\\u{:04x}", cp).expect("write to String never fails");
+            continue;
+        }
+        // Astral codepoint: UTF-16 surrogate pair, also lowercase hex.
+        let cp = cp - 0x10000;
+        let high = 0xD800 + (cp >> 10);
+        let low = 0xDC00 + (cp & 0x3FF);
+        use std::fmt::Write as _;
+        write!(&mut buf, "\\u{:04x}\\u{:04x}", high, low).expect("write to String never fails");
+    }
+    writer.write_all(buf.as_bytes())?;
     Ok(())
 }
 

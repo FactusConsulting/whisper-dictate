@@ -38,6 +38,13 @@ pub struct TranscribeResult {
     /// Detected language code (Python's `result.language`); empty for
     /// auto-detect.
     pub language: String,
+    /// Python's `result.gate` -- the speech-gate verdict the backend
+    /// returned. Populated when the backend rejected the clip; values
+    /// are `"too_quiet"`, `"no_speech"`, `"empty"`. The session reads
+    /// this on the empty-text branch so the matching UI card fires
+    /// instead of collapsing every empty result to `"empty"`. None when
+    /// the backend produced usable text (the gate is irrelevant then).
+    pub gate: Option<&'static str>,
 }
 
 /// Errors a [`TranscribeBackend::transcribe`] call can surface. The
