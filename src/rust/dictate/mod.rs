@@ -49,11 +49,20 @@ pub mod env_gates;
 pub mod events;
 pub mod ops;
 pub mod restart;
+// Wave 5 PR 2 (#348): pure-logic per-utterance state machine that
+// mirrors `vp_dictate.py::Dictate`'s lifecycle. No production caller in
+// this PR — PR 3 (audio_route) and PR 4 (hotkey wiring) consume it.
+// See module docs for the design rationale.
+pub mod session;
 pub mod skip;
 
 pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelError};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
+pub use session::{
+    DictateSession, InjectBackend, InjectError, SessionConfig, SessionError, SessionState,
+    TranscribeBackend, TranscribeError, TranscribeResult, UtteranceOutcome,
+};
 pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};
 
 #[cfg(test)]
