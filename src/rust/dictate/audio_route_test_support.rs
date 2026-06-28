@@ -71,39 +71,12 @@ impl InjectBackend for TestInject {
 
 // ── env helper ───────────────────────────────────────────────────────────────
 
-/// Process-scoped guard that sets / removes an env var for the duration
-/// of a single test and restores the original value on Drop. Callers
-/// MUST hold the crate-wide [`crate::test_env_lock::ENV_LOCK`] for the
-/// guard's lifetime — the `set_var` / `remove_var` calls would
-/// otherwise race against other env-mutating tests in the same library
-/// binary.
-pub(super) struct EnvVarGuard {
-    key: &'static str,
-    original: Option<std::ffi::OsString>,
-}
-
-impl EnvVarGuard {
-    pub(super) fn set(key: &'static str, value: &str) -> Self {
-        let original = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self { key, original }
-    }
-
-    pub(super) fn remove(key: &'static str) -> Self {
-        let original = std::env::var_os(key);
-        std::env::remove_var(key);
-        Self { key, original }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(v) => std::env::set_var(self.key, v),
-            None => std::env::remove_var(self.key),
-        }
-    }
-}
+// Re-export the crate-wide `EnvVarGuard` so callers in this module can keep
+// the historical `EnvVarGuard` name (the audio_route tests + the
+// `start_recording_with_cap_env` helper below). Callers MUST hold the
+// crate-wide [`crate::test_env_lock::ENV_LOCK`] for the guard's lifetime
+// — see `crate::test_env_lock` for the soundness contract.
+pub(super) use crate::test_env_lock::EnvVarGuard;
 
 // ── route builders ───────────────────────────────────────────────────────────
 

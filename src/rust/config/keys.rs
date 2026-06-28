@@ -156,9 +156,8 @@ mod tests {
     #[test]
     fn restart_required_keys_marks_audio_device_under_rust_backend() {
         use crate::runtime::AUDIO_BACKEND_ENV;
-        use crate::test_env_lock::ENV_LOCK;
+        use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var(AUDIO_BACKEND_ENV).ok();
         let before = AppSettings::default();
         let after = AppSettings {
             audio_device: "Yeti X".to_owned(),
@@ -166,16 +165,20 @@ mod tests {
         };
 
         // Sounddevice path (env unset) → audio_device stays live.
-        std::env::remove_var(AUDIO_BACKEND_ENV);
-        assert!(
-            restart_required_keys(&before, &after).is_empty(),
-            "audio_device must stay live on the default Python backend",
-        );
+        {
+            let _env = EnvVarGuard::remove(AUDIO_BACKEND_ENV);
+            assert!(
+                restart_required_keys(&before, &after).is_empty(),
+                "audio_device must stay live on the default Python backend",
+            );
+        }
 
         // Rust path. The dynamic gate only fires when the feature is
         // also compiled in — mirror `audio_pipeline_available()` here
-        // so the test stays honest in both build modes.
-        std::env::set_var(AUDIO_BACKEND_ENV, "rust");
+        // so the test stays honest in both build modes. RAII guard
+        // restores the original env value even if the asserts panic
+        // (Codex P2 #415 pattern).
+        let _env = EnvVarGuard::set(AUDIO_BACKEND_ENV, "rust");
         let keys = restart_required_keys(&before, &after);
         if cfg!(feature = "audio-in-rust") {
             assert_eq!(
@@ -188,11 +191,6 @@ mod tests {
                 keys.is_empty(),
                 "without the audio-in-rust feature the env opt-in is ignored",
             );
-        }
-
-        match prev {
-            Some(v) => std::env::set_var(AUDIO_BACKEND_ENV, v),
-            None => std::env::remove_var(AUDIO_BACKEND_ENV),
         }
     }
 

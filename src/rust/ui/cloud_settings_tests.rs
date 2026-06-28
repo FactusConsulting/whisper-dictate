@@ -123,7 +123,7 @@ fn custom_provider_keeps_user_endpoint_and_needs_no_api_key() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
-    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config);
 
     let mut app = test_app(AppSettings {
         stt_backend: "openai".to_owned(),
@@ -148,7 +148,7 @@ fn switching_to_custom_seeds_localhost_from_a_hosted_url() {
     let _lock = ENV_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
-    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config);
 
     // Provider just flipped to custom while the URL is still the hosted one.
     let mut app = test_app(AppSettings {

@@ -1,12 +1,10 @@
 use super::*;
-use std::env;
-use std::ffi::OsString;
 
-// Re-export the crate-wide env lock under the historical name. Per-module
-// locks cannot serialise against tests in OTHER modules that mutate the same
-// process env, so they violate the soundness contract `env::set_var` requires
-// under the Rust 2024 edition. See `crate::test_env_lock` for the full story.
-pub(super) use crate::test_env_lock::ENV_LOCK as ENV_TEST_LOCK;
+// Re-export the crate-wide env lock + guard under the historical names.
+// Per-module locks/guards cannot serialise against tests in OTHER modules
+// that mutate the same process env, so a single crate-wide design is the
+// only sound one. See `crate::test_env_lock` for the full story.
+pub(super) use crate::test_env_lock::{EnvVarGuard, ENV_LOCK as ENV_TEST_LOCK};
 
 pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
     WhisperDictateApp {
@@ -72,39 +70,5 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         tray: TrayManager::new(),
         last_logged_tray_state: None,
         whisper_model_downloads: crate::ui::whisper_models_state::WhisperModelDownloads::new(),
-    }
-}
-
-pub(super) struct EnvVarGuard {
-    key: &'static str,
-    original: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    pub(super) fn set(key: &'static str, value: &str) -> Self {
-        let original = env::var_os(key);
-        unsafe {
-            env::set_var(key, value);
-        }
-        Self { key, original }
-    }
-
-    pub(super) fn remove(key: &'static str) -> Self {
-        let original = env::var_os(key);
-        unsafe {
-            env::remove_var(key);
-        }
-        Self { key, original }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.original {
-                Some(value) => env::set_var(self.key, value),
-                None => env::remove_var(self.key),
-            }
-        }
     }
 }

@@ -304,6 +304,7 @@ fn parse_terms(obj: &serde_json::Map<String, Value>, item_id: &str) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
     use std::fs;
 
     fn write_manifest(dir: &Path, body: &str) -> PathBuf {
@@ -446,12 +447,16 @@ mod tests {
     #[test]
     fn expand_path_handles_env_var_dollar() {
         // Use a name we set ourselves; std::env::set_var is process-wide so
-        // pick something unlikely to clash with other tests.
+        // pick something unlikely to clash with other tests, and serialise
+        // on the crate-wide env lock so other env-mutating tests can't race
+        // the set/remove window. The guard restores the original value on
+        // Drop even if `expand_path` panics, so the override never leaks
+        // into sibling tests (Codex P2 #415 pattern).
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let name = "WD_TRAIN_CLI_TEST_BASE_DOLLAR";
         let value = std::env::temp_dir().join("vp_train_corp");
-        std::env::set_var(name, &value);
+        let _guard = EnvVarGuard::set(name, &value);
         let p = expand_path(&format!("${name}/corpus.json"));
-        std::env::remove_var(name);
         assert!(p
             .to_string_lossy()
             .contains(value.to_string_lossy().as_ref()));
@@ -459,11 +464,11 @@ mod tests {
 
     #[test]
     fn expand_path_handles_env_var_percent() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let name = "WD_TRAIN_CLI_TEST_BASE_PERCENT";
         let value = std::env::temp_dir().join("vp_train_corp_pct");
-        std::env::set_var(name, &value);
+        let _guard = EnvVarGuard::set(name, &value);
         let p = expand_path(&format!("%{name}%/corpus.json"));
-        std::env::remove_var(name);
         assert!(p
             .to_string_lossy()
             .contains(value.to_string_lossy().as_ref()));

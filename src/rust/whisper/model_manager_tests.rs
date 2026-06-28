@@ -9,47 +9,13 @@
 
 use super::*;
 use sha2::{Digest, Sha256};
-use std::ffi::{OsStr, OsString};
 use std::io::{self, Cursor};
 
-// Re-export the crate-wide env lock so the cache-dir override tests serialise
-// against every other env-mutating test in the suite. Per-module locks would
-// violate the soundness contract `env::set_var` requires under the Rust 2024
-// edition (see `crate::test_env_lock`).
-use crate::test_env_lock::ENV_LOCK;
-
-/// Save/restore wrapper around `env::set_var` / `env::remove_var` so the cache
-/// dir override tests don't leak into sibling tests. Mirrors the
-/// `EnvVarGuard` pattern in `runtime::test_support` — kept inline here to
-/// avoid a cross-module test-only dependency.
-struct EnvVarGuard {
-    key: &'static str,
-    original: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-        let original = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self { key, original }
-    }
-
-    fn remove(key: &'static str) -> Self {
-        let original = std::env::var_os(key);
-        std::env::remove_var(key);
-        Self { key, original }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        if let Some(value) = &self.original {
-            std::env::set_var(self.key, value);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
+// Re-export the crate-wide env lock + guard so the cache-dir override tests
+// serialise against every other env-mutating test in the suite. Per-module
+// locks/guards would violate the soundness contract `env::set_var` requires
+// under the Rust 2024 edition (see `crate::test_env_lock`).
+use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
 /// Counting progress sink used by tests to assert the streaming path
 /// actually drives the callback rather than just calling it once at the end.

@@ -7,54 +7,24 @@
 //! [`audio_pipeline_available`]: super::audio_pipeline_available
 
 use crate::runtime::{audio_pipeline_available, audio_pipeline_requested, AUDIO_BACKEND_ENV};
-use crate::test_env_lock::ENV_LOCK;
-use std::env;
+use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
 // Env-var mutation is process-global; serialise on the crate-wide lock so
 // tests in this module don't race AGAINST tests in other modules touching the
-// same process env. A module-local Mutex would only serialise within this
-// file and fail to discharge the `unsafe` contract `env::set_var` carries
-// under Rust 2024 — see `crate::test_env_lock`.
-
-struct EnvGuard {
-    key: &'static str,
-    previous: Option<String>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let previous = env::var(key).ok();
-        env::set_var(key, value);
-        Self { key, previous }
-    }
-
-    fn unset(key: &'static str) -> Self {
-        let previous = env::var(key).ok();
-        env::remove_var(key);
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(prev) => env::set_var(self.key, prev),
-            None => env::remove_var(self.key),
-        }
-    }
-}
+// same process env. The shared `EnvVarGuard` restores the original value on
+// Drop (even on panic) — see `crate::test_env_lock`.
 
 #[test]
 fn pipeline_not_requested_when_env_unset() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvGuard::unset(AUDIO_BACKEND_ENV);
+    let _g = EnvVarGuard::remove(AUDIO_BACKEND_ENV);
     assert!(!audio_pipeline_requested());
 }
 
 #[test]
 fn pipeline_requested_when_env_is_rust() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvGuard::set(AUDIO_BACKEND_ENV, "rust");
+    let _g = EnvVarGuard::set(AUDIO_BACKEND_ENV, "rust");
     assert!(audio_pipeline_requested());
 }
 
@@ -62,7 +32,7 @@ fn pipeline_requested_when_env_is_rust() {
 fn pipeline_requested_is_case_insensitive_and_trims_whitespace() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     for value in ["Rust", "RUST", " rust ", "\trust\n"] {
-        let _g = EnvGuard::set(AUDIO_BACKEND_ENV, value);
+        let _g = EnvVarGuard::set(AUDIO_BACKEND_ENV, value);
         assert!(
             audio_pipeline_requested(),
             "value {value:?} should request the pipeline",
@@ -81,7 +51,7 @@ fn pipeline_not_requested_for_other_values() {
         "0",
         "false",
     ] {
-        let _g = EnvGuard::set(AUDIO_BACKEND_ENV, value);
+        let _g = EnvVarGuard::set(AUDIO_BACKEND_ENV, value);
         assert!(
             !audio_pipeline_requested(),
             "value {value:?} must not request the pipeline",

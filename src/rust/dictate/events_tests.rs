@@ -15,47 +15,12 @@
 //! line through. The dedicated env-gate test toggles the variable to
 //! verify both branches.
 
-use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 
 use serde_json::{json, Map, Value};
 
 use super::events::*;
-use crate::test_env_lock::ENV_LOCK;
-
-// --- env-var helper -------------------------------------------------------
-
-/// Process-scoped guard that sets `VOICEPI_WORKER_EVENTS` for the
-/// duration of a single test and restores the original value on Drop.
-/// Callers MUST hold [`ENV_LOCK`] for the guard's lifetime — see the
-/// `test_env_lock` module docs for the soundness contract.
-struct EnvVarGuard {
-    key: &'static str,
-    original: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-        let original = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self { key, original }
-    }
-
-    fn remove(key: &'static str) -> Self {
-        let original = std::env::var_os(key);
-        std::env::remove_var(key);
-        Self { key, original }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.original {
-            Some(value) => std::env::set_var(self.key, value),
-            None => std::env::remove_var(self.key),
-        }
-    }
-}
+use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
 // --- helpers --------------------------------------------------------------
 
