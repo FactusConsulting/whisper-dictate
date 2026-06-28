@@ -19,7 +19,7 @@ fn full_utterance_is_transcribed_and_injected() {
     // Python: `test_full_utterance_is_transcribed_and_injected`.
     let transcribe = TestTranscribe::returning_text("hej verden");
     let inject = TestInject::new();
-    let (s, _) = session(transcribe, inject);
+    let (s, _, _guard) = session(transcribe, inject);
     let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
 
     match &outcome {
@@ -49,7 +49,7 @@ fn too_short_capture_is_skipped() {
     // well below the 0.3 s floor — Python drops it as `too_short`.
     let transcribe = TestTranscribe::returning_text("ignored");
     let inject = TestInject::new();
-    let (s, _) = session(transcribe, inject);
+    let (s, _, _guard) = session(transcribe, inject);
     let (outcome, bytes, s) = run_one_utterance(s, &vec![0.0_f32; 1000]);
 
     assert!(
@@ -79,7 +79,7 @@ fn hallucination_is_filtered_and_not_injected() {
     // Python: `test_hallucination_is_filtered_and_not_injected`.
     let transcribe = TestTranscribe::returning_hallucination("thank you");
     let inject = TestInject::new();
-    let (s, _) = session(transcribe, inject);
+    let (s, _, _guard) = session(transcribe, inject);
     let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
 
     assert!(
@@ -110,7 +110,7 @@ fn no_frames_emits_no_text_no_audio() {
     // starts, no frames are pushed, then stop_and_transcribe runs.
     let transcribe = TestTranscribe::returning_text("should not run");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     s.start(&mut buf).expect("start");
     let outcome = s.stop_and_transcribe(&mut buf).expect("stop");
 
@@ -134,7 +134,7 @@ fn cancel_matching_epoch_discards() {
     // discards the in-flight clip (no transcribe, no inject).
     let transcribe = TestTranscribe::returning_text("should never inject");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     let epoch = s.start(&mut buf).expect("start");
     s.push_frame(&one_second_pcm());
 
@@ -164,7 +164,7 @@ fn stale_cancel_for_old_epoch_does_not_discard() {
     // start again (epoch 2 active), then fire the STALE cancel(1).
     let transcribe = TestTranscribe::returning_text("epoch one text");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     let first = s.start(&mut buf).expect("start#1");
     s.push_frame(&one_second_pcm());
     s.stop_and_transcribe(&mut buf).expect("stop#1");

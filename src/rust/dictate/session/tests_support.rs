@@ -131,28 +131,35 @@ pub(super) fn one_second_pcm() -> Vec<f32> {
 }
 
 /// Build a session with the given backends + the default config (0.5 s
-/// min-record floor, blank capture/device labels). Returns the session +
-/// a fresh byte-buffer to capture status / utterance lines.
+/// min-record floor, blank capture/device labels). Returns
+/// `(session, byte_buf, env_lock_guard)`; the guard MUST be bound (e.g.
+/// `let (mut s, mut buf, _guard) = session(...)`) so it lives for the
+/// rest of the test -- it serialises `VOICEPI_WORKER_EVENTS` mutations
+/// against `events_tests` which mutates the same variable in the same
+/// library test binary.
 ///
-/// Sets `VOICEPI_WORKER_EVENTS=1` for the duration of the test process
-/// so the event-gating added in Codex P2 #413 round 2 (wire.rs:98) does
-/// not silence the test assertions. The env var is process-global so a
-/// test runner that runs these in parallel with other tests that flip
-/// the same var will need to use a mutex; in this crate no other test
-/// touches it.
+/// Codex P2 #413 round 3 (tests_support.rs:152): the previous round set
+/// the env var without taking the crate-wide `test_env_lock::ENV_LOCK`,
+/// which races against `events_tests::worker_events_env_var_gates_emission`
+/// and any other parallel test that observes the variable. Under the
+/// Rust 2024 edition `set_var` is `unsafe` precisely because of this
+/// hazard; the single crate-wide lock is the only sound design.
 pub(super) fn session<T: TranscribeBackend, I: InjectBackend>(
     transcribe: T,
     inject: I,
-) -> (DictateSession<T, I>, Vec<u8>) {
-    // Safety: the only other writer of this env var is the events module
-    // (also Wave 5), and its tests acquire a private mutex before touching
-    // it. Setting it once here, at module-level rather than per-test,
-    // keeps the existing tests free of mutex bookkeeping; the harness
-    // tears the process down per-binary so the leak is bounded.
+) -> (
+    DictateSession<T, I>,
+    Vec<u8>,
+    std::sync::MutexGuard<'static, ()>,
+) {
+    let guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
     (
         DictateSession::new(transcribe, inject, SessionConfig::default()),
         Vec::new(),
+        guard,
     )
 }
 
@@ -188,6 +195,10 @@ pub(super) fn state_trace(bytes: &[u8]) -> Vec<String> {
 /// Drive a session from idle through start → push frame → stop and
 /// return (final outcome, captured event bytes, the session). Saves a
 /// few lines of boilerplate in every happy-path test.
+///
+/// Note: this overload takes an already-constructed session, so callers
+/// must have bound the `_guard` from a prior `session(...)` call; that
+/// guard already holds `ENV_LOCK` for the whole test scope.
 pub(super) fn run_one_utterance<T: TranscribeBackend, I: InjectBackend>(
     mut s: DictateSession<T, I>,
     pcm: &[f32],

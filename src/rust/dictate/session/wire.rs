@@ -142,7 +142,14 @@ fn write_ascii_escaped<W: Write>(writer: &mut W, input: &str) -> Result<(), Sess
     let mut buf = String::with_capacity(input.len());
     for ch in input.chars() {
         let cp = ch as u32;
-        if cp < 0x80 {
+        // Treat DEL (U+007F) as non-ASCII for escaping purposes: Python
+        // `json.dumps(ensure_ascii=True)` emits `\u007f` for it, and PR 1's
+        // `events::AsciiFormatter` (also in this crate) does the same.
+        // Without this branch a dictated string / device label / error
+        // message carrying DEL would land as a raw control byte in the
+        // worker-event stream and break consumers on shells with
+        // non-UTF-8 code pages. Codex P2 #413 wire.rs:146 (round 3).
+        if cp < 0x80 && cp != 0x7f {
             buf.push(ch);
             continue;
         }

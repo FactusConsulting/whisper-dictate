@@ -25,7 +25,7 @@ fn push_frame_while_idle_is_dropped() {
     // Python capture mixin's `if self.recording` ingestion gate.
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     s.push_frame(&one_second_pcm());
     // Now actually run a recording with no real frames pushed — the
     // session must see an empty buffer (NoAudio outcome).
@@ -41,7 +41,7 @@ fn start_while_active_is_an_error() {
     // recording. The state must NOT change and the epoch must NOT bump.
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     let first = s.start(&mut buf).expect("start#1");
     let err = s.start(&mut buf).expect_err("nested start must error");
     assert!(
@@ -59,7 +59,7 @@ fn stop_while_idle_is_a_noop() {
     // events emitted.
     let transcribe = TestTranscribe::returning_text("never");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     let outcome = s.stop_and_transcribe(&mut buf).expect("stop");
     assert_eq!(outcome, UtteranceOutcome::NotRecording);
     assert!(buf.is_empty(), "stop-when-idle must not emit any events");
@@ -71,7 +71,7 @@ fn transcribe_error_emits_no_text_no_speech() {
     // it as `reason="no_speech"` on the no-text event.
     let transcribe = TestTranscribe::returning_error("model panicked");
     let inject = TestInject::new();
-    let (s, _) = session(transcribe, inject);
+    let (s, _, _guard) = session(transcribe, inject);
     let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
     assert!(matches!(
         outcome,
@@ -95,7 +95,7 @@ fn empty_transcribe_result_emits_no_text_empty() {
     // empty text, so the no_text reason is `empty` rather than `no_speech`).
     let transcribe = TestTranscribe::returning_empty();
     let inject = TestInject::new();
-    let (s, _) = session(transcribe, inject);
+    let (s, _, _guard) = session(transcribe, inject);
     let (outcome, bytes, _s) = run_one_utterance(s, &one_second_pcm());
     assert!(matches!(
         outcome,
@@ -116,7 +116,7 @@ fn start_emits_opening_then_recording_in_order() {
     // is caught here.
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     s.start(&mut buf).expect("start");
     let trace = state_trace(&buf);
     assert_eq!(
@@ -133,7 +133,7 @@ fn stale_cancel_while_idle_is_a_noop() {
     // `if not self.recording: return`.
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     s.cancel(0, &mut buf).expect("cancel-while-idle");
     s.cancel(42, &mut buf)
         .expect("cancel-while-idle (bogus epoch)");
@@ -151,7 +151,7 @@ fn inject_failure_still_emits_utterance() {
     // re-parsing logs.
     let transcribe = TestTranscribe::returning_text("hello there");
     let inject = TestInject::failing("clipboard busy");
-    let (s, _) = session(transcribe, inject);
+    let (s, _, _guard) = session(transcribe, inject);
     let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
     assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
     assert!(
@@ -172,7 +172,7 @@ fn inject_failure_still_emits_utterance() {
 fn epoch_bumps_monotonically_per_start() {
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     let a = s.start(&mut buf).expect("start#1");
     s.stop_and_transcribe(&mut buf).expect("stop#1");
     let b = s.start(&mut buf).expect("start#2");
@@ -190,7 +190,7 @@ fn utterance_event_carries_recording_s() {
     // log_render.rs / telemetry.rs read out of every utterance.
     let transcribe = TestTranscribe::returning_text("hello");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     s.start(&mut buf).expect("start");
     s.push_frame(&one_second_pcm());
     s.stop_and_transcribe(&mut buf).expect("stop");
@@ -218,7 +218,7 @@ fn transcribing_state_fires_even_on_no_audio() {
     // straight from `recording` to `no_text`.
     let transcribe = TestTranscribe::returning_text("never runs");
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     s.start(&mut buf).expect("start");
     s.stop_and_transcribe(&mut buf).expect("stop");
 
@@ -271,7 +271,7 @@ fn empty_text_with_gate_emits_normalised_reason() {
         });
     }
     let inject = TestInject::new();
-    let (mut s, mut buf) = session(transcribe, inject);
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
     s.start(&mut buf).expect("start");
     s.push_frame(&one_second_pcm());
     s.stop_and_transcribe(&mut buf).expect("stop");
@@ -281,4 +281,39 @@ fn empty_text_with_gate_emits_normalised_reason() {
         .find(|e| e.get("state").and_then(|s| s.as_str()) == Some("no_text"))
         .expect("a no_text event must be emitted");
     assert_eq!(no_text["reason"], "too_quiet");
+}
+#[test]
+fn worker_event_escapes_del_control_character() {
+    // Codex P2 #413 wire.rs:146 (round 3). The ASCII escape helper
+    // must treat DEL (U+007F) like any other non-ASCII control byte
+    // and emit `\u007f`, matching Python `json.dumps(ensure_ascii=True)`
+    // and PR 1's `events::AsciiFormatter`. Without this branch, a
+    // device name / dictated text / error message carrying DEL lands as
+    // a raw control byte and breaks consumers on non-UTF-8 shells.
+    use super::TranscribeResult;
+    let transcribe = TestTranscribe::returning_text("");
+    {
+        let mut next = transcribe.next.borrow_mut();
+        *next = super::tests_support::TranscribeOutcome::Ok(TranscribeResult {
+            text: String::new(),
+            // DEL embedded in the gate text -- exercises the escape path
+            // through the no_text emit.
+            gate: Some("input too quiet:\u{7f}detail".to_owned()),
+            ..Default::default()
+        });
+    }
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    s.start(&mut buf).expect("start");
+    s.push_frame(&one_second_pcm());
+    s.stop_and_transcribe(&mut buf).expect("stop");
+
+    // The raw bytes MUST NOT contain a literal 0x7f byte -- it should be
+    // serialised as the four-character escape `\u007f` (six bytes once
+    // the leading backslash is counted: `\`, `u`, `0`, `0`, `7`, `f`).
+    assert!(
+        !buf.iter().any(|&b| b == 0x7f),
+        "raw DEL (0x7f) leaked into worker-event stream: {:?}",
+        std::str::from_utf8(&buf).unwrap_or("<non-utf8>"),
+    );
 }
