@@ -489,6 +489,42 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             " audio-in-rust cpal/alsa-sys build chain shipped in rc.2.",
         )
 
+    def test_warm_release_cache_runs_on_nightly_schedule_not_per_push(self):
+        # Wave 5/8 churn produced 3-5 Rust-touching main merges per day,
+        # each triggering a Windows cache warm-up (~5 min) thats almost
+        # always thrown away before the next ~weekly release consumes it.
+        # The trigger must be a daily schedule + workflow_dispatch only;
+        # ANY `push:` block reintroduces the spam. workflow_dispatch is
+        # kept so a release captain can pre-warm immediately before tag.
+        workflow = Path(".github/workflows/warm-release-cache.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "schedule:", workflow,
+            "warm-release-cache must run on a cron schedule, not per main push",
+        )
+        self.assertIn(
+            "cron:", workflow,
+            "schedule block needs a cron expression",
+        )
+        self.assertIn(
+            "workflow_dispatch:", workflow,
+            "manual pre-release warm-up entry point must remain",
+        )
+        # No `push:` trigger -- thats what was spamming CI.
+        # Strip comments so the `on:` block check ignores the WHY-this-changed
+        # commentary at the top of the file.
+        lines_no_comments = [
+            ln for ln in workflow.splitlines()
+            if not ln.lstrip().startswith("#")
+        ]
+        body = "\n".join(lines_no_comments)
+        self.assertNotIn(
+            "push:", body,
+            "warm-release-cache must NOT trigger on push -- the schedule + "
+            "manual dispatch is enough and the per-push spam was the bug",
+        )
+
     def test_rust_crate_is_flat_single_crate_under_src_rust(self):
         # The Rust code lives directly under src/rust as a single crate — no
         # workspace wrapper and no nested per-crate subdirectory.

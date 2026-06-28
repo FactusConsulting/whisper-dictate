@@ -15,15 +15,15 @@ name: Warm release cache
 # tagged releases fast. If that cost isn't worth it, delete this workflow — the
 # release pipeline still works, releases just build cold (~3 min Rust compile).
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/rust/**'
-      # The toolchain is pinned in the repo-root rust-toolchain.toml (read by
-      # dtolnay/rust-toolchain). A channel bump there changes the compiler the
-      # release build uses, so re-warm the cache when it changes too.
-      - 'rust-toolchain.toml'
-      - '.github/workflows/warm-release-cache.yml'
+  # Wave 5 + Wave 8 churn produced 3-5 Rust-touching main merges per day,
+  # each triggering a fresh Windows cache warm-up (~5 min of CI time).
+  # The cache typically only gets consumed on a tagged release ~weekly,
+  # so most warm-ups were thrown away before being used. Switch to a
+  # nightly schedule so the cache is fresh for the next morning's
+  # release but routine PRs don't pay the cost. workflow_dispatch is
+  # kept so a release captain can pre-warm immediately before a tag.
+  schedule:
+    - cron: '0 4 * * *'  # 04:00 UTC daily (~05:00/06:00 CET overnight)
   workflow_dispatch:
 
 permissions:
