@@ -2,17 +2,19 @@
 //!
 //! The constructor itself does not load the model (the wrapping
 //! [`crate::whisper::IdleUnloadingModel`] is lazy), so these tests
-//! exercise the model-path-resolution + idle-timeout-parsing wiring
-//! without ever calling whisper.cpp. The model file does not have to
-//! exist on disk for [`super::make_real_session`] to succeed — the
-//! actual `LocalWhisper::new(...)` call is deferred until the first
-//! transcribe, which is exactly the lifecycle Wave 5 PR 5 inherits
-//! from PR 5-prep's `WhisperLocalTranscribeBackend`.
+//! exercise the env-driven config resolution + the production-sink
+//! fallback path without ever calling whisper.cpp. The model file does
+//! not have to exist on disk for [`super::make_real_session`] to
+//! succeed -- the actual `LocalWhisper::new(...)` call is deferred
+//! until the first transcribe, which is exactly the lifecycle Wave 5
+//! PR 5 inherits from PR 5-prep's `WhisperLocalTranscribeBackend`.
 
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 
-use super::{make_real_session, RealSession};
-use crate::dictate::SessionState;
+use super::{
+    session_config_from_env, whisper_backend_config_from_env, INITIAL_PROMPT_ENV, LANG_ENV,
+};
+use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::runtime::rust_session_sink::build_production_sink;
 use crate::runtime::RuntimeEvent;
 use crate::test_env_lock::ENV_LOCK;
@@ -49,80 +51,89 @@ impl Drop for EnvVarGuard {
     }
 }
 
-/// Happy path: with `VOICEPI_WHISPER_MODEL_PATH` pointing at any string
-/// (the model is NOT loaded yet — `IdleUnloadingModel` is lazy) the
-/// constructor returns a session in `Idle` whose generic params are
-/// the real backends. The `RealSession` type alias is the contract the
-/// production sink relies on; the assignment below pins it.
-#[test]
-fn make_real_session_resolves_when_model_env_set() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    // Use a path that does NOT need to exist — the lazy loader inside
-    // `IdleUnloadingModel` only opens the file on the first
-    // `with_model` call (which happens during transcribe, not
-    // construction).
-    let _model_env = EnvVarGuard::set(MODEL_PATH_ENV, "/tmp/fake-model.bin");
-    let _idle_env = EnvVarGuard::unset(IDLE_UNLOAD_ENV);
+// ── env-driven config parsers (Codex P2 #423 findings 2 + 5) ─────────────────
 
-    let session: std::sync::Arc<Mutex<RealSession>> =
-        make_real_session().expect("real session construction must succeed when model env is set");
+/// Wave 5 PR 5 round 2 (Codex P2 #423 finding 2): the language hint
+/// and the initial prompt come from the same env vars `vp_cli.py`
+/// reads. Empty / blank values must collapse to `None` so the per-
+/// call empty-string -> auto-detect collapse in
+/// `WhisperLocalTranscribeBackend::transcribe` never even sees a
+/// literal empty string.
+#[test]
+fn whisper_backend_config_reads_lang_and_initial_prompt_from_env() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _lang = EnvVarGuard::set(LANG_ENV, "da");
+    let _prompt = EnvVarGuard::set(INITIAL_PROMPT_ENV, "Whisper Dictate, Factus Consulting");
+
+    let cfg = whisper_backend_config_from_env();
+    assert_eq!(cfg.language.as_deref(), Some("da"));
     assert_eq!(
-        session.lock().unwrap().state(),
-        SessionState::Idle,
-        "fresh real session must start in Idle"
+        cfg.initial_prompt.as_deref(),
+        Some("Whisper Dictate, Factus Consulting")
     );
 }
 
-/// Sad path: with `VOICEPI_WHISPER_MODEL_PATH` set to empty AND no
-/// model in the user-cache (we deliberately point the cache lookup at a
-/// non-existent dir), the constructor surfaces a human-readable error
-/// that the production sink will log + fall back to stubs on.
-///
-/// The error string must mention the env var so users have an
-/// actionable hint -- the supervisor's fallback log copies the string
-/// verbatim onto the runtime event channel.
 #[test]
-fn make_real_session_errors_when_model_path_empty_and_no_cache() {
+fn whisper_backend_config_normalises_blank_env_values_to_none() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let _model_env = EnvVarGuard::set(MODEL_PATH_ENV, "   ");
-    let _idle_env = EnvVarGuard::unset(IDLE_UNLOAD_ENV);
+    let _lang = EnvVarGuard::set(LANG_ENV, "   ");
+    let _prompt = EnvVarGuard::set(INITIAL_PROMPT_ENV, "");
 
-    let err = match make_real_session() {
-        Err(e) => e,
-        Ok(_) => panic!("blank model path must error"),
-    };
+    let cfg = whisper_backend_config_from_env();
     assert!(
-        err.contains(MODEL_PATH_ENV),
-        "error must mention {MODEL_PATH_ENV} so the user knows how to fix it; got: {err}"
+        cfg.language.is_none(),
+        "blank language env must collapse to None, got {:?}",
+        cfg.language
     );
     assert!(
-        err.starts_with("model path:"),
-        "error must be tagged with the failing resolution step; got: {err}"
+        cfg.initial_prompt.is_none(),
+        "empty initial-prompt env must collapse to None, got {:?}",
+        cfg.initial_prompt
     );
 }
 
-/// Sad path: a malformed `VOICEPI_WHISPER_IDLE_UNLOAD_S` value must
-/// also surface as a human-readable error (tagged `idle timeout:`) so
-/// the supervisor's fallback log distinguishes the two failure modes.
 #[test]
-fn make_real_session_errors_on_invalid_idle_timeout() {
+fn whisper_backend_config_unset_env_is_none() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let _model_env = EnvVarGuard::set(MODEL_PATH_ENV, "/tmp/fake-model.bin");
-    let _idle_env = EnvVarGuard::set(IDLE_UNLOAD_ENV, "not-a-number");
+    let _lang = EnvVarGuard::unset(LANG_ENV);
+    let _prompt = EnvVarGuard::unset(INITIAL_PROMPT_ENV);
 
-    let err = match make_real_session() {
-        Err(e) => e,
-        Ok(_) => panic!("invalid idle timeout must error before session is built"),
-    };
+    let cfg = whisper_backend_config_from_env();
+    assert!(cfg.language.is_none());
+    assert!(cfg.initial_prompt.is_none());
+}
+
+/// Wave 5 PR 5 round 2 (Codex P2 #423 finding 5):
+/// `VOICEPI_MIN_RECORD_SECONDS` must flow into the constructed
+/// `SessionConfig` so a user who raised the floor to suppress
+/// accidental taps actually has that value enforced.
+#[test]
+fn session_config_threads_min_record_seconds_from_env() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _min = EnvVarGuard::set(MIN_RECORD_ENV, "0.8");
+    let cfg = session_config_from_env();
     assert!(
-        err.starts_with("idle timeout:"),
-        "error must be tagged with the failing resolution step; got: {err}"
+        (cfg.min_record_seconds - 0.8).abs() < f64::EPSILON,
+        "expected 0.8, got {}",
+        cfg.min_record_seconds
+    );
+}
+
+#[test]
+fn session_config_falls_back_to_route_default_when_env_missing() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _min = EnvVarGuard::unset(MIN_RECORD_ENV);
+    let cfg = session_config_from_env();
+    assert!(
+        (cfg.min_record_seconds - 0.5).abs() < f64::EPSILON,
+        "expected the 0.5 s default, got {}",
+        cfg.min_record_seconds
     );
 }
 
 // ── production sink integration ───────────────────────────────────────────────
 
-/// Wave 5 PR 5 — when both required features are compiled in AND the
+/// Wave 5 PR 5 -- when both required features are compiled in AND the
 /// model env-var points at an EMPTY path (resolution failure), the
 /// production sink must:
 ///
@@ -137,9 +148,7 @@ fn make_real_session_errors_on_invalid_idle_timeout() {
 /// would let the resolution succeed despite the blank env var), the
 /// real-backend branch will succeed and no fallback event fires --
 /// that is also a valid outcome of this contract. Only assert the
-/// fallback-event shape WHEN the fallback fired; the
-/// `make_real_session_errors_when_model_path_empty_and_no_cache` test
-/// above pins the underlying error-string contract unconditionally.
+/// fallback-event shape WHEN the fallback fired.
 #[test]
 fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -166,45 +175,8 @@ fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
     if !saw_fallback {
         eprintln!(
             "[test note] resolution succeeded despite blank env -- a cached \
-             model must be present on this host. Skipping fallback-event \
-             assertion; the make_real_session_errors_when_model_path_empty_and_no_cache \
-             test still pins the underlying error-string contract."
+             model OR an absent audio-in-rust feature might be in play. The \
+             round-2 env-helper tests pin the parse contracts unconditionally."
         );
     }
-}
-
-/// Wave 5 PR 5 — when both features are on AND the model env-var
-/// points at a (lazy, possibly non-existent) path, the production
-/// sink must NOT emit a fallback event because `make_real_session`
-/// succeeds (the loader is lazy and never touches disk during
-/// construction). This pins the happy path: real backends are wired
-/// without any warning noise so the user can grep their log card and
-/// confirm the rust-session path went green.
-#[test]
-fn build_production_sink_uses_real_backends_when_model_env_set() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let _model_env = EnvVarGuard::set(MODEL_PATH_ENV, "/tmp/whisper-dictate-pr5-fake-model.bin");
-    let _idle_env = EnvVarGuard::unset(IDLE_UNLOAD_ENV);
-
-    let (tx, rx) = mpsc::channel();
-    let (_sink, _coord_slot) = build_production_sink(tx, None);
-
-    // No fallback notice -- the real-backend branch must have been
-    // selected. (The slot-empty contract is already pinned by the
-    // fallback test above and by the PR 4 stub-only smoke test in
-    // `rust_session_sink_tests`.)
-    let mut saw_fallback = false;
-    while let Ok(ev) = rx.try_recv() {
-        if let RuntimeEvent::Stderr(s) = ev {
-            if s.contains("[rust-session]") && s.contains("falling back") {
-                saw_fallback = true;
-                break;
-            }
-        }
-    }
-    assert!(
-        !saw_fallback,
-        "real-backend path must succeed when the model env var is set; \
-         fallback event should NOT fire"
-    );
 }

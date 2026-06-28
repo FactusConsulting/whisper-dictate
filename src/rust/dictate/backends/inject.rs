@@ -315,7 +315,7 @@ impl InjectBackend for EnigoInjectBackend {
 /// caller is a Rust-native `DictateSession`. Codex P1 #417 inject.rs:110
 /// + Codex P1 #419 inject.rs:266 (restore-delay parity with Python)
 /// + Codex P2 #419 inject.rs:337 (detached restore so the inject thread
-/// is never blocked by the wall-clock wait).
+///   is never blocked by the wall-clock wait).
 ///
 /// Pulled into a free function so the borrow story stays obvious — the
 /// caller destructures `state` once and the function owns the disjoint

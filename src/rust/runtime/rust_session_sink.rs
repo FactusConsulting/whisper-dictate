@@ -288,11 +288,19 @@ pub(crate) fn build_production_sink(
     // [`super::rust_session_real_backends`] for the constructor.
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
-        match super::rust_session_real_backends::make_real_session() {
-            Ok(session) => {
+        // Wave 5 PR 5 round 2 (Codex P1 #423 finding 1): pass the
+        // runtime tx + repaint notifier down to the real-backend
+        // constructor so the audio pump it spawns can surface device
+        // errors on the same channel the rest of the supervisor uses
+        // and wake the egui UI on minimised-window installs.
+        match super::rust_session_real_backends::make_real_session(
+            tx.clone(),
+            repaint_notifier.clone(),
+        ) {
+            Ok(deps) => {
                 let coord_slot_for_signal = Arc::clone(&coord_slot);
-                let sink = build_session_action_sink(
-                    session,
+                let inner = build_session_action_sink(
+                    Arc::clone(&deps.session),
                     tx,
                     move |id| {
                         if let Some(handle) = coord_slot_for_signal.get() {
@@ -301,7 +309,20 @@ pub(crate) fn build_production_sink(
                     },
                     repaint_notifier,
                 );
-                return (Box::new(sink), coord_slot);
+                // Move the deps bundle into a wrapper closure so the
+                // audio pump (and the session Arc) stay alive for
+                // the sink's lifetime. The wrapper delegates to the
+                // inner sink -- it exists purely to own the deps.
+                // Without this the audio pump would be dropped right
+                // after construction and no frames would reach
+                // push_frame. Codex P1 #423 finding 1.
+                let mut inner = inner;
+                let _deps_keepalive = deps;
+                let owning_sink = move |action: CoordinatorAction| {
+                    let _keepalive = &_deps_keepalive;
+                    inner(action);
+                };
+                return (Box::new(owning_sink), coord_slot);
             }
             Err(err) => {
                 let _ = tx.send(RuntimeEvent::Stderr(format!(
