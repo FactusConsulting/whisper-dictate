@@ -19,9 +19,11 @@
 //!   `vp_dictate.py` uses).
 
 use super::rust_session_sink::{
-    build_session_action_sink, dictate_backend_rust_session_requested, make_session,
-    parse_or_stderr, EventForwarder, StubSession, DICTATE_BACKEND_ENV, WORKER_EVENT_PREFIX,
+    build_production_sink, build_session_action_sink, dictate_backend_rust_session_requested,
+    make_session, parse_or_stderr, EventForwarder, StubInject, StubSession, StubTranscribe,
+    DICTATE_BACKEND_ENV, STUB_GATE_STRING, WORKER_EVENT_PREFIX,
 };
+use crate::dictate::{InjectBackend, TranscribeBackend};
 use crate::hotkey::coordinator::{
     spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, CoordinatorThread, Mode,
     Options,
@@ -97,6 +99,52 @@ fn parse_or_stderr_falls_back_to_stderr_on_malformed_payload() {
         RuntimeEvent::Stderr(s) => assert_eq!(s, line),
         other => panic!("expected Stderr fallback, got {other:?}"),
     }
+}
+
+// ── stub backends ─────────────────────────────────────────────────────────────
+
+#[test]
+fn stub_transcribe_returns_empty_text_with_stub_gate() {
+    let stub = StubTranscribe;
+    let result = stub
+        .transcribe(&[0.0_f32; 16_000], 16_000)
+        .expect("stub never errors");
+    assert!(
+        result.text.is_empty(),
+        "stub transcribe must return empty text so the session takes the no_text path"
+    );
+    assert_eq!(result.gate.as_deref(), Some(STUB_GATE_STRING));
+}
+
+#[test]
+fn stub_inject_is_a_noop_that_always_succeeds() {
+    let stub = StubInject;
+    // The PR 4 stub backend always succeeds; PR 5 swaps for the real
+    // injection dispatcher that surfaces enigo/ydotool failures.
+    assert!(stub.inject("any text").is_ok());
+    assert!(
+        stub.inject("").is_ok(),
+        "empty text path must also succeed -- the session calls inject \
+         only on the non-empty branch today but the stub must be robust"
+    );
+}
+
+// ── production sink wiring ────────────────────────────────────────────────────
+
+#[test]
+fn build_production_sink_returns_empty_coordinator_slot() {
+    // `build_production_sink` constructs the closure BEFORE the
+    // coordinator exists; the supervisor pours the live
+    // CoordinatorHandle into the returned `OnceLock` after
+    // `install_hotkey` succeeds. This test only pins the contract:
+    // the slot must come back empty so the supervisor can populate it
+    // without losing the existing value.
+    let (tx, _rx) = mpsc::channel();
+    let (_sink, coord_slot) = build_production_sink(tx);
+    assert!(
+        coord_slot.get().is_none(),
+        "production sink must hand back an empty OnceLock for the supervisor to populate"
+    );
 }
 
 // ── EventForwarder framing ────────────────────────────────────────────────────
