@@ -135,6 +135,32 @@ function Get-CargoLegs {
                 '--release'
             )
         }
+        # Rust CLI smoke -- CIs Ubuntu rust job runs `cargo run -- --help`
+        # and `cargo run -- config path` (test.yml:372-375) so a broken
+        # CLI startup (e.g. clap derive bug, missing config schema,
+        # panicking init) surfaces before the runtime supervisor exec
+        # path. `cargo run -q` avoids the compile log spam; the exit
+        # code is what matters. Codex P2 #418 dev-check.ps1:194.
+        $legs += @{
+            Name = 'cargo run -- --help'
+            Argv = @(
+                'cargo', 'run', '-q',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--', '--help'
+            )
+        }
+        $legs += @{
+            Name = 'cargo run -- config path'
+            Argv = @(
+                'cargo', 'run', '-q',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--', 'config', 'path'
+            )
+        }
     }
     return $legs
 }
