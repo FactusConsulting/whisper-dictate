@@ -26,12 +26,87 @@
 
 use super::rust_session_sink::{
     build_production_sink, build_session_action_sink, make_session, parse_or_stderr,
-    EventForwarder, WORKER_EVENT_PREFIX,
+    EventForwarder, StubSession, WORKER_EVENT_PREFIX,
 };
+use super::test_support::EnvVarGuard;
+use crate::hotkey::coordinator::CoordinatorAction;
 use crate::runtime::RuntimeEvent;
 use std::io::Write;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// RAII bundle the signaling-sink fixture returns. The two guards
+/// (process env-lock + saved `VOICEPI_WORKER_EVENTS` value) are dropped
+/// in field order on test exit: the env-var is restored first, then the
+/// process lock is released -- so a subsequent test grabbing the lock
+/// always observes the pre-fixture worker-events value (Codex P2 PR #421
+/// "Restore VOICEPI_WORKER_EVENTS after coverage tests").
+struct SignalingSinkFixture {
+    _worker_events_guard: EnvVarGuard,
+    _env_lock_guard: MutexGuard<'static, ()>,
+}
+
+/// Shared fixture for the signaling-sink coverage tests: takes the
+/// crate-wide env lock, sets `VOICEPI_WORKER_EVENTS=1` via a
+/// drop-restoring guard, builds a fresh session + signal-capture
+/// `Vec`, and wires up a sink that records the `processing_finished`
+/// ids into that vec.
+///
+/// Pulled out of the per-test bodies so the shared boilerplate doesn't
+/// repeat across `sink_forwards_session_start_failure_as_runtime_error`,
+/// `sink_stop_from_idle_is_noop_but_signals_processing_finished`,
+/// `sink_cancel_with_mismatched_epoch_during_recording_is_safe`, and
+/// `sink_cancel_from_idle_is_a_safe_noop` -- Sonar CPD was flagging the
+/// 17-line preamble as duplicated (PR #421 follow-up).
+///
+/// The returned [`SignalingSinkFixture`] MUST stay bound for the
+/// duration of the test so concurrent env-mutating tests in the same
+/// binary serialise correctly (see `crate::test_env_lock`) AND so the
+/// pre-fixture `VOICEPI_WORKER_EVENTS` value is restored before the
+/// next test acquires the lock.
+///
+/// `clippy::type_complexity` allow: the tuple is intentionally five-
+/// arity because every test needs every component, and a stable-Rust
+/// `type` alias for the sink would have to spell out a concrete
+/// `Box<dyn ...>` (impl-trait aliases are nightly-only). Boxing forces
+/// a vtable indirection in tests for no readability win.
+#[allow(clippy::type_complexity)]
+fn signaling_sink_fixture() -> (
+    SignalingSinkFixture,
+    mpsc::Receiver<RuntimeEvent>,
+    Arc<Mutex<StubSession>>,
+    Arc<Mutex<Vec<u64>>>,
+    impl FnMut(CoordinatorAction) + Send + 'static,
+) {
+    let env_lock_guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // EnvVarGuard saves the pre-fixture value and restores it on drop;
+    // critical because the test binary is one process and a leaked
+    // worker-events gate would silently change the behavior of every
+    // subsequent test that acquires ENV_LOCK (Codex P2 PR #421).
+    let worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    let (tx, rx) = mpsc::channel();
+    let session = make_session();
+    let signaled = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let signaled_for_sink = Arc::clone(&signaled);
+    let sink = build_session_action_sink(
+        Arc::clone(&session),
+        tx,
+        move |id| signaled_for_sink.lock().unwrap().push(id),
+        None,
+    );
+    (
+        SignalingSinkFixture {
+            _worker_events_guard: worker_events_guard,
+            _env_lock_guard: env_lock_guard,
+        },
+        rx,
+        session,
+        signaled,
+        sink,
+    )
+}
 
 // ── parse_or_stderr fallback branches (Sonar L383) ────────────────────
 
@@ -121,23 +196,8 @@ fn event_forwarder_invokes_repaint_notifier_on_drop_flush() {
 /// `SessionError::AlreadyActive` on the second one.
 #[test]
 fn sink_forwards_session_start_failure_as_runtime_error() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+    let (_guard, rx, _session, signaled, mut sink) = signaling_sink_fixture();
 
-    let (tx, rx) = mpsc::channel();
-    let session = make_session();
-    let signaled = Arc::new(Mutex::new(Vec::<u64>::new()));
-    let signaled_for_sink = Arc::clone(&signaled);
-    let mut sink = build_session_action_sink(
-        Arc::clone(&session),
-        tx,
-        move |id| signaled_for_sink.lock().unwrap().push(id),
-        None,
-    );
-
-    use crate::hotkey::coordinator::CoordinatorAction;
     sink(CoordinatorAction::StartRecording(1));
     // Second start: session is already Recording -> the sink hits the
     // start-failed error formatter (Sonar L181-L183).
@@ -170,23 +230,8 @@ fn sink_forwards_session_start_failure_as_runtime_error() {
 /// the coordinator).
 #[test]
 fn sink_stop_from_idle_is_noop_but_signals_processing_finished() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+    let (_guard, rx, session, signaled, mut sink) = signaling_sink_fixture();
 
-    let (tx, rx) = mpsc::channel();
-    let session = make_session();
-    let signaled = Arc::new(Mutex::new(Vec::<u64>::new()));
-    let signaled_for_sink = Arc::clone(&signaled);
-    let mut sink = build_session_action_sink(
-        Arc::clone(&session),
-        tx,
-        move |id| signaled_for_sink.lock().unwrap().push(id),
-        None,
-    );
-
-    use crate::hotkey::coordinator::CoordinatorAction;
     sink(CoordinatorAction::StopAndTranscribe(7));
 
     let events: Vec<_> = rx.try_iter().collect();
@@ -221,16 +266,8 @@ fn sink_stop_from_idle_is_noop_but_signals_processing_finished() {
 /// down.
 #[test]
 fn sink_cancel_with_mismatched_epoch_during_recording_is_safe() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+    let (_guard, _rx, session, _signaled, mut sink) = signaling_sink_fixture();
 
-    let (tx, _rx) = mpsc::channel();
-    let session = make_session();
-    let mut sink = build_session_action_sink(Arc::clone(&session), tx, |_id| {}, None);
-
-    use crate::hotkey::coordinator::CoordinatorAction;
     sink(CoordinatorAction::StartRecording(1));
     // Cancel with a non-matching epoch: session's own epoch guard
     // silently ignores; sink must not panic and recording must continue.
@@ -257,16 +294,8 @@ fn sink_cancel_with_mismatched_epoch_during_recording_is_safe() {
 /// both Idle-vs-Recording entry conditions to the cancel branch.
 #[test]
 fn sink_cancel_from_idle_is_a_safe_noop() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+    let (_guard, rx, session, _signaled, mut sink) = signaling_sink_fixture();
 
-    let (tx, rx) = mpsc::channel();
-    let session = make_session();
-    let mut sink = build_session_action_sink(Arc::clone(&session), tx, |_id| {}, None);
-
-    use crate::hotkey::coordinator::CoordinatorAction;
     sink(CoordinatorAction::CancelRecording(99));
 
     let events: Vec<_> = rx.try_iter().collect();
@@ -295,16 +324,18 @@ fn sink_cancel_from_idle_is_a_safe_noop() {
 /// pouring the live `CoordinatorHandle` in via `OnceLock::set`).
 #[test]
 fn production_sink_processing_finished_is_noop_when_coord_slot_empty() {
-    let _guard = crate::test_env_lock::ENV_LOCK
+    let _env_lock_guard = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+    // Restore the pre-test worker-events value on drop -- otherwise a
+    // leaked truthy gate would silently change downstream tests in the
+    // same process (Codex P2 PR #421 "Restore VOICEPI_WORKER_EVENTS").
+    let _worker_events_guard = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
 
     let (tx, _rx) = mpsc::channel();
     let (mut sink, coord_slot) = build_production_sink(tx, None);
     assert!(coord_slot.get().is_none(), "precondition: slot empty");
 
-    use crate::hotkey::coordinator::CoordinatorAction;
     // Drive a stop directly -- the session is Idle so stop_and_transcribe
     // returns Ok(NotRecording); the sink then calls the
     // `processing_finished` closure body (Sonar L276-L280) which sees

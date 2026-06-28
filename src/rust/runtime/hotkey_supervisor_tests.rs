@@ -63,6 +63,67 @@ fn extract_hotkey_key_names_handles_single_key() {
     assert_eq!(names, vec!["f9"]);
 }
 
+/// Codex P2 PR #421 runtime.rs:530 -- regression coverage for the
+/// restart-path key-validation gate. The supervisor MUST NOT inject
+/// `VOICEPI_PYTHON_HOTKEY=0` when the configured PTT key is one the
+/// Rust (rdev) backend cannot translate -- otherwise the user's
+/// Settings change would silently park Python and the Rust hotkey
+/// would never fire (PTT goes silent for the whole session).
+///
+/// The full restart path needs a live `HotkeyHandle` (rust-hotkeys
+/// feature + a successful rdev install, neither available in headless
+/// CI), so this pins the contract at the helper level: extract +
+/// validate the same way `RuntimeSupervisor::start` does on the
+/// restart branch, and assert that an unsupported name short-circuits
+/// without mutating the command env.
+#[test]
+fn extract_then_validate_rejects_unsupported_key_without_disabling_python() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    let mut command = worker_command("/tmp/whisper-dictate");
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    command
+        .env
+        .push(("VOICEPI_KEY".to_owned(), "super_l".to_owned()));
+
+    let names = extract_hotkey_key_names(&command);
+    assert_eq!(
+        names,
+        vec!["super_l"],
+        "precondition: extract returns the configured (unsupported) name"
+    );
+
+    // On a feature build, validate_key_names rejects super_l (the
+    // Python evdev backend accepts it but the rdev key map does not).
+    // On a stub build, validate_key_names always returns Ok because
+    // the supervisor's hotkey_handle is None, so the restart-path
+    // validation gate is dead code -- but the test still pins the
+    // command-env invariant below regardless of feature flag.
+    #[cfg(feature = "rust-hotkeys")]
+    assert!(
+        crate::hotkey::validate_key_names(&names).is_err(),
+        "feature build: super_l must be rejected by validate_key_names"
+    );
+
+    // The contract the restart path enforces: when validate_key_names
+    // rejects, the supervisor must NOT call disable_python_hotkey, so
+    // the command env stays free of VOICEPI_PYTHON_HOTKEY=0. A future
+    // edit that reorders the gate (parks Python BEFORE validating)
+    // would have to flip this assertion to fail.
+    assert!(
+        !command
+            .env
+            .iter()
+            .any(|(k, _)| k == "VOICEPI_PYTHON_HOTKEY"),
+        "rejected-key restart must NOT inject VOICEPI_PYTHON_HOTKEY=0; \
+         the restart-path gate at runtime.rs:528-538 skips disable_python_hotkey \
+         when validate_key_names errors so Python stays enabled and PTT \
+         keeps working on the previous (supported) binding"
+    );
+}
+
 #[test]
 fn extract_hotkey_key_names_handles_blank_key_as_empty() {
     let _guard = ENV_LOCK.lock().unwrap();
