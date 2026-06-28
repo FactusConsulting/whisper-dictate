@@ -38,9 +38,15 @@
 //!   `_trace_enabled` env-flag parsing.
 //! - [`ops`] — JSON envelope dispatcher wired into the hidden
 //!   `dictate-ops` CLI subcommand.
+//! - [`events`] — Worker-event emitter that mirrors
+//!   `vp_events.py::_emit_worker_event` byte-for-byte. Added in Wave 5
+//!   PR 1 of #348 and intentionally NOT wired into any production
+//!   caller yet — PR 2 routes the supervisor through it once the wire
+//!   format is locked by the tests in `events_tests.rs`.
 
 pub mod backend;
 pub mod env_gates;
+pub mod events;
 pub mod ops;
 pub mod restart;
 pub mod skip;
@@ -49,3 +55,6 @@ pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelErro
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};
+
+#[cfg(test)]
+mod events_tests;
