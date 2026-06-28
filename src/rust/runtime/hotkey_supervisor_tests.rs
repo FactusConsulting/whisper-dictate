@@ -30,7 +30,7 @@ fn start_does_not_inject_python_hotkey_disable_flag() {
     // install_rust_hotkey_from_command is a no-op in headless env (rdev
     // listener refuses to start), so the flag must remain absent regardless.
     let (tx, _rx) = std::sync::mpsc::channel();
-    let _ = install_rust_hotkey_from_command(&command, tx);
+    let _ = install_rust_hotkey_from_command(&command, tx, None);
     // Even if we called disable_python_hotkey, the test is that start() does
     // NOT call it — verified here by checking the clean command env.
     assert!(
@@ -151,7 +151,7 @@ fn hotkey_handle_stub_suspend_and_resume_are_no_ops() {
     command.env.retain(|(k, _)| k != "VOICEPI_KEY");
 
     let (tx, _rx) = std::sync::mpsc::channel();
-    let handle = install_rust_hotkey_from_command(&command, tx);
+    let handle = install_rust_hotkey_from_command(&command, tx, None);
     assert!(
         handle.is_none(),
         "no backend + no key → None handle (nothing to suspend/resume)"
