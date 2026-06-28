@@ -1,76 +1,21 @@
-//! Tests for [`super::EnigoInjectBackend`].
+//! Delegation + error-mapping tests for [`super::EnigoInjectBackend`].
 //!
-//! Mock the dispatcher at the [`InjectorBackend`](crate::injection::enigo_backend::InjectorBackend)
-//! boundary so we never actually synthesise keystrokes — the
-//! `with_backend` hook on [`Injector`] is the production-supported
-//! injection point for exactly this purpose. The tests cover:
+//! Covers the trait-impl surface: typing/paste flows reach the
+//! underlying backend with the correct method, a backend failure
+//! surfaces as `InjectError::Backend(_)`, and the configured
+//! `InjectMethod` round-trips.
 //!
-//! - delegation: typing / pasting flows reach the underlying backend
-//!   with the correct method.
-//! - error mapping: a backend failure surfaces as
-//!   `InjectError::Backend(_)` with the message preserved.
-//! - method accessor: the configured [`InjectMethod`] round-trips.
+//! The Codex P1 + P2 pre-injection-cleanup behaviour (clipboard
+//! ownership, stale-modifier release) lives in the sibling
+//! `inject_cleanup_tests` module so each file stays under the repo's
+//! ~500-line modularity gate. Shared recording fakes live in
+//! `inject_test_support`.
 
-use std::sync::{Arc, Mutex};
-
-use anyhow::{anyhow, Result};
-
-use super::EnigoInjectBackend;
+use super::inject_test_support::{
+    backend_with, backend_with_clipboard, RecordingBackend, RecordingClipboard,
+};
 use crate::dictate::session::types::{InjectBackend, InjectError};
-use crate::injection::enigo_backend::InjectorBackend;
-use crate::injection::{InjectMethod, Injector, PasteShortcut};
-
-/// Recording fake — captures every call made by [`Injector`] so the
-/// assertion can pin down what the trait impl actually delegates. Lives
-/// behind `Arc<Mutex<…>>` so the test retains a handle after the value
-/// is moved into the [`Injector`].
-#[derive(Default, Clone)]
-struct RecordingBackend {
-    events: Arc<Mutex<Vec<String>>>,
-    fail_next: Arc<Mutex<Option<String>>>,
-}
-
-impl RecordingBackend {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn failing(msg: &str) -> Self {
-        let me = Self::default();
-        *me.fail_next.lock().unwrap() = Some(msg.to_owned());
-        me
-    }
-
-    fn take_fail(&self) -> Option<String> {
-        self.fail_next.lock().unwrap().take()
-    }
-}
-
-impl InjectorBackend for RecordingBackend {
-    fn type_text(&mut self, text: &str) -> Result<()> {
-        if let Some(msg) = self.take_fail() {
-            return Err(anyhow!("recorded failure: {msg}"));
-        }
-        self.events.lock().unwrap().push(format!("type:{text}"));
-        Ok(())
-    }
-    fn key_chord(&mut self, modifiers: &[u16], key: u16) -> Result<()> {
-        if let Some(msg) = self.take_fail() {
-            return Err(anyhow!("recorded failure: {msg}"));
-        }
-        let mods: Vec<String> = modifiers.iter().map(|m| format!("{m:#x}")).collect();
-        self.events
-            .lock()
-            .unwrap()
-            .push(format!("chord:[{}]+{:#x}", mods.join(","), key));
-        Ok(())
-    }
-}
-
-fn backend_with(method: InjectMethod, fake: RecordingBackend) -> EnigoInjectBackend {
-    let injector = Injector::new().with_backend(Box::new(fake));
-    EnigoInjectBackend::new(injector, method)
-}
+use crate::injection::{InjectMethod, PasteShortcut};
 
 #[test]
 fn inject_typing_delegates_text_to_underlying_backend() {
@@ -78,7 +23,15 @@ fn inject_typing_delegates_text_to_underlying_backend() {
     let events = fake.events.clone();
     let backend = backend_with(InjectMethod::Typing, fake);
     backend.inject("hello world").expect("inject ok");
-    assert_eq!(*events.lock().unwrap(), vec!["type:hello world".to_owned()]);
+    let recorded = events.lock().unwrap().clone();
+    // The wrapper always sweeps held modifiers before the action, so
+    // the recorded events include a leading `release:` line — assert
+    // the type event is present without pinning the exact order /
+    // count of release events (that's the cleanup-tests scope).
+    assert!(
+        recorded.iter().any(|e| e == "type:hello world"),
+        "expected type:hello world in events, got {recorded:?}"
+    );
 }
 
 #[test]
@@ -90,18 +43,22 @@ fn inject_paste_with_explicit_shortcut_emits_chord() {
     // get exactly one chord event.
     let fake = RecordingBackend::new();
     let events = fake.events.clone();
-    let backend = backend_with(InjectMethod::Paste(Some(PasteShortcut::CtrlV)), fake);
+    let clipboard = RecordingClipboard::with_initial(Some("prior"));
+    let backend = backend_with_clipboard(
+        InjectMethod::Paste(Some(PasteShortcut::CtrlV)),
+        fake,
+        clipboard,
+    );
     backend.inject("ignored on paste path").expect("inject ok");
     let recorded = events.lock().unwrap().clone();
+    let chords: Vec<&String> = recorded
+        .iter()
+        .filter(|e| e.starts_with("chord:["))
+        .collect();
     assert_eq!(
-        recorded.len(),
+        chords.len(),
         1,
         "expected exactly one chord event, got {recorded:?}"
-    );
-    assert!(
-        recorded[0].starts_with("chord:["),
-        "expected chord event, got {:?}",
-        recorded[0]
     );
 }
 
@@ -143,18 +100,18 @@ fn paste_none_falls_through_to_default_chord() {
     // than swallowing the call.
     let fake = RecordingBackend::new();
     let events = fake.events.clone();
-    let backend = backend_with(InjectMethod::Paste(None), fake);
+    let clipboard = RecordingClipboard::with_initial(Some("prior"));
+    let backend = backend_with_clipboard(InjectMethod::Paste(None), fake, clipboard);
     backend.inject("anything").expect("inject ok");
     let recorded = events.lock().unwrap().clone();
+    let chords: Vec<&String> = recorded
+        .iter()
+        .filter(|e| e.starts_with("chord:["))
+        .collect();
     assert_eq!(
-        recorded.len(),
+        chords.len(),
         1,
         "expected exactly one chord event for Paste(None), got {recorded:?}"
-    );
-    assert!(
-        recorded[0].starts_with("chord:["),
-        "expected chord event, got {:?}",
-        recorded[0]
     );
 }
 
@@ -169,8 +126,11 @@ fn injection_method_can_be_invoked_multiple_times() {
     let backend = backend_with(InjectMethod::Typing, fake);
     backend.inject("first").unwrap();
     backend.inject("second").unwrap();
+    let recorded = events.lock().unwrap().clone();
+    let types: Vec<&String> = recorded.iter().filter(|e| e.starts_with("type:")).collect();
     assert_eq!(
-        *events.lock().unwrap(),
-        vec!["type:first".to_owned(), "type:second".to_owned()]
+        types,
+        vec![&"type:first".to_owned(), &"type:second".to_owned()],
+        "expected ordered type events, got {recorded:?}"
     );
 }

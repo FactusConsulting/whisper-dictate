@@ -79,6 +79,12 @@ impl PasteShortcut {
 pub mod vk {
     pub const VK_CONTROL: u16 = 0x11;
     pub const VK_SHIFT: u16 = 0x10;
+    /// `VK_MENU` is the Win32 name for the Alt key (both sides). Exposed so
+    /// the stale-modifier sweep in `EnigoInjectBackend::inject` can drop
+    /// an Alt held from a push-to-talk chord before the burst lands —
+    /// matching `vp_inject.py::_release_stale_modifiers`'s full
+    /// Shift / Alt / Ctrl / Cmd set.
+    pub const VK_MENU: u16 = 0x12;
     pub const VK_LWIN: u16 = 0x5B;
     pub const VK_V: u16 = 0x56;
     pub const VK_INSERT: u16 = 0x2D;
@@ -89,6 +95,9 @@ pub mod vk {
 pub mod evdev {
     pub const KEY_LEFTCTRL: u16 = 29;
     pub const KEY_LEFTSHIFT: u16 = 42;
+    /// `KEY_LEFTALT` pairs with `vk::VK_MENU` for the stale-modifier
+    /// release sweep on the enigo path (see `EnigoInjectBackend::inject`).
+    pub const KEY_LEFTALT: u16 = 56;
     pub const KEY_V: u16 = 47;
     pub const KEY_INSERT: u16 = 110;
     pub const KEY_LEFTMETA: u16 = 125;
@@ -120,7 +129,7 @@ impl PasteGuard {
     /// Stash the current clipboard, copy `text`. Returns `None` if `text`
     /// could not be written (no clipboard backend, transient failure) — in
     /// which case the caller should not attempt to send the paste shortcut.
-    pub fn copy_with_backup<C: Clipboard>(clip: &mut C, text: &str) -> Option<Self> {
+    pub fn copy_with_backup<C: Clipboard + ?Sized>(clip: &mut C, text: &str) -> Option<Self> {
         let previous = clip.read();
         if !clip.write(text) {
             return None;
@@ -133,7 +142,7 @@ impl PasteGuard {
 
     /// Restore the saved clipboard, but only if it still holds the text we
     /// injected. Returns `true` when a restore actually happened.
-    pub fn restore<C: Clipboard>(self, clip: &mut C) -> bool {
+    pub fn restore<C: Clipboard + ?Sized>(self, clip: &mut C) -> bool {
         let Some(previous) = self.previous else {
             return false;
         };

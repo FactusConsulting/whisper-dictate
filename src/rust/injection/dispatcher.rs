@@ -152,6 +152,44 @@ impl Injector {
         Ok(self.backend.as_deref_mut().expect("just initialised"))
     }
 
+    /// Send a bare `Release` for each VK code in `modifiers` so a stale
+    /// push-to-talk chord (Ctrl / Shift / Alt / Cmd held by the user
+    /// THROUGH the injection) does not turn a typed burst into shortcuts
+    /// or warp a paste chord. Mirrors `vp_inject.py::_release_stale_modifiers`;
+    /// called from `EnigoInjectBackend::inject` before delegating to
+    /// `inject_text`. Codex P2 #417 inject.rs:110.
+    ///
+    /// Dispatches identically to `inject_text`:
+    ///
+    /// * Windows / macOS — through the active `InjectorBackend` (enigo by
+    ///   default, or a test fake when one was installed via
+    ///   `with_backend`).
+    /// * Linux — only through an explicitly-injected backend; the
+    ///   helper-chain path is a best-effort no-op here because the
+    ///   wayland.rs / ydotool route already runs `_WAYLAND_MODIFIER_RELEASES`
+    ///   inside its paste-shortcut helper, so duplicating it would be
+    ///   redundant noise rather than additional safety.
+    pub fn release_held_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            self.backend_mut()?.release_modifiers(modifiers)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(backend) = self.backend.as_deref_mut() {
+                return backend.release_modifiers(modifiers);
+            }
+            // Helper-chain path: wayland.rs owns its own modifier-release
+            // sweep before the paste shortcut. Nothing to do here.
+            Ok(())
+        }
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        {
+            let _ = modifiers;
+            Ok(())
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn inject_on_linux(&self, text: &str, method: InjectMethod) -> Result<()> {
         // ydotool already has a fully-featured layout-aware code path in

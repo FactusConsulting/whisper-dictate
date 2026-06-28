@@ -26,6 +26,19 @@ pub trait InjectorBackend {
     /// modifiers are pressed in order, then the main key is tapped, then the
     /// modifiers are released in reverse order.
     fn key_chord(&mut self, modifiers: &[u16], key: u16) -> Result<()>;
+    /// Send a bare `Release` for each VK code, mirroring the user lifting
+    /// the modifier key. The default impl is a no-op so existing recording
+    /// fakes (and the trait's other consumers) don't have to override
+    /// anything; the real `enigo` impl overrides this to actually drop
+    /// held modifiers. Used by `EnigoInjectBackend::inject` to clear a
+    /// stale push-to-talk chord (Ctrl / Shift / Alt / Cmd) before
+    /// synthesising the burst — without this a held PTT modifier turns
+    /// dictated characters into shortcuts, matching the Python
+    /// `_release_stale_modifiers` sweep. Codex P2 #417 inject.rs:110.
+    fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+        let _ = modifiers;
+        Ok(())
+    }
 }
 
 /// Send the configured paste keystroke. Pure logic over the backend trait;
@@ -103,6 +116,24 @@ mod enigo_impl {
             }
             Ok(())
         }
+
+        fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+            // Drop each held modifier individually. Sending a Release for
+            // a key that wasn't down is a no-op on every supported
+            // platform (Win32 `SendInput`, macOS `CGEventPost`, X11
+            // `XTestFakeKeyEvent`), so we don't gate on whether enigo
+            // believes the modifier is currently pressed. Unmapped VKs
+            // (e.g. a future code we haven't taught `vk_to_enigo` yet)
+            // and individual Release failures are silenced rather than
+            // failing the whole sweep — losing a modifier release is
+            // strictly less bad than aborting the burst.
+            for m in modifiers {
+                if let Ok(key) = vk_to_enigo(*m) {
+                    let _ = self.enigo.key(key, Release);
+                }
+            }
+            Ok(())
+        }
     }
 
     /// Map our platform-agnostic VK code constants to enigo's [`Key`] enum.
@@ -112,6 +143,11 @@ mod enigo_impl {
         Ok(match vk {
             platform::VK_CONTROL => Key::Control,
             platform::VK_SHIFT => Key::Shift,
+            // Alt — only used by `release_modifiers` today (no paste
+            // chord uses Alt); enigo's `Key::Alt` maps to the
+            // platform's left-Alt scancode on Win32 / X11 and to the
+            // Option key on macOS, matching `_release_stale_modifiers`.
+            platform::VK_MENU => Key::Alt,
             platform::VK_LWIN => Key::Meta,
             platform::VK_V => Key::Unicode('v'),
             platform::VK_INSERT => Key::Insert,

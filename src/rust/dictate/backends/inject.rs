@@ -11,61 +11,93 @@
 //! coordinator-sink wiring (PR 4) continues to use the stub injector
 //! until PR 5 swaps it for this one.
 //!
+//! # Pre-injection cleanup (Codex P1 / P2 #417)
+//!
+//! Calling `Injector::inject_text` directly leaves two gaps that the
+//! Python path (`vp_inject.py::_inject_via_rust_backend`) closes before
+//! delegating. This wrapper closes both inside `inject()` so a Rust
+//! `DictateSession` (PR 5) can swap the stub backend for this one
+//! without a separate caller-side dance:
+//!
+//! 1. **Clipboard ownership for paste mode.** The dispatcher's
+//!    `Paste(_)` arm only sends the keystroke; its module doc explicitly
+//!    states the caller is responsible for populating the clipboard
+//!    first. A Rust-native session hands this wrapper the transcript
+//!    itself, so without owning the copy/restore step we would silently
+//!    paste whatever the user already had on their clipboard. The
+//!    wrapper accepts an optional [`Clipboard`] impl via
+//!    [`Self::with_clipboard`]; on `Paste(_)` it stashes the previous
+//!    contents, writes the transcript, sends the chord, then restores
+//!    the previous value via [`PasteGuard`]. Paste-mode injection
+//!    without a configured clipboard returns
+//!    [`InjectError::Backend`] rather than silently pasting stale
+//!    data — surfacing the misconfiguration loudly instead of mangling
+//!    a transcript.
+//! 2. **Stale push-to-talk modifiers.** A modifier PTT (Shift / Ctrl /
+//!    Alt / Cmd) is held physically THROUGH the dictation: when the
+//!    inject burst lands, the OS still sees the modifier down, so a
+//!    typing burst becomes `Ctrl+<char>` shortcuts and a paste chord
+//!    gets warped. The wrapper calls
+//!    [`Injector::release_held_modifiers`] before delegating, mirroring
+//!    the Python `_release_stale_modifiers` sweep over the full
+//!    Shift / Alt / Ctrl / Cmd set.
+//!
+//! Both steps fail-soft (log + continue) when reasonable, matching the
+//! Python path's permissive philosophy: a missing modifier release is
+//! strictly less bad than failing the inject entirely and dropping the
+//! transcript. The clipboard write is the exception — there a failure
+//! means we'd paste stale data, so we abort BEFORE sending the chord.
+//!
 //! # Interior mutability
 //!
 //! [`InjectBackend::inject`] takes `&self` (the session keeps an
 //! immutable handle to the backend across utterances), but
 //! [`Injector::inject_text`] takes `&mut self` because the lazy
-//! enigo-construction stash needs to mutate the trait-object slot.
-//! Bridging the two requires a `Mutex` (or equivalent interior-mutability
-//! primitive). `Mutex` is the right pick here because injection is a
-//! coarse-grained, off-the-hot-path operation (it follows transcription
-//! by definition; never contended in practice).
+//! enigo-construction stash needs to mutate the trait-object slot. The
+//! optional [`Clipboard`] backend also needs `&mut self` (read / write
+//! are mutating on every real impl). Bridging the two requires a
+//! `Mutex` (or equivalent interior-mutability primitive); we use a
+//! single `Mutex` over a small inner struct so a paste injection can
+//! drive both the injector and the clipboard inside the same critical
+//! section. Injection is coarse-grained and off-the-hot-path (it
+//! follows transcription by definition; never contended in practice),
+//! so the lock is cheap.
 //!
 //! Whether the wrapper itself is `Send` / `Sync` is driven by the
 //! wrapped [`Injector`]'s auto-traits — `Injector` carries a
 //! `Box<dyn InjectorBackend>` (no `Send` bound), so neither auto-derives
 //! today. PR 5 / the supervisor can layer its own `Arc<Mutex<…>>` on
 //! top if a session needs to cross threads.
-//!
-//! # Caller-owned pre-conditions (PR 5 wiring will own these)
-//!
-//! Two side-channel concerns live one layer up from this thin trait
-//! impl, exactly as they do on the Python side in
-//! `vp_inject.py::_inject_via_rust_backend`:
-//!
-//! 1. **Clipboard population for `InjectMethod::Paste`.** The wrapped
-//!    [`Injector`] only sends the paste *keystroke* — it does not own
-//!    the clipboard. Calling [`EnigoInjectBackend::inject`] with the
-//!    transcript text while `InjectMethod::Paste(_)` is configured
-//!    sends Ctrl+V (or the configured chord) against whatever the user
-//!    already had on the clipboard, NOT the dictated text. PR 5's
-//!    wiring must call [`crate::injection::PasteGuard::copy_with_backup`]
-//!    against a real `Clipboard` implementation BEFORE invoking this
-//!    backend (Python's `populate_clipboard_for_rust_paste` is the
-//!    reference) and `restore()` afterwards. Codex P1 #417
-//!    inject.rs:110 — this PR's scope is the trait impl only; no
-//!    production [`Clipboard`](crate::injection::Clipboard) impl exists
-//!    in Rust yet, so the clipboard plumbing is its own follow-up.
-//!    Until that lands, [`InjectMethod::Typing`] is the
-//!    production-safe choice because the dispatcher types the literal
-//!    text through enigo / the helper chain regardless of clipboard
-//!    state.
-//! 2. **Stale-modifier release on a PTT chord.** When the push-to-talk
-//!    binding includes Ctrl/Shift/Alt/Meta and the key is still down
-//!    when injection starts, typed characters land as shortcuts and
-//!    paste chords get extra modifiers. Python's
-//!    `vp_inject._release_stale_modifiers` runs first. The Rust hotkey
-//!    coordinator (`src/rust/hotkey/`) owns the press/release tracking
-//!    and is the right place to issue the cleanup; PR 5's wiring will
-//!    invoke it between the transcribe-completion event and this
-//!    `inject()` call, matching Python's flow. Codex P2 #417
-//!    inject.rs:110.
 
 use std::sync::Mutex;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
+use crate::injection::paste::{vk, Clipboard, PasteGuard};
 use crate::injection::{InjectMethod, Injector};
+
+/// VKs the wrapper releases before every injection, matching the full
+/// Shift / Alt / Ctrl / Cmd sweep in `vp_inject.py::_release_stale_modifiers`.
+/// Order is fixed and asserted on by the unit tests so an accidental
+/// reorder is caught even when the resulting behaviour would be
+/// identical at runtime.
+pub(crate) const STALE_MODIFIER_VKS: &[u16] =
+    &[vk::VK_SHIFT, vk::VK_MENU, vk::VK_CONTROL, vk::VK_LWIN];
+
+/// Interior state guarded by a single `Mutex`. Keeping the injector and
+/// the clipboard under the same lock lets a `Paste(_)` injection drive
+/// both atomically: the clipboard write must happen between the
+/// modifier release and the paste chord, with no interleaving from a
+/// parallel `inject()` call on the same backend.
+struct State {
+    injector: Injector,
+    /// Caller-supplied clipboard backend. Required for paste-mode
+    /// injection; left `None` for typing-only wrappers (and for the
+    /// tests that exercise the typing path). Boxed-dyn rather than a
+    /// generic parameter so the wrapper can sit behind
+    /// `Box<dyn InjectBackend>` in the dictate-session sink without
+    /// leaking a phantom type parameter.
+    clipboard: Option<Box<dyn Clipboard>>,
+}
 
 /// Production [`InjectBackend`] wrapping [`Injector`].
 ///
@@ -81,11 +113,17 @@ use crate::injection::{InjectMethod, Injector};
 /// [`InjectMethod::Paste(None)`] which lets the dispatcher pick the
 /// platform-appropriate shortcut at dispatch time (incl. the Linux
 /// terminal-aware heuristic).
+///
+/// **Paste mode requires a [`Clipboard`] backend.** Pair the wrapper
+/// with [`Self::with_clipboard`] before handing it to any code path
+/// that may call [`Self::inject`] under a paste method; otherwise the
+/// paste arm surfaces [`InjectError::Backend`] rather than silently
+/// sending the chord against stale clipboard data.
 pub struct EnigoInjectBackend {
-    /// `Mutex` so the trait can be implemented for `&self` even though
-    /// [`Injector::inject_text`] needs `&mut self` for its lazy
-    /// enigo-backend stash.
-    inner: Mutex<Injector>,
+    /// `Mutex` over the combined injector + clipboard state so the
+    /// trait can be implemented for `&self` even though both inner
+    /// pieces need exclusive access during a single `inject` call.
+    inner: Mutex<State>,
     method: InjectMethod,
 }
 
@@ -98,7 +136,7 @@ impl std::fmt::Debug for EnigoInjectBackend {
         // and the supervisor can interrogate via Self::method().
         f.debug_struct("EnigoInjectBackend")
             .field("method", &self.method)
-            .field("injector", &"<Mutex<Injector>>")
+            .field("inner", &"<Mutex<State>>")
             .finish()
     }
 }
@@ -112,11 +150,33 @@ impl EnigoInjectBackend {
     /// in a single session (the target is the focused window at the
     /// moment of dictation, which the supervisor refreshes between
     /// sessions).
+    ///
+    /// No clipboard is wired by default — pair with
+    /// [`Self::with_clipboard`] for paste mode. Typing-only wrappers
+    /// can skip the clipboard step.
     pub fn new(injector: Injector, method: InjectMethod) -> Self {
         Self {
-            inner: Mutex::new(injector),
+            inner: Mutex::new(State {
+                injector,
+                clipboard: None,
+            }),
             method,
         }
+    }
+
+    /// Install a [`Clipboard`] backend used by paste mode to save the
+    /// previous contents, write the transcript, and restore the
+    /// previous value after the paste chord fires (via [`PasteGuard`]).
+    /// Required for [`InjectMethod::Paste`] — typing mode ignores it
+    /// entirely so a typing-only wrapper can skip this step.
+    pub fn with_clipboard(mut self, clipboard: Box<dyn Clipboard>) -> Self {
+        // `get_mut` skips the lock entirely; safe because `self` is owned
+        // here so no other reference to the Mutex can exist.
+        self.inner
+            .get_mut()
+            .expect("freshly-constructed mutex is uncontended")
+            .clipboard = Some(clipboard);
+        self
     }
 
     /// The chosen injection method (typing / paste-with-shortcut).
@@ -130,22 +190,94 @@ impl InjectBackend for EnigoInjectBackend {
     fn inject(&self, text: &str) -> Result<(), InjectError> {
         // Recover from a poisoned mutex: a panic inside a previous
         // injection (e.g. enigo failing in an unexpected way) would
-        // poison the lock. The Injector itself has no internal
-        // invariants that would be violated by a panic — the backend
-        // trait object is the only mutable field, and `enigo::Enigo`
-        // does not retain incoherent state across calls — so we
-        // recover the inner value and proceed rather than wedging the
-        // session forever.
+        // poison the lock. Neither the injector nor the clipboard
+        // carry invariants violated by a panic — `enigo::Enigo` does
+        // not retain incoherent state across calls and the
+        // `Clipboard` trait is stateless apart from the backing OS
+        // surface — so we recover the inner value and proceed rather
+        // than wedging the session forever.
         let mut guard = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard
-            .inject_text(text, self.method)
-            .map_err(|e| InjectError::Backend(format!("{e:#}")))
+        let state = &mut *guard;
+
+        // Pre-injection cleanup #1: drop any modifiers still held from
+        // a push-to-talk chord. Failures are logged + ignored to match
+        // the Python `_release_stale_modifiers` permissive behaviour;
+        // losing a release would land the burst as shortcuts but
+        // failing the inject would lose the transcript outright.
+        // Codex P2 #417 inject.rs:110.
+        if let Err(e) = state.injector.release_held_modifiers(STALE_MODIFIER_VKS) {
+            eprintln!("[inject] stale-modifier release failed: {e:#}");
+        }
+
+        match self.method {
+            InjectMethod::Typing => state
+                .injector
+                .inject_text(text, InjectMethod::Typing)
+                .map_err(|e| InjectError::Backend(format!("{e:#}"))),
+            InjectMethod::Paste(_) => inject_via_paste(state, text, self.method),
+        }
     }
 }
 
+/// Paste-mode injection arm: own the clipboard copy/restore so the
+/// dispatcher's "Python-already-copied" assumption holds even when the
+/// caller is a Rust-native `DictateSession`. Codex P1 #417 inject.rs:110.
+///
+/// Pulled into a free function so the borrow story stays obvious — the
+/// caller destructures `state` once and the function owns the disjoint
+/// `&mut Injector` + `&mut dyn Clipboard` borrows from there.
+fn inject_via_paste(
+    state: &mut State,
+    text: &str,
+    method: InjectMethod,
+) -> Result<(), InjectError> {
+    let clipboard = state.clipboard.as_deref_mut().ok_or_else(|| {
+        InjectError::Backend(
+            "paste injection requires a clipboard backend; call \
+             EnigoInjectBackend::with_clipboard before using Paste(_)"
+                .to_owned(),
+        )
+    })?;
+
+    // Save the previous clipboard + write the transcript. If the write
+    // fails we abort BEFORE sending the chord — pasting whatever was
+    // already on the clipboard would silently inject the wrong text.
+    let paste_guard = PasteGuard::copy_with_backup(clipboard, text).ok_or_else(|| {
+        InjectError::Backend(
+            "clipboard write failed; refusing to send paste shortcut \
+             against stale clipboard contents"
+                .to_owned(),
+        )
+    })?;
+
+    let inject_result = state
+        .injector
+        .inject_text(text, method)
+        .map_err(|e| InjectError::Backend(format!("{e:#}")));
+
+    // Restore the previous clipboard whether or not the chord went
+    // through — the user's prior clipboard contents are sacred. The
+    // restore is gated on the clipboard still holding OUR text so a
+    // user mid-paste copy is never clobbered; that check lives in
+    // `PasteGuard::restore` itself.
+    paste_guard.restore(clipboard);
+
+    inject_result
+}
+
+// Test modules live in sibling files (the `inject.rs` parent is a
+// file-form module, so without `#[path]` Rust would look for
+// `dictate/backends/inject/<name>.rs` — keeping the tests next to
+// their target file is more readable).
+#[cfg(test)]
+#[path = "inject_cleanup_tests.rs"]
+mod inject_cleanup_tests;
+#[cfg(test)]
+#[path = "inject_test_support.rs"]
+mod inject_test_support;
 #[cfg(test)]
 #[path = "inject_tests.rs"]
-mod tests;
+mod inject_tests;
