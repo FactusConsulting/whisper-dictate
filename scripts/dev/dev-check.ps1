@@ -24,7 +24,16 @@
 
 param(
     [switch]$DryRun,
-    [switch]$SkipExtraFeatures
+    [switch]$SkipExtraFeatures,
+    # Backwards-compat shim: the original script took `-Features <list>`
+    # and ran a single cargo test pass with that feature list. The
+    # rewrite drives the full CI matrix unconditionally, so this
+    # parameter is now ignored -- accepted only to avoid a
+    # parameter-binding error for invocations baked into AGENTS.md /
+    # local muscle memory. Codex P2 #418 dev-check.ps1 ($-Features
+    # entry point). Remove once AGENTS.md and the developer team have
+    # migrated.
+    [string]$Features
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +116,23 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app',
                 '--features', 'audio-in-rust'
+            )
+        }
+        # CIs Rust job runs `cargo build ... --features whisper-rs-local --release`
+        # (test.yml:360-371) as a compile-only smoke for the whisper.cpp /
+        # whisper-rs link boundary. Mirror it here so a whisper-rs API break
+        # surfaces before tagged releases. `cargo test` is overkill (whisper-rs
+        # tests want a GGML fixture we don't ship), so we use `cargo build`
+        # to match CI exactly. Codex P2 #418 dev-check.ps1:121 round 2.
+        $legs += @{
+            Name = 'cargo build --features whisper-rs-local --release'
+            Argv = @(
+                'cargo', 'build',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--features', 'whisper-rs-local',
+                '--release'
             )
         }
     }

@@ -14,12 +14,17 @@
   `cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check`
   and `cargo clippy --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-targets --all-features -- -D warnings`
 - **Native clippy is broken on Windows boxes without MSVC `lib.exe`.**
-  Use `pwsh scripts/dev/dev-check.ps1 [-Features <list>]` instead — it
-  runs `cargo fmt --check + clippy + test --lib` inside the devcontainer
-  image (Rancher Desktop's `rancher-desktop` WSL distro hosts the daemon).
-  The image is built once on first run (~5 min); thereafter reused. Run
-  this BEFORE every signed push so clippy lints fail locally rather than
-  costing a CI roundtrip.
+  Use `pwsh scripts/dev/dev-check.ps1` instead — it runs the full CI
+  rust matrix (fmt + clippy + default test + feature-gated tests for
+  rust-hotkeys / audio-in-rust + whisper-rs-local build) inside the
+  devcontainer image via Docker Desktop's `desktop-linux` context.
+  The image is built once on first run (~5 min); thereafter Docker's
+  layer cache keeps subsequent runs near-instant. Requires Docker
+  Desktop running. Run this BEFORE every signed push so clippy lints
+  fail locally rather than costing a CI roundtrip.
+  `-SkipExtraFeatures` limits the run to the default-feature leg only
+  (fast iteration when feature paths are untouched).
+  `-DryRun` prints every cargo argv without invoking docker.
 
 ## Regression Tests
 

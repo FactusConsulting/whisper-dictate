@@ -541,6 +541,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "cargo test (default)",
             "cargo test --features rust-hotkeys",
             "cargo test --features audio-in-rust",
+            "cargo build --features whisper-rs-local --release",
         ]:
             self.assertIn(
                 needle, script,
