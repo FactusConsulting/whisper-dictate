@@ -189,7 +189,9 @@ fn install_rust_hotkey_routes_to_session_sink_when_backend_is_rust_session() {
     // The contract we pin: the routing did NOT panic. The handle may be
     // None (headless) or Some (rust-hotkeys + a working rdev backend);
     // both are acceptable for this coverage test.
-    drop(handle);
+    // Avoid clippy::drop_non_drop -- on the stub build HotkeyHandle
+    // is not Drop; `let _` simply ends its scope.
+    let _ = handle;
 }
 
 #[test]
