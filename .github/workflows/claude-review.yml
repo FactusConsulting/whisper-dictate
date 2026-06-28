@@ -1,0 +1,159 @@
+name: Claude PR review
+
+# Automatic code-review pass on every NEW pull request. Replaces the
+# Codex auto-review hard-gate that documented in AGENTS.md, because the
+# Codex code-review quota is running out across the org. Uses the
+# CLAUDE_CODE_OAUTH_TOKEN org-level secret (subscription-based, no
+# pay-per-token cost) -- same token as the on-demand @claude workflow in
+# claude.yml.
+#
+# Single round per PR: triggers on `opened` only, NOT on every push to
+# the PR branch. Rationale: Codex's per-push pattern produced 5-7
+# rounds of inline comments per Wave 5 PR and the diminishing returns
+# past round 2 were not worth the review-context tokens. If a developer
+# wants a fresh pass after pushing fixes, they can @claude in a comment
+# (handled by claude.yml).
+
+on:
+  pull_request:
+    types: [opened]
+  # Allow manual re-trigger from the Actions tab on a stuck PR.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to re-review (manual override)'
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  # One review per PR at a time -- avoids racing review threads if a
+  # workflow_dispatch lands during the automatic opened pass.
+  group: claude-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # On `pull_request: opened`, GitHub already exposes the PR head
+      # via `github.event.pull_request.head.ref`. On `workflow_dispatch`,
+      # we have to resolve the PR's head ref from the `pr_number` input
+      # before checkout -- otherwise checkout lands on the default
+      # branch and the review runs against an empty diff. Codex P2 #422
+      # claude-review.yml:25.
+      - name: Resolve PR head ref (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        id: dispatch_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" --jq '.head.ref')
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved manual PR #${{ github.event.inputs.pr_number }} -> $ref"
+
+      - uses: actions/checkout@v5
+        with:
+          # Need history to diff against the PR base for context.
+          fetch-depth: 0
+          # On pull_request, checkout@v5 uses the PR head automatically.
+          # On workflow_dispatch, point it at the resolved ref above so
+          # the manual re-trigger actually reviews the right PR.
+          ref: ${{ github.event_name == 'workflow_dispatch' && steps.dispatch_pr.outputs.ref || github.event.pull_request.head.ref }}
+          # Fork PRs live in a different repo; without this `repository:`
+          # the checkout would fetch the base repo's branch (which may
+          # not exist) and the review runs against an empty / wrong
+          # tree. `github.event.pull_request.head.repo.full_name` is the
+          # fork's owner/repo for forked PRs and the base repo for
+          # same-repo PRs, so it's safe in both modes. Codex P2 #422
+          # claude-review.yml:66.
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          # The inline-comment MCP server reads PR_NUMBER to know which
+          # PR to attach comments to. The action falls back to
+          # `github.event.pull_request.number` on `pull_request` runs,
+          # but on `workflow_dispatch` that's null -- so wire the
+          # dispatch input through explicitly. Codex P2 #422
+          # claude-review.yml:68.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The action's PR-review surface lives behind an MCP tool
+          # (`mcp__github_inline_comment__create_inline_comment`) that
+          # is NOT in the default allow-list when a custom `prompt:` is
+          # supplied (agent mode). Without this entry, Claude can read
+          # the diff but cannot post any inline review comment -- the
+          # workflow ran "successfully" on the first commit of this PR
+          # and produced zero output. Codex P1 #422 claude-review.yml:50.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment"
+          # Restrict to the dependency-bump bots that AGENTS.md gates
+          # apply to. `'*'` would also accept arbitrary third-party bots
+          # in public forks / scripted PRs, handing them the Claude
+          # OAuth + `pull-requests: write` token. Anthropic's security
+          # docs flag the wildcard. Codex P2 #422 claude-review.yml:84.
+          allowed_bots: 'dependabot[bot],renovate[bot]'
+          prompt: |
+            You are this repository's automated code reviewer. Open the
+            pull request's diff and review it end-to-end, then post
+            inline review comments on the specific lines that warrant
+            attention.
+
+            **AGENTS.md hard gate**: every comment you post must be
+            triaged + resolved before the PR can merge. Be SELECTIVE.
+            Only flag findings that change correctness, safety, or
+            shippability:
+
+            - Logic bugs, off-by-one, missing boundary checks, race
+              conditions (especially around the chord-cancel epoch
+              guard in `dictate::session`).
+            - Security: hard-coded secrets/keys, unvalidated subprocess
+              args, path-injection, panics on attacker-controlled input.
+            - Breaking API changes without migration path or deprecation
+              shim.
+            - Test coverage gaps on NEW production code (SonarCloud
+              gates at 80% new-code coverage and will block merge).
+            - **NEW** files exceeding 500 LOC -- propose a split. The
+              repo has pre-existing files over the limit (runtime.rs,
+              vp_transcribe.py, etc) that AGENTS.md grandfathers; only
+              flag files this PR adds or grows past 500. Codex P2 #422
+              claude-review.yml:105.
+            - Env-var mutations in tests without `ENV_LOCK` -- pattern
+              causes the 69-test cascade documented in recent PRs.
+            - Worker-event wire-format drift between the Rust and
+              Python emitters (`vp_events.py` is the parity reference).
+
+            **DO NOT post** comments for style, naming, micro-
+            optimisation, documentation phrasing, or any other nit --
+            those produce review-thread noise the hard gate forces a
+            developer to triage even when the suggestion isn't
+            actionable. Codex P2 #422 claude-review.yml:60.
+
+            **What linters/CI already cover** (skip):
+            - Formatting -- `cargo fmt` / `rustfmt` rules.
+            - Spelling -- `cspell.json` is the source of truth.
+            - Pure clippy nits already in the CI matrix.
+
+            **Project context** (read these BEFORE reviewing):
+            - `AGENTS.md` -- modularity rule (no file >500 LOC),
+              validation commands, model-economy guidance, the
+              pull-request-review hard gate you are part of.
+            - Recent commit messages reference `MEMORY.md` gotchas
+              (SSH signing via PowerShell, dev-check.ps1 Linux-leg
+              matrix, Sonar gate behaviour, the 69-test ENV_LOCK
+              cascade, the Wave 5 chord-cancel epoch race).
+            - Wave 5+ migration is gradually replacing the Python
+              orchestrator with Rust; new code should prefer Rust
+              unless deliberately deprecated Python kept for the
+              transition window.
+
+            Use the inline review comment surface
+            (`mcp__github_inline_comment__create_inline_comment`), NOT
+            a top-level "summary" comment, so every finding lands as a
+            resolvable review thread per the AGENTS.md hard gate.

@@ -92,23 +92,32 @@ requires.
 ## Pull request review
 
 **HARD GATE — do not merge with unaddressed automated-review comments.**
-CI green is not enough; fetch and triage Codex / Copilot / SonarCloud
-comments first.
+CI green is not enough; fetch and triage Claude / Codex / Copilot /
+SonarCloud comments first.
 
-- Before merging, wait for the auto-review to land (Codex typically posts
-  within 5-15 minutes of CI completing). Fetch ALL inline comments — use
-  `--paginate` because `per_page` defaults to 30 and a busy PR easily
-  exceeds that:
+**Claude is the primary auto-reviewer** (configured in
+`.github/workflows/claude-review.yml`). One round per PR, fired on
+`pull_request: opened`. The Codex code-review integration is being
+phased out as its quota runs out across the org; Codex comments on
+already-open PRs still need triage under this hard gate, but new PRs
+will not get an automatic Codex pass. If a developer wants a fresh
+Claude pass after pushing fixes, they `@claude` mention in a PR
+comment (handled by `claude.yml`).
+
+- Before merging, wait for the auto-review to land (Claude typically
+  posts within 5-10 minutes of the workflow firing). Fetch ALL inline
+  comments — use `--paginate` because `per_page` defaults to 30 and a
+  busy PR easily exceeds that:
 
   ```sh
   gh api --paginate repos/<owner>/<repo>/pulls/<pr>/comments \
-    --jq '.[] | select(.user.login | test("codex|copilot|sonar"; "i")) | select(.in_reply_to_id == null) | "[\(.path):\(.line // .original_line)] \(.body)"'
+    --jq '.[] | select(.user.login | test("claude|codex|copilot|sonar"; "i")) | select(.in_reply_to_id == null) | "[\(.path):\(.line // .original_line)] \(.body)"'
   ```
 
   Use `.line // .original_line` because outdated comments may have null
-  `.line`. The login filter covers Codex, Copilot, AND SonarCloud
-  (whose inline comments come from `sonarqubecloud[bot]`) — all three
-  are auto-review sources gated by this rule.
+  `.line`. The login filter covers Claude, Codex, Copilot, AND
+  SonarCloud (whose inline comments come from `sonarqubecloud[bot]`)
+  — all four are auto-review sources gated by this rule.
 
 - **For EVERY inline review comment, before merging, do all three:**
   1. **Fix or explicitly decline** the suggestion (push a follow-up commit, or
@@ -163,9 +172,11 @@ comments first.
   `in_reply_to=<comment_id>` so the audit trail stays inline. Apply to
   every PR including admin-merged dependency bumps.
 
-- After pushing changes, the next auto-review will see the new HEAD; no
-  manual re-request is needed in this repo (Codex auto-review is configured
-  to fire on every push to a PR branch).
+- Claude review is **one round per PR** (`pull_request: opened` only).
+  After pushing fixes the auto-pass does NOT re-run automatically; if
+  a fresh pass is genuinely useful (e.g. a substantial rewrite during
+  Codex/Copilot iteration), `@claude` mention in a PR comment fires
+  `claude.yml` for an on-demand review.
 
 - Apply this gate to every PR, including scripted or batch merges.
 
