@@ -1006,7 +1006,70 @@ impl RuntimeSupervisor {
         self.suspend_session_sink_on_exit();
     }
 
+    /// Drain pending [`external_toggle::ExternalCommand`]s from the
+    /// process-global channel (filled by the Unix signal handler installed
+    /// in [`external_toggle::install_signal_handlers`] and by the CLI
+    /// forwarder when it sends SIGUSR1/SIGUSR2). Each command is routed to
+    /// the active hotkey coordinator so the same `Stage::Idle` /
+    /// `Stage::Recording` / `Stage::Processing` guards apply uniformly,
+    /// regardless of whether the trigger came from a keyboard chord or a
+    /// compositor keybinding.
+    ///
+    /// When the Rust hotkey coordinator is not installed (e.g. the user is
+    /// on the Python backend, the default in most builds), each command
+    /// surfaces as a stderr event so the user sees the trigger arrived and
+    /// understands why nothing happened. Issue #326.
+    pub fn dispatch_external_commands(&self) {
+        for cmd in external_toggle::take_pending_commands() {
+            self.dispatch_external_command(cmd);
+        }
+    }
+
+    /// Single-shot variant of [`Self::dispatch_external_commands`] —
+    /// exposed for tests that synthesise commands directly without going
+    /// through the channel.
+    pub fn dispatch_external_command(&self, cmd: external_toggle::ExternalCommand) {
+        // Fast path: surface the trigger on the runtime event log so the UI
+        // shows external-toggle activity even when there's no coordinator
+        // to route it through.
+        let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+            "[external-toggle] received {cmd:?}"
+        )));
+        #[cfg(feature = "rust-hotkeys")]
+        {
+            use crate::hotkey::coordinator::CoordinatorEvent;
+            use external_toggle::ExternalCommand;
+            if let Some(handle) = self.hotkey_handle.as_ref() {
+                let event = match cmd {
+                    ExternalCommand::Toggle | ExternalCommand::Start | ExternalCommand::Stop => {
+                        CoordinatorEvent::ExternalToggle
+                    }
+                    ExternalCommand::Cancel => CoordinatorEvent::Cancel,
+                };
+                handle.send_event(event);
+                return;
+            }
+        }
+        // Either the binary was built without `rust-hotkeys`, or no
+        // coordinator has been installed for this run (Python backend).
+        // Surface a one-line stderr hint so users wiring the signal know
+        // why nothing happened. We intentionally don't drive the Python
+        // worker directly here — that needs a richer IPC and is tracked
+        // in the follow-up bullet on issue #326.
+        let _ = self.tx.send(RuntimeEvent::Stderr(
+            "[external-toggle] no Rust hotkey coordinator active; \
+             external triggers require VOICEPI_HOTKEY_BACKEND=rust on a \
+             binary built with --features rust-hotkeys"
+                .to_owned(),
+        ));
+    }
+
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
+        // Issue #326: drain any external triggers (SIGUSR1/SIGUSR2 or
+        // `whisper-dictate --toggle-recording`) BEFORE the regular
+        // child-status check so the resulting events land in this poll's
+        // output vec.
+        self.dispatch_external_commands();
         // Iteration-2 review finding #3: act on a terminal bridge error
         // BEFORE the regular try_wait. The bridge watcher has already
         // emitted a `RuntimeEvent::Error` describing the failure; here
@@ -2224,6 +2287,11 @@ pub mod single_instance;
 // unset OR the feature set is incomplete, the supervisor stays on
 // Python. PR 7 will flip the default and delete the Python orchestrator.
 pub mod worker_rust;
+// Issue #326: CLI flags + Unix signals (SIGUSR1 = toggle, SIGUSR2 = cancel)
+// for compositor-driven external triggers. Lives in its own file so
+// `runtime.rs` does not grow past the 500-LOC modularity guideline. See
+// the module docs for the wire protocol and the daemon-side install hook.
+pub mod external_toggle;
 // Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
 // wiring that drives a `DictateSession` from the hotkey coordinator's
 // action sink. Stays out of the production path until PR 6 flips the
@@ -2273,6 +2341,9 @@ mod audio_spawn_tests;
 mod bridge_terminal_tests;
 #[cfg(test)]
 mod desktop_entry_tests;
+// Issue #326: sibling tests for `external_toggle`.
+#[cfg(test)]
+mod external_toggle_tests;
 #[cfg(test)]
 mod hotkey_supervisor_tests;
 #[cfg(test)]

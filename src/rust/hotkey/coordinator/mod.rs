@@ -126,6 +126,20 @@ pub enum CoordinatorEvent {
     /// Foreign-key chord detected by the manager — discard any in-flight
     /// recording and return to Idle without transcribing.
     Cancel,
+    /// External toggle from the CLI / Unix signal IPC (issue #326). Behaves
+    /// like a [`Mode::Toggle`] press regardless of the configured
+    /// [`Options::mode`], so a compositor-driven `whisper-dictate
+    /// --toggle-recording` does the obvious thing even for hold-to-talk
+    /// users (their keyboard PTT keeps its hold semantics; the external
+    /// trigger flips start↔stop).
+    ///
+    /// State transitions:
+    /// - `Idle`           → `Recording` (StartRecording action).
+    /// - `Recording`      → `Processing` (StopAndTranscribe action).
+    /// - `Processing`     → latch `pending_press` so the next
+    ///   `ProcessingFinished` immediately starts a fresh recording —
+    ///   matches the keyboard "kept held across transcription" behaviour.
+    ExternalToggle,
     /// Stop the coordinator thread cleanly. Sent by
     /// [`CoordinatorHandle::shutdown`].
     Shutdown,
@@ -361,6 +375,29 @@ pub(super) fn step(
             // Dropping it without state change preserves the live
             // recording — without this guard the recording would be
             // silently abandoned with no matching stop (P2 #9).
+            None
+        }
+        (CoordinatorEvent::ExternalToggle, Stage::Idle) => {
+            // External triggers are intentional, user-driven actions from
+            // a compositor keybinding. Bypass the bouncing-key debounce —
+            // a user that just stopped a previous recording via SIGUSR1 and
+            // immediately fires another one should get the next start, not
+            // a silent no-op (issue #326).
+            start_recording(state, now)
+        }
+        (CoordinatorEvent::ExternalToggle, Stage::Recording(id)) => {
+            // Mode-agnostic stop: hold-to-talk users still benefit from the
+            // toggle behaviour when the trigger came from outside the
+            // keyboard. Their keyboard PTT continues to bracket recordings;
+            // this branch only matters for SIGUSR1 / `--toggle-recording`.
+            state.stage = Stage::Processing(id);
+            Some(CoordinatorAction::StopAndTranscribe(id))
+        }
+        (CoordinatorEvent::ExternalToggle, Stage::Processing(_)) => {
+            // Same latch as a held keyboard press during Processing — the
+            // next ProcessingFinished will fire StartRecording so the user
+            // doesn't have to re-fire the signal manually.
+            state.pending_press = true;
             None
         }
         (CoordinatorEvent::Shutdown, _) => None,

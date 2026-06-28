@@ -574,3 +574,111 @@ fn toggle_press_during_processing_survives_key_release() {
     assert_eq!(s.stage, Stage::Recording(2));
     assert!(!s.pending_press);
 }
+
+// --- ExternalToggle (issue #326) -------------------------------------------
+
+#[test]
+fn external_toggle_starts_recording_from_idle_in_hold_to_talk_mode() {
+    // A compositor-driven SIGUSR1 / `--toggle-recording` must start a
+    // recording even when the configured PTT mode is hold-to-talk —
+    // external triggers are mode-agnostic by design (#326).
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    let action = step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalToggle);
+    assert_eq!(action, Some(CoordinatorAction::StartRecording(1)));
+    assert_eq!(s.stage, Stage::Recording(1));
+}
+
+#[test]
+fn external_toggle_stops_recording_in_hold_to_talk_mode() {
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalToggle);
+    let action = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(200),
+        CoordinatorEvent::ExternalToggle,
+    );
+    assert_eq!(action, Some(CoordinatorAction::StopAndTranscribe(1)));
+    assert_eq!(s.stage, Stage::Processing(1));
+}
+
+#[test]
+fn external_toggle_bypasses_debounce_so_back_to_back_triggers_take_effect() {
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalToggle);
+    step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(1),
+        CoordinatorEvent::Cancel,
+    );
+    // Manually arm a recent press timestamp so a regular `Press` would be
+    // debounce-dropped; ExternalToggle must IGNORE the debounce window.
+    s.last_idle_press = Some(t0);
+    let action = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(5),
+        CoordinatorEvent::ExternalToggle,
+    );
+    assert_eq!(action, Some(CoordinatorAction::StartRecording(2)));
+}
+
+#[test]
+fn external_toggle_latches_during_processing_and_restarts_on_finish() {
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalToggle);
+    step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(500),
+        CoordinatorEvent::ExternalToggle,
+    );
+    assert_eq!(s.stage, Stage::Processing(1));
+    let queued = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(700),
+        CoordinatorEvent::ExternalToggle,
+    );
+    assert_eq!(queued, None);
+    assert!(
+        s.pending_press,
+        "external toggle while Processing must latch"
+    );
+    let next = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(900),
+        CoordinatorEvent::ProcessingFinished(1),
+    );
+    assert_eq!(next, Some(CoordinatorAction::StartRecording(2)));
+}
+
+#[test]
+fn external_toggle_in_toggle_mode_behaves_like_press() {
+    // For users already on toggle mode, ExternalToggle and Press are
+    // functionally equivalent — the variant exists so hold-to-talk users
+    // can still get sensible external semantics without changing their
+    // keyboard mode.
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    let start = step(
+        &mut s,
+        toggle_options(),
+        t0,
+        CoordinatorEvent::ExternalToggle,
+    );
+    assert_eq!(start, Some(CoordinatorAction::StartRecording(1)));
+    let stop = step(
+        &mut s,
+        toggle_options(),
+        t0 + Duration::from_millis(200),
+        CoordinatorEvent::ExternalToggle,
+    );
+    assert_eq!(stop, Some(CoordinatorAction::StopAndTranscribe(1)));
+}

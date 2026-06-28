@@ -38,6 +38,18 @@ fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Issue #326: forward `--toggle-recording` / `--start-recording` /
+    // `--stop-recording` / `--cancel-recording` to the running daemon
+    // BEFORE any subcommand dispatch (or the single-instance gate). The
+    // flags are mutually exclusive with each other AND with the subcommand
+    // path (enforced by clap), so this branch always wins over the UI
+    // fallback when set. Exits 0 on success, non-zero with a clear message
+    // when no daemon is running (so the user's wm keybinding shows a
+    // helpful error instead of silently failing).
+    if let Some(cmd) = cli.external_command() {
+        return runtime::external_toggle::forward_command(cmd);
+    }
+
     // Issue #327 single-instance gate. Runs BEFORE dispatch so a second
     // invocation short-circuits without touching any subcommand handler
     // (which would otherwise fight for the same hotkey / tray slot).

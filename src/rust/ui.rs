@@ -244,6 +244,25 @@ pub fn run() -> Result<()> {
     #[cfg(not(feature = "ui-egui-wgpu"))]
     let renderer = eframe::Renderer::Glow;
 
+    // Issue #326: write the daemon PID file and (on Linux) install the
+    // SIGUSR1/SIGUSR2 handlers BEFORE eframe takes the main thread. The
+    // returned guard removes the PID file on a clean exit; we bind it to a
+    // variable that lives for the whole UI lifetime so its Drop fires at
+    // shutdown. A failure here is logged but does NOT abort the UI — the
+    // user still gets a working app, just without external-toggle support
+    // for this session.
+    let _external_toggle_guard = match runtime::external_toggle::install_signal_handlers() {
+        Ok(guard) => guard,
+        Err(err) => {
+            eprintln!(
+                "[external-toggle] could not install signal handlers / PID file: {err}; \
+                 `whisper-dictate --toggle-recording` and `kill -USR1` will not work \
+                 for this session"
+            );
+            None
+        }
+    };
+
     let options = eframe::NativeOptions {
         renderer,
         viewport: egui::ViewportBuilder::default()
