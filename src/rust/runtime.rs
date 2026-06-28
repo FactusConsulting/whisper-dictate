@@ -525,21 +525,32 @@ impl RuntimeSupervisor {
             // restarting the whole process. The coordinator mode
             // (hold-to-talk vs. toggle) is fixed at install time; mode
             // changes require an app restart.
-            let key_names = extract_hotkey_key_names(&effective_command);
-            let keys_supported =
-                !key_names.is_empty() && crate::hotkey::validate_key_names(&key_names).is_ok();
-            if !key_names.is_empty() && !keys_supported {
-                eprintln!(
-                    "[hotkey] resume skipped: PTT keys {key_names:?} are not \
-                     supported by the Rust backend; keeping Python listener \
-                     engaged and skipping resume"
-                );
-            }
-            if keys_supported {
-                if rust_session_sink::dictate_backend_rust_session_requested() {
-                    disable_python_hotkey(&mut effective_command);
+            //
+            // The branch decision is extracted to `restart_hotkey_decision`
+            // so the three-way gate (no-key / unsupported / resume) is
+            // unit-testable without populating a live HotkeyHandle (Codex
+            // P2 PR #421 runtime.rs:530).
+            match restart_hotkey_decision(
+                &effective_command,
+                rust_session_sink::dictate_backend_rust_session_requested(),
+            ) {
+                RestartHotkeyDecision::SkipNoKey => {}
+                RestartHotkeyDecision::SkipUnsupported { key_names } => {
+                    eprintln!(
+                        "[hotkey] resume skipped: PTT keys {key_names:?} are not \
+                         supported by the Rust backend; keeping Python listener \
+                         engaged and skipping resume"
+                    );
                 }
-                handle.resume(key_names);
+                RestartHotkeyDecision::Resume {
+                    key_names,
+                    park_python,
+                } => {
+                    if park_python {
+                        disable_python_hotkey(&mut effective_command);
+                    }
+                    handle.resume(key_names);
+                }
             }
         }
 
@@ -1397,6 +1408,63 @@ pub fn disable_python_hotkey(command: &mut WorkerCommand) {
     command.env.push((KEY.to_owned(), "0".to_owned()));
 }
 
+/// Outcome of the restart-path key-binding decision (see
+/// [`restart_hotkey_decision`]). Mapped 1:1 onto the supervisor's
+/// restart branch in [`RuntimeSupervisor::start`] (`else if let
+/// Some(handle) = self.hotkey_handle.as_ref()`):
+///
+/// * [`SkipNoKey`](Self::SkipNoKey) — `VOICEPI_KEY` is unset or blank;
+///   nothing to resume. The previous successful install handled the
+///   Python-park gate; this branch must leave it alone.
+/// * [`SkipUnsupported`](Self::SkipUnsupported) — the configured key
+///   is not in the Rust (rdev) supported list. The supervisor MUST
+///   NOT park Python on this branch — otherwise PTT goes silent for
+///   the whole session, the regression Codex P2 PR #421
+///   runtime.rs:530 guards against.
+/// * [`Resume`](Self::Resume) — the key is supported; the supervisor
+///   calls `handle.resume(key_names)`. `park_python` is true only
+///   when [`rust_session_sink::dictate_backend_rust_session_requested`]
+///   is true (the in-process session sink owns the lifecycle).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RestartHotkeyDecision {
+    SkipNoKey,
+    SkipUnsupported {
+        key_names: Vec<String>,
+    },
+    Resume {
+        key_names: Vec<String>,
+        park_python: bool,
+    },
+}
+
+/// Pure decision helper for the supervisor's restart-path branch.
+/// Extracted so the gate is unit-testable WITHOUT populating a live
+/// [`crate::hotkey::HotkeyHandle`] (which requires the `rust-hotkeys`
+/// feature plus a working rdev install — neither available in
+/// headless CI).
+///
+/// Codex P2 PR #421 runtime.rs:530 — the matching unit test in
+/// `hotkey_supervisor_tests` asserts the three branches of this
+/// helper so a future edit that flipped the gate (e.g. parking
+/// Python BEFORE validating) would have to fail a test before it
+/// could land.
+pub(crate) fn restart_hotkey_decision(
+    command: &WorkerCommand,
+    rust_session_requested: bool,
+) -> RestartHotkeyDecision {
+    let key_names = extract_hotkey_key_names(command);
+    if key_names.is_empty() {
+        return RestartHotkeyDecision::SkipNoKey;
+    }
+    if crate::hotkey::validate_key_names(&key_names).is_err() {
+        return RestartHotkeyDecision::SkipUnsupported { key_names };
+    }
+    RestartHotkeyDecision::Resume {
+        key_names,
+        park_python: rust_session_requested,
+    }
+}
+
 /// Whether the user requested the Rust-side hotkey backend via
 /// `VOICEPI_HOTKEY_BACKEND=rust`. Pure helper so the gate is unit-testable.
 /// Delegates to [`crate::hotkey::rust_hotkey_backend_requested`].
@@ -2097,12 +2165,16 @@ mod install_plan_tests;
 #[cfg(test)]
 mod process_capture_tests;
 // Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split
-// out of the production module to keep each file under the ~500-LOC
-// modularity guideline. Coverage-uplift tests live in a second
-// sibling file so the original test module stays focused on the
-// public contract and the new file targets Sonar gate uplift.
+// across three files to keep each under the ~500-LOC modularity
+// guideline (AGENTS.md "Review guidelines", Codex P2 PR #421):
+// - `rust_session_sink_tests`: pure helpers + EventForwarder framing.
+// - `rust_session_sink_coverage_tests`: Sonar gate-uplift targets.
+// - `rust_session_sink_e2e_tests`: synthetic Press/Release/Cancel
+//   integration tests through the coordinator + session.
 #[cfg(test)]
 mod rust_session_sink_coverage_tests;
+#[cfg(test)]
+mod rust_session_sink_e2e_tests;
 #[cfg(test)]
 mod rust_session_sink_tests;
 #[cfg(test)]
