@@ -8,7 +8,7 @@
 //! `#[cfg(test)]` so it never compiles into a release binary.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 
@@ -155,4 +155,32 @@ pub(super) fn backend_with_clipboard(
     EnigoInjectBackend::new(injector, method)
         .with_clipboard(Box::new(clipboard))
         .with_restore_delay(Duration::ZERO)
+}
+
+/// Block until `clip` reports `expected` contents (via `read_contents`,
+/// which does NOT bump `read_count`) or `timeout` elapses. Returns
+/// `true` if the value was observed in time.
+///
+/// Paste-mode injection now hands the clipboard restore off to a
+/// detached daemon thread (Codex P2 #419 inject.rs:337), so any test
+/// that asserts the post-restore clipboard state must poll rather than
+/// read immediately after `inject()` returns. Centralising the poll
+/// here keeps each call site short and prevents accidental tight-loop
+/// busy-waits in individual tests.
+pub(super) fn wait_for_clipboard(
+    clip: &RecordingClipboard,
+    expected: Option<&str>,
+    timeout: Duration,
+) -> bool {
+    let expected = expected.map(str::to_owned);
+    let deadline = Instant::now() + timeout;
+    loop {
+        if clip.read_contents() == expected {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }

@@ -37,7 +37,14 @@
 //!    can pass [`Duration::ZERO`]. Paste-mode injection without a
 //!    configured clipboard returns [`InjectError::Backend`] rather than
 //!    silently pasting stale data — surfacing the misconfiguration
-//!    loudly instead of mangling a transcript.
+//!    loudly instead of mangling a transcript. The restore delay runs
+//!    on a detached background thread so [`InjectBackend::inject`]
+//!    returns as soon as the chord has been dispatched — without that
+//!    split, every paste-mode utterance would block
+//!    `DictateSession::stop_and_transcribe` (and therefore the next PTT)
+//!    for the full 2 s clipboard-restore window (Codex P2 #419
+//!    inject.rs:337, parity with `vp_inject.py`'s daemon-thread
+//!    `_restore_clipboard_after_delay`).
 //! 2. **Stale push-to-talk modifiers.** A modifier PTT (Shift / Ctrl /
 //!    Alt / Cmd) is held physically THROUGH the dictation: when the
 //!    inject burst lands, the OS still sees the modifier down, so a
@@ -74,7 +81,7 @@
 //! today. PR 5 / the supervisor can layer its own `Arc<Mutex<…>>` on
 //! top if a session needs to cross threads.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
@@ -129,7 +136,17 @@ struct State {
     /// generic parameter so the wrapper can sit behind
     /// `Box<dyn InjectBackend>` in the dictate-session sink without
     /// leaking a phantom type parameter.
-    clipboard: Option<Box<dyn Clipboard>>,
+    ///
+    /// Wrapped in `Arc<Mutex<…>>` (and bounded `+ Send`) so the
+    /// detached restore thread spawned by `inject_via_paste` can hold
+    /// its own handle — see [`spawn_clipboard_restore`] / Codex P2 #419
+    /// inject.rs:337. The outer `State` mutex serialises inject calls;
+    /// the inner clipboard mutex separately serialises clipboard
+    /// access between the inject thread (initial save+write) and the
+    /// background restore thread (deferred restore). Both locks are
+    /// held only for the duration of a single OS clipboard call so
+    /// contention is negligible.
+    clipboard: Option<Arc<Mutex<Box<dyn Clipboard + Send>>>>,
 }
 
 /// Production [`InjectBackend`] wrapping [`Injector`].
@@ -210,13 +227,20 @@ impl EnigoInjectBackend {
     /// previous value after the paste chord fires (via [`PasteGuard`]).
     /// Required for [`InjectMethod::Paste`] — typing mode ignores it
     /// entirely so a typing-only wrapper can skip this step.
-    pub fn with_clipboard(mut self, clipboard: Box<dyn Clipboard>) -> Self {
+    pub fn with_clipboard(mut self, clipboard: Box<dyn Clipboard + Send>) -> Self {
         // `get_mut` skips the lock entirely; safe because `self` is owned
         // here so no other reference to the Mutex can exist.
+        //
+        // Wrap in `Arc<Mutex<…>>` at install time so the inject path can
+        // share the handle with the detached restore thread without
+        // re-allocating per call. The `+ Send` bound on the trait
+        // object is what lets the inner `Mutex` (and therefore the
+        // `Arc`) be `Sync` — required to cross the thread boundary
+        // into the restore worker.
         self.inner
             .get_mut()
             .expect("freshly-constructed mutex is uncontended")
-            .clipboard = Some(clipboard);
+            .clipboard = Some(Arc::new(Mutex::new(clipboard)));
         self
     }
 
@@ -289,18 +313,20 @@ impl InjectBackend for EnigoInjectBackend {
 /// Paste-mode injection arm: own the clipboard copy/restore so the
 /// dispatcher's "Python-already-copied" assumption holds even when the
 /// caller is a Rust-native `DictateSession`. Codex P1 #417 inject.rs:110
-/// + Codex P1 #419 inject.rs:266 (restore-delay parity with Python).
+/// + Codex P1 #419 inject.rs:266 (restore-delay parity with Python)
+/// + Codex P2 #419 inject.rs:337 (detached restore so the inject thread
+/// is never blocked by the wall-clock wait).
 ///
 /// Pulled into a free function so the borrow story stays obvious — the
 /// caller destructures `state` once and the function owns the disjoint
-/// `&mut Injector` + `&mut dyn Clipboard` borrows from there.
+/// `&mut Injector` + `Arc<Mutex<…>>` clipboard handle from there.
 fn inject_via_paste(
     state: &mut State,
     text: &str,
     method: InjectMethod,
     restore_delay: Duration,
 ) -> Result<(), InjectError> {
-    let clipboard = state.clipboard.as_deref_mut().ok_or_else(|| {
+    let clipboard = state.clipboard.as_ref().cloned().ok_or_else(|| {
         InjectError::Backend(
             "paste injection requires a clipboard backend; call \
              EnigoInjectBackend::with_clipboard before using Paste(_)"
@@ -311,40 +337,78 @@ fn inject_via_paste(
     // Save the previous clipboard + write the transcript. If the write
     // fails we abort BEFORE sending the chord — pasting whatever was
     // already on the clipboard would silently inject the wrong text.
-    let paste_guard = PasteGuard::copy_with_backup(clipboard, text).ok_or_else(|| {
-        InjectError::Backend(
-            "clipboard write failed; refusing to send paste shortcut \
-             against stale clipboard contents"
-                .to_owned(),
-        )
-    })?;
+    //
+    // The inner clipboard mutex is released as soon as the save+write
+    // finishes so the detached restore thread (or a concurrent
+    // unrelated reader) is not blocked behind the injector call below.
+    let paste_guard = {
+        let mut clip_guard = clipboard
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        PasteGuard::copy_with_backup(&mut **clip_guard, text).ok_or_else(|| {
+            InjectError::Backend(
+                "clipboard write failed; refusing to send paste shortcut \
+                 against stale clipboard contents"
+                    .to_owned(),
+            )
+        })?
+    };
 
     let inject_result = state
         .injector
         .inject_text(text, method)
         .map_err(|e| InjectError::Backend(format!("{e:#}")));
 
-    // Hold the paste guard alive until the target has had time to read
-    // the clipboard. Wayland / wl-copy serves contents at request time
-    // and slower GUI apps poll the clipboard async — restoring instantly
-    // races the paste itself and the target ends up with the user's
-    // previous clipboard contents instead of the dictated text. Mirrors
-    // Python's `_restore_clipboard_after_delay` (`time.sleep(2.0)` on
-    // its daemon thread). Skipped when the caller pinned
-    // `Duration::ZERO` — production keeps the 2 s default, tests pass
-    // ZERO. Codex P1 #419 inject.rs:266.
-    if !restore_delay.is_zero() {
-        std::thread::sleep(restore_delay);
-    }
-
-    // Restore the previous clipboard whether or not the chord went
-    // through — the user's prior clipboard contents are sacred. The
-    // restore is gated on the clipboard still holding OUR text so a
-    // user mid-paste copy is never clobbered; that check lives in
-    // `PasteGuard::restore` itself.
-    paste_guard.restore(clipboard);
+    // Hand the paste-guard restore off to a detached daemon thread so
+    // this function (and therefore `InjectBackend::inject`) returns as
+    // soon as the chord has been dispatched. Without that split,
+    // `DictateSession::stop_and_transcribe` would sit on the 2 s
+    // clipboard-restore window before emitting `ProcessingFinished`,
+    // which gates the next PTT — every paste-mode utterance would add
+    // a fixed 2 s wait before the user could speak again. Mirrors the
+    // Python path's `_restore_clipboard_after_delay` daemon thread.
+    // Codex P2 #419 inject.rs:337.
+    //
+    // The restore runs irrespective of the inject result — the user's
+    // prior clipboard contents are sacred, and `PasteGuard::restore`
+    // already gates the write on the clipboard still holding OUR text
+    // so a mid-paste user copy is never clobbered.
+    spawn_clipboard_restore(clipboard, paste_guard, restore_delay);
 
     inject_result
+}
+
+/// Detached daemon-thread restore for the paste-mode clipboard guard.
+///
+/// Holds the cloned `Arc<Mutex<…>>` clipboard handle + the
+/// `PasteGuard` (owned `previous` + `injected` strings) so the
+/// background thread has everything it needs without further borrows
+/// from `State`. Best-effort: a spawn failure (essentially impossible
+/// on production OSes) silently drops the restore — losing a restore
+/// is strictly less bad than panicking the inject thread.
+///
+/// The thread is intentionally NOT joined: it's keyed to a fixed
+/// timeout and the parent process owns its lifetime via the daemon
+/// model (matching Python's `threading.Thread(..., daemon=True)`
+/// `_restore_clipboard_after_delay`). Tests synchronise on the
+/// observable side effect (the restore write landing on the recording
+/// clipboard) rather than on the thread handle.
+fn spawn_clipboard_restore(
+    clipboard: Arc<Mutex<Box<dyn Clipboard + Send>>>,
+    guard: PasteGuard,
+    restore_delay: Duration,
+) {
+    let _ = std::thread::Builder::new()
+        .name("inject-paste-restore".to_owned())
+        .spawn(move || {
+            if !restore_delay.is_zero() {
+                std::thread::sleep(restore_delay);
+            }
+            let mut clip_guard = clipboard
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.restore(&mut **clip_guard);
+        });
 }
 
 // Test modules live in sibling files (the `inject.rs` parent is a
@@ -354,6 +418,9 @@ fn inject_via_paste(
 #[cfg(test)]
 #[path = "inject_cleanup_tests.rs"]
 mod inject_cleanup_tests;
+#[cfg(test)]
+#[path = "inject_restore_tests.rs"]
+mod inject_restore_tests;
 #[cfg(test)]
 #[path = "inject_test_support.rs"]
 mod inject_test_support;
