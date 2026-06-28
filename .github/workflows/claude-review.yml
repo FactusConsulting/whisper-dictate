@@ -64,8 +64,24 @@ jobs:
           # On workflow_dispatch, point it at the resolved ref above so
           # the manual re-trigger actually reviews the right PR.
           ref: ${{ github.event_name == 'workflow_dispatch' && steps.dispatch_pr.outputs.ref || github.event.pull_request.head.ref }}
+          # Fork PRs live in a different repo; without this `repository:`
+          # the checkout would fetch the base repo's branch (which may
+          # not exist) and the review runs against an empty / wrong
+          # tree. `github.event.pull_request.head.repo.full_name` is the
+          # fork's owner/repo for forked PRs and the base repo for
+          # same-repo PRs, so it's safe in both modes. Codex P2 #422
+          # claude-review.yml:66.
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
 
       - uses: anthropics/claude-code-action@v1
+        env:
+          # The inline-comment MCP server reads PR_NUMBER to know which
+          # PR to attach comments to. The action falls back to
+          # `github.event.pull_request.number` on `pull_request` runs,
+          # but on `workflow_dispatch` that's null -- so wire the
+          # dispatch input through explicitly. Codex P2 #422
+          # claude-review.yml:68.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The action's PR-review surface lives behind an MCP tool
@@ -77,11 +93,12 @@ jobs:
           # and produced zero output. Codex P1 #422 claude-review.yml:50.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment"
-          # Dependency-bump PRs from bot accounts (Dependabot, Renovate)
-          # are also covered by the AGENTS.md hard gate, so the
-          # reviewer must accept bot actors. The action defaults to
-          # rejecting them. Codex P2 #422 claude-review.yml:50.
-          allowed_bots: '*'
+          # Restrict to the dependency-bump bots that AGENTS.md gates
+          # apply to. `'*'` would also accept arbitrary third-party bots
+          # in public forks / scripted PRs, handing them the Claude
+          # OAuth + `pull-requests: write` token. Anthropic's security
+          # docs flag the wildcard. Codex P2 #422 claude-review.yml:84.
+          allowed_bots: 'dependabot[bot],renovate[bot]'
           prompt: |
             You are this repository's automated code reviewer. Open the
             pull request's diff and review it end-to-end, then post
@@ -102,7 +119,11 @@ jobs:
               shim.
             - Test coverage gaps on NEW production code (SonarCloud
               gates at 80% new-code coverage and will block merge).
-            - Files exceeding 500 LOC -- propose a split.
+            - **NEW** files exceeding 500 LOC -- propose a split. The
+              repo has pre-existing files over the limit (runtime.rs,
+              vp_transcribe.py, etc) that AGENTS.md grandfathers; only
+              flag files this PR adds or grows past 500. Codex P2 #422
+              claude-review.yml:105.
             - Env-var mutations in tests without `ENV_LOCK` -- pattern
               causes the 69-test cascade documented in recent PRs.
             - Worker-event wire-format drift between the Rust and
