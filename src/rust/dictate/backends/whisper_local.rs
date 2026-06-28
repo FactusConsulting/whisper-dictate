@@ -38,6 +38,8 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use regex::Regex;
+
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -89,6 +91,21 @@ pub fn is_hallucination(text: &str) -> bool {
     let set = SET.get_or_init(|| EXACT_BLACKLIST.iter().copied().collect());
     let lowered = text.to_lowercase();
     set.contains(lowered.trim_end())
+}
+
+/// Collapse internal whitespace runs to a single space and trim both
+/// ends. Mirrors Python's
+/// `re.sub(r"\s+", " ", "".join(s.text for s in segment_list)).strip()`
+/// in `vp_transcribe.py::_transcribe_detail` — segments returned by
+/// whisper.cpp carry leading spaces on word boundaries, and a naive
+/// concatenation leaves runs of whitespace + leading/trailing slack
+/// that would (a) defeat the exact-match hallucination blacklist for
+/// strings like `" tak"` and (b) inject visible extra spaces.
+/// Codex P2 #417 whisper_local.rs:201.
+fn normalize_whitespace(text: &str) -> String {
+    static WS_RUN: OnceLock<Regex> = OnceLock::new();
+    let re = WS_RUN.get_or_init(|| Regex::new(r"\s+").expect("whitespace regex is valid"));
+    re.replace_all(text.trim(), " ").into_owned()
 }
 
 /// Per-call language + initial-prompt hints fed to whisper.cpp on every
@@ -174,15 +191,38 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         pcm: &[f32],
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError> {
-        let language_hint = self.config.language.as_deref();
-        let initial_prompt = self.config.initial_prompt.as_deref();
+        // Normalize the language hint up-front: an empty string from
+        // the settings layer must collapse to `None` so
+        // `LocalWhisper::transcribe_samples` triggers auto-detect.
+        // Without this an empty `Some("")` from the default config
+        // would be forwarded as a literal language code, which the
+        // whisper.cpp loader rejects with a cryptic error on the
+        // first real transcription. Same treatment for the prompt so
+        // the contract documented on `WhisperBackendConfig` actually
+        // holds. Codex P2 #417 whisper_local.rs:183.
+        let language_hint = self.config.language.as_deref().filter(|s| !s.is_empty());
+        let initial_prompt = self
+            .config
+            .initial_prompt
+            .as_deref()
+            .filter(|s| !s.is_empty());
 
         let start = Instant::now();
-        let text = self
+        let raw_text = self
             .model
             .with_model(|m| m.transcribe_samples(pcm, language_hint, initial_prompt))
             .map_err(|e| TranscribeError::Backend(format!("{e:#}")))?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        // Collapse whitespace runs + trim both ends BEFORE the
+        // blacklist check and BEFORE injection, matching Python's
+        // `re.sub(r"\s+", " ", ...).strip()` in `_transcribe_detail`.
+        // Without this a quiet-audio hallucination like `" tak"` would
+        // bypass the exact-match filter (which only trims the right
+        // end), and a normal segment with the typical leading
+        // whisper.cpp word-boundary space would be injected verbatim.
+        // Codex P2 #417 whisper_local.rs:201.
+        let text = normalize_whitespace(&raw_text);
 
         // `duration_s` from sample count + rate (Python computes the
         // same way once the PCM is in hand — see `vp_transcribe.py::

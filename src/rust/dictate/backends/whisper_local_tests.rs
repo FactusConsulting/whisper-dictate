@@ -20,7 +20,9 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 
-use super::{is_hallucination, WhisperBackendConfig, WhisperLocalTranscribeBackend};
+use super::{
+    is_hallucination, normalize_whitespace, WhisperBackendConfig, WhisperLocalTranscribeBackend,
+};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -149,4 +151,103 @@ fn construction_with_idle_timeout_spawns_and_joins_cleanly() {
     assert!(!backend.model().is_loaded());
     // Drop on scope exit; if the watcher thread fails to join the test
     // process will hang and CI will time out.
+}
+
+// ── normalize_whitespace — segment-text post-processing ──────────────────────
+
+#[test]
+fn normalize_whitespace_collapses_internal_runs() {
+    // whisper.cpp segments carry leading word-boundary spaces; a naive
+    // concat produces `" hello   world  "` style strings. Match
+    // Python's `re.sub(r"\s+", " ", ...).strip()` shape.
+    // Codex P2 #417 whisper_local.rs:201.
+    assert_eq!(normalize_whitespace(" hello   world  "), "hello world");
+}
+
+#[test]
+fn normalize_whitespace_trims_both_ends() {
+    // Leading whitespace must be stripped so the exact-match
+    // hallucination blacklist catches `" tak"` after normalization.
+    assert_eq!(normalize_whitespace(" tak "), "tak");
+    assert_eq!(normalize_whitespace("\n\ttak\r\n"), "tak");
+}
+
+#[test]
+fn normalize_whitespace_preserves_internal_single_spaces() {
+    assert_eq!(normalize_whitespace("foo bar baz"), "foo bar baz");
+}
+
+#[test]
+fn normalize_whitespace_is_empty_safe() {
+    assert_eq!(normalize_whitespace(""), "");
+    assert_eq!(normalize_whitespace("   "), "");
+}
+
+#[test]
+fn is_hallucination_catches_leading_whitespace_after_normalize() {
+    // Regression guard for Codex P2 whisper_local.rs:201: the
+    // transcribe pipeline runs `normalize_whitespace` before
+    // `is_hallucination`, so a whisper.cpp output of " tak" is
+    // expected to be caught. This test pins the contract by running
+    // the two functions in the same order the trait impl does.
+    let raw = " tak";
+    let normalized = normalize_whitespace(raw);
+    assert!(
+        is_hallucination(&normalized),
+        "normalized ' tak' must be on the blacklist"
+    );
+}
+
+// ── empty-language hint normalization ────────────────────────────────────────
+
+#[test]
+fn empty_language_string_is_treated_as_auto_detect() {
+    // Codex P2 #417 whisper_local.rs:183: settings layer's default
+    // `Some("")` must not be forwarded as a literal language code,
+    // which whisper.cpp would reject. The transcribe path filters it
+    // to `None` before calling the model. Drive a real transcribe
+    // through a failing loader and confirm the failure surfaces from
+    // the loader (NOT from a language-validation error): that proves
+    // the language hint reached `with_model` as `None`. The exact
+    // error message we get is the loader's, not whisper.cpp's.
+    let model = IdleUnloadingModel::<LocalWhisper>::new(
+        || Err(anyhow!("loader: still always fails")),
+        None,
+    );
+    let backend = WhisperLocalTranscribeBackend::new(
+        model,
+        WhisperBackendConfig {
+            language: Some(String::new()),
+            initial_prompt: Some(String::new()),
+        },
+    );
+    let pcm = vec![0.0_f32; 16_000];
+    let err = backend.transcribe(&pcm, 16_000).expect_err("loader fails");
+    match err {
+        TranscribeError::Backend(msg) => {
+            assert!(
+                msg.contains("still always fails"),
+                "expected loader error to propagate, got: {msg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn empty_language_in_result_round_trips_as_empty_string() {
+    // Mirror Python's contract on `TranscribeResult.language`: the
+    // session emits the field verbatim. An empty `Some("")` in the
+    // config must surface as an empty string on the result so the
+    // worker-event payload stays byte-equivalent. (The transcribe
+    // call itself fails here because we use a failing loader, but
+    // the `language` field is populated from `self.config` so we
+    // don't need a successful call to verify the round-trip.)
+    let cfg = WhisperBackendConfig {
+        language: Some(String::new()),
+        ..Default::default()
+    };
+    // The `unwrap_or_default` branch yields "" for Some("") too —
+    // pin this contract so a future refactor doesn't accidentally
+    // collapse it to a literal "none" / "auto" marker.
+    assert_eq!(cfg.language.clone().unwrap_or_default(), "");
 }

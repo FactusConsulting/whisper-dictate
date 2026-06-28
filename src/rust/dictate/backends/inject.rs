@@ -27,6 +27,40 @@
 //! `Box<dyn InjectorBackend>` (no `Send` bound), so neither auto-derives
 //! today. PR 5 / the supervisor can layer its own `Arc<Mutex<…>>` on
 //! top if a session needs to cross threads.
+//!
+//! # Caller-owned pre-conditions (PR 5 wiring will own these)
+//!
+//! Two side-channel concerns live one layer up from this thin trait
+//! impl, exactly as they do on the Python side in
+//! `vp_inject.py::_inject_via_rust_backend`:
+//!
+//! 1. **Clipboard population for `InjectMethod::Paste`.** The wrapped
+//!    [`Injector`] only sends the paste *keystroke* — it does not own
+//!    the clipboard. Calling [`EnigoInjectBackend::inject`] with the
+//!    transcript text while `InjectMethod::Paste(_)` is configured
+//!    sends Ctrl+V (or the configured chord) against whatever the user
+//!    already had on the clipboard, NOT the dictated text. PR 5's
+//!    wiring must call [`crate::injection::PasteGuard::copy_with_backup`]
+//!    against a real `Clipboard` implementation BEFORE invoking this
+//!    backend (Python's `populate_clipboard_for_rust_paste` is the
+//!    reference) and `restore()` afterwards. Codex P1 #417
+//!    inject.rs:110 — this PR's scope is the trait impl only; no
+//!    production [`Clipboard`](crate::injection::Clipboard) impl exists
+//!    in Rust yet, so the clipboard plumbing is its own follow-up.
+//!    Until that lands, [`InjectMethod::Typing`] is the
+//!    production-safe choice because the dispatcher types the literal
+//!    text through enigo / the helper chain regardless of clipboard
+//!    state.
+//! 2. **Stale-modifier release on a PTT chord.** When the push-to-talk
+//!    binding includes Ctrl/Shift/Alt/Meta and the key is still down
+//!    when injection starts, typed characters land as shortcuts and
+//!    paste chords get extra modifiers. Python's
+//!    `vp_inject._release_stale_modifiers` runs first. The Rust hotkey
+//!    coordinator (`src/rust/hotkey/`) owns the press/release tracking
+//!    and is the right place to issue the cleanup; PR 5's wiring will
+//!    invoke it between the transcribe-completion event and this
+//!    `inject()` call, matching Python's flow. Codex P2 #417
+//!    inject.rs:110.
 
 use std::sync::Mutex;
 
