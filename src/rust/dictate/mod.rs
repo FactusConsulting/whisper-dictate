@@ -44,6 +44,15 @@
 //!   caller yet — PR 2 routes the supervisor through it once the wire
 //!   format is locked by the tests in `events_tests.rs`.
 
+// Wave 5 PR 3 (#348): the bridge that pumps `AudioPipeline` events
+// into a `DictateSession`. Gated on the `audio-in-rust` feature
+// because the `audio` module — and therefore `PipelineEvent` /
+// `AudioPipeline` — only compiles with that feature on. No production
+// caller in this PR; PR 4 wires it from the supervisor. See module
+// docs for the four behaviour gates it mirrors from
+// `vp_capture_rust_stdin.py`.
+#[cfg(feature = "audio-in-rust")]
+pub mod audio_route;
 pub mod backend;
 pub mod env_gates;
 pub mod events;
@@ -67,3 +76,9 @@ pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};
 
 #[cfg(test)]
 mod events_tests;
+
+// Wave 5 PR 3 (#348): unit tests for the audio_route bridge. Gated on
+// `audio-in-rust` because the tests construct `PipelineEvent`s from
+// the audio module (no cpal usage — see audio_route_tests.rs).
+#[cfg(all(test, feature = "audio-in-rust"))]
+mod audio_route_tests;
