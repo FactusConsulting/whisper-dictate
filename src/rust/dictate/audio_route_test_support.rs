@@ -125,6 +125,7 @@ pub(super) fn route_with_cap(cap_seconds: Option<f64>) -> AudioRoute<TestTranscr
         session,
         RouteConfig {
             max_record_seconds: cap_seconds,
+            ..RouteConfig::default()
         },
     )
 }

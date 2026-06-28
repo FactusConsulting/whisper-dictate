@@ -160,6 +160,13 @@ fn max_record_cap_refuses_over_cap_frames_and_emits_capped_status() {
 fn cap_tripped_recording_closes_normally_on_stop_recording() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    // Pin VOICEPI_MIN_RECORD_SECONDS to 0 so the round-7-D env-refresh
+    // in start_recording does not inject the 0.5 s default, which
+    // would push the 0.36 s buffer below the floor and into the
+    // too-short skip branch. The skip helper still raises the
+    // effective floor to the 0.3 s misfire absolute, which the 0.36 s
+    // cap remains above. Codex P2 #415 audio_route.rs:250 (round 7-D).
+    let _min_env = EnvVarGuard::set("VOICEPI_MIN_RECORD_SECONDS", "0");
     // Cap = 0.36 s = 5760 samples (above the 0.3 s misfire floor in
     // `crate::dictate::skip`, so the buffered audio reaches the
     // transcriber rather than the too-short skip branch).

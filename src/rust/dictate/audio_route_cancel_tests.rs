@@ -187,15 +187,23 @@ fn route_epoch_matches_session_epoch() {
     assert_eq!(route.epoch(), route.session().epoch());
 }
 
-/// `fence_pending_frames` is a documentation hook the supervisor calls
-/// between stop and start to acknowledge it has drained the pipeline
-/// receiver. The body is currently empty; this test pins the method
-/// signature so a future change cannot quietly remove it.
+/// `fence_pending_frames` is the supervisor's between-recordings
+/// drain hook. Round 7-A (Codex P2 #415 audio_route.rs:368) replaced
+/// the round-6 no-op body with a real callback-driven drain; this
+/// test pins the new signature -- a `FnMut() -> Option<PipelineEvent>`
+/// drain callback + a `usize` drained-count return -- so a future
+/// refactor cannot quietly weaken it. The deep behaviour assertions
+/// (stale events discarded, counter bumped, post-fence buffer clean)
+/// live in `audio_route_round7_tests.rs`.
 #[test]
-fn fence_pending_frames_compiles_and_returns_unit() {
+fn fence_pending_frames_signature_pin() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let _cap_env = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", "0");
     let mut route = route_with_cap(None);
-    route.fence_pending_frames(); // returns ()
+    // Empty drain callback -- behaviour is exercised in round7_tests;
+    // here we just pin the type.
+    let drained: usize = route.fence_pending_frames(|| None);
+    assert_eq!(drained, 0);
+    assert_eq!(route.fences_run(), 1);
 }

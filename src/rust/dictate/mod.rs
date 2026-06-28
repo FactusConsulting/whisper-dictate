@@ -90,3 +90,9 @@ mod audio_route_tests;
 // audio_route_tests.rs stays under the AGENTS.md ~500 LOC bar.
 #[cfg(all(test, feature = "audio-in-rust"))]
 mod audio_route_cancel_tests;
+// Round-7 follow-ups (Codex P2 findings on #415: fence drain, start-
+// ordering, min-record live-reload). Sibling test file for the same
+// 500-LOC reason -- see `audio_route_round7_tests.rs` for the per-
+// finding test rationale.
+#[cfg(all(test, feature = "audio-in-rust"))]
+mod audio_route_round7_tests;
