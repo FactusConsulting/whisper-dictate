@@ -525,6 +525,34 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "manual dispatch is enough and the per-push spam was the bug",
         )
 
+    def test_dev_check_wrapper_mirrors_ci_rust_matrix_legs(self):
+        # Codex P2 #418 dev-check.ps1:121 + :51: the pre-push wrapper
+        # must drive the same Rust legs CI runs (fmt-check + clippy +
+        # default test + rust-hotkeys test + audio-in-rust test);
+        # running only the default leg locally lets a feature-gated
+        # regression slip through. Lock the four cargo invocations
+        # (fmt, clippy, default test, two feature-gated tests) into
+        # the script body so a future refactor cant silently shrink
+        # the matrix.
+        script = Path("scripts/dev/dev-check.ps1").read_text(encoding="utf-8")
+        for needle in [
+            "cargo fmt --all -- --check",
+            "cargo clippy (ui-egui-glow)",
+            "cargo test (default)",
+            "cargo test --features rust-hotkeys",
+            "cargo test --features audio-in-rust",
+        ]:
+            self.assertIn(
+                needle, script,
+                f"dev-check.ps1 must drive `{needle}` to match CIs ubuntu rust matrix",
+            )
+        # Also assert the wrapper still uses Docker Desktop, not the
+        # earlier rancher-desktop WSL routing (which kept failing on
+        # silent distro unregistration).
+        self.assertIn("--context $DockerContext", script)
+        self.assertIn("desktop-linux", script)
+        self.assertNotIn("rancher-desktop", script)
+
     def test_rust_crate_is_flat_single_crate_under_src_rust(self):
         # The Rust code lives directly under src/rust as a single crate — no
         # workspace wrapper and no nested per-crate subdirectory.
