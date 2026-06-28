@@ -267,6 +267,10 @@ fn route_config_from_env_parses_max_record_seconds() {
 /// Codex P2 #415 audio_route.rs:358) and returns `RouteError::Device`.
 #[test]
 fn device_error_emits_capture_lost_status_and_returns_route_error() {
+    // Codex P2 #415 audio_route.rs:409 (round 4): the actionable error
+    // text MUST land under `reason` so the UI status logger's allowlist
+    // forwards it onto the status card. The legacy `message` field is
+    // preserved for any raw-stream consumer that greps for it.
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let mut route = route_with_cap(None);
@@ -293,10 +297,20 @@ fn device_error_emits_capture_lost_status_and_returns_route_error() {
         Some("capture_lost"),
         "DeviceError sets `state=capture_lost` — the canonical UI state for an unrecoverable capture failure",
     );
+    // Codex P2 #415 audio_route.rs:409: the UI status logger forwards
+    // a fixed allowlist (`src/rust/ui/worker_event.rs:12-24`) that
+    // includes `reason` but NOT `message`. Without this, every real
+    // mic/VAD failure shows up as a generic "capture_lost" line in the
+    // log and the user loses the actionable text.
+    assert_eq!(
+        ev["reason"].as_str(),
+        Some("mic unplugged"),
+        "device-error text must land under `reason` so the UI logger forwards it",
+    );
     assert_eq!(
         ev["message"].as_str(),
         Some("mic unplugged"),
-        "device-error message must round-trip through the payload",
+        "the legacy `message` field stays populated for raw-stream consumers",
     );
     assert_eq!(
         ev["backend"].as_str(),

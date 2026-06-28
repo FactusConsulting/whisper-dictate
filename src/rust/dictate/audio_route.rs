@@ -324,6 +324,16 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
             }
             PipelineEvent::DeviceError(msg) => {
                 self.emit_device_error(&msg, writer);
+                // Tear down the cpal worker + stream BEFORE returning
+                // the device error. The pipeline pump may already have
+                // exited, but `CaptureHandle` only drops the underlying
+                // resources on `AudioPipeline::stop` / drop -- without
+                // this call, a supervisor that handles `RouteError::Device`
+                // by constructing a replacement route (rather than
+                // dropping this one) would leak the old capture thread +
+                // mic stream. `stop_pipeline` is idempotent and a no-op
+                // in test mode (no pipeline). Codex P2 #415 audio_route.rs:327.
+                self.stop_pipeline();
                 Err(RouteError::Device(msg))
             }
         }
@@ -406,6 +416,16 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
     /// "couldn't write the status line" failure.
     fn emit_device_error<W: Write>(&self, message: &str, writer: &mut W) {
         let mut extras = Map::new();
+        // The Rust UI's status logger (`src/rust/ui/worker_event.rs:12-24`)
+        // forwards a fixed allowlist of fields onto the status card.
+        // `reason` is on the list; `message` is NOT, so writing the
+        // actionable text only under `message` would silently reduce
+        // every mic/VAD failure to a generic "capture_lost" line in the
+        // log. Put the text under `reason` (UI-consumed) and ALSO
+        // duplicate it under `message` so any consumer that greps the
+        // raw worker-event stream for the original field keeps working.
+        // Codex P2 #415 audio_route.rs:409.
+        extras.insert("reason".into(), Value::from(message));
         extras.insert("message".into(), Value::from(message));
         extras.insert("backend".into(), Value::from("rust-stdin"));
         let event = StatusEvent {
