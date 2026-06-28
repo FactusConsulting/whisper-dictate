@@ -124,6 +124,87 @@ fn extract_then_validate_rejects_unsupported_key_without_disabling_python() {
     );
 }
 
+/// Codex P2 PR #421 runtime.rs:530 -- pins the restart-path BRANCH
+/// (not just the helpers `extract_hotkey_key_names` /
+/// `validate_key_names`) via the extracted `restart_hotkey_decision`
+/// helper that backs the supervisor's `else if let Some(handle)` arm.
+/// A future edit that re-orders the gate (parks Python BEFORE
+/// validating) has to fail this test before it can land.
+///
+/// The decision return covers all three observable outcomes of the
+/// branch: skip-no-key (Python untouched), skip-unsupported (Python
+/// untouched even though rust-session was requested), and resume
+/// (with `park_python` reflecting the dictate-backend env).
+#[test]
+fn restart_hotkey_decision_covers_no_key_unsupported_and_resume_branches() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+
+    // 1) No key configured -> SkipNoKey, regardless of dictate-backend.
+    let mut command = worker_command("/tmp/whisper-dictate");
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    assert_eq!(
+        restart_hotkey_decision(&command, true),
+        RestartHotkeyDecision::SkipNoKey,
+        "blank VOICEPI_KEY must short-circuit to SkipNoKey BEFORE parking Python"
+    );
+    assert_eq!(
+        restart_hotkey_decision(&command, false),
+        RestartHotkeyDecision::SkipNoKey,
+    );
+
+    // 2) Unsupported rdev key -> SkipUnsupported even when rust-session
+    //    is requested. The supervisor's match arm for this variant must
+    //    NOT call `disable_python_hotkey`, so Python keeps PTT alive on
+    //    the previous (supported) binding. On stub builds
+    //    `validate_key_names` always returns Ok, so the feature-cfg is
+    //    required for the unsupported-key assertion to mean anything.
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        let mut command = worker_command("/tmp/whisper-dictate");
+        command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+        command
+            .env
+            .push(("VOICEPI_KEY".to_owned(), "super_l".to_owned()));
+        assert_eq!(
+            restart_hotkey_decision(&command, true),
+            RestartHotkeyDecision::SkipUnsupported {
+                key_names: vec!["super_l".to_owned()],
+            },
+            "unsupported key must surface SkipUnsupported (not Resume) so the \
+             supervisor skips disable_python_hotkey + resume"
+        );
+    }
+
+    // 3) Supported key + rust-session requested -> Resume{park_python:true}.
+    //    Supported key + rust-session NOT requested -> Resume{park_python:false}.
+    //    `ctrl_l` is in rdev's translation table on every supported
+    //    platform; on stub builds validate_key_names is a no-op pass-
+    //    through so the result is the same.
+    let mut command = worker_command("/tmp/whisper-dictate");
+    command.env.retain(|(k, _)| k != "VOICEPI_KEY");
+    command
+        .env
+        .push(("VOICEPI_KEY".to_owned(), "ctrl_l".to_owned()));
+    assert_eq!(
+        restart_hotkey_decision(&command, true),
+        RestartHotkeyDecision::Resume {
+            key_names: vec!["ctrl_l".to_owned()],
+            park_python: true,
+        },
+        "supported key + rust-session requested -> Resume with park_python=true"
+    );
+    assert_eq!(
+        restart_hotkey_decision(&command, false),
+        RestartHotkeyDecision::Resume {
+            key_names: vec!["ctrl_l".to_owned()],
+            park_python: false,
+        },
+        "supported key + rust-session NOT requested -> Resume with park_python=false"
+    );
+}
+
 #[test]
 fn extract_hotkey_key_names_handles_blank_key_as_empty() {
     let _guard = ENV_LOCK.lock().unwrap();
@@ -235,38 +316,92 @@ fn install_rust_hotkey_routes_to_session_sink_when_backend_is_rust_session() {
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
     let _dictate_guard = EnvVarGuard::set("VOICEPI_DICTATE_BACKEND", "rust-session");
     let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "ctrl_l");
+    // Codex P2 PR #421 hotkey_supervisor_tests.rs:248 -- the
+    // session-sink path enables `VOICEPI_WORKER_EVENTS=1` via
+    // `build_production_sink`; without an env-guard a later test that
+    // grabs ENV_LOCK would inherit the truthy gate and reintroduce the
+    // env-leak flake this PR fixes. The guard captures the
+    // pre-fixture value and restores it on Drop.
+    //
+    // We also REMOVE the var explicitly here (not just guard it) so the
+    // observable assertion below is a true measurement of what the
+    // routing call set, not the leaked state from a prior test.
+    let _worker_events_guard = EnvVarGuard::remove("VOICEPI_WORKER_EVENTS");
 
     // build a command the way start() would
     let command = worker_command("/tmp/whisper-dictate");
 
-    // Without the `rust-hotkeys` feature, `install_hotkey` is the stub
-    // that always errors -> the entire path returns None. With the
-    // feature, the rdev listener install fails on headless CI -> also
-    // None. Either way the routing through `install_session_sink_hotkey`
-    // executes its top-level lines (Sonar L1525-L1532).
+    // Codex P2 PR #421 hotkey_supervisor_tests.rs:230 (observability):
+    // without an observable side-effect this assertion would still pass
+    // if the route accidentally went through `install_logger_sink_hotkey`
+    // (both paths return None in headless CI). The session-sink
+    // builder sets `VOICEPI_WORKER_EVENTS=1` as a documented side
+    // effect (rust_session_sink::build_production_sink:268); the logger
+    // sink does not touch that var. Asserting on the var after the
+    // call distinguishes the two routes so a future edit that
+    // re-orders the gate (and falls through to the logger sink for
+    // `rust-session`) fails this test.
     let (tx, _rx) = std::sync::mpsc::channel();
     let handle = install_rust_hotkey_from_command(&command, tx, None);
-
-    // The contract we pin: the routing did NOT panic. The handle may be
-    // None (headless) or Some (rust-hotkeys + a working rdev backend);
-    // both are acceptable for this coverage test.
-    // Avoid clippy::drop_non_drop -- on the stub build HotkeyHandle
-    // is not Drop; `let _` simply ends its scope.
     let _ = handle;
+
+    assert_eq!(
+        std::env::var("VOICEPI_WORKER_EVENTS").ok().as_deref(),
+        Some("1"),
+        "session-sink route MUST set VOICEPI_WORKER_EVENTS=1 via \
+         build_production_sink; if this fires as None the routing went \
+         through install_logger_sink_hotkey (which does not touch the var)"
+    );
+}
+
+/// Negative control for the routing observability test above: when
+/// `VOICEPI_DICTATE_BACKEND` is NOT `rust-session`, the route MUST
+/// go through `install_logger_sink_hotkey`, which leaves
+/// `VOICEPI_WORKER_EVENTS` untouched. Pairs with the positive test to
+/// pin the env-gate as a true two-sided signal of which sink ran.
+#[test]
+fn install_rust_hotkey_routes_to_logger_sink_when_dictate_backend_unset() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
+    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
+    let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
+    let _dictate_guard = EnvVarGuard::remove("VOICEPI_DICTATE_BACKEND");
+    let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "ctrl_l");
+    // Removed (not just guarded) so the post-call assertion measures
+    // exactly what the routing call did, not state leaked from a
+    // prior test.
+    let _worker_events_guard = EnvVarGuard::remove("VOICEPI_WORKER_EVENTS");
+
+    let command = worker_command("/tmp/whisper-dictate");
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let handle = install_rust_hotkey_from_command(&command, tx, None);
+    let _ = handle;
+
+    assert!(
+        std::env::var("VOICEPI_WORKER_EVENTS").is_err(),
+        "logger-sink route MUST NOT set VOICEPI_WORKER_EVENTS; if this is Some(\"1\") \
+         the route went through install_session_sink_hotkey (which would mean the \
+         dictate-backend gate broke and we are silently driving the in-process \
+         session for every install)"
+    );
 }
 
 #[test]
 fn install_rust_hotkey_session_sink_path_compiles_with_repaint_notifier() {
-    // Same routing as above but with a real `RepaintNotifier` so the
-    // closure-construction site in `install_session_sink_hotkey` is
-    // covered too (it shows up in Sonar even though the closure body
-    // never fires when the install returns None).
+    // Same routing as the observability test above but with a real
+    // `RepaintNotifier` so the closure-construction site in
+    // `install_session_sink_hotkey` is covered too (it shows up in
+    // Sonar even though the closure body never fires when the install
+    // returns None). The same env-guard pattern keeps the worker-
+    // events gate restored after the test (Codex P2 PR #421).
     let _guard = ENV_LOCK.lock().unwrap();
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
     let _dictate_guard = EnvVarGuard::set("VOICEPI_DICTATE_BACKEND", "rust-session");
     let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "ctrl_l");
+    let _worker_events_guard = EnvVarGuard::remove("VOICEPI_WORKER_EVENTS");
 
     let command = worker_command("/tmp/whisper-dictate");
 
@@ -278,13 +413,16 @@ fn install_rust_hotkey_session_sink_path_compiles_with_repaint_notifier() {
 
     let (tx, _rx) = std::sync::mpsc::channel();
     let _ = install_rust_hotkey_from_command(&command, tx, Some(notifier));
-    // No assertion on wakeups -- the install returns None in this test
-    // environment so the notifier is never invoked. The point is to
-    // pin the call-site signature so a future refactor that drops the
-    // parameter does not silently compile.
     assert_eq!(
         wakeups.load(std::sync::atomic::Ordering::SeqCst),
         0,
         "no events flow when install returns None"
+    );
+    // Same observability check as above so this test also fails if
+    // the route falls through to the logger sink.
+    assert_eq!(
+        std::env::var("VOICEPI_WORKER_EVENTS").ok().as_deref(),
+        Some("1"),
+        "session-sink route must set VOICEPI_WORKER_EVENTS=1 even with a notifier"
     );
 }
