@@ -63,7 +63,7 @@ pub fn send_paste_shortcut<B: InjectorBackend + ?Sized>(
 }
 
 #[cfg(not(feature = "rust-injection"))]
-pub fn make_default_backend() -> Result<Box<dyn InjectorBackend>> {
+pub fn make_default_backend() -> Result<Box<dyn InjectorBackend + Send>> {
     Err(anyhow!(
         "rust-injection feature not compiled in (rebuild with --features rust-injection)"
     ))
@@ -80,7 +80,7 @@ mod enigo_impl {
         Enigo, Key, Keyboard, Settings,
     };
 
-    pub fn make_default_backend() -> Result<Box<dyn InjectorBackend>> {
+    pub fn make_default_backend() -> Result<Box<dyn InjectorBackend + Send>> {
         let enigo = Enigo::new(&Settings::default())
             .map_err(|e| anyhow!("failed to initialise enigo: {e}"))?;
         Ok(Box::new(EnigoBackend { enigo }))

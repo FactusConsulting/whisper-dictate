@@ -123,7 +123,15 @@ pub fn handle_transcribe_server() -> Result<()> {
 ///    or the Settings download UI) — tiny.en → base.en → small.en preference.
 ///    This means a user who downloaded a model via the UI can start with
 ///    `VOICEPI_TRANSCRIBE_BACKEND=rust` without a separate env-var step.
-fn resolve_model_path_from_env() -> Result<PathBuf> {
+///
+/// `pub(crate)` so the Wave 5 PR 5 in-process session sink can reuse the
+/// same resolution rules when wiring [`WhisperLocalTranscribeBackend`]
+/// behind `VOICEPI_DICTATE_BACKEND=rust-session` — keeping the
+/// resolution logic single-sourced means the env-var / cache-lookup
+/// contract is identical for the subprocess-per-utterance dispatcher
+/// (`handle_transcribe_wav`), the long-running server
+/// (`handle_transcribe_server`), and the in-process session sink.
+pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
     // Primary: explicit env var override.
     if let Ok(raw) = env::var(MODEL_PATH_ENV) {
         let trimmed = raw.trim();

@@ -2148,6 +2148,15 @@ pub mod audio_spawn;
 // the 500-LOC modularity guideline.
 pub(crate) mod rust_session_sink;
 
+// Wave 5 PR 5 of #348: real-backend constructor for the session sink.
+// Gated on `whisper-rs-local + rust-injection` so default builds compile
+// zero new code from this PR. The sink in `rust_session_sink::build_production_sink`
+// calls into this module to construct a `DictateSession<WhisperLocalTranscribeBackend,
+// EnigoInjectBackend>`; on feature absence OR model-resolution failure it
+// falls back to the PR 4 stub session so the wire-up still installs.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) mod rust_session_real_backends;
+
 #[cfg(test)]
 mod app_root_tests;
 #[cfg(test)]
