@@ -123,6 +123,22 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.epoch
     }
 
+    /// Re-set the per-session min-record floor in seconds. The
+    /// `min_record_seconds` setting is `live: true` in
+    /// `src/python/whisper_dictate/settings_schema.json`; the audio
+    /// route calls this on every successful
+    /// [`crate::dictate::audio_route::AudioRoute::start_recording`]
+    /// (after re-reading [`crate::dictate::audio_route::MIN_RECORD_ENV`])
+    /// so a Settings save between PTT presses takes effect on the next
+    /// recording without rebuilding the session. The skip helper still
+    /// clamps the effective floor up to
+    /// [`crate::dictate::skip::MIN_RECORD_FLOOR_S`] (0.3 s) regardless,
+    /// so a misconfigured 0 still surfaces the misfire protection.
+    /// Codex P2 #415 audio_route.rs:250 (round 7-D).
+    pub fn update_min_record_seconds(&mut self, seconds: f64) {
+        self.config.min_record_seconds = seconds;
+    }
+
     /// Read-only access to the transcribe backend. Tests use this to
     /// inspect what the session passed to the mock; production callers
     /// will rarely need it.
