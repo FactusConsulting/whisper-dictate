@@ -129,6 +129,7 @@ fn run() -> anyhow::Result<()> {
             serve_ms,
             forward_args,
         } => handle_single_instance_probe(serve_ms, forward_args),
+        Command::WorkerRust { stdin_only } => runtime::worker_rust::handle_worker_rust(stdin_only),
     }
 }
 

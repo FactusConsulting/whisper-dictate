@@ -267,6 +267,36 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         forward_args: Vec<String>,
     },
+    /// Wave 5 PR 6 of #348: long-running in-process Rust dictation worker.
+    /// Replaces the Python `vp_dictate.py`/`runtime.py` orchestrator when
+    /// `VOICEPI_DICTATE_BACKEND=rust-session` is set AND the binary was built
+    /// with `--features whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`.
+    /// Without the env var or the features the supervisor stays on the
+    /// Python path (PR 7 will flip the default).
+    ///
+    /// Owns the full PTT lifecycle in-process: installs the Rust hotkey
+    /// listener (rdev), spawns the audio pump (cpal -> Silero VAD), drives
+    /// the [`crate::dictate::DictateSession`] from the hotkey coordinator,
+    /// and emits `[worker-event] {...}` lines on stderr.
+    ///
+    /// Always reads stdin: a line of `press`, `release`, `cancel`, or
+    /// `quit` drives the coordinator (or shuts the worker down). Used by
+    /// the integration test to drive synthetic chord events without a
+    /// real OS listener, and gives the supervisor a clean shutdown path
+    /// (close stdin → worker exits) without relying on signals on Windows.
+    ///
+    /// Hidden because it is invoked only by the supervisor and tests, not
+    /// directly by users.
+    #[command(hide = true)]
+    WorkerRust {
+        /// Skip installing the real rdev hotkey listener; drive the
+        /// coordinator from stdin commands only. Used by the integration
+        /// test in headless CI environments where no display is available
+        /// for rdev to attach to. Production callers leave this unset so
+        /// the OS hotkey listener takes over the PTT chord.
+        #[arg(long)]
+        stdin_only: bool,
+    },
     /// Manage local Whisper model files (catalog, download, verify).
     ///
     /// Backwards compatibility: `VOICEPI_WHISPER_MODEL_PATH` still wins for the
@@ -856,6 +886,22 @@ mod tests {
                 command: ModelsCommand::Path,
             })
         );
+    }
+
+    #[test]
+    fn parses_worker_rust_subcommand_default() {
+        // Wave 5 PR 6 of #348: the new long-running Rust dictation worker
+        // subcommand. Defaults `stdin_only=false` so production builds
+        // install the real rdev listener (the integration test sets the
+        // flag to skip it on headless CI).
+        let cli = Cli::parse_from(["whisper-dictate", "worker-rust"]);
+        assert_eq!(cli.command, Some(Command::WorkerRust { stdin_only: false }),);
+    }
+
+    #[test]
+    fn parses_worker_rust_with_stdin_only_flag() {
+        let cli = Cli::parse_from(["whisper-dictate", "worker-rust", "--stdin-only"]);
+        assert_eq!(cli.command, Some(Command::WorkerRust { stdin_only: true }));
     }
 
     #[test]
