@@ -532,7 +532,7 @@ mod tests {
         // The VOICEPI_LOCAL_ONLY guard in spawn_download must abort before
         // touching the download state so no job slot is created and no thread
         // is spawned. Covers the new `is_local_only()` early-return branch.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _guard = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
         let state = WhisperModelDownloads::new();
         assert!(
@@ -549,7 +549,7 @@ mod tests {
     fn spawn_download_returns_false_for_unknown_model() {
         // Covers the `model_manager::find(name) == None` branch in
         // spawn_download: it must record a Failed job and return false.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
         let state = WhisperModelDownloads::new();
         assert!(
@@ -569,7 +569,7 @@ mod tests {
     fn spawn_download_returns_false_when_already_in_progress() {
         // Pre-reserve the slot so `start()` refuses a second caller — the
         // guard in `spawn_download` must detect this and abort cleanly.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
         let state = WhisperModelDownloads::new();
         state.start("tiny.en"); // reserves the slot
@@ -585,7 +585,7 @@ mod tests {
         // verify_cache. We verify this indirectly: after finish_ok with a
         // real tempdir file, is_verified_fast should find a cache entry and
         // skip the background verify thread, returning immediately.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -618,7 +618,7 @@ mod tests {
         // Exercise the main body of is_verified_fast: file exists → metadata
         // ok → lock acquired → cache miss → verify_running.insert → thread
         // spawned → return false.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -655,7 +655,7 @@ mod tests {
         //   4. Checking that is_verified_fast either returns false (cache miss
         //      or stale-detect) or re-schedules a new verify (returns false),
         //      but never returns true for the corrupt original hash result.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -695,7 +695,7 @@ mod tests {
         // verify_cache with verified=true and the mtime+len match what
         // is_verified_fast reads from disk, it must return true without
         // scheduling another verify thread.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 

@@ -134,7 +134,7 @@ mod tests {
         // Take the env lock before touching any process-global
         // variable; held across the entire test so the cache resolver
         // reads our scratch values, not whatever another test set.
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Point the cache resolver at a per-test scratch dir so we
         // don't touch the real user cache. The expected on-disk path

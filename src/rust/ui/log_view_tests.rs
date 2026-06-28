@@ -1,7 +1,7 @@
 use super::tabs::{
     audio_device_label, full_audio_device_label, live_audio_level_summary, mic_label_char_budget,
 };
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard, ENV_LOCK};
 use super::*;
 
 #[test]
@@ -450,7 +450,7 @@ fn worker_audio_event_with_inactive_state_clears_meter_readings() {
 
 #[test]
 fn toggling_log_view_persists_immediately_without_marking_settings_dirty() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config);
@@ -480,7 +480,7 @@ fn toggling_log_view_persists_immediately_without_marking_settings_dirty() {
 
 #[test]
 fn toggling_log_view_leaves_unrelated_pending_edits_uncommitted() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config);

@@ -279,7 +279,7 @@ fn partial_path_is_unique_and_has_partial_suffix() {
 
 #[test]
 fn is_local_only_reads_env_var() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _g1 = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
     assert!(is_local_only(), "\"1\" must count as local-only");
     drop(_g1);
@@ -295,7 +295,7 @@ fn is_local_only_reads_env_var() {
 
 #[test]
 fn download_model_blocked_when_local_only_via_env() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _g = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
     // Also ensure config doesn't interfere by pointing config at empty dir.
     let tmp_cfg = tempfile::tempdir().unwrap();
@@ -313,7 +313,7 @@ fn download_model_blocked_when_local_only_via_env() {
 fn download_model_blocked_when_local_only_via_config() {
     // P1: persisted `local_only: 1` in settings.json must block downloads
     // even without the VOICEPI_LOCAL_ONLY env var.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     let tmp_cfg = tempfile::tempdir().unwrap();
     let cfg_path = tmp_cfg.path().join("config.json");
@@ -331,7 +331,7 @@ fn download_model_blocked_when_local_only_via_config() {
 fn is_local_only_reads_persisted_config() {
     // P1: when env var is unset but config.json has "local_only":"1",
     // is_local_only() must return true.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _g_env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     let tmp_cfg = tempfile::tempdir().unwrap();
     let cfg_path = tmp_cfg.path().join("config.json");
@@ -345,7 +345,7 @@ fn is_local_only_reads_persisted_config() {
 
 #[test]
 fn download_timeout_uses_default_when_env_absent() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _g = EnvVarGuard::remove("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS");
     assert_eq!(
         download_timeout(),
@@ -356,7 +356,7 @@ fn download_timeout_uses_default_when_env_absent() {
 
 #[test]
 fn download_timeout_env_override_is_respected() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _g = EnvVarGuard::set("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS", "7200");
     assert_eq!(
         download_timeout(),
@@ -429,7 +429,7 @@ fn models_cache_dir_resolves_under_overridden_root() {
     // layout (`<base>/whisper-dictate/whisper-models`) without touching
     // the developer's real cache. Covers the `models_cache_dir`,
     // `model_path` and `user_cache_dir` happy paths in one shot.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
     // On macOS `user_cache_dir` derives its path by appending
@@ -459,7 +459,7 @@ fn is_downloaded_false_when_cache_is_empty() {
     // disk. The directory deliberately doesn't exist (`tempdir` returns
     // an empty dir; the `whisper-dictate/whisper-models` subpath has not
     // been created yet) so the `is_file()` branch returns false.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
     for entry in CATALOG {
@@ -478,7 +478,7 @@ fn is_downloaded_true_when_cached_file_matches_hash() {
     // We can't mutate the real CATALOG entry's hash (it's `&'static`),
     // so the test builds its own entry pointing at the same filename and
     // routes via `model_path` to honour the OS layout.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
     let payload = b"forged-ggml-bytes-just-for-this-test".to_vec();
@@ -507,7 +507,7 @@ fn models_cache_dir_errors_when_no_env_resolvable() {
     // Cover the `ok_or_else` branch: with every cache env-var source
     // cleared, `user_cache_dir` returns None and `models_cache_dir`
     // bubbles a helpful error instead of panicking.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _primary = EnvVarGuard::remove(CACHE_ENV_VAR);
     let _secondary = SECONDARY_CACHE_ENV_VAR.map(EnvVarGuard::remove);
     match models_cache_dir() {

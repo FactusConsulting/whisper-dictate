@@ -542,7 +542,7 @@ mod env_tests {
         // so the original value is restored even if an assertion below
         // panics (Codex P2 #415 pattern). See `crate::test_env_lock` for
         // the full soundness contract.
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         {
             let _g = EnvVarGuard::remove("VOICEPI_HOTKEY_BACKEND");
@@ -585,7 +585,7 @@ mod env_tests {
     #[test]
     #[cfg(not(feature = "rust-hotkeys"))]
     fn backend_available_is_false_on_stock_build_regardless_of_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
         assert!(
             !rust_hotkey_backend_available(),

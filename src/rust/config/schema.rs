@@ -162,7 +162,7 @@ mod tests {
         // value is restored on Drop even when an assertion below panics —
         // the old tail-of-test `restore_env` calls would never run on
         // panic, leaking six env vars into the next test (Codex P2 #415).
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(

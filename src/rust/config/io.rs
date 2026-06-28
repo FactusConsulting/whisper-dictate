@@ -173,7 +173,7 @@ mod tests {
         // `env::set_var; …; env::remove_var` pattern would (a) leak on
         // panic and (b) wipe CONFIG_ENV even when the developer had set
         // one in their shell (Codex P2 #415).
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("custom.json");
         let _env = EnvVarGuard::set(CONFIG_ENV, &path);
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn missing_config_loads_as_empty_object() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.json");
         let _env = EnvVarGuard::set(CONFIG_ENV, &path);
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn existing_config_loads_json() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         fs::write(&path, r#"{"lang":"da"}"#).unwrap();

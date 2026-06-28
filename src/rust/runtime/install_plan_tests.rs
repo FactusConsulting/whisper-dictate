@@ -57,7 +57,7 @@ fn install_plan_skips_legacy_parakeet_requirements_after_backend_removal() {
     // were removed. Even if a stale file is sitting next to the venv from
     // an older checkout, the installer must no longer pick it up — the
     // optional-requirements hook only handles `requirements/gpu.txt` now.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("requirements")).unwrap();
     std::fs::write(dir.path().join("requirements").join("cpu.txt"), "").unwrap();
@@ -77,7 +77,7 @@ fn install_plan_skips_legacy_parakeet_requirements_after_backend_removal() {
 
 #[test]
 fn install_plan_includes_gpu_requirements_when_cuda_device_requests_it() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("requirements")).unwrap();
     std::fs::write(dir.path().join("requirements").join("cpu.txt"), "").unwrap();

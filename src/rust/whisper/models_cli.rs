@@ -261,7 +261,7 @@ mod tests {
     fn download_fails_with_local_only_when_model_absent() {
         // When local-only is active AND the model is not yet cached, the
         // command must fail with a clear error — no network attempt is made.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g_lo = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
         // Point cache at an empty dir so no model is found.
         let tmp = tempfile::tempdir().unwrap();
@@ -283,7 +283,7 @@ mod tests {
         // P3 (idempotent): if the model is already cached and verified, the
         // `models download` command must succeed — no network call needed —
         // even when local-only mode is active.  This is the setup-script path.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _g_lo = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
 
         // Build a fake cache dir with a file that passes SHA-256 for tiny.en.

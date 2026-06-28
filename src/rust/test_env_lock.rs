@@ -33,6 +33,18 @@ use std::sync::Mutex;
 
 /// The single crate-wide guard serialising env-mutating tests. See the module
 /// docs for the soundness contract.
+///
+/// **Poison handling.** Callers MUST acquire this lock with
+/// `ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())` rather than `.unwrap()`
+/// / `.expect(...)`: when any test panics inside the locked scope the mutex
+/// is poisoned, and a bare `.unwrap()` turns that single real failure into
+/// a `PoisonError { .. }` cascade across every subsequent env-mutating test
+/// in the same library binary (Codex P2 #415 follow-up: this cascade was
+/// the entire root cause of the rust (windows-2025) leg's 70+-test failure
+/// set on PR #425). Recovering the inner value is safe because the env
+/// state is restored by [`EnvVarGuard`]'s Drop pair regardless of whether
+/// the test panicked, so a poisoned lock does not imply an inconsistent
+/// env snapshot.
 pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// RAII guard that snapshots an env var on construction, mutates it to the
@@ -51,6 +63,7 @@ pub(crate) struct EnvVarGuard {
 impl EnvVarGuard {
     /// Set `key` to `value` for the lifetime of the returned guard.
     pub(crate) fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        debug_assert_lock_held();
         let original = env::var_os(key);
         env::set_var(key, value);
         Self { key, original }
@@ -58,10 +71,40 @@ impl EnvVarGuard {
 
     /// Remove `key` for the lifetime of the returned guard.
     pub(crate) fn remove(key: &'static str) -> Self {
+        debug_assert_lock_held();
         let original = env::var_os(key);
         env::remove_var(key);
         Self { key, original }
     }
+}
+
+/// Debug-only runtime check that the current thread holds [`ENV_LOCK`].
+///
+/// Type-system enforcement (taking `&MutexGuard` as a parameter to
+/// every guard constructor) would catch the mistake at compile time
+/// but would touch every adoption site; this `try_lock`-based probe is
+/// the cheap backstop that catches a forgotten `ENV_LOCK.lock()` at
+/// runtime in debug builds without disturbing the per-site call shape.
+///
+/// `try_lock` returns `Err(TryLockError::WouldBlock)` when *some* thread
+/// holds the lock — that's the success case here (we don't separately
+/// verify the holder is this thread; that would require `Mutex`'s
+/// internal owner field which `std::sync::Mutex` doesn't expose). A
+/// false-positive (another test holding the lock while this thread
+/// forgot) is acceptable; the converse (we forgot AND nothing else is
+/// holding) is the bug this firewall catches. The `Poisoned` arm is
+/// treated as "lock IS held by a poisoned holder", which mirrors how
+/// the rest of the module treats poison as recoverable.
+fn debug_assert_lock_held() {
+    debug_assert!(
+        matches!(
+            ENV_LOCK.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock) | Err(std::sync::TryLockError::Poisoned(_))
+        ),
+        "EnvVarGuard must be constructed while holding crate::test_env_lock::ENV_LOCK; \
+         a missing `let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());` \
+         lets the env mutation race other tests in the same library binary",
+    );
 }
 
 impl Drop for EnvVarGuard {

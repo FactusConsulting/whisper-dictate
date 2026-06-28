@@ -1,4 +1,4 @@
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard, ENV_LOCK};
 use super::*;
 
 #[test]
@@ -17,7 +17,7 @@ fn cloud_provider_prefers_saved_provider_over_stale_url() {
 
 #[test]
 fn saving_api_key_persists_selected_cloud_provider_settings() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let config_env = config.to_string_lossy().to_string();
@@ -120,7 +120,7 @@ fn worker_command_uses_post_key_with_stt_key_fallback() {
 
 #[test]
 fn custom_provider_keeps_user_endpoint_and_needs_no_api_key() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config);
@@ -145,7 +145,7 @@ fn custom_provider_keeps_user_endpoint_and_needs_no_api_key() {
 
 #[test]
 fn switching_to_custom_seeds_localhost_from_a_hosted_url() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config);

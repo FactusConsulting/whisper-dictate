@@ -4,7 +4,7 @@ use super::*;
 // Per-module locks/guards cannot serialise against tests in OTHER modules
 // that mutate the same process env, so a single crate-wide design is the
 // only sound one. See `crate::test_env_lock` for the full story.
-pub(super) use crate::test_env_lock::{EnvVarGuard, ENV_LOCK as ENV_TEST_LOCK};
+pub(super) use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
 pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
     WhisperDictateApp {
