@@ -86,3 +86,7 @@ mod events_tests;
 mod audio_route_test_support;
 #[cfg(all(test, feature = "audio-in-rust"))]
 mod audio_route_tests;
+// Cancelled-event handling tests live in their own sibling so the main
+// audio_route_tests.rs stays under the AGENTS.md ~500 LOC bar.
+#[cfg(all(test, feature = "audio-in-rust"))]
+mod audio_route_cancel_tests;
