@@ -421,6 +421,52 @@ fn cancelled_event_dropped_silently_no_state_change() {
     );
 }
 
+/// P2-C explicit boundary scenario (Codex P2 #415 audio_route.rs:300)
+/// -- a stale `Cancelled` queued from a prior pipeline reset must NOT
+/// discard the new recording when it lands across a `start_recording`
+/// boundary. The Phase-1 silent-drop policy makes this safe; without
+/// it the route would call `session.cancel(session.epoch())` (which
+/// always matches) and discard the new audio.
+#[test]
+fn stale_cancelled_across_start_boundary_preserves_new_recording() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    let _cap_env = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", "0");
+    let mut route = route_with_cap(None);
+    let mut buf = Vec::new();
+
+    // Recording A: open + close so a stale Cancelled could be queued.
+    let epoch_a = route.start_recording(&mut buf).expect("start A");
+    route
+        .on_event(PipelineEvent::Frame(vec![0.5; 480]), &mut buf)
+        .expect("A frame");
+    route.stop_recording(&mut buf).expect("stop A");
+    buf.clear();
+
+    // Recording B: fresh start, push frames, then receive A's stale Cancelled.
+    let epoch_b = route.start_recording(&mut buf).expect("start B");
+    assert_ne!(epoch_a, epoch_b, "epochs must differ across start boundary");
+    for _ in 0..8 {
+        route
+            .on_event(PipelineEvent::Frame(vec![0.5; 480]), &mut buf)
+            .expect("B frame");
+    }
+    route
+        .on_event(PipelineEvent::Cancelled, &mut buf)
+        .expect("stale Cancelled must not error");
+
+    // Load-bearing: B's epoch + buffered audio survive.
+    assert_eq!(route.session().epoch(), epoch_b);
+    assert_eq!(route.buffered_samples(), 3840);
+    assert!(matches!(
+        route.session().state(),
+        SessionState::Recording { .. }
+    ));
+
+    route.stop_recording(&mut buf).expect("stop B");
+    assert_eq!(route.session().state(), SessionState::Idle);
+}
+
 /// Codex P2 #415 audio_route.rs:250 — `start_recording` re-reads
 /// `VOICEPI_MAX_RECORD_S` so a Settings save between PTT presses
 /// takes effect on the next recording without rebuilding the route.
