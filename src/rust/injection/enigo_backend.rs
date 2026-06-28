@@ -26,6 +26,19 @@ pub trait InjectorBackend {
     /// modifiers are pressed in order, then the main key is tapped, then the
     /// modifiers are released in reverse order.
     fn key_chord(&mut self, modifiers: &[u16], key: u16) -> Result<()>;
+    /// Send a bare `Release` for each VK code, mirroring the user lifting
+    /// the modifier key. The default impl is a no-op so existing recording
+    /// fakes (and the trait's other consumers) don't have to override
+    /// anything; the real `enigo` impl overrides this to actually drop
+    /// held modifiers. Used by `EnigoInjectBackend::inject` to clear a
+    /// stale push-to-talk chord (Ctrl / Shift / Alt / Cmd) before
+    /// synthesising the burst — without this a held PTT modifier turns
+    /// dictated characters into shortcuts, matching the Python
+    /// `_release_stale_modifiers` sweep. Codex P2 #417 inject.rs:110.
+    fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+        let _ = modifiers;
+        Ok(())
+    }
 }
 
 /// Send the configured paste keystroke. Pure logic over the backend trait;
@@ -103,16 +116,57 @@ mod enigo_impl {
             }
             Ok(())
         }
+
+        fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+            // Drop each held modifier individually. Sending a Release for
+            // a key that wasn't down is a no-op on every supported
+            // platform (Win32 `SendInput`, macOS `CGEventPost`, X11
+            // `XTestFakeKeyEvent`), so we don't gate on whether enigo
+            // believes the modifier is currently pressed. Unmapped VKs
+            // (e.g. a future code we haven't taught `vk_to_enigo` yet)
+            // and individual Release failures are silenced rather than
+            // failing the whole sweep — losing a modifier release is
+            // strictly less bad than aborting the burst.
+            for m in modifiers {
+                if let Ok(key) = vk_to_enigo(*m) {
+                    let _ = self.enigo.key(key, Release);
+                }
+            }
+            Ok(())
+        }
     }
 
     /// Map our platform-agnostic VK code constants to enigo's [`Key`] enum.
-    /// We only need the handful of keys used by the paste shortcuts.
+    /// We only need the handful of keys used by the paste shortcuts and the
+    /// side-specific variants used by the stale-modifier sweep.
     fn vk_to_enigo(vk: u16) -> Result<Key> {
         use super::super::paste::vk as platform;
         Ok(match vk {
             platform::VK_CONTROL => Key::Control,
             platform::VK_SHIFT => Key::Shift,
+            // Alt — only used by `release_modifiers` today (no paste
+            // chord uses Alt); enigo's `Key::Alt` maps to the
+            // platform's left-Alt scancode on Win32 / X11 and to the
+            // Option key on macOS, matching `_release_stale_modifiers`.
+            platform::VK_MENU => Key::Alt,
             platform::VK_LWIN => Key::Meta,
+            // Side-specific modifier variants. Codex P2 #419 inject.rs:84:
+            // a PTT binding like `ctrl_r` leaves VK_RCONTROL logically
+            // down; the generic VK_CONTROL release does NOT clear the
+            // right-side scancode on Win32. enigo exposes `Key::RControl`
+            // / `Key::RShift` cross-platform (their X11 / macOS impl maps
+            // to the same OS-level "right" scancode where one exists,
+            // and is a harmless no-op otherwise). `Key::RMenu` and
+            // `Key::RWin` are Windows-only in enigo 0.6, so we only
+            // include those mappings on Windows — on other platforms
+            // those VKs fall through to the silent-skip path in
+            // `release_modifiers`.
+            platform::VK_RCONTROL => Key::RControl,
+            platform::VK_RSHIFT => Key::RShift,
+            #[cfg(target_os = "windows")]
+            platform::VK_RMENU => Key::RMenu,
+            #[cfg(target_os = "windows")]
+            platform::VK_RWIN => Key::RWin,
             platform::VK_V => Key::Unicode('v'),
             platform::VK_INSERT => Key::Insert,
             other => return Err(anyhow!("unsupported VK code: {other:#x}")),
@@ -202,5 +256,35 @@ mod tests {
     #[test]
     fn make_default_backend_errors_without_feature() {
         assert!(make_default_backend().is_err());
+    }
+
+    #[test]
+    fn default_release_modifiers_is_a_silent_noop() {
+        // The trait-level default of `release_modifiers` exists so the
+        // existing recording fakes (which only care about type_text /
+        // key_chord) don't have to override anything. Verify it neither
+        // records events nor errors when called with a non-empty modifier
+        // list. The real enigo override is exercised on the dispatcher
+        // path -- see `Injector::release_held_modifiers` tests in
+        // `dispatcher.rs`. Coverage guard for PR #419 / Codex P2 #417.
+        use super::super::paste::vk;
+        let mut backend = Recording::default();
+        backend
+            .release_modifiers(&[vk::VK_CONTROL, vk::VK_SHIFT, vk::VK_MENU])
+            .unwrap();
+        assert!(
+            backend.events.is_empty(),
+            "default impl must not record any events, got {:?}",
+            backend.events
+        );
+    }
+
+    #[test]
+    fn default_release_modifiers_accepts_empty_list() {
+        // Empty input is the "no stale modifiers held" hot path and must
+        // stay a quiet success.
+        let mut backend = Recording::default();
+        backend.release_modifiers(&[]).unwrap();
+        assert!(backend.events.is_empty());
     }
 }

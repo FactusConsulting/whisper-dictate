@@ -152,6 +152,61 @@ impl Injector {
         Ok(self.backend.as_deref_mut().expect("just initialised"))
     }
 
+    /// Send a bare `Release` for each VK code in `modifiers` so a stale
+    /// push-to-talk chord (Ctrl / Shift / Alt / Cmd held by the user
+    /// THROUGH the injection) does not turn a typed burst into shortcuts
+    /// or warp a paste chord. Mirrors `vp_inject.py::_release_stale_modifiers`;
+    /// called from `EnigoInjectBackend::inject` before delegating to
+    /// `inject_text`. Codex P2 #417 inject.rs:110.
+    ///
+    /// Dispatches identically to `inject_text`:
+    ///
+    /// * Windows / macOS — through the active `InjectorBackend` (enigo by
+    ///   default, or a test fake when one was installed via
+    ///   `with_backend`).
+    /// * Linux — through an explicitly-injected backend when present;
+    ///   otherwise via the helper-chain release sweep (see below).
+    ///
+    /// # Linux helper-chain release sweep (Codex P2 #419 dispatcher.rs:184)
+    ///
+    /// `inject_on_linux` may select `kwtype` / `wtype` (Wayland) or
+    /// `dotool` for the actual inject, and **none of those have an
+    /// equivalent of `xdotool --clearmodifiers`** — a PTT modifier held
+    /// through dictation therefore corrupts the burst on those paths.
+    /// The previous behaviour returned `Ok(())` without doing anything,
+    /// claiming `wayland.rs` owned the release; but `wayland.rs` only
+    /// runs that prelude when ydotool wins the chain, so the gap was
+    /// real. We now best-effort release via `ydotool` (Wayland evdev
+    /// key-ups) or `xdotool` (X11 `keyup` verb) — regardless of which
+    /// helper the upcoming inject will use — so the modifier is dropped
+    /// before the inject lands. Hosts with only wtype/kwtype/dotool
+    /// installed get a silent `Ok`, matching the existing
+    /// failure-permissive philosophy.
+    pub fn release_held_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            self.backend_mut()?.release_modifiers(modifiers)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(backend) = self.backend.as_deref_mut() {
+                return backend.release_modifiers(modifiers);
+            }
+            // Helper-chain path: best-effort release via ydotool/xdotool.
+            // `modifiers` is informational (the helper sweep is helper-
+            // specific, not VK-keyed) — we drain the full common set
+            // either way, matching the all-or-nothing semantics of
+            // `xdotool --clearmodifiers` and `WAYLAND_MODIFIER_RELEASES`.
+            let _ = modifiers;
+            super::linux_helpers::release_modifiers_best_effort(locate_on_path)
+        }
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        {
+            let _ = modifiers;
+            Ok(())
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn inject_on_linux(&self, text: &str, method: InjectMethod) -> Result<()> {
         // ydotool already has a fully-featured layout-aware code path in
@@ -568,6 +623,19 @@ mod tests {
                 .push(format!("chord:[{}]+{:#x}", mods.join(","), key));
             Ok(())
         }
+        fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+            // Overridden so `Injector::release_held_modifiers` tests can
+            // assert the modifier sweep actually reached the backend (the
+            // trait's default would swallow it silently). Mirrors the
+            // production enigo path that drops Ctrl / Shift / Alt / Cmd
+            // before the burst lands — Codex P2 #417 inject.rs:110.
+            let mods: Vec<String> = modifiers.iter().map(|m| format!("{m:#x}")).collect();
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("release:[{}]", mods.join(",")));
+            Ok(())
+        }
     }
 
     #[test]
@@ -615,5 +683,70 @@ mod tests {
             1,
             "expected single chord for Paste(None), got {recorded:?}"
         );
+    }
+
+    // -- release_held_modifiers wiring (Codex P2 #417 inject.rs:110) --
+    //
+    // The PTT-modifier sweep needs to reach the backend on Windows/macOS
+    // (always) and on Linux when a backend is explicitly installed; on
+    // Linux without a backend it must stay a quiet success because the
+    // wayland.rs / ydotool helper already runs its own release sweep
+    // before the paste chord. These tests pin all three branches.
+
+    #[test]
+    fn release_held_modifiers_forwards_to_injected_backend() {
+        // Holds on Windows / macOS (always taken) AND on Linux (the
+        // `if let Some(backend) = ...` early-return branch). Asserts the
+        // exact VK codes propagate so a regression that drops one would
+        // be caught.
+        use super::super::paste::vk;
+        let backend = RecordingBackend::default();
+        let events = backend.events.clone();
+        let mut injector = Injector::new().with_backend(Box::new(backend));
+        injector
+            .release_held_modifiers(&[vk::VK_CONTROL, vk::VK_SHIFT, vk::VK_MENU])
+            .unwrap();
+        let recorded = events.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![format!(
+                "release:[{:#x},{:#x},{:#x}]",
+                vk::VK_CONTROL,
+                vk::VK_SHIFT,
+                vk::VK_MENU,
+            )]
+        );
+    }
+
+    #[test]
+    fn release_held_modifiers_with_empty_list_is_ok() {
+        // Empty input is the "no stale modifiers held" hot path; it must
+        // still reach the backend so a future implementation that, say,
+        // batches into a single SendInput call sees a well-formed empty
+        // request rather than the dispatcher swallowing the call.
+        let backend = RecordingBackend::default();
+        let events = backend.events.clone();
+        let mut injector = Injector::new().with_backend(Box::new(backend));
+        injector.release_held_modifiers(&[]).unwrap();
+        assert_eq!(*events.lock().unwrap(), vec!["release:[]".to_string()]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn release_held_modifiers_without_backend_runs_helper_sweep_on_linux() {
+        // Codex P2 #419 dispatcher.rs:184: with no trait-object backend
+        // installed the call must run the helper-chain release sweep
+        // (formerly a silent no-op that left wtype/kwtype/dotool paths
+        // exposed to held PTT modifiers). The actual sweep shells out
+        // to ydotool/xdotool when installed and silently succeeds when
+        // neither is — both branches surface as `Ok(())` from the public
+        // API, so we can only assert the success contract here. The
+        // exact command and argument vector is pinned by the
+        // `linux_helpers::plan_modifier_release` tests where the locator
+        // is injectable without touching `$PATH`.
+        use super::super::paste::vk;
+        let mut injector = Injector::new();
+        assert!(injector.release_held_modifiers(&[vk::VK_CONTROL]).is_ok());
+        assert!(injector.release_held_modifiers(&[]).is_ok());
     }
 }

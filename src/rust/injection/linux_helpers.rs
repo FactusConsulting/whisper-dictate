@@ -83,6 +83,103 @@ fn write_dotool_multiline<W: Write>(stdin: &mut W, text: &str) -> std::io::Resul
     Ok(())
 }
 
+/// xdotool key-up arguments that drain every common modifier (both sides)
+/// in one invocation. Mirrors the evdev `WAYLAND_MODIFIER_RELEASES` list
+/// but uses xdotool's symbolic key names — `keyup` sends a bare key-up
+/// without a preceding press, which is exactly what we need to clear a
+/// PTT chord held through the dictation. Pulled out as a constant so the
+/// unit test can pin the exact argument vector.
+///
+/// Codex P2 #419 dispatcher.rs:184 — when the helper-chain inject path
+/// runs without `--clearmodifiers` (kwtype / wtype / dotool), this
+/// fallback releases stale Ctrl / Shift / Alt / Super on both sides via
+/// xdotool before the inject lands.
+pub const XDOTOOL_MODIFIER_KEYUP_ARGS: &[&str] = &[
+    "keyup",
+    "ctrl",
+    "shift",
+    "alt",
+    "super",
+    "Control_L",
+    "Control_R",
+    "Shift_L",
+    "Shift_R",
+    "Alt_L",
+    "Alt_R",
+    "Super_L",
+    "Super_R",
+];
+
+/// Best-effort modifier release for the Linux helper-chain inject path.
+///
+/// Called from `Injector::release_held_modifiers` when no trait-object
+/// backend is installed. Picks the most-reliable available release
+/// mechanism *regardless* of which helper will run the actual inject —
+/// because `wtype`/`kwtype`/`dotool` have no first-class "release stale
+/// modifier" verb, but the user usually has `xdotool` or `ydotool`
+/// installed alongside.
+///
+/// Order:
+/// 1. **ydotool** — Wayland-native, sends evdev key-ups via the daemon
+///    socket; works in both X11 and Wayland sessions.
+/// 2. **xdotool** — X11 fallback (`keyup` verb sends a bare key-up).
+/// 3. Neither installed → silent `Ok` (best effort, matching the rest of
+///    the stale-modifier path's permissive philosophy: losing a release
+///    is strictly less bad than failing the inject).
+///
+/// `locator` is injected so unit tests can simulate "only xdotool
+/// installed" / "neither installed" without touching `$PATH`. Codex P2
+/// #419 dispatcher.rs:184.
+pub fn release_modifiers_best_effort<F>(locator: F) -> Result<()>
+where
+    F: Fn(&str) -> Option<std::path::PathBuf>,
+{
+    let plan = plan_modifier_release(&locator);
+    let Some((helper, args)) = plan else {
+        // Neither ydotool nor xdotool present — nothing to do. A
+        // wtype/kwtype/dotool-only host with a PTT modifier still down
+        // is rare in practice (those tools are Wayland-specific and
+        // Wayland sessions almost always have ydotool too).
+        return Ok(());
+    };
+    let output = Command::new(helper).args(&args).output()?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "{helper} modifier release failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Pure decision: which helper to use for the release sweep and the exact
+/// argument vector to pass. Split from [`release_modifiers_best_effort`]
+/// so the choice is unit-testable without spawning a child process.
+pub fn plan_modifier_release<F>(locator: &F) -> Option<(&'static str, Vec<String>)>
+where
+    F: Fn(&str) -> Option<std::path::PathBuf>,
+{
+    if locator("ydotool").is_some() {
+        let mut args = vec!["key".to_owned()];
+        args.extend(
+            super::wayland::WAYLAND_MODIFIER_RELEASES
+                .iter()
+                .map(|s| (*s).to_owned()),
+        );
+        Some(("ydotool", args))
+    } else if locator("xdotool").is_some() {
+        Some((
+            "xdotool",
+            XDOTOOL_MODIFIER_KEYUP_ARGS
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        ))
+    } else {
+        None
+    }
+}
+
 /// Send the requested paste shortcut via `helper`.
 pub fn invoke_paste(helper: &str, shortcut: PasteShortcut) -> Result<()> {
     let chord = shortcut_to_helper_chord(helper, shortcut)?;
@@ -309,5 +406,88 @@ mod tests {
         // stray CR in the dispatched text is a wrapper bug worth
         // surfacing rather than silently swallowing.
         assert_eq!(dotool_script("a\rb"), "type a\rb\n");
+    }
+
+    // -- Codex P2 #419 dispatcher.rs:184: helper-chain release sweep -----
+
+    use std::path::PathBuf;
+
+    fn locator_for(present: &'static [&'static str]) -> impl Fn(&str) -> Option<PathBuf> {
+        move |name| {
+            if present.contains(&name) {
+                Some(PathBuf::from(format!("/usr/bin/{name}")))
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn plan_picks_ydotool_when_available_and_uses_full_wayland_release_list() {
+        // ydotool is the first choice: it works on both Wayland and X11
+        // and reaches the OS via the uinput daemon, so it can release
+        // modifiers regardless of which inject-helper wins the chain.
+        // The arg vector must mirror `WAYLAND_MODIFIER_RELEASES` verbatim
+        // (drained as evdev key-up codes) so a regression that drops a
+        // side-specific scancode is caught.
+        let plan = plan_modifier_release(&locator_for(&["ydotool", "xdotool", "wtype"]));
+        let (helper, args) = plan.expect("ydotool should be chosen when present");
+        assert_eq!(helper, "ydotool");
+        assert_eq!(args[0], "key");
+        let codes: Vec<&str> = args[1..].iter().map(String::as_str).collect();
+        let expected: Vec<&str> = super::super::wayland::WAYLAND_MODIFIER_RELEASES.to_vec();
+        assert_eq!(codes, expected);
+    }
+
+    #[test]
+    fn plan_falls_back_to_xdotool_when_only_xdotool_is_installed() {
+        // X11-only host without ydotool: xdotool's `keyup` verb sends a
+        // bare key-up without a preceding press, which is exactly what
+        // we need to clear a held PTT modifier. The argument vector is
+        // pinned so a future tweak that drops a side-specific name
+        // (e.g. Control_R) fails the test instead of silently shipping.
+        let plan = plan_modifier_release(&locator_for(&["xdotool", "wtype", "kwtype"]));
+        let (helper, args) = plan.expect("xdotool should win when ydotool is absent");
+        assert_eq!(helper, "xdotool");
+        let strs: Vec<&str> = args.iter().map(String::as_str).collect();
+        assert_eq!(strs, XDOTOOL_MODIFIER_KEYUP_ARGS.to_vec());
+        // And it must include both sides of every common modifier.
+        for name in [
+            "Control_L",
+            "Control_R",
+            "Shift_L",
+            "Shift_R",
+            "Alt_L",
+            "Alt_R",
+            "Super_L",
+            "Super_R",
+        ] {
+            assert!(
+                strs.contains(&name),
+                "xdotool release must cover {name}, got {strs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_is_none_when_no_release_helper_is_installed() {
+        // wtype/kwtype/dotool can't perform a stale-modifier release on
+        // their own (no `keyup` / `--clearmodifiers` equivalent). On a
+        // host that has *only* those installed we return `None` so the
+        // dispatcher resolves to a silent `Ok`, matching the existing
+        // permissive philosophy ("losing a release is less bad than
+        // failing the inject").
+        assert!(plan_modifier_release(&locator_for(&["wtype", "kwtype", "dotool"])).is_none());
+        assert!(plan_modifier_release(&locator_for(&[])).is_none());
+    }
+
+    #[test]
+    fn plan_prefers_ydotool_even_when_xdotool_also_present() {
+        // Stability guard for the priority order: a host with BOTH tools
+        // installed (common: ydotool for Wayland, xdotool kept for X11
+        // tooling) must always pick ydotool because it works in both
+        // sessions and avoids the X11-only assumption.
+        let plan = plan_modifier_release(&locator_for(&["xdotool", "ydotool"]));
+        assert_eq!(plan.expect("expected a plan").0, "ydotool");
     }
 }

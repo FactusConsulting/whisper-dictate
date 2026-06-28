@@ -76,12 +76,40 @@ impl PasteShortcut {
 
 /// Windows `VK_*` codes used by the enigo backend. Defined here so they can be
 /// unit-tested on every platform.
+///
+/// **Side-specific variants (`VK_R*`) matter for the stale-modifier sweep.**
+/// Win32 distinguishes left and right modifier scancodes at the keyboard
+/// layer: sending a `KEYUP` for the generic `VK_CONTROL` does NOT reliably
+/// clear a `VK_RCONTROL` that the user is still holding (PTT bindings like
+/// `ctrl_r` or `shift_r+ctrl_r` leave the side-specific scancode logically
+/// down). The sweep in `EnigoInjectBackend::inject` therefore releases the
+/// right-side variants too, mirroring `vp_inject.py::_release_stale_modifiers`
+/// which loops over `ctrl_l`/`ctrl_r`/etc. via pynput. Codex P2 #419 inject.rs:84.
 pub mod vk {
     pub const VK_CONTROL: u16 = 0x11;
     pub const VK_SHIFT: u16 = 0x10;
+    /// `VK_MENU` is the Win32 name for the Alt key (both sides). Exposed so
+    /// the stale-modifier sweep in `EnigoInjectBackend::inject` can drop
+    /// an Alt held from a push-to-talk chord before the burst lands —
+    /// matching `vp_inject.py::_release_stale_modifiers`'s full
+    /// Shift / Alt / Ctrl / Cmd set.
+    pub const VK_MENU: u16 = 0x12;
     pub const VK_LWIN: u16 = 0x5B;
+    /// Right-Windows / right-Meta. Paired with `VK_LWIN` in the
+    /// stale-modifier sweep so a `cmd_r` PTT binding clears too (Python's
+    /// `_release_stale_modifiers` loops over `cmd`/`cmd_l`/`cmd_r`).
+    pub const VK_RWIN: u16 = 0x5C;
     pub const VK_V: u16 = 0x56;
     pub const VK_INSERT: u16 = 0x2D;
+    /// Right-Shift. Side-specific Win32 VK; the generic `VK_SHIFT` release
+    /// does not always clear it. Codex P2 #419 inject.rs:84.
+    pub const VK_RSHIFT: u16 = 0xA1;
+    /// Right-Control. Side-specific Win32 VK; the generic `VK_CONTROL`
+    /// release does not always clear it. Codex P2 #419 inject.rs:84.
+    pub const VK_RCONTROL: u16 = 0xA3;
+    /// Right-Alt. Side-specific Win32 VK; the generic `VK_MENU` release
+    /// does not always clear it. Codex P2 #419 inject.rs:84.
+    pub const VK_RMENU: u16 = 0xA5;
 }
 
 /// Linux evdev keycodes. These match the ones already used by the Wayland
@@ -89,6 +117,9 @@ pub mod vk {
 pub mod evdev {
     pub const KEY_LEFTCTRL: u16 = 29;
     pub const KEY_LEFTSHIFT: u16 = 42;
+    /// `KEY_LEFTALT` pairs with `vk::VK_MENU` for the stale-modifier
+    /// release sweep on the enigo path (see `EnigoInjectBackend::inject`).
+    pub const KEY_LEFTALT: u16 = 56;
     pub const KEY_V: u16 = 47;
     pub const KEY_INSERT: u16 = 110;
     pub const KEY_LEFTMETA: u16 = 125;
@@ -120,7 +151,7 @@ impl PasteGuard {
     /// Stash the current clipboard, copy `text`. Returns `None` if `text`
     /// could not be written (no clipboard backend, transient failure) — in
     /// which case the caller should not attempt to send the paste shortcut.
-    pub fn copy_with_backup<C: Clipboard>(clip: &mut C, text: &str) -> Option<Self> {
+    pub fn copy_with_backup<C: Clipboard + ?Sized>(clip: &mut C, text: &str) -> Option<Self> {
         let previous = clip.read();
         if !clip.write(text) {
             return None;
@@ -133,7 +164,7 @@ impl PasteGuard {
 
     /// Restore the saved clipboard, but only if it still holds the text we
     /// injected. Returns `true` when a restore actually happened.
-    pub fn restore<C: Clipboard>(self, clip: &mut C) -> bool {
+    pub fn restore<C: Clipboard + ?Sized>(self, clip: &mut C) -> bool {
         let Some(previous) = self.previous else {
             return false;
         };
@@ -226,6 +257,19 @@ mod tests {
         assert_eq!(vk::VK_SHIFT, 0x10);
         assert_eq!(vk::VK_V, 0x56);
         assert_eq!(vk::VK_INSERT, 0x2D);
+    }
+
+    #[test]
+    fn side_specific_modifier_vks_match_win32_documented_values() {
+        // Codex P2 #419 inject.rs:84: side-specific modifier VKs must be
+        // present and pinned to the Win32 documented constants so the
+        // stale-modifier sweep can actually clear `ctrl_r`/`shift_r`/`alt_r`
+        // PTT bindings. A regression here would silently let held right-
+        // side modifiers warp the dictated burst into shortcuts.
+        assert_eq!(vk::VK_RSHIFT, 0xA1, "VK_RSHIFT is Win32 0xA1");
+        assert_eq!(vk::VK_RCONTROL, 0xA3, "VK_RCONTROL is Win32 0xA3");
+        assert_eq!(vk::VK_RMENU, 0xA5, "VK_RMENU is Win32 0xA5");
+        assert_eq!(vk::VK_RWIN, 0x5C, "VK_RWIN is Win32 0x5C");
     }
 
     #[test]
