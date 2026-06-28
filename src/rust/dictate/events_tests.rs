@@ -331,3 +331,72 @@ fn worker_status_wire_strings_match_python() {
     assert_eq!(WorkerStatus::Error.as_wire_str(), "error");
     assert_eq!(WorkerStatus::Ready.as_wire_str(), "ready");
 }
+
+// --- AsciiFormatter scalar coverage ---------------------------------------
+
+#[test]
+fn ascii_formatter_passes_through_every_json_scalar_kind() {
+    // The custom AsciiFormatter delegates every method except
+    // `write_string_fragment` to serde_json's CompactFormatter, but each
+    // delegation still needs at least one byte-equality assertion so
+    // SonarCloud sees the path covered (otherwise the new-code coverage
+    // gate dips below 80% on this PR). Encode every JSON scalar shape
+    // that maps to a distinct Formatter method (`write_null`,
+    // `write_bool`, signed/unsigned ints across widths, `write_f64`),
+    // run them through the emitter via the utterance entry point, and
+    // check the bytes match what CompactFormatter would have produced.
+    // NOTE: `emit_utterance` filters `null`-valued payload keys to match
+    // Python's `if v is not None` shape, so we don't include a null here
+    // — the null-drop behaviour itself is locked by a separate test
+    // (`none_optional_fields_are_omitted_from_payload`). The scalars
+    // below cover every other distinct Formatter method.
+    let payload = json!({
+        "true_value": true,
+        "false_value": false,
+        "small_int": 7i64,
+        "negative_int": -42i64,
+        "i32_max": i32::MAX,
+        "i64_min": i64::MIN,
+        "u64_max": u64::MAX,
+        "float_value": 1.5_f64,
+    });
+    let bytes = emit_utterance_bytes(&payload);
+    let expected: &[u8] = b"[worker-event] {\
+\"event\":\"utterance\",\
+\"false_value\":false,\
+\"float_value\":1.5,\
+\"i32_max\":2147483647,\
+\"i64_min\":-9223372036854775808,\
+\"negative_int\":-42,\
+\"small_int\":7,\
+\"true_value\":true,\
+\"u64_max\":18446744073709551615\
+}\n";
+    assert_eq!(
+        bytes, expected,
+        "AsciiFormatter scalar passthrough must match CompactFormatter byte-for-byte",
+    );
+}
+
+#[test]
+fn ascii_formatter_emits_empty_array_and_nested_object() {
+    // Covers the `begin_array` / `end_array` / `begin_array_value` and
+    // `begin_object` / `begin_object_key` / `end_object` delegations that
+    // a flat scalar payload doesn't reach. Same coverage rationale as the
+    // scalar sweep above -- locks every Formatter method in events.rs to
+    // at least one byte assertion so the new-code coverage gate stays
+    // above SonarCloud's 80% threshold.
+    let payload = json!({
+        "items": [1, 2, 3],
+        "empty": [],
+        "nested": { "inner_key": "inner_value" },
+    });
+    let bytes = emit_utterance_bytes(&payload);
+    let expected: &[u8] = b"[worker-event] {\
+\"empty\":[],\
+\"event\":\"utterance\",\
+\"items\":[1,2,3],\
+\"nested\":{\"inner_key\":\"inner_value\"}\
+}\n";
+    assert_eq!(bytes, expected);
+}
