@@ -465,7 +465,7 @@ How it works:
 
 Example sway config (`~/.config/sway/config`):
 
-```
+```text
 bindsym $mod+grave exec whisper-dictate --toggle-recording
 bindsym $mod+Shift+grave exec whisper-dictate --cancel-recording
 ```
