@@ -113,3 +113,89 @@ fn stale_cancelled_across_start_boundary_preserves_new_recording() {
     route.stop_recording(&mut buf).expect("stop B");
     assert_eq!(route.session().state(), SessionState::Idle);
 }
+/// Codex P2 #415 audio_route.rs:251 (round 6): the supervisor needs a
+/// `route.cancel(epoch)` API. Without it the supervisor cannot honour
+/// a chord-cancel without transcribing + injecting text the user meant
+/// to drop. This test stamps an epoch via `start_recording`, fires
+/// some frames, then calls `route.cancel(epoch)` and asserts the
+/// buffer is dropped + the session returns to Idle.
+#[test]
+fn route_cancel_drops_in_flight_buffer() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    let _cap_env = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", "0");
+    let mut route = route_with_cap(None);
+    let mut buf = Vec::new();
+
+    let epoch = route.start_recording(&mut buf).expect("start");
+    for _ in 0..3 {
+        route
+            .on_event(PipelineEvent::Frame(vec![0.5; 480]), &mut buf)
+            .expect("frame");
+    }
+    assert_eq!(route.buffered_samples(), 1440);
+
+    route.cancel(epoch, &mut buf).expect("cancel");
+    assert_eq!(route.session().state(), SessionState::Idle);
+    assert_eq!(
+        route.buffered_samples(),
+        0,
+        "cancel must drop the buffered samples counter alongside the session buffer",
+    );
+}
+
+/// Stale `route.cancel(old_epoch)` must NOT discard the active recording.
+/// The session's own epoch guard handles this; this is the route-level
+/// regression that the new accessor preserves the contract.
+#[test]
+fn route_cancel_with_stale_epoch_is_a_noop() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    let _cap_env = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", "0");
+    let mut route = route_with_cap(None);
+    let mut buf = Vec::new();
+
+    let epoch_a = route.start_recording(&mut buf).expect("start A");
+    route.stop_recording(&mut buf).expect("stop A");
+    let epoch_b = route.start_recording(&mut buf).expect("start B");
+    assert_ne!(epoch_a, epoch_b);
+    route
+        .on_event(PipelineEvent::Frame(vec![0.5; 480]), &mut buf)
+        .expect("B frame");
+
+    // Stale cancel for A's epoch must NOT discard B.
+    route.cancel(epoch_a, &mut buf).expect("stale cancel");
+    assert!(matches!(
+        route.session().state(),
+        SessionState::Recording { .. }
+    ));
+    assert_eq!(route.buffered_samples(), 480);
+}
+
+/// Top-level `route.epoch()` shortcut mirrors the session's epoch so
+/// supervisors do not have to reach through `.session()` to stamp
+/// outgoing cancel requests.
+#[test]
+fn route_epoch_matches_session_epoch() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    let _cap_env = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", "0");
+    let mut route = route_with_cap(None);
+    let mut buf = Vec::new();
+    let id = route.start_recording(&mut buf).expect("start");
+    assert_eq!(route.epoch(), id);
+    assert_eq!(route.epoch(), route.session().epoch());
+}
+
+/// `fence_pending_frames` is a documentation hook the supervisor calls
+/// between stop and start to acknowledge it has drained the pipeline
+/// receiver. The body is currently empty; this test pins the method
+/// signature so a future change cannot quietly remove it.
+#[test]
+fn fence_pending_frames_compiles_and_returns_unit() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
+    let _cap_env = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", "0");
+    let mut route = route_with_cap(None);
+    route.fence_pending_frames(); // returns ()
+}

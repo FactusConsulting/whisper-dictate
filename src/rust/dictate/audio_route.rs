@@ -251,6 +251,13 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
         &self.session
     }
 
+    /// Current recording epoch (delegates to [`DictateSession::epoch`]).
+    /// Supervisors stamp outgoing cancel requests with this so the
+    /// session's stale-cancel guard fires correctly under chord races.
+    pub fn epoch(&self) -> u64 {
+        self.session.epoch()
+    }
+
     /// Current per-recording buffered-sample count. Tests assert this;
     /// the supervisor may read it for UI / telemetry.
     pub fn buffered_samples(&self) -> usize {
@@ -308,6 +315,64 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
         let outcome = self.session.stop_and_transcribe(writer)?;
         self.buffered_samples = 0;
         Ok(outcome)
+    }
+
+    /// Cancel the in-flight recording if `requested_epoch` matches the
+    /// session's current epoch. Drops the buffered audio, settles back
+    /// to Idle, and emits `status=cancelled` then `status=ready`
+    /// through the writer. Delegates to [`DictateSession::cancel`] --
+    /// the session's stale-cancel guard (`vp_dictate.py:140-147 +
+    /// 665-684`) is what makes this safe under PTT chord races.
+    ///
+    /// Without this accessor, a supervisor that owns `AudioRoute` had
+    /// no way to honour a chord-cancel: `session` is read-only via
+    /// [`Self::session`], and falling back to [`Self::stop_recording`]
+    /// would transcribe + inject text the user cancelled. Codex P2
+    /// #415 audio_route.rs:251.
+    pub fn cancel<W: Write>(
+        &mut self,
+        requested_epoch: u64,
+        writer: &mut W,
+    ) -> Result<(), RouteError> {
+        // Capture the active epoch BEFORE calling cancel so we can tell
+        // whether the session actually dropped the recording (epoch
+        // matched) or no-oped (stale epoch). Only clear our own
+        // buffered_samples counter when the session actually cancelled
+        // -- otherwise a stale cancel from a prior press would
+        // additionally erase the NEW recording's sample count even
+        // though the session correctly preserved its buffer.
+        let active_before = self.session.epoch();
+        self.session.cancel(requested_epoch, writer)?;
+        if requested_epoch == active_before {
+            self.buffered_samples = 0;
+        }
+        Ok(())
+    }
+
+    /// Drop any frames the supervisor has not yet drained from the
+    /// pipeline receiver. Called by the supervisor BETWEEN
+    /// [`Self::stop_recording`] and the next [`Self::start_recording`]
+    /// to prevent stale frames from the previous press leaking into
+    /// the new recording (Codex P2 #415 audio_route.rs:398).
+    ///
+    /// `PipelineEvent::Frame` carries no recording id and the
+    /// idle-frame drop in [`Self::handle_frame`] only protects frames
+    /// processed BEFORE the start handshake; frames queued in the
+    /// channel before `start_recording()` but processed after it would
+    /// otherwise land in the new utterance. The supervisor (PR 4) is
+    /// the only component that owns the channel, so it is the only
+    /// component that can drain it; this method is a documentation
+    /// hook plus a no-op reset of internal counters so the contract
+    /// is auditable. The real drain happens in the supervisor's PTT
+    /// release handler.
+    pub fn fence_pending_frames(&mut self) {
+        // Internal counters are already cleared on start_recording, so
+        // the body is intentionally empty -- the value is the doc
+        // contract above. Kept as a real method so tests + PR 4 wiring
+        // can reference an actual symbol.
+        // If a future refactor adds per-recording fencing state
+        // (e.g. a "pending stale frames" buffer), this is the place
+        // to drop it.
     }
 
     /// Drive a single [`PipelineEvent`] into the session. Returns
