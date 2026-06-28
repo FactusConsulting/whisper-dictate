@@ -312,7 +312,7 @@ fn worker_event_escapes_del_control_character() {
     // serialised as the four-character escape `\u007f` (six bytes once
     // the leading backslash is counted: `\`, `u`, `0`, `0`, `7`, `f`).
     assert!(
-        !buf.iter().any(|&b| b == 0x7f),
+        !buf.contains(&0x7f),
         "raw DEL (0x7f) leaked into worker-event stream: {:?}",
         std::str::from_utf8(&buf).unwrap_or("<non-utf8>"),
     );
