@@ -157,9 +157,13 @@ pub enum RouteError {
     #[error("audio device error: {0}")]
     Device(String),
     /// The wrapped session refused a transition (e.g. duplicate
-    /// `start_recording`).
+    /// `start_recording`). I/O failures from the session writer are
+    /// re-routed to [`RouteError::Io`] below so supervisors can split
+    /// "transition refused" from "stderr is plugged"; only true
+    /// transition errors (AlreadyActive etc.) land in this variant.
+    /// Codex P2 #415 audio_route.rs:162.
     #[error(transparent)]
-    Session(#[from] SessionError),
+    Session(SessionError),
     /// An I/O write to the event-line writer failed. Distinct from
     /// `Device` so the supervisor can distinguish "the mic blew up"
     /// from "stderr is plugged".
@@ -170,6 +174,21 @@ pub enum RouteError {
 impl From<std::io::Error> for RouteError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value.to_string())
+    }
+}
+
+impl From<SessionError> for RouteError {
+    fn from(value: SessionError) -> Self {
+        // The session funnels both writer errors AND duplicate-start /
+        // bad-state refusals through the same enum; the supervisor (PR 4/6)
+        // wants them in different buckets so it can fail-loud on the
+        // transition errors while recovering from a pipe blowup. Map the
+        // I/O case onto the dedicated Io variant; pass everything else
+        // through as Session. Codex P2 #415 audio_route.rs:162.
+        match value {
+            SessionError::Io(msg) => Self::Io(msg),
+            other => Self::Session(other),
+        }
     }
 }
 

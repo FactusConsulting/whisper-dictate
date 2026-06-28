@@ -135,13 +135,22 @@ pub(super) fn route_with_cap(cap_seconds: Option<f64>) -> AudioRoute<TestTranscr
 /// the cap can use [`route_with_cap`] with `None` and additionally
 /// clear the env var via an [`EnvVarGuard::set("…", "0")`] so the
 /// refresh lands on `None`.
+///
+/// Returns `(recording_id, EnvVarGuard)`. Callers MUST bind the guard
+/// (e.g. `let (_id, _cap_guard) = start_recording_with_cap_env(...)`)
+/// so the previous `VOICEPI_MAX_RECORD_S` value is restored at end of
+/// scope — without the guard, any later library test in the same
+/// process inherits the cap from whichever audio-route test ran last
+/// and the suite goes order-dependent. Codex P2 #415
+/// test_support.rs:143.
 pub(super) fn start_recording_with_cap_env<W: Write>(
     route: &mut AudioRoute<TestTranscribe, TestInject>,
     writer: &mut W,
     cap_seconds: f64,
-) -> u64 {
-    std::env::set_var("VOICEPI_MAX_RECORD_S", cap_seconds.to_string());
-    route.start_recording(writer).expect("start_recording")
+) -> (u64, EnvVarGuard) {
+    let guard = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", &cap_seconds.to_string());
+    let id = route.start_recording(writer).expect("start_recording");
+    (id, guard)
 }
 
 // ── wire helpers ─────────────────────────────────────────────────────────────

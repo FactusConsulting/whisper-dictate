@@ -99,7 +99,7 @@ fn max_record_cap_refuses_over_cap_frames_and_emits_capped_status() {
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let mut route = route_with_cap(None);
     let mut buf = Vec::new();
-    let _id = start_recording_with_cap_env(&mut route, &mut buf, 0.03);
+    let (_id, _cap_guard) = start_recording_with_cap_env(&mut route, &mut buf, 0.03);
     // Drop the start_recording events so the assertions below only
     // see what the on_event calls emit.
     buf.clear();
@@ -165,7 +165,7 @@ fn cap_tripped_recording_closes_normally_on_stop_recording() {
     // transcriber rather than the too-short skip branch).
     let mut route = route_with_cap(None);
     let mut buf = Vec::new();
-    let _id = start_recording_with_cap_env(&mut route, &mut buf, 0.36);
+    let (_id, _cap_guard) = start_recording_with_cap_env(&mut route, &mut buf, 0.36);
 
     // 12 frames = 5760 samples = exactly cap. 13th trips.
     for _ in 0..12 {
@@ -433,4 +433,33 @@ fn start_recording_refreshes_max_record_seconds_from_env() {
     // here so a future change to the rate forces this test to fail
     // loudly rather than silently drift.
     assert_eq!(SR, 16_000, "max-record cap math assumes 16 kHz");
+}
+/// Codex P2 #415 audio_route.rs:162 (round 5): RouteError must split
+/// I/O failures from session-transition refusals so a supervisor can
+/// distinguish "stderr is plugged" from "duplicate start". A
+/// `SessionError::Io` raised by a broken writer routes to
+/// `RouteError::Io`; `SessionError::AlreadyActive` (a true transition
+/// refusal) routes to `RouteError::Session`.
+#[test]
+fn session_io_error_routes_to_route_io_variant() {
+    use crate::dictate::SessionError;
+
+    let session_io: SessionError = SessionError::Io("stderr broken".into());
+    let route: RouteError = session_io.into();
+    assert!(
+        matches!(route, RouteError::Io(_)),
+        "SessionError::Io must map to RouteError::Io, got {route:?}",
+    );
+
+    let session_transition: SessionError = SessionError::AlreadyActive {
+        state: crate::dictate::SessionState::Recording { id: 1 },
+    };
+    let route: RouteError = session_transition.into();
+    assert!(
+        matches!(
+            route,
+            RouteError::Session(SessionError::AlreadyActive { .. })
+        ),
+        "SessionError::AlreadyActive must pass through as RouteError::Session, got {route:?}",
+    );
 }
