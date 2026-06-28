@@ -200,9 +200,7 @@ fn write_named_event<W: Write>(writer: &mut W, name: &str, payload: &Value) -> i
 fn write_line<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
     writer.write_all(WORKER_EVENT_PREFIX.as_bytes())?;
     let mut serializer = Serializer::with_formatter(&mut *writer, AsciiFormatter::new());
-    value
-        .serialize(&mut serializer)
-        .map_err(io::Error::other)?;
+    value.serialize(&mut serializer).map_err(io::Error::other)?;
     writer.write_all(b"\n")
 }
 
@@ -220,7 +218,9 @@ struct AsciiFormatter {
 
 impl AsciiFormatter {
     fn new() -> Self {
-        Self { inner: CompactFormatter }
+        Self {
+            inner: CompactFormatter,
+        }
     }
 }
 
@@ -293,7 +293,11 @@ impl Formatter for AsciiFormatter {
     fn write_f64<W: ?Sized + Write>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
         self.inner.write_f64(writer, value)
     }
-    fn write_number_str<W: ?Sized + Write>(&mut self, writer: &mut W, value: &str) -> io::Result<()> {
+    fn write_number_str<W: ?Sized + Write>(
+        &mut self,
+        writer: &mut W,
+        value: &str,
+    ) -> io::Result<()> {
         self.inner.write_number_str(writer, value)
     }
     fn begin_string<W: ?Sized + Write>(&mut self, writer: &mut W) -> io::Result<()> {
@@ -370,4 +374,3 @@ fn write_unicode_escape<W: ?Sized + Write>(writer: &mut W, ch: char) -> io::Resu
         write!(writer, "\\u{:04x}\\u{:04x}", high, low)
     }
 }
-

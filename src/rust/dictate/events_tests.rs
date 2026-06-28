@@ -128,7 +128,8 @@ fn emit_utterance_byte_golden() {
     //   _emit_worker_event("utterance", text="hello world", audio_peak=0.5)
     let payload = json!({"text": "hello world", "audio_peak": 0.5});
     let bytes = emit_utterance_bytes(&payload);
-    let expected: &[u8] = b"[worker-event] {\"audio_peak\":0.5,\"event\":\"utterance\",\"text\":\"hello world\"}\n";
+    let expected: &[u8] =
+        b"[worker-event] {\"audio_peak\":0.5,\"event\":\"utterance\",\"text\":\"hello world\"}\n";
     assert_eq!(bytes, expected);
 }
 
@@ -172,7 +173,10 @@ fn emit_status_round_trips_through_parse_worker_event_payload_shape() {
         .expect("newline-terminated");
 
     let payload: Value = serde_json::from_str(raw).expect("payload is valid JSON");
-    assert_eq!(payload.get("event").and_then(|v| v.as_str()), Some("status"));
+    assert_eq!(
+        payload.get("event").and_then(|v| v.as_str()),
+        Some("status")
+    );
     assert_eq!(
         payload.get("state").and_then(|v| v.as_str()),
         Some("recording"),
@@ -318,7 +322,10 @@ fn worker_status_wire_strings_match_python() {
     assert_eq!(WorkerStatus::Opening.as_wire_str(), "opening");
     assert_eq!(WorkerStatus::Recording.as_wire_str(), "recording");
     assert_eq!(WorkerStatus::Transcribing.as_wire_str(), "transcribing");
-    assert_eq!(WorkerStatus::PostProcessing.as_wire_str(), "post-processing");
+    assert_eq!(
+        WorkerStatus::PostProcessing.as_wire_str(),
+        "post-processing"
+    );
     assert_eq!(WorkerStatus::NoText.as_wire_str(), "no_text");
     assert_eq!(WorkerStatus::Cancelled.as_wire_str(), "cancelled");
     assert_eq!(WorkerStatus::Error.as_wire_str(), "error");
