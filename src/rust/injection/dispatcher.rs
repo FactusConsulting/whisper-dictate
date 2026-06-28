@@ -606,6 +606,19 @@ mod tests {
                 .push(format!("chord:[{}]+{:#x}", mods.join(","), key));
             Ok(())
         }
+        fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+            // Overridden so `Injector::release_held_modifiers` tests can
+            // assert the modifier sweep actually reached the backend (the
+            // trait's default would swallow it silently). Mirrors the
+            // production enigo path that drops Ctrl / Shift / Alt / Cmd
+            // before the burst lands — Codex P2 #417 inject.rs:110.
+            let mods: Vec<String> = modifiers.iter().map(|m| format!("{m:#x}")).collect();
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("release:[{}]", mods.join(",")));
+            Ok(())
+        }
     }
 
     #[test]
@@ -653,5 +666,65 @@ mod tests {
             1,
             "expected single chord for Paste(None), got {recorded:?}"
         );
+    }
+
+    // -- release_held_modifiers wiring (Codex P2 #417 inject.rs:110) --
+    //
+    // The PTT-modifier sweep needs to reach the backend on Windows/macOS
+    // (always) and on Linux when a backend is explicitly installed; on
+    // Linux without a backend it must stay a quiet success because the
+    // wayland.rs / ydotool helper already runs its own release sweep
+    // before the paste chord. These tests pin all three branches.
+
+    #[test]
+    fn release_held_modifiers_forwards_to_injected_backend() {
+        // Holds on Windows / macOS (always taken) AND on Linux (the
+        // `if let Some(backend) = ...` early-return branch). Asserts the
+        // exact VK codes propagate so a regression that drops one would
+        // be caught.
+        use super::super::paste::vk;
+        let backend = RecordingBackend::default();
+        let events = backend.events.clone();
+        let mut injector = Injector::new().with_backend(Box::new(backend));
+        injector
+            .release_held_modifiers(&[vk::VK_CONTROL, vk::VK_SHIFT, vk::VK_MENU])
+            .unwrap();
+        let recorded = events.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![format!(
+                "release:[{:#x},{:#x},{:#x}]",
+                vk::VK_CONTROL,
+                vk::VK_SHIFT,
+                vk::VK_MENU,
+            )]
+        );
+    }
+
+    #[test]
+    fn release_held_modifiers_with_empty_list_is_ok() {
+        // Empty input is the "no stale modifiers held" hot path; it must
+        // still reach the backend so a future implementation that, say,
+        // batches into a single SendInput call sees a well-formed empty
+        // request rather than the dispatcher swallowing the call.
+        let backend = RecordingBackend::default();
+        let events = backend.events.clone();
+        let mut injector = Injector::new().with_backend(Box::new(backend));
+        injector.release_held_modifiers(&[]).unwrap();
+        assert_eq!(*events.lock().unwrap(), vec!["release:[]".to_string()]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn release_held_modifiers_without_backend_is_noop_on_linux() {
+        // Linux helper-chain fallback: no backend installed, so the
+        // dispatcher returns Ok without doing anything. The wayland.rs
+        // ydotool path runs its own `_WAYLAND_MODIFIER_RELEASES` sweep
+        // inside the paste-shortcut helper, so duplicating it here
+        // would be redundant rather than additional safety.
+        use super::super::paste::vk;
+        let mut injector = Injector::new();
+        assert!(injector.release_held_modifiers(&[vk::VK_CONTROL]).is_ok());
+        assert!(injector.release_held_modifiers(&[]).is_ok());
     }
 }

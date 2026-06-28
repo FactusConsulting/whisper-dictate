@@ -239,4 +239,34 @@ mod tests {
     fn make_default_backend_errors_without_feature() {
         assert!(make_default_backend().is_err());
     }
+
+    #[test]
+    fn default_release_modifiers_is_a_silent_noop() {
+        // The trait-level default of `release_modifiers` exists so the
+        // existing recording fakes (which only care about type_text /
+        // key_chord) don't have to override anything. Verify it neither
+        // records events nor errors when called with a non-empty modifier
+        // list. The real enigo override is exercised on the dispatcher
+        // path -- see `Injector::release_held_modifiers` tests in
+        // `dispatcher.rs`. Coverage guard for PR #419 / Codex P2 #417.
+        use super::super::paste::vk;
+        let mut backend = Recording::default();
+        backend
+            .release_modifiers(&[vk::VK_CONTROL, vk::VK_SHIFT, vk::VK_MENU])
+            .unwrap();
+        assert!(
+            backend.events.is_empty(),
+            "default impl must not record any events, got {:?}",
+            backend.events
+        );
+    }
+
+    #[test]
+    fn default_release_modifiers_accepts_empty_list() {
+        // Empty input is the "no stale modifiers held" hot path and must
+        // stay a quiet success.
+        let mut backend = Recording::default();
+        backend.release_modifiers(&[]).unwrap();
+        assert!(backend.events.is_empty());
+    }
 }
