@@ -41,3 +41,11 @@ Thumbs.db
 # Local benchmark recordings/results
 benchmark/audio/
 benchmark/*.jsonl
+
+# Devcontainer-side cargo + rustup + target caches written by
+# scripts/dev/dev-check.ps1 (the Linux target dir is shared via the
+# mounted repo so the host doesn't need a separate clippy toolchain;
+# keep all three out of git).
+/.cargo-cache/
+/.rustup-cache/
+/target-linux/

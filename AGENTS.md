@@ -13,6 +13,13 @@
 - Rust checks:
   `cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check`
   and `cargo clippy --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-targets --all-features -- -D warnings`
+- **Native clippy is broken on Windows boxes without MSVC `lib.exe`.**
+  Use `pwsh scripts/dev/dev-check.ps1 [-Features <list>]` instead — it
+  runs `cargo fmt --check + clippy + test --lib` inside the devcontainer
+  image (Rancher Desktop's `rancher-desktop` WSL distro hosts the daemon).
+  The image is built once on first run (~5 min); thereafter reused. Run
+  this BEFORE every signed push so clippy lints fail locally rather than
+  costing a CI roundtrip.
 
 ## Regression Tests
 
