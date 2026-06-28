@@ -256,6 +256,41 @@ where
 }
 
 #[cfg(feature = "rust-hotkeys")]
+/// Validate `key_names` against the Rust (rdev) backend's supported list
+/// WITHOUT installing anything. Mirrors the validation `install_hotkey`
+/// runs before spawning manager / coordinator threads, so the supervisor
+/// can check a (possibly updated) restart-time binding before parking
+/// the Python listener. Returns Err with the first unsupported name.
+///
+/// Codex P2 #416 (round 2) runtime.rs:511 -- on the restart path the
+/// supervisor parks Python BEFORE calling `handle.resume(key_names)`;
+/// without this validation a Settings change to a key that the Python
+/// evdev backend accepts but rdev does not (eg `super_l`) would leave
+/// Python disabled and the Rust hotkey unable to fire.
+///
+/// In stub builds (no `rust-hotkeys` feature) this always succeeds --
+/// `install_hotkey` already returns `Unsupported` synchronously there,
+/// so the supervisor's `hotkey_handle` is None and this validation is
+/// dead code anyway.
+#[cfg(feature = "rust-hotkeys")]
+pub fn validate_key_names(key_names: &[String]) -> Result<()> {
+    if key_names.is_empty() {
+        return Err(InstallError::EmptyConfig);
+    }
+    for name in key_names {
+        if !is_rdev_supported_name(name) {
+            return Err(InstallError::UnsupportedKey(name.clone()));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "rust-hotkeys"))]
+pub fn validate_key_names(_key_names: &[String]) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(feature = "rust-hotkeys")]
 impl HotkeyHandle {
     /// Send a [`coordinator::CoordinatorEvent::ProcessingFinished`] for the
     /// given recording id. The host calls this from the transcription
