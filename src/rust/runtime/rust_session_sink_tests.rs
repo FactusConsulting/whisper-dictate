@@ -143,18 +143,22 @@ fn drain_events(rx: &mpsc::Receiver<RuntimeEvent>) -> Vec<RuntimeEvent> {
     out
 }
 
+/// Bundle of test handles returned by [`wire_coordinator_with_session`].
+/// Factored into a struct rather than a 5-tuple so clippy's
+/// `type_complexity` lint stays quiet (the tuple form was rejected by
+/// CI's `clippy -- -D warnings` pass).
+struct CoordinatorTestRig {
+    coord: CoordinatorHandle,
+    coord_thread: CoordinatorThread,
+    session: Arc<Mutex<StubSession>>,
+    rx: mpsc::Receiver<RuntimeEvent>,
+    /// Every `processing_finished` id the sink emitted, in order.
+    signaled: Arc<Mutex<Vec<u64>>>,
+}
+
 /// Build the rust-session sink, plug it into a fresh coordinator,
-/// and return the wiring the test will exercise:
-/// `(coord_handle, coord_thread, session, rx, signaled_ids)`.
-fn wire_coordinator_with_session(
-    mode: Mode,
-) -> (
-    CoordinatorHandle,
-    CoordinatorThread,
-    Arc<Mutex<StubSession>>,
-    mpsc::Receiver<RuntimeEvent>,
-    Arc<Mutex<Vec<u64>>>,
-) {
+/// and return the wiring the test will exercise.
+fn wire_coordinator_with_session(mode: Mode) -> CoordinatorTestRig {
     let (tx, rx) = mpsc::channel();
     let session = make_session();
     // Capture every `processing_finished` id the sink emits.
@@ -184,7 +188,13 @@ fn wire_coordinator_with_session(
         panic!("coord_slot must be empty on first set");
     }
 
-    (coord_handle, coord_thread, session, rx, signaled)
+    CoordinatorTestRig {
+        coord: coord_handle,
+        coord_thread,
+        session,
+        rx,
+        signaled,
+    }
 }
 
 /// Block until a worker event with the given state arrives or panic
@@ -218,8 +228,13 @@ fn coordinator_press_release_drives_session_end_to_end() {
         .unwrap_or_else(|e| e.into_inner());
     std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
 
-    let (coord, coord_thread, session, rx, signaled) =
-        wire_coordinator_with_session(Mode::HoldToTalk);
+    let CoordinatorTestRig {
+        coord,
+        coord_thread,
+        session,
+        rx,
+        signaled,
+    } = wire_coordinator_with_session(Mode::HoldToTalk);
 
     // 1) Press → coordinator emits StartRecording → sink calls
     //    `session.start()`. Wait for the matching `state=recording`
@@ -315,8 +330,13 @@ fn coordinator_press_release_emits_full_state_sequence() {
         .unwrap_or_else(|e| e.into_inner());
     std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
 
-    let (coord, coord_thread, _session, rx, signaled) =
-        wire_coordinator_with_session(Mode::HoldToTalk);
+    let CoordinatorTestRig {
+        coord,
+        coord_thread,
+        session: _session,
+        rx,
+        signaled,
+    } = wire_coordinator_with_session(Mode::HoldToTalk);
 
     coord.send(CoordinatorEvent::Press);
     coord.send(CoordinatorEvent::Release);
@@ -370,8 +390,13 @@ fn coordinator_cancel_drives_session_cancel() {
         .unwrap_or_else(|e| e.into_inner());
     std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
 
-    let (coord, coord_thread, session, rx, signaled) =
-        wire_coordinator_with_session(Mode::HoldToTalk);
+    let CoordinatorTestRig {
+        coord,
+        coord_thread,
+        session,
+        rx,
+        signaled,
+    } = wire_coordinator_with_session(Mode::HoldToTalk);
 
     coord.send(CoordinatorEvent::Press);
     wait_for_state(&rx, "recording");
