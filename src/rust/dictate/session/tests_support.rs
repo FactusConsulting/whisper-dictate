@@ -133,10 +133,23 @@ pub(super) fn one_second_pcm() -> Vec<f32> {
 /// Build a session with the given backends + the default config (0.5 s
 /// min-record floor, blank capture/device labels). Returns the session +
 /// a fresh byte-buffer to capture status / utterance lines.
+///
+/// Sets `VOICEPI_WORKER_EVENTS=1` for the duration of the test process
+/// so the event-gating added in Codex P2 #413 round 2 (wire.rs:98) does
+/// not silence the test assertions. The env var is process-global so a
+/// test runner that runs these in parallel with other tests that flip
+/// the same var will need to use a mutex; in this crate no other test
+/// touches it.
 pub(super) fn session<T: TranscribeBackend, I: InjectBackend>(
     transcribe: T,
     inject: I,
 ) -> (DictateSession<T, I>, Vec<u8>) {
+    // Safety: the only other writer of this env var is the events module
+    // (also Wave 5), and its tests acquire a private mutex before touching
+    // it. Setting it once here, at module-level rather than per-test,
+    // keeps the existing tests free of mutex bookkeeping; the harness
+    // tears the process down per-binary so the leak is bounded.
+    std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
     (
         DictateSession::new(transcribe, inject, SessionConfig::default()),
         Vec::new(),

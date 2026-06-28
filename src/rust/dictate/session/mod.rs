@@ -56,6 +56,24 @@ pub use types::{
     TranscribeError, TranscribeResult, UtteranceOutcome, SR,
 };
 
+/// Translate the backend's free-form gate text (as `result.gate` carries
+/// it -- e.g. `"input too quiet: -42 dBFS"`, `"no speech contrast: 0.02"`)
+/// into one of the three reason tokens the worker-event consumers / UI
+/// cards switch on: `"too_quiet"`, `"no_speech"`, `"empty"`. Mirrors the
+/// Python mapper in `vp_transcribe.py` (substring-based, ASCII-cased).
+/// Codex P2 #413 mod.rs:284 (round 2 follow-up to the `gate` field
+/// landed in round 1).
+pub(crate) fn normalize_gate_reason(gate: &str) -> &'static str {
+    let lowered = gate.to_ascii_lowercase();
+    if lowered.contains("too quiet") {
+        return "too_quiet";
+    }
+    if lowered.contains("no speech") {
+        return "no_speech";
+    }
+    "empty"
+}
+
 /// Per-utterance state machine. Owns the capture buffer and the
 /// transcribe / inject backends; emits status events through a
 /// caller-supplied writer.
@@ -228,6 +246,15 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         writer: &mut W,
         buf: &[f32],
     ) -> Result<UtteranceOutcome, SessionError> {
+        // Status flip to `transcribing` lands FIRST -- Python's
+        // `vp_dictate.py` emits this before the empty-frames guard, so
+        // every utterance shows `recording -> transcribing -> ... -> ready`
+        // even when no frames arrive (consumers like log_render.rs key on
+        // the full sequence). Without this, the no-audio path would jump
+        // straight from `recording` to `no_text` and drop the
+        // `transcribing` UI card. Codex P2 #413 mod.rs:233 (round 2).
+        wire::emit_status(writer, "transcribing", &self.capture_extras())?;
+
         // No frames ever pushed — Python's `if not self.frames:` branch.
         if buf.is_empty() {
             wire::emit_status(writer, "no_text", &[("reason", Value::from("no_audio"))])?;
@@ -236,14 +263,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
         // `recording_s` is reported on every no-text branch (Python:
         // `recording_s=round(recording_s, 2)` on every `_emit_worker_event`
-        // call from `_stop_and_transcribe`'s no-text paths). Computed once
-        // up-front so the err/empty/hallucination branches below all see
-        // the same value. Codex P2 #413 mod.rs:254.
+        // call from `_stop_and_transcribe`'s no-text paths) AND on the
+        // successful utterance event. Computed once up-front so every
+        // branch shares the same value. Codex P2 #413 mod.rs:254 +
+        // wire.rs:61 (round 2).
         let recording_s = json!(wire::round2(buf.len() as f64 / SR as f64));
-
-        // Status flip to `transcribing` mirrors the Python emit that
-        // immediately precedes the skip-gate / transcribe call.
-        wire::emit_status(writer, "transcribing", &self.capture_extras())?;
 
         // Min-duration gate. Delegates to the existing skip helper so
         // the threshold semantics (0.3 s floor, fractional comparison)
@@ -279,9 +303,17 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             }
             Ok(result) if result.text.is_empty() => {
                 // Python distinguishes `too_quiet`, `no_speech`, `empty`
-                // from `result.gate` so the matching UI card fires.
-                // Codex P2 #413 mod.rs:263.
-                let reason = result.gate.unwrap_or("empty");
+                // from `result.gate` so the matching UI card fires. The
+                // production gate returns free-form text (e.g. "input
+                // too quiet: -42 dBFS"), so route it through
+                // `normalize_gate_reason` to land on one of the three
+                // reason tokens. Codex P2 #413 mod.rs:263 (round 1) +
+                // mod.rs:284 (round 2 follow-up: gate text normalisation).
+                let reason = result
+                    .gate
+                    .as_deref()
+                    .map(normalize_gate_reason)
+                    .unwrap_or("empty");
                 wire::emit_status(
                     writer,
                     "no_text",
@@ -315,10 +347,16 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                     // still fires with the text we attempted to inject.
                     // Surface the failure on the utterance event so the
                     // supervisor can decide whether to retry / show UI.
-                    wire::emit_utterance(writer, &text, &result, Some(err.to_string()))?;
+                    wire::emit_utterance(
+                        writer,
+                        &text,
+                        &result,
+                        recording_s.clone(),
+                        Some(err.to_string()),
+                    )?;
                     return Ok(UtteranceOutcome::Injected { text, result });
                 }
-                wire::emit_utterance(writer, &text, &result, None)?;
+                wire::emit_utterance(writer, &text, &result, recording_s.clone(), None)?;
                 Ok(UtteranceOutcome::Injected { text, result })
             }
         }

@@ -49,6 +49,7 @@ pub(super) fn emit_utterance<W: Write>(
     writer: &mut W,
     text: &str,
     result: &TranscribeResult,
+    recording_s: Value,
     inject_error: Option<String>,
 ) -> Result<(), SessionError> {
     let mut payload: Map<String, Value> = Map::new();
@@ -58,6 +59,11 @@ pub(super) fn emit_utterance<W: Write>(
         "text_chars".into(),
         Value::from(text.chars().count() as u64),
     );
+    // Clip duration in seconds (rounded to 2 dp). Python's
+    // `_utterance_event` writes it; consumers like
+    // `src/rust/ui/log_render.rs` + `src/rust/telemetry.rs` read it.
+    // Codex P2 #413 wire.rs:61 (round 2).
+    payload.insert("recording_s".into(), recording_s);
     payload.insert("compute_ms".into(), Value::from(result.latency_ms));
     // `compute_s` is the seconds-rounded mirror of `compute_ms` that
     // existing consumers (`src/rust/ui/log_render.rs` +
@@ -95,6 +101,16 @@ fn is_droppable(value: &Value) -> bool {
 }
 
 fn write_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), SessionError> {
+    // Honour the VOICEPI_WORKER_EVENTS env gate (Python's
+    // `_emit_worker_event` returns early when the var is unset/falsy;
+    // PR 1's `events::write_line` does the same). Without the gate any
+    // session run outside the RuntimeSupervisor (e.g. a CLI smoke or
+    // tooling integration) would leak lines to whatever writer was
+    // passed in. Codex P2 #413 wire.rs:98 (round 2).
+    if !crate::dictate::env_gates::is_truthy(std::env::var("VOICEPI_WORKER_EVENTS").ok().as_deref())
+    {
+        return Ok(());
+    }
     writer.write_all(WORKER_EVENT_PREFIX.as_bytes())?;
     // ASCII-escape non-ASCII payload bytes so the worker-event line is
     // safe on Windows shells / hidden subprocess pipes with non-UTF-8
@@ -114,6 +130,11 @@ fn write_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), SessionErro
     let serialised = serde_json::to_string(value).map_err(|e| SessionError::Io(e.to_string()))?;
     write_ascii_escaped(writer, &serialised)?;
     writer.write_all(b"\n")?;
+    // Python `_emit_worker_event` uses `flush=True`; PR 1's
+    // `events::write_line` flushes too. Without the flush, status lines
+    // can sit in a buffered writer past the moment the UI needs them.
+    // Codex P2 #413 wire.rs:116 (round 2).
+    writer.flush()?;
     Ok(())
 }
 

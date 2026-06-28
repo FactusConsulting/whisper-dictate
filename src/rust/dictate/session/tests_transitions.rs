@@ -183,3 +183,102 @@ fn epoch_bumps_monotonically_per_start() {
         "epochs must be monotonically increasing: {a},{b},{c}"
     );
 }
+#[test]
+fn utterance_event_carries_recording_s() {
+    // Codex P2 #413 wire.rs:61 (round 2). Successful utterance events
+    // must carry `recording_s` -- it''s the clip duration that
+    // log_render.rs / telemetry.rs read out of every utterance.
+    let transcribe = TestTranscribe::returning_text("hello");
+    let inject = TestInject::new();
+    let (mut s, mut buf) = session(transcribe, inject);
+    s.start(&mut buf).expect("start");
+    s.push_frame(&one_second_pcm());
+    s.stop_and_transcribe(&mut buf).expect("stop");
+
+    let utterance = parse_events(&buf)
+        .into_iter()
+        .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("an utterance event must be emitted");
+    let rec = utterance
+        .get("recording_s")
+        .and_then(|v| v.as_f64())
+        .expect("recording_s must be present on utterance events");
+    assert!(
+        (rec - 1.0).abs() < 0.01,
+        "recording_s ({rec}) must be ~1.0 for a one-second-pcm utterance",
+    );
+}
+
+#[test]
+fn transcribing_state_fires_even_on_no_audio() {
+    // Codex P2 #413 mod.rs:233 (round 2). Python emits
+    // `state="transcribing"` BEFORE the empty-frames guard so the UI
+    // sequence is `recording -> transcribing -> no_text -> ready` even
+    // on a no-audio recording. Without this the Rust path would jump
+    // straight from `recording` to `no_text`.
+    let transcribe = TestTranscribe::returning_text("never runs");
+    let inject = TestInject::new();
+    let (mut s, mut buf) = session(transcribe, inject);
+    s.start(&mut buf).expect("start");
+    s.stop_and_transcribe(&mut buf).expect("stop");
+
+    let trace = state_trace(&buf);
+    let transcribing_idx = trace
+        .iter()
+        .position(|s| s == "transcribing")
+        .expect("transcribing state must fire even on no-audio");
+    let no_text_idx = trace.iter().position(|s| s == "no_text").expect("no_text");
+    assert!(
+        transcribing_idx < no_text_idx,
+        "transcribing must precede no_text: trace was {trace:?}",
+    );
+}
+
+#[test]
+fn gate_text_normalises_to_reason_token() {
+    // Codex P2 #413 mod.rs:284 (round 2). The Rust speech gate returns
+    // free-form messages like "input too quiet: -42 dBFS" which Python
+    // maps to "too_quiet"; the session must surface the reason token,
+    // not the raw gate text.
+    use crate::dictate::session::normalize_gate_reason;
+    assert_eq!(
+        normalize_gate_reason("input too quiet: -42 dBFS"),
+        "too_quiet"
+    );
+    assert_eq!(normalize_gate_reason("Input Too Quiet"), "too_quiet"); // case-insensitive
+    assert_eq!(
+        normalize_gate_reason("no speech contrast: 0.02"),
+        "no_speech"
+    );
+    assert_eq!(normalize_gate_reason("NO SPEECH detected"), "no_speech");
+    assert_eq!(normalize_gate_reason(""), "empty");
+    assert_eq!(normalize_gate_reason("something unrelated"), "empty");
+}
+
+#[test]
+fn empty_text_with_gate_emits_normalised_reason() {
+    // Wire-level lock for the previous test: an empty-text result whose
+    // `gate` field carries the production "too quiet" message must
+    // surface as `reason="too_quiet"` on the no_text event.
+    use super::TranscribeResult;
+    let transcribe = TestTranscribe::returning_text("");
+    {
+        let mut next = transcribe.next.borrow_mut();
+        *next = super::tests_support::TranscribeOutcome::Ok(TranscribeResult {
+            text: String::new(),
+            gate: Some("input too quiet: -42 dBFS".to_owned()),
+            ..Default::default()
+        });
+    }
+    let inject = TestInject::new();
+    let (mut s, mut buf) = session(transcribe, inject);
+    s.start(&mut buf).expect("start");
+    s.push_frame(&one_second_pcm());
+    s.stop_and_transcribe(&mut buf).expect("stop");
+
+    let no_text = parse_events(&buf)
+        .into_iter()
+        .find(|e| e.get("state").and_then(|s| s.as_str()) == Some("no_text"))
+        .expect("a no_text event must be emitted");
+    assert_eq!(no_text["reason"], "too_quiet");
+}
