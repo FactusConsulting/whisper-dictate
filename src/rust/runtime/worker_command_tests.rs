@@ -318,7 +318,7 @@ fn install_rust_hotkey_from_command_skips_when_key_missing() {
     command.env.retain(|(k, _)| k != "VOICEPI_KEY");
 
     let (tx, _rx) = std::sync::mpsc::channel();
-    let handle = install_rust_hotkey_from_command(&command, tx);
+    let handle = install_rust_hotkey_from_command(&command, tx, None);
     assert!(
         handle.is_none(),
         "must return None when PTT key is missing from env"
@@ -352,7 +352,7 @@ fn install_rust_hotkey_from_command_reads_toggle_mode_from_env() {
     let (tx, _rx) = std::sync::mpsc::channel();
     // Backend env var not set → None (function exits early via
     // maybe_install_rust_hotkey's guard). No panic or crash = pass.
-    let handle = install_rust_hotkey_from_command(&command, tx);
+    let handle = install_rust_hotkey_from_command(&command, tx, None);
     assert!(
         handle.is_none(),
         "VOICEPI_HOTKEY_BACKEND not set → must return None"

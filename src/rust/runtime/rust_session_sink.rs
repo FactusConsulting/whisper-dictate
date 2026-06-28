@@ -43,7 +43,7 @@ use crate::dictate::{
     TranscribeResult,
 };
 use crate::hotkey::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle};
-use crate::runtime::{RuntimeEvent, WorkerEvent};
+use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 
 /// Env-var name. Matches the existing `VOICEPI_DICTATE_BACKEND` env var
 /// the Python wrapper reads -- the `rust-session` value is the new
@@ -157,6 +157,7 @@ pub(crate) fn build_session_action_sink<F>(
     session: Arc<Mutex<StubSession>>,
     tx: Sender<RuntimeEvent>,
     on_processing_finished: F,
+    repaint_notifier: Option<RepaintNotifier>,
 ) -> impl FnMut(CoordinatorAction) + Send + 'static
 where
     F: Fn(u64) + Send + Sync + 'static,
@@ -173,7 +174,7 @@ where
         let mut session_guard = session_for_sink
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let mut forwarder = EventForwarder::new(&tx);
+        let mut forwarder = EventForwarder::new(&tx, repaint_notifier.as_ref());
         match action {
             CoordinatorAction::StartRecording(id) => {
                 if let Err(err) = session_guard.start(&mut forwarder) {
@@ -231,23 +232,54 @@ where
 /// AND the [`OnceLock`] the supervisor populates from the live
 /// [`crate::hotkey::HotkeyHandle::coordinator_handle`] after install.
 ///
+/// Also enables the `VOICEPI_WORKER_EVENTS` env-gate on the current
+/// process so the session's wire emitter (which mirrors Python's
+/// `_emit_worker_event` and short-circuits when the var is falsy) does
+/// not silently drop every event from the in-process session. The
+/// supervisor already sets the var on the Python child via the worker
+/// command's env; the in-process session reads the Rust supervisor's
+/// own env, so without this set the event stream would be empty for
+/// users who haven't manually exported the var. Codex P2 #416
+/// rust_session_sink.rs:179.
+///
+/// `repaint_notifier` is the UI's wake-up callback (the same one
+/// `RuntimeSupervisor::stream_lines` runs after every event it
+/// enqueues). Threading it here so the in-process session's events
+/// don't sit in the channel until some unrelated repaint -- on
+/// Windows with the window minimised, the egui tick doesn't fire
+/// without an explicit nudge. Codex P2 #416 rust_session_sink.rs:289.
+///
 /// Used only from the supervisor; tests construct the sink directly via
 /// [`build_session_action_sink`] so they can plug a recording callback
 /// in place of the OnceLock dance.
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
 ) -> (
     impl FnMut(CoordinatorAction) + Send + 'static,
     Arc<OnceLock<CoordinatorHandle>>,
 ) {
+    // Enable the worker-event gate once at sink construction. Setting
+    // is idempotent and the supervisor calls this exactly once per
+    // process lifetime (first `start()` with VOICEPI_DICTATE_BACKEND
+    // =rust-session set), so there is no env-mutation hazard despite
+    // the lack of `crate::test_env_lock::ENV_LOCK` here -- the
+    // supervisor is single-threaded with respect to its own setup.
+    std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
+
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
     let coord_slot_for_signal = Arc::clone(&coord_slot);
     let session = make_session();
-    let sink = build_session_action_sink(session, tx, move |id| {
-        if let Some(handle) = coord_slot_for_signal.get() {
-            handle.send(CoordinatorEvent::ProcessingFinished(id));
-        }
-    });
+    let sink = build_session_action_sink(
+        session,
+        tx,
+        move |id| {
+            if let Some(handle) = coord_slot_for_signal.get() {
+                handle.send(CoordinatorEvent::ProcessingFinished(id));
+            }
+        },
+        repaint_notifier,
+    );
     (sink, coord_slot)
 }
 
@@ -260,16 +292,29 @@ pub(crate) fn build_production_sink(
 /// card still picks it up. `pub(super)` so the sibling
 /// [`super::rust_session_sink_tests`] module can construct one
 /// directly and assert its framing without going through the sink.
+///
+/// Optionally carries a [`RepaintNotifier`] -- when set, the notifier
+/// is invoked AFTER each event is enqueued onto `tx` so the egui UI
+/// wakes up to process it. Without this the session's events can sit
+/// in the channel until some unrelated repaint (the Windows
+/// minimised-window pattern documented in
+/// `RuntimeSupervisor::repaint_notifier`). Codex P2 #416
+/// rust_session_sink.rs:289.
 pub(super) struct EventForwarder<'a> {
     tx: &'a Sender<RuntimeEvent>,
     buf: Vec<u8>,
+    repaint_notifier: Option<&'a RepaintNotifier>,
 }
 
 impl<'a> EventForwarder<'a> {
-    pub(super) fn new(tx: &'a Sender<RuntimeEvent>) -> Self {
+    pub(super) fn new(
+        tx: &'a Sender<RuntimeEvent>,
+        repaint_notifier: Option<&'a RepaintNotifier>,
+    ) -> Self {
         Self {
             tx,
             buf: Vec::new(),
+            repaint_notifier,
         }
     }
 
@@ -287,6 +332,9 @@ impl<'a> EventForwarder<'a> {
             let line = String::from_utf8_lossy(without_nl).into_owned();
             let event = parse_or_stderr(line);
             let _ = self.tx.send(event);
+            if let Some(notifier) = self.repaint_notifier {
+                notifier();
+            }
         }
     }
 }
@@ -313,6 +361,9 @@ impl<'a> Drop for EventForwarder<'a> {
             let trailing = std::mem::take(&mut self.buf);
             let line = String::from_utf8_lossy(&trailing).into_owned();
             let _ = self.tx.send(RuntimeEvent::Stderr(line));
+            if let Some(notifier) = self.repaint_notifier {
+                notifier();
+            }
         }
     }
 }

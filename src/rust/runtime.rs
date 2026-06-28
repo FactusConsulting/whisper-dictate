@@ -483,19 +483,33 @@ impl RuntimeSupervisor {
         // listener thread cannot be cleanly stopped so subsequent restart()
         // calls reuse the existing handle.
         //
-        // Python stays enabled regardless of whether the Rust coordinator
-        // installs successfully: the coordinator today only logs actions
-        // ([hotkey] lines) and no IPC drives the worker's actual recording
-        // lifecycle. Disabling Python before that IPC is wired would leave
-        // PTT completely silent. Follow-up work will wire the IPC and THEN
-        // gate disable_python_hotkey on a live action-sink connection.
+        // Python stays enabled when the action sink is the logger sink:
+        // the coordinator only logs `[hotkey]` lines and no IPC drives the
+        // worker's actual recording lifecycle, so Python must keep
+        // listening or PTT goes silent. When the user opts into the
+        // session sink (`VOICEPI_DICTATE_BACKEND=rust-session`) AND that
+        // install succeeds, the Rust process now drives the dictation
+        // loop in-process so we MUST park the Python listener -- otherwise
+        // both backends react to the same chord and produce duplicate /
+        // conflicting state transitions. Codex P2 #416 runtime.rs:1427.
         if self.hotkey_handle.is_none() {
-            if let Some(handle) =
-                install_rust_hotkey_from_command(&effective_command, self.tx.clone())
-            {
+            if let Some(handle) = install_rust_hotkey_from_command(
+                &effective_command,
+                self.tx.clone(),
+                self.repaint_notifier.clone(),
+            ) {
+                if rust_session_sink::dictate_backend_rust_session_requested() {
+                    disable_python_hotkey(&mut effective_command);
+                }
                 self.hotkey_handle = Some(handle);
             }
         } else if let Some(handle) = self.hotkey_handle.as_ref() {
+            // Restart path: the handle survived from a prior start(); the
+            // env-var-derived backend choice is fixed per-process so
+            // re-park Python if the session sink is active.
+            if rust_session_sink::dictate_backend_rust_session_requested() {
+                disable_python_hotkey(&mut effective_command);
+            }
             // Fix 3 (#373): Resume the manager with the (possibly new) PTT
             // key names so a changed binding takes effect without restarting
             // the whole process. The coordinator mode (hold-to-talk vs.
@@ -843,6 +857,30 @@ impl RuntimeSupervisor {
         self.bridge_terminal.store(true, Ordering::SeqCst);
     }
 
+    /// When the rust-session sink is active, suspend the hotkey
+    /// handle on an unexpected child exit so PTT presses do not keep
+    /// driving the in-process [`crate::dictate::DictateSession`] while
+    /// the UI considers the runtime stopped. Codex P2 #416
+    /// runtime.rs:1484.
+    ///
+    /// No-op for the logger-sink path: the logger sink is harmless
+    /// (just stderr lines), and Python -- which owned the recording
+    /// lifecycle in that path -- already exited together with the
+    /// child. Leaving the Rust manager registered there preserves the
+    /// existing PR 1-3 behaviour exactly.
+    ///
+    /// The next `start()` call's restart-path branch then re-registers
+    /// the binding via `handle.resume(key_names)` so PTT comes back
+    /// online with the (possibly updated) chord.
+    fn suspend_session_sink_on_exit(&self) {
+        if !rust_session_sink::dictate_backend_rust_session_requested() {
+            return;
+        }
+        if let Some(handle) = self.hotkey_handle.as_ref() {
+            handle.suspend();
+        }
+    }
+
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
         // Iteration-2 review finding #3: act on a terminal bridge error
         // BEFORE the regular try_wait. The bridge watcher has already
@@ -891,6 +929,7 @@ impl RuntimeSupervisor {
                             bridge.stop();
                         }
                     }
+                    self.suspend_session_sink_on_exit();
                     let _ = self.tx.send(RuntimeEvent::Exited {
                         code: status.code(),
                     });
@@ -908,6 +947,7 @@ impl RuntimeSupervisor {
                             bridge.stop();
                         }
                     }
+                    self.suspend_session_sink_on_exit();
                     let _ = self.tx.send(RuntimeEvent::Error(err.to_string()));
                 }
             }
@@ -1405,6 +1445,7 @@ where
 fn install_rust_hotkey_from_command(
     command: &WorkerCommand,
     tx: std::sync::mpsc::Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
 ) -> Option<crate::hotkey::HotkeyHandle> {
     let key_names = extract_hotkey_key_names(command);
     if key_names.is_empty() {
@@ -1424,8 +1465,14 @@ fn install_rust_hotkey_from_command(
         crate::hotkey::coordinator::Mode::HoldToTalk
     };
     if rust_session_sink::dictate_backend_rust_session_requested() {
-        install_session_sink_hotkey(key_names, mode, tx)
+        install_session_sink_hotkey(key_names, mode, tx, repaint_notifier)
     } else {
+        // Logger sink does not need the notifier -- the existing
+        // stream_lines path already invokes the repaint_notifier after
+        // every event it enqueues, and the logger sink's outputs flow
+        // through the same channel without the in-process bypass that
+        // the session sink uses.
+        let _ = repaint_notifier;
         install_logger_sink_hotkey(key_names, mode, tx)
     }
 }
@@ -1479,8 +1526,9 @@ fn install_session_sink_hotkey(
     key_names: Vec<String>,
     mode: crate::hotkey::coordinator::Mode,
     tx: std::sync::mpsc::Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
 ) -> Option<crate::hotkey::HotkeyHandle> {
-    let (sink, coord_slot) = rust_session_sink::build_production_sink(tx.clone());
+    let (sink, coord_slot) = rust_session_sink::build_production_sink(tx.clone(), repaint_notifier);
     let handle = maybe_install_rust_hotkey(key_names, mode, sink)?;
     #[cfg(feature = "rust-hotkeys")]
     {

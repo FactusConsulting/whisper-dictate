@@ -140,7 +140,7 @@ fn build_production_sink_returns_empty_coordinator_slot() {
     // the slot must come back empty so the supervisor can populate it
     // without losing the existing value.
     let (tx, _rx) = mpsc::channel();
-    let (_sink, coord_slot) = build_production_sink(tx);
+    let (_sink, coord_slot) = build_production_sink(tx, None);
     assert!(
         coord_slot.get().is_none(),
         "production sink must hand back an empty OnceLock for the supervisor to populate"
@@ -153,7 +153,7 @@ fn build_production_sink_returns_empty_coordinator_slot() {
 fn event_forwarder_buffers_partial_writes() {
     let (tx, rx) = mpsc::channel();
     {
-        let mut fwd = EventForwarder::new(&tx);
+        let mut fwd = EventForwarder::new(&tx, None);
         fwd.write_all(b"hello ").unwrap();
         fwd.write_all(b"world\n").unwrap();
     }
@@ -169,13 +169,42 @@ fn event_forwarder_buffers_partial_writes() {
 fn event_forwarder_drains_trailing_partial_line_on_drop() {
     let (tx, rx) = mpsc::channel();
     {
-        let mut fwd = EventForwarder::new(&tx);
+        let mut fwd = EventForwarder::new(&tx, None);
         fwd.write_all(b"no-newline").unwrap();
     }
     match rx.try_recv().expect("drained trailing line") {
         RuntimeEvent::Stderr(s) => assert_eq!(s, "no-newline"),
         other => panic!("expected Stderr trailing, got {other:?}"),
     }
+}
+
+/// Pins Codex P2 #416 rust_session_sink.rs:289 fix: the repaint
+/// notifier fires once per event the forwarder enqueues so the egui
+/// UI wakes up to process it (the Windows minimised-window pattern
+/// the supervisor's `repaint_notifier` doc comment describes).
+#[test]
+fn event_forwarder_invokes_repaint_notifier_after_each_event() {
+    let (tx, rx) = mpsc::channel();
+    let wakeups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let wakeups_for_notifier = Arc::clone(&wakeups);
+    let notifier: crate::runtime::RepaintNotifier = Arc::new(move || {
+        wakeups_for_notifier.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    {
+        let mut fwd = EventForwarder::new(&tx, Some(&notifier));
+        fwd.write_all(b"line one\nline two\n").unwrap();
+    }
+    // Two complete lines -> two RuntimeEvents on tx -> two wakeups.
+    assert_eq!(
+        rx.try_iter().count(),
+        2,
+        "two complete lines must produce two RuntimeEvents"
+    );
+    assert_eq!(
+        wakeups.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "repaint notifier must fire once per enqueued event"
+    );
 }
 
 // ── end-to-end integration ────────────────────────────────────────────────────
@@ -222,12 +251,17 @@ fn wire_coordinator_with_session(mode: Mode) -> CoordinatorTestRig {
     let coord_slot_for_signal = Arc::clone(&coord_slot);
     let signaled_for_sink = Arc::clone(&signaled);
 
-    let sink = build_session_action_sink(Arc::clone(&session), tx, move |id| {
-        signaled_for_sink.lock().unwrap().push(id);
-        if let Some(handle) = coord_slot_for_signal.get() {
-            handle.send(CoordinatorEvent::ProcessingFinished(id));
-        }
-    });
+    let sink = build_session_action_sink(
+        Arc::clone(&session),
+        tx,
+        move |id| {
+            signaled_for_sink.lock().unwrap().push(id);
+            if let Some(handle) = coord_slot_for_signal.get() {
+                handle.send(CoordinatorEvent::ProcessingFinished(id));
+            }
+        },
+        None,
+    );
 
     let (coord_handle, coord_thread) = spawn_coordinator(Options { mode }, sink, Instant::now);
     // `OnceLock::set` returns `Err(value)` on second call; we own the
