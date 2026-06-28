@@ -95,6 +95,33 @@ function Get-CargoLegs {
                 '--target-dir', 'target-linux',
                 '-p', 'whisper-dictate-app'
             )
+        },
+        # Rust CLI smoke -- CIs Ubuntu rust job runs `cargo run -- --help`
+        # and `cargo run -- config path` (test.yml:372-375) WITHOUT extra
+        # features, so they belong outside the IncludeExtraFeatures block.
+        # A CLI-only change (clap derive bug, broken config schema) needs
+        # to fail the fast `-SkipExtraFeatures` path too -- otherwise the
+        # wrapper prints `OK -- ready to push` even though required CI
+        # will fail. Codex P2 #418 dev-check.ps1:146 round 4.
+        @{
+            Name = 'cargo run -- --help'
+            Argv = @(
+                'cargo', 'run', '-q',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--', '--help'
+            )
+        },
+        @{
+            Name = 'cargo run -- config path'
+            Argv = @(
+                'cargo', 'run', '-q',
+                '--manifest-path', 'src/rust/Cargo.toml',
+                '--target-dir', 'target-linux',
+                '-p', 'whisper-dictate-app',
+                '--', 'config', 'path'
+            )
         }
     )
     if ($IncludeExtraFeatures) {
@@ -133,32 +160,6 @@ function Get-CargoLegs {
                 '-p', 'whisper-dictate-app',
                 '--features', 'whisper-rs-local',
                 '--release'
-            )
-        }
-        # Rust CLI smoke -- CIs Ubuntu rust job runs `cargo run -- --help`
-        # and `cargo run -- config path` (test.yml:372-375) so a broken
-        # CLI startup (e.g. clap derive bug, missing config schema,
-        # panicking init) surfaces before the runtime supervisor exec
-        # path. `cargo run -q` avoids the compile log spam; the exit
-        # code is what matters. Codex P2 #418 dev-check.ps1:194.
-        $legs += @{
-            Name = 'cargo run -- --help'
-            Argv = @(
-                'cargo', 'run', '-q',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--', '--help'
-            )
-        }
-        $legs += @{
-            Name = 'cargo run -- config path'
-            Argv = @(
-                'cargo', 'run', '-q',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--', 'config', 'path'
             )
         }
     }
