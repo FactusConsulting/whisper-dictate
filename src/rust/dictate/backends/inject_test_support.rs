@@ -8,6 +8,7 @@
 //! `#[cfg(test)]` so it never compiles into a release binary.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 
@@ -132,18 +133,26 @@ impl Clipboard for RecordingClipboard {
 /// Build a wrapper with the supplied recording backend installed via
 /// `Injector::with_backend`. No clipboard is wired — paste-mode
 /// callers should use [`backend_with_clipboard`] instead.
+///
+/// The clipboard-restore delay is forced to `Duration::ZERO` so paste
+/// tests don't pay the 2 s production wall-clock wait — see
+/// [`super::DEFAULT_CLIPBOARD_RESTORE_DELAY`] / Codex P1 #419
+/// inject.rs:266 for the rationale.
 pub(super) fn backend_with(method: InjectMethod, fake: RecordingBackend) -> EnigoInjectBackend {
     let injector = Injector::new().with_backend(Box::new(fake));
-    EnigoInjectBackend::new(injector, method)
+    EnigoInjectBackend::new(injector, method).with_restore_delay(Duration::ZERO)
 }
 
 /// Build a paste-capable wrapper: recording backend + recording
-/// clipboard installed in one step.
+/// clipboard installed in one step. Restore delay forced to ZERO so the
+/// paste-cleanup assertions don't pay the 2 s production wall-clock wait.
 pub(super) fn backend_with_clipboard(
     method: InjectMethod,
     fake: RecordingBackend,
     clipboard: RecordingClipboard,
 ) -> EnigoInjectBackend {
     let injector = Injector::new().with_backend(Box::new(fake));
-    EnigoInjectBackend::new(injector, method).with_clipboard(Box::new(clipboard))
+    EnigoInjectBackend::new(injector, method)
+        .with_clipboard(Box::new(clipboard))
+        .with_restore_delay(Duration::ZERO)
 }

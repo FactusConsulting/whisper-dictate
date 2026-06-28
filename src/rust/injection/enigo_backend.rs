@@ -137,7 +137,8 @@ mod enigo_impl {
     }
 
     /// Map our platform-agnostic VK code constants to enigo's [`Key`] enum.
-    /// We only need the handful of keys used by the paste shortcuts.
+    /// We only need the handful of keys used by the paste shortcuts and the
+    /// side-specific variants used by the stale-modifier sweep.
     fn vk_to_enigo(vk: u16) -> Result<Key> {
         use super::super::paste::vk as platform;
         Ok(match vk {
@@ -149,6 +150,23 @@ mod enigo_impl {
             // Option key on macOS, matching `_release_stale_modifiers`.
             platform::VK_MENU => Key::Alt,
             platform::VK_LWIN => Key::Meta,
+            // Side-specific modifier variants. Codex P2 #419 inject.rs:84:
+            // a PTT binding like `ctrl_r` leaves VK_RCONTROL logically
+            // down; the generic VK_CONTROL release does NOT clear the
+            // right-side scancode on Win32. enigo exposes `Key::RControl`
+            // / `Key::RShift` cross-platform (their X11 / macOS impl maps
+            // to the same OS-level "right" scancode where one exists,
+            // and is a harmless no-op otherwise). `Key::RMenu` and
+            // `Key::RWin` are Windows-only in enigo 0.6, so we only
+            // include those mappings on Windows — on other platforms
+            // those VKs fall through to the silent-skip path in
+            // `release_modifiers`.
+            platform::VK_RCONTROL => Key::RControl,
+            platform::VK_RSHIFT => Key::RShift,
+            #[cfg(target_os = "windows")]
+            platform::VK_RMENU => Key::RMenu,
+            #[cfg(target_os = "windows")]
+            platform::VK_RWIN => Key::RWin,
             platform::VK_V => Key::Unicode('v'),
             platform::VK_INSERT => Key::Insert,
             other => return Err(anyhow!("unsupported VK code: {other:#x}")),

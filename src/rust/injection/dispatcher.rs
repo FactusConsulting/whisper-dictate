@@ -164,11 +164,24 @@ impl Injector {
     /// * Windows / macOS — through the active `InjectorBackend` (enigo by
     ///   default, or a test fake when one was installed via
     ///   `with_backend`).
-    /// * Linux — only through an explicitly-injected backend; the
-    ///   helper-chain path is a best-effort no-op here because the
-    ///   wayland.rs / ydotool route already runs `_WAYLAND_MODIFIER_RELEASES`
-    ///   inside its paste-shortcut helper, so duplicating it would be
-    ///   redundant noise rather than additional safety.
+    /// * Linux — through an explicitly-injected backend when present;
+    ///   otherwise via the helper-chain release sweep (see below).
+    ///
+    /// # Linux helper-chain release sweep (Codex P2 #419 dispatcher.rs:184)
+    ///
+    /// `inject_on_linux` may select `kwtype` / `wtype` (Wayland) or
+    /// `dotool` for the actual inject, and **none of those have an
+    /// equivalent of `xdotool --clearmodifiers`** — a PTT modifier held
+    /// through dictation therefore corrupts the burst on those paths.
+    /// The previous behaviour returned `Ok(())` without doing anything,
+    /// claiming `wayland.rs` owned the release; but `wayland.rs` only
+    /// runs that prelude when ydotool wins the chain, so the gap was
+    /// real. We now best-effort release via `ydotool` (Wayland evdev
+    /// key-ups) or `xdotool` (X11 `keyup` verb) — regardless of which
+    /// helper the upcoming inject will use — so the modifier is dropped
+    /// before the inject lands. Hosts with only wtype/kwtype/dotool
+    /// installed get a silent `Ok`, matching the existing
+    /// failure-permissive philosophy.
     pub fn release_held_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
         #[cfg(any(windows, target_os = "macos"))]
         {
@@ -179,9 +192,13 @@ impl Injector {
             if let Some(backend) = self.backend.as_deref_mut() {
                 return backend.release_modifiers(modifiers);
             }
-            // Helper-chain path: wayland.rs owns its own modifier-release
-            // sweep before the paste shortcut. Nothing to do here.
-            Ok(())
+            // Helper-chain path: best-effort release via ydotool/xdotool.
+            // `modifiers` is informational (the helper sweep is helper-
+            // specific, not VK-keyed) — we drain the full common set
+            // either way, matching the all-or-nothing semantics of
+            // `xdotool --clearmodifiers` and `WAYLAND_MODIFIER_RELEASES`.
+            let _ = modifiers;
+            super::linux_helpers::release_modifiers_best_effort(locate_on_path)
         }
         #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
@@ -716,12 +733,17 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn release_held_modifiers_without_backend_is_noop_on_linux() {
-        // Linux helper-chain fallback: no backend installed, so the
-        // dispatcher returns Ok without doing anything. The wayland.rs
-        // ydotool path runs its own `_WAYLAND_MODIFIER_RELEASES` sweep
-        // inside the paste-shortcut helper, so duplicating it here
-        // would be redundant rather than additional safety.
+    fn release_held_modifiers_without_backend_runs_helper_sweep_on_linux() {
+        // Codex P2 #419 dispatcher.rs:184: with no trait-object backend
+        // installed the call must run the helper-chain release sweep
+        // (formerly a silent no-op that left wtype/kwtype/dotool paths
+        // exposed to held PTT modifiers). The actual sweep shells out
+        // to ydotool/xdotool when installed and silently succeeds when
+        // neither is — both branches surface as `Ok(())` from the public
+        // API, so we can only assert the success contract here. The
+        // exact command and argument vector is pinned by the
+        // `linux_helpers::plan_modifier_release` tests where the locator
+        // is injectable without touching `$PATH`.
         use super::super::paste::vk;
         let mut injector = Injector::new();
         assert!(injector.release_held_modifiers(&[vk::VK_CONTROL]).is_ok());
