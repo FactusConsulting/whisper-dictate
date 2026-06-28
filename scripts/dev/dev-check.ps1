@@ -107,12 +107,20 @@ Invoke-InContainer @(
 # and friends). Restricting locally to `--lib` made dev-check green while
 # an integration test was still failing in CI. Codex P2 #414
 # dev-check.ps1:77.
-Write-Host "[dev-check] cargo test (matches CIs full target set)" -ForegroundColor Cyan
+#
+# Forwards `--features $Features` too: CIs ubuntu rust job runs a
+# default `cargo test` AND `cargo test ... --features rust-hotkeys` AND
+# `cargo test ... --features audio-in-rust`. When a developer passes
+# `-Features rust-hotkeys` here, the feature-gated tests must actually
+# compile and run -- otherwise dev-check is green but the feature-gated
+# step in CI can still fail. Codex P2 #414 dev-check.ps1:116.
+Write-Host "[dev-check] cargo test --features $Features (matches CIs full target set)" -ForegroundColor Cyan
 Invoke-InContainer @(
     'cargo', 'test',
     '--manifest-path', 'src/rust/Cargo.toml',
     '--target-dir', 'target-linux',
-    '-p', 'whisper-dictate-app'
+    '-p', 'whisper-dictate-app',
+    '--features', $Features
 )
 
 Write-Host "[dev-check] OK -- ready to push" -ForegroundColor Green
