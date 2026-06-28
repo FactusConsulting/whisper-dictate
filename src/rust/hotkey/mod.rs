@@ -276,6 +276,23 @@ impl HotkeyHandle {
         self.coordinator.send(event);
     }
 
+    /// Clone the inner [`coordinator::CoordinatorHandle`].
+    ///
+    /// Wave 5 PR 4 of #348: the session-backed action sink in
+    /// `runtime::rust_session_sink` needs to feed
+    /// [`coordinator::CoordinatorEvent::ProcessingFinished`] back into the
+    /// coordinator from inside the action callback (after
+    /// [`crate::dictate::DictateSession::stop_and_transcribe`] returns).
+    /// The closure is constructed BEFORE `install_hotkey` returns -- so the
+    /// supervisor populates a shared slot from this accessor after the
+    /// install succeeds, and the closure reads it on stop. Lighter-weight
+    /// than passing a `Weak<HotkeyHandle>` because the
+    /// [`coordinator::CoordinatorHandle`] is already a thin `Clone` wrapper
+    /// over the inbound mpsc sender.
+    pub fn coordinator_handle(&self) -> CoordinatorHandle {
+        self.coordinator.clone()
+    }
+
     /// Suspend key tracking: unregister the PTT binding from the manager and
     /// send [`coordinator::CoordinatorEvent::Cancel`] to the coordinator so
     /// any in-flight [`coordinator::Stage::Recording`] is reset to Idle.

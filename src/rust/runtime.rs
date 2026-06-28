@@ -1379,19 +1379,29 @@ where
 }
 
 /// Extract the PTT key names and toggle mode from a [`WorkerCommand`]'s
-/// environment, then call [`maybe_install_rust_hotkey`] with a logging
-/// action sink. Returns the live handle on success so the caller can call
+/// environment, then call [`maybe_install_rust_hotkey`] with one of two
+/// action sinks:
+///
+/// * **Default (production today):** a logger sink that turns each
+///   [`crate::hotkey::coordinator::CoordinatorAction`] into a
+///   `[hotkey]`-prefixed `RuntimeEvent::Stderr` line. The Python worker
+///   still owns the live recording lifecycle.
+/// * **`VOICEPI_DICTATE_BACKEND=rust-session`** (Wave 5 PR 4 of #348):
+///   a session-backed sink that drives an in-process
+///   [`crate::dictate::DictateSession`] (start / stop_and_transcribe /
+///   cancel) and signals
+///   [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`]
+///   back into the coordinator when the stop completes. Uses stub
+///   `TranscribeBackend` / `InjectBackend` impls (PR 5 swaps them for
+///   `LocalWhisper` + the real injection dispatcher). Frames stay
+///   unwired until PR 3 (#415) + PR 5 land; the env-var gate keeps
+///   production on the logger sink so PR 4 is observable but inert.
+///
+/// Returns the live handle on success so the caller can call
 /// [`disable_python_hotkey`]; returns `None` when the backend is not
 /// requested, not available, or the key config is missing / empty.
 ///
-/// The action sink logs each [`crate::hotkey::coordinator::CoordinatorAction`]
-/// as a `[hotkey]`-prefixed `RuntimeEvent::Stderr` line. Full IPC integration
-/// with the Python worker (start/stop recording signals) is planned as
-/// follow-up work; for now the coordinator state machine runs and the key
-/// presses are tracked even though the Python worker still manages its own
-/// recording lifecycle.
-///
-/// P2 #346 finding 1.
+/// P2 #346 finding 1 (logger sink) + Wave 5 PR 4 (session sink).
 fn install_rust_hotkey_from_command(
     command: &WorkerCommand,
     tx: std::sync::mpsc::Sender<RuntimeEvent>,
@@ -1413,6 +1423,22 @@ fn install_rust_hotkey_from_command(
     } else {
         crate::hotkey::coordinator::Mode::HoldToTalk
     };
+    if rust_session_sink::dictate_backend_rust_session_requested() {
+        install_session_sink_hotkey(key_names, mode, tx)
+    } else {
+        install_logger_sink_hotkey(key_names, mode, tx)
+    }
+}
+
+/// The historical (PR 1-3) logger sink: turn every
+/// [`crate::hotkey::coordinator::CoordinatorAction`] into a stderr line
+/// on the runtime event channel. Production still uses this -- the
+/// Python worker owns the recording lifecycle until PR 6.
+fn install_logger_sink_hotkey(
+    key_names: Vec<String>,
+    mode: crate::hotkey::coordinator::Mode,
+    tx: std::sync::mpsc::Sender<RuntimeEvent>,
+) -> Option<crate::hotkey::HotkeyHandle> {
     maybe_install_rust_hotkey(key_names, mode, move |action| {
         use crate::hotkey::coordinator::CoordinatorAction;
         let msg = match action {
@@ -1428,6 +1454,55 @@ fn install_rust_hotkey_from_command(
         };
         let _ = tx.send(RuntimeEvent::Stderr(msg));
     })
+}
+
+/// Wave 5 PR 4 of #348: opt-in session-backed sink.
+///
+/// Wires the coordinator into a [`crate::dictate::DictateSession`] so
+/// PTT press/release actually drives `session.start()` /
+/// `stop_and_transcribe()` / `cancel(epoch)`. The session feeds
+/// worker events back through `tx` as
+/// [`RuntimeEvent::Worker`] just like the Python worker does, so the
+/// UI's log card / tray-state machine see the same shape.
+///
+/// After `install_hotkey` succeeds, the
+/// [`crate::hotkey::HotkeyHandle::coordinator_handle`] is poured into
+/// the shared `OnceLock` the sink captured, so the sink's
+/// `processing_finished` callback can send
+/// [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`]
+/// back into the coordinator (the press latch otherwise stays parked
+/// in `Stage::Processing`). On stub builds (no `rust-hotkeys`
+/// feature) `maybe_install_rust_hotkey` returns `None` before we ever
+/// touch the slot, so the cfg-gated accessor is only invoked on
+/// builds where it exists.
+fn install_session_sink_hotkey(
+    key_names: Vec<String>,
+    mode: crate::hotkey::coordinator::Mode,
+    tx: std::sync::mpsc::Sender<RuntimeEvent>,
+) -> Option<crate::hotkey::HotkeyHandle> {
+    let (sink, coord_slot) = rust_session_sink::build_production_sink(tx.clone());
+    let handle = maybe_install_rust_hotkey(key_names, mode, sink)?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        // `set` returns Err iff the slot is already populated. This is
+        // the only writer; a duplicate `Some(handle)` from a future
+        // refactor would be a programming error worth logging but not
+        // panicking on -- the existing handle would still drive
+        // ProcessingFinished correctly.
+        if coord_slot.set(handle.coordinator_handle()).is_err() {
+            let _ = tx.send(RuntimeEvent::Stderr(
+                "[rust-session] coordinator handle slot already populated; \
+                 ignoring (this is a no-op but indicates a refactor regression)"
+                    .to_owned(),
+            ));
+        }
+    }
+    // Suppress `unused` warnings when `rust-hotkeys` is off: the slot
+    // would never be populated, but `build_production_sink` already
+    // returned it; explicitly discard so clippy stays quiet.
+    #[cfg(not(feature = "rust-hotkeys"))]
+    let _ = coord_slot;
+    Some(handle)
 }
 
 pub fn default_worker_command() -> WorkerCommand {
@@ -1884,6 +1959,12 @@ fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
 }
 
 pub mod audio_spawn;
+// Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
+// wiring that drives a `DictateSession` from the hotkey coordinator's
+// action sink. Stays out of the production path until PR 6 flips the
+// default. Lives in its own file so `runtime.rs` does not grow past
+// the 500-LOC modularity guideline.
+pub(crate) mod rust_session_sink;
 
 #[cfg(test)]
 mod app_root_tests;
@@ -1901,6 +1982,11 @@ mod hotkey_supervisor_tests;
 mod install_plan_tests;
 #[cfg(test)]
 mod process_capture_tests;
+// Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split
+// out of the production module to keep each file under the ~500-LOC
+// modularity guideline.
+#[cfg(test)]
+mod rust_session_sink_tests;
 #[cfg(test)]
 mod state_tests;
 #[cfg(test)]
