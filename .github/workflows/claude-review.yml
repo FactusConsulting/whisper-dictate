@@ -1,0 +1,95 @@
+name: Claude PR review
+
+# Automatic code-review pass on every NEW pull request. Replaces the
+# Codex auto-review hard-gate that documented in AGENTS.md, because the
+# Codex code-review quota is running out across the org. Uses the
+# CLAUDE_CODE_OAUTH_TOKEN org-level secret (subscription-based, no
+# pay-per-token cost) -- same token as the on-demand @claude workflow in
+# claude.yml.
+#
+# Single round per PR: triggers on `opened` only, NOT on every push to
+# the PR branch. Rationale: Codex's per-push pattern produced 5-7
+# rounds of inline comments per Wave 5 PR and the diminishing returns
+# past round 2 were not worth the review-context tokens. If a developer
+# wants a fresh pass after pushing fixes, they can @claude in a comment
+# (handled by claude.yml).
+
+on:
+  pull_request:
+    types: [opened]
+  # Allow manual re-trigger from the Actions tab on a stuck PR.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to re-review (manual override)'
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  # One review per PR at a time -- avoids racing review threads if a
+  # workflow_dispatch lands during the automatic opened pass.
+  group: claude-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need history to diff against the PR base for context.
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are this repository's automated code reviewer. Open the
+            pull request's diff and review it end-to-end, then post inline
+            review comments on the specific lines that warrant attention.
+
+            **Per-comment format**: prefix each finding with either
+            `**[P1]**` (correctness / security / breaking change / data
+            loss / regression of an existing test) or `**[P2]**`
+            (style / minor optimization / docs / nit / test gap that is
+            not load-bearing). Follow with a 1-2 sentence rationale, then
+            a concrete suggested fix.
+
+            **Project standards** (read these before reviewing):
+            - `AGENTS.md` — the contract every agent (human or AI) must
+              follow. Especially: the modularity rule (no file >500 LOC),
+              the validation commands, the pull-request-review hard gate
+              you are now part of, and the model-economy guidance.
+            - `MEMORY.md` references in commit messages — recurring
+              repo-specific gotchas (SSH signing via PowerShell, the
+              dev-check.ps1 Linux-leg matrix, Sonar gate behavior, etc).
+            - The Wave 5+ migration is gradually replacing the Python
+              orchestrator with Rust; new code should prefer Rust unless
+              it's deliberately deprecated Python being kept for the
+              transition window.
+
+            **What to flag aggressively**:
+            - Logic bugs, off-by-one, missing boundary checks, race
+              conditions (especially around the chord-cancel epoch guard
+              in `dictate::session`).
+            - Test coverage gaps on NEW production code (SonarCloud gates
+              at 80% new-code coverage and will block merge).
+            - Files exceeding 500 LOC -- propose a split.
+            - Env-var mutations in tests without `ENV_LOCK` -- pattern
+              causes the 69-test cascade documented in recent PRs.
+            - Hard-coded paths / secrets / API keys.
+            - Worker-event wire-format drift between the Rust and Python
+              emitters (`vp_events.py` is the parity reference).
+
+            **What to skip** (linters/CI handle these):
+            - Formatting -- `cargo fmt` / `rustfmt` rules.
+            - Spelling -- `cspell.json` is the source of truth.
+            - Pure clippy nits already in the CI matrix.
+
+            Use the inline review comment surface, not a top-level
+            "summary" comment, so every finding lands as a resolvable
+            review thread per the AGENTS.md hard gate.
