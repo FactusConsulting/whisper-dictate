@@ -45,6 +45,14 @@
 //!   format is locked by the tests in `events_tests.rs`.
 
 pub mod backend;
+// Wave 5 PR 5-prep (#348): production `TranscribeBackend` / `InjectBackend`
+// trait impls (`WhisperLocalTranscribeBackend`, `EnigoInjectBackend`).
+// Each submodule is feature-gated on the cargo feature that already
+// controls its underlying dependency (`whisper-rs-local`,
+// `rust-injection`), so default builds compile zero new code here.
+// No production caller in this PR — PR 5 swaps the stub backends in the
+// coordinator-sink wiring (PR 4) for these once both land.
+pub mod backends;
 pub mod env_gates;
 pub mod events;
 pub mod ops;
@@ -57,6 +65,14 @@ pub mod session;
 pub mod skip;
 
 pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelError};
+// Wave 5 PR 5-prep re-exports: surface the real backends through the
+// `crate::dictate` namespace so PR 5's swap is a one-liner that doesn't
+// have to reach into the `backends` submodule. Each re-export is gated
+// on the same cargo feature as the source module.
+#[cfg(feature = "rust-injection")]
+pub use backends::EnigoInjectBackend;
+#[cfg(feature = "whisper-rs-local")]
+pub use backends::WhisperLocalTranscribeBackend;
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
