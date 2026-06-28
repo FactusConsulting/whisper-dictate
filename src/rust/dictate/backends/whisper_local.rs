@@ -196,9 +196,12 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             pcm.len() as f64 / f64::from(sample_rate)
         };
 
+        // Compute the hallucination flag against a borrow so `text` can
+        // be moved into the result without a redundant clone.
+        let is_hallucination = is_hallucination(&text);
         Ok(TranscribeResult {
-            text: text.clone(),
-            is_hallucination: is_hallucination(&text),
+            text,
+            is_hallucination,
             latency_ms,
             duration_s,
             language: self.config.language.clone().unwrap_or_default(),
