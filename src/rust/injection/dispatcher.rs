@@ -65,7 +65,7 @@ pub struct Injector {
     target_title: String,
     target_process: String,
     xkb_layout: String,
-    backend: Option<Box<dyn InjectorBackend>>,
+    backend: Option<Box<dyn InjectorBackend + Send>>,
 }
 
 impl std::fmt::Debug for Injector {
@@ -108,7 +108,7 @@ impl Injector {
     /// `enigo`, and reserved for alternative backends. When unset, the
     /// dispatcher falls back to [`enigo_backend::make_default_backend`] on
     /// Windows/macOS.
-    pub fn with_backend(mut self, backend: Box<dyn InjectorBackend>) -> Self {
+    pub fn with_backend(mut self, backend: Box<dyn InjectorBackend + Send>) -> Self {
         self.backend = Some(backend);
         self
     }

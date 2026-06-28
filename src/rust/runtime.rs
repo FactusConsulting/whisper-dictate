@@ -2148,6 +2148,38 @@ pub mod audio_spawn;
 // the 500-LOC modularity guideline.
 pub(crate) mod rust_session_sink;
 
+// Wave 5 PR 5 of #348: real-backend constructor for the session sink.
+// Gated on `whisper-rs-local + rust-injection` so default builds compile
+// zero new code from this PR. The sink in `rust_session_sink::build_production_sink`
+// calls into this module to construct a `DictateSession<WhisperLocalTranscribeBackend,
+// ProductionInjectBackend>`; on feature absence OR model-resolution failure it
+// falls back to the PR 4 stub session so the wire-up still installs.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) mod rust_session_real_backends;
+
+// Wave 5 PR 5 of #348 round 2 (Codex P2 #423 finding 4): production
+// `InjectBackend` wrapper that honors `VOICEPI_INJECT_MODE=print`
+// (stdout-only dry-run). Modifier release lives inside
+// `dictate/backends/inject.rs::EnigoInjectBackend` itself (Codex P2
+// #417 inject.rs:110 follow-up in PR #419) so the wrapper just
+// delegates for the Enigo arm. Gated on the same feature pair the
+// real-backend module requires; without whisper-rs-local nothing
+// constructs the wrapper and its items would dead-code.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) mod rust_session_inject;
+
+// Wave 5 PR 5 of #348 round 2 (Codex P1 #423 finding 1): audio-pump
+// that forwards `AudioPipeline` frames into the real
+// `DictateSession`'s `push_frame`. Without this the rust-session path
+// captured no audio and every stop hit the `no_audio` early-return.
+// Gated on all three features the full real-backend path requires.
+#[cfg(all(
+    feature = "whisper-rs-local",
+    feature = "rust-injection",
+    feature = "audio-in-rust"
+))]
+pub(crate) mod rust_session_audio;
+
 #[cfg(test)]
 mod app_root_tests;
 #[cfg(test)]

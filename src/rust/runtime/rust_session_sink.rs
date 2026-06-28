@@ -153,13 +153,15 @@ pub(crate) fn make_session() -> Arc<Mutex<StubSession>> {
 /// (so consumers like the egui log card key off the same variant they
 /// see for the Python worker today); anything else lands as
 /// [`RuntimeEvent::Stderr`].
-pub(crate) fn build_session_action_sink<F>(
-    session: Arc<Mutex<StubSession>>,
+pub(crate) fn build_session_action_sink<T, I, F>(
+    session: Arc<Mutex<DictateSession<T, I>>>,
     tx: Sender<RuntimeEvent>,
     on_processing_finished: F,
     repaint_notifier: Option<RepaintNotifier>,
 ) -> impl FnMut(CoordinatorAction) + Send + 'static
 where
+    T: TranscribeBackend + Send + 'static,
+    I: InjectBackend + Send + 'static,
     F: Fn(u64) + Send + Sync + 'static,
 {
     let session_for_sink = Arc::clone(&session);
@@ -252,13 +254,20 @@ where
 /// Used only from the supervisor; tests construct the sink directly via
 /// [`build_session_action_sink`] so they can plug a recording callback
 /// in place of the OnceLock dance.
+/// Boxed action-sink closure handed back from [`build_production_sink`].
+/// Aliased so clippy's `type_complexity` lint stays quiet (the tuple
+/// return type otherwise breaches the threshold). The `Box<dyn …>`
+/// indirection is needed because PR 5 chooses between the stub-backed
+/// session (always available) and the real-backed session (gated on
+/// `all(feature = "whisper-rs-local", feature = "rust-injection")`) at
+/// runtime — the two underlying closures have different capture types
+/// and so cannot share an `impl FnMut` return.
+pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send + 'static>;
+
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
-) -> (
-    impl FnMut(CoordinatorAction) + Send + 'static,
-    Arc<OnceLock<CoordinatorHandle>>,
-) {
+) -> (CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>) {
     // Enable the worker-event gate once at sink construction. Setting
     // is idempotent and the supervisor calls this exactly once per
     // process lifetime (first `start()` with VOICEPI_DICTATE_BACKEND
@@ -268,6 +277,66 @@ pub(crate) fn build_production_sink(
     std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
 
     let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+
+    // Wave 5 PR 5: when the binary was built with both `whisper-rs-local`
+    // (real Whisper inference) and `rust-injection` (real OS injection)
+    // the production sink uses the REAL backend trait impls instead of
+    // the PR 4 stubs. On any feature missing OR a model-resolution
+    // failure at construction time we fall back to the stubs so the
+    // wire-up still installs (and the supervisor surfaces a stderr
+    // event so the user notices the degraded mode). See
+    // [`super::rust_session_real_backends`] for the constructor.
+    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    {
+        // Wave 5 PR 5 round 2 (Codex P1 #423 finding 1): pass the
+        // runtime tx + repaint notifier down to the real-backend
+        // constructor so the audio pump it spawns can surface device
+        // errors on the same channel the rest of the supervisor uses
+        // and wake the egui UI on minimised-window installs.
+        match super::rust_session_real_backends::make_real_session(
+            tx.clone(),
+            repaint_notifier.clone(),
+        ) {
+            Ok(deps) => {
+                let coord_slot_for_signal = Arc::clone(&coord_slot);
+                let inner = build_session_action_sink(
+                    Arc::clone(&deps.session),
+                    tx,
+                    move |id| {
+                        if let Some(handle) = coord_slot_for_signal.get() {
+                            handle.send(CoordinatorEvent::ProcessingFinished(id));
+                        }
+                    },
+                    repaint_notifier,
+                );
+                // Move the deps bundle into a wrapper closure so the
+                // audio pump (and the session Arc) stay alive for
+                // the sink's lifetime. The wrapper delegates to the
+                // inner sink -- it exists purely to own the deps.
+                // Without this the audio pump would be dropped right
+                // after construction and no frames would reach
+                // push_frame. Codex P1 #423 finding 1.
+                let mut inner = inner;
+                let _deps_keepalive = deps;
+                let owning_sink = move |action: CoordinatorAction| {
+                    let _keepalive = &_deps_keepalive;
+                    inner(action);
+                };
+                return (Box::new(owning_sink), coord_slot);
+            }
+            Err(err) => {
+                let _ = tx.send(RuntimeEvent::Stderr(format!(
+                    "[rust-session] real backend init failed ({err}); \
+                     falling back to PR 4 stub backends so the wire-up still \
+                     installs. Set VOICEPI_WHISPER_MODEL_PATH or download a \
+                     model via `whisper-dictate models download tiny.en` to \
+                     enable real transcription."
+                )));
+                // fall through to the stub builder below
+            }
+        }
+    }
+
     let coord_slot_for_signal = Arc::clone(&coord_slot);
     let session = make_session();
     let sink = build_session_action_sink(
@@ -280,7 +349,7 @@ pub(crate) fn build_production_sink(
         },
         repaint_notifier,
     );
-    (sink, coord_slot)
+    (Box::new(sink), coord_slot)
 }
 
 // ── event forwarder ──────────────────────────────────────────────────────────

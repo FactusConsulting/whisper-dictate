@@ -49,6 +49,14 @@ pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV}
 pub use protocol::{ServerReady, TranscribeRequest, TranscribeResponse};
 pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
+// Re-export the model-path resolver to the in-process Rust-session
+// sink (Wave 5 PR 5) so the sink applies the same env-var / cache
+// lookup as the subprocess dispatcher. Gated on the SAME feature pair
+// the sink's real-backends module is gated on -- otherwise a
+// `whisper-rs-local`-only build (e.g. CI's release smoke leg) would
+// flag the unused import.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) use dispatch::resolve_model_path_from_env;
 #[cfg(feature = "whisper-rs-local")]
 pub use dispatch::{handle_transcribe_server, handle_transcribe_wav, MODEL_PATH_ENV};
 #[cfg(feature = "whisper-rs-local")]
