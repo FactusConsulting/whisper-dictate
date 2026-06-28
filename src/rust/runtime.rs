@@ -505,19 +505,40 @@ impl RuntimeSupervisor {
             }
         } else if let Some(handle) = self.hotkey_handle.as_ref() {
             // Restart path: the handle survived from a prior start(); the
-            // env-var-derived backend choice is fixed per-process so
-            // re-park Python if the session sink is active.
-            if rust_session_sink::dictate_backend_rust_session_requested() {
-                disable_python_hotkey(&mut effective_command);
-            }
+            // env-var-derived backend choice is fixed per-process so we
+            // re-evaluate whether to park Python every time.
+            //
+            // Codex P2 #416 (round 2) runtime.rs:511 -- validate the
+            // (possibly updated) key binding against the Rust backend's
+            // rdev-supported list BEFORE parking Python. Without this, a
+            // Settings change to a key that the Python evdev backend
+            // accepts but rdev does not (eg `super_l`) would leave Python
+            // disabled and the Rust hotkey unable to fire -- PTT goes
+            // silent for the whole session.
+            //
+            // `resume()` itself only calls `manager.register()` and does
+            // not re-run install-time validation, so this gate is the
+            // only place restart-time key changes are sanity-checked.
+            //
             // Fix 3 (#373): Resume the manager with the (possibly new) PTT
-            // key names so a changed binding takes effect without restarting
-            // the whole process. The coordinator mode (hold-to-talk vs.
-            // toggle) is fixed at install time; mode changes require an app
-            // restart. Python handles the recording lifecycle so correctness
-            // is unaffected by this limitation.
+            // key names so a changed binding takes effect without
+            // restarting the whole process. The coordinator mode
+            // (hold-to-talk vs. toggle) is fixed at install time; mode
+            // changes require an app restart.
             let key_names = extract_hotkey_key_names(&effective_command);
-            if !key_names.is_empty() {
+            let keys_supported =
+                !key_names.is_empty() && crate::hotkey::validate_key_names(&key_names).is_ok();
+            if !key_names.is_empty() && !keys_supported {
+                eprintln!(
+                    "[hotkey] resume skipped: PTT keys {key_names:?} are not \
+                     supported by the Rust backend; keeping Python listener \
+                     engaged and skipping resume"
+                );
+            }
+            if keys_supported {
+                if rust_session_sink::dictate_backend_rust_session_requested() {
+                    disable_python_hotkey(&mut effective_command);
+                }
                 handle.resume(key_names);
             }
         }
@@ -545,7 +566,18 @@ impl RuntimeSupervisor {
         }
         configure_piped_python_stdio(&mut process);
         configure_background_process(&mut process);
-        let mut child = process.spawn()?;
+        let mut child = match process.spawn() {
+            Ok(c) => c,
+            Err(err) => {
+                // Codex P2 #416 (round 2) runtime.rs:504 -- the
+                // session sink was registered above; without this
+                // cleanup PTT would still drive DictateSession after
+                // a spawn failure.
+                self.suspend_session_sink_on_start_failure();
+                self.state = RuntimeState::Stopped;
+                return Err(err.into());
+            }
+        };
 
         // Iteration-3 review finding #1: when the rust-audio backend
         // is active we need to know when the worker's stdin reader is
@@ -572,6 +604,11 @@ impl RuntimeSupervisor {
                 Err(err) => {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Codex P2 #416 (round 2) runtime.rs:504 -- mirror
+                    // the spawn-failure cleanup so an audio-pipeline
+                    // init failure doesn't leave the session sink
+                    // driving DictateSession against a dead worker.
+                    self.suspend_session_sink_on_start_failure();
                     self.state = RuntimeState::Stopped;
                     return Err(anyhow!(
                         "failed to prepare Rust audio pipeline: {err}; \
@@ -881,6 +918,23 @@ impl RuntimeSupervisor {
         }
     }
 
+    /// Mirror of [`Self::suspend_session_sink_on_exit`] for the
+    /// `start()` error-return paths. Codex P2 #416 (round 2)
+    /// runtime.rs:504: the Rust hotkey handle is installed (and the
+    /// session sink registered with the coordinator) BEFORE the
+    /// fallible `process.spawn()` + audio-bridge prep steps. If those
+    /// fail and `start()` returns Err, the UI flips to Stopped but
+    /// the hotkey handle is still live -- PTT presses can still drive
+    /// `DictateSession` against a worker that never started.
+    ///
+    /// Suspend the handle on those paths so the coordinator returns
+    /// to Idle and PTT goes silent until the next successful start.
+    /// Same gate as the on-exit path: only the session-sink build
+    /// needs cleanup (the logger sink is inert).
+    fn suspend_session_sink_on_start_failure(&self) {
+        self.suspend_session_sink_on_exit();
+    }
+
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
         // Iteration-2 review finding #3: act on a terminal bridge error
         // BEFORE the regular try_wait. The bridge watcher has already
@@ -899,6 +953,14 @@ impl RuntimeSupervisor {
                 let _ = kill_child(&mut child);
                 let exit_code = child.wait().ok().and_then(|status| status.code());
                 self.state = RuntimeState::Stopped;
+                // Codex P2 #416 (round 2) runtime.rs:875 -- the
+                // try_wait arms call this on every unexpected exit;
+                // the bridge-terminal branch kills+takes the child
+                // and returns BEFORE those arms run, so without this
+                // call a terminal BridgeError would leave the
+                // session sink driving DictateSession while the UI
+                // shows Stopped.
+                self.suspend_session_sink_on_exit();
                 let _ = self.tx.send(RuntimeEvent::Exited { code: exit_code });
                 if let Some(notifier) = self.repaint_notifier.as_ref() {
                     notifier();
@@ -907,6 +969,10 @@ impl RuntimeSupervisor {
                 // No child to kill (already exited): just be sure
                 // state reflects stopped.
                 self.state = RuntimeState::Stopped;
+                // Same Codex P2 (round 2) -- even if the child was
+                // already gone, the hotkey handle could still be
+                // live.
+                self.suspend_session_sink_on_exit();
             }
             return self.rx.try_iter().collect();
         }
@@ -2032,7 +2098,11 @@ mod install_plan_tests;
 mod process_capture_tests;
 // Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split
 // out of the production module to keep each file under the ~500-LOC
-// modularity guideline.
+// modularity guideline. Coverage-uplift tests live in a second
+// sibling file so the original test module stays focused on the
+// public contract and the new file targets Sonar gate uplift.
+#[cfg(test)]
+mod rust_session_sink_coverage_tests;
 #[cfg(test)]
 mod rust_session_sink_tests;
 #[cfg(test)]

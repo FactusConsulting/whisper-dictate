@@ -256,6 +256,41 @@ where
 }
 
 #[cfg(feature = "rust-hotkeys")]
+/// Validate `key_names` against the Rust (rdev) backend's supported list
+/// WITHOUT installing anything. Mirrors the validation `install_hotkey`
+/// runs before spawning manager / coordinator threads, so the supervisor
+/// can check a (possibly updated) restart-time binding before parking
+/// the Python listener. Returns Err with the first unsupported name.
+///
+/// Codex P2 #416 (round 2) runtime.rs:511 -- on the restart path the
+/// supervisor parks Python BEFORE calling `handle.resume(key_names)`;
+/// without this validation a Settings change to a key that the Python
+/// evdev backend accepts but rdev does not (eg `super_l`) would leave
+/// Python disabled and the Rust hotkey unable to fire.
+///
+/// In stub builds (no `rust-hotkeys` feature) this always succeeds --
+/// `install_hotkey` already returns `Unsupported` synchronously there,
+/// so the supervisor's `hotkey_handle` is None and this validation is
+/// dead code anyway.
+#[cfg(feature = "rust-hotkeys")]
+pub fn validate_key_names(key_names: &[String]) -> Result<()> {
+    if key_names.is_empty() {
+        return Err(InstallError::EmptyConfig);
+    }
+    for name in key_names {
+        if !is_rdev_supported_name(name) {
+            return Err(InstallError::UnsupportedKey(name.clone()));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "rust-hotkeys"))]
+pub fn validate_key_names(_key_names: &[String]) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(feature = "rust-hotkeys")]
 impl HotkeyHandle {
     /// Send a [`coordinator::CoordinatorEvent::ProcessingFinished`] for the
     /// given recording id. The host calls this from the transcription
@@ -465,6 +500,34 @@ mod integration {
             other => panic!("expected UnsupportedKey, got {other:?}"),
         }
     }
+
+    /// Pins the feature-build behaviour of `validate_key_names`, the
+    /// pure helper the runtime restart path consults BEFORE parking
+    /// Python on a key-binding change (Codex P2 PR #421 runtime.rs:530).
+    /// Empty input must surface `EmptyConfig`; an unsupported name must
+    /// surface `UnsupportedKey(name)` and stop at the FIRST bad name in
+    /// the list (so the message is deterministic). The all-supported
+    /// path returns Ok so the restart gate proceeds to `handle.resume`.
+    #[test]
+    fn validate_key_names_feature_build_matches_install_validation() {
+        assert!(matches!(
+            validate_key_names(&[]),
+            Err(InstallError::EmptyConfig)
+        ));
+        // First-bad-name is reported (deterministic for error UX).
+        match validate_key_names(&["ctrl_l".to_owned(), "super_l".to_owned()]) {
+            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "super_l"),
+            other => {
+                panic!("expected UnsupportedKey(\"super_l\") for first-bad-name, got: {other:?}")
+            }
+        }
+        match validate_key_names(&["super_l".to_owned(), "ctrl_l".to_owned()]) {
+            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "super_l"),
+            other => panic!("expected UnsupportedKey(\"super_l\") first, got: {other:?}"),
+        }
+        // All-supported -> Ok so the restart path proceeds to resume.
+        assert!(validate_key_names(&["ctrl_l".to_owned(), "f9".to_owned()]).is_ok());
+    }
 }
 
 #[cfg(test)]
@@ -568,5 +631,28 @@ mod env_tests {
             matches!(err, InstallError::Unsupported),
             "stock build must return InstallError::Unsupported, got: {err}"
         );
+    }
+
+    /// On a stock build (no `rust-hotkeys` feature) `validate_key_names` is
+    /// a no-op that always returns `Ok(())` -- the supervisor's
+    /// `hotkey_handle` is None in stub builds so the restart-path
+    /// validation gate (runtime.rs) is dead code, but the function itself
+    /// must compile and return Ok for any input so the call site type-
+    /// checks under both feature configurations.
+    ///
+    /// Without this test the 3-line stub body is uncovered in the Sonar
+    /// build (which uses `--features ui-egui-glow`, NOT `rust-hotkeys`),
+    /// which dragged the new-code coverage gate on PR #421.
+    #[test]
+    #[cfg(not(feature = "rust-hotkeys"))]
+    fn validate_key_names_stub_always_returns_ok() {
+        // Empty input: the feature build rejects with EmptyConfig; the
+        // stub is unconditionally Ok.
+        assert!(validate_key_names(&[]).is_ok());
+        // Non-empty input including a name the feature build would reject
+        // (`super_l` is not in the rdev key map): stub still returns Ok
+        // because the supervisor never consults the result when
+        // `hotkey_handle` is None.
+        assert!(validate_key_names(&["ctrl_l".to_owned(), "super_l".to_owned()]).is_ok());
     }
 }
