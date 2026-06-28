@@ -16,26 +16,38 @@
 //!    next press would leak into the next utterance's buffer.
 //! 2. **Max-record cap** (`vp_capture_rust_stdin.py:200-224`) — once the
 //!    buffered duration exceeds the `VOICEPI_MAX_RECORD_S` cap, further
-//!    frames are dropped AND an automatic
-//!    [`DictateSession::stop_and_transcribe`] closes the recording so
-//!    the user gets their text without releasing PTT. The Python path
-//!    only refuses frames + emits a "capped" status event; we go a step
-//!    further to match the sounddevice / arecord callbacks that DO
-//!    auto-stop, keeping the three capture backends behaviour-consistent.
+//!    frames are dropped AND a one-shot `status=recording capped=true
+//!    recording_s=N` worker event is emitted. We **do not** auto-stop
+//!    the recording: the Python path also keeps the recording open
+//!    after the cap fires (see `vp_capture._cb` / `_arecord_reader`),
+//!    leaving the stop/transcribe path to the PTT-release handler.
+//!    Auto-stopping mid-press would inject text while the PTT modifier
+//!    is still down — which for bare-modifier bindings (Ctrl, Alt) would
+//!    trigger keyboard shortcuts on the injected characters. The
+//!    supervisor (PR 4) closes the recording on key-up as normal.
 //! 3. **DeviceError surfacing** (`vp_capture_rust_stdin.py:233-236`) —
-//!    a [`PipelineEvent::DeviceError`] emits an `event=error` worker
-//!    event via [`crate::dictate::events::emit_error`] and returns
+//!    a [`PipelineEvent::DeviceError`] emits a `status=capture_lost`
+//!    worker event via [`crate::dictate::events::emit_status`] (the
+//!    canonical state the Rust UI dispatcher in `src/rust/ui/app.rs`
+//!    already handles — `event=error` would be ignored) and returns
 //!    [`RouteError::Device`]. The supervisor (PR 4/6) owns restart.
-//! 4. **Cancelled passthrough** — a [`PipelineEvent::Cancelled`]
+//! 4. **Cancelled — diagnostic only** — a [`PipelineEvent::Cancelled`]
 //!    (emitted by the VAD when an in-flight utterance is discarded)
-//!    runs through [`DictateSession::cancel`] with the active epoch so
-//!    the session settles back to [`SessionState::Idle`] and the buffer
-//!    is dropped.
+//!    is currently dropped silently, matching Python's Phase-1
+//!    behaviour (`vp_capture_rust_stdin.py:228-232`): the PTT-release
+//!    boundary, not the VAD's, owns utterance closing. Routing it
+//!    through `DictateSession::cancel` would race the chord-cancel
+//!    epoch guard — the pipeline event carries no recording id, so
+//!    a stale Cancelled queued from a prior recording could discard
+//!    the next press's audio. PR 4/5 will revisit when the Rust VAD
+//!    actually drives utterance commits.
 //!
 //! The route is also responsible for translating
 //! [`PipelineEvent::SpeechStart`] / [`PipelineEvent::SpeechEnd`] into
-//! [`SpeechMarker`] return values; the supervisor in PR 4 wires those
-//! into the preview / live-card UI.
+//! [`SpeechMarker`] return values **while a recording is in flight**;
+//! markers heard while the session is idle are dropped so background
+//! speech between PTT presses doesn't trip stale UI transitions in the
+//! live-preview / utterance-card consumers the supervisor (PR 4) wires.
 //!
 //! # Why a separate buffer-length counter
 //!
@@ -57,10 +69,10 @@
 
 use std::io::Write;
 
-use serde_json::{json, Value};
+use serde_json::{Map, Value};
 
 use crate::audio::{AudioPipeline, PipelineEvent};
-use crate::dictate::events::{self, WorkerStatus};
+use crate::dictate::events::{self, StatusEvent, WorkerStatus};
 use crate::dictate::session::{
     DictateSession, InjectBackend, SessionError, SessionState, TranscribeBackend, UtteranceOutcome,
     SR,
@@ -139,7 +151,7 @@ pub enum SpeechMarker {
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
     /// Pipeline reported an unrecoverable capture failure. The route
-    /// has already emitted an `event=error` worker event; the
+    /// has already emitted a `status=capture_lost` worker event; the
     /// supervisor (PR 4/6) is responsible for restart / user-facing
     /// recovery.
     #[error("audio device error: {0}")]
@@ -240,11 +252,19 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
         }
     }
 
-    /// Open a fresh utterance. Delegates to [`DictateSession::start`]
-    /// and resets the cap-tracking state. Returns the new recording
-    /// epoch so the caller can stash it for a later
-    /// [`DictateSession::cancel`].
+    /// Open a fresh utterance. Delegates to [`DictateSession::start`],
+    /// resets the cap-tracking state, AND re-reads
+    /// [`MAX_RECORD_ENV`] so a Settings save between PTT presses takes
+    /// effect on the next recording without rebuilding the route — the
+    /// `max_record_s` setting is `live: true` in
+    /// `src/python/whisper_dictate/settings_schema.json`, and the
+    /// Python capture callbacks re-read `_max_record_s()` per
+    /// recording. Codex P2 #415 audio_route.rs:250.
+    ///
+    /// Returns the new recording epoch so the caller can stash it for
+    /// a later [`DictateSession::cancel`].
     pub fn start_recording<W: Write>(&mut self, writer: &mut W) -> Result<u64, RouteError> {
+        self.config = RouteConfig::from_env();
         let id = self.session.start(writer)?;
         self.buffered_samples = 0;
         self.cap_tripped = false;
@@ -272,9 +292,10 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
     }
 
     /// Drive a single [`PipelineEvent`] into the session. Returns
-    /// `Ok(Some(SpeechMarker))` for `SpeechStart` / `SpeechEnd` so the
-    /// supervisor can pass the marker through to the live-preview UI;
-    /// `Ok(None)` for every other branch. See the module docs for the
+    /// `Ok(Some(SpeechMarker))` for `SpeechStart` / `SpeechEnd` heard
+    /// **while a recording is in flight**; `Ok(None)` for every other
+    /// branch (including speech markers heard while idle — see Codex
+    /// P2 #415 audio_route.rs:290). See the module docs for the four
     /// behaviour gates.
     pub fn on_event<W: Write>(
         &mut self,
@@ -286,21 +307,19 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
                 self.handle_frame(&frame, writer)?;
                 Ok(None)
             }
-            PipelineEvent::SpeechStart => Ok(Some(SpeechMarker::Start)),
-            PipelineEvent::SpeechEnd => Ok(Some(SpeechMarker::End)),
+            PipelineEvent::SpeechStart => Ok(self.speech_marker_if_recording(SpeechMarker::Start)),
+            PipelineEvent::SpeechEnd => Ok(self.speech_marker_if_recording(SpeechMarker::End)),
             PipelineEvent::Cancelled => {
-                // Use the session's current epoch — by the time we
-                // observe Cancelled, the recording it refers to is the
-                // current one (the pipeline emits Cancelled strictly
-                // between SpeechStart and any would-be SpeechEnd, so
-                // there is no race with a fresh start arriving from
-                // the supervisor in this PR; the chord-race guard in
-                // `DictateSession::cancel` is the load-bearing check
-                // for the PTT cancel path that PR 4 wires).
-                let epoch = self.session.epoch();
-                self.session.cancel(epoch, writer)?;
-                self.buffered_samples = 0;
-                self.cap_tripped = false;
+                // Drop silently. The pipeline event carries no
+                // recording id, so routing it through
+                // `DictateSession::cancel` would race the chord-cancel
+                // epoch guard — a stale Cancelled queued from a prior
+                // recording could discard the new utterance. Python's
+                // Phase-1 rust-stdin handler also ignores Cancelled
+                // (vp_capture_rust_stdin.py:228-232); the PTT-release
+                // path is the authoritative cancel trigger. PR 4/5
+                // will revisit when the Rust VAD drives commits.
+                // Codex P2 #415 audio_route.rs:300.
                 Ok(None)
             }
             PipelineEvent::DeviceError(msg) => {
@@ -310,33 +329,40 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
         }
     }
 
+    /// Speech-marker gate: only surface SpeechStart/SpeechEnd when a
+    /// recording is in flight. Idle background speech between PTT
+    /// presses would otherwise drive stale UI transitions. Codex P2
+    /// #415 audio_route.rs:290.
+    fn speech_marker_if_recording(&self, marker: SpeechMarker) -> Option<SpeechMarker> {
+        if matches!(self.session.state(), SessionState::Recording { .. }) {
+            Some(marker)
+        } else {
+            None
+        }
+    }
+
     /// The `Frame` branch of [`Self::on_event`] — split out so the
     /// outer match stays scannable and the three frame-disposition
-    /// outcomes (drop-idle / cap-trip-auto-stop / accept) read top-to-
-    /// bottom.
+    /// outcomes (drop-idle / drop-over-cap / accept) read top-to-bottom.
     fn handle_frame<W: Write>(&mut self, frame: &[f32], writer: &mut W) -> Result<(), RouteError> {
         // Idle-frame drop. Mirrors vp_capture_rust_stdin.py:192-193.
-        // Also catches the post-auto-stop window where `cap_tripped`
-        // is set but the session is back in Idle (auto-stop drove the
-        // transition); the state check is therefore the sole gate.
         if !matches!(self.session.state(), SessionState::Recording { .. }) {
             return Ok(());
         }
-        // Max-record cap. Mirrors vp_capture_rust_stdin.py:200-224.
+        // Max-record cap. Mirrors vp_capture_rust_stdin.py:200-224
+        // exactly: refuse over-cap frames, emit the one-shot
+        // `capped=true` status event on the FIRST trip, then keep the
+        // recording open until the PTT-release handler closes it.
+        // Auto-stopping mid-press would inject text while modifiers
+        // are still held — Codex P2 #415 audio_route.rs:339.
         if let Some(cap) = self.config.max_record_seconds {
             let buffered_with_frame = self.buffered_samples.saturating_add(frame.len());
-            if (buffered_with_frame as f64 / f64::from(SR)) > cap {
-                self.cap_tripped = true;
-                // Auto-stop. Drops the trip-frame (matching Python's
-                // `return True` before the append) but flushes the
-                // already-buffered audio through the session so the
-                // user gets their text. PR 4 will surface the
-                // `capped` worker event the Python path emits before
-                // refusing the frame; in this PR the stop_and_transcribe
-                // call already drives the recording → transcribing →
-                // (utterance | no_text) → ready transition that the UI
-                // keys on.
-                self.stop_recording(writer)?;
+            let buffered_s = buffered_with_frame as f64 / f64::from(SR);
+            if buffered_s > cap {
+                if !self.cap_tripped {
+                    self.cap_tripped = true;
+                    self.emit_capped_status(buffered_s, writer)?;
+                }
                 return Ok(());
             }
         }
@@ -345,16 +371,56 @@ impl<T: TranscribeBackend, I: InjectBackend> AudioRoute<T, I> {
         Ok(())
     }
 
-    /// Emit the `event=error` worker line for a [`PipelineEvent::DeviceError`].
-    /// Swallows a writer I/O failure on purpose: the device error itself
-    /// is already the headline diagnostic the supervisor will surface,
-    /// and we shouldn't mask it behind a follow-up "couldn't write the
-    /// error event" failure.
-    fn emit_device_error<W: Write>(&self, message: &str, writer: &mut W) {
-        let payload: Value = json!({
-            "state": WorkerStatus::Error.as_wire_str(),
-            "backend": "rust-stdin",
-        });
-        let _ = events::emit_error(writer, message, &payload);
+    /// One-shot `status=recording capped=true recording_s=N` worker
+    /// event, mirroring `vp_capture_rust_stdin.py:212-224`'s
+    /// `_emit_worker_event("status", state="recording", capped=True,
+    /// recording_s=round(buffered_s, 1))`. `recording_s` is rounded to
+    /// one decimal to match Python.
+    fn emit_capped_status<W: Write>(
+        &self,
+        buffered_s: f64,
+        writer: &mut W,
+    ) -> Result<(), RouteError> {
+        let mut extras = Map::new();
+        extras.insert("capped".into(), Value::from(true));
+        extras.insert("recording_s".into(), Value::from(round_to_1dp(buffered_s)));
+        let event = StatusEvent {
+            state: WorkerStatus::Recording,
+            extras,
+            ..StatusEvent::new(WorkerStatus::Recording)
+        };
+        events::emit_status(writer, &event)?;
+        Ok(())
     }
+
+    /// Emit the `status=capture_lost` worker line for a
+    /// [`PipelineEvent::DeviceError`]. We use the canonical
+    /// `WorkerStatus::CaptureLost` state — the Rust UI dispatcher in
+    /// `src/rust/ui/app.rs` switches on `event=status` and handles
+    /// `state=capture_lost` specifically; an `event=error` line would
+    /// be parsed and then ignored. Codex P2 #415 audio_route.rs:358.
+    ///
+    /// Swallows a writer I/O failure on purpose: the device error
+    /// itself is already the headline diagnostic the supervisor will
+    /// surface, and we shouldn't mask it behind a follow-up
+    /// "couldn't write the status line" failure.
+    fn emit_device_error<W: Write>(&self, message: &str, writer: &mut W) {
+        let mut extras = Map::new();
+        extras.insert("message".into(), Value::from(message));
+        extras.insert("backend".into(), Value::from("rust-stdin"));
+        let event = StatusEvent {
+            state: WorkerStatus::CaptureLost,
+            extras,
+            ..StatusEvent::new(WorkerStatus::CaptureLost)
+        };
+        let _ = events::emit_status(writer, &event);
+    }
+}
+
+/// Round to one decimal place, matching Python's
+/// `round(buffered_s, 1)` in `vp_capture_rust_stdin.py:222`. Kept
+/// local rather than importing `session::wire::round2` to avoid
+/// reaching into a sibling module's private helper for a one-liner.
+fn round_to_1dp(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
 }

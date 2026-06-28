@@ -80,5 +80,9 @@ mod events_tests;
 // Wave 5 PR 3 (#348): unit tests for the audio_route bridge. Gated on
 // `audio-in-rust` because the tests construct `PipelineEvent`s from
 // the audio module (no cpal usage — see audio_route_tests.rs).
+// Shared test backends + env helpers live in `audio_route_test_support`
+// so the tests file stays under the AGENTS.md 500-LOC bar.
+#[cfg(all(test, feature = "audio-in-rust"))]
+mod audio_route_test_support;
 #[cfg(all(test, feature = "audio-in-rust"))]
 mod audio_route_tests;
