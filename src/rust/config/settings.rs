@@ -79,6 +79,19 @@ pub struct AppSettings {
     pub ui_log_view: String,
     pub ui_theme: String,
     pub ui_text_scale: String,
+    /// Whether the small always-on-top recording overlay (Issue #320) appears
+    /// during dictation. Stored as a typed bool but persisted through the
+    /// same `"1"`/`"0"` string contract as the rest of the bool settings.
+    pub overlay_enabled: bool,
+    /// One of: `top-left`, `top-right`, `bottom-left`, `bottom-right`, or
+    /// `custom:<x>,<y>` — see `crate::ui::overlay::position::OverlayPosition`.
+    /// Anything unrecognised decodes to the default (`bottom-right`) at
+    /// render time, so a hand-edited config can't crash the UI.
+    pub overlay_position: String,
+    /// When `true`, the overlay also shows while the worker is idle/ready —
+    /// useful for a permanent meter while configuring devices; default `false`
+    /// so the overlay only appears around live dictation.
+    pub overlay_show_on_idle: bool,
     pub profiles_json: String,
 }
 
@@ -153,6 +166,13 @@ impl Default for AppSettings {
             ui_log_view: "minimal".to_owned(),
             ui_theme: "dark".to_owned(),
             ui_text_scale: "1.15".to_owned(),
+            // Overlay defaults: off until the user opts in, bottom-right
+            // corner so it doesn't crowd the active app's title bar, and
+            // hidden while idle so the overlay only appears around live
+            // dictation. See `crate::ui::overlay`.
+            overlay_enabled: false,
+            overlay_position: "bottom-right".to_owned(),
+            overlay_show_on_idle: false,
             profiles_json: default_profiles_json(),
         }
     }

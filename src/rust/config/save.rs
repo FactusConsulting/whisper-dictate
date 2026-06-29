@@ -106,6 +106,9 @@ impl AppSettings {
         set_string(object, "ui_language", &self.ui_language);
         set_string(object, "ui_log_view", &self.ui_log_view);
         set_string(object, "ui_text_scale", &self.ui_text_scale);
+        set_bool(object, "overlay_enabled", self.overlay_enabled);
+        set_string(object, "overlay_position", &self.overlay_position);
+        set_bool(object, "overlay_show_on_idle", self.overlay_show_on_idle);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
                 object.insert("profiles".to_owned(), profiles);

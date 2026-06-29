@@ -182,6 +182,14 @@ impl AppSettings {
         self.ui_language = string_value(object, "ui_language", &defaults.ui_language);
         self.ui_log_view = string_value(object, "ui_log_view", &defaults.ui_log_view);
         self.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
+        self.overlay_enabled = bool_value(object, "overlay_enabled", defaults.overlay_enabled);
+        self.overlay_position =
+            string_value(object, "overlay_position", &defaults.overlay_position);
+        self.overlay_show_on_idle = bool_value(
+            object,
+            "overlay_show_on_idle",
+            defaults.overlay_show_on_idle,
+        );
     }
 }
 

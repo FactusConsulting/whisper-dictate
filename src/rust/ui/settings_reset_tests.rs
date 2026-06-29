@@ -71,6 +71,9 @@ fn changed_settings() -> AppSettings {
         post_redact: true,
         post_redact_terms: "Sara,Lars".to_owned(),
         ui_language: "da".to_owned(),
+        overlay_enabled: true,
+        overlay_position: "top-left".to_owned(),
+        overlay_show_on_idle: true,
         profiles_json: r#"[{"name":"code"}]"#.to_owned(),
     }
 }
