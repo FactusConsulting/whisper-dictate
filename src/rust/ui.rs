@@ -43,6 +43,7 @@ mod diagnostics_level;
 mod hotkey;
 mod icon;
 mod log_render;
+mod overlay;
 mod platform;
 mod previews;
 mod secret_store;
@@ -77,6 +78,10 @@ pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
 // resolve these items; non-test code reaches them through `api_keys`.
 pub(in crate::ui) use self::log_render::*;
+pub(in crate::ui) use self::overlay::{
+    render_recording_overlay, MeterFrame, OverlayConfig, OverlayPalette, OverlayPhase,
+    OverlayPosition, OverlayRender, OverlayState,
+};
 pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
 use self::secret_store::*;
@@ -448,6 +453,12 @@ struct WhisperDictateApp {
     /// Empty when no downloads have been kicked off this session — never
     /// persisted.
     pub(in crate::ui) whisper_model_downloads: whisper_models_state::WhisperModelDownloads,
+    /// Time-smoothed audio meter + visibility bookkeeping for the recording
+    /// overlay window (Issue #320). Lives outside `AppSettings` because it is
+    /// session-only render state — the persisted toggle/position live in the
+    /// settings struct (`overlay_enabled` / `overlay_position` /
+    /// `overlay_show_on_idle`).
+    pub(in crate::ui) overlay_state: OverlayState,
 }
 
 impl Default for WhisperDictateApp {
@@ -551,6 +562,7 @@ impl Default for WhisperDictateApp {
             tray: TrayManager::new(),
             last_logged_tray_state: None,
             whisper_model_downloads: whisper_models_state::WhisperModelDownloads::new(),
+            overlay_state: OverlayState::default(),
         }
     }
 }

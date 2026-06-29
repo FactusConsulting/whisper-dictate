@@ -206,6 +206,68 @@ impl WhisperDictateApp {
         ui.separator();
         ui.add_space(8.0);
 
+        // --- Recording overlay (Issue #320): the small always-on-top window
+        // with the live audio meter. Kept in its own section so the settings
+        // stay grouped — the toggle controls visibility, the position picker
+        // controls anchoring, and "Also show while idle" turns it into a
+        // permanent meter for device-setup mode.
+        section_label(ui, "Recording overlay", palette);
+        ui.add_space(6.0);
+        settings_grid("system_overlay_settings").show(ui, |ui| {
+            checkbox_help(
+                ui,
+                "Show recording overlay",
+                &mut self.settings.overlay_enabled,
+                "Show a small always-on-top window with a live audio level meter \
+                 while dictating, so you can see the mic is working without \
+                 squinting at the tray icon.",
+            );
+            // Position picker: the four corners + a custom anchor that is
+            // produced (and persisted) by dragging the overlay window. The
+            // custom case is shown but not selectable from the picker — it
+            // exists so the dropdown can DISPLAY the current state honestly.
+            ui.label("Overlay position");
+            let current_position =
+                crate::ui::OverlayPosition::parse(&self.settings.overlay_position);
+            let selected_label = match current_position {
+                crate::ui::OverlayPosition::TopLeft => "Top-left",
+                crate::ui::OverlayPosition::TopRight => "Top-right",
+                crate::ui::OverlayPosition::BottomLeft => "Bottom-left",
+                crate::ui::OverlayPosition::BottomRight => "Bottom-right",
+                crate::ui::OverlayPosition::Custom { .. } => "Custom (dragged)",
+            };
+            egui::ComboBox::from_id_salt("overlay_position_select")
+                .selected_text(selected_label)
+                .show_ui(ui, |ui| {
+                    for (variant, label) in [
+                        (crate::ui::OverlayPosition::TopLeft, "Top-left"),
+                        (crate::ui::OverlayPosition::TopRight, "Top-right"),
+                        (crate::ui::OverlayPosition::BottomLeft, "Bottom-left"),
+                        (crate::ui::OverlayPosition::BottomRight, "Bottom-right"),
+                    ] {
+                        if ui
+                            .selectable_label(current_position == variant, label)
+                            .clicked()
+                        {
+                            self.settings.overlay_position = variant.to_storage_string();
+                        }
+                    }
+                });
+            ui.end_row();
+            checkbox_help(
+                ui,
+                "Also show while idle",
+                &mut self.settings.overlay_show_on_idle,
+                "Keep the overlay on screen even when not dictating — useful as a \
+                 permanent meter while configuring microphones, but distracting \
+                 in everyday use.",
+            );
+        });
+
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         // --- Feedback: the audio/notification cues moved out of Output.
         section_label(
             ui,

@@ -141,6 +141,13 @@ impl eframe::App for WhisperDictateApp {
             self.pipeline_stage.is_some(),
         ));
 
+        // Recording overlay (Issue #320). Painted BEFORE the main panels so
+        // the secondary viewport gets first crack at repaint scheduling; the
+        // call is internally a no-op (and tears the viewport down) whenever
+        // the visibility rule in `overlay::settings::should_show_overlay`
+        // returns false.
+        self.render_overlay(&ctx, palette);
+
         // Compact mode: a single tiny CentralPanel with one control row — no
         // sidebar, tabs, log, or message bars. The viewport is already resized /
         // raised always-on-top by `set_compact_mode`; here we only render.
@@ -634,6 +641,16 @@ impl WhisperDictateApp {
         if let Some(peak) = worker_event_f32(&event.payload, "peak") {
             self.audio_meter_peak = Some(peak);
         }
+        // Mirror the latest audio event onto the recording overlay's smoother
+        // so the floating meter (Issue #320) doesn't lag the in-window gauge.
+        // The smoother is internally a no-op when the overlay is disabled,
+        // but stepping it unconditionally keeps `last_tick` aligned with
+        // real time so a re-enabled overlay doesn't jump on the next frame.
+        self.overlay_state.tick(MeterFrame {
+            level: self.audio_meter_level,
+            peak: self.audio_meter_peak,
+            raw_dbfs: self.audio_meter_raw_dbfs,
+        });
         if let Some(state) = event.state.as_deref() {
             self.audio_capture_opening = state == "opening";
             if let Some(active) = audio_capture_active_for_worker_state(state) {
@@ -666,6 +683,58 @@ impl WhisperDictateApp {
             return;
         }
         self.append_runtime_log(output);
+    }
+
+    /// Per-frame overlay window driver. Resolves the persisted overlay
+    /// settings + the current worker phase into the visibility decision
+    /// (`overlay::settings::should_show_overlay`), feeds the smoothed
+    /// meter, and re-renders the secondary egui viewport. A user drag is
+    /// captured by `OverlayRender::on_drag` and persisted straight back into
+    /// `settings.overlay_position` so dragging across the screen is sticky.
+    fn render_overlay(&mut self, ctx: &egui::Context, palette: super::UiPalette) {
+        let config = OverlayConfig {
+            enabled: self.settings.overlay_enabled,
+            show_on_idle: self.settings.overlay_show_on_idle,
+        };
+        let phase = OverlayPhase::from_worker_state(
+            self.runtime_state,
+            &self.last_worker_status_state,
+            self.audio_capture_opening,
+            self.audio_capture_active,
+        );
+        let position = OverlayPosition::parse(&self.settings.overlay_position);
+        let mut next_position: Option<OverlayPosition> = None;
+        {
+            let mut on_drag = |new_position: OverlayPosition| {
+                // Coalesce drag deltas within a frame by overwriting; the
+                // settings string is only updated once per `render_overlay`
+                // call below so the dirty dot doesn't blink per-pixel.
+                next_position = Some(new_position);
+            };
+            render_recording_overlay(
+                ctx,
+                OverlayRender {
+                    config,
+                    phase,
+                    palette: OverlayPalette::from_main_palette(&palette),
+                    state: &mut self.overlay_state,
+                    position,
+                    active_device: &self.active_audio_device,
+                    on_drag: &mut on_drag,
+                },
+            );
+        }
+        if let Some(new_position) = next_position {
+            // Persist the dragged position by overwriting the typed setting;
+            // the next save round-trip flushes it to config.json via
+            // `apply_to_object`. Skipping the write when the new value
+            // equals the current one keeps the dirty flag from flapping when
+            // the user clicks-without-dragging.
+            let serialised = new_position.to_storage_string();
+            if serialised != self.settings.overlay_position {
+                self.settings.overlay_position = serialised;
+            }
+        }
     }
 }
 
