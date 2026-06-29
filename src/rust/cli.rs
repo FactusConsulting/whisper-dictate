@@ -363,6 +363,22 @@ pub enum HistoryCommand {
     },
     /// Print the most recent history text.
     Last,
+    /// Substring-search the SQLite history store (issue #324). Returns
+    /// rows whose text matches `query` via FTS5 (when available) or
+    /// LIKE. Requires a binary built with the default `history-sqlite`
+    /// feature; otherwise the subcommand prints a friendly hint and
+    /// exits non-zero.
+    Search {
+        /// Search query — words are matched as a phrase. Pass an
+        /// empty string to scan recent rows without a text filter.
+        query: String,
+        /// Maximum rows to return.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// Skip this many leading rows (pagination offset).
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+    },
 }
 
 #[cfg(test)]
@@ -567,6 +583,45 @@ mod tests {
             cli.command,
             Some(Command::History {
                 command: HistoryCommand::List { limit: 25 },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_history_search_subcommand_with_defaults() {
+        let cli = Cli::parse_from(["whisper-dictate", "history", "search", "rødgrød"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::History {
+                command: HistoryCommand::Search {
+                    query: "rødgrød".to_owned(),
+                    limit: 20,
+                    offset: 0,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_history_search_subcommand_with_pagination_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "history",
+            "search",
+            "needle",
+            "--limit",
+            "5",
+            "--offset",
+            "10",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::History {
+                command: HistoryCommand::Search {
+                    query: "needle".to_owned(),
+                    limit: 5,
+                    offset: 10,
+                },
             })
         );
     }

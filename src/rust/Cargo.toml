@@ -19,9 +19,17 @@ path = "main.rs"
 # `eframe::Renderer` by cfg. The renderer-matrix CI workflow builds BOTH so the
 # wgpu exit route never silently rots.
 [features]
-default = ["ui-egui-glow"]
+default = ["ui-egui-glow", "history-sqlite"]
 ui-egui-glow = ["eframe/glow"]
 ui-egui-wgpu = ["eframe/wgpu"]
+# Local SQLite-backed transcription history (issue #324). Pulls in
+# `rusqlite` with its `bundled` feature so we ship our own SQLite (no
+# system libsqlite3 dep — matches the project's "no system deps" stance).
+# Enabled by default: the history store is part of the shipping desktop
+# experience. Build with `--no-default-features` (or
+# `--no-default-features --features ui-egui-glow`) to opt out, e.g. for
+# minimal CI binaries that don't need the history table.
+history-sqlite = ["dep:rusqlite"]
 # Local Whisper inference via the whisper.cpp bindings (`whisper-rs`).
 # OFF by default: enabling this feature pulls in whisper-rs and requires
 # CMake and a C/C++ compiler (e.g. clang) on the build host, since
@@ -149,6 +157,15 @@ rdev = { version = "0.5", optional = true }
 # src/rust/injection/fallback.rs. Send/Sync constraints are handled inside the
 # dispatcher (each inject_text call constructs a fresh Enigo).
 enigo = { version = "0.6", optional = true }
+
+# --- history-sqlite feature dep (default-on)
+# rusqlite with the `bundled` feature compiles SQLite from source so we
+# don't depend on a system libsqlite3. The bundled build enables FTS5
+# (used for searchable history text); a runtime probe in
+# `history::schema` still detects missing FTS5 and falls back to LIKE.
+# The 0.32 line is the last release on SQLite 3.45 which compiles cleanly
+# in the devcontainer image without bumping the MSRV.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }

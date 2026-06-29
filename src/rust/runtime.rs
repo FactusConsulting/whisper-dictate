@@ -1978,6 +1978,16 @@ fn stream_lines<R>(
                                 let _ = signal.send(());
                             }
                         }
+                        // Issue #324: persist one row per accepted
+                        // utterance into the per-user SQLite history
+                        // store. Best-effort and feature-gated — the
+                        // wrapper logs failures and swallows them so
+                        // a DB hiccup (locked file, disk full) never
+                        // breaks the dictation pipeline.
+                        #[cfg(feature = "history-sqlite")]
+                        if worker.event == "utterance" {
+                            crate::history::try_record_utterance_default(&worker.payload);
+                        }
                     }
                     let _ = tx.send(event);
                     if let Some(notifier) = repaint_notifier.as_ref() {

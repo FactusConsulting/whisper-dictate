@@ -53,6 +53,18 @@ pub mod devices;
 pub mod dictionary;
 pub mod formatting;
 pub mod health;
+// Local SQLite-backed transcription history (issue #324). Owns the
+// schema, insert path, and search API for the per-user history.sqlite3
+// store. Gated behind the `history-sqlite` cargo feature (default-on)
+// so a `--no-default-features` build doesn't pull rusqlite + the
+// bundled SQLite C compile. The supervisor's utterance-event hook
+// (`crate::runtime::stream_lines`) calls into this module on each
+// `event="utterance"` line; failures are logged and swallowed so a DB
+// hiccup never breaks dictation. The `History` CLI subcommand
+// (`history list / last / search`) also routes through here when the
+// feature is on.
+#[cfg(feature = "history-sqlite")]
+pub mod history;
 // Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier
 // matcher and the stage state machine compile unconditionally so their unit
 // tests run on every CI job; the OS listener layer is gated behind the
