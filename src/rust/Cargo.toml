@@ -165,7 +165,7 @@ enigo = { version = "0.6", optional = true }
 # `history::schema` still detects missing FTS5 and falls back to LIKE.
 # The 0.32 line is the last release on SQLite 3.45 which compiles cleanly
 # in the devcontainer image without bumping the MSRV.
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }
