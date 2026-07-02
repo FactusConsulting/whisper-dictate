@@ -79,7 +79,7 @@ jobs:
       # scheduled for removal later in 2026. A Node-20-targeted action
       # could brick the `changes` job once the transition lands, which
       # would skip every required check downstream — P2 #398 follow-up.
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
         # PR-scoped only: paths-filter needs the PR-files API for an
         # accurate diff. On a push or workflow_call (release), skip the
