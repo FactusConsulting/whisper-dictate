@@ -308,12 +308,17 @@ pub fn install_signal_handlers() -> io::Result<Option<PidFileGuard>> {
 fn install_linux_signal_handlers() -> io::Result<()> {
     use signal_hook::consts::{SIGUSR1, SIGUSR2};
     use signal_hook::iterator::Signals;
-    // Idempotent: the signal-handler thread runs `signals.forever()` which
-    // never exits, so a second install would leak a thread and double every
-    // signal. The OnceLock guard keeps the daemon-side install + any
-    // accidental re-entry from tests safe.
-    static INSTALLED: OnceLock<()> = OnceLock::new();
-    if INSTALLED.get().is_some() {
+    // Idempotent: the signal-handler thread runs `signals.forever()`
+    // which never exits, so a second install would leak a thread and
+    // double every signal. Use a Mutex-guarded bool rather than a
+    // OnceLock split into `get()` + `set()` so the check-and-install
+    // pair is atomic -- the earlier `get().is_some() -> ... -> set()`
+    // pattern allowed two concurrent callers to race past the guard,
+    // each spawning their own `Signals::new` handle and thread. Claude
+    // P1 #428 external_toggle.rs:336.
+    static INSTALLED: Mutex<bool> = Mutex::new(false);
+    let mut installed = INSTALLED.lock().unwrap_or_else(|e| e.into_inner());
+    if *installed {
         return Ok(());
     }
     let mut signals = Signals::new([SIGUSR1, SIGUSR2])?;
@@ -333,7 +338,10 @@ fn install_linux_signal_handlers() -> io::Result<()> {
                 push_command(cmd);
             }
         })?;
-    let _ = INSTALLED.set(());
+    // Set the flag AFTER the thread spawn succeeded so the guard cannot
+    // erroneously report "installed" if Signals::new or Builder::spawn
+    // returned an error.
+    *installed = true;
     Ok(())
 }
 

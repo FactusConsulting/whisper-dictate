@@ -1041,9 +1041,14 @@ impl RuntimeSupervisor {
             use external_toggle::ExternalCommand;
             if let Some(handle) = self.hotkey_handle.as_ref() {
                 let event = match cmd {
-                    ExternalCommand::Toggle | ExternalCommand::Start | ExternalCommand::Stop => {
-                        CoordinatorEvent::ExternalToggle
-                    }
+                    ExternalCommand::Toggle => CoordinatorEvent::ExternalToggle,
+                    // Claude P1 #428: Start/Stop must NOT collapse to
+                    // ExternalToggle -- that gives the CLI flags opposite
+                    // semantics (--start-recording ends up stopping when
+                    // already recording, and vice versa). Route each to
+                    // its dedicated idempotent coordinator event.
+                    ExternalCommand::Start => CoordinatorEvent::ExternalStart,
+                    ExternalCommand::Stop => CoordinatorEvent::ExternalStop,
                     ExternalCommand::Cancel => CoordinatorEvent::Cancel,
                 };
                 handle.send_event(event);

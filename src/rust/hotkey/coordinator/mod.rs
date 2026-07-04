@@ -140,6 +140,18 @@ pub enum CoordinatorEvent {
     ///   `ProcessingFinished` immediately starts a fresh recording —
     ///   matches the keyboard "kept held across transcription" behaviour.
     ExternalToggle,
+    /// External **start** from the CLI / Unix signal IPC. Unlike
+    /// [`Self::ExternalToggle`] this is idempotent -- if a recording is
+    /// already in flight the event is dropped rather than toggled off,
+    /// matching the `--start-recording` CLI flag's documented
+    /// no-op-when-already-recording contract. Claude P1 review on #428.
+    ExternalStart,
+    /// External **stop** from the CLI / Unix signal IPC. Idempotent
+    /// counterpart to [`Self::ExternalStart`] -- if the coordinator is
+    /// already Idle the event is dropped. Clears any queued
+    /// `pending_press` when fired during Processing so a stop request
+    /// mid-transcription doesn't re-arm a new recording.
+    ExternalStop,
     /// Stop the coordinator thread cleanly. Sent by
     /// [`CoordinatorHandle::shutdown`].
     Shutdown,
@@ -398,6 +410,36 @@ pub(super) fn step(
             // next ProcessingFinished will fire StartRecording so the user
             // doesn't have to re-fire the signal manually.
             state.pending_press = true;
+            None
+        }
+        // `ExternalStart` -- idempotent start (Claude P1 #428).
+        (CoordinatorEvent::ExternalStart, Stage::Idle) => start_recording(state, now),
+        (CoordinatorEvent::ExternalStart, Stage::Recording(_)) => {
+            // Already recording -- --start-recording is a no-op per the
+            // documented CLI contract. Do NOT toggle the recording off.
+            None
+        }
+        (CoordinatorEvent::ExternalStart, Stage::Processing(_)) => {
+            // Latch a pending press so the next ProcessingFinished starts
+            // a fresh recording -- matches the ExternalToggle-during-
+            // Processing latch behaviour.
+            state.pending_press = true;
+            None
+        }
+        // `ExternalStop` -- idempotent stop (Claude P1 #428).
+        (CoordinatorEvent::ExternalStop, Stage::Idle) => {
+            // Nothing to stop.
+            None
+        }
+        (CoordinatorEvent::ExternalStop, Stage::Recording(id)) => {
+            state.stage = Stage::Processing(id);
+            Some(CoordinatorAction::StopAndTranscribe(id))
+        }
+        (CoordinatorEvent::ExternalStop, Stage::Processing(_)) => {
+            // Clear any queued pending press so a stop request mid-
+            // transcription doesn't re-arm a new recording after
+            // ProcessingFinished lands.
+            state.pending_press = false;
             None
         }
         (CoordinatorEvent::Shutdown, _) => None,

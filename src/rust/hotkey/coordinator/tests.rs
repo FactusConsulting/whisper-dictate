@@ -682,3 +682,100 @@ fn external_toggle_in_toggle_mode_behaves_like_press() {
     );
     assert_eq!(stop, Some(CoordinatorAction::StopAndTranscribe(1)));
 }
+
+// --- ExternalStart / ExternalStop (Claude P1 #428 idempotent semantics) ----
+
+#[test]
+fn external_start_from_idle_starts_recording() {
+    // `--start-recording` when idle behaves like ExternalToggle-from-Idle.
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    let action = step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalStart);
+    assert_eq!(action, Some(CoordinatorAction::StartRecording(1)));
+    assert_eq!(s.stage, Stage::Recording(1));
+}
+
+#[test]
+fn external_start_when_already_recording_is_a_noop() {
+    // Claude P1 #428: --start-recording MUST NOT toggle off an in-flight
+    // recording. Prior to the fix, ExternalCommand::Start collapsed to
+    // ExternalToggle which STOPPED the recording.
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalToggle);
+    assert_eq!(s.stage, Stage::Recording(1));
+    let action = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(200),
+        CoordinatorEvent::ExternalStart,
+    );
+    assert_eq!(action, None, "duplicate start must be idempotent");
+    assert_eq!(
+        s.stage,
+        Stage::Recording(1),
+        "recording must survive a duplicate --start-recording",
+    );
+}
+
+#[test]
+fn external_stop_from_recording_stops_and_transcribes() {
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalToggle);
+    let action = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(200),
+        CoordinatorEvent::ExternalStop,
+    );
+    assert_eq!(action, Some(CoordinatorAction::StopAndTranscribe(1)));
+    assert_eq!(s.stage, Stage::Processing(1));
+}
+
+#[test]
+fn external_stop_when_idle_is_a_noop() {
+    // Claude P1 #428: --stop-recording MUST NOT start a recording. Prior
+    // to the fix, ExternalCommand::Stop collapsed to ExternalToggle which
+    // STARTED a recording when the coordinator was Idle.
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    let action = step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalStop);
+    assert_eq!(action, None, "stop-when-idle must be idempotent");
+    assert_eq!(
+        s.stage,
+        Stage::Idle,
+        "idle stage must survive a stop request"
+    );
+}
+
+#[test]
+fn external_stop_during_processing_clears_pending_press_latch() {
+    // ExternalStop mid-transcription must NOT re-arm a new recording via
+    // the pending_press latch (that's ExternalToggle's behaviour). Prior
+    // to the split, --stop-recording after transcription started would
+    // silently queue another recording.
+    let mut s = StepState::new();
+    let t0 = Instant::now();
+    step(&mut s, hold_options(), t0, CoordinatorEvent::ExternalToggle);
+    step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(100),
+        CoordinatorEvent::ExternalToggle,
+    );
+    assert_eq!(s.stage, Stage::Processing(1));
+    // Latch a pending press so we can assert ExternalStop clears it.
+    s.pending_press = true;
+    let action = step(
+        &mut s,
+        hold_options(),
+        t0 + Duration::from_millis(200),
+        CoordinatorEvent::ExternalStop,
+    );
+    assert_eq!(action, None);
+    assert!(
+        !s.pending_press,
+        "ExternalStop during Processing must clear pending_press",
+    );
+}
