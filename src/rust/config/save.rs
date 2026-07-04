@@ -82,6 +82,13 @@ impl AppSettings {
         set_string(object, "post_max_output_chars", &self.post_max_output_chars);
         set_bool(object, "post_redact", self.post_redact);
         set_string(object, "post_redact_terms", &self.post_redact_terms);
+        set_string(object, "postprocess_hotkey", &self.postprocess_hotkey);
+        set_string(object, "postprocess_profiles", &self.postprocess_profiles);
+        set_string(
+            object,
+            "postprocess_profile_index",
+            &self.postprocess_profile_index,
+        );
         set_bool(object, "feedback_sounds", self.feedback_sounds);
         set_bool(object, "feedback_notify", self.feedback_notify);
         set_bool(object, "debug", self.debug);

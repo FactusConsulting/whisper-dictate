@@ -68,6 +68,9 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "post_max_output_chars",
     "post_redact",
     "post_redact_terms",
+    "postprocess_hotkey",
+    "postprocess_profiles",
+    "postprocess_profile_index",
     "feedback_sounds",
     "feedback_notify",
     "debug",
@@ -108,6 +111,7 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "quit_key",
     "quit_count",
     "quit_window_ms",
+    "postprocess_hotkey",
 ];
 
 /// Legacy config.json keys we now strip on save so they fade out of users'

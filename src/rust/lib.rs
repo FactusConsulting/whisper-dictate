@@ -84,6 +84,14 @@ pub(crate) mod os_cache;
 // extract-final-text and the redaction restore. Python shells out via
 // the `postprocess` subcommand when VOICEPI_POSTPROCESS_BACKEND=rust.
 pub mod postprocess;
+// Second-hotkey LLM post-processing (issue #319). Layered on top of the
+// Wave 4-B `postprocess` module: adds a profile registry the user can
+// cycle through with a second hotkey and a dispatcher that runs the
+// active profile against the last dictated utterance (SQLite history or
+// caller-supplied clipboard fallback). Exposes a hidden
+// `postprocess-hotkey` subcommand mirroring the `postprocess` envelope
+// shape so the Python worker can shell out to the same pipeline.
+pub mod postprocess_hotkey;
 pub mod privacy;
 pub mod profiles;
 pub mod redaction;

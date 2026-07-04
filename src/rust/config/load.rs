@@ -149,6 +149,13 @@ impl AppSettings {
         );
         self.post_redact = bool_value(object, "post_redact", defaults.post_redact);
         self.post_redact_terms = string_value(object, "post_redact_terms", "");
+        self.postprocess_hotkey = string_value(object, "postprocess_hotkey", "");
+        self.postprocess_profiles = string_value(object, "postprocess_profiles", "");
+        self.postprocess_profile_index = string_value(
+            object,
+            "postprocess_profile_index",
+            &defaults.postprocess_profile_index,
+        );
     }
 
     /// Debug flags and quit-shortcut settings.
