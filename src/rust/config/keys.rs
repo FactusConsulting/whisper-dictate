@@ -90,6 +90,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     // Issue #328: onboarding wizard state.
     "onboarding_completed",
     "onboarding_seen_at",
+    "settings_mode",
 ];
 
 /// Keys whose change forces a worker restart (everything else is live-reloaded).

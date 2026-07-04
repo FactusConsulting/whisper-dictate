@@ -74,6 +74,7 @@ fn changed_settings() -> AppSettings {
         overlay_enabled: true,
         overlay_position: "top-left".to_owned(),
         overlay_show_on_idle: true,
+        settings_mode: "advanced".to_owned(),
         profiles_json: r#"[{"name":"code"}]"#.to_owned(),
         // Issue #328: onboarding-wizard gate. The reset flow is orthogonal to
         // the wizard so it can carry any value here; the changed_settings()
