@@ -182,8 +182,15 @@ fn format_iso_utc(unix_seconds: f64) -> String {
     // 17-digit floating noise. Negative timestamps fall through to a
     // best-effort "1970-01-01T00:00:00.000Z" since none of our worker
     // payloads can produce a pre-epoch ts in practice.
-    let secs = unix_seconds.max(0.0) as i64;
-    let millis = ((unix_seconds.max(0.0) - secs as f64) * 1000.0).round() as i64;
+    // Round-trip the entire value through total-milliseconds so a
+    // fractional part that rounds up to 1000 ms carries into the next
+    // second instead of producing an out-of-range ".1000Z" suffix.
+    // Without this, a payload like 1700000000.9999999 lands as
+    // 22:13:20.1000Z (RFC 3339 violation); after, it lands as
+    // 22:13:21.000Z. Claude P1 review on PR #427.
+    let total_ms = (unix_seconds.max(0.0) * 1000.0).round() as i64;
+    let secs = total_ms / 1000;
+    let millis = total_ms % 1000;
     let (year, month, day, hour, minute, second) = civil_from_unix(secs);
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
@@ -363,6 +370,25 @@ mod tests {
         assert_eq!(
             format_iso_utc(1_700_000_000.123),
             "2023-11-14T22:13:20.123Z"
+        );
+    }
+
+    #[test]
+    fn format_iso_utc_handles_near_whole_second_rounding() {
+        // Claude P1 review on PR #427: a fractional part that rounds
+        // to 1000 ms must carry into the next second instead of
+        // producing a 4-digit `.1000Z` field. Python's `time.time()`
+        // can emit sub-microsecond precision, so 1_700_000_000.9999999
+        // is a payload-reachable value.
+        assert_eq!(
+            format_iso_utc(1_700_000_000.9999999),
+            "2023-11-14T22:13:21.000Z",
+            "fractional rollover must roll the second forward, not emit .1000Z",
+        );
+        // Just below the rollover stays in the lower second.
+        assert_eq!(
+            format_iso_utc(1_700_000_000.999),
+            "2023-11-14T22:13:20.999Z",
         );
     }
 }
