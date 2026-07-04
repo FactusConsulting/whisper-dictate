@@ -451,6 +451,12 @@ impl RuntimeSupervisor {
         #[cfg(feature = "audio-in-rust")]
         self.bridge_cancel.store(false, Ordering::SeqCst);
 
+        // Issue #322: install / clear the auto-mute controller based on
+        // the current `mute_output_while_recording` setting. Re-evaluated
+        // on each start() so a settings edit picks up on the next
+        // worker restart without needing a full app relaunch.
+        install_output_mute_from_config();
+
         // Phase-1 rollout (PR #341 — wiring the Rust audio pipeline):
         // If the user opted in via VOICEPI_AUDIO_BACKEND=rust AND this
         // binary was built with the `audio-in-rust` cargo feature, we
@@ -2038,6 +2044,12 @@ fn stream_lines<R>(
                                 let _ = signal.send(());
                             }
                         }
+                        // Issue #322: fan every worker-state transition
+                        // into the auto-mute observer. Cheap no-op when
+                        // the `mute_output_while_recording` setting is
+                        // off (no controller installed), so leaving this
+                        // permanently in the hot path is safe.
+                        crate::output_mute::session::observe_worker_state(worker.state.as_deref());
                         // Issue #324: persist one row per accepted
                         // utterance into the per-user SQLite history
                         // store. Best-effort and feature-gated — the
@@ -2092,6 +2104,21 @@ fn parse_worker_event(line: &str) -> Option<WorkerEvent> {
         state,
         payload,
     })
+}
+
+/// Read the user's current `mute_output_while_recording` setting from
+/// config.json and install (or clear) the process-global auto-mute
+/// controller accordingly (issue #322). Called from `Runtime::start` so
+/// a settings edit is picked up on the next worker restart.
+///
+/// A missing / unreadable config file is treated as "toggle off" — we
+/// never want to silently start muting the user's audio because we
+/// could not load their preferences.
+fn install_output_mute_from_config() {
+    let enabled = config::load_settings()
+        .map(|settings| settings.mute_output_while_recording)
+        .unwrap_or(false);
+    crate::output_mute::session::install(enabled);
 }
 
 fn kill_child(child: &mut Child) -> Result<()> {

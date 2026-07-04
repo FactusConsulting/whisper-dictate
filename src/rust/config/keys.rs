@@ -48,6 +48,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "min_snr_db",
     "audio_ducking",
     "audio_ducking_level",
+    "mute_output_while_recording",
     "dictionary",
     "dictionary_enabled",
     "dictionary_max_terms",

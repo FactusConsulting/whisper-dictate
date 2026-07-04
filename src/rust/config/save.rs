@@ -54,6 +54,11 @@ impl AppSettings {
         set_string(object, "min_snr_db", &self.min_snr_db);
         set_bool(object, "audio_ducking", self.audio_ducking);
         set_string(object, "audio_ducking_level", &self.audio_ducking_level);
+        set_bool(
+            object,
+            "mute_output_while_recording",
+            self.mute_output_while_recording,
+        );
         set_string(object, "dictionary", &self.dictionary);
         set_bool(object, "dictionary_enabled", self.dictionary_enabled);
         set_string(object, "dictionary_max_terms", &self.dictionary_max_terms);

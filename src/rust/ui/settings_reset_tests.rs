@@ -35,6 +35,7 @@ fn changed_settings() -> AppSettings {
         min_snr_db: "10".to_owned(),
         audio_ducking: true,
         audio_ducking_level: "0.5".to_owned(),
+        mute_output_while_recording: true,
         initial_prompt: "Keep Factus terms.".to_owned(),
         dictionary: "custom-dictionary.json".to_owned(),
         dictionary_enabled: false,
