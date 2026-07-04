@@ -115,13 +115,72 @@ pub fn should_delegate_to_worker_rust() -> bool {
 ///
 /// Fails when `std::env::current_exe()` cannot be resolved (e.g. the
 /// binary was deleted out from under us mid-run). The supervisor
-/// surfaces the error and stays on Python in that case.
+/// surfaces the error and stays on Python in that case -- the caller
+/// MUST also clear its own `delegate_to_worker_rust` flag on Err
+/// (see [`plan_worker_rust_delegation`] for the composed helper that
+/// gets this right).
 pub fn swap_command_to_worker_rust(command: &mut WorkerCommand) -> Result<()> {
     let exe = std::env::current_exe()
         .map_err(|e| anyhow!("cannot resolve current executable for worker-rust: {e}"))?;
     command.program = exe;
     command.args = vec!["worker-rust".to_owned()];
     Ok(())
+}
+
+/// Outcome of the pre-spawn delegate decision. Consumed by
+/// [`crate::runtime::RuntimeSupervisor::start`]; extracted from
+/// there so the "on swap failure the delegate flag AND the audio
+/// bridge decision both fall back cleanly" branch is unit-testable
+/// without spawning a real supervisor.
+///
+/// Claude review comment #3523185636 on PR #434: an earlier
+/// iteration only reset `delegate_to_worker_rust = false` on failure
+/// but left `use_rust_audio` at whatever `should_use_rust_audio_backend`
+/// returned. If the user also opted into `VOICEPI_AUDIO_BACKEND=rust`
+/// the (still-Python) child would spawn without
+/// `--audio-source=rust-stdin` while the supervisor's audio bridge
+/// wrote JSON frames into an unread pipe. This helper folds both
+/// decisions together so the two flags cannot drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DelegatePlan {
+    /// True iff the supervisor should spawn the worker-rust
+    /// subprocess. False on the "stay on Python" path.
+    pub delegate: bool,
+    /// True iff the supervisor should push `--audio-source=rust-stdin`
+    /// onto the Python worker's argv AND start the audio bridge. Always
+    /// false on the delegate path (the subprocess owns cpal itself).
+    pub push_rust_stdin_arg: bool,
+}
+
+/// Pure-logic decision for the supervisor's pre-spawn delegate
+/// branch. Given the "user opted into delegation" flag, the "audio
+/// backend requested" flag, and a boolean indicating whether
+/// [`swap_command_to_worker_rust`] succeeded on the effective
+/// command, returns the composed [`DelegatePlan`].
+///
+/// The supervisor calls this AFTER attempting the swap so we get the
+/// success signal as a boolean rather than repeating the swap here
+/// (the swap mutates `command` in place -- we can't run it twice).
+pub fn plan_worker_rust_delegation(
+    delegate_requested: bool,
+    swap_succeeded: bool,
+    rust_audio_requested: bool,
+) -> DelegatePlan {
+    if delegate_requested && swap_succeeded {
+        // Delegating: subprocess owns audio.
+        DelegatePlan {
+            delegate: true,
+            push_rust_stdin_arg: false,
+        }
+    } else {
+        // Either the user did not opt in, or the swap failed and we
+        // are falling back to Python. Either way, honour the audio
+        // backend gate as if delegation had never been considered.
+        DelegatePlan {
+            delegate: false,
+            push_rust_stdin_arg: rust_audio_requested,
+        }
+    }
 }
 
 /// Public CLI entry point. Wired from `src/rust/main.rs`'s clap
@@ -277,26 +336,47 @@ impl WorkerRunner {
     }
 }
 
-/// Install the rdev OS hotkey listener via the existing
-/// `maybe_install_rust_hotkey` plumbing. The closure is an "ignore"
-/// callback because the coordinator is already wired by the session
-/// sink -- the rdev manager would normally drive coordinator events
-/// directly via its own bridge inside `install_hotkey`. We're using
-/// `install_hotkey` here to set up the OS listener, so we MUST give
-/// it a sink callback even though the coordinator is wired
-/// separately. The OS listener's TrackerOutput → CoordinatorEvent
-/// bridge is set up by `install_hotkey` (see `hotkey/mod.rs`); the
-/// `action_sink` parameter we pass here is for a SECOND coordinator
-/// that the install spawns internally.
+/// Install the rdev OS hotkey listener via
+/// [`crate::hotkey::install_hotkey`] directly, BYPASSING the
+/// [`crate::runtime::maybe_install_rust_hotkey`] env-var gate.
 ///
-/// **Architectural note**: today `install_hotkey` always spawns its
-/// own coordinator and bridges the OS listener into it. The session
-/// sink coordinator we spawn manually in `WorkerRunner::run` is
-/// driven by stdin commands only. A future cleanup will let
-/// `install_hotkey` accept an external coordinator handle so the
-/// OS listener feeds the same coordinator the session sink talks to.
-/// For PR 6 we accept the duplication so the rdev install path is
-/// exercised on real builds without restructuring the hotkey crate.
+/// # Why the env-var gate is skipped (Claude review comment #3523185556)
+///
+/// `maybe_install_rust_hotkey` first checks
+/// [`crate::hotkey::rust_hotkey_backend_requested`] (i.e.
+/// `VOICEPI_HOTKEY_BACKEND=rust`) and returns `None` when the env var
+/// isn't set -- that's the supervisor-side gate: the supervisor only
+/// installs the Rust listener when the user OPTED IN specifically for
+/// the hotkey backend.
+///
+/// But by the time `install_listener` runs we're already inside the
+/// worker-rust subprocess, which the supervisor only spawns when
+/// [`should_delegate_to_worker_rust`] is true -- i.e. the user
+/// already opted into the rust-session backend. Delegation itself
+/// implies "the subprocess owns the hotkey lifecycle", so gating on a
+/// second, separately-named env var here would silently break PTT for
+/// any user who set `VOICEPI_DICTATE_BACKEND=rust-session` without
+/// also setting `VOICEPI_HOTKEY_BACKEND=rust` -- the supervisor
+/// wouldn't spawn Python (it delegated), the subprocess wouldn't
+/// install rdev (env var missing), and PTT would be dead with no
+/// visible error.
+///
+/// Calling `install_hotkey` directly here treats "we're running as
+/// worker-rust" as the implicit opt-in, matching the semantics the
+/// supervisor's delegation already committed to.
+///
+/// # Bridge closure
+///
+/// `install_hotkey` requires an action-sink callback. The rdev
+/// manager thread emits `TrackerOutput`s (chord press / release /
+/// cancel) which `install_hotkey`'s internal coordinator translates
+/// into [`crate::hotkey::coordinator::CoordinatorAction`]s and hands
+/// to the sink. We translate those actions back into
+/// [`CoordinatorEvent`]s on the session-sink coordinator we spawned
+/// manually in [`WorkerRunner::run`], so the session sink reacts to
+/// them. A follow-up will let `install_hotkey` share the caller's
+/// coordinator handle so the second internal coordinator isn't
+/// needed.
 fn install_listener(
     key_names: Vec<String>,
     mode: Mode,
@@ -309,30 +389,48 @@ fn install_listener(
         );
         return None;
     }
-    // The bridge: forward every TrackerOutput-derived CoordinatorEvent
-    // that install_hotkey's internal coordinator emits as actions into
-    // OUR session-sink coordinator. install_hotkey requires an action
-    // sink (FnMut(CoordinatorAction)); we translate the actions back
-    // into CoordinatorEvents on the session coordinator so the session
-    // sink reacts to them. This is the price of not yet letting
-    // install_hotkey share a coordinator with the caller.
     use crate::hotkey::coordinator::CoordinatorAction;
+    use crate::hotkey::{install_hotkey, HotkeyConfig, InstallError};
     let bridge = session_coord;
-    let result = crate::runtime::maybe_install_rust_hotkey(key_names, mode, move |action| {
+    let cfg = HotkeyConfig { key_names, mode };
+    match install_hotkey(cfg, move |action| {
         let event = match action {
             CoordinatorAction::StartRecording(_) => CoordinatorEvent::Press,
             CoordinatorAction::StopAndTranscribe(_) => CoordinatorEvent::Release,
             CoordinatorAction::CancelRecording(_) => CoordinatorEvent::Cancel,
         };
         bridge.send(event);
-    });
-    if result.is_none() {
-        eprintln!(
-            "[worker-rust] rdev listener install returned None; falling back to \
-             stdin-only driving (rdev unavailable, feature disabled, or chord rejected)"
-        );
+    }) {
+        Ok(handle) => {
+            eprintln!(
+                "[worker-rust] rdev hotkey listener installed; PTT chord will drive the \
+                 in-process DictateSession"
+            );
+            Some(handle)
+        }
+        Err(InstallError::Unsupported) => {
+            // Only reachable on a build without the `rust-hotkeys`
+            // feature. `handle_worker_rust` refuses to run in that
+            // configuration unless `--stdin-only` is set, which
+            // itself bypasses `install_listener` (see
+            // `WorkerRunner::run`). Kept explicit so a future
+            // refactor that widens the entry-point contract still
+            // surfaces this branch cleanly instead of silently
+            // going PTT-dark.
+            eprintln!(
+                "[worker-rust] rdev listener unavailable: build was compiled without \
+                 --features rust-hotkeys; PTT chord will not work in this subprocess"
+            );
+            None
+        }
+        Err(err) => {
+            eprintln!(
+                "[worker-rust] rdev hotkey install failed: {err}; PTT chord will not \
+                 work in this subprocess (was a display / accessibility permission missing?)"
+            );
+            None
+        }
     }
-    result
 }
 
 /// Emit a one-shot `[worker-event] {"event":"status","state":"ready"}`

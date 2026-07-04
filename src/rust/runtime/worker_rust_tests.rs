@@ -45,10 +45,12 @@ fn all_required_features_enabled_reflects_cfg_set() {
 #[test]
 fn should_delegate_only_when_env_and_features_match() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var_os("VOICEPI_DICTATE_BACKEND");
+    let prev_dictate = std::env::var_os("VOICEPI_DICTATE_BACKEND");
+    let prev_hotkey = std::env::var_os("VOICEPI_HOTKEY_BACKEND");
 
     // env unset -> never delegate, regardless of features.
     std::env::remove_var("VOICEPI_DICTATE_BACKEND");
+    std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
     assert!(!should_delegate_to_worker_rust());
 
     // env set but not the magic value -> never delegate.
@@ -62,10 +64,31 @@ fn should_delegate_only_when_env_and_features_match() {
         all_required_features_enabled()
     );
 
+    // Claude review comment #3523185556 on PR #434: even with
+    // `VOICEPI_HOTKEY_BACKEND` unset the delegate gate MUST still
+    // fire so the supervisor spawns the worker-rust subprocess (which
+    // owns the hotkey install internally via `install_listener` --
+    // that helper bypasses the separate hotkey-backend env var
+    // because the subprocess IS the requested backend by
+    // construction). Otherwise a user who set only
+    // VOICEPI_DICTATE_BACKEND=rust-session would silently regress to
+    // Python.
+    std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
+    assert_eq!(
+        should_delegate_to_worker_rust(),
+        all_required_features_enabled(),
+        "delegate gate must not require VOICEPI_HOTKEY_BACKEND -- \
+         the subprocess installs rdev unconditionally on the delegate path"
+    );
+
     // restore the previous env state so we don't pollute siblings.
-    match prev {
+    match prev_dictate {
         Some(v) => std::env::set_var("VOICEPI_DICTATE_BACKEND", v),
         None => std::env::remove_var("VOICEPI_DICTATE_BACKEND"),
+    }
+    match prev_hotkey {
+        Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
     }
 }
 
@@ -101,6 +124,88 @@ fn swap_command_replaces_program_and_args_in_place() {
     );
     assert_eq!(cmd.args, vec!["worker-rust".to_owned()]);
     assert_eq!(cmd.env, original_env);
+}
+
+// ── plan_worker_rust_delegation ─────────────────────────────────────────────
+//
+// Claude review comment #3523185636 on PR #434: on `swap_command_to_worker_rust`
+// failure, the supervisor MUST reset delegate + honour the original
+// audio-backend gate together. These tests pin the composed decision
+// so a future refactor that splits them back cannot land silently.
+
+#[test]
+fn delegation_plan_delegates_when_requested_and_swap_ok() {
+    // Happy path: user opted in, swap succeeded. Subprocess owns
+    // audio -- no `--audio-source=rust-stdin` push on the (now
+    // worker-rust) command.
+    let plan = plan_worker_rust_delegation(true, true, true);
+    assert_eq!(
+        plan,
+        DelegatePlan {
+            delegate: true,
+            push_rust_stdin_arg: false,
+        }
+    );
+    // Same happy path with rust-audio NOT requested.
+    let plan = plan_worker_rust_delegation(true, true, false);
+    assert_eq!(
+        plan,
+        DelegatePlan {
+            delegate: true,
+            push_rust_stdin_arg: false,
+        }
+    );
+}
+
+#[test]
+fn delegation_plan_falls_back_to_python_when_swap_fails_preserving_audio_arg() {
+    // The load-bearing case for Claude review comment #3523185636:
+    // delegate requested but swap failed AND rust-audio requested.
+    // Falls back to Python AND pushes --audio-source=rust-stdin, so
+    // the child reads from the audio bridge instead of stalling on
+    // an unread pipe.
+    let plan = plan_worker_rust_delegation(true, false, true);
+    assert_eq!(
+        plan,
+        DelegatePlan {
+            delegate: false,
+            push_rust_stdin_arg: true,
+        }
+    );
+    // Same failure path with rust-audio NOT requested: fall back to
+    // Python without pushing the arg (Python does its own capture).
+    let plan = plan_worker_rust_delegation(true, false, false);
+    assert_eq!(
+        plan,
+        DelegatePlan {
+            delegate: false,
+            push_rust_stdin_arg: false,
+        }
+    );
+}
+
+#[test]
+fn delegation_plan_stays_on_python_when_not_requested() {
+    // User did not opt in. `swap_succeeded` is irrelevant on this
+    // branch (the supervisor never tried the swap). The plan should
+    // still honour the `rust_audio_requested` gate so
+    // VOICEPI_AUDIO_BACKEND=rust keeps working on the Python path.
+    let plan = plan_worker_rust_delegation(false, false, true);
+    assert_eq!(
+        plan,
+        DelegatePlan {
+            delegate: false,
+            push_rust_stdin_arg: true,
+        }
+    );
+    let plan = plan_worker_rust_delegation(false, true, false);
+    assert_eq!(
+        plan,
+        DelegatePlan {
+            delegate: false,
+            push_rust_stdin_arg: false,
+        }
+    );
 }
 
 // ── stdin command dispatcher ────────────────────────────────────────────────

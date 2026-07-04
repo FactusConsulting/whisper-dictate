@@ -493,21 +493,36 @@ impl RuntimeSupervisor {
         // Without the env var OR with any feature missing this path is
         // a no-op and the supervisor stays on Python -- the production
         // default until PR 7 ships.
-        let delegate_to_worker_rust = worker_rust::should_delegate_to_worker_rust();
-        let mut use_rust_audio = use_rust_audio;
-        if delegate_to_worker_rust {
+        let delegate_requested = worker_rust::should_delegate_to_worker_rust();
+        let mut swap_succeeded = true;
+        if delegate_requested {
             if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
                 let _ = self.tx.send(RuntimeEvent::Stderr(format!(
                     "[runtime] worker-rust delegation failed ({err}); \
                      falling back to the Python orchestrator"
                 )));
-            } else {
-                // The subprocess owns audio capture itself; clear the
-                // supervisor-side audio bridge so we don't open a
-                // second cpal stream against the same mic.
-                use_rust_audio = false;
+                swap_succeeded = false;
             }
-        } else if use_rust_audio {
+        }
+        // Claude review comment #3523185636 on PR #434: fold the
+        // delegate decision AND the audio-bridge decision through
+        // one pure helper so a swap failure resets BOTH flags
+        // together -- an earlier iteration only reset the delegate
+        // flag and left `use_rust_audio` stale, which meant the
+        // fallback Python child spawned without
+        // `--audio-source=rust-stdin` while the audio bridge still
+        // wrote JSON frames into its unread pipe.
+        let plan = worker_rust::plan_worker_rust_delegation(
+            delegate_requested,
+            swap_succeeded,
+            use_rust_audio,
+        );
+        let delegate_to_worker_rust = plan.delegate;
+        let mut use_rust_audio = use_rust_audio;
+        if plan.delegate {
+            use_rust_audio = false;
+        }
+        if plan.push_rust_stdin_arg {
             effective_command
                 .args
                 .push("--audio-source=rust-stdin".to_owned());
