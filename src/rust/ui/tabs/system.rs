@@ -102,6 +102,22 @@ impl WhisperDictateApp {
             {
                 self.open_config_folder();
             }
+            // Issue #328: re-open the onboarding wizard on demand. Enabled
+            // regardless of `idle` — the wizard just paints a modal, no
+            // background task is spawned.
+            if ui
+                .button(icon_text(
+                    icons::ICON_PLAY_ARROW.codepoint,
+                    "Run setup again",
+                ))
+                .on_hover_text(
+                    "Re-open the first-run onboarding wizard (microphone, hotkey, \
+                     backend, permissions, test recording).",
+                )
+                .clicked()
+            {
+                self.reopen_onboarding_wizard();
+            }
         });
         // Discoverable help for the maintenance cluster: a `?` badge toggles a
         // wrapped explanation of every action, mirroring the settings-grid rows.

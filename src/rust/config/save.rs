@@ -109,6 +109,11 @@ impl AppSettings {
         set_bool(object, "overlay_enabled", self.overlay_enabled);
         set_string(object, "overlay_position", &self.overlay_position);
         set_bool(object, "overlay_show_on_idle", self.overlay_show_on_idle);
+        // Issue #328: onboarding gate. `onboarding_seen_at` is an RFC 3339
+        // string (empty ⇒ never shown); `set_string` drops the key entirely
+        // when empty so a fresh config never carries a blank sentinel.
+        set_bool(object, "onboarding_completed", self.onboarding_completed);
+        set_string(object, "onboarding_seen_at", &self.onboarding_seen_at);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
                 object.insert("profiles".to_owned(), profiles);

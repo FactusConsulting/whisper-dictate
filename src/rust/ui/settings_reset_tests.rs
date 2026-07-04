@@ -75,6 +75,11 @@ fn changed_settings() -> AppSettings {
         overlay_position: "top-left".to_owned(),
         overlay_show_on_idle: true,
         profiles_json: r#"[{"name":"code"}]"#.to_owned(),
+        // Issue #328: onboarding-wizard gate. The reset flow is orthogonal to
+        // the wizard so it can carry any value here; the changed_settings()
+        // fixture just needs a non-default sentinel to keep this legal.
+        onboarding_completed: true,
+        onboarding_seen_at: "2026-07-04T12:34:56Z".to_owned(),
     }
 }
 

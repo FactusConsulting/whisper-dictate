@@ -87,6 +87,9 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "overlay_enabled",
     "overlay_position",
     "overlay_show_on_idle",
+    // Issue #328: onboarding wizard state.
+    "onboarding_completed",
+    "onboarding_seen_at",
 ];
 
 /// Keys whose change forces a worker restart (everything else is live-reloaded).

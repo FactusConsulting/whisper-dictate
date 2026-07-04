@@ -214,10 +214,58 @@ impl eframe::App for WhisperDictateApp {
                 Tab::Profiles => self.settings_panel(ui, Self::profiles_tab),
                 Tab::System => self.settings_panel(ui, Self::system_tab),
             });
+
+        // Issue #328: paint the onboarding wizard modal LAST so it floats
+        // over the main panel. `render_onboarding_wizard` is a no-op when
+        // `self.onboarding` is None.
+        self.render_onboarding_wizard(&ctx);
     }
 }
 
 impl WhisperDictateApp {
+    /// Issue #328: paint the onboarding wizard modal when active, and react
+    /// to its outcome — persist the completion flag + save settings, or drop
+    /// the session state on a transient dismiss. No-op when the wizard is
+    /// not active (the common case after the first successful launch).
+    pub(in crate::ui) fn render_onboarding_wizard(&mut self, ctx: &egui::Context) {
+        let Some(ui_state) = self.onboarding.as_mut() else {
+            return;
+        };
+        let outcome = super::onboarding::render_onboarding_modal(ctx, ui_state);
+        match outcome {
+            super::onboarding::OnboardingOutcome::Active => {}
+            super::onboarding::OnboardingOutcome::DismissedTransient => {
+                // Bare skip — record the "seen at" timestamp but leave the
+                // gate flag alone so first-run detection triggers again.
+                self.settings.onboarding_seen_at =
+                    super::onboarding::format_seen_at(std::time::SystemTime::now());
+                let _ = crate::config::save_settings(&self.settings);
+                self.onboarding = None;
+            }
+            super::onboarding::OnboardingOutcome::PersistCompletion => {
+                // Finish (or skip + "don't show again"): flip the gate,
+                // stamp the timestamp, save, and drop the session state.
+                self.settings.onboarding_completed = true;
+                self.settings.onboarding_seen_at =
+                    super::onboarding::format_seen_at(std::time::SystemTime::now());
+                self.saved_settings.onboarding_completed = true;
+                self.saved_settings.onboarding_seen_at = self.settings.onboarding_seen_at.clone();
+                let _ = crate::config::save_settings(&self.settings);
+                self.onboarding = None;
+                self.append_runtime_log(
+                    "[ui] onboarding wizard complete (onboarding_completed=true)",
+                );
+            }
+        }
+    }
+
+    /// Issue #328: re-open the wizard on demand (from the System tab's "Run
+    /// setup again" button). Always resets to the welcome step.
+    pub(in crate::ui) fn reopen_onboarding_wizard(&mut self) {
+        self.onboarding = Some(super::onboarding::OnboardingUi::reopen());
+        self.append_runtime_log("[ui] onboarding wizard re-opened from Settings");
+    }
+
     /// Recolour the system-tray icon to mirror the current dictation state and
     /// react to a tray left-click by focusing the main window. Purely additive:
     /// on non-Windows it is a no-op stub, and even on Windows a failed tray init

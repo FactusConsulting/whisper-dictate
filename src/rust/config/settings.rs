@@ -93,6 +93,17 @@ pub struct AppSettings {
     /// so the overlay only appears around live dictation.
     pub overlay_show_on_idle: bool,
     pub profiles_json: String,
+    /// Issue #328: first-run onboarding gate. Defaults to `false` so a fresh
+    /// install triggers the wizard on the first launch, then flips to `true`
+    /// on either "Finish" or "Skip + don't show again". Users can re-open the
+    /// wizard from the System tab, which does NOT flip this back to `false`
+    /// (re-runs are always explicit user actions, not first-run detection).
+    pub onboarding_completed: bool,
+    /// Issue #328: RFC 3339 timestamp of the last time the user actually saw
+    /// (opened) the onboarding wizard. Empty when the wizard has never been
+    /// shown. Stored as a plain string to match the rest of the settings
+    /// serialization contract; parsed on demand where needed.
+    pub onboarding_seen_at: String,
 }
 
 impl Default for AppSettings {
@@ -174,6 +185,10 @@ impl Default for AppSettings {
             overlay_position: "bottom-right".to_owned(),
             overlay_show_on_idle: false,
             profiles_json: default_profiles_json(),
+            // Issue #328: false on a fresh install triggers the first-run
+            // wizard; users flip it to `true` by finishing / skipping it.
+            onboarding_completed: false,
+            onboarding_seen_at: String::new(),
         }
     }
 }

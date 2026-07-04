@@ -43,6 +43,7 @@ mod diagnostics_level;
 mod hotkey;
 mod icon;
 mod log_render;
+mod onboarding;
 mod overlay;
 mod platform;
 mod previews;
@@ -459,6 +460,11 @@ struct WhisperDictateApp {
     /// settings struct (`overlay_enabled` / `overlay_position` /
     /// `overlay_show_on_idle`).
     pub(in crate::ui) overlay_state: OverlayState,
+    /// Issue #328: first-run onboarding wizard state. `Some` when the wizard
+    /// is on screen (fresh install or "Run setup again" from the System
+    /// tab); `None` otherwise. Session-only — the persisted gate lives on
+    /// `AppSettings.onboarding_completed`.
+    pub(in crate::ui) onboarding: Option<onboarding::OnboardingUi>,
 }
 
 impl Default for WhisperDictateApp {
@@ -527,6 +533,14 @@ impl Default for WhisperDictateApp {
             benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
+            // Trigger the wizard on first launch (settings default is
+            // `onboarding_completed = false`); users flip that on skip/finish.
+            // On a bare skip (no "don't show again") the gate stays false and
+            // the wizard re-triggers on next launch. See
+            // `onboarding::should_trigger_first_run`. Computed BEFORE `settings`
+            // is moved into the struct.
+            onboarding: onboarding::should_trigger_first_run(&settings)
+                .then(onboarding::OnboardingUi::new),
             settings,
             settings_status,
             saved_stt_api_key_input,

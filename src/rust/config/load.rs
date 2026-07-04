@@ -190,6 +190,13 @@ impl AppSettings {
             "overlay_show_on_idle",
             defaults.overlay_show_on_idle,
         );
+        // Issue #328: first-run onboarding gate + last-seen timestamp.
+        self.onboarding_completed = bool_value(
+            object,
+            "onboarding_completed",
+            defaults.onboarding_completed,
+        );
+        self.onboarding_seen_at = string_value(object, "onboarding_seen_at", "");
     }
 }
 
