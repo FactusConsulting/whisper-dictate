@@ -32,6 +32,7 @@
 
 pub mod gpu;
 pub mod idle;
+pub mod local_discovery;
 pub mod model_manager;
 pub mod models_cli;
 pub mod protocol;

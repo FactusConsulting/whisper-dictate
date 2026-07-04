@@ -39,12 +39,49 @@ impl WhisperDictateApp {
             ui.add_space(2.0);
         }
         if let Ok(dir) = model_manager::models_cache_dir() {
+            self.render_discovered_custom_models(ui, &dir);
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(format!("Cache: {}", dir.display()))
                     .small()
                     .weak(),
             );
+        }
+    }
+
+    /// Render one row per auto-discovered custom GGML file the user
+    /// dropped into the models cache directory (#332). The scan is
+    /// cheap — `read_dir` + one `metadata()` per entry, no hashing —
+    /// so running it every frame is fine.
+    ///
+    /// Nothing is rendered when the directory has no custom files, so
+    /// the vanilla "download tiny.en" experience stays uncluttered.
+    fn render_discovered_custom_models(&mut self, ui: &mut egui::Ui, cache_dir: &std::path::Path) {
+        let discovered = crate::whisper::local_discovery::discover_models(cache_dir);
+        if discovered.is_empty() {
+            return;
+        }
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Custom user models").strong());
+        ui.label(
+            egui::RichText::new(
+                "GGML files you dropped into the cache directory. \
+                 Selected automatically when no curated model is downloaded \
+                 and VOICEPI_WHISPER_MODEL_PATH is unset.",
+            )
+            .small()
+            .weak(),
+        );
+        ui.add_space(2.0);
+        for model in &discovered {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&model.filename).strong().monospace());
+                ui.label(format!(
+                    "  {}  ({})  [user]",
+                    human_bytes(model.size_bytes),
+                    model.variant.label(),
+                ));
+            });
         }
     }
 
