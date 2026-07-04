@@ -535,7 +535,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("combo_help_labeled_short(", speech)
         self.assertIn('"Device"', speech)
         # WIDE combos with long option labels stay wide (no _short suffix).
-        self.assertIn('combo_enabled_labeled(\n                    ui,\n                    backend != SttBackendMode::Cloud,\n                    "Compute type"', speech)
+        self.assertIn('combo_enabled_labeled(\n                        ui,\n                        backend != SttBackendMode::Cloud,\n                        "Compute type"', speech)
         self.assertIn("combo_model_vram(", speech)
 
         # Post mode is short; Post model stays wide.
