@@ -471,7 +471,58 @@ impl RuntimeSupervisor {
 
         self.state = RuntimeState::Starting;
         let mut effective_command = command;
-        if use_rust_audio {
+
+        // Wave 5 PR 6 of #348: delegate the dictation lifecycle to the
+        // `whisper-dictate worker-rust` subprocess when the user opted
+        // in via `VOICEPI_DICTATE_BACKEND=rust-session` AND the binary
+        // was built with the full feature set
+        // (`whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`).
+        // The subprocess owns the entire lifecycle in-process: it
+        // installs its own rdev OS listener, runs the
+        // `DictateSession` with the real backends, and emits worker
+        // events back to us through stderr (already wired by
+        // `stream_lines` below).
+        //
+        // When delegating we MUST also skip the supervisor's own
+        // in-process Rust hotkey install -- otherwise the parent and
+        // the child would both register the same OS chord and race for
+        // every press / release. The audio bridge is N/A too (the
+        // subprocess opens its own cpal stream via the audio pump in
+        // `rust_session_audio.rs`).
+        //
+        // Without the env var OR with any feature missing this path is
+        // a no-op and the supervisor stays on Python -- the production
+        // default until PR 7 ships.
+        let delegate_requested = worker_rust::should_delegate_to_worker_rust();
+        let mut swap_succeeded = true;
+        if delegate_requested {
+            if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
+                let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                    "[runtime] worker-rust delegation failed ({err}); \
+                     falling back to the Python orchestrator"
+                )));
+                swap_succeeded = false;
+            }
+        }
+        // Claude review comment #3523185636 on PR #434: fold the
+        // delegate decision AND the audio-bridge decision through
+        // one pure helper so a swap failure resets BOTH flags
+        // together -- an earlier iteration only reset the delegate
+        // flag and left `use_rust_audio` stale, which meant the
+        // fallback Python child spawned without
+        // `--audio-source=rust-stdin` while the audio bridge still
+        // wrote JSON frames into its unread pipe.
+        let plan = worker_rust::plan_worker_rust_delegation(
+            delegate_requested,
+            swap_succeeded,
+            use_rust_audio,
+        );
+        let delegate_to_worker_rust = plan.delegate;
+        let mut use_rust_audio = use_rust_audio;
+        if plan.delegate {
+            use_rust_audio = false;
+        }
+        if plan.push_rust_stdin_arg {
             effective_command
                 .args
                 .push("--audio-source=rust-stdin".to_owned());
@@ -492,7 +543,16 @@ impl RuntimeSupervisor {
         // loop in-process so we MUST park the Python listener -- otherwise
         // both backends react to the same chord and produce duplicate /
         // conflicting state transitions. Codex P2 #416 runtime.rs:1427.
-        if self.hotkey_handle.is_none() {
+        if delegate_to_worker_rust {
+            // The worker-rust subprocess owns its own hotkey install +
+            // session sink in-process; the supervisor MUST NOT install
+            // a second listener (it would race the subprocess for the
+            // same OS chord) and MUST NOT register a session sink (the
+            // subprocess holds the only `DictateSession` instance).
+            // Codex P2 #416 runtime.rs:1427 still applies for the
+            // non-delegated rust-session path; this branch short-
+            // circuits it because Python is not being spawned at all.
+        } else if self.hotkey_handle.is_none() {
             if let Some(handle) = install_rust_hotkey_from_command(
                 &effective_command,
                 self.tx.clone(),
@@ -2157,6 +2217,13 @@ pub mod audio_spawn;
 // The module ships the machinery; opt-in wire-up lives in
 // `main.rs::run()` behind `VOICEPI_SINGLE_INSTANCE`.
 pub mod single_instance;
+// Wave 5 PR 6 of #348: the `whisper-dictate worker-rust` CLI entry
+// point + supervisor-side "delegate to worker-rust subprocess" gate.
+// Production code path (without VOICEPI_DICTATE_BACKEND=rust-session +
+// all four features) is byte-for-byte unchanged: when the env var is
+// unset OR the feature set is incomplete, the supervisor stays on
+// Python. PR 7 will flip the default and delete the Python orchestrator.
+pub mod worker_rust;
 // Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
 // wiring that drives a `DictateSession` from the hotkey coordinator's
 // action sink. Stays out of the production path until PR 6 flips the
