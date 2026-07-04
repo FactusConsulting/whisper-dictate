@@ -239,6 +239,34 @@ pub enum Command {
     /// error and exit non-zero so the Python caller can fall back to its own
     /// path. Used by `vp_devices.py` when `VOICEPI_DEVICES_BACKEND=rust`.
     Devices,
+    /// Internal helper used by the single-instance gate integration
+    /// tests (issue #327). NOT a supported user-facing entry point:
+    /// the flags and output format may change without notice.
+    ///
+    /// Two modes:
+    ///
+    /// * `--serve-ms N`: act as the running instance. Acquire the
+    ///   single-instance lock, listen for up to `N` milliseconds,
+    ///   print any forwarded argv as `[forwarded] <json>` lines to
+    ///   stdout, then release the lock and exit 0.
+    /// * default: act as the client. Attempt to forward `forward_args`
+    ///   to a running instance. Prints `[forwarded]` on success or
+    ///   `[acquired]` if there was no running instance (in which case
+    ///   the lock is released immediately and the process exits).
+    ///
+    /// Combined with `VOICEPI_SINGLE_INSTANCE_DIR=<tempdir>` this lets
+    /// the integration test drive two real processes without stomping
+    /// on a live user daemon.
+    #[command(hide = true)]
+    SingleInstanceProbe {
+        /// Serve mode: hold the lock for this many milliseconds while
+        /// printing forwarded argv to stdout.
+        #[arg(long)]
+        serve_ms: Option<u64>,
+        /// argv the client mode forwards to the running instance.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        forward_args: Vec<String>,
+    },
     /// Manage local Whisper model files (catalog, download, verify).
     ///
     /// Backwards compatibility: `VOICEPI_WHISPER_MODEL_PATH` still wins for the

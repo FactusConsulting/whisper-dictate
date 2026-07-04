@@ -2151,6 +2151,12 @@ fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
 }
 
 pub mod audio_spawn;
+// Issue #327: cross-platform single-instance gate with CLI-arg
+// forwarding. Split into `single_instance/{mod,socket,lockfile}.rs`
+// so each file stays under the project's 500-LOC modularity ceiling.
+// The module ships the machinery; opt-in wire-up lives in
+// `main.rs::run()` behind `VOICEPI_SINGLE_INSTANCE`.
+pub mod single_instance;
 // Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
 // wiring that drives a `DictateSession` from the hotkey coordinator's
 // action sink. Stays out of the production path until PR 6 flips the
