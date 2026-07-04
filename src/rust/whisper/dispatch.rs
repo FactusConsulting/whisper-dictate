@@ -123,6 +123,11 @@ pub fn handle_transcribe_server() -> Result<()> {
 ///    or the Settings download UI) — tiny.en → base.en → small.en preference.
 ///    This means a user who downloaded a model via the UI can start with
 ///    `VOICEPI_TRANSCRIBE_BACKEND=rust` without a separate env-var step.
+/// 3. Auto-discovered custom GGML files the user dropped into the models
+///    cache directory (#332). Sorted by filename; the first is returned.
+///    We can't verify these against a known SHA-256 (they aren't in the
+///    catalog), so the loader is the last line of defence against a
+///    corrupt file — but a wonky filename shouldn't hide the model.
 ///
 /// `pub(crate)` so the Wave 5 PR 5 in-process session sink can reuse the
 /// same resolution rules when wiring [`WhisperLocalTranscribeBackend`]
@@ -143,7 +148,7 @@ pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
              whisper.cpp model file"
         ));
     }
-    // Fallback: first catalog model that exists in the cache directory AND
+    // Fallback A: first catalog model that exists in the cache directory AND
     // whose SHA-256 matches the catalog.  Verifying before selecting means a
     // truncated or corrupt file is skipped (the next catalog entry is tried)
     // rather than being passed to whisper-rs where it produces a confusing
@@ -156,11 +161,22 @@ pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
             }
         }
     }
+    // Fallback B: a user-supplied custom GGML file the auto-discovery pass
+    // found under the models cache directory (#332). This is what lets a
+    // power user drop in a fine-tuned or quantised model without editing
+    // the catalog or exporting `VOICEPI_WHISPER_MODEL_PATH`.
+    if let Ok(dir) = crate::whisper::model_manager::models_cache_dir() {
+        let discovered = crate::whisper::local_discovery::discover_models(&dir);
+        if let Some(first) = discovered.into_iter().next() {
+            return Ok(first.path);
+        }
+    }
     Err(anyhow!(
         "{MODEL_PATH_ENV} is not set and no model was found in the \
          whisper-models cache directory; download a model via \
-         `whisper-dictate models download tiny.en` or set \
-         {MODEL_PATH_ENV} to point at a GGML whisper.cpp model file"
+         `whisper-dictate models download tiny.en`, drop a custom \
+         ggml-*.bin / *.gguf file into the models cache directory, or \
+         set {MODEL_PATH_ENV} to point at a GGML whisper.cpp model file"
     ))
 }
 
@@ -283,6 +299,46 @@ mod tests {
         assert!(
             err.to_string().contains(MODEL_PATH_ENV),
             "error must name the missing-model env var: {err}"
+        );
+
+        match saved_cache {
+            Some(v) => env::set_var(CACHE_ENV_VAR, v),
+            None => env::remove_var(CACHE_ENV_VAR),
+        }
+        if let Some(v) = saved {
+            env::set_var(MODEL_PATH_ENV, v);
+        }
+    }
+
+    #[test]
+    fn resolve_model_path_returns_discovered_custom_model() {
+        // #332: when neither the env var nor a catalog model is present,
+        // the resolver must fall back to any user-supplied GGML file the
+        // discovery pass finds under the models cache directory.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = env::var(MODEL_PATH_ENV).ok();
+        env::remove_var(MODEL_PATH_ENV);
+        let tmp = tempfile::tempdir().unwrap();
+        let saved_cache = env::var_os(CACHE_ENV_VAR);
+        env::set_var(CACHE_ENV_VAR, tmp.path());
+
+        let cache_subdir = if cfg!(target_os = "macos") {
+            tmp.path()
+                .join("Library/Caches/whisper-dictate/whisper-models")
+        } else {
+            tmp.path().join("whisper-dictate/whisper-models")
+        };
+        std::fs::create_dir_all(&cache_subdir).unwrap();
+        let custom = cache_subdir.join("my-custom-large.bin");
+        // Needs to clear the 1 MiB MIN_MODEL_BYTES threshold in discovery.
+        let f = std::fs::File::create(&custom).unwrap();
+        f.set_len(2 * 1024 * 1024).unwrap();
+        drop(f);
+
+        let resolved = resolve_model_path_from_env().expect("must fall back to discovered file");
+        assert_eq!(
+            resolved, custom,
+            "resolver must return the auto-discovered custom model"
         );
 
         match saved_cache {
