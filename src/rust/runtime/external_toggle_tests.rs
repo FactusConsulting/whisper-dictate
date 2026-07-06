@@ -167,6 +167,37 @@ fn push_and_take_round_trip_through_channel() {
     assert!(take_pending_commands().is_empty());
 }
 
+#[test]
+fn recv_command_blocking_returns_pushed_command() {
+    // Cross-platform coverage of `recv_command_blocking`: a pushed
+    // command surfaces via the block-wait path (used by the Linux
+    // e2e test to avoid poll+sleep starvation on CI). Runs on every
+    // target so the helper stays live under `clippy -D warnings`.
+    reset_channel_for_tests();
+    push_command(ExternalCommand::Cancel);
+    let recv = recv_command_blocking(std::time::Duration::from_secs(1));
+    assert_eq!(recv, Some(ExternalCommand::Cancel));
+    // A follow-up block-wait on the drained channel times out
+    // rather than blocking forever, and returns None.
+    let empty = recv_command_blocking(std::time::Duration::from_millis(20));
+    assert_eq!(empty, None);
+}
+
+#[test]
+fn recv_command_blocking_times_out_when_channel_empty() {
+    // Second cross-platform pin: with nothing pushed the helper must
+    // honour the timeout and yield None, not block indefinitely.
+    reset_channel_for_tests();
+    let started = std::time::Instant::now();
+    let result = recv_command_blocking(std::time::Duration::from_millis(30));
+    assert_eq!(result, None);
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(25),
+        "recv_timeout should have honoured the 30ms budget, elapsed = {:?}",
+        started.elapsed()
+    );
+}
+
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn forward_command_returns_clear_not_implemented_on_non_linux() {

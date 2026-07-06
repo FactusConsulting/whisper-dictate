@@ -268,11 +268,7 @@ pub(super) fn reset_channel_for_tests() {
 /// instead of poll+sleeping. Under CPU throttling on CI the poll+sleep
 /// form starved the signal-handler thread of scheduling and timed out
 /// even at 5s; block-waiting yields the CPU to the handler immediately.
-///
-/// Linux-only: the sole caller (`linux_signal_handler_end_to_end`) is
-/// gated on the same cfg; without this guard the function is unused
-/// on Windows and clippy `-D warnings` on rust (windows-2025) trips.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(super) fn recv_command_blocking(timeout: std::time::Duration) -> Option<ExternalCommand> {
     let slot = ensure_channel();
     let rx = slot.rx.lock().ok()?;
