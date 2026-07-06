@@ -62,6 +62,7 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Result};
 
+use crate::config::AppSettings;
 use crate::dictate::events as dictate_events;
 use crate::hotkey::coordinator::{
     spawn as spawn_coordinator, CoordinatorEvent, CoordinatorHandle, Mode, Options,
@@ -159,6 +160,100 @@ pub fn unsupported_worker_rust_settings_reason() -> Option<String> {
              knows whisper / openai / groq -- staying on Python"
         )),
     }
+}
+
+/// PR #441 review round 2 (Codex P1 + P1 postprocess): the delegate
+/// gate must also consult the user's saved [`AppSettings`] because the
+/// Rust worker only implements a subset of the STT / post-processing
+/// features the Python orchestrator supports today. Returning
+/// `Some(reason)` here tells the supervisor to stay on Python for THIS
+/// user's config; `None` means the Rust worker can handle it.
+///
+/// What we currently guard on:
+///
+/// * `stt_backend` != `"whisper"` -- the real-backend constructor
+///   (`super::rust_session_real_backends::make_real_session`) only
+///   builds a [`crate::dictate::backends::WhisperLocalTranscribeBackend`];
+///   cloud STT providers (`"openai"`, `"groq"`, ...) go through the
+///   Python `vp_transcribe.py` cloud client that hasn't been ported
+///   yet. Delegating a cloud-STT user would either silently switch
+///   them to local Whisper or produce empty dictations.
+/// * `post_processor` != `"none"` -- the Rust `postprocess::run::run`
+///   pipeline exists (Wave 4-B) but the in-process
+///   [`crate::dictate::DictateSession`] does NOT invoke it (see
+///   `src/rust/dictate/session/mod.rs:357-361`: "PR 5 will run
+///   post-processing + format commands here"). A user with an Ollama
+///   / OpenAI / Groq post-processor configured would silently lose
+///   their cleanup on the delegate path.
+/// * `format_commands` != `"off"` -- same story: the Rust
+///   `formatting::apply_format_commands` helper exists but the
+///   session does not invoke it. A user relying on "period" ->
+///   "." transformations would see the raw literal words.
+/// * `dictionary_enabled` is a KNOWN Wave-5.5 gap but is NOT gated
+///   here: `AppSettings::default()` ships with the field true, so
+///   gating on it would neutralise PR 7's default flip for every
+///   fresh install. Missing the dictionary prompt is a soft
+///   degradation (transcription still works, custom vocab may just
+///   not be boosted). Users who rely on term-boosting can set
+///   `VOICEPI_DICTATE_BACKEND=python-legacy` explicitly during the
+///   burn-in.
+///
+/// Pure helper: takes `&AppSettings` and returns a static-str reason.
+/// Kept close to [`should_delegate_to_worker_rust`] so the two gates
+/// are read together. The supervisor combines them in
+/// [`crate::runtime::RuntimeSupervisor::start`]: if either says "stay
+/// on Python", the delegate is off.
+///
+/// Wave-5.5 will port each of these paths into the Rust session; when
+/// a path lands, drop its arm here so the gate opens up progressively
+/// (see the tracking comment in each `Some(...)` arm).
+pub fn unsupported_worker_rust_settings_reason(
+    settings: &AppSettings,
+) -> Option<&'static str> {
+    // stt_backend: only `"whisper"` (default) is wired to the Rust
+    // session. Cloud STT providers land here as `"openai"` etc. Case-
+    // insensitive match to mirror the config loader's own contract.
+    if !settings.stt_backend.eq_ignore_ascii_case("whisper") {
+        // TODO Wave-5.5: wire the cloud STT client behind the Rust
+        // TranscribeBackend trait, then drop this arm.
+        return Some(
+            "stt_backend != whisper (Rust worker only wires local Whisper today;              set VOICEPI_DICTATE_BACKEND=python-legacy to force Python + your              configured cloud STT backend during the Wave-5 -> Wave-8 burn-in)",
+        );
+    }
+    // post_processor: `"none"` (default) is safe; any other value
+    // means the user configured cleanup that the Rust session does
+    // not run today.
+    if !settings.post_processor.eq_ignore_ascii_case("none") {
+        // TODO Wave-5.5: invoke crate::postprocess::run::postprocess_text
+        // from DictateSession's utterance branch, then drop this arm.
+        return Some(
+            "post_processor is configured (Rust session does not invoke the              postprocess pipeline yet; set VOICEPI_DICTATE_BACKEND=python-legacy              to keep post-processing during the Wave-5 -> Wave-8 burn-in)",
+        );
+    }
+    // format_commands: `"off"` (default) is safe; any other value
+    // (`"en"`, `"da"`, `"both"`) means the user configured spoken-
+    // command formatting that the Rust session does not apply today.
+    if !settings.format_commands.eq_ignore_ascii_case("off") {
+        // TODO Wave-5.5: invoke crate::formatting::apply_format_commands
+        // from DictateSession's utterance branch, then drop this arm.
+        return Some(
+            "format_commands is enabled (Rust session does not apply spoken-command              formatting yet; set VOICEPI_DICTATE_BACKEND=python-legacy to keep              format commands during the Wave-5 -> Wave-8 burn-in)",
+        );
+    }
+    // NOTE: `dictionary_enabled` is deliberately NOT gated here, even
+    // though the Rust `WhisperLocalTranscribeBackend` does not build a
+    // dictionary prompt from `dictionary.json` yet. `AppSettings::default()`
+    // ships with `dictionary_enabled = true`, so gating on the field would
+    // neutralise PR 7's default flip for every fresh install (they would
+    // all fall back to Python). Missing the dictionary prompt is a soft
+    // degradation -- transcription still works, custom vocab may just not
+    // be boosted -- so we accept it during the Wave-5 -> Wave-8 burn-in
+    // and let users who rely on dictionary term-boosting reach for the
+    // `python-legacy` escape hatch explicitly. Wave-5.5 threads the
+    // dictionary prompt through `WhisperBackendConfig` and this comment
+    // can be replaced with an active gate (or deleted, if the gate
+    // becomes moot).
+    None
 }
 
 /// Swap an existing Python-orchestrator [`WorkerCommand`] in place so
@@ -479,6 +574,13 @@ fn install_listener(
                 "[worker-rust] rdev listener unavailable: build was compiled without \
                  --features rust-hotkeys; PTT chord will not work in this subprocess"
             );
+            // PR #441 review round 2 (Codex P1 finding 4): also emit a
+            // machine-parseable worker-event so the supervisor can log
+            // a prominent diagnostic pointing users to the
+            // `python-legacy` escape hatch. Actual auto-fallback (kill
+            // the child + respawn Python) is a Wave-5.5 gap tracked
+            // separately -- this signal is the first step.
+            emit_hotkey_install_failed("rust-hotkeys feature not compiled in");
             None
         }
         Err(err) => {
@@ -486,6 +588,11 @@ fn install_listener(
                 "[worker-rust] rdev hotkey install failed: {err}; PTT chord will not \
                  work in this subprocess (was a display / accessibility permission missing?)"
             );
+            // PR #441 review round 2 (Codex P1 finding 4): signal
+            // failure to the supervisor via a worker-event so it can
+            // surface the escape-hatch hint even if the user missed
+            // the plain-stderr warning above.
+            emit_hotkey_install_failed(&format!("{err}"));
             None
         }
     }
@@ -499,6 +606,35 @@ fn emit_worker_ready<W: Write>(writer: &mut W) -> Result<()> {
     let event = dictate_events::StatusEvent::new(dictate_events::WorkerStatus::Ready);
     dictate_events::emit_status(writer, &event)?;
     Ok(())
+}
+
+/// Machine-parseable wire signal for "the worker's rdev hotkey install
+/// just failed". Emits a `[worker-event]` line on stderr with
+/// `state=error` and `reason=hotkey_install_failed` so the parent
+/// supervisor's `parse_worker_event` consumer can detect the failure
+/// and log a prominent hint about
+/// `VOICEPI_DICTATE_BACKEND=python-legacy`. PR #441 review round 2
+/// (Codex P1 finding 4) added this alongside the pre-existing plain
+/// `eprintln!` so a supervisor that missed the raw stderr line still
+/// gets a structured signal it can react to.
+///
+/// Wave-5.5 will turn this into an actual auto-fallback (kill child +
+/// respawn Python); for PR #441 the supervisor only needs to log the
+/// signal so users see the escape hatch.
+fn emit_hotkey_install_failed(detail: &str) {
+    let mut event =
+        dictate_events::StatusEvent::new(dictate_events::WorkerStatus::Error);
+    event.extras.insert(
+        "reason".to_owned(),
+        serde_json::Value::from("hotkey_install_failed"),
+    );
+    event
+        .extras
+        .insert("detail".to_owned(), serde_json::Value::from(detail));
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    // Best-effort: if stderr is dead we cannot signal anyway.
+    let _ = dictate_events::emit_status(&mut lock, &event);
 }
 
 /// Spawn the event-pump thread that forwards [`RuntimeEvent`]s off

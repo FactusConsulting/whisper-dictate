@@ -506,7 +506,48 @@ impl RuntimeSupervisor {
         // missing (typical on stock CI builds), this path is a no-op
         // and the supervisor stays on Python. `worker-rust` refuses
         // to run on incomplete-feature builds anyway.
-        let delegate_requested = worker_rust::should_delegate_to_worker_rust();
+        // PR #441 review round 2 (Codex P1 findings 1 + 5): before
+        // committing to the delegate path we also consult the user's
+        // saved config. `worker_rust::unsupported_worker_rust_settings_reason`
+        // returns Some(reason) when the Rust worker cannot honour the
+        // config today (cloud STT, post-processor, format commands,
+        // dictionary prompt). On that branch we stay on Python and log
+        // a stderr diagnostic pointing at the specific missing feature
+        // so users understand why the escape hatch is being used
+        // implicitly.
+        let env_gate_ok = worker_rust::should_delegate_to_worker_rust();
+        let delegate_requested = if env_gate_ok {
+            match config::load_settings() {
+                Ok(settings) => {
+                    match worker_rust::unsupported_worker_rust_settings_reason(&settings) {
+                        Some(reason) => {
+                            let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                                "[runtime] not delegating to worker-rust: {reason}. \
+                                 The Python orchestrator handles this configuration; \
+                                 clear the flagged setting to opt back in."
+                            )));
+                            false
+                        }
+                        None => true,
+                    }
+                }
+                Err(err) => {
+                    // Config load failure is treated as "stay safe on
+                    // Python" so a corrupt config.json cannot silently
+                    // strand a user on a partially-configured Rust
+                    // worker. Same fallback the swap-failure branch below
+                    // uses.
+                    let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                        "[runtime] not delegating to worker-rust: config load failed \
+                         ({err}); staying on Python for safety. Fix config.json to \
+                         re-enable the delegate path."
+                    )));
+                    false
+                }
+            }
+        } else {
+            false
+        };
         let mut swap_succeeded = true;
         if delegate_requested {
             if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
@@ -643,11 +684,27 @@ impl RuntimeSupervisor {
             )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if use_rust_audio {
-            // Only the Rust path needs to write to the worker's stdin
-            // (JSON frame events). Inherit otherwise — the Python path
-            // doesn't read stdin and a piped+unused stdin can confuse
-            // some libraries that probe `isatty()` on launch.
+        if use_rust_audio || delegate_to_worker_rust {
+            // Two callers need a piped stdin:
+            //
+            // 1. `use_rust_audio`: the audio bridge writes JSON frame
+            //    events to the worker's stdin.
+            // 2. `delegate_to_worker_rust` (PR #441 review round 2,
+            //    Codex P1 finding 3): `worker-rust` unconditionally
+            //    reads stdin in its command loop. On a Windows GUI
+            //    launch the parent has no console stdin, so
+            //    inheriting would leave the child with an invalid
+            //    handle -- the read errors immediately and the
+            //    worker exits before rdev can drive PTT. Piping
+            //    (without ever writing) parks the worker's main
+            //    thread on a blocked `read()`; closing the pipe at
+            //    supervisor shutdown yields EOF and the worker
+            //    exits cleanly.
+            //
+            // Piping unused stdin can confuse some libraries that
+            // probe `isatty()` on launch; neither the Rust audio
+            // bridge nor `worker-rust` does that, so this is safe on
+            // both branches.
             process.stdin(Stdio::piped());
         }
         configure_piped_python_stdio(&mut process);
@@ -2180,9 +2237,37 @@ fn stream_lines<R>(
                                 )));
                             }
                         }
+                        // PR #441 review round 2 (Codex P1 finding 4):
+                        // the delegated `worker-rust` subprocess emits
+                        // `state=error` with `reason=hotkey_install_failed`
+                        // when rdev refuses to install (missing display,
+                        // permission denied, unsupported chord, ...).
+                        // Surface a prominent stderr diagnostic so users
+                        // see the `python-legacy` escape hatch hint even
+                        // if the worker's raw stderr line was lost in
+                        // the noise. Actual auto-fallback (kill child,
+                        // respawn Python) is a Wave-5.5 gap: the worker
+                        // survives with PTT disabled today; users can
+                        // reach for the escape hatch to keep dictating.
+                        if worker.state.as_deref() == Some("error")
+                            && worker
+                                .payload
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                == Some("hotkey_install_failed")
+                        {
+                            let detail = worker
+                                .payload
+                                .get("detail")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("(no detail)");
+                            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                                "[runtime] worker-rust hotkey install failed                                  ({detail}) -- PTT will not work in this session.                                  Set VOICEPI_DICTATE_BACKEND=python-legacy and                                  restart to fall back to the Python hotkey                                  listener while Wave-5.5 wires the auto-fallback."
+                            )));
+                        }
                         // Issue #324: persist one row per accepted
                         // utterance into the per-user SQLite history
-                        // store. Best-effort and feature-gated — the
+                        // store. Best-effort and feature-gated -- the
                         // wrapper logs failures and swallows them so
                         // a DB hiccup (locked file, disk full) never
                         // breaks the dictation pipeline.
@@ -2426,6 +2511,14 @@ pub mod worker_rust;
 // `runtime.rs` does not grow past the 500-LOC modularity guideline. See
 // the module docs for the wire protocol and the daemon-side install hook.
 pub mod external_toggle;
+// PR #441 review round 2: env-var gate helpers split out of
+// `rust_session_sink` so that file stays under the AGENTS.md
+// ~500-LOC-per-file modularity guideline. Owns
+// `dictate_backend_python_legacy_requested` /
+// `dictate_backend_rust_session_requested`; `rust_session_sink`
+// re-exports them so external call sites are unchanged.
+pub(crate) mod rust_session_dictate_env;
+
 // Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
 // wiring that drives a `DictateSession` from the hotkey coordinator's
 // action sink. Stays out of the production path until PR 6 flips the
@@ -2509,3 +2602,9 @@ mod windows_process_tests;
 mod worker_command_tests;
 #[cfg(test)]
 mod worker_event_tests;
+// PR #441 review round 2: sibling tests for
+// `worker_rust::unsupported_worker_rust_settings_reason`. Kept out of
+// the main `worker_rust_tests` file so both files stay under the
+// AGENTS.md 500-LOC modularity guideline.
+#[cfg(test)]
+mod worker_rust_config_gate_tests;

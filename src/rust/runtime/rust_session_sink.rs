@@ -4,43 +4,19 @@
 //! drives `session.start()` / `stop_and_transcribe()` / `cancel(epoch)`
 //! instead of merely logging.
 //!
-//! Wave 5 PR 4 of #348. Originally **opt-in only** behind
-//! `VOICEPI_DICTATE_BACKEND=rust-session`; Wave 5 PR 7 flipped the
-//! supervisor's overall default to the Rust worker (see
-//! [`super::worker_rust`]). The session-sink wiring in this module is
-//! now the production path invoked from
+//! After PR 7 the sink is the production dictation path invoked from
 //! [`super::worker_rust::WorkerRunner::run`] via
-//! [`build_production_sink`]. The env var is still honoured on the
-//! Python-fallback path so the supervisor's own hotkey install can
-//! route to the session sink (rather than the historical logger
-//! sink) when a user forces `python-legacy` on a build that still has
-//! `--features whisper-rs-local,rust-injection`.
+//! [`build_production_sink`]; on the `python-legacy` fallback path the
+//! supervisor's own hotkey install still routes to the session sink
+//! when a build carries `--features whisper-rs-local,rust-injection`.
 //!
-//! # Slicing
-//!
-//! - PR 4 (this module): coordinator → session wire-up + stub backends
-//!   so the end-to-end flow is observable without `whisper-rs-local` or
-//!   the OS injector. The stub `TranscribeBackend` always returns an
-//!   empty result with a `"rust-session-pr4-stub"` gate so the session
-//!   takes the `no_text` branch and emits the matching worker event;
-//!   the stub `InjectBackend` is a no-op for the same reason.
-//! - PR 5: swap the stubs for `LocalWhisper` +
-//!   the existing injection dispatcher; wire `audio_route` (PR 3 #415)
-//!   into [`crate::dictate::DictateSession::push_frame`].
-//! - PR 6: introduce the `whisper-dictate worker-rust` subcommand and
-//!   the supervisor-side delegate gate (opt-in via env var).
-//! - PR 7 (Wave 5 wrap-up): flip the default. Rust worker runs on any
-//!   full-feature build; `VOICEPI_DICTATE_BACKEND=python-legacy` is
-//!   the emergency rollback for the Wave-7 → Wave-8 burn-in only.
-//!
-//! # Why a tiny module instead of inline in `runtime.rs`
-//!
-//! `runtime.rs` is already past the 500-LOC guideline; the new wiring
-//! lives here so the guideline is respected (per AGENTS.md "Modularity").
-//! The integration test exercising the full coordinator → sink →
-//! session → worker-events loop lives in the `#[cfg(test)] mod tests`
-//! block at the bottom of this file so it sits next to the code under
-//! test.
+//! The env-var gate helpers that decide the fallback path live in the
+//! sibling [`super::rust_session_dictate_env`] module; this file
+//! re-exports them so callers keep writing
+//! `rust_session_sink::dictate_backend_rust_session_requested` /
+//! `_python_legacy_requested` unchanged (PR #441 review round 2 split
+//! for the AGENTS.md ~500-LOC-per-file modularity guideline). Sibling
+//! test files: `rust_session_sink_tests`, `_e2e_tests`, `_coverage_tests`.
 
 use std::io::Write;
 use std::sync::mpsc::Sender;
@@ -55,33 +31,14 @@ use crate::dictate::{
 use crate::hotkey::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle};
 use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 
-/// Env-var name. Matches the existing `VOICEPI_DICTATE_BACKEND` env var
-/// the Python wrapper reads -- the `rust-session` value is the
-/// (historical, PR 6) opt-in for the in-process Rust session sink
-/// (alongside the existing `rust` value the Python wrapper interprets
-/// as "shell out to `dictate-ops`"). Wave 5 PR 7 flipped the default
-/// so the Rust worker runs unconditionally on a full-feature build;
-/// this env var now doubles as the emergency-rollback knob when set
-/// to [`DICTATE_BACKEND_PYTHON_LEGACY`].
-pub(crate) const DICTATE_BACKEND_ENV: &str = "VOICEPI_DICTATE_BACKEND";
-
-/// Value that enables the in-process Rust session sink wiring.
-///
-/// After PR 7 (Wave 5) this value is redundant on a full-feature build
-/// (the Rust worker is the default) but stays recognised so the
-/// supervisor's session-sink hotkey routing on the Python fallback
-/// path -- and users who explicitly export this in their config --
-/// keep working unchanged.
-pub(crate) const DICTATE_BACKEND_RUST_SESSION: &str = "rust-session";
-
-/// Wave 5 PR 7 escape hatch: setting the backend env var to this
-/// value opts OUT of the new default (Rust worker) and forces the
-/// supervisor back onto the pre-PR-7 Python `runtime.py` orchestrator.
-/// Recognised on any casing / surrounding whitespace so a user
-/// crash-cart-editing the env var from the shell does not have to be
-/// pixel-perfect. Wave 8 removes the Python bundle and this constant
-/// together (issue #348).
-pub(crate) const DICTATE_BACKEND_PYTHON_LEGACY: &str = "python-legacy";
+// Re-export the env-var gate helpers so the public API of this module
+// stays byte-identical to the pre-split shape (PR #441 review round 2).
+// Callers keep writing `rust_session_sink::dictate_backend_..._requested()`
+// exactly as before; the implementation lives in the sibling module.
+pub(crate) use super::rust_session_dictate_env::{
+    dictate_backend_python_legacy_requested, dictate_backend_rust_session_requested,
+    DICTATE_BACKEND_ENV, DICTATE_BACKEND_PYTHON_LEGACY,
+};
 
 /// Prefix every `[worker-event] {…}` line carries. Mirrors the
 /// `WORKER_EVENT_PREFIX` const in `runtime.rs`; kept local so this
@@ -90,32 +47,6 @@ pub(crate) const DICTATE_BACKEND_PYTHON_LEGACY: &str = "python-legacy";
 /// the sibling [`super::rust_session_sink_tests`] module can spell the
 /// prefix literally in its assertions.
 pub(super) const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
-
-/// True when the user opted in to the Rust-session sink wiring via env
-/// var. Pure helper (no side effects) so the gate is unit-testable
-/// without spawning a coordinator. Returns false for unset / empty /
-/// any non-`rust-session` value.
-pub(crate) fn dictate_backend_rust_session_requested() -> bool {
-    std::env::var(DICTATE_BACKEND_ENV)
-        .map(|v| v.trim().eq_ignore_ascii_case(DICTATE_BACKEND_RUST_SESSION))
-        .unwrap_or(false)
-}
-
-/// Wave 5 PR 7 of #348: true when the user opted OUT of the new Rust
-/// worker default via `VOICEPI_DICTATE_BACKEND=python-legacy`. The
-/// supervisor consults this (via
-/// [`super::worker_rust::should_delegate_to_worker_rust`]) to decide
-/// whether to swap the spawned command for `worker-rust` or keep the
-/// pre-PR-7 Python orchestrator command as-is.
-///
-/// Pure helper -- accepts any casing / surrounding whitespace so a
-/// shell-set escape-hatch value ("Python-Legacy", " python-legacy ")
-/// still opts out. Returns false for unset / empty / any other value.
-pub(crate) fn dictate_backend_python_legacy_requested() -> bool {
-    std::env::var(DICTATE_BACKEND_ENV)
-        .map(|v| v.trim().eq_ignore_ascii_case(DICTATE_BACKEND_PYTHON_LEGACY))
-        .unwrap_or(false)
-}
 
 // ── stub backends ────────────────────────────────────────────────────────────
 
