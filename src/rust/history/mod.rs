@@ -55,6 +55,17 @@ pub use search::{search, SearchHit, SearchOptions};
 /// (case-insensitive, whitespace-trimmed). Anything else — including
 /// the default unset state — leaves the store enabled.
 pub const HISTORY_DISABLED_ENV: &str = "VOICEPI_HISTORY_DISABLED";
+/// Env var that mirrors the documented `history_enabled` schema
+/// setting. Codex-P2 finding on #439: the Settings UI toggle and the
+/// Python worker both use `VOICEPI_HISTORY_ENABLED=0` (falsy) as
+/// "disable history", so the Rust side must honour it too — otherwise a
+/// user who opted out via the UI would still see the SQLite store read
+/// on the second-hotkey dispatch path.
+///
+/// Accepts the falsy values `0`, `false`, `no`, `off` (case-insensitive,
+/// whitespace-trimmed) — matching the Python `_truthy` helper. Any other
+/// value (or the unset state) is treated as "enabled".
+pub const HISTORY_ENABLED_ENV: &str = "VOICEPI_HISTORY_ENABLED";
 /// Env var that overrides the default DB path. Useful for tests that
 /// want a tempdir-scoped DB without mocking `platform_config_dir`, and
 /// for power users that want the history on a different volume.
@@ -69,9 +80,23 @@ pub fn default_db_path() -> PathBuf {
     crate::config::platform_config_dir().join("history.sqlite3")
 }
 
-/// True unless the user opted out via [`HISTORY_DISABLED_ENV`].
+/// True unless the user opted out via either the "disable" env var
+/// ([`HISTORY_DISABLED_ENV`]) or a falsy "enable" env var
+/// ([`HISTORY_ENABLED_ENV`], which mirrors the Settings-UI toggle).
+///
+/// Codex-P2 finding on #439: honouring both env vars keeps the Rust
+/// runtime aligned with the documented `history_enabled` schema field
+/// and its Python-side counterpart — a user who disabled history in the
+/// UI or exported `VOICEPI_HISTORY_ENABLED=0` will not have the SQLite
+/// store secretly read behind their back.
 pub fn is_enabled() -> bool {
-    !is_truthy_env(HISTORY_DISABLED_ENV)
+    if is_truthy_env(HISTORY_DISABLED_ENV) {
+        return false;
+    }
+    if is_falsy_env(HISTORY_ENABLED_ENV) {
+        return false;
+    }
+    true
 }
 
 fn is_truthy_env(name: &str) -> bool {
@@ -81,6 +106,20 @@ fn is_truthy_env(name: &str) -> bool {
             .as_deref()
             .map(|raw| raw.trim().to_ascii_lowercase()),
         Some(v) if matches!(v.as_str(), "1" | "true" | "yes" | "on")
+    )
+}
+
+/// Companion to [`is_truthy_env`]: returns `true` when the env var is
+/// set to an explicit falsy value (`0`, `false`, `no`, `off`,
+/// case-insensitive). An unset variable returns `false` — the caller
+/// interprets that as "default", not "disabled".
+fn is_falsy_env(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .ok()
+            .as_deref()
+            .map(|raw| raw.trim().to_ascii_lowercase()),
+        Some(v) if matches!(v.as_str(), "0" | "false" | "no" | "off")
     )
 }
 
@@ -180,6 +219,42 @@ mod tests {
             );
         }
         std::env::remove_var(HISTORY_DISABLED_ENV);
+    }
+
+    /// Codex-P2 finding on #439: the documented Settings-UI toggle is
+    /// `history_enabled` / `VOICEPI_HISTORY_ENABLED=0`, so honouring it
+    /// here keeps the Rust runtime aligned with the Python worker and
+    /// the schema field. Every falsy spelling the `_truthy` helper on
+    /// the Python side rejects must land as `is_enabled() == false`.
+    #[test]
+    fn is_enabled_honours_falsy_history_enabled_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(HISTORY_DISABLED_ENV);
+        for raw in ["0", "false", "No", " OFF ", "FALSE"] {
+            std::env::set_var(HISTORY_ENABLED_ENV, raw);
+            assert!(
+                !is_enabled(),
+                "expected disabled for VOICEPI_HISTORY_ENABLED={raw:?}, but is_enabled() was true"
+            );
+        }
+        std::env::remove_var(HISTORY_ENABLED_ENV);
+    }
+
+    /// Companion: an explicit truthy VOICEPI_HISTORY_ENABLED (or any
+    /// unknown value) leaves history enabled — the env var is a gate,
+    /// not a strict allow-list.
+    #[test]
+    fn is_enabled_ignores_truthy_or_unknown_history_enabled_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(HISTORY_DISABLED_ENV);
+        for raw in ["1", "true", "yes", "on", "maybe", ""] {
+            std::env::set_var(HISTORY_ENABLED_ENV, raw);
+            assert!(
+                is_enabled(),
+                "expected enabled for VOICEPI_HISTORY_ENABLED={raw:?}, but is_enabled() was false"
+            );
+        }
+        std::env::remove_var(HISTORY_ENABLED_ENV);
     }
 
     #[test]

@@ -128,10 +128,18 @@ impl PostprocessProfile {
     /// processor's default" — same substitution the base postprocess
     /// pipeline runs so both call sites agree on the effective settings.
     pub fn normalized(&self) -> Self {
-        let base_url = if self.base_url.trim().is_empty() {
+        // Codex-P2 finding on #439: strip trailing slashes AND surrounding
+        // whitespace before matching against the built-in provider defaults.
+        // `normalized_base_url` uses an exact match against
+        // `DEFAULT_OLLAMA_BASE_URL` / `DEFAULT_OPENAI_BASE_URL` / `GROQ_BASE_URL`,
+        // so a hand-edited `http://localhost:11434/` (trailing slash) or
+        // `  http://localhost:11434  ` would slip through the substitution
+        // and the wrong endpoint would be called for an openai/groq profile.
+        let trimmed_base_url = self.base_url.trim().trim_end_matches('/');
+        let base_url = if trimmed_base_url.is_empty() {
             default_base_url(&self.processor).to_owned()
         } else {
-            normalized_base_url(&self.processor, &self.base_url)
+            normalized_base_url(&self.processor, trimmed_base_url)
         };
         let model = normalized_model(&self.processor, &self.model);
         Self {
@@ -425,6 +433,58 @@ mod tests {
     /// The Ollama and passthrough processors never need a key, so the
     /// env-resolver returns empty even when secrets are set — no need
     /// to fake up an unused HTTP header for a local process.
+    /// Codex-P2 finding on #439: an openai profile with the model omitted
+    /// (or still carrying the Ollama default) must be rewritten to the
+    /// OpenAI post default before dispatch — otherwise the Chat API is
+    /// called with a nonsense model id and the pipeline falls back.
+    #[test]
+    fn normalized_substitutes_openai_default_model_off_ollama_default() {
+        let profile = PostprocessProfile {
+            processor: "openai".to_owned(),
+            model: DEFAULT_OLLAMA_POST_MODEL.to_owned(),
+            ..PostprocessProfile::default()
+        };
+        assert_eq!(profile.normalized().model, "gpt-4o-mini");
+
+        // And the same substitution when the model field was left empty
+        // (partial-JSON path).
+        let profile = PostprocessProfile {
+            processor: "openai".to_owned(),
+            model: String::new(),
+            ..PostprocessProfile::default()
+        };
+        assert_eq!(profile.normalized().model, "gpt-4o-mini");
+    }
+
+    /// Codex-P2 finding on #439: a stale Ollama base URL with a trailing
+    /// slash (e.g. `http://localhost:11434/`) or surrounding whitespace
+    /// bypassed the exact-match substitution in `normalized_base_url` and
+    /// dispatched an openai/groq call at the Ollama endpoint. The trim
+    /// step in `normalized` guards it.
+    #[test]
+    fn normalized_trims_base_url_before_matching_processor_defaults() {
+        let profile = PostprocessProfile {
+            processor: "openai".to_owned(),
+            base_url: "http://localhost:11434/".to_owned(),
+            ..PostprocessProfile::default()
+        };
+        // Ollama base URL with trailing slash must still map to the OpenAI
+        // provider default when the profile switches processor.
+        assert_eq!(
+            profile.normalized().base_url,
+            crate::cloud_api::DEFAULT_OPENAI_BASE_URL
+        );
+
+        // Same for whitespace padding — a hand-edited config with stray
+        // spaces round-trips through the substitution.
+        let profile = PostprocessProfile {
+            processor: "groq".to_owned(),
+            base_url: "  http://localhost:11434  ".to_owned(),
+            ..PostprocessProfile::default()
+        };
+        assert_eq!(profile.normalized().base_url, GROQ_BASE_URL);
+    }
+
     #[test]
     fn resolve_api_key_from_env_returns_empty_for_local_processors() {
         assert!(resolve_api_key_from_env("ollama").is_empty());

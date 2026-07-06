@@ -164,7 +164,16 @@ impl AppSettings {
         // next save wiped it. Accept both shapes — a raw string
         // round-trips verbatim, an array is re-encoded to the string form
         // the rest of the pipeline consumes.
-        self.postprocess_profiles = string_or_json_value(object, "postprocess_profiles", "");
+        //
+        // Follow-up Codex-P2 finding on #439: whichever shape the caller
+        // used, strip any inline `api_key` entries out of profile objects
+        // before the value round-trips back through `save.rs`. The
+        // `PostprocessProfile` struct no longer carries `api_key` (secrets
+        // resolve at dispatch time from env / OS credential store), so a
+        // legacy config or a hand-edited value that still contains one
+        // would otherwise be re-persisted in plaintext.
+        self.postprocess_profiles =
+            sanitize_postprocess_profiles(string_or_json_value(object, "postprocess_profiles", ""));
         self.postprocess_profile_index = string_value(
             object,
             "postprocess_profile_index",
@@ -308,6 +317,46 @@ fn string_or_json_value(object: &Map<String, Value>, key: &str, default: &str) -
         Some(other) => serde_json::to_string(other).unwrap_or_else(|_| default.to_owned()),
         None => default.to_owned(),
     }
+}
+
+/// Strip inline `api_key` entries out of a `postprocess_profiles` JSON
+/// payload before we store it in `AppSettings`. Codex-P2 finding on
+/// #439: the profile struct no longer carries `api_key` (secrets flow
+/// through env vars / OS credential store), but the config-load path
+/// still treated the field as opaque, so a legacy `{"api_key":"sk-..."}`
+/// entry would silently round-trip back out to `config.json` on the next
+/// save.
+///
+/// Contract:
+/// * Empty / whitespace-only input passes through unchanged (no work).
+/// * A JSON array of objects is parsed, each object's `api_key` field is
+///   removed, and the result re-serialized.
+/// * Anything that fails to parse as a JSON array is returned verbatim so
+///   we do not silently discard a hand-edited value the user still cares
+///   about — `PostprocessProfile::from_json` will surface the parse
+///   failure at dispatch time via the existing malformed-config path.
+fn sanitize_postprocess_profiles(raw: String) -> String {
+    if raw.trim().is_empty() {
+        return raw;
+    }
+    let Ok(mut parsed) = serde_json::from_str::<Value>(&raw) else {
+        return raw;
+    };
+    let Some(items) = parsed.as_array_mut() else {
+        return raw;
+    };
+    let mut mutated = false;
+    for item in items {
+        if let Some(obj) = item.as_object_mut() {
+            if obj.remove("api_key").is_some() {
+                mutated = true;
+            }
+        }
+    }
+    if !mutated {
+        return raw;
+    }
+    serde_json::to_string(&parsed).unwrap_or(raw)
 }
 
 fn bool_value(object: &Map<String, Value>, key: &str, default: bool) -> bool {
@@ -457,6 +506,62 @@ mod tests {
         let value = serde_json::json!({
             "postprocess_profiles": raw,
         });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.postprocess_profiles, raw);
+    }
+
+    /// Codex-P2 follow-up on #439: legacy configs that still carry an
+    /// inline `api_key` on a profile must NOT round-trip that secret
+    /// back out to `config.json`. The load path parses the string and
+    /// strips the field so the next save is clean.
+    #[test]
+    fn postprocess_profiles_strips_legacy_api_key_from_string_form() {
+        let raw = r#"[{"name":"Formal","processor":"openai","api_key":"sk-should-not-persist","mode":"clean"}]"#;
+        let value = serde_json::json!({ "postprocess_profiles": raw });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert!(
+            !settings.postprocess_profiles.contains("api_key"),
+            "sanitized value must not carry api_key, got: {}",
+            settings.postprocess_profiles,
+        );
+        assert!(!settings
+            .postprocess_profiles
+            .contains("sk-should-not-persist"));
+        // Other fields survive so the user's profile setup is not lost.
+        assert!(settings.postprocess_profiles.contains("Formal"));
+        assert!(settings.postprocess_profiles.contains("openai"));
+    }
+
+    /// Same guarantee when the config uses the docs-friendly JSON array
+    /// shape rather than the string encoding — the sanitizer runs after
+    /// the array-to-string re-encoding.
+    #[test]
+    fn postprocess_profiles_strips_legacy_api_key_from_array_form() {
+        let value = serde_json::json!({
+            "postprocess_profiles": [
+                {
+                    "name": "Formal",
+                    "processor": "openai",
+                    "mode": "clean",
+                    "api_key": "sk-should-not-persist",
+                },
+            ],
+        });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert!(!settings.postprocess_profiles.contains("api_key"));
+        assert!(!settings
+            .postprocess_profiles
+            .contains("sk-should-not-persist"));
+        assert!(settings.postprocess_profiles.contains("Formal"));
+    }
+
+    /// Sanity check: a payload that never had an `api_key` in the first
+    /// place is byte-for-byte identical after sanitisation — no needless
+    /// churn on save.
+    #[test]
+    fn postprocess_profiles_unchanged_when_no_api_key_present() {
+        let raw = r#"[{"name":"Clean","processor":"ollama","mode":"clean"}]"#;
+        let value = serde_json::json!({ "postprocess_profiles": raw });
         let settings = AppSettings::from_value(value).unwrap();
         assert_eq!(settings.postprocess_profiles, raw);
     }
