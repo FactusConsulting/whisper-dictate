@@ -114,6 +114,7 @@ impl AppSettings {
         // when empty so a fresh config never carries a blank sentinel.
         set_bool(object, "onboarding_completed", self.onboarding_completed);
         set_string(object, "onboarding_seen_at", &self.onboarding_seen_at);
+        set_string(object, "settings_mode", &self.settings_mode);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
                 object.insert("profiles".to_owned(), profiles);
@@ -146,6 +147,27 @@ fn set_bool(object: &mut Map<String, Value>, key: &str, value: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_to_object_persists_settings_mode() {
+        // Issue #334: the Simple/Advanced choice must survive a save
+        // round-trip so it can be reloaded on the next launch.
+        let mut object: Map<String, Value> = Map::new();
+        let settings = AppSettings {
+            settings_mode: "advanced".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.apply_to_object(&mut object);
+        assert_eq!(object["settings_mode"], "advanced");
+
+        let mut object: Map<String, Value> = Map::new();
+        let settings = AppSettings {
+            settings_mode: "simple".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.apply_to_object(&mut object);
+        assert_eq!(object["settings_mode"], "simple");
+    }
 
     #[test]
     fn apply_to_object_strips_deprecated_parakeet_keys() {

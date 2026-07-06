@@ -7,6 +7,13 @@ use egui_material_icons::icons;
 // global bottom message bar.
 const SETTINGS_FOOTER_HEIGHT: f32 = 40.0;
 const SETTINGS_FOOTER_CHROME_HEIGHT: f32 = 18.0;
+/// Height of the Simple/Advanced toggle row rendered above every settings
+/// tab (Issue #334). Fixed so the ScrollArea's `max_height` math stays
+/// exact — otherwise the bottom Reset row falls under the status bar.
+const SETTINGS_MODE_TOGGLE_HEIGHT: f32 = 36.0;
+/// Small vertical gap between the toggle row and the ScrollArea body, so
+/// the toggle doesn't visually collide with the tab heading below it.
+const SETTINGS_MODE_TOGGLE_GAP: f32 = 8.0;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn settings_panel(
@@ -14,6 +21,12 @@ impl WhisperDictateApp {
         ui: &mut egui::Ui,
         body: fn(&mut Self, &mut egui::Ui),
     ) {
+        // The Simple/Advanced toggle sits at the top of the settings body
+        // (right-aligned) so it is visible whichever tab the user is on.
+        // Rendering it OUTSIDE the ScrollArea keeps it pinned as the tab
+        // content scrolls.
+        self.render_settings_mode_toggle(ui);
+        ui.add_space(SETTINGS_MODE_TOGGLE_GAP);
         let footer_height = SETTINGS_FOOTER_HEIGHT;
         let body_height =
             (ui.available_height() - footer_height - SETTINGS_FOOTER_CHROME_HEIGHT).max(0.0);
@@ -28,6 +41,69 @@ impl WhisperDictateApp {
 
         ui.separator();
         self.settings_actions(ui);
+    }
+
+    /// Segmented `[Simple | Advanced]` control at the top-right of the
+    /// settings body (Issue #334). Mirrors the pattern already used by the
+    /// theme toggle: two `SelectableLabel`-style buttons in a horizontal
+    /// frame. Persists straight into [`AppSettings::settings_mode`] so the
+    /// choice survives across sessions.
+    fn render_settings_mode_toggle(&mut self, ui: &mut egui::Ui) {
+        let palette = ui_palette(&self.settings.ui_theme);
+        let language = self.settings.ui_language.clone();
+        let current = SettingsMode::from_raw(&self.settings.settings_mode);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), SETTINGS_MODE_TOGGLE_HEIGHT),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let help = ui_text(&language, UiTextKey::SettingsModeHelp);
+                for (mode, key) in [
+                    (SettingsMode::Advanced, UiTextKey::SettingsModeAdvanced),
+                    (SettingsMode::Simple, UiTextKey::SettingsModeSimple),
+                ] {
+                    let selected = current == mode;
+                    let fill = if selected {
+                        palette.accent_dark
+                    } else {
+                        palette.surface_bg
+                    };
+                    let label = ui_text(&language, key);
+                    let text = if selected {
+                        egui::RichText::new(label).strong().color(palette.text)
+                    } else {
+                        egui::RichText::new(label).color(palette.text_muted)
+                    };
+                    if ui
+                        .add_sized(
+                            egui::vec2(96.0, 28.0),
+                            egui::Button::new(text)
+                                .fill(fill)
+                                .stroke(egui::Stroke::new(0.8, palette.border_soft)),
+                        )
+                        .on_hover_text(help)
+                        .clicked()
+                        && !selected
+                    {
+                        self.settings.settings_mode = mode.as_raw().to_owned();
+                        // If the newly-selected mode hides the current tab
+                        // (Simple hides everything except Log + Speech),
+                        // bump the selection to Speech so the settings body
+                        // doesn't try to render a tab whose sidebar entry
+                        // has just disappeared.
+                        if !settings_mode_tab_visible(mode, self.selected_tab) {
+                            self.selected_tab = Tab::Speech;
+                        }
+                    }
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(ui_text(&language, UiTextKey::SettingsMode))
+                        .text_style(egui::TextStyle::Small)
+                        .color(palette.text_muted),
+                )
+                .on_hover_text(help);
+            },
+        );
     }
 
     fn settings_actions(&mut self, ui: &mut egui::Ui) {
@@ -58,7 +134,13 @@ impl WhisperDictateApp {
 
     fn reset_current_tab_settings(&mut self) {
         let tab = self.selected_tab;
-        reset_tab_settings(&mut self.settings, tab);
+        // Issue #334 / Codex #435 P2: Reset in Simple mode only touches the
+        // fields the user can actually see. An Advanced power-user field
+        // (device/compute, cloud timeout, xkb layout, toggle mode, quit
+        // chord) would otherwise be silently reset to the schema default the
+        // moment a Simple-mode user hit "Reset page" on Speech.
+        let mode = SettingsMode::from_raw(&self.settings.settings_mode);
+        reset_tab_settings_for_mode(&mut self.settings, tab, mode);
         match tab {
             Tab::Speech => self.reload_stt_api_key(),
             Tab::Post => self.reload_post_api_key(),
@@ -74,6 +156,57 @@ impl WhisperDictateApp {
             "Reset {} settings to defaults. Save settings to keep the reset.",
             tab.label(&self.settings.ui_language)
         );
+    }
+}
+
+/// Dispatch the per-tab reset for the current
+/// [`SettingsMode`](crate::ui::SettingsMode). Simple mode only resets the
+/// fields the user can actually see; Advanced mode resets every field on
+/// the tab (matches the pre-#334 behaviour). This function is the entry
+/// point wired into the Reset Page button.
+pub(in crate::ui) fn reset_tab_settings_for_mode(
+    settings: &mut AppSettings,
+    tab: Tab,
+    mode: SettingsMode,
+) {
+    match mode {
+        SettingsMode::Advanced => reset_tab_settings(settings, tab),
+        SettingsMode::Simple => reset_tab_settings_simple(settings, tab),
+    }
+}
+
+/// Simple-mode variant of the per-tab reset. Only the rows that Simple mode
+/// actually renders are reset — every Advanced-only field is preserved so
+/// a user who hides Advanced can't accidentally lose device/compute, cloud
+/// timeout, xkb layout, toggle mode or the quit-key chord by hitting
+/// Reset Page on the Speech tab. Tabs that Simple mode HIDES entirely are
+/// a no-op here (the Reset Page button is unreachable for them anyway; the
+/// no-op is a defensive guard so a future rendering bug can't leak Advanced
+/// data through this path).
+fn reset_tab_settings_simple(settings: &mut AppSettings, tab: Tab) {
+    // Only Speech has visible rows in Simple mode; every other tab is
+    // hidden from the sidebar so the Reset Page button never renders. Any
+    // other tab is a defensive no-op — if a future rendering bug ever
+    // routes a Reset Page click through this path anyway, we do not want
+    // it to wipe Advanced-only fields the user cannot see.
+    if tab == Tab::Speech {
+        let defaults = AppSettings::default();
+        // Simple-visible Speech rows: backend/model, cloud provider +
+        // model (+ URL when Custom), mic, language, hotkey.
+        settings.stt_backend = defaults.stt_backend;
+        settings.model = defaults.model;
+        settings.stt_provider = defaults.stt_provider;
+        settings.stt_model = defaults.stt_model;
+        // Base URL is reset even though it is only visible for Custom:
+        // clearing back to the schema default (empty) is what a Simple
+        // reset means for the URL row a user could see.
+        settings.stt_base_url = defaults.stt_base_url;
+        settings.audio_device = defaults.audio_device;
+        settings.lang = defaults.lang;
+        settings.key = defaults.key;
+        // Advanced-only Speech fields (stt_timeout_ms, device,
+        // compute_type, xkb_layout, toggle_mode, quit_key, quit_count,
+        // quit_window_ms) are intentionally preserved.
     }
 }
 

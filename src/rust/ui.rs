@@ -48,6 +48,7 @@ mod overlay;
 mod platform;
 mod previews;
 mod secret_store;
+mod settings_mode;
 mod settings_state;
 mod tabs;
 mod tasks;
@@ -86,6 +87,10 @@ pub(in crate::ui) use self::overlay::{
 pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
 use self::secret_store::*;
+pub(in crate::ui) use self::settings_mode::{
+    normalize_selected_tab, row_visible, tab_visible as settings_mode_tab_visible, visible_tabs,
+    SettingsMode,
+};
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;

@@ -168,6 +168,15 @@ pub(in crate::ui) enum UiTextKey {
     UpdateIncludePrereleases,
     /// Help text for the release-candidate opt-in checkbox.
     UpdateIncludePrereleasesHelp,
+    /// Simple/Advanced settings-mode toggle heading + segmented control
+    /// labels (Issue #334). Shown at the top of the settings body.
+    SettingsMode,
+    /// Segmented-control label for the "Simple" (slim view) setting mode.
+    SettingsModeSimple,
+    /// Segmented-control label for the "Advanced" (full view) setting mode.
+    SettingsModeAdvanced,
+    /// Hover text explaining what the segmented control does.
+    SettingsModeHelp,
 }
 
 impl UiTextKey {
@@ -327,6 +336,16 @@ impl UiTextKey {
                     the matching installer from the release page. Also settable via \
                     the VOICEPI_UPDATE_INCLUDE_PRERELEASES environment variable."
                 }
+                UiTextKey::SettingsMode => "Settings",
+                UiTextKey::SettingsModeSimple => "Simple",
+                UiTextKey::SettingsModeAdvanced => "Advanced",
+                UiTextKey::SettingsModeHelp => {
+                    "Simple hides niche power-user knobs and shows only the fields \
+                    a new user needs to make the app work (microphone, hotkey, \
+                    backend, model, language, API key). Advanced shows every \
+                    setting. The choice is saved to config.json and survives \
+                    across sessions."
+                }
             },
             UiLanguageMode::Danish => match self {
                 UiTextKey::Recording => "Optager",
@@ -482,6 +501,16 @@ impl UiTextKey {
                     \"choco upgrade whisper-dictate --prerelease\" eller ved at \
                     hente den tilsvarende installer fra udgivelsessiden. Kan også \
                     sættes via miljøvariablen VOICEPI_UPDATE_INCLUDE_PRERELEASES."
+                }
+                UiTextKey::SettingsMode => "Settings",
+                UiTextKey::SettingsModeSimple => "Enkel",
+                UiTextKey::SettingsModeAdvanced => "Avanceret",
+                UiTextKey::SettingsModeHelp => {
+                    "Enkel skjuler avancerede knapper og viser kun de felter en \
+                    ny bruger har brug for at få appen til at virke (mikrofon, \
+                    genvejstast, backend, model, sprog, API-nøgle). Avanceret \
+                    viser alle indstillinger. Valget gemmes i config.json og \
+                    huskes på tværs af sessioner."
                 }
             },
         }

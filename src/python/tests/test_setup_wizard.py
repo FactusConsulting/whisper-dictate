@@ -256,6 +256,93 @@ class WizardBasicTrackTests(unittest.TestCase):
         self.assertIn("$env:VOICEPI_STT_API_KEY = '***'", out)
 
 
+class WizardPreservesUiOnlyKeysTests(unittest.TestCase):
+    """Codex #435 P2 / Issue #334: run_setup must not strip UI-only keys
+    (``settings_mode``, ``ui_theme``, ``ui_language``, ``ui_log_view``,
+    ``onboarding_*``) from ``config.json``. These are not in the runtime
+    settings schema (they are pure Rust UI state), so ``effective_config()``
+    ignores them — a naive rewrite would silently drop them. That is exactly
+    what caused a user who explicitly saved Simple mode to be migrated back
+    to Advanced by the Rust load-time heuristic on the next wizard run.
+    """
+
+    def setUp(self):
+        self._cfg = os.path.join(tempfile.gettempdir(), "wd-wizard-preserve.json")
+
+    def _run(self, answers, seed_config):
+        Path(self._cfg).write_text(
+            json.dumps(seed_config), encoding="utf-8",
+        )
+        out_fn, lines = _collector()
+        captured = {}
+
+        def _writer(config):
+            captured["config"] = config
+            return Path(self._cfg)
+
+        rc = vp_setup.run_setup(
+            input_fn=_scripted(answers),
+            output_fn=out_fn,
+            getpass_fn=lambda _p: "",
+            config_writer=_writer,
+        )
+        return rc, captured.get("config", {})
+
+    def test_settings_mode_survives_wizard_rewrite(self):
+        # A user who explicitly saved Simple mode must not be silently
+        # migrated back to Advanced by the Rust load heuristic after the
+        # next ``--setup`` run. All ENTER + advanced=n → the wizard writes
+        # zero of its OWN keys, but the preserved settings_mode value has
+        # to be in the emitted config.
+        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg):
+            rc, config = self._run(
+                [""] * 20 + ["n"],
+                {"settings_mode": "simple"},
+            )
+        self.assertEqual(rc, 0)
+        self.assertEqual(config.get("settings_mode"), "simple")
+
+    def test_multiple_ui_only_keys_survive_wizard_rewrite(self):
+        # ui_theme / ui_language / ui_log_view / onboarding_* are the
+        # other schema-unknown keys the Rust UI persists — they must
+        # survive too so the wizard is a general-purpose UI-state-safe
+        # rewrite, not just a settings_mode-safe one.
+        seed = {
+            "settings_mode": "simple",
+            "ui_theme": "light",
+            "ui_language": "da",
+            "ui_log_view": "diagnostic",
+            "onboarding_completed": True,
+            "onboarding_seen_at": "2026-07-04T12:34:56Z",
+        }
+        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg):
+            rc, config = self._run([""] * 20 + ["n"], seed)
+        self.assertEqual(rc, 0)
+        for key, expected in seed.items():
+            self.assertEqual(
+                config.get(key),
+                expected,
+                f"UI-only key {key!r} must survive the wizard rewrite",
+            )
+
+    def test_schema_known_keys_are_not_duplicated_by_the_preserve_pass(self):
+        # A schema-known key (e.g. ``lang``) must NOT round-trip through
+        # the preserve pass — that would resurrect a value the wizard
+        # decided to clear. The preserve pass filters to unknown keys, so
+        # setting lang via the wizard to a value ≠ the seed must win.
+        with _clean_voicepi_env(VOICEPI_CONFIG=self._cfg):
+            # First basic prompt is `key`; answer f9 for key, ENTER for
+            # model + stt_backend, then "en" for the language prompt,
+            # ENTER the rest, no advanced.
+            rc, config = self._run(
+                ["f9", "", "", "", "", "", "", "", "", "en"] + [""] * 10 + ["n"],
+                {"lang": "da", "settings_mode": "simple"},
+            )
+        self.assertEqual(rc, 0)
+        # settings_mode preserved.
+        self.assertEqual(config.get("settings_mode"), "simple")
+
+
 class WizardAdvancedTrackTests(unittest.TestCase):
     def setUp(self):
         self._cfg = os.path.join(tempfile.gettempdir(), "wd-wizard-adv.json")

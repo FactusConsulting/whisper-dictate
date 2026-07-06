@@ -92,6 +92,14 @@ pub struct AppSettings {
     /// useful for a permanent meter while configuring devices; default `false`
     /// so the overlay only appears around live dictation.
     pub overlay_show_on_idle: bool,
+    /// Simple/Advanced settings-mode toggle (Issue #334). Persisted as
+    /// `"simple"` or `"advanced"` so the choice survives across sessions.
+    /// A fresh install (no config file / empty object) defaults to
+    /// `"simple"`; an existing config with none of the mode key on load is
+    /// migrated to `"advanced"` so established users keep every knob they
+    /// had before. Anything unrecognised falls back to `"advanced"` at
+    /// render time — see `crate::ui::settings_mode::SettingsMode::from_raw`.
+    pub settings_mode: String,
     pub profiles_json: String,
     /// Issue #328: first-run onboarding gate. Defaults to `false` so a fresh
     /// install triggers the wizard on the first launch, then flips to `true`
@@ -184,6 +192,10 @@ impl Default for AppSettings {
             overlay_enabled: false,
             overlay_position: "bottom-right".to_owned(),
             overlay_show_on_idle: false,
+            // Fresh install default per Issue #334. A saved config that
+            // lacks the key is migrated to "advanced" in `from_value` so
+            // established users keep every knob they had before.
+            settings_mode: "simple".to_owned(),
             profiles_json: default_profiles_json(),
             // Issue #328: false on a fresh install triggers the first-run
             // wizard; users flip it to `true` by finishing / skipping it.

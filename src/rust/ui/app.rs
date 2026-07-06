@@ -160,6 +160,23 @@ impl eframe::App for WhisperDictateApp {
             return;
         }
 
+        // Issue #334 / Codex #435 P2: If the persisted `settings_mode` hides
+        // the currently-selected tab (e.g. a config reload flips Simple mode
+        // on while the user was parked on Quality), snap the selection back
+        // to Speech. Without this, the sidebar would hide the tab entry but
+        // the central panel below still dispatches off `selected_tab` and
+        // would render the "hidden" Advanced page — and Reset Page would
+        // target it. Doing this once per frame is a one-line defensive
+        // guarantee that Simple mode is enforced across every render
+        // surface, not just the sidebar filter.
+        {
+            let mode = SettingsMode::from_raw(&self.settings.settings_mode);
+            let normalized = normalize_selected_tab(mode, self.selected_tab);
+            if normalized != self.selected_tab {
+                self.selected_tab = normalized;
+            }
+        }
+
         paint_sidebar_bridge(&ctx, palette, &self.settings.ui_text_scale);
 
         egui::Panel::left("primary_navigation")

@@ -34,6 +34,7 @@ impl AppSettings {
                 .transpose()?
                 .unwrap_or_else(|| defaults.profiles_json.clone());
             migrate_parakeet_backend(&mut settings, object, &defaults);
+            migrate_settings_mode(&mut settings, object);
         }
         Ok(settings)
     }
@@ -197,6 +198,33 @@ impl AppSettings {
             defaults.onboarding_completed,
         );
         self.onboarding_seen_at = string_value(object, "onboarding_seen_at", "");
+        // Load the persisted Simple/Advanced choice. Missing → keep the
+        // default; the "existing user" migration below then upgrades the
+        // implicit default when the rest of the config is non-empty.
+        self.settings_mode = string_value(object, "settings_mode", &defaults.settings_mode);
+    }
+}
+
+/// Issue #334 migration: an existing config that predates the
+/// Simple/Advanced toggle has no `settings_mode` key. Those users should
+/// default to **Advanced** so nothing they previously configured
+/// disappears. New/empty configs keep the schema default (`"simple"`)
+/// picked in [`AppSettings::default`], so first-time users land on the
+/// slim view.
+///
+/// "Existing user" is detected by looking for ANY other saved key on
+/// disk (`stt_backend`, `key`, etc.); an empty `{}` config counts as a
+/// fresh install even if the file itself was created accidentally.
+fn migrate_settings_mode(settings: &mut AppSettings, object: &Map<String, Value>) {
+    if object.contains_key("settings_mode") {
+        return;
+    }
+    // Any other key implies "the user has saved settings before" — flip
+    // them to Advanced. A stray empty object stays on the fresh-install
+    // default.
+    let has_other_settings = object.keys().any(|key| key != "settings_mode");
+    if has_other_settings {
+        settings.settings_mode = "advanced".to_owned();
     }
 }
 
@@ -359,6 +387,42 @@ mod tests {
         let value = serde_json::json!({ "stt_backend": "whisper" });
         let settings = AppSettings::from_value(value).unwrap();
         assert_eq!(settings.stt_backend, "whisper");
+    }
+
+    #[test]
+    fn settings_mode_defaults_to_simple_on_empty_config() {
+        // Issue #334: a fresh install (empty JSON object) is a first-time
+        // user; keep the Simple default so onboarding stays slim.
+        let settings = AppSettings::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(settings.settings_mode, "simple");
+    }
+
+    #[test]
+    fn settings_mode_migrates_to_advanced_for_existing_users() {
+        // Issue #334: an existing config that predates the toggle has no
+        // `settings_mode` key. Anything ELSE saved in the file means "the
+        // user has settings history" — flip them to Advanced so nothing
+        // they previously configured disappears from the UI.
+        let value = serde_json::json!({
+            "lang": "da",
+            "stt_backend": "whisper",
+        });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.settings_mode, "advanced");
+    }
+
+    #[test]
+    fn settings_mode_is_respected_when_explicitly_saved() {
+        // When the user has already picked a mode, the saved value wins
+        // and the migration is a no-op regardless of what else is saved.
+        for mode in ["simple", "advanced"] {
+            let value = serde_json::json!({
+                "settings_mode": mode,
+                "lang": "en",
+            });
+            let settings = AppSettings::from_value(value).unwrap();
+            assert_eq!(settings.settings_mode, mode);
+        }
     }
 
     #[test]

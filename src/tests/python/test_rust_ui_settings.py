@@ -422,7 +422,14 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"UI language"', script)
         self.assertIn('("", "Auto")', script)
         self.assertIn('("da", "Danish")', script)
-        self.assertIn('if !cfg!(windows) {', script)
+        # Issue #334: the row is wrapped in `if show_advanced && !cfg!(windows) {`
+        # by the Simple/Advanced toggle, so the exact `if !cfg!(windows) {` prefix
+        # no longer occurs. Assert the two guards (advanced-gate + Linux-only)
+        # are BOTH present around the "Linux keyboard layout" row rather than
+        # pinning a specific `if` prefix that is orthogonal to what this test
+        # encodes.
+        self.assertIn('!cfg!(windows) {', script)
+        self.assertIn('show_advanced && !cfg!(windows) {', script)
         self.assertIn('"Linux keyboard layout"', script)
         # Old flat section labels replaced by scope_group boxes.
         self.assertNotIn('"Local runtime"', script)
@@ -445,6 +452,26 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         # Microphone + Refresh devices remain in the General group.
         self.assertIn('"Refresh devices"', script)
         self.assertIn('"Wayland ydotool/XKB layout used for direct text injection on Linux.', script)
+
+    def test_simple_mode_shows_custom_cloud_url_row(self):
+        """Codex #435 P2: In Simple mode, the Cloud STT API URL row must
+        remain visible when the user has picked the ``Custom
+        (OpenAI-compatible)`` provider — that is the ONLY control for
+        ``stt_base_url``, and hiding it in Simple mode would make a
+        self-hosted endpoint unreachable without first discovering
+        Advanced mode. The guard is `show_advanced || provider ==
+        CloudProvider::Custom`; pin the exact form so a future refactor
+        that drops the Custom branch is caught.
+        """
+        speech = Path("src/rust/ui/tabs/speech.rs").read_text(encoding="utf-8")
+        self.assertIn(
+            "if show_advanced || provider == CloudProvider::Custom {",
+            speech,
+        )
+        # Timeout stays Advanced-only regardless of provider — a Simple
+        # user relies on the default 30 s.
+        self.assertIn("if show_advanced {", speech)
+        self.assertIn('"Cloud STT timeout ms"', speech)
 
     def test_rust_speech_tab_scope_groups_field_placement(self):
         """Encode the per-group field assignment so a future regrouping is caught."""
@@ -535,7 +562,7 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn("combo_help_labeled_short(", speech)
         self.assertIn('"Device"', speech)
         # WIDE combos with long option labels stay wide (no _short suffix).
-        self.assertIn('combo_enabled_labeled(\n                    ui,\n                    backend != SttBackendMode::Cloud,\n                    "Compute type"', speech)
+        self.assertIn('combo_enabled_labeled(\n                        ui,\n                        backend != SttBackendMode::Cloud,\n                        "Compute type"', speech)
         self.assertIn("combo_model_vram(", speech)
 
         # Post mode is short; Post model stays wide.

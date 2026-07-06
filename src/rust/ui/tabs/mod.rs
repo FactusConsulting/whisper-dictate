@@ -68,6 +68,8 @@ pub(in crate::ui) use runtime_format::{
 };
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
+#[cfg(test)]
+pub(in crate::ui) use settings::reset_tab_settings_for_mode;
 fn settings_grid(id: &'static str) -> egui::Grid {
     // Alignment is anchored by the label cell's `set_min_width(settings_label_width(ui))`
     // call inside `label_with_help` / `label_with_help_enabled` — no grid-wide
