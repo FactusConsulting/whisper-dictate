@@ -86,6 +86,28 @@ pub(in crate::ui) fn visible_tabs(mode: SettingsMode) -> impl Iterator<Item = Ta
         .filter(move |tab| tab_visible(mode, *tab))
 }
 
+/// Snap a possibly-hidden tab back into the visible-set for `mode`. The
+/// sidebar only renders visible tabs, but the central panel and Reset Page
+/// still dispatch off `WhisperDictateApp::selected_tab`. If a config
+/// reload flips the mode to Simple while the user was parked on an
+/// Advanced-only tab (e.g. Quality/Post/System), the sidebar would hide
+/// the entry but the central panel would still render the hidden page —
+/// and Reset Page would target it. Normalizing on every `ui()` frame
+/// (Codex #435 P2) is a single defensive line that guarantees Simple mode
+/// is actually enforced across every render surface.
+///
+/// The snap target is [`Tab::Speech`] — that is the tab the mode toggle
+/// itself falls back to when Simple hides the current tab, so keeping the
+/// two sites in sync avoids two different "safe" tabs for the same
+/// condition.
+pub(in crate::ui) fn normalize_selected_tab(mode: SettingsMode, tab: Tab) -> Tab {
+    if tab_visible(mode, tab) {
+        tab
+    } else {
+        Tab::Speech
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +175,89 @@ mod tests {
                 "tab {tab:?} must be visible in advanced mode"
             );
         }
+    }
+
+    #[test]
+    fn normalize_selected_tab_keeps_visible_tabs_untouched() {
+        // A visible tab must round-trip through the normalizer unchanged so
+        // a config reload that leaves the user on Speech/Log doesn't
+        // spuriously nudge them onto the fallback.
+        for tab in Tab::ALL {
+            assert_eq!(
+                normalize_selected_tab(SettingsMode::Advanced, tab),
+                tab,
+                "advanced-mode {tab:?} must not be normalized",
+            );
+        }
+        assert_eq!(
+            normalize_selected_tab(SettingsMode::Simple, Tab::Log),
+            Tab::Log,
+        );
+        assert_eq!(
+            normalize_selected_tab(SettingsMode::Simple, Tab::Speech),
+            Tab::Speech,
+        );
+    }
+
+    #[test]
+    fn normalize_selected_tab_snaps_hidden_tabs_to_speech_in_simple_mode() {
+        // Codex #435 P2: if the user was parked on Quality/Post/System/…
+        // when a config reload flipped Simple mode on, snap them onto
+        // Speech so both sidebar filter and central panel dispatch agree
+        // on which tab is being shown. Speech (not Log) matches the
+        // fallback the mode-toggle button already uses.
+        for tab in [
+            Tab::Quality,
+            Tab::Dictionary,
+            Tab::Output,
+            Tab::Post,
+            Tab::Profiles,
+            Tab::System,
+        ] {
+            assert_eq!(
+                normalize_selected_tab(SettingsMode::Simple, tab),
+                Tab::Speech,
+                "hidden {tab:?} must snap to Speech in Simple mode",
+            );
+        }
+    }
+
+    /// Codex #435 P2 / AGENTS.md Windows-first: this compile-time-gated
+    /// smoke exercises the Simple/Advanced toggle logic on the Windows CI
+    /// runner. It does NOT open an egui context (the eframe smoke elsewhere
+    /// is the render harness); it pins that on Windows the mode toggle
+    /// preserves the exact tab-visibility contract and does not diverge
+    /// from the non-Windows path — Windows-specific `cfg!(windows)` gates
+    /// live in speech.rs (xkb layout row), and this test guards against a
+    /// future Windows-only branch that would let a Simple-mode Windows
+    /// user see (or lose) a tab the other platforms hide (or keep).
+    #[cfg(windows)]
+    #[test]
+    fn windows_settings_mode_toggle_contract_matches_other_platforms() {
+        // The tab-visibility predicate is compiled identically on Windows
+        // and non-Windows targets; this test runs on the Windows CI matrix
+        // so a Windows-only regression would surface here rather than in
+        // manual smoke.
+        for tab in Tab::ALL {
+            assert!(
+                tab_visible(SettingsMode::Advanced, tab),
+                "windows: advanced-mode must show {tab:?}",
+            );
+        }
+        // Only Log + Speech survive Simple mode on Windows too.
+        let visible: Vec<Tab> = visible_tabs(SettingsMode::Simple).collect();
+        assert_eq!(visible, vec![Tab::Log, Tab::Speech]);
+        // The row-visibility helper stays a pure superset check on Windows.
+        assert!(row_visible(SettingsMode::Advanced, false));
+        assert!(row_visible(SettingsMode::Advanced, true));
+        assert!(!row_visible(SettingsMode::Simple, false));
+        assert!(row_visible(SettingsMode::Simple, true));
+        // normalize_selected_tab snaps hidden tabs to Speech (not Log) on
+        // Windows too — same fallback the mode-toggle button uses.
+        assert_eq!(
+            normalize_selected_tab(SettingsMode::Simple, Tab::System),
+            Tab::Speech,
+        );
     }
 
     #[test]

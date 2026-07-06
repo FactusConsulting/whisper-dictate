@@ -134,7 +134,13 @@ impl WhisperDictateApp {
 
     fn reset_current_tab_settings(&mut self) {
         let tab = self.selected_tab;
-        reset_tab_settings(&mut self.settings, tab);
+        // Issue #334 / Codex #435 P2: Reset in Simple mode only touches the
+        // fields the user can actually see. An Advanced power-user field
+        // (device/compute, cloud timeout, xkb layout, toggle mode, quit
+        // chord) would otherwise be silently reset to the schema default the
+        // moment a Simple-mode user hit "Reset page" on Speech.
+        let mode = SettingsMode::from_raw(&self.settings.settings_mode);
+        reset_tab_settings_for_mode(&mut self.settings, tab, mode);
         match tab {
             Tab::Speech => self.reload_stt_api_key(),
             Tab::Post => self.reload_post_api_key(),
@@ -150,6 +156,57 @@ impl WhisperDictateApp {
             "Reset {} settings to defaults. Save settings to keep the reset.",
             tab.label(&self.settings.ui_language)
         );
+    }
+}
+
+/// Dispatch the per-tab reset for the current
+/// [`SettingsMode`](crate::ui::SettingsMode). Simple mode only resets the
+/// fields the user can actually see; Advanced mode resets every field on
+/// the tab (matches the pre-#334 behaviour). This function is the entry
+/// point wired into the Reset Page button.
+pub(in crate::ui) fn reset_tab_settings_for_mode(
+    settings: &mut AppSettings,
+    tab: Tab,
+    mode: SettingsMode,
+) {
+    match mode {
+        SettingsMode::Advanced => reset_tab_settings(settings, tab),
+        SettingsMode::Simple => reset_tab_settings_simple(settings, tab),
+    }
+}
+
+/// Simple-mode variant of the per-tab reset. Only the rows that Simple mode
+/// actually renders are reset — every Advanced-only field is preserved so
+/// a user who hides Advanced can't accidentally lose device/compute, cloud
+/// timeout, xkb layout, toggle mode or the quit-key chord by hitting
+/// Reset Page on the Speech tab. Tabs that Simple mode HIDES entirely are
+/// a no-op here (the Reset Page button is unreachable for them anyway; the
+/// no-op is a defensive guard so a future rendering bug can't leak Advanced
+/// data through this path).
+fn reset_tab_settings_simple(settings: &mut AppSettings, tab: Tab) {
+    // Only Speech has visible rows in Simple mode; every other tab is
+    // hidden from the sidebar so the Reset Page button never renders. Any
+    // other tab is a defensive no-op — if a future rendering bug ever
+    // routes a Reset Page click through this path anyway, we do not want
+    // it to wipe Advanced-only fields the user cannot see.
+    if tab == Tab::Speech {
+        let defaults = AppSettings::default();
+        // Simple-visible Speech rows: backend/model, cloud provider +
+        // model (+ URL when Custom), mic, language, hotkey.
+        settings.stt_backend = defaults.stt_backend;
+        settings.model = defaults.model;
+        settings.stt_provider = defaults.stt_provider;
+        settings.stt_model = defaults.stt_model;
+        // Base URL is reset even though it is only visible for Custom:
+        // clearing back to the schema default (empty) is what a Simple
+        // reset means for the URL row a user could see.
+        settings.stt_base_url = defaults.stt_base_url;
+        settings.audio_device = defaults.audio_device;
+        settings.lang = defaults.lang;
+        settings.key = defaults.key;
+        // Advanced-only Speech fields (stt_timeout_ms, device,
+        // compute_type, xkb_layout, toggle_mode, quit_key, quit_count,
+        // quit_window_ms) are intentionally preserved.
     }
 }
 

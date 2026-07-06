@@ -122,9 +122,15 @@ impl WhisperDictateApp {
                         "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
                     );
                 }
-                // Base URL + timeout are Advanced-only: a Simple-mode user
-                // stays on the provider's default endpoint and timeout.
-                if show_advanced {
+                // Base URL is Advanced-only for the built-in providers (Groq
+                // and OpenAI have well-known endpoints), BUT `Custom` is the
+                // "self-hosted OpenAI-compatible server" escape hatch — hiding
+                // its URL row means a Simple-mode user could never point at a
+                // different host/port than the seeded `http://localhost:8000/v1`
+                // sentinel. Keep the URL visible whenever Custom is selected so
+                // the row a user needs is reachable from Simple mode too
+                // (Codex #435 P2).
+                if show_advanced || provider == CloudProvider::Custom {
                     text_enabled(
                         ui,
                         backend == SttBackendMode::Cloud,
@@ -132,6 +138,11 @@ impl WhisperDictateApp {
                         &mut self.settings.stt_base_url,
                         "Base URL for the selected cloud transcription provider.",
                     );
+                }
+                // Timeout stays Advanced-only regardless of provider — a fresh
+                // user can rely on the default 30 s regardless of whether the
+                // endpoint is Groq, OpenAI, or a self-hosted box.
+                if show_advanced {
                     numeric_enabled(
                         ui,
                         &language,

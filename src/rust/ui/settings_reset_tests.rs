@@ -1,4 +1,5 @@
-use super::tabs::reset_tab_settings;
+use super::tabs::{reset_tab_settings, reset_tab_settings_for_mode};
+use super::SettingsMode;
 use super::*;
 
 fn changed_settings() -> AppSettings {
@@ -267,4 +268,82 @@ fn profiles_page_reset_restores_only_profiles_json() {
     assert_eq!(settings.profiles_json, defaults.profiles_json);
     assert_eq!(settings.stt_backend, "openai");
     assert_eq!(settings.post_processor, "groq");
+}
+
+#[test]
+fn simple_mode_speech_reset_preserves_advanced_only_fields() {
+    // Issue #334 / Codex #435 P2: a Simple-mode user who resets the
+    // Speech page must not lose Advanced-only knobs they configured
+    // before switching modes. The reset must only touch fields Simple
+    // mode actually shows (mic/hotkey/backend+model/language/cloud
+    // provider+model+URL); the Advanced-only knobs (device, compute
+    // type, cloud timeout, xkb layout, toggle mode, quit chord) must
+    // stay as they were.
+    let defaults = AppSettings::default();
+    let mut settings = changed_settings();
+    settings.settings_mode = "simple".to_owned();
+
+    reset_tab_settings_for_mode(&mut settings, Tab::Speech, SettingsMode::Simple);
+
+    // Visible-in-Simple rows reset to defaults.
+    assert_eq!(settings.stt_backend, defaults.stt_backend);
+    assert_eq!(settings.model, defaults.model);
+    assert_eq!(settings.stt_provider, defaults.stt_provider);
+    assert_eq!(settings.stt_model, defaults.stt_model);
+    assert_eq!(settings.stt_base_url, defaults.stt_base_url);
+    assert_eq!(settings.audio_device, defaults.audio_device);
+    assert_eq!(settings.lang, defaults.lang);
+    assert_eq!(settings.key, defaults.key);
+
+    // Advanced-only Speech fields are PRESERVED, not silently reset to
+    // the schema default.
+    assert_eq!(settings.stt_timeout_ms, "12345");
+    assert_eq!(settings.device, "cuda");
+    assert_eq!(settings.compute_type, "int8_float16");
+    assert_eq!(settings.xkb_layout, "dk");
+    assert!(settings.toggle_mode);
+    assert_eq!(settings.quit_key, "f12");
+    assert_eq!(settings.quit_count, "4");
+    assert_eq!(settings.quit_window_ms, "2000");
+}
+
+#[test]
+fn advanced_mode_reset_dispatch_matches_full_reset() {
+    // Advanced mode goes through the same reset code path a pre-#334
+    // user got, so the dispatch is a strict pass-through to
+    // `reset_tab_settings`. This test pins that equivalence so a future
+    // change to the dispatch does not silently drift the two apart.
+    let mut via_dispatch = changed_settings();
+    let mut via_full = changed_settings();
+
+    reset_tab_settings_for_mode(&mut via_dispatch, Tab::Speech, SettingsMode::Advanced);
+    reset_tab_settings(&mut via_full, Tab::Speech);
+
+    assert_eq!(via_dispatch, via_full);
+}
+
+#[test]
+fn simple_mode_reset_is_noop_on_hidden_tabs() {
+    // Every tab except Log + Speech is hidden from the sidebar in Simple
+    // mode, so the Reset Page button is unreachable. As a defensive
+    // guard, the Simple-mode reset dispatch is a no-op for those tabs —
+    // if a future rendering bug ever routes a Reset Page click through
+    // this path anyway, we do not want it to wipe Advanced-only fields
+    // the user cannot see.
+    let baseline = changed_settings();
+    for tab in [
+        Tab::Quality,
+        Tab::Dictionary,
+        Tab::Output,
+        Tab::Post,
+        Tab::Profiles,
+        Tab::System,
+    ] {
+        let mut settings = baseline.clone();
+        reset_tab_settings_for_mode(&mut settings, tab, SettingsMode::Simple);
+        assert_eq!(
+            settings, baseline,
+            "Simple-mode reset for hidden tab {tab:?} must be a no-op",
+        );
+    }
 }

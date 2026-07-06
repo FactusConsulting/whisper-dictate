@@ -34,6 +34,7 @@ from whisper_dictate.vp_config import (
     SETTINGS,
     SETTING_BY_KEY,
     effective_config,
+    load_config,
     save_config,
 )
 
@@ -533,10 +534,27 @@ def run_setup(
         getpass_fn = getpass.getpass
 
     existing = effective_config()
+    # Codex #435 P2 / Issue #334: preserve UI-only keys the wizard doesn't
+    # know about (`settings_mode`, `ui_theme`, `ui_language`, `ui_log_view`,
+    # the `onboarding_*` gate, ...). ``effective_config()`` only carries the
+    # schema-backed keys, so a naive rewrite would strip these on every
+    # ``run_setup`` call — which specifically caused a user who saved
+    # Simple mode to be silently migrated back to Advanced by the Rust
+    # load-time heuristic after the next wizard run.
+    raw_existing = load_config()
+    preserved_extra_keys = {
+        key: raw_existing[key]
+        for key in raw_existing
+        if key not in SETTING_BY_KEY
+    }
     wizard = _Wizard(input_fn, output, existing)
     result = wizard.run(getpass_fn=getpass_fn)
 
     config = result.config if minimal else {**existing, **result.config}
+    # Merge preserved keys UNDER the wizard result so a wizard-managed key
+    # always wins (the preserved map is unknown/UI-only keys by construction,
+    # so there is no overlap in practice — this is a belt-and-braces order).
+    config = {**preserved_extra_keys, **config}
     writer = config_writer or save_config
     path = writer(config)
 
