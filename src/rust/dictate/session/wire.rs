@@ -101,16 +101,19 @@ fn is_droppable(value: &Value) -> bool {
 }
 
 fn write_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), SessionError> {
-    // Honour the VOICEPI_WORKER_EVENTS env gate (Python's
-    // `_emit_worker_event` returns early when the var is unset/falsy;
-    // PR 1's `events::write_line` does the same). Without the gate any
-    // session run outside the RuntimeSupervisor (e.g. a CLI smoke or
-    // tooling integration) would leak lines to whatever writer was
-    // passed in. Codex P2 #413 wire.rs:98 (round 2).
-    if !crate::dictate::env_gates::is_truthy(std::env::var("VOICEPI_WORKER_EVENTS").ok().as_deref())
-    {
-        return Ok(());
-    }
+    // NOTE: the previous `VOICEPI_WORKER_EVENTS` env-gate that used
+    // to live here was moved OUT of this state-machine helper.
+    // Rationale: re-reading a process-global env var on EVERY worker
+    // event created a Rust 2024 `set_var` race that manifested as a
+    // Windows-only flake on `inject_failure_still_emits_utterance`
+    // (the assertion "utterance event must still fire on inject
+    // failure" panicked mid-cascade). Env-gating is a policy that
+    // belongs at the caller boundary -- the RuntimeSupervisor now
+    // wraps stderr in a sink writer when `VOICEPI_WORKER_EVENTS`
+    // is unset/falsy, so a disabled caller still gets zero output
+    // but the state-machine's tests are no longer racing an
+    // unsynchronised env-block read. Codex P2 #413 wire.rs:98
+    // (round 3 -- follow-up to round 2 which introduced the race).
     writer.write_all(WORKER_EVENT_PREFIX.as_bytes())?;
     // ASCII-escape non-ASCII payload bytes so the worker-event line is
     // safe on Windows shells / hidden subprocess pipes with non-UTF-8
