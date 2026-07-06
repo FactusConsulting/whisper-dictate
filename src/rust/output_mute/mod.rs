@@ -25,10 +25,10 @@
 //!   worker-event stream can observe without threading an `Arc` through
 //!   every layer. Absent init → all observation calls are cheap no-ops.
 //!
-//! The trait boundary keeps the Linux integration test honest: it swaps a
-//! [`MockPactl`](linux::MockPactl) recorder for the real subprocess so we
-//! can assert the exact `pactl` verbs we emit without touching the host
-//! audio state.
+//! The trait boundary keeps the Linux integration test honest: it swaps
+//! an in-memory recorder (`MockPactl`, in `linux_tests.rs`) for the real
+//! subprocess so we can assert the exact `pactl` verbs we emit without
+//! touching the host audio state.
 //!
 //! [`AppSettings::mute_output_while_recording`]: crate::config::AppSettings::mute_output_while_recording
 
