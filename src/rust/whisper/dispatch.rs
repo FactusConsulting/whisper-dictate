@@ -219,7 +219,7 @@ fn dispatch(model_path: &Path, request: TranscribeRequest) -> Result<TranscribeR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_env_lock::ENV_LOCK;
+    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
     /// Pick the env var `user_cache_dir` consults on the current platform.
     const CACHE_ENV_VAR: &str = if cfg!(windows) {
@@ -232,41 +232,28 @@ mod tests {
 
     #[test]
     fn resolve_model_path_errors_when_env_missing_and_no_cache() {
+        // RAII guards restore the originals even if the assert below panics
+        // — without them a failed assertion would leak MODEL_PATH_ENV-unset
+        // + a bogus CACHE_ENV_VAR into every later test (Codex P2 #415).
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = env::var(MODEL_PATH_ENV).ok();
-        env::remove_var(MODEL_PATH_ENV);
+        let _model = EnvVarGuard::remove(MODEL_PATH_ENV);
         // Pin cache to a non-existent dir so the cache fallback also finds nothing.
-        let saved_cache = env::var_os(CACHE_ENV_VAR);
-        env::set_var(CACHE_ENV_VAR, "/definitely/not/a/real/dir/xyz");
+        let _cache = EnvVarGuard::set(CACHE_ENV_VAR, "/definitely/not/a/real/dir/xyz");
 
         let err = resolve_model_path_from_env().unwrap_err();
         assert!(
             err.to_string().contains(MODEL_PATH_ENV),
             "unexpected error: {err}"
         );
-
-        match saved_cache {
-            Some(v) => env::set_var(CACHE_ENV_VAR, v),
-            None => env::remove_var(CACHE_ENV_VAR),
-        }
-        if let Some(v) = saved {
-            env::set_var(MODEL_PATH_ENV, v);
-        }
     }
 
     #[test]
     fn resolve_model_path_errors_when_env_blank() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = env::var(MODEL_PATH_ENV).ok();
-        env::set_var(MODEL_PATH_ENV, "   ");
+        let _model = EnvVarGuard::set(MODEL_PATH_ENV, "   ");
 
         let err = resolve_model_path_from_env().unwrap_err();
         assert!(err.to_string().contains("empty"), "unexpected error: {err}");
-
-        match saved {
-            Some(v) => env::set_var(MODEL_PATH_ENV, v),
-            None => env::remove_var(MODEL_PATH_ENV),
-        }
     }
 
     #[test]
@@ -276,11 +263,9 @@ mod tests {
         // After the fix, `is_downloaded` gates the fallback, so a file with
         // wrong content is skipped and the function errors (no valid model).
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = env::var(MODEL_PATH_ENV).ok();
-        env::remove_var(MODEL_PATH_ENV);
+        let _model = EnvVarGuard::remove(MODEL_PATH_ENV);
         let tmp = tempfile::tempdir().unwrap();
-        let saved_cache = env::var_os(CACHE_ENV_VAR);
-        env::set_var(CACHE_ENV_VAR, tmp.path());
+        let _cache = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
 
         let cache_subdir = if cfg!(target_os = "macos") {
             tmp.path()
@@ -300,14 +285,6 @@ mod tests {
             err.to_string().contains(MODEL_PATH_ENV),
             "error must name the missing-model env var: {err}"
         );
-
-        match saved_cache {
-            Some(v) => env::set_var(CACHE_ENV_VAR, v),
-            None => env::remove_var(CACHE_ENV_VAR),
-        }
-        if let Some(v) = saved {
-            env::set_var(MODEL_PATH_ENV, v);
-        }
     }
 
     #[test]
@@ -353,16 +330,10 @@ mod tests {
     #[test]
     fn resolve_model_path_returns_value_when_set() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = env::var(MODEL_PATH_ENV).ok();
-        env::set_var(MODEL_PATH_ENV, "/tmp/ggml-tiny.en.bin");
+        let _model = EnvVarGuard::set(MODEL_PATH_ENV, "/tmp/ggml-tiny.en.bin");
 
         let p = resolve_model_path_from_env().unwrap();
         assert_eq!(p, PathBuf::from("/tmp/ggml-tiny.en.bin"));
-
-        match saved {
-            Some(v) => env::set_var(MODEL_PATH_ENV, v),
-            None => env::remove_var(MODEL_PATH_ENV),
-        }
     }
 
     /// End-to-end: with a real model + WAV (env-gated, same as the

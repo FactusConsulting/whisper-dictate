@@ -246,7 +246,7 @@ mod tests {
 
     // ── download() ordering / local-only tests ───────────────────────────────
 
-    use crate::test_env_lock::ENV_LOCK;
+    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
     /// Platform-specific env var that controls the OS user-cache directory.
     const CACHE_ENV_VAR: &str = if cfg!(windows) {
@@ -257,39 +257,19 @@ mod tests {
         "XDG_CACHE_HOME"
     };
 
-    struct EnvGuard {
-        key: &'static str,
-        original: Option<std::ffi::OsString>,
-    }
-    impl EnvGuard {
-        fn set(key: &'static str, val: &str) -> Self {
-            let original = std::env::var_os(key);
-            std::env::set_var(key, val);
-            Self { key, original }
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-
     #[test]
     fn download_fails_with_local_only_when_model_absent() {
         // When local-only is active AND the model is not yet cached, the
         // command must fail with a clear error — no network attempt is made.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let _g_lo = EnvGuard::set("VOICEPI_LOCAL_ONLY", "1");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g_lo = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
         // Point cache at an empty dir so no model is found.
         let tmp = tempfile::tempdir().unwrap();
-        let _g_cache = EnvGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
+        let _g_cache = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
         // Point config at empty file so config path doesn't conflict.
         let tmp_cfg = tempfile::tempdir().unwrap();
         let cfg_path = tmp_cfg.path().join("config.json");
-        let _g_cfg = EnvGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
+        let _g_cfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
 
         let err = download("tiny.en").expect_err("must fail: local-only + no cache");
         assert!(
@@ -303,15 +283,15 @@ mod tests {
         // P3 (idempotent): if the model is already cached and verified, the
         // `models download` command must succeed — no network call needed —
         // even when local-only mode is active.  This is the setup-script path.
-        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
-        let _g_lo = EnvGuard::set("VOICEPI_LOCAL_ONLY", "1");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g_lo = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
 
         // Build a fake cache dir with a file that passes SHA-256 for tiny.en.
         let tmp = tempfile::tempdir().unwrap();
-        let _g_cache = EnvGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
+        let _g_cache = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
         let tmp_cfg = tempfile::tempdir().unwrap();
         let cfg_path = tmp_cfg.path().join("config.json");
-        let _g_cfg = EnvGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
+        let _g_cfg = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_str().unwrap());
 
         let entry = model_manager::find("tiny.en").unwrap();
         let model_path =

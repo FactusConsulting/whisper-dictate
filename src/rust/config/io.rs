@@ -164,40 +164,42 @@ fn open_path(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::test_support::ENV_LOCK;
+    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
     #[test]
     fn config_env_overrides_default_path() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        // RAII guard captures the original CONFIG_ENV value at construction
+        // and restores it on Drop — including on panic. The previous
+        // `env::set_var; …; env::remove_var` pattern would (a) leak on
+        // panic and (b) wipe CONFIG_ENV even when the developer had set
+        // one in their shell (Codex P2 #415).
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("custom.json");
+        let _env = EnvVarGuard::set(CONFIG_ENV, &path);
 
-        env::set_var(CONFIG_ENV, &path);
         assert_eq!(config_path(), path);
-        env::remove_var(CONFIG_ENV);
     }
 
     #[test]
     fn missing_config_loads_as_empty_object() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.json");
+        let _env = EnvVarGuard::set(CONFIG_ENV, &path);
 
-        env::set_var(CONFIG_ENV, &path);
         assert_eq!(load_raw_config().unwrap(), Value::Object(Map::new()));
-        env::remove_var(CONFIG_ENV);
     }
 
     #[test]
     fn existing_config_loads_json() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         fs::write(&path, r#"{"lang":"da"}"#).unwrap();
+        let _env = EnvVarGuard::set(CONFIG_ENV, &path);
 
-        env::set_var(CONFIG_ENV, &path);
         assert_eq!(load_raw_config().unwrap()["lang"], "da");
-        env::remove_var(CONFIG_ENV);
     }
 
     #[test]

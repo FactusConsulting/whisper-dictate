@@ -33,7 +33,9 @@ use std::sync::Arc;
 
 #[test]
 fn dictate_backend_gate_reads_env_var_case_insensitive() {
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let prev = std::env::var(DICTATE_BACKEND_ENV).ok();
 
     std::env::remove_var(DICTATE_BACKEND_ENV);

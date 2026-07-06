@@ -1,11 +1,11 @@
-use super::test_support::{EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{EnvVarGuard, ENV_LOCK};
 use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn file_api_key_store_round_trips_and_deletes_stt_keys() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("api-keys.json");
     let store_env = store.to_string_lossy().to_string();
@@ -33,7 +33,7 @@ fn file_api_key_store_round_trips_and_deletes_stt_keys() {
 
 #[test]
 fn file_api_key_store_keeps_post_and_stt_keys_separate() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("api-keys.json");
     let store_env = store.to_string_lossy().to_string();
@@ -54,7 +54,7 @@ fn file_api_key_store_keeps_post_and_stt_keys_separate() {
 
 #[test]
 fn disabled_os_keyring_uses_file_store_through_ui_secret_api() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("api-keys.json");
     let store_env = store.to_string_lossy().to_string();
@@ -78,7 +78,7 @@ fn disabled_os_keyring_uses_file_store_through_ui_secret_api() {
 
 #[test]
 fn successful_keyring_save_keeps_file_fallback() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("api-keys.json");
     let store_env = store.to_string_lossy().to_string();

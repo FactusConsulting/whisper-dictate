@@ -130,6 +130,16 @@ pub(super) fn one_second_pcm() -> Vec<f32> {
     vec![0.0_f32; SR as usize]
 }
 
+/// Bundle returned by [`session`]. Holds the env lock + an
+/// `EnvVarGuard` for `VOICEPI_WORKER_EVENTS` so the override + the lock
+/// drop together at end of scope — without the env guard the variable
+/// leaked into every later test that didn't take the lock (Codex P2
+/// #415 pattern; previously the helper set the var with no restore).
+pub(super) struct SessionEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _env: crate::test_env_lock::EnvVarGuard,
+}
+
 /// Build a session with the given backends + the default config (0.5 s
 /// min-record floor, blank capture/device labels). Returns
 /// `(session, byte_buf, env_lock_guard)`; the guard MUST be bound (e.g.
@@ -147,19 +157,18 @@ pub(super) fn one_second_pcm() -> Vec<f32> {
 pub(super) fn session<T: TranscribeBackend, I: InjectBackend>(
     transcribe: T,
     inject: I,
-) -> (
-    DictateSession<T, I>,
-    Vec<u8>,
-    std::sync::MutexGuard<'static, ()>,
-) {
-    let guard = crate::test_env_lock::ENV_LOCK
+) -> (DictateSession<T, I>, Vec<u8>, SessionEnvGuard) {
+    let lock = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+    let env = crate::test_env_lock::EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     (
         DictateSession::new(transcribe, inject, SessionConfig::default()),
         Vec::new(),
-        guard,
+        SessionEnvGuard {
+            _lock: lock,
+            _env: env,
+        },
     )
 }
 

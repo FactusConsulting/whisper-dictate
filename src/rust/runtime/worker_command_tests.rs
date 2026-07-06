@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn worker_command_launches_python_directly() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
 
@@ -25,7 +25,7 @@ fn worker_command_launches_python_directly() {
 
 #[test]
 fn worker_command_appends_passthrough_args() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
 
@@ -49,7 +49,7 @@ fn worker_command_appends_passthrough_args() {
 
 #[test]
 fn worker_command_does_not_force_utf8_for_foreground_console() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
 
@@ -64,7 +64,7 @@ fn worker_command_does_not_force_utf8_for_foreground_console() {
 
 #[test]
 fn worker_command_exports_effective_config_to_python_env() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     std::fs::write(
@@ -100,7 +100,7 @@ fn worker_command_exports_effective_config_to_python_env() {
 
 #[test]
 fn worker_command_honors_python_override() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = PathBuf::from("/tmp/whisper-dictate");
 
     let _python_guard = EnvVarGuard::set(PYTHON_ENV, "/custom/python");
@@ -111,7 +111,7 @@ fn worker_command_honors_python_override() {
 
 #[test]
 fn worker_command_prefers_existing_project_venv_python() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     // Use the canonical post-rebrand name (new installs).
     let python = if cfg!(windows) {
@@ -138,7 +138,7 @@ fn worker_command_prefers_existing_project_venv_python() {
 #[test]
 #[cfg(windows)]
 fn worker_command_falls_back_to_legacy_venv_on_windows() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     // Only the pre-rebrand venv exists (existing install, not yet migrated).
     let python = dir
@@ -158,7 +158,7 @@ fn worker_command_falls_back_to_legacy_venv_on_windows() {
 
 #[test]
 fn default_worker_command_honors_app_root_override() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");
 
     let command = default_worker_command();
@@ -177,7 +177,7 @@ fn default_worker_command_honors_app_root_override() {
 
 #[test]
 fn doctor_command_adds_doctor_argument() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
@@ -204,7 +204,7 @@ fn worker_command_does_not_auto_disable_python_hotkey_when_env_var_set() {
     // listener had actually started. The supervisor now opts in
     // explicitly via `disable_python_hotkey` ONLY after a successful
     // install, so the env-var alone must never park Python.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
@@ -224,7 +224,7 @@ fn worker_command_does_not_auto_disable_python_hotkey_when_env_var_set() {
 
 #[test]
 fn disable_python_hotkey_adds_the_flag() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
 
@@ -241,7 +241,7 @@ fn disable_python_hotkey_adds_the_flag() {
 
 #[test]
 fn disable_python_hotkey_is_idempotent() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
 
@@ -259,7 +259,7 @@ fn disable_python_hotkey_is_idempotent() {
 
 #[test]
 fn benchmark_command_adds_run_benchmark_argument_with_app_root_and_config() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     std::fs::write(
@@ -308,7 +308,7 @@ fn benchmark_command_adds_run_benchmark_argument_with_app_root_and_config() {
 fn install_rust_hotkey_from_command_skips_when_key_missing() {
     // When VOICEPI_KEY is absent from the command's env (e.g. no default set),
     // the helper must return None without calling maybe_install_rust_hotkey.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
@@ -332,7 +332,7 @@ fn install_rust_hotkey_from_command_reads_toggle_mode_from_env() {
     // in a headless env, so we test the config-extraction logic directly by
     // checking that the function doesn't panic and returns the expected result
     // type (None when backend env var is not set).
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _backend_guard = EnvVarGuard::remove("VOICEPI_HOTKEY_BACKEND");
@@ -402,7 +402,7 @@ fn parse_toggle_value_trims_whitespace() {
 
 #[test]
 fn extract_hotkey_key_names_splits_plus_separated_keys() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -418,7 +418,7 @@ fn extract_hotkey_key_names_splits_plus_separated_keys() {
 
 #[test]
 fn extract_hotkey_key_names_returns_empty_when_key_missing() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -431,7 +431,7 @@ fn extract_hotkey_key_names_returns_empty_when_key_missing() {
 
 #[test]
 fn extract_hotkey_key_names_trims_whitespace_around_segments() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -465,7 +465,7 @@ fn lookup_env<'a>(command: &'a super::WorkerCommand, key: &str) -> Option<&'a st
 
 #[test]
 fn audio_devices_command_propagates_devices_backend_when_audio_backend_rust() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", "rust");
@@ -485,7 +485,7 @@ fn audio_devices_command_propagates_devices_backend_when_audio_backend_rust() {
 fn audio_devices_command_propagation_is_case_insensitive_on_value() {
     // VOICEPI_AUDIO_BACKEND values are matched case-insensitively by
     // audio_pipeline_requested, so the propagation must follow the same rule.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _devices_guard = EnvVarGuard::remove("VOICEPI_DEVICES_BACKEND");
@@ -502,7 +502,7 @@ fn audio_devices_command_propagation_is_case_insensitive_on_value() {
 
 #[test]
 fn audio_devices_command_skips_propagation_when_audio_backend_unset() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _audio_guard = EnvVarGuard::remove("VOICEPI_AUDIO_BACKEND");
@@ -522,7 +522,7 @@ fn audio_devices_command_skips_propagation_when_audio_backend_is_python() {
     // Any non-rust value (including the documented "python" sentinel)
     // means the user has NOT opted into Rust capture; the picker stays
     // on sounddevice so it can offer non-default-host devices.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _devices_guard = EnvVarGuard::remove("VOICEPI_DEVICES_BACKEND");
@@ -546,7 +546,7 @@ fn audio_devices_command_skips_propagation_when_process_env_already_sets_devices
     // The propagator therefore detects the process-env value and skips —
     // verified here by asserting no entry was added to command.env (so
     // inheritance wins, not an override).
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", "rust");
@@ -571,7 +571,7 @@ fn audio_devices_command_propagation_is_idempotent_against_pre_populated_command
     // propagation. Two entries would still pick the last write at spawn
     // time but would be confusing in `--worker-env` dumps and would mask
     // bugs in upstream callers.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _audio_guard = EnvVarGuard::set("VOICEPI_AUDIO_BACKEND", "rust");
@@ -615,7 +615,7 @@ fn record_corpus_item_command_joins_id_with_equals_sign() {
     // leading hyphens (its allowlist is [A-Za-z0-9._-]) so the worker
     // command builder must use the unambiguous `--flag=value` form to
     // round-trip such ids correctly through Python argparse.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -645,7 +645,7 @@ fn record_corpus_item_command_joins_typical_id_too() {
     // id, not just the hyphen-leading edge case. Catches a future refactor
     // that re-introduces the split form for "normal-looking" ids and
     // silently loses the hyphen protection.
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
 
@@ -826,7 +826,17 @@ fn worker_command_normalises_right_alt_in_voicepi_key() {
     // End-to-end: a user with VOICEPI_KEY=right_alt in their process env
     // must see the WorkerCommand emit VOICEPI_KEY=alt_gr so the Python
     // worker's pynput resolution succeeds at startup (P3 #383).
-    let _guard = ENV_LOCK.lock().unwrap();
+    //
+    // Point `VOICEPI_CONFIG` at an empty temp file so the dev-box config
+    // (which may carry a saved `key`) does not shadow the env-var override
+    // — `config::worker_env_overrides()` resolves the on-disk config
+    // BEFORE the process env, so without this isolation the test fails
+    // for any developer who has ever saved a hotkey through Settings.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    std::fs::write(&config_path, "{}").unwrap();
+    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path);
     let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
     let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
     let _key_guard = EnvVarGuard::set("VOICEPI_KEY", "right_alt");

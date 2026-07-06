@@ -533,33 +533,36 @@ mod integration {
 #[cfg(test)]
 mod env_tests {
     use super::*;
+    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
     #[test]
     fn backend_requested_reads_env_var_truthy_rust_only() {
         // Hold the crate-wide env lock so we don't race other env-mutating
-        // tests in the same binary — see crate::test_env_lock for the
-        // soundness contract.
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
+        // tests in the same binary, AND wrap each mutation in an RAII guard
+        // so the original value is restored even if an assertion below
+        // panics (Codex P2 #415 pattern). See `crate::test_env_lock` for
+        // the full soundness contract.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
-        assert!(!rust_hotkey_backend_requested());
-
-        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "rust");
-        assert!(rust_hotkey_backend_requested());
-
-        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "RUST");
-        assert!(rust_hotkey_backend_requested());
-
-        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "pynput");
-        assert!(!rust_hotkey_backend_requested());
-
-        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "");
-        assert!(!rust_hotkey_backend_requested());
-
-        match prev {
-            Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
-            None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
+        {
+            let _g = EnvVarGuard::remove("VOICEPI_HOTKEY_BACKEND");
+            assert!(!rust_hotkey_backend_requested());
+        }
+        {
+            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
+            assert!(rust_hotkey_backend_requested());
+        }
+        {
+            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "RUST");
+            assert!(rust_hotkey_backend_requested());
+        }
+        {
+            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "pynput");
+            assert!(!rust_hotkey_backend_requested());
+        }
+        {
+            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "");
+            assert!(!rust_hotkey_backend_requested());
         }
     }
 
@@ -582,19 +585,12 @@ mod env_tests {
     #[test]
     #[cfg(not(feature = "rust-hotkeys"))]
     fn backend_available_is_false_on_stock_build_regardless_of_env() {
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
-
-        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "rust");
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
         assert!(
             !rust_hotkey_backend_available(),
             "backend_available must be false on a stock build even when env var is set"
         );
-
-        match prev {
-            Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
-            None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
-        }
     }
 
     // -----------------------------------------------------------------------
