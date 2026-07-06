@@ -55,10 +55,7 @@ impl PowerShellRunner for Arc<MockShell> {
             "get_all" => {
                 let mut stdout = String::new();
                 for (r, muted) in state.per_role.iter().enumerate() {
-                    stdout.push_str(&format!(
-                        "ROLE:{r}:{}\n",
-                        if *muted { 1 } else { 0 }
-                    ));
+                    stdout.push_str(&format!("ROLE:{r}:{}\n", if *muted { 1 } else { 0 }));
                 }
                 stdout.push_str("OK\n");
                 Ok(PowerShellResult {

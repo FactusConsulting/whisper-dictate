@@ -198,7 +198,6 @@ pub fn parse_get_sink_mute(stdout: &str) -> Result<bool, MuteError> {
     )))
 }
 
-
 // Codex P2 (linux.rs:1, PR #440) — MockPactl + tests live in a sibling
 // file (`linux_tests.rs`) so this module stays under AGENTS.md's
 // ~500-LOC modularity cap. Impl + mock + tests inline previously

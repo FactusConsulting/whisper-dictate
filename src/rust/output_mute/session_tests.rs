@@ -190,7 +190,10 @@ fn config_wins_over_env_and_env_is_the_default_fallback() {
     std::env::remove_var(MUTE_OUTPUT_ENV);
     assert_eq!(env_override(), None);
     install_from_settings(None);
-    assert!(!is_installed(), "default is off when config + env are silent");
+    assert!(
+        !is_installed(),
+        "default is off when config + env are silent"
+    );
 
     // 6) Explicit config always wins even without env.
     install_from_settings(Some(true));

@@ -2254,11 +2254,7 @@ fn install_output_mute_from_config() {
     // the only case where None comes from the Err path.
     let config_value = config::load_raw_config()
         .ok()
-        .and_then(|value| {
-            value
-                .as_object()
-                .and_then(read_mute_key_option)
-        });
+        .and_then(|value| value.as_object().and_then(read_mute_key_option));
     crate::output_mute::session::install_from_settings(config_value);
 }
 

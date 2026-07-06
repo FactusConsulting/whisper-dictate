@@ -220,10 +220,7 @@ pub fn is_installed() -> bool {
 /// backend failures (missing `pactl`, broken CoreAudio, PowerShell
 /// spawn failure) to the user via the runtime log so the auto-mute
 /// feature does not fail silently on every recording.
-pub fn observe_worker_state(
-    state: Option<&str>,
-    observer_generation: u64,
-) -> Option<MuteError> {
+pub fn observe_worker_state(state: Option<&str>, observer_generation: u64) -> Option<MuteError> {
     let Some(state) = state else { return None };
     if IGNORED_STATES.contains(&state) {
         return None;

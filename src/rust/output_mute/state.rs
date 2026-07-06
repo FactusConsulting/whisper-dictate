@@ -245,7 +245,6 @@ impl Drop for MuteController {
     }
 }
 
-
 // Codex P2 (state.rs:1, PR #440) — tests live in a sibling file
 // (`state_tests.rs`) so this module stays under AGENTS.md's ~500-LOC
 // modularity cap. Impl + tests inline previously weighed 611 lines.
