@@ -515,6 +515,36 @@
       "category": "postprocess"
     },
     {
+      "env": "VOICEPI_POSTPROCESS_HOTKEY",
+      "key": "postprocess_hotkey",
+      "default": null,
+      "live": false,
+      "description": "Optional second hotkey (issue #319): press-to-post-process the last dictated utterance through the active postprocess profile. Empty disables. Same key format as VOICEPI_KEY (e.g. ctrl_r+shift_r, f10).",
+      "advanced": true,
+      "category": "postprocess"
+    },
+    {
+      "env": "VOICEPI_POSTPROCESS_PROFILES",
+      "key": "postprocess_profiles",
+      "default": null,
+      "live": true,
+      "description": "JSON array of postprocess profiles the second hotkey cycles through: each entry has name, processor, mode, model, base_url, timeout_ms, max_input_chars, max_output_chars, redact, redact_terms. Cloud API keys are read from VOICEPI_POST_API_KEY / VOICEPI_STT_API_KEY / provider env vars (never inline in this list). Empty falls back to the built-in grammar/email/bullets seed.",
+      "advanced": true,
+      "category": "postprocess"
+    },
+    {
+      "env": "VOICEPI_POSTPROCESS_PROFILE_INDEX",
+      "key": "postprocess_profile_index",
+      "default": "0",
+      "live": true,
+      "min": 0,
+      "max": 64,
+      "step": 1,
+      "description": "Currently active postprocess profile index. The second hotkey cycles this modulo the profile-list length; the controller persists the value between runs.",
+      "advanced": true,
+      "category": "postprocess"
+    },
+    {
       "env": "VOICEPI_FEEDBACK_SOUNDS",
       "key": "feedback_sounds",
       "default": null,

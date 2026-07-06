@@ -109,6 +109,9 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `post_max_output_chars` | `VOICEPI_POST_MAX_OUTPUT_CHARS` | `4000` | Live | Maximum number of rewritten characters accepted back from the post-processor. |
 | `post_redact` | `VOICEPI_POST_REDACT` | _(unset)_ | Live | Opt-in local redaction before cloud post-processing: replace emails, phone numbers and common API tokens with placeholders, restored afterward when possible. |
 | `post_redact_terms` | `VOICEPI_POST_REDACT_TERMS` | _(unset)_ | Live | Extra comma-separated names/terms to redact before cloud post-processing. Original values are never written to metrics. |
+| `postprocess_hotkey` | `VOICEPI_POSTPROCESS_HOTKEY` | _(unset)_ | Restart | Optional second hotkey (issue #319): press-to-post-process the last dictated utterance through the active postprocess profile. Empty disables. Same key format as VOICEPI_KEY (e.g. ctrl_r+shift_r, f10). |
+| `postprocess_profiles` | `VOICEPI_POSTPROCESS_PROFILES` | _(unset)_ | Live | JSON array of postprocess profiles the second hotkey cycles through: each entry has name, processor, mode, model, base_url, timeout_ms, max_input_chars, max_output_chars, redact, redact_terms. Cloud API keys are read from VOICEPI_POST_API_KEY / VOICEPI_STT_API_KEY / provider env vars (never inline in this list). Empty falls back to the built-in grammar/email/bullets seed. |
+| `postprocess_profile_index` | `VOICEPI_POSTPROCESS_PROFILE_INDEX` | `0` | Live | Currently active postprocess profile index. The second hotkey cycles this modulo the profile-list length; the controller persists the value between runs. |
 
 ### Injection, hotkeys & feedback
 

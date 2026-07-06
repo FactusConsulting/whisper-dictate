@@ -293,6 +293,12 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.post_max_output_chars = defaults.post_max_output_chars;
             settings.post_redact = defaults.post_redact;
             settings.post_redact_terms = defaults.post_redact_terms;
+            // Issue #319: the second-hotkey plumbing (binding + profile
+            // list + active index) resets alongside the base
+            // post-processor knobs since they share the same tab.
+            settings.postprocess_hotkey = defaults.postprocess_hotkey;
+            settings.postprocess_profiles = defaults.postprocess_profiles;
+            settings.postprocess_profile_index = defaults.postprocess_profile_index;
         }
         Tab::Profiles => {
             settings.profiles_json = defaults.profiles_json;

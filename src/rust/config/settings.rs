@@ -63,6 +63,17 @@ pub struct AppSettings {
     pub post_max_output_chars: String,
     pub post_redact: bool,
     pub post_redact_terms: String,
+    /// Second hotkey binding for the LLM post-processing dispatcher
+    /// (issue #319). Same string format as [`Self::key`]; empty disables.
+    pub postprocess_hotkey: String,
+    /// JSON-encoded list of postprocess profiles the second hotkey
+    /// cycles through. Kept as an opaque string here so the UI and the
+    /// Rust runtime can each parse it on demand with the shared
+    /// [`crate::postprocess_hotkey::ProfileRegistry`] helper.
+    pub postprocess_profiles: String,
+    /// Persisted active-profile index. Clamped to the profile list on
+    /// load so a stale value never crashes the second hotkey.
+    pub postprocess_profile_index: String,
     pub feedback_sounds: bool,
     pub feedback_notify: bool,
     pub debug: bool,
@@ -169,6 +180,9 @@ impl Default for AppSettings {
             post_max_output_chars: "4000".to_owned(),
             post_redact: false,
             post_redact_terms: String::new(),
+            postprocess_hotkey: String::new(),
+            postprocess_profiles: String::new(),
+            postprocess_profile_index: "0".to_owned(),
             feedback_sounds: false,
             feedback_notify: false,
             debug: false,
@@ -243,6 +257,7 @@ impl AppSettings {
             "quit_key" => Some(&self.quit_key),
             "quit_count" => Some(&self.quit_count),
             "quit_window_ms" => Some(&self.quit_window_ms),
+            "postprocess_hotkey" => Some(&self.postprocess_hotkey),
             // Iteration-3 review finding #3: not in the static
             // RESTART_KEYS table (Python backends are live-reloadable
             // for this key), but exposed here so the dynamic

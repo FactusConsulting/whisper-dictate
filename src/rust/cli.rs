@@ -182,6 +182,13 @@ pub enum Command {
     /// path.
     #[command(hide = true)]
     Postprocess,
+    /// Internal helper used by the Python worker (or a future Rust
+    /// supervisor) to drive the second-hotkey LLM post-processing
+    /// pipeline (issue #319). JSON envelope on stdin, JSON response on
+    /// stdout — see `src/rust/postprocess_hotkey/mod.rs`. Actions:
+    /// `load_profiles`, `cycle_next`, `cycle_previous`, `dispatch`.
+    #[command(hide = true)]
+    PostprocessHotkey,
     /// Internal helper used by the Python worker for OpenAI-compatible chat
     /// completion (post-processor cloud backend) + transcription prompt
     /// capping. JSON envelope on stdin, JSON response on stdout — see
@@ -798,6 +805,9 @@ mod tests {
 
         let cli = Cli::parse_from(["whisper-dictate", "postprocess"]);
         assert_eq!(cli.command, Some(Command::Postprocess));
+
+        let cli = Cli::parse_from(["whisper-dictate", "postprocess-hotkey"]);
+        assert_eq!(cli.command, Some(Command::PostprocessHotkey));
 
         let cli = Cli::parse_from(["whisper-dictate", "external-api"]);
         assert_eq!(cli.command, Some(Command::ExternalApi));

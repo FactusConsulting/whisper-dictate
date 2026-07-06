@@ -71,6 +71,9 @@ fn changed_settings() -> AppSettings {
         post_max_output_chars: "2345".to_owned(),
         post_redact: true,
         post_redact_terms: "Sara,Lars".to_owned(),
+        postprocess_hotkey: "shift_r+ctrl_r".to_owned(),
+        postprocess_profiles: r#"[{"name":"grammar"}]"#.to_owned(),
+        postprocess_profile_index: "1".to_owned(),
         ui_language: "da".to_owned(),
         overlay_enabled: true,
         overlay_position: "top-left".to_owned(),
@@ -254,6 +257,12 @@ fn post_page_reset_restores_only_post_settings() {
     );
     assert_eq!(settings.post_redact, defaults.post_redact);
     assert_eq!(settings.post_redact_terms, defaults.post_redact_terms);
+    assert_eq!(settings.postprocess_hotkey, defaults.postprocess_hotkey);
+    assert_eq!(settings.postprocess_profiles, defaults.postprocess_profiles);
+    assert_eq!(
+        settings.postprocess_profile_index,
+        defaults.postprocess_profile_index
+    );
     assert_eq!(settings.stt_backend, "openai");
     assert_eq!(settings.dictionary_max_terms, "12");
 }
