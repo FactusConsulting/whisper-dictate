@@ -46,9 +46,9 @@ impl ProfileRegistry {
     /// list between runs) is clamped to `0` so the next press still
     /// fires something reasonable.
     pub fn new(profiles: Vec<PostprocessProfile>, active: usize) -> Self {
-        let clamped = if profiles.is_empty() {
-            0
-        } else if active >= profiles.len() {
+        // Both empty-list and out-of-range clamp to 0; combined into a
+        // single branch so `clippy::if_same_then_else` does not fire.
+        let clamped = if profiles.is_empty() || active >= profiles.len() {
             0
         } else {
             active
