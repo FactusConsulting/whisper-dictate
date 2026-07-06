@@ -158,12 +158,24 @@ pub(super) fn session<T: TranscribeBackend, I: InjectBackend>(
     transcribe: T,
     inject: I,
 ) -> (DictateSession<T, I>, Vec<u8>, SessionEnvGuard) {
+    session_with_config(transcribe, inject, SessionConfig::default())
+}
+
+/// Same as [`session`] but with a caller-supplied [`SessionConfig`], so
+/// the Wave 5.5 post-process / format-command wiring tests can flip on
+/// their respective fields without touching the default config every
+/// other test relies on.
+pub(super) fn session_with_config<T: TranscribeBackend, I: InjectBackend>(
+    transcribe: T,
+    inject: I,
+    config: SessionConfig,
+) -> (DictateSession<T, I>, Vec<u8>, SessionEnvGuard) {
     let lock = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let env = crate::test_env_lock::EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     (
-        DictateSession::new(transcribe, inject, SessionConfig::default()),
+        DictateSession::new(transcribe, inject, config),
         Vec::new(),
         SessionEnvGuard {
             _lock: lock,

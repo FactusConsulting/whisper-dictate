@@ -41,16 +41,50 @@ pub(super) fn emit_status<W: Write>(
     write_line(writer, &Value::Object(payload))
 }
 
+/// Extra postprocess / format-command / raw-text fields to weave into
+/// a `utterance` worker event. Extracted into a struct so the emitter's
+/// signature stays legible as new fields land (Wave 5.5 adds ten; PR 5
+/// will add more from the dictionary pipeline).
+///
+/// All fields are optional so a caller that has not wired post-processing
+/// yet still calls the emitter with `Default::default()` and produces a
+/// byte-identical event to the pre-Wave-5.5 wire.
+#[derive(Debug, Clone, Default)]
+pub(super) struct UtteranceExtras {
+    /// The transcribed text BEFORE post-processing / format commands.
+    /// Mirrors Python's `raw_text` field on the utterance event so
+    /// consumers that compare raw vs. final text keep working. When
+    /// `None`, the field is omitted (backwards-compatible default).
+    pub(super) raw_text: Option<String>,
+    /// Post-processing error message. Surfaced on the utterance event
+    /// so the supervisor / UI can drive a "post fallback" indicator
+    /// without re-parsing logs. `None` on success or when
+    /// post-processing did not run.
+    pub(super) postprocess_error: Option<String>,
+    /// Post-processing provenance mirroring Python's `post_*` fields.
+    pub(super) post_provider: Option<String>,
+    pub(super) post_mode: Option<String>,
+    pub(super) post_latency_ms: Option<u64>,
+    pub(super) post_changed: Option<bool>,
+    pub(super) post_fallback: Option<bool>,
+    /// Format-command provenance mirroring Python's
+    /// `format_commands_*` fields.
+    pub(super) format_enabled: Option<bool>,
+    pub(super) format_command_set: Option<String>,
+    pub(super) format_changed: Option<bool>,
+}
+
 /// Emit one `[worker-event] {…,"event":"utterance",…}` line. Carries
 /// the subset of fields `vp_dictate.py::_utterance_event` exposes from
-/// the trait surface; the long-tail post-process / format / dictionary
-/// fields land with PR 5.
+/// the trait surface plus optional postprocess / format extras added in
+/// Wave 5.5.
 pub(super) fn emit_utterance<W: Write>(
     writer: &mut W,
     text: &str,
     result: &TranscribeResult,
     recording_s: Value,
     inject_error: Option<String>,
+    extras: UtteranceExtras,
 ) -> Result<(), SessionError> {
     let mut payload: Map<String, Value> = Map::new();
     payload.insert("event".into(), Value::from("utterance"));
@@ -84,6 +118,36 @@ pub(super) fn emit_utterance<W: Write>(
     }
     if let Some(err) = inject_error {
         payload.insert("inject_error".into(), Value::from(err));
+    }
+    if let Some(raw) = extras.raw_text {
+        payload.insert("raw_text".into(), Value::from(raw));
+    }
+    if let Some(err) = extras.postprocess_error {
+        payload.insert("postprocess_error".into(), Value::from(err));
+    }
+    if let Some(provider) = extras.post_provider {
+        payload.insert("post_processor".into(), Value::from(provider));
+    }
+    if let Some(mode) = extras.post_mode {
+        payload.insert("post_mode".into(), Value::from(mode));
+    }
+    if let Some(latency) = extras.post_latency_ms {
+        payload.insert("post_latency_ms".into(), Value::from(latency));
+    }
+    if let Some(changed) = extras.post_changed {
+        payload.insert("post_changed".into(), Value::from(changed));
+    }
+    if let Some(fallback) = extras.post_fallback {
+        payload.insert("post_fallback".into(), Value::from(fallback));
+    }
+    if let Some(enabled) = extras.format_enabled {
+        payload.insert("format_commands_enabled".into(), Value::from(enabled));
+    }
+    if let Some(set) = extras.format_command_set {
+        payload.insert("format_commands_set".into(), Value::from(set));
+    }
+    if let Some(changed) = extras.format_changed {
+        payload.insert("format_commands_changed".into(), Value::from(changed));
     }
     write_line(writer, &Value::Object(payload))
 }
