@@ -9,8 +9,84 @@ pub struct Cli {
     #[arg(long)]
     pub version: bool,
 
+    /// Issue #326: forward a "toggle recording" command to the running
+    /// whisper-dictate daemon (start if idle, stop-and-transcribe if
+    /// recording) and exit. On Linux this sends SIGUSR1 to the PID from
+    /// the daemon's PID file; on macOS/Windows it currently errors with a
+    /// clear "not implemented" message (Linux-only IPC for now, per #326).
+    /// Mutually exclusive with `--start-recording`, `--stop-recording`,
+    /// `--cancel-recording`, and `--version` (clap-enforced). When combined
+    /// with a subcommand the flag wins — `main.rs` short-circuits to the
+    /// IPC forwarder before the subcommand match runs, matching the documented
+    /// "exactly one top-level action per invocation" contract.
+    #[arg(
+        long = "toggle-recording",
+        conflicts_with_all = [
+            "start_recording", "stop_recording", "cancel_recording", "version",
+        ],
+    )]
+    pub toggle_recording: bool,
+
+    /// Forward a "start recording" command to the running daemon. On the
+    /// wire this still uses SIGUSR1 (Unix signals carry no data); the CLI
+    /// writes the action token to a small command file so the daemon
+    /// distinguishes start / stop / toggle. No-op if the daemon is already
+    /// recording.
+    #[arg(
+        long = "start-recording",
+        conflicts_with_all = [
+            "toggle_recording", "stop_recording", "cancel_recording", "version",
+        ],
+    )]
+    pub start_recording: bool,
+
+    /// Forward a "stop and transcribe" command to the running daemon. Same
+    /// wire as `--start-recording` (SIGUSR1 + command file). No-op if no
+    /// recording is in flight.
+    #[arg(
+        long = "stop-recording",
+        conflicts_with_all = [
+            "toggle_recording", "start_recording", "cancel_recording", "version",
+        ],
+    )]
+    pub stop_recording: bool,
+
+    /// Forward a "cancel recording" command to the running daemon
+    /// (discard buffered audio, no transcription). Uses SIGUSR2 so it
+    /// works even when the command file is missing — the documented
+    /// "emergency stop" hotkey.
+    #[arg(
+        long = "cancel-recording",
+        conflicts_with_all = [
+            "toggle_recording", "start_recording", "stop_recording", "version",
+        ],
+    )]
+    pub cancel_recording: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+impl Cli {
+    /// Map the four external-toggle flags onto an [`crate::runtime::external_toggle::ExternalCommand`].
+    /// Returns `None` when none of the flags are set; callers in `main.rs`
+    /// use this to short-circuit before dispatching the subcommand.
+    /// Mutual exclusion is enforced by clap (`conflicts_with_all`); this
+    /// helper just maps the matched flag to the IPC enum.
+    pub fn external_command(&self) -> Option<crate::runtime::external_toggle::ExternalCommand> {
+        use crate::runtime::external_toggle::ExternalCommand;
+        if self.toggle_recording {
+            Some(ExternalCommand::Toggle)
+        } else if self.start_recording {
+            Some(ExternalCommand::Start)
+        } else if self.stop_recording {
+            Some(ExternalCommand::Stop)
+        } else if self.cancel_recording {
+            Some(ExternalCommand::Cancel)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -896,6 +972,80 @@ mod tests {
                 command: ModelsCommand::Path,
             })
         );
+    }
+
+    // --- External toggle flags (issue #326) -------------------------------
+
+    #[test]
+    fn parses_toggle_recording_flag() {
+        use crate::runtime::external_toggle::ExternalCommand;
+        let cli = Cli::parse_from(["whisper-dictate", "--toggle-recording"]);
+        assert!(cli.toggle_recording);
+        assert_eq!(cli.external_command(), Some(ExternalCommand::Toggle));
+    }
+
+    #[test]
+    fn parses_start_recording_flag() {
+        use crate::runtime::external_toggle::ExternalCommand;
+        let cli = Cli::parse_from(["whisper-dictate", "--start-recording"]);
+        assert!(cli.start_recording);
+        assert_eq!(cli.external_command(), Some(ExternalCommand::Start));
+    }
+
+    #[test]
+    fn parses_stop_recording_flag() {
+        use crate::runtime::external_toggle::ExternalCommand;
+        let cli = Cli::parse_from(["whisper-dictate", "--stop-recording"]);
+        assert!(cli.stop_recording);
+        assert_eq!(cli.external_command(), Some(ExternalCommand::Stop));
+    }
+
+    #[test]
+    fn parses_cancel_recording_flag() {
+        use crate::runtime::external_toggle::ExternalCommand;
+        let cli = Cli::parse_from(["whisper-dictate", "--cancel-recording"]);
+        assert!(cli.cancel_recording);
+        assert_eq!(cli.external_command(), Some(ExternalCommand::Cancel));
+    }
+
+    #[test]
+    fn external_command_is_none_when_no_flag_set() {
+        let cli = Cli::parse_from(["whisper-dictate"]);
+        assert!(cli.external_command().is_none());
+    }
+
+    #[test]
+    fn external_toggle_flags_conflict_with_each_other() {
+        // clap enforces the conflicts_with_all attribute: invoking two
+        // mutually-exclusive flags must fail at parse time so we never
+        // silently pick one over the other.
+        let err = Cli::try_parse_from([
+            "whisper-dictate",
+            "--toggle-recording",
+            "--cancel-recording",
+        ])
+        .expect_err("conflicting flags must error");
+        assert!(
+            err.to_string()
+                .to_ascii_lowercase()
+                .contains("cannot be used with"),
+            "expected clap conflict error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn external_toggle_flag_takes_precedence_over_subcommand() {
+        // Clap does not expose the `#[command(subcommand)]` field as a valid
+        // `conflicts_with` target, so a user that types
+        // `whisper-dictate --toggle-recording ui` parses without a parse-time
+        // error. `main.rs` short-circuits to the IPC forwarder when
+        // `external_command()` is `Some`, so the subcommand is silently
+        // ignored — assert the flag wins, documenting the precedence
+        // contract.
+        let cli = Cli::parse_from(["whisper-dictate", "--toggle-recording", "ui"]);
+        assert!(cli.toggle_recording);
+        assert_eq!(cli.command, Some(Command::Ui));
+        assert!(cli.external_command().is_some());
     }
 
     #[test]

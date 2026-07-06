@@ -13,7 +13,15 @@ fn help_uses_public_binary_name_even_when_binary_path_differs() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success());
-    assert!(stdout.contains("Usage: whisper-dictate [COMMAND]"));
+    // After issue #326 added top-level `--toggle-recording` / etc. flags,
+    // clap renders `Usage: whisper-dictate [OPTIONS] [COMMAND]` instead of
+    // `[COMMAND]`. Accept either shape so the public binary-name assertion
+    // (the actual contract of this test) keeps holding regardless of how
+    // many top-level flags exist.
+    assert!(
+        stdout.contains("Usage: whisper-dictate"),
+        "expected public binary name in usage line, got: {stdout}"
+    );
     assert!(!stdout.contains("Usage: whisper-dictate-app"));
 }
 

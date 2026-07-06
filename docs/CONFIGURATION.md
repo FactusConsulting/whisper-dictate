@@ -430,6 +430,68 @@ Notes:
   "server mode"; it is the normal `whisper-dictate run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).
 
+### Recipe E — External toggle from a compositor keybinding (Linux / Wayland)
+
+On Wayland the compositor owns global hotkeys, not the application. Bind your
+compositor shortcut to one of the CLI flags (or send a Unix signal directly) to
+drive recording from a system-wide key without fighting the Wayland security
+model. Issue #326.
+
+```bash
+# Toggle start↔stop (the most useful binding).
+whisper-dictate --toggle-recording
+
+# Or, for explicit start/stop bindings (useful with two separate hotkeys):
+whisper-dictate --start-recording
+whisper-dictate --stop-recording
+
+# Emergency "discard whatever is buffered now" — discards audio, no transcript.
+whisper-dictate --cancel-recording
+
+# Equivalent raw signals (no extra process spawn — handy from a script):
+kill -USR1 "$(pidof whisper-dictate)"   # toggle (default action of SIGUSR1)
+kill -USR2 "$(pidof whisper-dictate)"   # cancel
+```
+
+How it works:
+
+- The daemon (the `whisper-dictate` UI process) writes its PID to
+  `$XDG_RUNTIME_DIR/whisper-dictate/whisper-dictate.pid` at startup and
+  installs SIGUSR1 (toggle / start / stop) + SIGUSR2 (cancel) handlers.
+- The CLI flag writes its action (`toggle` / `start` / `stop`) to a one-line
+  command file under the same directory, then sends SIGUSR1. The daemon's
+  signal handler reads-and-deletes the file to disambiguate. SIGUSR2 needs no
+  file — it always means cancel.
+- The triggered command flows into the same hotkey state machine as a
+  keyboard PTT chord, so the `Idle` / `Recording` / `Processing` guards
+  apply uniformly. External toggles bypass the 30 ms bouncing-key debounce
+  (they are user-driven, not key-jitter).
+
+Example sway config (`~/.config/sway/config`):
+
+```text
+bindsym $mod+grave exec whisper-dictate --toggle-recording
+bindsym $mod+Shift+grave exec whisper-dictate --cancel-recording
+```
+
+Example GNOME custom shortcut: Settings → Keyboard → Custom Shortcuts → Add,
+command `whisper-dictate --toggle-recording`, bind to your key of choice.
+
+Caveats:
+
+- **Linux only today.** macOS and Windows print a clear "not implemented"
+  error on the CLI side; a future PR can wire equivalent IPC (named pipes
+  on Windows, Distributed Notifications on macOS).
+- **Requires the Rust hotkey backend to act on the signal.** External
+  triggers route through the Rust hotkey coordinator
+  (`VOICEPI_HOTKEY_BACKEND=rust` on a binary built with `--features
+  rust-hotkeys`). On the default Python-backend build the signal still
+  arrives and shows in the runtime log, but does not start a recording.
+- **One daemon per user.** If you have multiple `whisper-dictate` UI
+  processes running, only the most recent one wins (it overwrites the PID
+  file). Use the tray menu or `pgrep whisper-dictate` to confirm before
+  binding the hotkey.
+
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.py`
 
 Before `setx VOICEPI_KEY <something>`, verify your OS actually delivers

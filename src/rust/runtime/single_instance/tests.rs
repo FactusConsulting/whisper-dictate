@@ -6,36 +6,47 @@
 //!   parallel and never touch a real `$XDG_RUNTIME_DIR`.
 
 use super::*;
+use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 use std::sync::MutexGuard;
 use std::time::Duration;
 use tempfile::TempDir;
 
 /// Test guard that (1) serialises access to the crate-wide env lock and
 /// (2) points the single-instance runtime dir at a per-test tempdir.
-/// The Drop impl clears the env var so leaks between tests can't
-/// happen even on panic.
+///
+/// The lock is acquired with `unwrap_or_else(|e| e.into_inner())` rather
+/// than `.expect(...)`: any panic inside an env-mutating test poisons
+/// the crate-wide mutex, and `.expect` would cascade every subsequent
+/// test into a `PoisonError` failure — obscuring the real root cause.
+/// This is the poison-recovery pattern documented in
+/// [`crate::test_env_lock`]; recovering the inner value is safe because
+/// [`EnvVarGuard`]'s Drop restores env state unconditionally.
+///
+/// The override is applied via [`EnvVarGuard`] rather than a manual
+/// `set_var` + `Drop`-remove pair so a pre-existing value in the process
+/// env is restored on drop, and a panic mid-test cannot leak the
+/// override into every later test in the same binary (Codex P2 #415
+/// pattern).
 struct TestEnv {
+    // Field-drop order is declaration order in Rust: the env guard
+    // drops BEFORE the mutex guard, so the env is restored while we
+    // still hold the crate-wide lock — no other env-mutating test can
+    // observe the half-restored state.
+    _env: EnvVarGuard,
     _guard: MutexGuard<'static, ()>,
     _dir: TempDir,
 }
 
 impl TestEnv {
     fn new() -> Self {
-        let guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .expect("ENV_LOCK poisoned");
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().expect("tempdir");
-        std::env::set_var(RUNTIME_DIR_OVERRIDE_ENV, dir.path());
+        let env = EnvVarGuard::set(RUNTIME_DIR_OVERRIDE_ENV, dir.path());
         Self {
+            _env: env,
             _guard: guard,
             _dir: dir,
         }
-    }
-}
-
-impl Drop for TestEnv {
-    fn drop(&mut self) {
-        std::env::remove_var(RUNTIME_DIR_OVERRIDE_ENV);
     }
 }
 
