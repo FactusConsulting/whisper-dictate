@@ -1,8 +1,7 @@
-//! Wave 5 PR 6 of #348: the `whisper-dictate worker-rust` CLI entry
+//! Wave 5 PR 6+7 of #348: the `whisper-dictate worker-rust` CLI entry
 //! point — a long-running, in-process Rust dictation worker that
-//! replaces the Python `vp_dictate.py` / `runtime.py` orchestrator
-//! when `VOICEPI_DICTATE_BACKEND=rust-session` is set AND the binary
-//! was built with the full feature set
+//! REPLACES the Python `vp_dictate.py` / `runtime.py` orchestrator on
+//! any build compiled with the full feature set
 //! (`whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`).
 //!
 //! The subprocess driven by this entry point owns the full dictation
@@ -15,18 +14,30 @@
 //! wire format the supervisor's `parse_worker_event` consumer already
 //! ingests.
 //!
-//! # PR 6 is opt-in only
+//! # PR 7 default: Rust worker; escape hatch: Python
 //!
-//! * `VOICEPI_DICTATE_BACKEND` unset -> supervisor spawns Python
-//!   (byte-for-byte unchanged behaviour).
-//! * `VOICEPI_DICTATE_BACKEND=rust-session` + all four features ->
-//!   supervisor spawns this subcommand instead of Python.
-//! * `VOICEPI_DICTATE_BACKEND=rust-session` + any feature missing ->
-//!   supervisor stays on Python (this subcommand exits non-zero with
-//!   a clear "feature not compiled in" message if invoked directly).
+//! * `VOICEPI_DICTATE_BACKEND` unset + all four features ->
+//!   supervisor spawns THIS worker (production default; the Rust
+//!   worker owns dictation end-to-end).
+//! * `VOICEPI_DICTATE_BACKEND=python-legacy` (any casing/whitespace)
+//!   + Python bundle still installed -> emergency rollback. Supervisor
+//!   spawns Python (`python -m whisper_dictate.runtime`) exactly like
+//!   the pre-PR-7 default. Provided so a real-world regression during
+//!   the Wave-7 → Wave-8 burn-in can be un-stuck without a rollback
+//!   build. Wave 8 deletes the Python bundle and drops this escape
+//!   hatch (issue #348).
+//! * Any feature in the four-feature set missing -> supervisor stays
+//!   on Python regardless of the env var (this subcommand exits
+//!   non-zero with a clear "feature not compiled in" message if
+//!   invoked directly). This branch is compiled-out on stock CI
+//!   builds so PR 6's pre-flip semantics still hold for dev/test.
 //!
-//! PR 7 will delete `vp_dictate.py` / `runtime.py` and flip the
-//! default; until then production keeps shipping Python.
+//! Historical values (`VOICEPI_DICTATE_BACKEND=rust`,
+//! `=rust-session`) are still recognised by
+//! [`super::rust_session_sink::dictate_backend_rust_session_requested`]
+//! for the supervisor-side session-sink hotkey routing on the Python
+//! fallback path; on the new-default delegate path those knobs are
+//! moot because the subprocess owns everything.
 //!
 //! # Test mode (`--stdin-only`)
 //!
@@ -92,19 +103,28 @@ pub const fn all_required_features_enabled() -> bool {
 /// Whether the supervisor should delegate the dictation lifecycle to
 /// the worker-rust subprocess instead of Python. True iff all three:
 ///
-/// * the user requested the rust-session backend via env var, AND
 /// * the binary was built with [`all_required_features_enabled`], AND
+/// * the user did NOT set the Python-legacy escape hatch
+///   (`VOICEPI_DICTATE_BACKEND=python-legacy`) --
+///   [`rust_session_sink::dictate_backend_python_legacy_requested`], AND
 /// * the effective `VOICEPI_STT_BACKEND` names a backend the rust
-///   worker knows how to build ([`unsupported_worker_rust_settings_reason`]
-///   returns `None`).
+///   worker knows how to build
+///   ([`unsupported_worker_rust_settings_reason`] returns `None`).
+///
+/// Wave 5 PR 7 of #348 flipped this gate: PR 6 required the user to
+/// opt IN via `VOICEPI_DICTATE_BACKEND=rust-session`; PR 7 makes the
+/// Rust worker the production default and provides `python-legacy` as
+/// an emergency rollback for the Wave-7 -> Wave-8 burn-in. Wave 8
+/// deletes the Python bundle and this helper collapses to
+/// `all_required_features_enabled() && unsupported_worker_rust_settings_reason().is_none()`.
 ///
 /// Pure helper so the gate is unit-testable. The supervisor's
 /// `RuntimeSupervisor::start` consults this to swap its spawned
 /// command for the worker-rust subcommand AND to skip its own
 /// in-process Rust hotkey install (the subprocess installs its own).
 pub fn should_delegate_to_worker_rust() -> bool {
-    rust_session_sink::dictate_backend_rust_session_requested()
-        && all_required_features_enabled()
+    all_required_features_enabled()
+        && !rust_session_sink::dictate_backend_python_legacy_requested()
         && unsupported_worker_rust_settings_reason().is_none()
 }
 

@@ -350,12 +350,16 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         forward_args: Vec<String>,
     },
-    /// Wave 5 PR 6 of #348: long-running in-process Rust dictation worker.
-    /// Replaces the Python `vp_dictate.py`/`runtime.py` orchestrator when
-    /// `VOICEPI_DICTATE_BACKEND=rust-session` is set AND the binary was built
-    /// with `--features whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`.
-    /// Without the env var or the features the supervisor stays on the
-    /// Python path (PR 7 will flip the default).
+    /// Wave 5 PR 6+7 of #348: long-running in-process Rust dictation worker.
+    /// REPLACES the Python `vp_dictate.py`/`runtime.py` orchestrator on any
+    /// build compiled with
+    /// `--features whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`.
+    /// Users can force the pre-PR-7 Python fallback with
+    /// `VOICEPI_DICTATE_BACKEND=python-legacy` during the Wave-7 → Wave-8
+    /// burn-in only; Wave 8 removes the Python bundle and this escape
+    /// hatch together. Stock CI builds (any feature missing) still stay
+    /// on Python by construction — this subcommand refuses to run
+    /// there.
     ///
     /// Owns the full PTT lifecycle in-process: installs the Rust hotkey
     /// listener (rdev), spawns the audio pump (cpal -> Silero VAD), drives

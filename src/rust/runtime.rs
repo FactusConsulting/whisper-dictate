@@ -478,16 +478,22 @@ impl RuntimeSupervisor {
         self.state = RuntimeState::Starting;
         let mut effective_command = command;
 
-        // Wave 5 PR 6 of #348: delegate the dictation lifecycle to the
-        // `whisper-dictate worker-rust` subprocess when the user opted
-        // in via `VOICEPI_DICTATE_BACKEND=rust-session` AND the binary
-        // was built with the full feature set
+        // Wave 5 PR 6 (+ PR 7 default-flip) of #348: delegate the
+        // dictation lifecycle to the `whisper-dictate worker-rust`
+        // subprocess on any build compiled with the full feature set
         // (`whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`).
         // The subprocess owns the entire lifecycle in-process: it
         // installs its own rdev OS listener, runs the
         // `DictateSession` with the real backends, and emits worker
         // events back to us through stderr (already wired by
         // `stream_lines` below).
+        //
+        // PR 7 flipped the default: previously the user had to opt IN
+        // via `VOICEPI_DICTATE_BACKEND=rust-session`; now the Rust
+        // worker runs unconditionally on a full-feature build and the
+        // user opts OUT with `VOICEPI_DICTATE_BACKEND=python-legacy`
+        // for the Wave-7 → Wave-8 burn-in only. Wave 8 removes the
+        // Python bundle and this escape hatch together.
         //
         // When delegating we MUST also skip the supervisor's own
         // in-process Rust hotkey install -- otherwise the parent and
@@ -496,16 +502,19 @@ impl RuntimeSupervisor {
         // subprocess opens its own cpal stream via the audio pump in
         // `rust_session_audio.rs`).
         //
-        // Without the env var OR with any feature missing this path is
-        // a no-op and the supervisor stays on Python -- the production
-        // default until PR 7 ships.
+        // With the escape hatch set OR with any required feature
+        // missing (typical on stock CI builds), this path is a no-op
+        // and the supervisor stays on Python. `worker-rust` refuses
+        // to run on incomplete-feature builds anyway.
         let delegate_requested = worker_rust::should_delegate_to_worker_rust();
         let mut swap_succeeded = true;
         if delegate_requested {
             if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
                 let _ = self.tx.send(RuntimeEvent::Stderr(format!(
                     "[runtime] worker-rust delegation failed ({err}); \
-                     falling back to the Python orchestrator"
+                     falling back to the Python orchestrator (set \
+                     VOICEPI_DICTATE_BACKEND=python-legacy to force this \
+                     fallback path proactively)"
                 )));
                 swap_succeeded = false;
             }
@@ -2404,12 +2413,13 @@ pub mod audio_spawn;
 // The module ships the machinery; opt-in wire-up lives in
 // `main.rs::run()` behind `VOICEPI_SINGLE_INSTANCE`.
 pub mod single_instance;
-// Wave 5 PR 6 of #348: the `whisper-dictate worker-rust` CLI entry
+// Wave 5 PR 6+7 of #348: the `whisper-dictate worker-rust` CLI entry
 // point + supervisor-side "delegate to worker-rust subprocess" gate.
-// Production code path (without VOICEPI_DICTATE_BACKEND=rust-session +
-// all four features) is byte-for-byte unchanged: when the env var is
-// unset OR the feature set is incomplete, the supervisor stays on
-// Python. PR 7 will flip the default and delete the Python orchestrator.
+// After PR 7 (default flip) a full-feature build spawns the Rust
+// worker unconditionally; users opt out with
+// `VOICEPI_DICTATE_BACKEND=python-legacy` to fall back to the pre-flip
+// Python orchestrator during the Wave-7 → Wave-8 burn-in. Wave 8
+// removes the Python bundle and this fallback together.
 pub mod worker_rust;
 // Issue #326: CLI flags + Unix signals (SIGUSR1 = toggle, SIGUSR2 = cancel)
 // for compositor-driven external triggers. Lives in its own file so

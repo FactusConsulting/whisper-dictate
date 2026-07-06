@@ -43,7 +43,12 @@ fn all_required_features_enabled_reflects_cfg_set() {
 }
 
 #[test]
-fn should_delegate_only_when_env_and_features_match() {
+fn should_delegate_default_is_on_and_python_legacy_opts_out() {
+    // Wave 5 PR 7 of #348 flipped the semantics: previously the gate
+    // required `VOICEPI_DICTATE_BACKEND=rust-session` to opt IN; now
+    // the Rust worker is the default and the user opts OUT via
+    // `=python-legacy`. Feature-gated: the delegate can only be true
+    // when the four-feature set is compiled in.
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev_dictate = std::env::var_os("VOICEPI_DICTATE_BACKEND");
     let prev_hotkey = std::env::var_os("VOICEPI_HOTKEY_BACKEND");
@@ -53,37 +58,80 @@ fn should_delegate_only_when_env_and_features_match() {
     // it's covered by dedicated tests below.
     std::env::remove_var("VOICEPI_STT_BACKEND");
 
-    // env unset -> never delegate, regardless of features.
+    // env unset -> DEFAULT delegate (mirrors the feature gate). This
+    // is the load-bearing PR 7 assertion: without any env var, the
+    // gate returns true on a full-feature build so production hits
+    // the Rust worker path.
     std::env::remove_var("VOICEPI_DICTATE_BACKEND");
-    std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
-    assert!(!should_delegate_to_worker_rust());
-
-    // env set but not the magic value -> never delegate.
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust");
-    assert!(!should_delegate_to_worker_rust());
-
-    // env set to the magic value -> result mirrors the feature gate.
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
-    assert_eq!(
-        should_delegate_to_worker_rust(),
-        all_required_features_enabled()
-    );
-
-    // Claude review comment #3523185556 on PR #434: even with
-    // `VOICEPI_HOTKEY_BACKEND` unset the delegate gate MUST still
-    // fire so the supervisor spawns the worker-rust subprocess (which
-    // owns the hotkey install internally via `install_listener` --
-    // that helper bypasses the separate hotkey-backend env var
-    // because the subprocess IS the requested backend by
-    // construction). Otherwise a user who set only
-    // VOICEPI_DICTATE_BACKEND=rust-session would silently regress to
-    // Python.
     std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
     assert_eq!(
         should_delegate_to_worker_rust(),
         all_required_features_enabled(),
-        "delegate gate must not require VOICEPI_HOTKEY_BACKEND -- \
-         the subprocess installs rdev unconditionally on the delegate path"
+        "PR 7 default: unset VOICEPI_DICTATE_BACKEND must delegate on a full-feature build"
+    );
+
+    // env set to the historical `rust-session` opt-in -> still
+    // delegate. The value is redundant post-PR-7 but recognised so
+    // users with the setting exported in their profile keep the
+    // exact same behaviour they had on PR 6.
+    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
+    assert_eq!(
+        should_delegate_to_worker_rust(),
+        all_required_features_enabled(),
+        "the historical `rust-session` value must still delegate post-PR-7"
+    );
+
+    // env set to `rust` (historical Python-side shell-out gate) ->
+    // still delegate. That value is consumed by the Python wrapper
+    // NOT by the Rust supervisor's delegate gate, so it must not
+    // pull the supervisor off the new default.
+    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust");
+    assert_eq!(
+        should_delegate_to_worker_rust(),
+        all_required_features_enabled(),
+        "`rust` value is a Python-side knob and must not block delegation"
+    );
+
+    // env set to the escape hatch -> NEVER delegate, regardless of
+    // features. This is the PR 7 rollback path: the supervisor
+    // stays on the pre-PR-7 Python orchestrator.
+    std::env::set_var("VOICEPI_DICTATE_BACKEND", "python-legacy");
+    assert!(
+        !should_delegate_to_worker_rust(),
+        "python-legacy escape hatch must opt out of delegation"
+    );
+
+    // Escape hatch matching is case-insensitive + trims whitespace
+    // (shell-set values from a crash-cart edit must still work).
+    std::env::set_var("VOICEPI_DICTATE_BACKEND", "  Python-Legacy  ");
+    assert!(
+        !should_delegate_to_worker_rust(),
+        "python-legacy escape hatch must match case-insensitively with surrounding whitespace"
+    );
+
+    // Claude review comment #3523185556 on PR #434 (preserved by PR
+    // 7): `VOICEPI_HOTKEY_BACKEND` MUST NOT gate delegation; the
+    // subprocess installs rdev on its own via `install_listener`
+    // regardless of the hotkey-backend env var. If a user opted out
+    // via python-legacy AND unset the hotkey backend, they must
+    // still land on Python (belt-and-braces: hotkey env being unset
+    // is the default state, so this also tests that the *combined*
+    // gate is python-legacy-dominant).
+    std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
+    std::env::set_var("VOICEPI_DICTATE_BACKEND", "python-legacy");
+    assert!(
+        !should_delegate_to_worker_rust(),
+        "escape hatch must dominate over any hotkey-backend state"
+    );
+
+    // And once we clear the escape hatch AND leave hotkey backend
+    // unset, we're back on the new default -- the subprocess owns
+    // its own rdev install so no separate opt-in is needed.
+    std::env::remove_var("VOICEPI_DICTATE_BACKEND");
+    assert_eq!(
+        should_delegate_to_worker_rust(),
+        all_required_features_enabled(),
+        "removing the escape hatch restores the PR 7 default even with hotkey backend unset"
     );
 
     // restore the previous env state so we don't pollute siblings.
