@@ -598,8 +598,64 @@ jobs:
           if ($p2.ExitCode -ne 0) { throw "whisper-dictate.exe config path exited $($p2.ExitCode)" }
           Write-Host "  ok  config path exit 0"
 
+      - name: Rust worker headless smoke (worker-rust --stdin-only)
+        if: steps.download.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:APP_ROOT 'whisper-dictate.exe'
+
+          # Wave 5 PR 7 of #348: the installed release build ships with the full
+          # feature set (whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys)
+          # so `worker-rust` is the production dictation entry point that
+          # RuntimeSupervisor::start delegates to. `--stdin-only` skips the rdev
+          # OS-listener install (headless runner has no display / accessibility
+          # permission) and drives the coordinator from stdin commands only —
+          # closing stdin is the documented clean-shutdown mechanism on Windows
+          # where SIGTERM isn't reliable. With no PTT chord configured
+          # (VOICEPI_KEY unset) + closed stdin the worker emits its startup
+          # `state=ready` heartbeat, waits, sees EOF, and exits 0.
+          #
+          # This is the load-bearing PR 7 assertion: the shipped Rust worker
+          # binary comes up end-to-end on a fresh installer image without ever
+          # invoking Python — the pre-PR-7 smoke test proved Python worked,
+          # this one proves the new production default works.
+          Write-Host "Running: whisper-dictate.exe worker-rust --stdin-only (stdin closed)"
+          $stdinFile = Join-Path $env:TEMP 'wd-worker-rust-empty-stdin.txt'
+          Set-Content -LiteralPath $stdinFile -Value '' -NoNewline
+          $stderrFile = Join-Path $env:TEMP 'wd-worker-rust-stderr.log'
+          $p = Start-Process `
+            -FilePath $exe `
+            -ArgumentList 'worker-rust','--stdin-only' `
+            -Wait -PassThru -WindowStyle Hidden `
+            -RedirectStandardInput $stdinFile `
+            -RedirectStandardError $stderrFile
+          Remove-Item -LiteralPath $stdinFile -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $stderrFile) {
+            Write-Host "--- worker-rust stderr ---"
+            Get-Content -LiteralPath $stderrFile
+            Write-Host "---------------------------"
+          }
+          if ($p.ExitCode -ne 0) {
+            throw "whisper-dictate.exe worker-rust --stdin-only exited $($p.ExitCode) (expected 0 -- see stderr above)"
+          }
+          # Assert the startup heartbeat appeared on stderr: without this a
+          # future refactor that made the worker exit 0 before ever emitting a
+          # worker event would silently pass. The `[worker-event] ` prefix +
+          # `"state":"ready"` is the exact wire form
+          # RuntimeSupervisor::parse_worker_event consumes.
+          if (Test-Path -LiteralPath $stderrFile) {
+            $stderrText = Get-Content -LiteralPath $stderrFile -Raw
+            Remove-Item -LiteralPath $stderrFile -ErrorAction SilentlyContinue
+            if ($stderrText -notmatch '\[worker-event\][^\n]*"state":"ready"') {
+              throw "worker-rust did not emit startup [worker-event] state=ready heartbeat on stderr; got: $stderrText"
+            }
+            Write-Host "  ok  worker-rust emitted startup state=ready heartbeat"
+          }
+          Write-Host "  ok  worker-rust --stdin-only exit 0"
+
       - name: Summary
         if: steps.download.outputs.found == 'true'
         shell: bash
         run: |
-          echo "install-smoke PASSED for $TAG: silent-install layout OK, Rust controller launches headless (exit 0)."
+          echo "install-smoke PASSED for $TAG: silent-install layout OK, Rust controller launches headless (exit 0), production worker-rust dictation entry point comes up end-to-end (emits state=ready, exits 0 on stdin EOF) — no Python required on the primary dictation path (Wave 5 PR 7 of #348)."
