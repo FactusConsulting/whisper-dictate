@@ -173,6 +173,15 @@ fn recv_command_blocking_returns_pushed_command() {
     // command surfaces via the block-wait path (used by the Linux
     // e2e test to avoid poll+sleep starvation on CI). Runs on every
     // target so the helper stays live under `clippy -D warnings`.
+    //
+    // The global `CHANNEL` is process-shared, so we serialise on the
+    // crate-wide `ENV_LOCK` to avoid racing `linux_signal_handler_end_to_end`
+    // (which also touches the channel through the signal handler).
+    // Without this guard the two tests can interleave: a stray
+    // `push_command` from here lands on the signal-handler test's
+    // `wait_for_command` recv and vice versa.
+    use crate::test_env_lock::ENV_LOCK;
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     reset_channel_for_tests();
     push_command(ExternalCommand::Cancel);
     let recv = recv_command_blocking(std::time::Duration::from_secs(1));
@@ -187,6 +196,10 @@ fn recv_command_blocking_returns_pushed_command() {
 fn recv_command_blocking_times_out_when_channel_empty() {
     // Second cross-platform pin: with nothing pushed the helper must
     // honour the timeout and yield None, not block indefinitely.
+    // Same channel-race justification as above -- hold `ENV_LOCK` so
+    // a parallel test cannot slip a `push_command` in mid-recv.
+    use crate::test_env_lock::ENV_LOCK;
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     reset_channel_for_tests();
     let started = std::time::Instant::now();
     let result = recv_command_blocking(std::time::Duration::from_millis(30));
