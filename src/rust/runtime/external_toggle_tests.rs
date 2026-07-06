@@ -155,6 +155,15 @@ fn default_pid_file_path_lives_under_runtime_dir() {
 
 #[test]
 fn push_and_take_round_trip_through_channel() {
+    // The global `CHANNEL` is process-shared: this test used to race
+    // `recv_command_blocking_returns_pushed_command` and
+    // `linux_signal_handler_end_to_end` (both hold `ENV_LOCK`) when
+    // cargo test ran them in parallel -- a parallel `push_command`
+    // could interleave between our `push` and `take`, producing
+    // `[Cancel]` instead of `[Toggle, Cancel]`. Serialise via the
+    // same crate-wide lock so all channel-touching tests take turns.
+    use crate::test_env_lock::ENV_LOCK;
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     reset_channel_for_tests();
     push_command(ExternalCommand::Toggle);
     push_command(ExternalCommand::Cancel);
