@@ -129,11 +129,15 @@ pub struct HistoryLastText;
 impl LastTextSource for HistoryLastText {
     fn last_text(&self) -> Option<String> {
         use crate::history::{is_enabled, open_default, search, SearchOptions};
-        // Codex-2 finding on #439: honour VOICEPI_HISTORY_DISABLED before
-        // ever touching the SQLite file. A user who opted out of history
-        // for privacy should not have the second hotkey silently read a
-        // stale utterance from the on-disk store — fall through to the
-        // caller-provided fallback text (clipboard / last-inject) instead.
+        // Codex-P2 finding on #439: honour both VOICEPI_HISTORY_DISABLED
+        // AND VOICEPI_HISTORY_ENABLED=0 (the documented Settings-UI
+        // toggle) before ever touching the SQLite file. A user who opted
+        // out of history for privacy should not have the second hotkey
+        // silently read a stale utterance from the on-disk store — fall
+        // through to the caller-provided fallback text (clipboard /
+        // last-inject) instead. `history::is_enabled()` folds both env
+        // vars into a single check so this call site (and any future
+        // one) stays aligned with the documented toggle automatically.
         if !is_enabled() {
             return None;
         }

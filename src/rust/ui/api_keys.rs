@@ -253,6 +253,27 @@ pub(super) fn load_post_api_key_from_env(provider: PostProvider) -> Option<Strin
         .find(|value| !value.is_empty())
 }
 
+/// Codex-P2 follow-up on #439: expose a provider-id-keyed lookup so
+/// `WhisperDictateApp::worker_command` can pull the saved post API key
+/// for cloud profiles used by the second-hotkey feature — even when
+/// the primary `post_processor` is `none`/`ollama` and would not
+/// otherwise inject any key into the worker env.
+///
+/// Returns `None` when the provider id is unknown (i.e. not `openai` /
+/// `groq`), when the credential store has no saved key for it, or when
+/// the saved value is whitespace-only.
+pub(super) fn saved_post_api_key_for(provider_id: &str) -> Option<String> {
+    let provider = match provider_id.trim().to_ascii_lowercase().as_str() {
+        "groq" => PostProvider::Groq,
+        "openai" => PostProvider::OpenAi,
+        _ => return None,
+    };
+    load_post_api_key(provider)
+        .ok()
+        .map(|key| key.trim().to_owned())
+        .filter(|key| !key.is_empty())
+}
+
 pub(super) fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<SecretSaveReport> {
     save_secret(provider.credential_user(), secret)
 }

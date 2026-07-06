@@ -77,9 +77,18 @@ pub fn default_base_url(processor: &str) -> &'static str {
 
 /// Pick the right cloud model when the saved settings still hold the local
 /// Ollama default. Matches the Python `_normalized_model`.
+///
+/// Codex-P2 finding on #439: when `processor == "openai"` and the model
+/// was left empty (or inherited the Ollama default `qwen2.5:3b`), swap in
+/// the OpenAI post default. Same rewrite the Settings-UI path already
+/// runs — without it, a minimal `{"processor":"openai"}` profile would
+/// call the OpenAI Chat API with an Ollama model id and fall back.
 pub fn normalized_model(processor: &str, raw_model: &str) -> String {
     if processor == "groq" && (raw_model.is_empty() || raw_model == DEFAULT_OLLAMA_POST_MODEL) {
         return "llama-3.1-8b-instant".to_owned();
+    }
+    if processor == "openai" && (raw_model.is_empty() || raw_model == DEFAULT_OLLAMA_POST_MODEL) {
+        return "gpt-4o-mini".to_owned();
     }
     if raw_model.is_empty() {
         return DEFAULT_OLLAMA_POST_MODEL.to_owned();
@@ -168,7 +177,15 @@ mod tests {
             "llama-3.1-8b-instant"
         );
         assert_eq!(normalized_model("groq", "custom-model"), "custom-model");
-        assert_eq!(normalized_model("openai", ""), DEFAULT_OLLAMA_POST_MODEL);
+        // Codex-P2 finding on #439: openai now substitutes gpt-4o-mini for
+        // both the empty case and the stale Ollama-default case, matching
+        // the Groq treatment above and the Settings-UI rewrite.
+        assert_eq!(normalized_model("openai", ""), "gpt-4o-mini");
+        assert_eq!(
+            normalized_model("openai", DEFAULT_OLLAMA_POST_MODEL),
+            "gpt-4o-mini"
+        );
+        assert_eq!(normalized_model("openai", "gpt-4o"), "gpt-4o");
         assert_eq!(normalized_model("ollama", "qwen2.5:14b"), "qwen2.5:14b");
     }
 

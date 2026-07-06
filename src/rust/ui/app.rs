@@ -400,6 +400,17 @@ impl WhisperDictateApp {
                     .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
             }
         }
+        // Codex-P2 follow-up on #439: the second-hotkey feature (issue
+        // #319) lets a user run cloud post-processing via
+        // `postprocess_profiles` even when the *primary* `post_processor`
+        // stays `none`/`ollama`. Without the block above firing, the
+        // profile's env-based key resolver would see no key and every
+        // cloud dispatch would fall back with an empty-key error. Scan
+        // the saved profiles for cloud providers and inject the
+        // corresponding OS-credential-store key as the provider-specific
+        // env var so `PostprocessProfile::resolve_api_key_from_env`
+        // finds it.
+        inject_profile_cloud_keys_into_env(&self.settings.postprocess_profiles, &mut command);
         command
     }
 
@@ -799,6 +810,63 @@ impl WhisperDictateApp {
             if serialised != self.settings.overlay_position {
                 self.settings.overlay_position = serialised;
             }
+        }
+    }
+}
+
+/// Codex-P2 follow-up on #439: parse the saved `postprocess_profiles`
+/// JSON, collect the distinct cloud provider ids (`openai` / `groq`),
+/// and inject each provider's saved post API key as the corresponding
+/// provider-specific env var on the worker command.
+///
+/// This closes the gap where a user keeps the primary `post_processor`
+/// local (`none`/`ollama`) but binds a cloud-backed profile to the
+/// second hotkey — without this, `PostprocessProfile::resolve_api_key_from_env`
+/// (called at dispatch time) would see no env keys and every cloud
+/// dispatch would fall back with the empty-key error.
+///
+/// Uses the provider-specific env var names (`OPENAI_API_KEY` /
+/// `GROQ_API_KEY`) so the primary `VOICEPI_POST_API_KEY` handling above
+/// is preserved unchanged: when the primary IS cloud, its key still
+/// wins at the top of the resolver's fallback chain.
+///
+/// Silent no-op on parse errors — the runtime's own load path already
+/// surfaces those; blocking a runtime restart here would be worse than
+/// leaving the second-hotkey dispatch to fall back at press time.
+fn inject_profile_cloud_keys_into_env(profiles_json: &str, command: &mut WorkerCommand) {
+    let trimmed = profiles_json.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return;
+    };
+    let Some(items) = value.as_array() else {
+        return;
+    };
+    let mut seen_openai = false;
+    let mut seen_groq = false;
+    for item in items {
+        let processor = item
+            .get("processor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        match processor.as_str() {
+            "openai" if !seen_openai => {
+                seen_openai = true;
+                if let Some(key) = saved_post_api_key_for("openai") {
+                    command.env.push(("OPENAI_API_KEY".to_owned(), key));
+                }
+            }
+            "groq" if !seen_groq => {
+                seen_groq = true;
+                if let Some(key) = saved_post_api_key_for("groq") {
+                    command.env.push(("GROQ_API_KEY".to_owned(), key));
+                }
+            }
+            _ => {}
         }
     }
 }
