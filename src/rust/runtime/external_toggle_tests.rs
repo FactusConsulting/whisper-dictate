@@ -268,26 +268,23 @@ fn linux_signal_handler_end_to_end() {
     assert_eq!(cmd, Some(ExternalCommand::Cancel));
 }
 
-/// Poll the global channel waiting for a single command. Used by
+/// Block-wait on the global channel for a single command. Used by
 /// [`linux_signal_handler_end_to_end`] to wait for the signal-handler
 /// thread to push without spinning forever if the test is broken.
 ///
-/// Budget is deliberately generous (~5 s) because the failure mode this
-/// polls around is "handler thread not yet scheduled by the OS" on a
-/// heavily loaded CI runner — the previous 1 s window flaked reliably
-/// on rust (ubuntu-latest) even after the readiness handshake was
-/// added in commit 49b6c61. The sigaction is installed synchronously
-/// by `Signals::new`, so a timeout here always indicates scheduler
-/// starvation, never a lost signal. The 10 ms poll interval yields to
-/// the OS so the handler thread has ample opportunity to run.
+/// Uses `recv_command_blocking` (a `recv_timeout` on the mpsc receiver)
+/// rather than the earlier poll+sleep implementation. Prior versions
+/// (5s poll @ 10ms interval) still flaked on rust (ubuntu-latest)
+/// because the parent thread was spinning through `try_recv`+`sleep`
+/// while the OS scheduler kept the signal-handler thread starved. A
+/// blocking `recv_timeout` yields the CPU to the handler immediately
+/// and gives it a real chance to enter `signals.forever()`.next() and
+/// push the command.
+///
+/// The sigaction registered by `Signals::new` is synchronous, so a
+/// timeout here still indicates scheduler starvation on the handler
+/// thread, never a lost signal.
 #[cfg(target_os = "linux")]
 fn wait_for_command() -> Option<ExternalCommand> {
-    for _ in 0..500 {
-        let cmds = take_pending_commands();
-        if let Some(first) = cmds.into_iter().next() {
-            return Some(first);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    None
+    crate::runtime::external_toggle::recv_command_blocking(std::time::Duration::from_secs(10))
 }

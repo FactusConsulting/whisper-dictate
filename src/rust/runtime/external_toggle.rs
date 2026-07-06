@@ -263,6 +263,18 @@ pub(super) fn reset_channel_for_tests() {
     }
 }
 
+/// Test-only blocking wait on the global channel. Uses `recv_timeout` on
+/// the actual receiver so the parent thread block-waits (OS-efficient)
+/// instead of poll+sleeping. Under CPU throttling on CI the poll+sleep
+/// form starved the signal-handler thread of scheduling and timed out
+/// even at 5s; block-waiting yields the CPU to the handler immediately.
+#[cfg(test)]
+pub(super) fn recv_command_blocking(timeout: std::time::Duration) -> Option<ExternalCommand> {
+    let slot = ensure_channel();
+    let rx = slot.rx.lock().ok()?;
+    rx.recv_timeout(timeout).ok()
+}
+
 // ---------------------------------------------------------------------------
 // Daemon side: install signal handlers + write the PID file.
 // ---------------------------------------------------------------------------
