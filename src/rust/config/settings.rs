@@ -43,6 +43,10 @@ pub struct AppSettings {
     pub min_snr_db: String,
     pub audio_ducking: bool,
     pub audio_ducking_level: String,
+    /// Auto-mute the system audio output (default render endpoint) while
+    /// recording is active (issue #322). Opt-in, restores the prior mute
+    /// state on stop; see `crate::output_mute` for the per-OS backends.
+    pub mute_output_while_recording: bool,
     pub dictionary: String,
     pub dictionary_enabled: bool,
     pub dictionary_max_terms: String,
@@ -160,6 +164,7 @@ impl Default for AppSettings {
             min_snr_db: "6".to_owned(),
             audio_ducking: false,
             audio_ducking_level: "0.25".to_owned(),
+            mute_output_while_recording: false,
             dictionary: default_dictionary_path().display().to_string(),
             dictionary_enabled: true,
             dictionary_max_terms: "80".to_owned(),

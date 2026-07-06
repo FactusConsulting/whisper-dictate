@@ -317,6 +317,15 @@
       "category": "audio"
     },
     {
+      "env": "VOICEPI_MUTE_OUTPUT_WHILE_RECORDING",
+      "key": "mute_output_while_recording",
+      "default": null,
+      "live": true,
+      "description": "While recording, mute the default system audio output (speakers/headphones) so meeting/video sound cannot leak into the microphone. Restores the prior mute state when recording ends. Disabled by default.",
+      "advanced": true,
+      "category": "audio"
+    },
+    {
       "env": "VOICEPI_DICTIONARY",
       "key": "dictionary",
       "default": null,

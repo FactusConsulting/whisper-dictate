@@ -451,6 +451,12 @@ impl RuntimeSupervisor {
         #[cfg(feature = "audio-in-rust")]
         self.bridge_cancel.store(false, Ordering::SeqCst);
 
+        // Issue #322: install / clear the auto-mute controller based on
+        // the current `mute_output_while_recording` setting. Re-evaluated
+        // on each start() so a settings edit picks up on the next
+        // worker restart without needing a full app relaunch.
+        install_output_mute_from_config();
+
         // Phase-1 rollout (PR #341 — wiring the Rust audio pipeline):
         // If the user opted in via VOICEPI_AUDIO_BACKEND=rust AND this
         // binary was built with the `audio-in-rust` cargo feature, we
@@ -920,6 +926,13 @@ impl RuntimeSupervisor {
             handle.suspend();
         }
 
+        // Codex P1 (runtime.rs:458, PR #440): every teardown path must
+        // clear the process-global auto-mute controller. `install()`
+        // only runs on `Runtime::start`, so without this the controller
+        // would remain parked in its `Recording` phase after a stop and
+        // leave the user's speakers muted until the next start.
+        clear_output_mute_on_teardown();
+
         let Some(mut child) = self.child.take() else {
             self.state = RuntimeState::Stopped;
             return Ok(());
@@ -1032,6 +1045,11 @@ impl RuntimeSupervisor {
                 // session sink driving DictateSession while the UI
                 // shows Stopped.
                 self.suspend_session_sink_on_exit();
+                // Codex P1 (runtime.rs:458, PR #440): clear the
+                // process-global auto-mute controller so the user's
+                // speakers are restored even on a bridge-terminal
+                // teardown.
+                clear_output_mute_on_teardown();
                 let _ = self.tx.send(RuntimeEvent::Exited { code: exit_code });
                 if let Some(notifier) = self.repaint_notifier.as_ref() {
                     notifier();
@@ -1044,6 +1062,9 @@ impl RuntimeSupervisor {
                 // already gone, the hotkey handle could still be
                 // live.
                 self.suspend_session_sink_on_exit();
+                // Same Codex P1 (PR #440) — mute controller could
+                // still be installed even if the child is gone.
+                clear_output_mute_on_teardown();
             }
             return self.rx.try_iter().collect();
         }
@@ -1067,6 +1088,11 @@ impl RuntimeSupervisor {
                         }
                     }
                     self.suspend_session_sink_on_exit();
+                    // Codex P1 (runtime.rs:458, PR #440): unexpected-exit
+                    // path also needs to drop the mute controller so a
+                    // worker crash while muted leaves the speakers
+                    // restored.
+                    clear_output_mute_on_teardown();
                     let _ = self.tx.send(RuntimeEvent::Exited {
                         code: status.code(),
                     });
@@ -1085,6 +1111,8 @@ impl RuntimeSupervisor {
                         }
                     }
                     self.suspend_session_sink_on_exit();
+                    // Same Codex P1 (PR #440) — try_wait error path.
+                    clear_output_mute_on_teardown();
                     let _ = self.tx.send(RuntimeEvent::Error(err.to_string()));
                 }
             }
@@ -2038,6 +2066,12 @@ fn stream_lines<R>(
                                 let _ = signal.send(());
                             }
                         }
+                        // Issue #322: fan every worker-state transition
+                        // into the auto-mute observer. Cheap no-op when
+                        // the `mute_output_while_recording` setting is
+                        // off (no controller installed), so leaving this
+                        // permanently in the hot path is safe.
+                        crate::output_mute::session::observe_worker_state(worker.state.as_deref());
                         // Issue #324: persist one row per accepted
                         // utterance into the per-user SQLite history
                         // store. Best-effort and feature-gated — the
@@ -2092,6 +2126,45 @@ fn parse_worker_event(line: &str) -> Option<WorkerEvent> {
         state,
         payload,
     })
+}
+
+/// Read the user's current `mute_output_while_recording` setting from
+/// config.json (falling back to the [`crate::output_mute::session::MUTE_OUTPUT_ENV`]
+/// env var when set) and install (or clear) the process-global
+/// auto-mute controller accordingly (issue #322). Called from
+/// `Runtime::start` so a settings edit is picked up on the next worker
+/// restart.
+///
+/// A missing / unreadable config file is treated as "toggle off" — we
+/// never want to silently start muting the user's audio because we
+/// could not load their preferences.
+///
+/// Codex P2 (runtime.rs:2060, PR #440) — env-var precedence is now the
+/// same as the schema-derived worker overrides: an explicit
+/// `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1` in the environment installs
+/// the controller even when config.json is silent or set to `false`,
+/// matching the schema's documented env-fallback semantics.
+fn install_output_mute_from_config() {
+    let config_value = config::load_settings()
+        .map(|settings| settings.mute_output_while_recording)
+        .unwrap_or(false);
+    crate::output_mute::session::install_from_settings(config_value);
+}
+
+/// Clear the process-global auto-mute controller on every worker
+/// teardown path (Codex P1 runtime.rs:458, PR #440).
+///
+/// `install_output_mute_from_config` only runs on `Runtime::start`, so
+/// a worker stop/kill/crash used to leave the controller parked in its
+/// `Recording` phase indefinitely — the controller's `Drop` restore
+/// never fired, and the user's speakers could stay muted until either
+/// another start replaced the controller or the app exited entirely.
+/// Dropping the controller via `install(false)` triggers `Drop` which
+/// runs the pending restore. Safe to call unconditionally: when no
+/// controller is installed (the setting is off) this is a mutex-lock +
+/// no-op.
+fn clear_output_mute_on_teardown() {
+    crate::output_mute::session::install(false);
 }
 
 fn kill_child(child: &mut Child) -> Result<()> {

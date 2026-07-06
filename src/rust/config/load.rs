@@ -98,6 +98,13 @@ impl AppSettings {
         self.audio_ducking = bool_value(object, "audio_ducking", defaults.audio_ducking);
         self.audio_ducking_level =
             string_value(object, "audio_ducking_level", &defaults.audio_ducking_level);
+        // Issue #322: auto-mute the system output while recording. Opt-in bool,
+        // parsed with the same "0"/"1"/"true"/"false" contract as the rest.
+        self.mute_output_while_recording = bool_value(
+            object,
+            "mute_output_while_recording",
+            defaults.mute_output_while_recording,
+        );
     }
 
     /// Dictionary path and prompt-injection budget settings.

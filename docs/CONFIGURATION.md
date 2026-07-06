@@ -90,6 +90,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `min_snr_db` | `VOICEPI_MIN_SNR_DB` | `6` | Live | Reject utterances with speech-vs-noise contrast below this (dB) as 'no speech contrast'. |
 | `audio_ducking` | `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Live | Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default. |
 | `audio_ducking_level` | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | Live | Target volume (0.0-1.0) for other apps' audio while recording when audio ducking is enabled. |
+| `mute_output_while_recording` | `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING` | _(unset)_ | Live | While recording, mute the default system audio output (speakers/headphones) so meeting/video sound cannot leak into the microphone. Restores the prior mute state when recording ends. Disabled by default. |
 
 ### Dictionary & post-processing
 

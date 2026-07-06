@@ -36,6 +36,7 @@ fn changed_settings() -> AppSettings {
         min_snr_db: "10".to_owned(),
         audio_ducking: true,
         audio_ducking_level: "0.5".to_owned(),
+        mute_output_while_recording: true,
         initial_prompt: "Keep Factus terms.".to_owned(),
         dictionary: "custom-dictionary.json".to_owned(),
         dictionary_enabled: false,
@@ -138,6 +139,12 @@ fn quality_page_reset_restores_only_quality_settings() {
     assert_eq!(settings.min_snr_db, defaults.min_snr_db);
     assert_eq!(settings.audio_ducking, defaults.audio_ducking);
     assert_eq!(settings.audio_ducking_level, defaults.audio_ducking_level);
+    // Codex P2 (settings_schema.json:321, PR #440) — the new
+    // mute-output toggle must reset with its sibling audio controls.
+    assert_eq!(
+        settings.mute_output_while_recording,
+        defaults.mute_output_while_recording
+    );
     assert_eq!(settings.initial_prompt, defaults.initial_prompt);
     assert_eq!(settings.stt_backend, "openai");
     assert_eq!(settings.dictionary_max_terms, "12");

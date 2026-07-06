@@ -88,6 +88,19 @@ impl WhisperDictateApp {
                     &mut self.settings.audio_ducking_level,
                     "Target volume for other apps while recording. 0.25 means 25%.",
                 );
+                // Codex P2 (settings_schema.json:321, PR #440): expose
+                // the mute-output-while-recording toggle alongside the
+                // sibling ducking controls so users can flip it from
+                // the Settings tab instead of hand-editing config.json
+                // or setting an env var. The schema categorises this
+                // key under `audio`, matching the other controls in
+                // this scope.
+                checkbox_help(
+                    ui,
+                    "Mute system output while recording",
+                    &mut self.settings.mute_output_while_recording,
+                    "Windows + Linux (PulseAudio/PipeWire): mute the default speakers/headphones for the duration of a recording, then restore the prior mute state. Prevents meeting/video audio from bleeding into the mic. Disabled by default.",
+                );
             },
         );
 

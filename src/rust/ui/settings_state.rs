@@ -22,6 +22,25 @@ impl WhisperDictateApp {
                 if update_check_settings_changed(&self.saved_settings, &self.settings) {
                     self.last_update_check = None;
                 }
+                // Codex P2 (settings_schema.json:323, PR #440) — honour
+                // the schema's `"live": true` claim by reinstalling
+                // (or clearing) the process-global auto-mute controller
+                // as soon as the user saves a change to this key. The
+                // controller was previously (re)installed only on
+                // worker start, so toggling this in Settings silently
+                // had no effect until the next manual restart. Uses
+                // `install_from_settings` so an env override still wins.
+                if self.saved_settings.mute_output_while_recording
+                    != self.settings.mute_output_while_recording
+                {
+                    crate::output_mute::session::install_from_settings(
+                        self.settings.mute_output_while_recording,
+                    );
+                    self.append_runtime_log(format!(
+                        "[ui] mute-output-while-recording toggled -> {}",
+                        self.settings.mute_output_while_recording,
+                    ));
+                }
                 let key_message = self.save_stt_api_key_if_changed();
                 let post_key_message = self.save_post_api_key_if_changed();
                 self.saved_settings = self.settings.clone();

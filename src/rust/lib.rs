@@ -77,6 +77,14 @@ pub mod model_capacity;
 // (unconditional). Extracted here to avoid a cross-module dependency that
 // crosses a feature boundary.
 pub(crate) mod os_cache;
+// Auto-mute the system audio output while recording (issue #322). Pure
+// state machine + tiny per-OS subprocess/COM shims; no cpal / ONNX
+// deps, so it compiles into every build regardless of `audio-in-rust`.
+// Feature is behind the AppSettings.mute_output_while_recording toggle
+// (default OFF); `runtime::stream_lines` fans worker-state events into
+// `output_mute::session::observe_worker_state`, which is a cheap no-op
+// when the toggle is off.
+pub mod output_mute;
 // Rust port of `vp_postprocess.py` (Wave 4-B of #348). Owns the full
 // post-STT formatting / LLM cleanup pipeline: settings validation,
 // cloud-safe redaction, prompt construction, provider call (local
