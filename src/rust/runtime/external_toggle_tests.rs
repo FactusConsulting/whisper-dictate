@@ -4,37 +4,16 @@
 //! `audio_spawn_tests`, `rust_session_sink_*_tests` etc.
 
 use super::external_toggle::*;
+// The crate-wide `EnvVarGuard` (from `crate::test_env_lock`) replaced
+// the previous file-local shim so every env-mutating test in the
+// library binary uses one guard type and one poison-recovery pattern
+// (Codex P2 #415 / #425). The guard's Drop restores the pre-existing
+// value on panic, so a mid-test panic no longer leaks the override
+// into every subsequent test — and the crate-wide `ENV_LOCK` serialises
+// mutations across module boundaries, which a per-file guard could not.
 #[cfg(target_os = "linux")]
-use std::ffi::{OsStr, OsString};
+use crate::test_env_lock::EnvVarGuard;
 use std::io;
-
-/// RAII wrapper around an env var so tests don't pollute the process env.
-/// Linux-only because only the Linux test paths mutate env vars.
-#[cfg(target_os = "linux")]
-struct EnvVarGuard {
-    key: &'static str,
-    original: Option<OsString>,
-}
-
-#[cfg(target_os = "linux")]
-impl EnvVarGuard {
-    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-        let original = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self { key, original }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        if let Some(value) = &self.original {
-            std::env::set_var(self.key, value);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
 
 // --- Pure helpers: parse / serialize / signal mapping ---------------------
 
@@ -232,6 +211,37 @@ fn linux_signal_handler_end_to_end() {
     );
     reset_channel_for_tests();
 
+    // --- Warmup: prove the signal→channel pipeline is live before the
+    // real assertions. On a CPU-throttled CI runner (observed
+    // repeatedly on rust (ubuntu-latest), PR #428) the signal-handler
+    // thread may not be scheduled inside the parent's poll window even
+    // though the sigaction registered by `Signals::new` has already
+    // captured the signal into signal-hook's self-pipe. The readiness
+    // handshake in `install_linux_signal_handlers` guarantees the
+    // thread has BEEN scheduled once, but not that it has entered the
+    // blocking iterator; the warmup raises a signal and blocks on the
+    // channel with the full generous timeout, which forces the OS to
+    // schedule the handler thread at least until it drains one signal.
+    // Subsequent raises then land near-instantly because the thread is
+    // already blocked inside `signals.forever()`.
+    // SAFETY: libc::raise is a thin syscall wrapper on a validated int.
+    unsafe {
+        assert_eq!(
+            libc::raise(libc::SIGUSR1),
+            0,
+            "warmup raise SIGUSR1 must succeed"
+        );
+    }
+    let warmup = wait_for_command();
+    assert_eq!(
+        warmup,
+        Some(ExternalCommand::Toggle),
+        "warmup: signal-handler thread did not surface a Toggle within the poll budget \
+         — the sigaction is registered synchronously so a None here means the handler \
+         thread never got scheduled to drain the self-pipe"
+    );
+    reset_channel_for_tests();
+
     // --- SIGUSR1 with no command file → Toggle (documented default).
     // SAFETY: libc::raise is a thin syscall wrapper.
     unsafe {
@@ -258,12 +268,21 @@ fn linux_signal_handler_end_to_end() {
     assert_eq!(cmd, Some(ExternalCommand::Cancel));
 }
 
-/// Poll the global channel for up to ~1 s waiting for a single command. Used
-/// by [`linux_signal_handler_end_to_end`] to wait for the signal-handler
+/// Poll the global channel waiting for a single command. Used by
+/// [`linux_signal_handler_end_to_end`] to wait for the signal-handler
 /// thread to push without spinning forever if the test is broken.
+///
+/// Budget is deliberately generous (~5 s) because the failure mode this
+/// polls around is "handler thread not yet scheduled by the OS" on a
+/// heavily loaded CI runner — the previous 1 s window flaked reliably
+/// on rust (ubuntu-latest) even after the readiness handshake was
+/// added in commit 49b6c61. The sigaction is installed synchronously
+/// by `Signals::new`, so a timeout here always indicates scheduler
+/// starvation, never a lost signal. The 10 ms poll interval yields to
+/// the OS so the handler thread has ample opportunity to run.
 #[cfg(target_os = "linux")]
 fn wait_for_command() -> Option<ExternalCommand> {
-    for _ in 0..100 {
+    for _ in 0..500 {
         let cmds = take_pending_commands();
         if let Some(first) = cmds.into_iter().next() {
             return Some(first);

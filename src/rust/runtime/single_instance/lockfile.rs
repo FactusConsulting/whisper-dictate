@@ -255,26 +255,36 @@ mod tests {
 
     #[test]
     fn resolve_runtime_dir_honours_override_env() {
+        // The crate-wide env-lock (`crate::test_env_lock::ENV_LOCK`)
+        // serialises any test that mutates process env vars. Acquire
+        // via `unwrap_or_else(|e| e.into_inner())` so a panic in an
+        // unrelated env-mutating test poisons the mutex without
+        // cascading a `PoisonError` failure here — the pattern
+        // documented in `test_env_lock`. Recovering the inner value is
+        // safe because `EnvVarGuard`'s Drop restores env state
+        // unconditionally.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
-        // We intentionally scope the env change to the current test only:
-        // the crate's env-lock (`crate::test_env_lock::ENV_LOCK`) serialises
-        // any test that mutates process env vars.
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
-        std::env::set_var(RUNTIME_DIR_OVERRIDE_ENV, dir.path());
+        // `EnvVarGuard` restores the pre-existing value (or absence) on
+        // Drop; a bare `set_var` + `remove_var` pair leaks the override
+        // into every subsequent test on panic (Codex P2 #415).
+        let _env = crate::test_env_lock::EnvVarGuard::set(RUNTIME_DIR_OVERRIDE_ENV, dir.path());
         let resolved = resolve_runtime_dir().unwrap();
-        std::env::remove_var(RUNTIME_DIR_OVERRIDE_ENV);
         assert_eq!(resolved, dir.path());
     }
 
     #[test]
     fn resolve_runtime_dir_creates_missing_directory() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let nested = dir.path().join("nested").join("runtime");
         assert!(!nested.exists());
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
-        std::env::set_var(RUNTIME_DIR_OVERRIDE_ENV, &nested);
+        let _env = crate::test_env_lock::EnvVarGuard::set(RUNTIME_DIR_OVERRIDE_ENV, &nested);
         let resolved = resolve_runtime_dir().unwrap();
-        std::env::remove_var(RUNTIME_DIR_OVERRIDE_ENV);
         assert_eq!(resolved, nested);
         assert!(nested.is_dir());
     }
