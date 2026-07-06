@@ -170,6 +170,68 @@ pub fn install_from_settings(config_value: Option<bool>) {
     install(effective);
 }
 
+/// Hot-swap the controller from a settings UI event (Save / Reload)
+/// WITHOUT bumping the observer generation.
+///
+/// Codex P2 (session.rs:230, PR #443) — plain [`install`] bumps the
+/// generation so a stale reader from a stopped child is filtered out
+/// by [`observe_worker_state`]. That is exactly wrong when the caller
+/// is the settings UI toggling the auto-mute setting mid-recording: the
+/// active `stream_lines` reader from the LIVE worker is not stale, and
+/// bumping the generation would silently drop every subsequent worker
+/// state from that worker — the new controller then never sees an
+/// on_recording_start/stop pair until the next worker restart, even
+/// though the schema advertises `"live": true` for this key. This hot
+/// variant swaps the controller under the same mutex `install` uses
+/// (the previous controller's Drop still restores an active mute) but
+/// leaves the generation untouched so the live reader keeps driving
+/// the new controller normally.
+///
+/// Only the settings UI should call this. Worker start/stop MUST keep
+/// using [`install`] so the generation bump invalidates the stale
+/// reader from the previous child.
+pub fn install_from_settings_hot(config_value: Option<bool>) {
+    let effective = config_value.or_else(env_override).unwrap_or(false);
+    let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
+    if effective {
+        *slot = Some(MuteController::new(platform_backend()));
+    } else {
+        *slot = None;
+    }
+    // Deliberately NO bump_generation() here (see doc-comment).
+}
+
+/// Read the raw `mute_output_while_recording` value from a JSON config
+/// map, returning `None` when the key is absent so the caller can fall
+/// back to the env var / default.
+///
+/// Codex P2 (session.rs:130, PR #443) — moved here from `runtime.rs`
+/// so both the supervisor start (`install_output_mute_from_config`)
+/// AND the settings UI (`reload_settings`) can resolve the exact same
+/// config-vs-env precedence. Prior to this, the runtime path went
+/// through raw JSON (so a missing key preserved env fallback) but the
+/// UI Reload path used the typed `AppSettings::mute_output_while_recording`
+/// which converts a missing key to `false` — that made Reload clobber
+/// env for users running with `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1`
+/// and no on-disk key.
+///
+/// Returns `Some(true|false)` when the key is present as a bool or a
+/// recognised lax-string token (`"1"/"true"/"yes"/"on"` vs
+/// `"0"/"false"/"no"/"off"/""`). Returns `None` when the key is absent
+/// OR when the value is an unrecognised string (e.g. `"maybe"`) so the
+/// env fallback wins over a typo instead of silently flipping the
+/// setting.
+pub fn read_mute_key_from_json(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Option<bool> {
+    let value = object.get("mute_output_while_recording")?;
+    match value {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::String(s) => parse_bool_env(s),
+        _ => None,
+    }
+}
+
 /// Parse [`MUTE_OUTPUT_ENV`] as a bool. `Some(true|false)` when set to
 /// a recognised truthy/falsy token; `None` when unset or unparsable so
 /// the caller can fall back to the config value.
@@ -221,18 +283,27 @@ pub fn is_installed() -> bool {
 /// spawn failure) to the user via the runtime log so the auto-mute
 /// feature does not fail silently on every recording.
 pub fn observe_worker_state(state: Option<&str>, observer_generation: u64) -> Option<MuteError> {
-    let Some(state) = state else { return None };
+    let state = state?;
     if IGNORED_STATES.contains(&state) {
         return None;
     }
-    // Codex P2 (runtime.rs:2074, PR #440) — stale-generation guard.
+    let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
+    // Claude P2 (session.rs:235, PR #443) — re-check the generation
+    // AFTER acquiring the mutex, not before. `install()` bumps the
+    // generation while holding this same lock, so a check that
+    // happens outside the critical section can race: a stale reader
+    // sees `observer_generation == current_generation()` just before
+    // a concurrent `install()` swaps the controller + bumps, then
+    // blocks on the lock, and once the swap releases the mutex it
+    // proceeds to drive on_recording_start/stop against the NEW
+    // controller using an event that belonged to the previous
+    // (stopped) child. Reading the generation inside the same
+    // critical section that `install()` holds makes the check + act
+    // atomic w.r.t. controller swaps.
     if observer_generation != current_generation() {
         return None;
     }
-    let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
-    let Some(controller) = slot.as_mut() else {
-        return None;
-    };
+    let controller = slot.as_mut()?;
     if START_STATES.contains(&state) {
         controller.on_recording_start();
     } else if TERMINAL_STATES.contains(&state) {

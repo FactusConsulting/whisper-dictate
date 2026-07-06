@@ -331,25 +331,27 @@ impl<R: PowerShellRunner> OutputMuteBackend for WindowsBackend<R> {
             // unmute everything.
             "0,0,0".to_owned()
         };
-        let result = self
-            .runner
-            .run(POWERSHELL_SCRIPT, "set_all", Some(&targets))?;
-        if !result.status_ok {
-            let action = if muted { "mute" } else { "unmute" };
-            return Err(MuteError::OsFailure(format!(
-                "powershell {action} failed: {}",
-                result.stderr.trim(),
-            )));
+        let outcome = self.run_set_all(&targets, muted);
+        // Codex P2 (windows.rs:166, PR #443) — the PowerShell `set_all`
+        // branch iterates roles 0/1/2 sequentially and throws on the
+        // first SetMute HRESULT failure. Roles processed before the
+        // failing one are already muted (or restored) — the caller
+        // treats a `set_mute(true)` error as "we did not touch
+        // anything" (state.rs::on_recording_start clears the phase to
+        // Idle without a matching restore), which used to leave those
+        // early roles stuck muted forever on a split-role system with
+        // one failing endpoint. On a `set_mute(true)` failure, attempt
+        // one rollback pass that writes the ORIGINAL per-role targets
+        // so any endpoints we successfully muted go back to their
+        // prior state; ignore the rollback outcome (best-effort) and
+        // return the original error so state.rs still logs it.
+        if muted && outcome.is_err() {
+            if let Some(snap) = self.snapshot() {
+                let rollback_targets = snap.as_target_string();
+                let _ = self.run_set_all(&rollback_targets, false);
+            }
         }
-        if result.stdout.lines().any(|line| line.trim() == "OK") {
-            Ok(())
-        } else {
-            let action = if muted { "mute" } else { "unmute" };
-            Err(MuteError::UnexpectedOutput(format!(
-                "powershell {action} produced no OK line: {:?}",
-                result.stdout,
-            )))
-        }
+        outcome
     }
 
     fn pin_current_endpoint(&self) -> Result<(), MuteError> {
@@ -377,6 +379,33 @@ impl<R: PowerShellRunner> WindowsBackend<R> {
         }
         parse_get_all(&result.stdout)
     }
+
+    /// One PowerShell `set_all` invocation with error decoding shared by
+    /// [`Self::set_mute`] and its Codex P2 (windows.rs:166, PR #443)
+    /// partial-failure rollback path. Kept as a small helper so both
+    /// the primary call and the rollback go through the same
+    /// non-zero-exit / missing-OK checks.
+    fn run_set_all(&self, targets: &str, muted: bool) -> Result<(), MuteError> {
+        let result = self
+            .runner
+            .run(POWERSHELL_SCRIPT, "set_all", Some(targets))?;
+        if !result.status_ok {
+            let action = if muted { "mute" } else { "unmute" };
+            return Err(MuteError::OsFailure(format!(
+                "powershell {action} failed: {}",
+                result.stderr.trim(),
+            )));
+        }
+        if result.stdout.lines().any(|line| line.trim() == "OK") {
+            Ok(())
+        } else {
+            let action = if muted { "mute" } else { "unmute" };
+            Err(MuteError::UnexpectedOutput(format!(
+                "powershell {action} produced no OK line: {:?}",
+                result.stdout,
+            )))
+        }
+    }
 }
 
 /// Parse the multi-role `ROLE:<role>:<0|1>` output emitted by the
@@ -386,7 +415,13 @@ impl<R: PowerShellRunner> WindowsBackend<R> {
 /// surfaces as `UnexpectedOutput` so a script edit that accidentally
 /// dropped an iteration fails loudly at pin time rather than silently
 /// omitting an endpoint from the restore.
-pub fn parse_get_all(stdout: &str) -> Result<PriorRoleState, MuteError> {
+///
+/// Codex P2 (windows.rs:389, PR #443) — kept module-private so the
+/// private `PriorRoleState` return type does not leak across the module
+/// boundary and trip Rust's `private_interfaces` warning on the Windows
+/// target (repo builds with `-D warnings`). Sibling tests still see it
+/// via `super::*`.
+fn parse_get_all(stdout: &str) -> Result<PriorRoleState, MuteError> {
     let mut per_role = [false; 3];
     let mut seen = [false; 3];
     for line in stdout.lines() {

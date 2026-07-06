@@ -412,6 +412,98 @@ fn powershell_actions_check_hresults_before_reporting_success() {
 }
 
 #[test]
+fn set_mute_true_failure_rolls_back_with_prior_targets() {
+    // Codex P2 (windows.rs:166, PR #443) — the PS script mutes roles
+    // 0/1/2 in sequence and throws on the first SetMute error, so a
+    // failing role 2 can leave roles 0/1 muted while state.rs still
+    // treats set_mute(true) as "we did not touch anything". The
+    // backend must attempt one rollback pass carrying the ORIGINAL
+    // per-role targets so any endpoints it managed to mute go back to
+    // their prior state. This test drives that path by wrapping the
+    // MockShell to fail the FIRST set_all (the mute attempt) while
+    // letting the second set_all (the rollback) succeed, then asserts
+    // that the second set_all carried the original per-role targets.
+    struct FirstSetAllFails {
+        inner: Arc<MockShell>,
+        set_all_calls: StdMutex<u32>,
+    }
+    impl PowerShellRunner for FirstSetAllFails {
+        fn run(
+            &self,
+            script: &str,
+            action: &str,
+            targets: Option<&str>,
+        ) -> Result<PowerShellResult, MuteError> {
+            if action == "set_all" {
+                let mut count = self.set_all_calls.lock().unwrap();
+                *count += 1;
+                if *count == 1 {
+                    // Simulate a mid-loop SetMute HRESULT throw: PS
+                    // exits non-zero WITHOUT applying the full targets,
+                    // but does mute roles 0/1 (we mirror that by
+                    // half-applying to the mock shared state).
+                    let targets = targets.unwrap_or("");
+                    let items: Vec<&str> = targets.split(',').collect();
+                    let mut state = self.inner.inner.lock().unwrap();
+                    for (r, item) in items.iter().enumerate().take(2) {
+                        match item.trim() {
+                            "1" => state.per_role[r] = true,
+                            "0" => state.per_role[r] = false,
+                            _ => {}
+                        }
+                    }
+                    state
+                        .calls
+                        .push((action.to_owned(), Some(targets.to_owned())));
+                    return Ok(PowerShellResult {
+                        status_ok: false,
+                        stdout: String::new(),
+                        stderr: "SetMute HRESULT 0x80070005".to_owned(),
+                    });
+                }
+            }
+            self.inner.run(script, action, targets)
+        }
+    }
+    let inner = Arc::new(MockShell::default());
+    inner.set_per_role([false, true, false]); // eMultimedia already muted
+    let wrapped = FirstSetAllFails {
+        inner: inner.clone(),
+        set_all_calls: StdMutex::new(0),
+    };
+    let backend = WindowsBackend::with_runner(wrapped);
+    backend.pin_current_endpoint().unwrap();
+
+    // Primary set_mute(true) fails after muting roles 0/1.
+    let err = backend.set_mute(true).unwrap_err();
+    assert!(
+        matches!(err, MuteError::OsFailure(_)),
+        "primary failure surfaces as OsFailure"
+    );
+    // The rollback set_all must have restored the endpoints to their
+    // pre-recording per-role state — [false, true, false].
+    assert_eq!(
+        inner.per_role(),
+        [false, true, false],
+        "rollback must return partially-muted endpoints to their prior state \
+         (Codex P2 windows.rs:166 PR #443)"
+    );
+    // The last set_all invocation must carry the ORIGINAL per-role
+    // targets, not "0,0,0" or "1,1,1".
+    let set_all_calls: Vec<(String, Option<String>)> = inner
+        .actions()
+        .into_iter()
+        .filter(|(a, _)| a == "set_all")
+        .collect();
+    assert_eq!(set_all_calls.len(), 2, "one primary + one rollback set_all");
+    assert_eq!(
+        set_all_calls[1].1.as_deref(),
+        Some("0,1,0"),
+        "rollback set_all must carry the ORIGINAL per-role targets"
+    );
+}
+
+#[test]
 fn powershell_script_iterates_all_three_roles() {
     // Codex P2 (windows.rs:96, PR #440): every render role default
     // endpoint must be touched. Pin the loop structure so a future

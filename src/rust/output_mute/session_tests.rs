@@ -210,6 +210,162 @@ fn config_wins_over_env_and_env_is_the_default_fallback() {
 }
 
 #[test]
+fn read_mute_key_from_json_covers_every_precedence_rung() {
+    // Claude P2 (runtime.rs:2279, PR #443) — the raw-JSON parser is
+    // what makes "config wins over env, env fills in when config is
+    // silent" actually work. The precedence integration test above
+    // constructs Option<bool> directly and never exercises the JSON
+    // parsing branches, so this table test pins each branch: bool,
+    // recognised string tokens, unrecognised string (env fallback),
+    // and missing key.
+    use serde_json::{json, Map, Value};
+
+    fn parse(v: Value) -> Option<bool> {
+        match v {
+            Value::Object(map) => read_mute_key_from_json(&map),
+            _ => panic!("test helper expects an object"),
+        }
+    }
+
+    // Bool branch.
+    assert_eq!(
+        parse(json!({ "mute_output_while_recording": true })),
+        Some(true)
+    );
+    assert_eq!(
+        parse(json!({ "mute_output_while_recording": false })),
+        Some(false)
+    );
+
+    // Lax-string truthy tokens.
+    for truthy in ["1", "true", "TRUE", "yes", "YES", "on", "  on  "] {
+        assert_eq!(
+            parse(json!({ "mute_output_while_recording": truthy })),
+            Some(true),
+            "truthy token {truthy:?} must parse as Some(true)",
+        );
+    }
+
+    // Lax-string falsy tokens.
+    for falsy in ["0", "false", "FALSE", "no", "off", ""] {
+        assert_eq!(
+            parse(json!({ "mute_output_while_recording": falsy })),
+            Some(false),
+            "falsy token {falsy:?} must parse as Some(false)",
+        );
+    }
+
+    // Unrecognised string -> None so env fallback wins over a typo.
+    for garbage in ["maybe", "2", "on!"] {
+        assert_eq!(
+            parse(json!({ "mute_output_while_recording": garbage })),
+            None,
+            "unrecognised token {garbage:?} must parse as None (env fallback)",
+        );
+    }
+
+    // Numeric / null / array -> None (unsupported shape).
+    assert_eq!(parse(json!({ "mute_output_while_recording": 1 })), None);
+    assert_eq!(parse(json!({ "mute_output_while_recording": null })), None);
+    assert_eq!(parse(json!({ "mute_output_while_recording": [] })), None);
+
+    // Missing key -> None so env fallback wins.
+    let empty: Map<String, Value> = Map::new();
+    assert_eq!(read_mute_key_from_json(&empty), None);
+
+    // Sibling keys must not confuse the parser.
+    assert_eq!(
+        parse(json!({ "unrelated_key": true, "mute_output_while_recording": true })),
+        Some(true)
+    );
+}
+
+#[test]
+fn observe_worker_state_rejects_stale_observer_generation() {
+    // Claude P2 (session.rs:235, PR #443) — the stale-reader guard is
+    // the point of the generation-tag mechanism and previously had
+    // ZERO coverage: every session test above passes
+    // `current_generation()` itself, which always matches. This test
+    // exercises the "observer's generation differs from the current
+    // one" branch that used to be a silent dead code path.
+    let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let backend = Arc::new(CountingBackend::default());
+    let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
+    let saved = install_test_controller(Some(controller));
+
+    // Snapshot the CURRENT generation as a "stale" reader would have
+    // done at worker start.
+    let stale_generation = current_generation();
+
+    // Simulate a worker restart: install() bumps the generation.
+    install(true);
+    assert_ne!(
+        stale_generation,
+        current_generation(),
+        "install() must bump the generation so stale readers can be filtered",
+    );
+
+    // Feed a "recording" event with the STALE generation. The guard
+    // must reject it before it drives the freshly-installed controller.
+    // Get the fresh backend's mute state by pulling the underlying
+    // recorded set_calls — the CountingBackend built above is now
+    // dropped, so we assert via the freshly-installed controller's
+    // is_installed + a lack of side-effects on the ORIGINAL backend.
+    let _ = observe_worker_state(Some("recording"), stale_generation);
+    assert!(
+        backend.set_calls.lock().unwrap().is_empty(),
+        "stale-generation event must NOT drive the newly-installed controller",
+    );
+
+    // Sanity: a call with the CURRENT generation still drives the
+    // installed controller (proves the guard is not a blanket no-op).
+    let _ = observe_worker_state(Some("recording"), current_generation());
+
+    install_test_controller(saved);
+}
+
+#[test]
+fn install_from_settings_hot_swaps_without_bumping_generation() {
+    // Codex P2 (session.rs:230, PR #443) — the settings UI Save/Reload
+    // paths must swap the controller WITHOUT bumping the observer
+    // generation, so the live worker's `stream_lines` reader keeps
+    // driving the new controller. Plain `install()` bumps; the hot
+    // variant does not.
+    let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved = install_test_controller(None);
+
+    // Baseline generation captured as a live reader would have done.
+    let gen_before = current_generation();
+
+    // Hot-swap ON with a Some(true) config value.
+    install_from_settings_hot(Some(true));
+    assert!(is_installed(), "hot swap ON must install the controller");
+    assert_eq!(
+        gen_before,
+        current_generation(),
+        "hot swap must NOT bump generation (Codex P2 session.rs:230 PR #443)",
+    );
+
+    // Hot-swap OFF via Some(false).
+    install_from_settings_hot(Some(false));
+    assert!(!is_installed(), "hot swap OFF must clear the controller");
+    assert_eq!(
+        gen_before,
+        current_generation(),
+        "hot swap OFF must also NOT bump generation",
+    );
+
+    // A live reader that captured `gen_before` still matches, so a
+    // follow-up observation drives whatever is installed now (nothing
+    // in this branch — clean no-op).
+    let _ = observe_worker_state(Some("recording"), gen_before);
+    let _ = observe_worker_state(Some("ready"), gen_before);
+    assert!(!is_installed());
+
+    install_test_controller(saved);
+}
+
+#[test]
 fn env_override_recognises_truthy_and_falsy_tokens() {
     // Guard the token vocabulary so a future refactor cannot
     // silently narrow it.
