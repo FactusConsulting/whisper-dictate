@@ -488,13 +488,22 @@ mod tests {
         std::env::set_var("VOICEPI_LOCAL_ONLY", "1");
 
         // Deserialize a Dispatch envelope that OMITS local_only entirely.
-        let raw = r#"{
-            "action":"dispatch",
-            "profiles_json":"[{"name":"P","processor":"openai","mode":"clean","base_url":"https://api.openai.com/v1"}]",
-            "active_index":0,
-            "fallback_text":"hello"
-        }"#;
-        let request: HotkeyRequest = serde_json::from_str(raw).unwrap();
+        // Use `json!` to build the envelope so the nested `profiles_json`
+        // string value gets its inner quotes escaped correctly -- writing
+        // the literal by hand with a raw string previously fed serde_json
+        // an unclosed inner string at column 33.
+        let envelope = serde_json::json!({
+            "action": "dispatch",
+            "profiles_json": serde_json::to_string(&serde_json::json!([{
+                "name": "P",
+                "processor": "openai",
+                "mode": "clean",
+                "base_url": "https://api.openai.com/v1",
+            }])).unwrap(),
+            "active_index": 0,
+            "fallback_text": "hello",
+        });
+        let request: HotkeyRequest = serde_json::from_value(envelope).unwrap();
         let (local_only_out, _profile_json, _active, _hist, _fallback) = match request {
             HotkeyRequest::Dispatch {
                 profiles_json,
