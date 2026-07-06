@@ -12,7 +12,8 @@
 use std::sync::mpsc;
 
 use super::{
-    session_config_from_env, whisper_backend_config_from_env, INITIAL_PROMPT_ENV, LANG_ENV,
+    build_initial_prompt, session_config_from_env, whisper_backend_config_from_env,
+    INITIAL_PROMPT_ENV, LANG_ENV,
 };
 use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::runtime::rust_session_sink::build_production_sink;
@@ -128,6 +129,97 @@ fn session_config_falls_back_to_route_default_when_env_missing() {
         (cfg.min_record_seconds - 0.5).abs() < f64::EPSILON,
         "expected the 0.5 s default, got {}",
         cfg.min_record_seconds
+    );
+}
+
+// ── Wave 5.5 gap #4: dictionary prompt injection ─────────────────────────────
+//
+// The rust-session Whisper backend must pick up the user's dictionary
+// vocabulary and weave it into `initial_prompt` -- otherwise the
+// rust-session path throws the dictionary away and every rare-word bias
+// the Python worker enjoyed silently regresses. Tests:
+//
+// - dictionary disabled: `build_initial_prompt` returns the env base
+//   verbatim (or None if there's no base) -- byte-identical to
+//   pre-Wave-5.5 behaviour.
+// - dictionary enabled but empty: same result -- an enabled but
+//   term-less dictionary doesn't fabricate a `Vocabulary:` suffix.
+// - dictionary enabled + terms present: the returned prompt starts
+//   with the base + a `Vocabulary:` line (the `Dictionary::build_prompt`
+//   format).
+// - `whisper_backend_config_from_env` threads the env base through
+//   `build_initial_prompt` so the backend receives the dictionary-aware
+//   prompt without touching the env var format the user knows.
+
+#[test]
+fn build_initial_prompt_disabled_dictionary_passes_base_through() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // Dictionary explicitly disabled -> the runtime helper returns the
+    // base prompt unchanged. Load a config-file default that could
+    // supply a stray dictionary path -- the env override wins.
+    let _enabled = EnvVarGuard::set("VOICEPI_DICTIONARY_ENABLED", "0");
+    let _path = EnvVarGuard::unset("VOICEPI_DICTIONARY");
+
+    assert_eq!(
+        build_initial_prompt(Some("Base prompt")).as_deref(),
+        Some("Base prompt"),
+    );
+    // A blank / missing base collapses to None -- the whisper backend
+    // must not receive an empty-string prompt (it would forward it as a
+    // literal empty vocabulary hint).
+    assert!(build_initial_prompt(None).is_none());
+    assert!(build_initial_prompt(Some("")).is_none());
+}
+
+#[test]
+fn build_initial_prompt_appends_vocabulary_terms_when_dictionary_present() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // Point the dictionary env vars at a tempfile with two vocabulary
+    // terms so the `runtime_dictionary_result` helper loads them and
+    // `build_prompt` appends the `Vocabulary: ...` line.
+    let dir = tempfile::tempdir().unwrap();
+    let dict_path = dir.path().join("dictionary.json");
+    std::fs::write(
+        &dict_path,
+        r#"{"terms":["Slack","Claude Code"],"replacements":{}}"#,
+    )
+    .unwrap();
+    let _enabled = EnvVarGuard::set("VOICEPI_DICTIONARY_ENABLED", "1");
+    let _path = EnvVarGuard::set(
+        "VOICEPI_DICTIONARY",
+        dict_path.to_string_lossy().as_ref(),
+    );
+
+    let prompt = build_initial_prompt(Some("Base prompt")).expect("prompt");
+    // Byte-identical to what `Dictionary::build_prompt` produces so a
+    // regression in either layer is caught here.
+    assert_eq!(prompt, "Base prompt\nVocabulary: Slack, Claude Code");
+}
+
+#[test]
+fn whisper_backend_config_threads_dictionary_prompt_into_backend() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let dict_path = dir.path().join("dictionary.json");
+    std::fs::write(
+        &dict_path,
+        r#"{"terms":["Codex"],"replacements":{}}"#,
+    )
+    .unwrap();
+    let _lang = EnvVarGuard::unset(LANG_ENV);
+    let _prompt = EnvVarGuard::set(INITIAL_PROMPT_ENV, "Whisper Dictate");
+    let _enabled = EnvVarGuard::set("VOICEPI_DICTIONARY_ENABLED", "1");
+    let _path = EnvVarGuard::set(
+        "VOICEPI_DICTIONARY",
+        dict_path.to_string_lossy().as_ref(),
+    );
+
+    let cfg = whisper_backend_config_from_env();
+    assert_eq!(
+        cfg.initial_prompt.as_deref(),
+        Some("Whisper Dictate\nVocabulary: Codex"),
+        "the backend config's initial_prompt must carry the dictionary-\
+         merged prompt, not just the env-var base"
     );
 }
 
