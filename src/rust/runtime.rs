@@ -2213,10 +2213,42 @@ fn parse_worker_event(line: &str) -> Option<WorkerEvent> {
 /// the controller even when config.json is silent or set to `false`,
 /// matching the schema's documented env-fallback semantics.
 fn install_output_mute_from_config() {
-    let config_value = config::load_settings()
-        .map(|settings| settings.mute_output_while_recording)
-        .unwrap_or(false);
+    // Codex P2 (session.rs:130, PR #440) — pass Option<bool> so the
+    // session installer can distinguish "user explicitly set this in
+    // config.json" from "key is missing, fall back to env or default".
+    // A missing config file, an unreadable JSON payload, or a key that
+    // is absent all resolve to None so the env var can still take
+    // effect. `load_raw_config` returns an empty object for a
+    // nonexistent file (not an error), so a genuine parse failure is
+    // the only case where None comes from the Err path.
+    let config_value = config::load_raw_config()
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .and_then(read_mute_key_option)
+        });
     crate::output_mute::session::install_from_settings(config_value);
+}
+
+/// Read the raw `mute_output_while_recording` value from a config map.
+///
+/// Returns `None` when the key is absent (so the session installer can
+/// fall back to the env var / default). Returns `Some(true|false)` when
+/// the key is present, using the same lax-bool vocabulary as
+/// `config::load::bool_value`. An unparseable value (e.g. `"maybe"`)
+/// also returns `None` so the env fallback wins.
+fn read_mute_key_option(object: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    let value = object.get("mute_output_while_recording")?;
+    match value {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "" | "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Clear the process-global auto-mute controller on every worker

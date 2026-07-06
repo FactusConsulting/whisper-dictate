@@ -33,9 +33,12 @@ impl WhisperDictateApp {
                 if self.saved_settings.mute_output_while_recording
                     != self.settings.mute_output_while_recording
                 {
-                    crate::output_mute::session::install_from_settings(
+                    // Codex P2 (session.rs:130, PR #440) — Save always
+                    // means "the user made this the on-disk value", so
+                    // pass Some(...) so env can never override.
+                    crate::output_mute::session::install_from_settings(Some(
                         self.settings.mute_output_while_recording,
-                    );
+                    ));
                     self.append_runtime_log(format!(
                         "[ui] mute-output-while-recording toggled -> {}",
                         self.settings.mute_output_while_recording,
@@ -105,6 +108,18 @@ impl WhisperDictateApp {
                 self.settings = settings;
                 self.reload_stt_api_key();
                 self.reload_post_api_key();
+                // Codex P2 (settings_state.rs:38, PR #440) — honour the
+                // schema's `"live": true` claim on this key by
+                // reinstalling (or clearing) the process-global
+                // auto-mute controller when Reload config picks up a
+                // change. Without this, editing config.json externally
+                // and clicking Reload left the UI showing the new value
+                // while the runtime kept the old mute state until a
+                // Save toggle or a restart. `install_from_settings`
+                // resolves env fallback the same way as start-up.
+                crate::output_mute::session::install_from_settings(Some(
+                    self.settings.mute_output_while_recording,
+                ));
                 self.settings_status = "Reloaded config".to_owned();
                 self.append_runtime_log(format!("[ui] settings loaded: {}", self.config_path));
             }

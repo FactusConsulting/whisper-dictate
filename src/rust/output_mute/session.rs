@@ -115,19 +115,25 @@ pub fn install(enabled: bool) {
 /// Merge an on-disk config value with the [`MUTE_OUTPUT_ENV`] env var
 /// and install (or clear) the controller accordingly.
 ///
-/// Codex P2 (runtime.rs:2060, PR #440) — the previous installer read
-/// only config.json, so `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1` set in
-/// the environment (as the schema documents) was silently ignored by
-/// the Rust supervisor even though the same var is forwarded to the
-/// Python worker. This helper adopts the same "env wins over config"
-/// precedence used elsewhere for schema-derived worker overrides.
+/// Precedence matches Python's `vp_config.Config.effective_config`:
 ///
-/// A missing/unset env var falls back to the caller-supplied
-/// `config_value` (typically the persisted `AppSettings` field). An
-/// unrecognised env value (neither truthy nor falsy) also falls back
-/// so a typo does not silently flip the setting off.
-pub fn install_from_settings(config_value: bool) {
-    let effective = env_override().unwrap_or(config_value);
+///   config.json (if explicitly set) -> environment -> default (off).
+///
+/// Codex P2 (session.rs:130, PR #440) — an earlier iteration let env
+/// win unconditionally. That meant an operator who had exported
+/// `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1` could not disable the
+/// feature by saving `"mute_output_while_recording": "0"` in Settings;
+/// the Rust supervisor kept muting even after the effective runtime
+/// config said "off". Config now wins over env so Settings can always
+/// turn the feature off, matching the schema-driven Python resolution.
+///
+/// `config_value.is_none()` means "config silent on this key" (either
+/// the file is absent or the key is missing entirely). `Some(x)` means
+/// the user explicitly persisted `x` and the env var must NOT override
+/// it. An unrecognised env value is treated as unset so a typo does
+/// not silently flip the setting.
+pub fn install_from_settings(config_value: Option<bool>) {
+    let effective = config_value.or_else(env_override).unwrap_or(false);
     install(effective);
 }
 
@@ -334,31 +340,58 @@ mod tests {
     }
 
     #[test]
-    fn env_override_wins_over_config() {
-        // Codex P2 (runtime.rs:2060, PR #440): the documented
-        // VOICEPI_MUTE_OUTPUT_WHILE_RECORDING env var must actually
-        // control the installer, not just the schema paperwork.
+    fn config_wins_over_env_and_env_is_the_default_fallback() {
+        // Codex P2 (session.rs:130, PR #440): precedence must mirror
+        // Python's `vp_config.Config.effective_config`:
+        // config.json (if explicitly set) -> environment -> default off.
+        // The previous behaviour let env unconditionally override
+        // config, so an operator with the env var set could not disable
+        // the feature from Settings. Explicit Some(...) always wins now.
         use crate::test_env_lock::ENV_LOCK;
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var(MUTE_OUTPUT_ENV).ok();
 
+        // 1) explicit config=false MUST win over env=1.
         std::env::set_var(MUTE_OUTPUT_ENV, "1");
         assert_eq!(env_override(), Some(true));
-        // Even with config OFF, the env-var opt-in must install.
-        install_from_settings(false);
-        assert!(is_installed(), "env=1 must install even when config=false");
+        install_from_settings(Some(false));
+        assert!(
+            !is_installed(),
+            "config=Some(false) must win over env=1 (Codex P2 session.rs:130)"
+        );
 
+        // 2) explicit config=true MUST win over env=0.
         std::env::set_var(MUTE_OUTPUT_ENV, "0");
-        install_from_settings(true);
-        assert!(!is_installed(), "env=0 must clear even when config=true");
+        install_from_settings(Some(true));
+        assert!(
+            is_installed(),
+            "config=Some(true) must win over env=0 (Codex P2 session.rs:130)"
+        );
 
-        // Unset env falls back to config value.
+        // 3) config=None (key missing) -> env fallback: env=1 installs.
+        std::env::set_var(MUTE_OUTPUT_ENV, "1");
+        install_from_settings(None);
+        assert!(is_installed(), "env=1 must apply when config is silent");
+
+        // 4) config=None + env=0 -> not installed.
+        std::env::set_var(MUTE_OUTPUT_ENV, "0");
+        install_from_settings(None);
+        assert!(
+            !is_installed(),
+            "env=0 must clear controller when config is silent"
+        );
+
+        // 5) Both silent -> default off.
         std::env::remove_var(MUTE_OUTPUT_ENV);
         assert_eq!(env_override(), None);
-        install_from_settings(true);
+        install_from_settings(None);
+        assert!(!is_installed(), "default is off when config + env are silent");
+
+        // 6) Explicit config always wins even without env.
+        install_from_settings(Some(true));
         assert!(is_installed());
-        install_from_settings(false);
+        install_from_settings(Some(false));
         assert!(!is_installed());
 
         // Restore
