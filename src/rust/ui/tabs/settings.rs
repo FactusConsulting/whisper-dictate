@@ -117,6 +117,10 @@ pub(in crate::ui) fn reset_tab_settings(settings: &mut AppSettings, tab: Tab) {
             settings.min_snr_db = defaults.min_snr_db;
             settings.audio_ducking = defaults.audio_ducking;
             settings.audio_ducking_level = defaults.audio_ducking_level;
+            // Codex P2 (settings_schema.json:321, PR #440) — reset the
+            // new mute-output toggle alongside its sibling audio
+            // controls so "Reset this tab" behaves symmetrically.
+            settings.mute_output_while_recording = defaults.mute_output_while_recording;
             settings.initial_prompt = defaults.initial_prompt;
         }
         Tab::Dictionary => {

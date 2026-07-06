@@ -55,12 +55,44 @@ pub use state::{MuteController, MuteError, PriorMuteState};
 /// the controller drives from the recording lifecycle. Every call is
 /// fallible so backends can surface transient errors (missing tool,
 /// COM failure, permission denied) without panicking the audio path.
+///
+/// Codex P2 (state.rs:175, PR #440) — [`Self::pin_current_endpoint`] +
+/// [`Self::clear_endpoint_pin`] let backends bind a recording session
+/// to a *specific* endpoint rather than re-resolving the default on
+/// every call. If the user switches the default output device
+/// mid-recording, the restore then targets the endpoint we originally
+/// muted, not whatever the OS now considers default (which the user
+/// may have deliberately muted before switching).
+///
+/// Both methods have no-op default impls so backends that either don't
+/// need this (macOS/noop) or haven't been ported yet keep the previous
+/// "always default" behaviour. Linux implements it via
+/// `pactl get-default-sink`.
 pub trait OutputMuteBackend: Send + Sync {
     /// Read the current mute state of the default render endpoint.
     fn get_mute(&self) -> Result<bool, MuteError>;
 
     /// Set the mute state of the default render endpoint.
     fn set_mute(&self, muted: bool) -> Result<(), MuteError>;
+
+    /// Resolve the current default render endpoint and cache it inside
+    /// the backend so subsequent [`Self::get_mute`] / [`Self::set_mute`]
+    /// calls target that specific endpoint until [`Self::clear_endpoint_pin`]
+    /// is called. Default impl is a no-op — backends that don't need
+    /// pinning simply keep re-resolving the default on every call.
+    ///
+    /// Codex P2 (state.rs:175, PR #440) — used by [`MuteController`] at
+    /// recording start so a mid-recording default-device switch does
+    /// not leave the original speakers muted / silently unmute a
+    /// newly-selected device the user had already muted.
+    fn pin_current_endpoint(&self) -> Result<(), MuteError> {
+        Ok(())
+    }
+
+    /// Release the endpoint pin installed by [`Self::pin_current_endpoint`]
+    /// so subsequent calls fall back to the current default endpoint.
+    /// No-op by default; called by [`MuteController`] on stop / drop.
+    fn clear_endpoint_pin(&self) {}
 }
 
 /// Build the platform-appropriate backend.

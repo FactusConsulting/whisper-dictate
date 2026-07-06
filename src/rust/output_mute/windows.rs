@@ -43,14 +43,39 @@ $ErrorActionPreference = 'Stop'
 Add-Type -Language CSharp -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+// Codex P1 (windows.rs:51, PR #440) — the IAudioEndpointVolume vtable
+// order (past IUnknown) is:
+//   1  RegisterControlChangeNotify
+//   2  UnregisterControlChangeNotify
+//   3  GetChannelCount
+//   4  SetMasterVolumeLevel
+//   5  SetMasterVolumeLevelScalar
+//   6  GetMasterVolumeLevel
+//   7  GetMasterVolumeLevelScalar
+//   8  SetChannelVolumeLevel
+//   9  SetChannelVolumeLevelScalar
+//   10 GetChannelVolumeLevel
+//   11 GetChannelVolumeLevelScalar
+//   12 SetMute      <-- must sit immediately after GetChannelVolumeLevelScalar
+//   13 GetMute      <-- must sit immediately after SetMute
+// A stray NotUsed12 placeholder used to shift SetMute/GetMute into the
+// wrong vtable slots, so the script was silently dispatching to
+// GetVolumeStepInfo when it thought it was calling SetMute. The primary
+// Windows path never actually toggled the mute state until this fix.
+//
+// Codex P2 (windows.rs:53, PR #440) — GetMute writes a Win32 BOOL
+// (4-byte int), but COM interop marshals System.Boolean out params as
+// VARIANT_BOOL (2-byte short) by default. Explicit
+// [MarshalAs(UnmanagedType.Bool)] on the out parameter matches the
+// SetMute argument's marshalling and prevents the caller from reading a
+// corrupt / half-truncated buffer for the prior mute state.
 [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 public interface IAudioEndpointVolume {
     int NotUsed1(); int NotUsed2();
     int GetChannelCount(out uint pnChannelCount);
     int NotUsed4(); int NotUsed5(); int NotUsed6(); int NotUsed7(); int NotUsed8(); int NotUsed9(); int NotUsed10(); int NotUsed11();
-    int NotUsed12();
     int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
-    int GetMute(out bool pbMute);
+    int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
 }
 [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 public interface IMMDevice {
@@ -77,19 +102,28 @@ public static class OutputMuteHelper {
 }
 '@ -ReferencedAssemblies System.Runtime.InteropServices | Out-Null
 $vol = [OutputMuteHelper]::Activate()
+# Codex P2 (windows.rs:87, PR #440) — every IAudioEndpointVolume call
+# returns an HRESULT. The previous version cast the return to [void],
+# which silently swallowed any endpoint/COM failure and then emitted
+# OK / MUTE:0 as if the operation had succeeded. Wrapping each call in
+# Marshal.ThrowExceptionForHR converts a non-zero HRESULT into a
+# ComException that propagates through PowerShell's non-zero exit and
+# stderr, letting the Rust caller distinguish real success from silent
+# failure.
 switch ($env:VOICEPI_MUTE_ACTION) {
     'get' {
-        $m = $false; [void]$vol.GetMute([ref]$m)
+        $m = $false
+        [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.GetMute([ref]$m))
         if ($m) { 'MUTE:1' } else { 'MUTE:0' }
     }
     'mute' {
         $ctx = [Guid]::Empty
-        [void]$vol.SetMute($true, [ref]$ctx)
+        [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.SetMute($true, [ref]$ctx))
         'OK'
     }
     'unmute' {
         $ctx = [Guid]::Empty
-        [void]$vol.SetMute($false, [ref]$ctx)
+        [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.SetMute($false, [ref]$ctx))
         'OK'
     }
     default { throw "unknown VOICEPI_MUTE_ACTION" }
@@ -377,5 +411,83 @@ mod tests {
         assert!(POWERSHELL_SCRIPT.contains("GetMute"));
         assert!(POWERSHELL_SCRIPT.contains("IAudioEndpointVolume"));
         assert!(POWERSHELL_SCRIPT.contains("IMMDeviceEnumerator"));
+    }
+
+    #[test]
+    fn iaudio_vtable_places_setmute_and_getmute_in_the_correct_slots() {
+        // Codex P1 (windows.rs:51, PR #440) — SetMute must sit
+        // immediately after the last NotUsed11 slot (which stands in
+        // for GetChannelVolumeLevelScalar in the real vtable) and
+        // GetMute must sit immediately after SetMute. A stray
+        // NotUsed12 shim used to shift both methods into the wrong
+        // vtable slots. Pin the interface signature so a similar
+        // future edit fails CI instead of showing up as a silent
+        // no-op on Windows only.
+        let script = POWERSHELL_SCRIPT;
+        let not_used11 = script.find("NotUsed11").expect("NotUsed11 slot present");
+        let set_mute = script
+            .find("int SetMute([MarshalAs")
+            .expect("SetMute signature present");
+        let get_mute = script
+            .find("int GetMute([MarshalAs")
+            .expect("GetMute signature present");
+        assert!(
+            not_used11 < set_mute && set_mute < get_mute,
+            "SetMute must follow the last NotUsed11 slot, GetMute must follow SetMute",
+        );
+
+        // The stray NotUsed12 placeholder must be gone: only NotUsed1..
+        // NotUsed11 are legal in the current interface. A future review
+        // adding a stub back would push the vtable out of alignment
+        // again.
+        let between = &script[not_used11..set_mute];
+        assert!(
+            !between.contains("NotUsed12"),
+            "no NotUsed12 stub is allowed between the volume methods and SetMute",
+        );
+    }
+
+    #[test]
+    fn getmute_out_parameter_is_marshalled_as_win32_bool() {
+        // Codex P2 (windows.rs:53, PR #440) — Win32 BOOL is a 4-byte
+        // int, and the default marshalling for a System.Boolean out
+        // param is VARIANT_BOOL (2 bytes). Without the explicit
+        // MarshalAs the caller reads a truncated / uninitialised
+        // buffer for the prior mute state, which then flips the saved
+        // "did we mute" bit.
+        assert!(
+            POWERSHELL_SCRIPT.contains("int GetMute([MarshalAs(UnmanagedType.Bool)] out bool"),
+            "GetMute's out parameter must be explicitly marshalled as Win32 BOOL",
+        );
+    }
+
+    #[test]
+    fn powershell_actions_check_hresults_before_reporting_success() {
+        // Codex P2 (windows.rs:87, PR #440) — each SetMute/GetMute
+        // call must have its HRESULT checked, otherwise a non-zero
+        // return silently drops through to "OK" or "MUTE:0".
+        // Pin the ThrowExceptionForHR wrapping on every action branch.
+        let script = POWERSHELL_SCRIPT;
+        for expected in [
+            "ThrowExceptionForHR($vol.GetMute",
+            "ThrowExceptionForHR($vol.SetMute($true",
+            "ThrowExceptionForHR($vol.SetMute($false",
+        ] {
+            assert!(
+                script.contains(expected),
+                "powershell script must wrap `{expected}...` in Marshal.ThrowExceptionForHR",
+            );
+        }
+        // Belt-and-braces: the previous `[void]$vol.SetMute(` /
+        // `[void]$vol.GetMute(` pattern (which discarded the HRESULT)
+        // must not creep back in.
+        assert!(
+            !script.contains("[void]$vol.SetMute"),
+            "SetMute HRESULT must not be discarded",
+        );
+        assert!(
+            !script.contains("[void]$vol.GetMute"),
+            "GetMute HRESULT must not be discarded",
+        );
     }
 }

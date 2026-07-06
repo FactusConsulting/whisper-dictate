@@ -400,6 +400,18 @@ impl<'a> EventForwarder<'a> {
             // the forwarder defensive against a future emitter change.
             let line = String::from_utf8_lossy(without_nl).into_owned();
             let event = parse_or_stderr(line);
+            // Codex P2 (runtime.rs:1992, PR #440) — in the
+            // `VOICEPI_DICTATE_BACKEND=rust-session` path, worker
+            // events flow through the in-process EventForwarder rather
+            // than the supervisor's `stream_lines` subprocess reader.
+            // The auto-mute observer used to be hooked only into the
+            // latter, so the mute feature silently did nothing under
+            // the rust-session backend. Fanning every state transition
+            // into the observer here restores parity — cheap no-op
+            // when no controller is installed.
+            if let RuntimeEvent::Worker(worker) = &event {
+                crate::output_mute::session::observe_worker_state(worker.state.as_deref());
+            }
             let _ = self.tx.send(event);
             if let Some(notifier) = self.repaint_notifier {
                 notifier();
