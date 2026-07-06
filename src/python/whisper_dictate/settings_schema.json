@@ -528,7 +528,7 @@
       "key": "postprocess_profiles",
       "default": null,
       "live": true,
-      "description": "JSON array of postprocess profiles the second hotkey cycles through: each entry has name, processor, mode, model, base_url, api_key, timeout_ms, max_input_chars, max_output_chars, redact, redact_terms. Empty falls back to the built-in grammar/email/bullets seed.",
+      "description": "JSON array of postprocess profiles the second hotkey cycles through: each entry has name, processor, mode, model, base_url, timeout_ms, max_input_chars, max_output_chars, redact, redact_terms. Cloud API keys are read from VOICEPI_POST_API_KEY / VOICEPI_STT_API_KEY / provider env vars (never inline in this list). Empty falls back to the built-in grammar/email/bullets seed.",
       "advanced": true,
       "category": "postprocess"
     },

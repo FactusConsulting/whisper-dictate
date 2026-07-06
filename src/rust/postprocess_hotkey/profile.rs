@@ -42,12 +42,6 @@ pub struct PostprocessProfile {
     /// substitutes it before we hand the profile to the pipeline.
     #[serde(default)]
     pub base_url: String,
-    /// Optional API key. Empty string means "read from the standard
-    /// `VOICEPI_POST_API_KEY` / provider-specific env var" — mirrors the
-    /// existing postprocess wiring so profiles do not force users to
-    /// duplicate secrets in `config.json`.
-    #[serde(default)]
-    pub api_key: String,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
     #[serde(default = "default_max_chars")]
@@ -84,7 +78,6 @@ impl Default for PostprocessProfile {
             mode: default_mode(),
             model: default_model(),
             base_url: DEFAULT_OLLAMA_BASE_URL.to_owned(),
-            api_key: String::new(),
             timeout_ms: default_timeout_ms(),
             max_input_chars: default_max_chars(),
             max_output_chars: default_max_chars(),
@@ -92,6 +85,41 @@ impl Default for PostprocessProfile {
             redact_terms: String::new(),
         }
     }
+}
+
+/// Env-var fallback used when a profile does not carry its own API key.
+/// Kept in sync with `ui::api_keys::load_post_api_key_from_env` so cloud
+/// profiles pick up the same environment secrets the primary
+/// post-processing path honours (VOICEPI_POST_API_KEY →
+/// VOICEPI_STT_API_KEY → provider-specific).
+///
+/// Claude-P1 + Codex-P2 finding on #439: the previous per-profile
+/// `api_key` field was persisted in plaintext inside `config.json`,
+/// bypassing the OS credential store the rest of the codebase uses. The
+/// field is gone; secrets flow through env vars (which the runtime
+/// populates from the OS credential store during worker launch).
+pub fn resolve_api_key_from_env(processor: &str) -> String {
+    let candidates: &[&str] = match processor {
+        "groq" => &[
+            "VOICEPI_POST_API_KEY",
+            "VOICEPI_STT_API_KEY",
+            "GROQ_API_KEY",
+        ],
+        "openai" => &[
+            "VOICEPI_POST_API_KEY",
+            "VOICEPI_STT_API_KEY",
+            "OPENAI_API_KEY",
+        ],
+        // Ollama and the passthrough "none" processor do not need a key
+        // — the chat client only rejects on the cloud path.
+        _ => return String::new(),
+    };
+    candidates
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
 }
 
 impl PostprocessProfile {
@@ -112,7 +140,6 @@ impl PostprocessProfile {
             mode: self.mode.clone(),
             model,
             base_url,
-            api_key: self.api_key.clone(),
             timeout_ms: self.timeout_ms,
             max_input_chars: self.max_input_chars,
             max_output_chars: self.max_output_chars,
@@ -125,8 +152,15 @@ impl PostprocessProfile {
     /// expects. The `local_only` gate is threaded in from the caller so
     /// the same profile can be validated against the current privacy
     /// mode without baking a stale value into the profile itself.
+    ///
+    /// Cloud profiles resolve their API key at the very last moment via
+    /// [`resolve_api_key_from_env`] so a user who keeps their secret in
+    /// the OS credential store / environment (rather than in
+    /// `config.json`) still gets a live key on every dispatch. Claude-P1
+    /// + Codex-P2 finding on #439.
     pub fn to_settings(&self, local_only: bool) -> PostprocessSettings {
         let norm = self.normalized();
+        let api_key = resolve_api_key_from_env(&norm.processor);
         PostprocessSettings {
             processor: norm.processor,
             mode: norm.mode,
@@ -135,7 +169,7 @@ impl PostprocessProfile {
             timeout_ms: norm.timeout_ms,
             max_input_chars: norm.max_input_chars,
             max_output_chars: norm.max_output_chars,
-            api_key: norm.api_key,
+            api_key,
             redact: norm.redact,
             redact_terms: norm.redact_terms,
             local_only,
@@ -264,7 +298,6 @@ mod tests {
             mode: "email".to_owned(),
             model: "gpt-4o-mini".to_owned(),
             base_url: "https://api.openai.com/v1".to_owned(),
-            api_key: "sk-test".to_owned(),
             timeout_ms: 12_000,
             max_input_chars: 8_000,
             max_output_chars: 8_000,
@@ -286,5 +319,115 @@ mod tests {
         assert_eq!(profile.name, "Just a label");
         assert_eq!(profile.processor, "ollama");
         assert_eq!(profile.mode, "clean");
+    }
+
+    /// Claude-P1 + Codex-P2 finding on #439: an inline `api_key` in the
+    /// profile JSON must never round-trip back into `config.json` /
+    /// `postprocess_profiles` — cloud secrets belong in the env /
+    /// OS-credential-store path, same as the primary `post_api_key`.
+    /// Serde ignores unknown fields, so a legacy value is silently
+    /// dropped on load, and the serialized form has no `api_key` field
+    /// at all.
+    #[test]
+    fn json_never_persists_api_key_on_the_profile() {
+        // 1. A legacy JSON payload carrying `api_key` must parse (back-
+        //    compat for anyone who set it under an earlier build) and
+        //    the field must NOT be surfaced on re-serialization.
+        let legacy = r#"{"name":"Formal","processor":"openai","api_key":"sk-test"}"#;
+        let profile: PostprocessProfile = serde_json::from_str(legacy).unwrap();
+        let json = serde_json::to_string(&profile).unwrap();
+        assert!(
+            !json.contains("api_key"),
+            "profile JSON must not carry api_key (got: {json})",
+        );
+        assert!(!json.contains("sk-test"));
+
+        // 2. The registry-level round-trip via `to_json` (the shape the
+        //    config.json actually stores) also drops the secret.
+        let json = serde_json::to_string(&vec![profile]).unwrap();
+        assert!(!json.contains("api_key"));
+        assert!(!json.contains("sk-test"));
+    }
+
+    /// Codex-P2 finding on #439: `to_settings` must resolve the API key
+    /// from the same env vars the primary post-processing path honours
+    /// so a cloud profile without an inline secret still runs against
+    /// the user's `VOICEPI_POST_API_KEY` / provider-specific env var.
+    /// Verified against the OpenAI processor since that has the widest
+    /// env-var fan-out.
+    #[test]
+    fn to_settings_resolves_openai_api_key_from_env() {
+        use crate::test_env_lock::ENV_LOCK;
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(&str, Option<std::ffi::OsString>)> = [
+            "VOICEPI_POST_API_KEY",
+            "VOICEPI_STT_API_KEY",
+            "OPENAI_API_KEY",
+        ]
+        .iter()
+        .map(|k| (*k, std::env::var_os(k)))
+        .collect();
+        for (k, _) in &saved {
+            std::env::remove_var(k);
+        }
+        std::env::set_var("VOICEPI_POST_API_KEY", "post-env-secret");
+
+        let profile = PostprocessProfile {
+            processor: "openai".to_owned(),
+            ..PostprocessProfile::default()
+        };
+        let settings = profile.to_settings(false);
+
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+
+        assert_eq!(settings.api_key, "post-env-secret");
+    }
+
+    /// Sibling coverage: the ordered fallback chain
+    /// (POST → STT → provider-specific) matches
+    /// `ui::api_keys::load_post_api_key_from_env`, so a user who only
+    /// sets `OPENAI_API_KEY` still lands a resolved key.
+    #[test]
+    fn resolve_api_key_from_env_falls_through_to_provider_specific() {
+        use crate::test_env_lock::ENV_LOCK;
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(&str, Option<std::ffi::OsString>)> = [
+            "VOICEPI_POST_API_KEY",
+            "VOICEPI_STT_API_KEY",
+            "OPENAI_API_KEY",
+            "GROQ_API_KEY",
+        ]
+        .iter()
+        .map(|k| (*k, std::env::var_os(k)))
+        .collect();
+        for (k, _) in &saved {
+            std::env::remove_var(k);
+        }
+        std::env::set_var("GROQ_API_KEY", "groq-env-secret");
+
+        let got = resolve_api_key_from_env("groq");
+
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+
+        assert_eq!(got, "groq-env-secret");
+    }
+
+    /// The Ollama and passthrough processors never need a key, so the
+    /// env-resolver returns empty even when secrets are set — no need
+    /// to fake up an unused HTTP header for a local process.
+    #[test]
+    fn resolve_api_key_from_env_returns_empty_for_local_processors() {
+        assert!(resolve_api_key_from_env("ollama").is_empty());
+        assert!(resolve_api_key_from_env("none").is_empty());
     }
 }

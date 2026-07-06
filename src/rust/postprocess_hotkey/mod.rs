@@ -169,8 +169,13 @@ fn load_registry(profiles_json: &str, active_index: usize) -> ProfileRegistry {
         // Fall back to the built-in seed so an empty / malformed config
         // string still yields a usable registry rather than a hard
         // error — the response's `error` field surfaces the parse
-        // failure to the caller.
-        _ => ProfileRegistry::built_in(),
+        // failure to the caller. Codex-2 finding on #439: preserve the
+        // caller-supplied `active_index` here so cycling through the
+        // built-in seed (Clean grammar / Email tone / Bullet list)
+        // sticks across dispatches; `ProfileRegistry::new` clamps a
+        // stale value to 0, so this is safe even if the built-in list
+        // shrinks between releases.
+        _ => ProfileRegistry::new(built_in_profiles(), active_index),
     }
 }
 
@@ -327,5 +332,36 @@ mod tests {
     fn dispatch_response_reports_none_when_both_texts_missing() {
         let outcome = dispatch_response(&sample_profiles_json(), 0, None, None, false);
         assert_eq!(outcome.source, DispatchSource::None);
+    }
+
+    /// Codex-2 finding on #439: when the config's `postprocess_profiles`
+    /// is empty the fallback used to hard-code `active_index = 0`, so a
+    /// user who cycled to `Email tone` (index 1) would silently jump
+    /// back to `Clean grammar` on the next press. The fix threads the
+    /// caller-supplied index through the built-in fallback; this test
+    /// guards it by asserting that `load_response("", 1)` reports the
+    /// second built-in profile as active.
+    #[test]
+    fn load_response_preserves_active_index_when_falling_back_to_builtin() {
+        let resp = load_response("", 1);
+        assert!(resp.error.is_empty());
+        assert_eq!(
+            resp.active_index, 1,
+            "empty JSON must not reset the persisted active index",
+        );
+        // The name at index 1 in `built_in_profiles()` is "Email tone".
+        assert_eq!(resp.profiles[1].name, "Email tone");
+    }
+
+    /// Companion coverage for the `load_registry` helper used on the
+    /// dispatch path: an empty JSON payload must yield the built-in seed
+    /// with the caller-supplied active index intact. Guarded here (not
+    /// via `dispatch_response`) so the assertion does not accidentally
+    /// depend on the built-in profile's Ollama endpoint being open.
+    #[test]
+    fn load_registry_preserves_active_index_when_falling_back_to_builtin() {
+        let reg = load_registry("", 2);
+        assert_eq!(reg.active_index(), 2);
+        assert_eq!(reg.current().unwrap().name, "Bullet list");
     }
 }

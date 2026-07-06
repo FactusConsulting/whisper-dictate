@@ -128,7 +128,15 @@ pub struct HistoryLastText;
 #[cfg(feature = "history-sqlite")]
 impl LastTextSource for HistoryLastText {
     fn last_text(&self) -> Option<String> {
-        use crate::history::{open_default, search, SearchOptions};
+        use crate::history::{is_enabled, open_default, search, SearchOptions};
+        // Codex-2 finding on #439: honour VOICEPI_HISTORY_DISABLED before
+        // ever touching the SQLite file. A user who opted out of history
+        // for privacy should not have the second hotkey silently read a
+        // stale utterance from the on-disk store — fall through to the
+        // caller-provided fallback text (clipboard / last-inject) instead.
+        if !is_enabled() {
+            return None;
+        }
         let conn = open_default().ok()?;
         let hits = search(
             &conn,
@@ -208,12 +216,46 @@ mod tests {
         let mut profile = passthrough_profile();
         profile.processor = "openai".to_owned();
         profile.mode = "clean".to_owned();
-        profile.api_key = "test-key".to_owned();
         profile.base_url = "https://api.openai.com/v1".to_owned();
+        // api_key is now resolved from env at dispatch time
+        // (Claude-P1/Codex-P2 finding on #439). The local_only gate
+        // trips before we ever look at the key, so the test does not
+        // need to plant one — but if the resolver's env-var order ever
+        // changes such that this test starts hitting the wire, that is
+        // a signal to add an env guard here.
         let source = || Some("hello".to_owned());
         let outcome = dispatch_last_text(&profile, &source, None, true);
         assert!(outcome.result.fallback);
         assert!(outcome.result.error.contains("VOICEPI_LOCAL_ONLY=1"));
+    }
+
+    /// Codex-2 finding on #439: with `VOICEPI_HISTORY_DISABLED=1` the
+    /// SQLite-backed source must NOT open the DB — the user opted out of
+    /// history for privacy, so reading old rows behind their back defeats
+    /// the whole point. This test guards the early-return that lands the
+    /// caller on the fallback text (clipboard/last-inject) instead of the
+    /// on-disk store.
+    #[cfg(feature = "history-sqlite")]
+    #[test]
+    fn history_last_text_returns_none_when_history_is_disabled() {
+        use crate::history::HISTORY_DISABLED_ENV;
+        use crate::test_env_lock::ENV_LOCK;
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os(HISTORY_DISABLED_ENV);
+        std::env::set_var(HISTORY_DISABLED_ENV, "1");
+
+        let source = HistoryLastText;
+        let got = source.last_text();
+
+        match prev {
+            Some(v) => std::env::set_var(HISTORY_DISABLED_ENV, v),
+            None => std::env::remove_var(HISTORY_DISABLED_ENV),
+        }
+
+        assert!(
+            got.is_none(),
+            "HistoryLastText must short-circuit on VOICEPI_HISTORY_DISABLED",
+        );
     }
 
     /// Integration test: hotkey coordinator -> postprocess pipeline via a

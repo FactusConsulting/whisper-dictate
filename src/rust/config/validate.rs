@@ -81,6 +81,17 @@ impl AppSettings {
         validate_u32("post_max_output_chars", &self.post_max_output_chars, 100)?;
         validate_u32("quit_count", &self.quit_count, 0)?;
         validate_u32("quit_window_ms", &self.quit_window_ms, 1)?;
+        // Second-hotkey profile index: same treatment as every other
+        // numeric-string setting so a hand-edited `config.json` with a
+        // negative / non-integer value fails fast on load instead of
+        // silently defaulting downstream. Codex-2 review finding on
+        // #439: sibling numeric fields all get this call — the profile
+        // index was the odd one out.
+        validate_u32(
+            "postprocess_profile_index",
+            &self.postprocess_profile_index,
+            0,
+        )?;
         validate_f32("vad_threshold", &self.vad_threshold)?;
         validate_f32("target_dbfs", &self.target_dbfs)?;
         validate_f32("min_input_dbfs", &self.min_input_dbfs)?;
@@ -225,5 +236,38 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("beam_size"));
+    }
+
+    /// Codex-2 review finding on #439: `postprocess_profile_index` was the
+    /// only numeric-string setting that skipped `validate_u32`, so a
+    /// hand-edited config with `"abc"` or a negative value silently passed
+    /// validation. Guard against a regression by asserting the same
+    /// error shape sibling fields produce.
+    #[test]
+    fn settings_validation_rejects_non_integer_postprocess_profile_index() {
+        let settings = AppSettings {
+            postprocess_profile_index: "abc".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("postprocess_profile_index"));
+    }
+
+    #[test]
+    fn settings_validation_rejects_negative_postprocess_profile_index() {
+        let settings = AppSettings {
+            postprocess_profile_index: "-1".to_owned(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("postprocess_profile_index"));
     }
 }

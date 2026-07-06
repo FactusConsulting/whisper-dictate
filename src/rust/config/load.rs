@@ -150,7 +150,13 @@ impl AppSettings {
         self.post_redact = bool_value(object, "post_redact", defaults.post_redact);
         self.post_redact_terms = string_value(object, "post_redact_terms", "");
         self.postprocess_hotkey = string_value(object, "postprocess_hotkey", "");
-        self.postprocess_profiles = string_value(object, "postprocess_profiles", "");
+        // Codex-2 finding on #439: users following the schema doc write
+        // `"postprocess_profiles": [{...}]` (a JSON array) in config.json,
+        // but the string-only path silently dropped the array and the
+        // next save wiped it. Accept both shapes — a raw string
+        // round-trips verbatim, an array is re-encoded to the string form
+        // the rest of the pipeline consumes.
+        self.postprocess_profiles = string_or_json_value(object, "postprocess_profiles", "");
         self.postprocess_profile_index = string_value(
             object,
             "postprocess_profile_index",
@@ -254,6 +260,19 @@ fn string_value(object: &Map<String, Value>, key: &str, default: &str) -> String
         .and_then(Value::as_str)
         .unwrap_or(default)
         .to_owned()
+}
+
+/// Read a config value that the schema calls a string but power users
+/// may hand-edit as a raw JSON array/object. Strings pass through
+/// verbatim; anything else is re-encoded to JSON so downstream string
+/// parsers still get the same shape. Used by `postprocess_profiles`
+/// (Codex-2 finding on #439).
+fn string_or_json_value(object: &Map<String, Value>, key: &str, default: &str) -> String {
+    match object.get(key) {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => serde_json::to_string(other).unwrap_or_else(|_| default.to_owned()),
+        None => default.to_owned(),
+    }
 }
 
 fn bool_value(object: &Map<String, Value>, key: &str, default: bool) -> bool {
@@ -366,6 +385,45 @@ mod tests {
         let value = serde_json::json!({ "stt_backend": "whisper" });
         let settings = AppSettings::from_value(value).unwrap();
         assert_eq!(settings.stt_backend, "whisper");
+    }
+
+    /// Codex-2 finding on #439: schema/docs describe
+    /// `postprocess_profiles` as a JSON array, but the string-only load
+    /// path silently dropped array values and the next save (which owns
+    /// the key via `SETTINGS_KEYS`) wiped them. This test asserts both
+    /// shapes are accepted and end up as the string form the rest of the
+    /// pipeline consumes.
+    #[test]
+    fn postprocess_profiles_accepts_json_array_and_reencodes_to_string() {
+        let value = serde_json::json!({
+            "postprocess_profiles": [
+                {"name": "Grammar", "processor": "ollama", "mode": "clean"},
+                {"name": "Bullets", "processor": "ollama", "mode": "bullets"},
+            ],
+        });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert!(!settings.postprocess_profiles.is_empty());
+        assert!(settings.postprocess_profiles.contains("Grammar"));
+        assert!(settings.postprocess_profiles.contains("Bullets"));
+        // The re-encoded value must round-trip back through the profile
+        // registry loader so the runtime keeps consuming it as-is.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&settings.postprocess_profiles).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn postprocess_profiles_accepts_string_form_verbatim() {
+        // Back-compat: the previous string-only representation must
+        // still land in the field untouched (the load path used to be
+        // string-only, and hand-written configs / test fixtures may
+        // still use it).
+        let raw = r#"[{"name":"Only","processor":"none","mode":"raw"}]"#;
+        let value = serde_json::json!({
+            "postprocess_profiles": raw,
+        });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.postprocess_profiles, raw);
     }
 
     #[test]
