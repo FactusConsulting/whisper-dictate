@@ -207,9 +207,7 @@ pub fn unsupported_worker_rust_settings_reason() -> Option<String> {
 /// Wave-5.5 will port each of these paths into the Rust session; when
 /// a path lands, drop its arm here so the gate opens up progressively
 /// (see the tracking comment in each `Some(...)` arm).
-pub fn unsupported_worker_rust_settings_reason(
-    settings: &AppSettings,
-) -> Option<&'static str> {
+pub fn unsupported_worker_rust_settings_reason(settings: &AppSettings) -> Option<&'static str> {
     // stt_backend: only `"whisper"` (default) is wired to the Rust
     // session. Cloud STT providers land here as `"openai"` etc. Case-
     // insensitive match to mirror the config loader's own contract.
@@ -622,8 +620,7 @@ fn emit_worker_ready<W: Write>(writer: &mut W) -> Result<()> {
 /// respawn Python); for PR #441 the supervisor only needs to log the
 /// signal so users see the escape hatch.
 fn emit_hotkey_install_failed(detail: &str) {
-    let mut event =
-        dictate_events::StatusEvent::new(dictate_events::WorkerStatus::Error);
+    let mut event = dictate_events::StatusEvent::new(dictate_events::WorkerStatus::Error);
     event.extras.insert(
         "reason".to_owned(),
         serde_json::Value::from("hotkey_install_failed"),

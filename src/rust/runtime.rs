@@ -2250,10 +2250,7 @@ fn stream_lines<R>(
                         // survives with PTT disabled today; users can
                         // reach for the escape hatch to keep dictating.
                         if worker.state.as_deref() == Some("error")
-                            && worker
-                                .payload
-                                .get("reason")
-                                .and_then(|v| v.as_str())
+                            && worker.payload.get("reason").and_then(|v| v.as_str())
                                 == Some("hotkey_install_failed")
                         {
                             let detail = worker

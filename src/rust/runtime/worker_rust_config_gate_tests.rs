@@ -130,8 +130,8 @@ fn unsupported_reason_first_offender_wins() {
     settings.stt_backend = "openai".to_owned();
     settings.post_processor = "ollama".to_owned();
     settings.format_commands = "both".to_owned();
-    let reason = unsupported_worker_rust_settings_reason(&settings)
-        .expect("multi-flag config must gate");
+    let reason =
+        unsupported_worker_rust_settings_reason(&settings).expect("multi-flag config must gate");
     assert!(
         reason.starts_with("stt_backend"),
         "stt_backend must be reported first when multiple flags are set;          got: {reason}"
