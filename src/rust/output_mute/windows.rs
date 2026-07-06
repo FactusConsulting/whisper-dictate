@@ -9,6 +9,22 @@
 //! record start / stop (~200 ms), which is well under the recording
 //! start latency users already accept from the audio stack.
 //!
+//! # Multi-role muting
+//!
+//! Codex P2 (windows.rs:96, PR #440) — the previous implementation only
+//! muted the `eConsole` role default endpoint. On Windows systems where
+//! the user has a separate communications or multimedia default (for
+//! example a USB headset for Teams/Zoom while speakers remain the console
+//! default), meeting apps often render through `eCommunications` or
+//! `eMultimedia`, so the auto-mute silently protected the wrong
+//! endpoint while the audio most likely to leak into the mic kept
+//! playing. This backend now touches the default endpoint for *every*
+//! role (0 = eConsole, 1 = eMultimedia, 2 = eCommunications) and saves
+//! each role's prior mute state at pin time so the restore returns
+//! each endpoint to exactly the state the user had before we touched
+//! it — even when the three roles map to three different physical
+//! devices with different prior mute states.
+//!
 //! The runner boundary matches the Linux side: real code shells out to
 //! `powershell.exe`; tests substitute an in-memory recorder without
 //! spawning anything. Keeping the backends symmetric also means the
@@ -16,6 +32,7 @@
 //! learns about either OS.
 
 use std::process::Command;
+use std::sync::Mutex;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -30,14 +47,17 @@ use crate::output_mute::{MuteError, OutputMuteBackend};
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// PowerShell + C# snippet: define an interop shim for the CoreAudio
-/// `IAudioEndpointVolume` interface, get the default render endpoint,
-/// then either read or write the mute state.
+/// `IAudioEndpointVolume` interface, then either enumerate the default
+/// endpoint for each render role and report its mute state (`get_all`),
+/// or drive `SetMute` on each role's default endpoint from the
+/// caller-supplied per-role state (`set_all`).
 ///
-/// Kept as a const string so tests can assert on its shape without
-/// spinning a real subprocess. The script prints exactly one line —
-/// `MUTE:0` or `MUTE:1` for reads, `OK` for writes — followed by an
-/// error line on the failure branch. That token contract is what the
-/// [`parse_powershell_output`] parser locks in.
+/// The script prints one line per role for `get_all`
+/// (`ROLE:<role>:<0|1>`) plus a final `OK`, and a single `OK` for
+/// `set_all` on success. Every COM call is wrapped in
+/// `Marshal.ThrowExceptionForHR` so a non-zero HRESULT propagates as a
+/// PowerShell non-zero exit + stderr — the Rust caller distinguishes
+/// real success from silent failure.
 pub const POWERSHELL_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 Add-Type -Language CSharp -TypeDefinition @'
@@ -89,11 +109,15 @@ public interface IMMDeviceEnumerator {
 [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E"), ClassInterface(ClassInterfaceType.None)]
 public class MMDeviceEnumeratorComClass {}
 public static class OutputMuteHelper {
-    public static IAudioEndpointVolume Activate() {
+    // Codex P2 (windows.rs:96, PR #440) — activate the default render
+    // endpoint for an arbitrary role (0=eConsole, 1=eMultimedia,
+    // 2=eCommunications) so we can operate on each of them in turn
+    // rather than only the console default.
+    public static IAudioEndpointVolume ActivateForRole(uint role) {
         var mmType = Type.GetTypeFromCLSID(new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E"));
         var enumerator = (IMMDeviceEnumerator)Activator.CreateInstance(mmType);
         IMMDevice device;
-        Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 0, out device));
+        Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, role, out device));
         var iid = typeof(IAudioEndpointVolume).GUID;
         object o;
         Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out o));
@@ -101,29 +125,46 @@ public static class OutputMuteHelper {
     }
 }
 '@ -ReferencedAssemblies System.Runtime.InteropServices | Out-Null
-$vol = [OutputMuteHelper]::Activate()
-# Codex P2 (windows.rs:87, PR #440) — every IAudioEndpointVolume call
-# returns an HRESULT. The previous version cast the return to [void],
-# which silently swallowed any endpoint/COM failure and then emitted
-# OK / MUTE:0 as if the operation had succeeded. Wrapping each call in
-# Marshal.ThrowExceptionForHR converts a non-zero HRESULT into a
-# ComException that propagates through PowerShell's non-zero exit and
-# stderr, letting the Rust caller distinguish real success from silent
-# failure.
+# Codex P2 (windows.rs:96, PR #440) — every action iterates roles
+# 0/1/2 so we touch every render-role default endpoint. If a system
+# has only one physical device the three activations return handles
+# for the same endpoint and the mute/unmute is idempotent; on a
+# split setup (headset comms + speakers console) each endpoint sees
+# its own save/restore.
 switch ($env:VOICEPI_MUTE_ACTION) {
-    'get' {
-        $m = $false
-        [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.GetMute([ref]$m))
-        if ($m) { 'MUTE:1' } else { 'MUTE:0' }
-    }
-    'mute' {
-        $ctx = [Guid]::Empty
-        [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.SetMute($true, [ref]$ctx))
+    'get_all' {
+        for ($r = 0; $r -lt 3; $r++) {
+            $vol = [OutputMuteHelper]::ActivateForRole($r)
+            $m = $false
+            [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.GetMute([ref]$m))
+            "ROLE:${r}:$(if ($m) { 1 } else { 0 })"
+        }
         'OK'
     }
-    'unmute' {
-        $ctx = [Guid]::Empty
-        [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.SetMute($false, [ref]$ctx))
+    'set_all' {
+        # VOICEPI_MUTE_TARGETS: three comma-separated 0/1 values, one
+        # per role (index 0=eConsole, 1=eMultimedia, 2=eCommunications).
+        # Missing or unrecognised values default to "leave unchanged",
+        # which we implement as "read then write the same value" so a
+        # transient parse hiccup can't accidentally flip a mute.
+        $targets = ($env:VOICEPI_MUTE_TARGETS -split ',')
+        for ($r = 0; $r -lt 3; $r++) {
+            $vol = [OutputMuteHelper]::ActivateForRole($r)
+            $desired = $null
+            if ($r -lt $targets.Length) {
+                $t = $targets[$r].Trim()
+                if ($t -eq '1') { $desired = $true }
+                elseif ($t -eq '0') { $desired = $false }
+            }
+            if ($desired -eq $null) {
+                # No explicit target for this role -- read + write same.
+                $m = $false
+                [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.GetMute([ref]$m))
+                $desired = $m
+            }
+            $ctx = [Guid]::Empty
+            [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($vol.SetMute($desired, [ref]$ctx))
+        }
         'OK'
     }
     default { throw "unknown VOICEPI_MUTE_ACTION" }
@@ -140,11 +181,18 @@ pub struct PowerShellResult {
 
 /// The subprocess boundary the backend calls into. Real code launches
 /// `powershell.exe`; tests substitute a recorder.
+///
+/// Codex P2 (windows.rs:96, PR #440) — takes `targets` so `set_all` can
+/// pass the per-role desired state via `VOICEPI_MUTE_TARGETS` in one
+/// PowerShell launch. `None` is used by actions that don't need it
+/// (`get_all`) and lets the recorder assert on it too.
 pub trait PowerShellRunner: Send + Sync {
-    /// Run PowerShell with the given script + action env var. Returns
-    /// stdout/stderr/exit-status so the parser can distinguish "PS
-    /// crashed" (Unavailable) from "the mute call failed" (OsFailure).
-    fn run(&self, script: &str, action: &str) -> Result<PowerShellResult, MuteError>;
+    fn run(
+        &self,
+        script: &str,
+        action: &str,
+        targets: Option<&str>,
+    ) -> Result<PowerShellResult, MuteError>;
 }
 
 /// Real-subprocess implementation of [`PowerShellRunner`].
@@ -152,11 +200,19 @@ pub trait PowerShellRunner: Send + Sync {
 pub struct SystemPowerShell;
 
 impl PowerShellRunner for SystemPowerShell {
-    fn run(&self, script: &str, action: &str) -> Result<PowerShellResult, MuteError> {
+    fn run(
+        &self,
+        script: &str,
+        action: &str,
+        targets: Option<&str>,
+    ) -> Result<PowerShellResult, MuteError> {
         let mut command = Command::new("powershell.exe");
         command
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .env("VOICEPI_MUTE_ACTION", action);
+        if let Some(targets) = targets {
+            command.env("VOICEPI_MUTE_TARGETS", targets);
+        }
         #[cfg(windows)]
         {
             command.creation_flags(CREATE_NO_WINDOW);
@@ -172,15 +228,48 @@ impl PowerShellRunner for SystemPowerShell {
     }
 }
 
+/// Snapshot of the default render endpoint mute state per role.
+///
+/// Index 0 = eConsole, 1 = eMultimedia, 2 = eCommunications — the three
+/// documented [ERole](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/ne-mmdeviceapi-erole)
+/// values. Captured at pin time so the restore returns each endpoint
+/// exactly to the state it was in before we touched it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PriorRoleState {
+    per_role: [bool; 3],
+}
+
+impl PriorRoleState {
+    fn all_muted(&self) -> bool {
+        self.per_role.iter().all(|m| *m)
+    }
+    fn as_target_string(&self) -> String {
+        format!(
+            "{},{},{}",
+            if self.per_role[0] { "1" } else { "0" },
+            if self.per_role[1] { "1" } else { "0" },
+            if self.per_role[2] { "1" } else { "0" },
+        )
+    }
+}
+
 /// CoreAudio-via-PowerShell output-mute backend.
+///
+/// Codex P2 (windows.rs:96, PR #440) — caches the pre-recording per-role
+/// mute state populated by [`Self::pin_current_endpoint`] so the restore
+/// on `set_mute(false)` can hand each role its ORIGINAL mute value
+/// rather than blanket-unmuting endpoints the user had deliberately
+/// muted before recording started.
 pub struct WindowsBackend<R: PowerShellRunner = SystemPowerShell> {
     runner: R,
+    prior_role_state: Mutex<Option<PriorRoleState>>,
 }
 
 impl Default for WindowsBackend<SystemPowerShell> {
     fn default() -> Self {
         Self {
             runner: SystemPowerShell,
+            prior_role_state: Mutex::new(None),
         }
     }
 }
@@ -188,26 +277,65 @@ impl Default for WindowsBackend<SystemPowerShell> {
 impl<R: PowerShellRunner> WindowsBackend<R> {
     /// Build a backend around an arbitrary runner. Used by unit tests.
     pub fn with_runner(runner: R) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            prior_role_state: Mutex::new(None),
+        }
+    }
+
+    fn snapshot(&self) -> Option<PriorRoleState> {
+        *self
+            .prior_role_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn store_snapshot(&self, snap: Option<PriorRoleState>) {
+        *self
+            .prior_role_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = snap;
     }
 }
 
 impl<R: PowerShellRunner> OutputMuteBackend for WindowsBackend<R> {
     fn get_mute(&self) -> Result<bool, MuteError> {
-        let result = self.runner.run(POWERSHELL_SCRIPT, "get")?;
-        if !result.status_ok {
-            return Err(MuteError::OsFailure(format!(
-                "powershell get-mute failed: {}",
-                result.stderr.trim(),
-            )));
+        // Codex P2 (windows.rs:96, PR #440) — return whether ALL three
+        // role-default endpoints are muted, based on the snapshot
+        // captured by [`Self::pin_current_endpoint`]. `state.rs` uses
+        // this to decide whether to skip the mute entirely; treating
+        // "any endpoint unmuted" as "not muted" lets us go on to mute
+        // the unmuted ones and later restore each endpoint's original
+        // state. If pin has not run yet (should not happen — the
+        // controller always pins before get) we fall back to a live
+        // query to avoid a hard failure.
+        if let Some(snap) = self.snapshot() {
+            return Ok(snap.all_muted());
         }
-        parse_powershell_output(&result.stdout)
+        let snap = self.query_all_role_states()?;
+        self.store_snapshot(Some(snap));
+        Ok(snap.all_muted())
     }
 
     fn set_mute(&self, muted: bool) -> Result<(), MuteError> {
-        let action = if muted { "mute" } else { "unmute" };
-        let result = self.runner.run(POWERSHELL_SCRIPT, action)?;
+        // Codex P2 (windows.rs:96, PR #440) — mute all three role
+        // defaults on set_mute(true); on set_mute(false) restore each
+        // role to its ORIGINAL mute state so an endpoint that was
+        // already muted before recording stays muted.
+        let targets = if muted {
+            "1,1,1".to_owned()
+        } else if let Some(snap) = self.snapshot() {
+            snap.as_target_string()
+        } else {
+            // No snapshot -> nothing to restore, but be safe and
+            // unmute everything.
+            "0,0,0".to_owned()
+        };
+        let result = self
+            .runner
+            .run(POWERSHELL_SCRIPT, "set_all", Some(&targets))?;
         if !result.status_ok {
+            let action = if muted { "mute" } else { "unmute" };
             return Err(MuteError::OsFailure(format!(
                 "powershell {action} failed: {}",
                 result.stderr.trim(),
@@ -216,278 +344,95 @@ impl<R: PowerShellRunner> OutputMuteBackend for WindowsBackend<R> {
         if result.stdout.lines().any(|line| line.trim() == "OK") {
             Ok(())
         } else {
+            let action = if muted { "mute" } else { "unmute" };
             Err(MuteError::UnexpectedOutput(format!(
                 "powershell {action} produced no OK line: {:?}",
                 result.stdout,
             )))
         }
     }
+
+    fn pin_current_endpoint(&self) -> Result<(), MuteError> {
+        // Codex P2 (windows.rs:96, PR #440) — snapshot the per-role
+        // default-endpoint mute state so `set_mute(false)` can restore
+        // each role to its ORIGINAL value, not blanket-unmute all.
+        let snap = self.query_all_role_states()?;
+        self.store_snapshot(Some(snap));
+        Ok(())
+    }
+
+    fn clear_endpoint_pin(&self) {
+        self.store_snapshot(None);
+    }
 }
 
-/// Parse the `MUTE:0` / `MUTE:1` token emitted by the get-branch of the
-/// PowerShell script. Tolerant of surrounding whitespace + accidental
-/// blank lines the shell can inject.
-pub fn parse_powershell_output(stdout: &str) -> Result<bool, MuteError> {
+impl<R: PowerShellRunner> WindowsBackend<R> {
+    fn query_all_role_states(&self) -> Result<PriorRoleState, MuteError> {
+        let result = self.runner.run(POWERSHELL_SCRIPT, "get_all", None)?;
+        if !result.status_ok {
+            return Err(MuteError::OsFailure(format!(
+                "powershell get_all failed: {}",
+                result.stderr.trim(),
+            )));
+        }
+        parse_get_all(&result.stdout)
+    }
+}
+
+/// Parse the multi-role `ROLE:<role>:<0|1>` output emitted by the
+/// `get_all` branch of the PowerShell script.
+///
+/// Every role in `{0, 1, 2}` must have exactly one line. A missing role
+/// surfaces as `UnexpectedOutput` so a script edit that accidentally
+/// dropped an iteration fails loudly at pin time rather than silently
+/// omitting an endpoint from the restore.
+pub fn parse_get_all(stdout: &str) -> Result<PriorRoleState, MuteError> {
+    let mut per_role = [false; 3];
+    let mut seen = [false; 3];
     for line in stdout.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("MUTE:") {
-            match rest.trim() {
-                "0" | "False" | "false" => return Ok(false),
-                "1" | "True" | "true" => return Ok(true),
-                _ => {
-                    return Err(MuteError::UnexpectedOutput(format!(
-                        "unrecognised MUTE value: {rest:?}",
-                    )))
-                }
-            }
+        let Some(rest) = trimmed.strip_prefix("ROLE:") else {
+            continue;
+        };
+        let mut parts = rest.split(':');
+        let (Some(idx_raw), Some(state_raw)) = (parts.next(), parts.next()) else {
+            return Err(MuteError::UnexpectedOutput(format!(
+                "malformed ROLE line: {trimmed:?}",
+            )));
+        };
+        let idx: usize = idx_raw.trim().parse().map_err(|_| {
+            MuteError::UnexpectedOutput(format!("non-numeric role index: {idx_raw:?}"))
+        })?;
+        if idx >= 3 {
+            return Err(MuteError::UnexpectedOutput(format!(
+                "role index out of range 0..=2: {idx}",
+            )));
         }
+        let muted = match state_raw.trim() {
+            "1" | "True" | "true" => true,
+            "0" | "False" | "false" => false,
+            other => {
+                return Err(MuteError::UnexpectedOutput(format!(
+                    "unrecognised ROLE mute value: {other:?}",
+                )))
+            }
+        };
+        per_role[idx] = muted;
+        seen[idx] = true;
     }
-    Err(MuteError::UnexpectedOutput(format!(
-        "no MUTE: line in powershell output: {stdout:?}",
-    )))
+    if !seen.iter().all(|s| *s) {
+        return Err(MuteError::UnexpectedOutput(format!(
+            "missing ROLE line(s) in get_all output: {stdout:?}",
+        )));
+    }
+    Ok(PriorRoleState { per_role })
 }
 
+// Codex P2 (windows.rs:96, PR #440) — tests live in a sibling file
+// (`windows_tests.rs`) so the impl file stays under AGENTS.md's
+// ~500-LOC modularity cap. Prior single-role impl + tests inline
+// weighed 493 lines; multi-role adds substantial state so the split
+// prevents future creep.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Default)]
-    struct MockShell {
-        inner: Mutex<MockState>,
-    }
-
-    #[derive(Default)]
-    struct MockState {
-        muted: bool,
-        calls: Vec<String>,
-        spawn_failure: Option<MuteError>,
-        force_failure_exit: bool,
-    }
-
-    impl PowerShellRunner for Arc<MockShell> {
-        fn run(&self, _script: &str, action: &str) -> Result<PowerShellResult, MuteError> {
-            let mut state = self.inner.lock().unwrap();
-            state.calls.push(action.to_owned());
-            if let Some(err) = state.spawn_failure.take() {
-                return Err(err);
-            }
-            if state.force_failure_exit {
-                return Ok(PowerShellResult {
-                    status_ok: false,
-                    stdout: String::new(),
-                    stderr: "forced mock ps failure".to_owned(),
-                });
-            }
-            match action {
-                "get" => Ok(PowerShellResult {
-                    status_ok: true,
-                    stdout: format!("MUTE:{}\n", if state.muted { 1 } else { 0 }),
-                    stderr: String::new(),
-                }),
-                "mute" => {
-                    state.muted = true;
-                    Ok(PowerShellResult {
-                        status_ok: true,
-                        stdout: "OK\n".to_owned(),
-                        stderr: String::new(),
-                    })
-                }
-                "unmute" => {
-                    state.muted = false;
-                    Ok(PowerShellResult {
-                        status_ok: true,
-                        stdout: "OK\n".to_owned(),
-                        stderr: String::new(),
-                    })
-                }
-                other => Ok(PowerShellResult {
-                    status_ok: false,
-                    stdout: String::new(),
-                    stderr: format!("mock ps: unexpected action {other}"),
-                }),
-            }
-        }
-    }
-
-    fn backend(mock: Arc<MockShell>) -> WindowsBackend<Arc<MockShell>> {
-        WindowsBackend::with_runner(mock)
-    }
-
-    #[test]
-    fn parse_output_reads_mute_token() {
-        assert!(!parse_powershell_output("MUTE:0\n").unwrap());
-        assert!(parse_powershell_output("MUTE:1").unwrap());
-        assert!(parse_powershell_output("MUTE: True\n").unwrap());
-    }
-
-    #[test]
-    fn parse_output_reports_missing_token() {
-        let err = parse_powershell_output("noise\n").unwrap_err();
-        assert!(matches!(err, MuteError::UnexpectedOutput(_)));
-    }
-
-    #[test]
-    fn parse_output_reports_bad_value() {
-        let err = parse_powershell_output("MUTE:maybe\n").unwrap_err();
-        assert!(matches!(err, MuteError::UnexpectedOutput(_)));
-    }
-
-    #[test]
-    fn get_mute_reads_state_from_mock() {
-        let mock = Arc::new(MockShell::default());
-        mock.inner.lock().unwrap().muted = true;
-        let backend = backend(mock.clone());
-        assert!(backend.get_mute().unwrap());
-        assert_eq!(mock.inner.lock().unwrap().calls, vec!["get".to_owned()]);
-    }
-
-    #[test]
-    fn set_mute_emits_mute_then_unmute_actions() {
-        let mock = Arc::new(MockShell::default());
-        let backend = backend(mock.clone());
-        backend.set_mute(true).unwrap();
-        backend.set_mute(false).unwrap();
-        assert_eq!(
-            mock.inner.lock().unwrap().calls,
-            vec!["mute".to_owned(), "unmute".to_owned()],
-        );
-    }
-
-    #[test]
-    fn spawn_failure_becomes_unavailable() {
-        let mock = Arc::new(MockShell::default());
-        mock.inner.lock().unwrap().spawn_failure =
-            Some(MuteError::Unavailable("no powershell".to_owned()));
-        let backend = backend(mock.clone());
-        assert!(matches!(
-            backend.get_mute().unwrap_err(),
-            MuteError::Unavailable(_)
-        ));
-    }
-
-    #[test]
-    fn nonzero_exit_becomes_os_failure() {
-        let mock = Arc::new(MockShell::default());
-        mock.inner.lock().unwrap().force_failure_exit = true;
-        let backend = backend(mock.clone());
-        assert!(matches!(
-            backend.get_mute().unwrap_err(),
-            MuteError::OsFailure(_)
-        ));
-        assert!(matches!(
-            backend.set_mute(true).unwrap_err(),
-            MuteError::OsFailure(_)
-        ));
-    }
-
-    #[test]
-    fn set_mute_without_ok_becomes_unexpected_output() {
-        // A run that succeeded but printed nothing useful — treat as
-        // malformed so we do not silently claim to have muted.
-        struct SilentRunner;
-        impl PowerShellRunner for SilentRunner {
-            fn run(&self, _script: &str, _action: &str) -> Result<PowerShellResult, MuteError> {
-                Ok(PowerShellResult {
-                    status_ok: true,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                })
-            }
-        }
-        let backend = WindowsBackend::with_runner(SilentRunner);
-        assert!(matches!(
-            backend.set_mute(true).unwrap_err(),
-            MuteError::UnexpectedOutput(_)
-        ));
-    }
-
-    #[test]
-    fn powershell_script_contains_the_coreaudio_interface_signatures() {
-        // Sanity-check the embedded script so a careless edit that
-        // removes the SetMute/GetMute lines fails the build rather
-        // than showing up as a runtime error on Windows only.
-        assert!(POWERSHELL_SCRIPT.contains("SetMute"));
-        assert!(POWERSHELL_SCRIPT.contains("GetMute"));
-        assert!(POWERSHELL_SCRIPT.contains("IAudioEndpointVolume"));
-        assert!(POWERSHELL_SCRIPT.contains("IMMDeviceEnumerator"));
-    }
-
-    #[test]
-    fn iaudio_vtable_places_setmute_and_getmute_in_the_correct_slots() {
-        // Codex P1 (windows.rs:51, PR #440) — SetMute must sit
-        // immediately after the last NotUsed11 slot (which stands in
-        // for GetChannelVolumeLevelScalar in the real vtable) and
-        // GetMute must sit immediately after SetMute. A stray
-        // NotUsed12 shim used to shift both methods into the wrong
-        // vtable slots. Pin the interface signature so a similar
-        // future edit fails CI instead of showing up as a silent
-        // no-op on Windows only.
-        let script = POWERSHELL_SCRIPT;
-        let not_used11 = script.find("NotUsed11").expect("NotUsed11 slot present");
-        let set_mute = script
-            .find("int SetMute([MarshalAs")
-            .expect("SetMute signature present");
-        let get_mute = script
-            .find("int GetMute([MarshalAs")
-            .expect("GetMute signature present");
-        assert!(
-            not_used11 < set_mute && set_mute < get_mute,
-            "SetMute must follow the last NotUsed11 slot, GetMute must follow SetMute",
-        );
-
-        // The stray NotUsed12 placeholder must be gone: only NotUsed1..
-        // NotUsed11 are legal in the current interface. A future review
-        // adding a stub back would push the vtable out of alignment
-        // again.
-        let between = &script[not_used11..set_mute];
-        assert!(
-            !between.contains("NotUsed12"),
-            "no NotUsed12 stub is allowed between the volume methods and SetMute",
-        );
-    }
-
-    #[test]
-    fn getmute_out_parameter_is_marshalled_as_win32_bool() {
-        // Codex P2 (windows.rs:53, PR #440) — Win32 BOOL is a 4-byte
-        // int, and the default marshalling for a System.Boolean out
-        // param is VARIANT_BOOL (2 bytes). Without the explicit
-        // MarshalAs the caller reads a truncated / uninitialised
-        // buffer for the prior mute state, which then flips the saved
-        // "did we mute" bit.
-        assert!(
-            POWERSHELL_SCRIPT.contains("int GetMute([MarshalAs(UnmanagedType.Bool)] out bool"),
-            "GetMute's out parameter must be explicitly marshalled as Win32 BOOL",
-        );
-    }
-
-    #[test]
-    fn powershell_actions_check_hresults_before_reporting_success() {
-        // Codex P2 (windows.rs:87, PR #440) — each SetMute/GetMute
-        // call must have its HRESULT checked, otherwise a non-zero
-        // return silently drops through to "OK" or "MUTE:0".
-        // Pin the ThrowExceptionForHR wrapping on every action branch.
-        let script = POWERSHELL_SCRIPT;
-        for expected in [
-            "ThrowExceptionForHR($vol.GetMute",
-            "ThrowExceptionForHR($vol.SetMute($true",
-            "ThrowExceptionForHR($vol.SetMute($false",
-        ] {
-            assert!(
-                script.contains(expected),
-                "powershell script must wrap `{expected}...` in Marshal.ThrowExceptionForHR",
-            );
-        }
-        // Belt-and-braces: the previous `[void]$vol.SetMute(` /
-        // `[void]$vol.GetMute(` pattern (which discarded the HRESULT)
-        // must not creep back in.
-        assert!(
-            !script.contains("[void]$vol.SetMute"),
-            "SetMute HRESULT must not be discarded",
-        );
-        assert!(
-            !script.contains("[void]$vol.GetMute"),
-            "GetMute HRESULT must not be discarded",
-        );
-    }
-}
+#[path = "windows_tests.rs"]
+mod tests;
