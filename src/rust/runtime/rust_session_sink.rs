@@ -373,6 +373,12 @@ pub(super) struct EventForwarder<'a> {
     tx: &'a Sender<RuntimeEvent>,
     buf: Vec<u8>,
     repaint_notifier: Option<&'a RepaintNotifier>,
+    /// Codex P2 (runtime.rs:2074, PR #440) — generation snapshot
+    /// captured at construction so the stale-observer guard in
+    /// `output_mute::session::observe_worker_state` can no-op a
+    /// forwarder from a previous session if the controller was
+    /// swapped mid-flight.
+    mute_generation: u64,
 }
 
 impl<'a> EventForwarder<'a> {
@@ -384,6 +390,7 @@ impl<'a> EventForwarder<'a> {
             tx,
             buf: Vec::new(),
             repaint_notifier,
+            mute_generation: crate::output_mute::session::current_generation(),
         }
     }
 
@@ -410,7 +417,19 @@ impl<'a> EventForwarder<'a> {
             // into the observer here restores parity — cheap no-op
             // when no controller is installed.
             if let RuntimeEvent::Worker(worker) = &event {
-                crate::output_mute::session::observe_worker_state(worker.state.as_deref());
+                // Codex P2 (runtime.rs:2074 + state.rs:158, PR #440) —
+                // pass the captured generation (stale-reader guard) and
+                // surface any backend failure through a Stderr event so
+                // the user sees when the mute silently didn't happen.
+                if let Some(err) = crate::output_mute::session::observe_worker_state(
+                    worker.state.as_deref(),
+                    self.mute_generation,
+                ) {
+                    let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                        "[output-mute] backend failure while observing state {state:?}: {err}",
+                        state = worker.state.as_deref().unwrap_or(""),
+                    )));
+                }
             }
             let _ = self.tx.send(event);
             if let Some(notifier) = self.repaint_notifier {

@@ -92,8 +92,37 @@ const IGNORED_STATES: &[&str] = &["post-processing"];
 
 static CONTROLLER: OnceLock<Mutex<Option<MuteController>>> = OnceLock::new();
 
+/// Monotonically-increasing observer generation. Bumped by every
+/// [`install`] / [`install_test_controller`] so a stale
+/// `stream_lines` reader from a stopped child can be told apart from
+/// the current supervisor session.
+///
+/// Codex P2 (runtime.rs:2074, PR #440) — `Runtime::restart` calls
+/// `stop()` (kills the previous child on a background thread) and
+/// then `start()` immediately. The old per-child `stream_lines` thread
+/// can still drain buffered worker events between those two calls.
+/// Tagging each reader with the generation it was created under lets
+/// [`observe_worker_state`] discard those stale events instead of
+/// nudging the fresh controller into a bogus mute/unmute cycle.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn cell() -> &'static Mutex<Option<MuteController>> {
     CONTROLLER.get_or_init(|| Mutex::new(None))
+}
+
+/// Snapshot the current observer generation.
+///
+/// A `stream_lines` reader (or `EventForwarder`) should capture this
+/// value once at construction and pass it to every
+/// [`observe_worker_state`] call. When the supervisor stops/starts a
+/// worker the generation is bumped, so any surviving reader from the
+/// previous child sees `generation != current` and no-ops.
+pub fn current_generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn bump_generation() {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Install the process-global controller.
@@ -110,6 +139,10 @@ pub fn install(enabled: bool) {
     } else {
         *slot = None;
     }
+    // Codex P2 (runtime.rs:2074, PR #440) — every controller swap
+    // bumps the observer generation so any stale reader from a
+    // stopped child no-ops on its next `observe_worker_state` call.
+    bump_generation();
 }
 
 /// Merge an on-disk config value with the [`MUTE_OUTPUT_ENV`] env var
@@ -172,20 +205,45 @@ pub fn is_installed() -> bool {
 /// tokens like `"post-processing"`). No-op when no controller is
 /// installed, so leaving the call site permanently in `stream_lines`
 /// costs one atomic + one mutex acquisition per worker event.
-pub fn observe_worker_state(state: Option<&str>) {
-    let Some(state) = state else { return };
+///
+/// `observer_generation` is the value the caller captured via
+/// [`current_generation`] when its reader was created. If a different
+/// controller has been installed since (worker stop/start, config
+/// hot-reload, test swap), this call is a cheap no-op — Codex P2
+/// (runtime.rs:2074, PR #440) added this so a stale `stream_lines`
+/// reader from a stopped child cannot drive the new supervisor
+/// session's controller into a bogus mute/unmute cycle.
+///
+/// Returns `Some(MuteError)` when the observation triggered a backend
+/// call that failed. Codex P2 (state.rs:158, PR #440) — the caller
+/// (supervisor / rust-session forwarder) uses this to surface silent
+/// backend failures (missing `pactl`, broken CoreAudio, PowerShell
+/// spawn failure) to the user via the runtime log so the auto-mute
+/// feature does not fail silently on every recording.
+pub fn observe_worker_state(
+    state: Option<&str>,
+    observer_generation: u64,
+) -> Option<MuteError> {
+    let Some(state) = state else { return None };
     if IGNORED_STATES.contains(&state) {
-        return;
+        return None;
+    }
+    // Codex P2 (runtime.rs:2074, PR #440) — stale-generation guard.
+    if observer_generation != current_generation() {
+        return None;
     }
     let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
     let Some(controller) = slot.as_mut() else {
-        return;
+        return None;
     };
     if START_STATES.contains(&state) {
         controller.on_recording_start();
     } else if TERMINAL_STATES.contains(&state) {
         controller.on_recording_stop();
+    } else {
+        return None;
     }
+    controller.last_error().cloned()
 }
 
 /// Test-only helper: swap in a controller built from an arbitrary
@@ -197,7 +255,11 @@ pub(crate) fn install_test_controller(
     controller: Option<MuteController>,
 ) -> Option<MuteController> {
     let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::replace(&mut *slot, controller)
+    let previous = std::mem::replace(&mut *slot, controller);
+    // Codex P2 (runtime.rs:2074, PR #440) — tests exercise the same
+    // stale-generation guard, so a swap must bump too.
+    bump_generation();
+    previous
 }
 
 #[cfg(test)]
@@ -234,9 +296,9 @@ mod tests {
         let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = install_test_controller(None);
 
-        observe_worker_state(Some("recording"));
-        observe_worker_state(Some("ready"));
-        observe_worker_state(None);
+        let _ = observe_worker_state(Some("recording"), current_generation());
+        let _ = observe_worker_state(Some("ready"), current_generation());
+        let _ = observe_worker_state(None, current_generation());
         assert!(!is_installed());
 
         install_test_controller(saved);
@@ -249,9 +311,9 @@ mod tests {
         let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
         let saved = install_test_controller(Some(controller));
 
-        observe_worker_state(Some("recording"));
+        let _ = observe_worker_state(Some("recording"), current_generation());
         assert_eq!(*backend.set_calls.lock().unwrap(), vec![true]);
-        observe_worker_state(Some("ready"));
+        let _ = observe_worker_state(Some("ready"), current_generation());
         assert_eq!(*backend.set_calls.lock().unwrap(), vec![true, false]);
 
         install_test_controller(saved);
@@ -268,15 +330,15 @@ mod tests {
         let saved = install_test_controller(Some(controller));
 
         // recording -> post-processing -> ready
-        observe_worker_state(Some("recording"));
-        observe_worker_state(Some("post-processing"));
+        let _ = observe_worker_state(Some("recording"), current_generation());
+        let _ = observe_worker_state(Some("post-processing"), current_generation());
         assert_eq!(
             *backend.set_calls.lock().unwrap(),
             vec![true],
             "post-processing must not unmute mid-utterance",
         );
 
-        observe_worker_state(Some("ready"));
+        let _ = observe_worker_state(Some("ready"), current_generation());
         assert_eq!(*backend.set_calls.lock().unwrap(), vec![true, false]);
 
         install_test_controller(saved);
@@ -293,7 +355,7 @@ mod tests {
         let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
         let saved = install_test_controller(Some(controller));
 
-        observe_worker_state(Some("opening"));
+        let _ = observe_worker_state(Some("opening"), current_generation());
         assert_eq!(
             *backend.set_calls.lock().unwrap(),
             vec![true],
@@ -303,14 +365,14 @@ mod tests {
         // Idempotent: the immediately-following recording event must
         // NOT re-drive set_mute, otherwise a duplicate start would
         // overwrite the saved prior state with our own installed value.
-        observe_worker_state(Some("recording"));
+        let _ = observe_worker_state(Some("recording"), current_generation());
         assert_eq!(
             *backend.set_calls.lock().unwrap(),
             vec![true],
             "recording after opening must be a no-op (idempotent start)",
         );
 
-        observe_worker_state(Some("ready"));
+        let _ = observe_worker_state(Some("ready"), current_generation());
         assert_eq!(*backend.set_calls.lock().unwrap(), vec![true, false]);
 
         install_test_controller(saved);
@@ -327,8 +389,8 @@ mod tests {
         let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
         let saved = install_test_controller(Some(controller));
 
-        observe_worker_state(Some("recording"));
-        observe_worker_state(Some("capture_lost"));
+        let _ = observe_worker_state(Some("recording"), current_generation());
+        let _ = observe_worker_state(Some("capture_lost"), current_generation());
 
         assert_eq!(
             *backend.set_calls.lock().unwrap(),
@@ -424,7 +486,7 @@ mod tests {
         let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
         install_test_controller(Some(controller));
 
-        observe_worker_state(Some("recording"));
+        let _ = observe_worker_state(Some("recording"), current_generation());
         assert!(*backend.muted.lock().unwrap());
 
         // Replacing the controller drops the old one — Drop restores
@@ -464,8 +526,8 @@ mod tests {
             let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
             let saved = install_test_controller(Some(controller));
 
-            observe_worker_state(Some("recording"));
-            observe_worker_state(Some(terminal));
+            let _ = observe_worker_state(Some("recording"), current_generation());
+            let _ = observe_worker_state(Some(terminal), current_generation());
 
             assert_eq!(
                 *backend.set_calls.lock().unwrap(),
