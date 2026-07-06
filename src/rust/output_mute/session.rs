@@ -47,7 +47,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use crate::output_mute::{platform_backend, MuteController};
+use crate::output_mute::{platform_backend, MuteController, MuteError};
 
 /// Env-var handle for the setting. Documented in `settings_schema.json`
 /// as the fallback for users who prefer env-only configuration; the

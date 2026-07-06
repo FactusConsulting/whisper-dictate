@@ -2115,16 +2115,16 @@ enum RuntimeStream {
     Stderr,
 }
 
+/// `mute_observer_generation` — Codex P2 (runtime.rs:2074, PR #440):
+/// observer generation captured when this reader is created. `None` on
+/// streams that never emit worker events (e.g. stdout). See
+/// [`crate::output_mute::session::current_generation`].
 fn stream_lines<R>(
     reader: R,
     tx: Sender<RuntimeEvent>,
     stream: RuntimeStream,
     repaint_notifier: Option<RepaintNotifier>,
     ready_signal: Option<Sender<()>>,
-    /// Codex P2 (runtime.rs:2074, PR #440) — observer generation
-    /// captured when this reader is created. `None` on streams that
-    /// never emit worker events (e.g. stdout). See
-    /// [`crate::output_mute::session::current_generation`].
     mute_observer_generation: Option<u64>,
 ) where
     R: std::io::Read + Send + 'static,
