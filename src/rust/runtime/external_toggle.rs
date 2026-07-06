@@ -322,10 +322,32 @@ fn install_linux_signal_handlers() -> io::Result<()> {
         return Ok(());
     }
     let mut signals = Signals::new([SIGUSR1, SIGUSR2])?;
+    // Readiness handshake with the spawned signal-handler thread. On a
+    // loaded CI runner the classic pattern -- spawn a thread that runs
+    // `signals.forever()` and immediately `raise()` in the parent -- can
+    // fail if the just-spawned thread has not yet been scheduled by the
+    // time the signal fires. signal-hook's self-pipe *does* buffer the
+    // pending signal, but the observed test flake on PR #428 CI
+    // (`linux_signal_handler_end_to_end` -> `left: None, right:
+    // Some(Toggle)`) reproduces when the handler thread has not been
+    // scheduled at all before the parent's 1s poll window elapses --
+    // for instance when the runner is CPU-throttled. The fix: block
+    // this function until the thread confirms it has been scheduled
+    // and is about to enter the blocking iterator. Bounded by a short
+    // timeout so a mis-spawn does not deadlock the daemon startup.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     std::thread::Builder::new()
         .name("vp-external-toggle".to_owned())
         .spawn(move || {
             let cmd_file = default_command_file_path();
+            // Announce liveness BEFORE entering `signals.forever()` so
+            // the parent can proceed knowing the OS scheduler has run
+            // this thread at least once. Any signal delivered between
+            // this send and the first `.next()` on the iterator is
+            // captured by the sigaction registered in `Signals::new`
+            // and buffered in signal-hook's self-pipe -- so nothing is
+            // lost even if the raise happens in that tiny window.
+            let _ = ready_tx.send(());
             for sig in signals.forever() {
                 let cmd = match sig {
                     SIGUSR2 => ExternalCommand::Cancel,
@@ -338,6 +360,13 @@ fn install_linux_signal_handlers() -> io::Result<()> {
                 push_command(cmd);
             }
         })?;
+    // Wait up to 1s for the thread to confirm it started. The
+    // sigaction is already active (`Signals::new` above installed it
+    // synchronously), so a timeout here does NOT drop signals -- it
+    // only means we release the caller without a scheduling guarantee.
+    // Kept as a fallback so a stuck / mis-scheduled worker cannot
+    // deadlock the daemon's startup path.
+    let _ = ready_rx.recv_timeout(std::time::Duration::from_secs(1));
     // Set the flag AFTER the thread spawn succeeded so the guard cannot
     // erroneously report "installed" if Signals::new or Builder::spawn
     // returned an error.
