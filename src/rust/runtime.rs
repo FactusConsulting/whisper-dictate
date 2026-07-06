@@ -703,12 +703,20 @@ impl RuntimeSupervisor {
         #[cfg(not(feature = "audio-in-rust"))]
         let ready_signal: Option<Sender<()>> = None;
 
+        // Codex P2 (runtime.rs:2074, PR #440) — capture the
+        // observer generation for THIS worker instance. Stale readers
+        // from a previous child will hold their old generation, so
+        // their late-arriving worker events no-op instead of poisoning
+        // the fresh controller. stdout doesn't emit worker events so
+        // it doesn't need a generation.
+        let mute_generation = crate::output_mute::session::current_generation();
         if let Some(stdout) = child.stdout.take() {
             stream_lines(
                 stdout,
                 self.tx.clone(),
                 RuntimeStream::Stdout,
                 self.repaint_notifier.clone(),
+                None,
                 None,
             );
         }
@@ -719,6 +727,7 @@ impl RuntimeSupervisor {
                 RuntimeStream::Stderr,
                 self.repaint_notifier.clone(),
                 ready_signal,
+                Some(mute_generation),
             );
         }
 
@@ -2106,12 +2115,17 @@ enum RuntimeStream {
     Stderr,
 }
 
+/// `mute_observer_generation` — Codex P2 (runtime.rs:2074, PR #440):
+/// observer generation captured when this reader is created. `None` on
+/// streams that never emit worker events (e.g. stdout). See
+/// [`crate::output_mute::session::current_generation`].
 fn stream_lines<R>(
     reader: R,
     tx: Sender<RuntimeEvent>,
     stream: RuntimeStream,
     repaint_notifier: Option<RepaintNotifier>,
     ready_signal: Option<Sender<()>>,
+    mute_observer_generation: Option<u64>,
 ) where
     R: std::io::Read + Send + 'static,
 {
@@ -2139,7 +2153,24 @@ fn stream_lines<R>(
                         // the `mute_output_while_recording` setting is
                         // off (no controller installed), so leaving this
                         // permanently in the hot path is safe.
-                        crate::output_mute::session::observe_worker_state(worker.state.as_deref());
+                        //
+                        // Codex P2 (runtime.rs:2074 + state.rs:158,
+                        // PR #440) — passes the generation captured at
+                        // reader creation so a stale reader from a
+                        // stopped child no-ops, and surfaces any backend
+                        // failure through the runtime log so the user
+                        // sees when the mute silently didn't happen.
+                        if let Some(gen) = mute_observer_generation {
+                            if let Some(err) = crate::output_mute::session::observe_worker_state(
+                                worker.state.as_deref(),
+                                gen,
+                            ) {
+                                let _ = tx.send(RuntimeEvent::Stderr(format!(
+                                    "[output-mute] backend failure while observing state {state:?}: {err}",
+                                    state = worker.state.as_deref().unwrap_or(""),
+                                )));
+                            }
+                        }
                         // Issue #324: persist one row per accepted
                         // utterance into the per-user SQLite history
                         // store. Best-effort and feature-gated — the
@@ -2213,9 +2244,24 @@ fn parse_worker_event(line: &str) -> Option<WorkerEvent> {
 /// the controller even when config.json is silent or set to `false`,
 /// matching the schema's documented env-fallback semantics.
 fn install_output_mute_from_config() {
-    let config_value = config::load_settings()
-        .map(|settings| settings.mute_output_while_recording)
-        .unwrap_or(false);
+    // Codex P2 (session.rs:130, PR #440) — pass Option<bool> so the
+    // session installer can distinguish "user explicitly set this in
+    // config.json" from "key is missing, fall back to env or default".
+    // A missing config file, an unreadable JSON payload, or a key that
+    // is absent all resolve to None so the env var can still take
+    // effect. `load_raw_config` returns an empty object for a
+    // nonexistent file (not an error), so a genuine parse failure is
+    // the only case where None comes from the Err path.
+    //
+    // Codex P2 (session.rs:130, PR #443) — the parse helper now lives
+    // in `output_mute::session` so the UI Reload path in
+    // `settings_state.rs` resolves the exact same config-vs-env
+    // precedence (see `read_mute_key_from_json`).
+    let config_value = config::load_raw_config().ok().and_then(|value| {
+        value
+            .as_object()
+            .and_then(crate::output_mute::session::read_mute_key_from_json)
+    });
     crate::output_mute::session::install_from_settings(config_value);
 }
 

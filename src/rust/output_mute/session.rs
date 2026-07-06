@@ -47,7 +47,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use crate::output_mute::{platform_backend, MuteController};
+use crate::output_mute::{platform_backend, MuteController, MuteError};
 
 /// Env-var handle for the setting. Documented in `settings_schema.json`
 /// as the fallback for users who prefer env-only configuration; the
@@ -92,8 +92,37 @@ const IGNORED_STATES: &[&str] = &["post-processing"];
 
 static CONTROLLER: OnceLock<Mutex<Option<MuteController>>> = OnceLock::new();
 
+/// Monotonically-increasing observer generation. Bumped by every
+/// [`install`] / [`install_test_controller`] so a stale
+/// `stream_lines` reader from a stopped child can be told apart from
+/// the current supervisor session.
+///
+/// Codex P2 (runtime.rs:2074, PR #440) — `Runtime::restart` calls
+/// `stop()` (kills the previous child on a background thread) and
+/// then `start()` immediately. The old per-child `stream_lines` thread
+/// can still drain buffered worker events between those two calls.
+/// Tagging each reader with the generation it was created under lets
+/// [`observe_worker_state`] discard those stale events instead of
+/// nudging the fresh controller into a bogus mute/unmute cycle.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn cell() -> &'static Mutex<Option<MuteController>> {
     CONTROLLER.get_or_init(|| Mutex::new(None))
+}
+
+/// Snapshot the current observer generation.
+///
+/// A `stream_lines` reader (or `EventForwarder`) should capture this
+/// value once at construction and pass it to every
+/// [`observe_worker_state`] call. When the supervisor stops/starts a
+/// worker the generation is bumped, so any surviving reader from the
+/// previous child sees `generation != current` and no-ops.
+pub fn current_generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn bump_generation() {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Install the process-global controller.
@@ -110,25 +139,97 @@ pub fn install(enabled: bool) {
     } else {
         *slot = None;
     }
+    // Codex P2 (runtime.rs:2074, PR #440) — every controller swap
+    // bumps the observer generation so any stale reader from a
+    // stopped child no-ops on its next `observe_worker_state` call.
+    bump_generation();
 }
 
 /// Merge an on-disk config value with the [`MUTE_OUTPUT_ENV`] env var
 /// and install (or clear) the controller accordingly.
 ///
-/// Codex P2 (runtime.rs:2060, PR #440) — the previous installer read
-/// only config.json, so `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1` set in
-/// the environment (as the schema documents) was silently ignored by
-/// the Rust supervisor even though the same var is forwarded to the
-/// Python worker. This helper adopts the same "env wins over config"
-/// precedence used elsewhere for schema-derived worker overrides.
+/// Precedence matches Python's `vp_config.Config.effective_config`:
 ///
-/// A missing/unset env var falls back to the caller-supplied
-/// `config_value` (typically the persisted `AppSettings` field). An
-/// unrecognised env value (neither truthy nor falsy) also falls back
-/// so a typo does not silently flip the setting off.
-pub fn install_from_settings(config_value: bool) {
-    let effective = env_override().unwrap_or(config_value);
+///   config.json (if explicitly set) -> environment -> default (off).
+///
+/// Codex P2 (session.rs:130, PR #440) — an earlier iteration let env
+/// win unconditionally. That meant an operator who had exported
+/// `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1` could not disable the
+/// feature by saving `"mute_output_while_recording": "0"` in Settings;
+/// the Rust supervisor kept muting even after the effective runtime
+/// config said "off". Config now wins over env so Settings can always
+/// turn the feature off, matching the schema-driven Python resolution.
+///
+/// `config_value.is_none()` means "config silent on this key" (either
+/// the file is absent or the key is missing entirely). `Some(x)` means
+/// the user explicitly persisted `x` and the env var must NOT override
+/// it. An unrecognised env value is treated as unset so a typo does
+/// not silently flip the setting.
+pub fn install_from_settings(config_value: Option<bool>) {
+    let effective = config_value.or_else(env_override).unwrap_or(false);
     install(effective);
+}
+
+/// Hot-swap the controller from a settings UI event (Save / Reload)
+/// WITHOUT bumping the observer generation.
+///
+/// Codex P2 (session.rs:230, PR #443) — plain [`install`] bumps the
+/// generation so a stale reader from a stopped child is filtered out
+/// by [`observe_worker_state`]. That is exactly wrong when the caller
+/// is the settings UI toggling the auto-mute setting mid-recording: the
+/// active `stream_lines` reader from the LIVE worker is not stale, and
+/// bumping the generation would silently drop every subsequent worker
+/// state from that worker — the new controller then never sees an
+/// on_recording_start/stop pair until the next worker restart, even
+/// though the schema advertises `"live": true` for this key. This hot
+/// variant swaps the controller under the same mutex `install` uses
+/// (the previous controller's Drop still restores an active mute) but
+/// leaves the generation untouched so the live reader keeps driving
+/// the new controller normally.
+///
+/// Only the settings UI should call this. Worker start/stop MUST keep
+/// using [`install`] so the generation bump invalidates the stale
+/// reader from the previous child.
+pub fn install_from_settings_hot(config_value: Option<bool>) {
+    let effective = config_value.or_else(env_override).unwrap_or(false);
+    let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
+    if effective {
+        *slot = Some(MuteController::new(platform_backend()));
+    } else {
+        *slot = None;
+    }
+    // Deliberately NO bump_generation() here (see doc-comment).
+}
+
+/// Read the raw `mute_output_while_recording` value from a JSON config
+/// map, returning `None` when the key is absent so the caller can fall
+/// back to the env var / default.
+///
+/// Codex P2 (session.rs:130, PR #443) — moved here from `runtime.rs`
+/// so both the supervisor start (`install_output_mute_from_config`)
+/// AND the settings UI (`reload_settings`) can resolve the exact same
+/// config-vs-env precedence. Prior to this, the runtime path went
+/// through raw JSON (so a missing key preserved env fallback) but the
+/// UI Reload path used the typed `AppSettings::mute_output_while_recording`
+/// which converts a missing key to `false` — that made Reload clobber
+/// env for users running with `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1`
+/// and no on-disk key.
+///
+/// Returns `Some(true|false)` when the key is present as a bool or a
+/// recognised lax-string token (`"1"/"true"/"yes"/"on"` vs
+/// `"0"/"false"/"no"/"off"/""`). Returns `None` when the key is absent
+/// OR when the value is an unrecognised string (e.g. `"maybe"`) so the
+/// env fallback wins over a typo instead of silently flipping the
+/// setting.
+pub fn read_mute_key_from_json(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Option<bool> {
+    let value = object.get("mute_output_while_recording")?;
+    match value {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::String(s) => parse_bool_env(s),
+        _ => None,
+    }
 }
 
 /// Parse [`MUTE_OUTPUT_ENV`] as a bool. `Some(true|false)` when set to
@@ -166,20 +267,51 @@ pub fn is_installed() -> bool {
 /// tokens like `"post-processing"`). No-op when no controller is
 /// installed, so leaving the call site permanently in `stream_lines`
 /// costs one atomic + one mutex acquisition per worker event.
-pub fn observe_worker_state(state: Option<&str>) {
-    let Some(state) = state else { return };
+///
+/// `observer_generation` is the value the caller captured via
+/// [`current_generation`] when its reader was created. If a different
+/// controller has been installed since (worker stop/start, config
+/// hot-reload, test swap), this call is a cheap no-op — Codex P2
+/// (runtime.rs:2074, PR #440) added this so a stale `stream_lines`
+/// reader from a stopped child cannot drive the new supervisor
+/// session's controller into a bogus mute/unmute cycle.
+///
+/// Returns `Some(MuteError)` when the observation triggered a backend
+/// call that failed. Codex P2 (state.rs:158, PR #440) — the caller
+/// (supervisor / rust-session forwarder) uses this to surface silent
+/// backend failures (missing `pactl`, broken CoreAudio, PowerShell
+/// spawn failure) to the user via the runtime log so the auto-mute
+/// feature does not fail silently on every recording.
+pub fn observe_worker_state(state: Option<&str>, observer_generation: u64) -> Option<MuteError> {
+    let state = state?;
     if IGNORED_STATES.contains(&state) {
-        return;
+        return None;
     }
     let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
-    let Some(controller) = slot.as_mut() else {
-        return;
-    };
+    // Claude P2 (session.rs:235, PR #443) — re-check the generation
+    // AFTER acquiring the mutex, not before. `install()` bumps the
+    // generation while holding this same lock, so a check that
+    // happens outside the critical section can race: a stale reader
+    // sees `observer_generation == current_generation()` just before
+    // a concurrent `install()` swaps the controller + bumps, then
+    // blocks on the lock, and once the swap releases the mutex it
+    // proceeds to drive on_recording_start/stop against the NEW
+    // controller using an event that belonged to the previous
+    // (stopped) child. Reading the generation inside the same
+    // critical section that `install()` holds makes the check + act
+    // atomic w.r.t. controller swaps.
+    if observer_generation != current_generation() {
+        return None;
+    }
+    let controller = slot.as_mut()?;
     if START_STATES.contains(&state) {
         controller.on_recording_start();
     } else if TERMINAL_STATES.contains(&state) {
         controller.on_recording_stop();
+    } else {
+        return None;
     }
+    controller.last_error().cloned()
 }
 
 /// Test-only helper: swap in a controller built from an arbitrary
@@ -191,256 +323,17 @@ pub(crate) fn install_test_controller(
     controller: Option<MuteController>,
 ) -> Option<MuteController> {
     let mut slot = cell().lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::replace(&mut *slot, controller)
+    let previous = std::mem::replace(&mut *slot, controller);
+    // Codex P2 (runtime.rs:2074, PR #440) — tests exercise the same
+    // stale-generation guard, so a swap must bump too.
+    bump_generation();
+    previous
 }
 
+// Codex P2 (runtime.rs:2074, PR #440) — tests live in a sibling file
+// (`session_tests.rs`) so this module stays under AGENTS.md's ~500-LOC
+// modularity cap. Impl + tests inline weighed 541 lines after the
+// generation-tag rework.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex as StdMutex};
-
-    use crate::output_mute::{MuteError, OutputMuteBackend};
-    // Private test lock so a panic in one session test cannot poison
-    // the crate-wide ENV_LOCK (and cascade-fail every env-touching
-    // test). The session tests do not read process env at all — they
-    // only serialize on the process-global controller cell.
-    static SESSION_TEST_LOCK: StdMutex<()> = StdMutex::new(());
-
-    #[derive(Default)]
-    struct CountingBackend {
-        muted: StdMutex<bool>,
-        set_calls: StdMutex<Vec<bool>>,
-    }
-
-    impl OutputMuteBackend for CountingBackend {
-        fn get_mute(&self) -> Result<bool, MuteError> {
-            Ok(*self.muted.lock().unwrap())
-        }
-        fn set_mute(&self, muted: bool) -> Result<(), MuteError> {
-            *self.muted.lock().unwrap() = muted;
-            self.set_calls.lock().unwrap().push(muted);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn observe_is_noop_without_installed_controller() {
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = install_test_controller(None);
-
-        observe_worker_state(Some("recording"));
-        observe_worker_state(Some("ready"));
-        observe_worker_state(None);
-        assert!(!is_installed());
-
-        install_test_controller(saved);
-    }
-
-    #[test]
-    fn recording_then_ready_drives_start_and_stop() {
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let backend = Arc::new(CountingBackend::default());
-        let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
-        let saved = install_test_controller(Some(controller));
-
-        observe_worker_state(Some("recording"));
-        assert_eq!(*backend.set_calls.lock().unwrap(), vec![true]);
-        observe_worker_state(Some("ready"));
-        assert_eq!(*backend.set_calls.lock().unwrap(), vec![true, false]);
-
-        install_test_controller(saved);
-    }
-
-    #[test]
-    fn ignored_states_do_not_drive_transitions() {
-        // Codex P2 (session.rs:37, PR #440): only `post-processing` is
-        // now an ignored intermediate. `opening` moved to START_STATES
-        // (see `opening_starts_recording_and_recording_is_idempotent`).
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let backend = Arc::new(CountingBackend::default());
-        let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
-        let saved = install_test_controller(Some(controller));
-
-        // recording -> post-processing -> ready
-        observe_worker_state(Some("recording"));
-        observe_worker_state(Some("post-processing"));
-        assert_eq!(
-            *backend.set_calls.lock().unwrap(),
-            vec![true],
-            "post-processing must not unmute mid-utterance",
-        );
-
-        observe_worker_state(Some("ready"));
-        assert_eq!(*backend.set_calls.lock().unwrap(), vec![true, false]);
-
-        install_test_controller(saved);
-    }
-
-    #[test]
-    fn opening_starts_recording_and_recording_is_idempotent() {
-        // Codex P2 (session.rs:37, PR #440): opening must mute BEFORE
-        // the mic buffer starts filling. The follow-up recording event
-        // must not re-save state (idempotent), and the terminal state
-        // must still restore the ORIGINAL prior mute value.
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let backend = Arc::new(CountingBackend::default());
-        let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
-        let saved = install_test_controller(Some(controller));
-
-        observe_worker_state(Some("opening"));
-        assert_eq!(
-            *backend.set_calls.lock().unwrap(),
-            vec![true],
-            "opening must mute so meeting audio does not leak during the capture-open window",
-        );
-
-        // Idempotent: the immediately-following recording event must
-        // NOT re-drive set_mute, otherwise a duplicate start would
-        // overwrite the saved prior state with our own installed value.
-        observe_worker_state(Some("recording"));
-        assert_eq!(
-            *backend.set_calls.lock().unwrap(),
-            vec![true],
-            "recording after opening must be a no-op (idempotent start)",
-        );
-
-        observe_worker_state(Some("ready"));
-        assert_eq!(*backend.set_calls.lock().unwrap(), vec![true, false]);
-
-        install_test_controller(saved);
-    }
-
-    #[test]
-    fn capture_lost_restores_mute() {
-        // Codex P2 + Claude P2 (session.rs:32/37, PR #440): mid-recording
-        // device loss emits capture_lost, not a normal terminal state.
-        // Without this fix the controller stayed parked in Recording
-        // forever and left the user's speakers muted until app exit.
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let backend = Arc::new(CountingBackend::default());
-        let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
-        let saved = install_test_controller(Some(controller));
-
-        observe_worker_state(Some("recording"));
-        observe_worker_state(Some("capture_lost"));
-
-        assert_eq!(
-            *backend.set_calls.lock().unwrap(),
-            vec![true, false],
-            "capture_lost must restore the mute we installed at recording start",
-        );
-
-        install_test_controller(saved);
-    }
-
-    #[test]
-    fn env_override_wins_over_config() {
-        // Codex P2 (runtime.rs:2060, PR #440): the documented
-        // VOICEPI_MUTE_OUTPUT_WHILE_RECORDING env var must actually
-        // control the installer, not just the schema paperwork.
-        use crate::test_env_lock::ENV_LOCK;
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var(MUTE_OUTPUT_ENV).ok();
-
-        std::env::set_var(MUTE_OUTPUT_ENV, "1");
-        assert_eq!(env_override(), Some(true));
-        // Even with config OFF, the env-var opt-in must install.
-        install_from_settings(false);
-        assert!(is_installed(), "env=1 must install even when config=false");
-
-        std::env::set_var(MUTE_OUTPUT_ENV, "0");
-        install_from_settings(true);
-        assert!(!is_installed(), "env=0 must clear even when config=true");
-
-        // Unset env falls back to config value.
-        std::env::remove_var(MUTE_OUTPUT_ENV);
-        assert_eq!(env_override(), None);
-        install_from_settings(true);
-        assert!(is_installed());
-        install_from_settings(false);
-        assert!(!is_installed());
-
-        // Restore
-        install_test_controller(None);
-        match prev {
-            Some(v) => std::env::set_var(MUTE_OUTPUT_ENV, v),
-            None => std::env::remove_var(MUTE_OUTPUT_ENV),
-        }
-    }
-
-    #[test]
-    fn env_override_recognises_truthy_and_falsy_tokens() {
-        // Guard the token vocabulary so a future refactor cannot
-        // silently narrow it.
-        for truthy in ["1", "true", "TRUE", "yes", "on"] {
-            assert_eq!(parse_bool_env(truthy), Some(true), "{truthy:?}");
-        }
-        for falsy in ["0", "false", "no", "off", ""] {
-            assert_eq!(parse_bool_env(falsy), Some(false), "{falsy:?}");
-        }
-        for garbage in ["maybe", "2", "on!"] {
-            assert_eq!(parse_bool_env(garbage), None, "{garbage:?}");
-        }
-    }
-
-    #[test]
-    fn install_replaces_previous_controller_and_restores_mute() {
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let backend = Arc::new(CountingBackend::default());
-        let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
-        install_test_controller(Some(controller));
-
-        observe_worker_state(Some("recording"));
-        assert!(*backend.muted.lock().unwrap());
-
-        // Replacing the controller drops the old one — Drop restores
-        // the mute. Explicitly drop the returned previous slot before
-        // asserting so the restore has already run.
-        drop(install_test_controller(None));
-        assert!(!*backend.muted.lock().unwrap(), "Drop must restore mute");
-    }
-
-    #[test]
-    fn install_true_installs_and_install_false_clears() {
-        let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = install_test_controller(None);
-
-        install(true);
-        assert!(is_installed());
-        install(false);
-        assert!(!is_installed());
-
-        install_test_controller(saved);
-    }
-
-    #[test]
-    fn cancelled_and_error_also_stop_recording() {
-        // Belt-and-braces: every terminal state we listed must trigger
-        // a stop, not just "ready". Regression guard for a future
-        // reshuffle of TERMINAL_STATES.
-        for terminal in [
-            "transcribing",
-            "no_text",
-            "cancelled",
-            "error",
-            "capture_lost",
-        ] {
-            let _lock = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let backend = Arc::new(CountingBackend::default());
-            let controller = MuteController::new(backend.clone() as Arc<dyn OutputMuteBackend>);
-            let saved = install_test_controller(Some(controller));
-
-            observe_worker_state(Some("recording"));
-            observe_worker_state(Some(terminal));
-
-            assert_eq!(
-                *backend.set_calls.lock().unwrap(),
-                vec![true, false],
-                "terminal state {terminal:?} must restore mute",
-            );
-
-            install_test_controller(saved);
-        }
-    }
-}
+#[path = "session_tests.rs"]
+mod tests;
