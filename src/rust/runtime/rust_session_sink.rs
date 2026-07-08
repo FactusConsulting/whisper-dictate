@@ -37,6 +37,14 @@ use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 // exactly as before; the implementation lives in the sibling module.
 pub(crate) use super::rust_session_dictate_env::{
     dictate_backend_python_legacy_requested, dictate_backend_rust_session_requested,
+};
+
+// Constants are only referenced from `#[cfg(test)]` sibling test
+// modules; a non-test lib build has no consumer for the re-export and
+// clippy `-D unused-imports` fires. Gate the constant re-export on
+// test only.
+#[cfg(test)]
+pub(crate) use super::rust_session_dictate_env::{
     DICTATE_BACKEND_ENV, DICTATE_BACKEND_PYTHON_LEGACY,
 };
 

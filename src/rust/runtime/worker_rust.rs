@@ -20,12 +20,12 @@
 //!   supervisor spawns THIS worker (production default; the Rust
 //!   worker owns dictation end-to-end).
 //! * `VOICEPI_DICTATE_BACKEND=python-legacy` (any casing/whitespace)
-//!   + Python bundle still installed -> emergency rollback. Supervisor
-//!   spawns Python (`python -m whisper_dictate.runtime`) exactly like
-//!   the pre-PR-7 default. Provided so a real-world regression during
-//!   the Wave-7 → Wave-8 burn-in can be un-stuck without a rollback
-//!   build. Wave 8 deletes the Python bundle and drops this escape
-//!   hatch (issue #348).
+//!   with the Python bundle still installed triggers an emergency
+//!   rollback: supervisor spawns Python
+//!   (`python -m whisper_dictate.runtime`) exactly like the pre-PR-7
+//!   default. Provided so a real-world regression during the Wave-7
+//!   -> Wave-8 burn-in can be un-stuck without a rollback build. Wave 8
+//!   deletes the Python bundle and drops this escape hatch (issue #348).
 //! * Any feature in the four-feature set missing -> supervisor stays
 //!   on Python regardless of the env var (this subcommand exits
 //!   non-zero with a clear "feature not compiled in" message if
