@@ -84,14 +84,91 @@ use std::sync::{Arc, Mutex};
 
 use crate::dictate::audio_route::RouteConfig;
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
-use crate::dictate::backends::WhisperLocalTranscribeBackend;
-use crate::dictate::{DictateSession, SessionConfig};
+use crate::dictate::backends::{CloudBackendConfig, CloudTranscribeBackend, WhisperLocalTranscribeBackend};
+use crate::dictate::{
+    DictateSession, SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult,
+};
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 use crate::whisper::{
     parse_idle_timeout_from_env, resolve_model_path_from_env, IdleUnloadingModel,
 };
 
 use super::rust_session_inject::ProductionInjectBackend;
+
+/// Env var carrying the STT backend selection. Mirrors
+/// `vp_transcribe.STT_BACKEND` on the Python side. Recognised values
+/// (case-insensitive, `faster-whisper` normalised to `whisper` per
+/// [`crate::dictate::validate_backend`]):
+///
+/// - `"whisper"` (or unset / empty) -- local whisper.cpp inference.
+/// - `"openai"` -- OpenAI-compatible cloud STT (base URL determines
+///   OpenAI vs. Groq vs. self-hosted).
+///
+/// A user with `stt_provider = "groq"` and the Groq base URL saved
+/// still sets `stt_backend = "openai"` -- provider is a sub-choice of
+/// the cloud backend, so we only branch here on the top-level backend
+/// selection. See [`resolve_stt_backend_from_env`] for the parser.
+pub(crate) const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
+
+/// Result of [`resolve_stt_backend_from_env`]: which real backend the
+/// factory should build. Kept separate from the `dictate::BackendKind`
+/// enum so this layer can grow provider-specific variants (Cloud vs.
+/// Whisper is enough for Wave 5.5 gap #1; a future Wave could split
+/// Cloud into OpenAI / Groq if the wire divergence ever requires it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealBackendKind {
+    /// In-process whisper.cpp inference via
+    /// [`WhisperLocalTranscribeBackend`]. Default when the env var is
+    /// unset -- matches the Python worker's fallback.
+    Whisper,
+    /// OpenAI-compatible cloud STT via [`CloudTranscribeBackend`].
+    Cloud,
+}
+
+/// Parse [`STT_BACKEND_ENV`] into a [`RealBackendKind`]. Recognises the
+/// same historical `faster-whisper` alias `vp_transcribe.py` does. An
+/// unset or blank env var lands on [`RealBackendKind::Whisper`] --
+/// production defaults to local inference just like the Python worker.
+/// Unrecognised values return `None` so the factory can surface a
+/// human-readable "unsupported stt_backend" error rather than falling
+/// through to a silent whisper build.
+pub(crate) fn resolve_stt_backend_from_env() -> Option<RealBackendKind> {
+    let raw = std::env::var(STT_BACKEND_ENV).ok().unwrap_or_default();
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "whisper" | "faster-whisper" => Some(RealBackendKind::Whisper),
+        "openai" | "groq" => Some(RealBackendKind::Cloud),
+        _ => None,
+    }
+}
+
+/// Real production [`TranscribeBackend`] impl for the rust-session
+/// worker. Enum dispatch (rather than `Box<dyn>`) so the two variants
+/// share a single monomorphised session type and clippy's dead-code
+/// lint doesn't fire on the always-live `TranscribeBackend for
+/// DictateSession<...>` bound.
+///
+/// Wave 5.5 gap #1 of #348 -- see the [`super::rust_session_real_backends`]
+/// module docs for the "silent stub fallback for cloud STT" bug this
+/// enum closes.
+pub enum RealTranscribeBackend {
+    /// In-process whisper.cpp via [`WhisperLocalTranscribeBackend`].
+    Whisper(WhisperLocalTranscribeBackend),
+    /// OpenAI-compatible cloud STT via [`CloudTranscribeBackend`].
+    Cloud(CloudTranscribeBackend),
+}
+
+impl TranscribeBackend for RealTranscribeBackend {
+    fn transcribe(
+        &self,
+        pcm: &[f32],
+        sample_rate: u32,
+    ) -> Result<TranscribeResult, TranscribeError> {
+        match self {
+            Self::Whisper(inner) => inner.transcribe(pcm, sample_rate),
+            Self::Cloud(inner) => inner.transcribe(pcm, sample_rate),
+        }
+    }
+}
 
 /// Env var that supplies the spoken-language hint for the local
 /// Whisper backend. Mirrors `vp_cli.py` / `settings_schema.json:89` so
@@ -108,8 +185,14 @@ pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 
 /// The real production session type that PR 5 wires behind
 /// `VOICEPI_DICTATE_BACKEND=rust-session` when both features are on.
+///
+/// Wave 5.5 gap #1 of #348 widened this from a fixed
+/// [`WhisperLocalTranscribeBackend`] to the [`RealTranscribeBackend`]
+/// enum so the same `DictateSession` type owns either the local
+/// whisper.cpp path or the OpenAI-compatible cloud path -- picked by
+/// [`resolve_stt_backend_from_env`] at session construction.
 pub(crate) type RealSession =
-    DictateSession<WhisperLocalTranscribeBackend, ProductionInjectBackend>;
+    DictateSession<RealTranscribeBackend, ProductionInjectBackend>;
 
 /// Bundle handed back from [`make_real_session`].
 ///
@@ -208,6 +291,38 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
     }
 }
 
+/// Construct the [`RealTranscribeBackend`] variant matching `kind`,
+/// pulling every dependent config value from env. Split out of
+/// [`make_real_session`] so the two per-backend builders (model + idle
+/// wrapper for Whisper, base URL + key + model for Cloud) each stay in
+/// their own linear block and the routing test can drive the
+/// dispatcher without the audio-pump gate.
+///
+/// Returns `Err(String)` mirroring [`make_real_session`]'s error
+/// contract -- the supervisor logs the message and falls back to
+/// the stub sink.
+pub(crate) fn build_real_transcribe_backend(
+    kind: RealBackendKind,
+) -> Result<RealTranscribeBackend, String> {
+    match kind {
+        RealBackendKind::Whisper => {
+            let model_path =
+                resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
+            let idle =
+                parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
+            let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
+            Ok(RealTranscribeBackend::Whisper(
+                WhisperLocalTranscribeBackend::new(model, whisper_backend_config_from_env()),
+            ))
+        }
+        RealBackendKind::Cloud => {
+            let cfg = CloudBackendConfig::from_env();
+            let backend = CloudTranscribeBackend::new(cfg).map_err(|e| format!("cloud STT: {e}"))?;
+            Ok(RealTranscribeBackend::Cloud(backend))
+        }
+    }
+}
+
 /// Build the real-backend session, wrapped in `Arc<Mutex<...>>` so the
 /// coordinator-sink closure can hold a clone while exposing a separate
 /// clone for tests / supervisor introspection. The returned struct
@@ -260,11 +375,19 @@ pub(crate) fn make_real_session(
     }
     #[cfg(feature = "audio-in-rust")]
     {
-        let model_path = resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
-        let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
-        let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-        let transcribe =
-            WhisperLocalTranscribeBackend::new(model, whisper_backend_config_from_env());
+        // Wave 5.5 gap #1 of #348: branch on VOICEPI_STT_BACKEND so a
+        // `stt_backend = "openai"` install builds the cloud backend
+        // instead of the local Whisper one. Unrecognised backend values
+        // surface as an explicit error rather than silently falling
+        // back to whisper -- an unsupported value in the env is far
+        // more likely a misconfigured worker than an intentional
+        // opt-in.
+        let backend_kind = resolve_stt_backend_from_env().ok_or_else(|| {
+            format!(
+                "unsupported {STT_BACKEND_ENV} value; expected one of whisper, openai, groq"
+            )
+        })?;
+        let transcribe = build_real_transcribe_backend(backend_kind)?;
 
         // Inject backend reads VOICEPI_INJECT_MODE itself; the Print
         // variant short-circuits all OS calls. The Enigo variant

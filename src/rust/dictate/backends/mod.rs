@@ -23,16 +23,23 @@
 //!
 //! - [`whisper_local`] — gated on `whisper-rs-local` (whisper.cpp).
 //! - [`inject`] — gated on `rust-injection` (enigo).
+//! - [`cloud`] — no feature gate. `cloud_api::cloud_transcribe` is
+//!   always compiled in, so every build can talk to an OpenAI-
+//!   compatible transcription endpoint. Added in Wave 5.5 gap #1 of
+//!   #348 so a rust-session install with `stt_backend = "openai"`
+//!   stops falling back to Python for cloud STT.
 //!
 //! Tests for each backend live in a sibling `*_tests.rs` file, also
 //! gated on the same feature so they only run when the underlying
 //! dependency is available.
 
+pub mod cloud;
 #[cfg(feature = "rust-injection")]
 pub mod inject;
 #[cfg(feature = "whisper-rs-local")]
 pub mod whisper_local;
 
+pub use cloud::{CloudBackendConfig, CloudTranscribeBackend};
 #[cfg(feature = "rust-injection")]
 pub use inject::EnigoInjectBackend;
 #[cfg(feature = "whisper-rs-local")]

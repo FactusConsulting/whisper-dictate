@@ -90,17 +90,55 @@ pub const fn all_required_features_enabled() -> bool {
 }
 
 /// Whether the supervisor should delegate the dictation lifecycle to
-/// the worker-rust subprocess instead of Python. True iff both:
+/// the worker-rust subprocess instead of Python. True iff all three:
 ///
 /// * the user requested the rust-session backend via env var, AND
-/// * the binary was built with [`all_required_features_enabled`].
+/// * the binary was built with [`all_required_features_enabled`], AND
+/// * the effective `VOICEPI_STT_BACKEND` names a backend the rust
+///   worker knows how to build ([`unsupported_worker_rust_settings_reason`]
+///   returns `None`).
 ///
 /// Pure helper so the gate is unit-testable. The supervisor's
 /// `RuntimeSupervisor::start` consults this to swap its spawned
 /// command for the worker-rust subcommand AND to skip its own
 /// in-process Rust hotkey install (the subprocess installs its own).
 pub fn should_delegate_to_worker_rust() -> bool {
-    rust_session_sink::dictate_backend_rust_session_requested() && all_required_features_enabled()
+    rust_session_sink::dictate_backend_rust_session_requested()
+        && all_required_features_enabled()
+        && unsupported_worker_rust_settings_reason().is_none()
+}
+
+/// Env var carrying the STT backend selection (whisper / openai /
+/// groq). Kept as a `const` in this module so the delegate gate does
+/// not have to reach into `rust_session_real_backends`, which is
+/// itself feature-gated on `whisper-rs-local + rust-injection`.
+const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
+
+/// Return `Some(reason)` when the current env carries a
+/// `VOICEPI_STT_BACKEND` value the worker-rust subprocess cannot
+/// build. Returns `None` when the value is one of the recognised
+/// backends -- unset / empty / `whisper` / `faster-whisper` (local
+/// Whisper) OR `openai` / `groq` (cloud STT, Wave 5.5 gap #1 of #348).
+///
+/// Named ish to match `should_delegate_to_worker_rust`'s "supervisor
+/// stays on Python" fallback semantics: a `Some(reason)` return value
+/// is exactly the message the supervisor logs before it declines to
+/// delegate. Pure helper so the parse + set membership is unit-
+/// testable without spawning a worker.
+///
+/// The parser mirrors [`super::rust_session_real_backends::resolve_stt_backend_from_env`]
+/// (case-insensitive, trims whitespace, accepts the `faster-whisper`
+/// alias) so the two decisions cannot drift -- a value the delegate
+/// gate accepts is one the factory can build.
+pub fn unsupported_worker_rust_settings_reason() -> Option<String> {
+    let raw = std::env::var(STT_BACKEND_ENV).ok().unwrap_or_default();
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "whisper" | "faster-whisper" | "openai" | "groq" => None,
+        other => Some(format!(
+            "unsupported {STT_BACKEND_ENV}={other:?}; the rust-session worker \
+             knows whisper / openai / groq -- staying on Python"
+        )),
+    }
 }
 
 /// Swap an existing Python-orchestrator [`WorkerCommand`] in place so

@@ -47,6 +47,11 @@ fn should_delegate_only_when_env_and_features_match() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev_dictate = std::env::var_os("VOICEPI_DICTATE_BACKEND");
     let prev_hotkey = std::env::var_os("VOICEPI_HOTKEY_BACKEND");
+    let prev_stt = std::env::var_os("VOICEPI_STT_BACKEND");
+    // Clear the STT-backend gate so this test only exercises the
+    // env+feature interaction. Wave 5.5 gap #1 added a third gate;
+    // it's covered by dedicated tests below.
+    std::env::remove_var("VOICEPI_STT_BACKEND");
 
     // env unset -> never delegate, regardless of features.
     std::env::remove_var("VOICEPI_DICTATE_BACKEND");
@@ -89,6 +94,104 @@ fn should_delegate_only_when_env_and_features_match() {
     match prev_hotkey {
         Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
         None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
+    }
+    match prev_stt {
+        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
+    }
+}
+
+// ── Wave 5.5 gap #1: STT-backend gate ────────────────────────────────────────
+
+/// Unset / whisper / faster-whisper / openai / groq are all supported
+/// STT backends the rust-session worker knows how to build; the gate
+/// must return None for each. Any other value must land in the
+/// unsupported set so the supervisor stays on Python.
+#[test]
+fn unsupported_worker_rust_settings_reason_accepts_supported_backends() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var_os("VOICEPI_STT_BACKEND");
+
+    for supported in ["", "whisper", "WHISPER", "faster-whisper", "openai", "GROQ"] {
+        if supported.is_empty() {
+            std::env::remove_var("VOICEPI_STT_BACKEND");
+        } else {
+            std::env::set_var("VOICEPI_STT_BACKEND", supported);
+        }
+        assert!(
+            unsupported_worker_rust_settings_reason().is_none(),
+            "value {supported:?} must be a supported STT backend"
+        );
+    }
+
+    match prev {
+        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
+    }
+}
+
+/// An unrecognised STT backend value (stale parakeet, typo, ...) must
+/// surface a Some(reason) so the supervisor logs a clear message and
+/// falls back to the Python worker.
+#[test]
+fn unsupported_worker_rust_settings_reason_rejects_unknown_backend() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var_os("VOICEPI_STT_BACKEND");
+    std::env::set_var("VOICEPI_STT_BACKEND", "parakeet");
+
+    let reason = unsupported_worker_rust_settings_reason().expect("parakeet is unsupported");
+    assert!(
+        reason.contains("parakeet"),
+        "reason must name the offending value: {reason}"
+    );
+    assert!(
+        reason.contains("staying on Python"),
+        "reason must explain the fallback: {reason}"
+    );
+
+    match prev {
+        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
+    }
+}
+
+/// End-to-end delegate gate: with the dictate-backend env, feature
+/// set, AND stt_backend=openai/groq all lined up, delegation fires so
+/// the supervisor swaps the command to worker-rust instead of Python.
+/// Wave 5.5 gap #1 -- before this PR delegation happened but the
+/// worker couldn't build the cloud backend, silently producing empty
+/// no_text events; the enum-based factory + config-gate together
+/// close the gap.
+#[test]
+fn should_delegate_fires_for_cloud_stt_backends_when_features_present() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev_dictate = std::env::var_os("VOICEPI_DICTATE_BACKEND");
+    let prev_stt = std::env::var_os("VOICEPI_STT_BACKEND");
+
+    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
+    for cloud in ["openai", "groq"] {
+        std::env::set_var("VOICEPI_STT_BACKEND", cloud);
+        assert_eq!(
+            should_delegate_to_worker_rust(),
+            all_required_features_enabled(),
+            "delegation must not refuse stt_backend={cloud:?}"
+        );
+    }
+
+    // And the unsupported-value branch must still veto delegation.
+    std::env::set_var("VOICEPI_STT_BACKEND", "parakeet");
+    assert!(
+        !should_delegate_to_worker_rust(),
+        "unsupported stt_backend must veto delegation"
+    );
+
+    match prev_dictate {
+        Some(v) => std::env::set_var("VOICEPI_DICTATE_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_DICTATE_BACKEND"),
+    }
+    match prev_stt {
+        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
     }
 }
 

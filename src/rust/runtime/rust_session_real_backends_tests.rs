@@ -12,9 +12,11 @@
 use std::sync::mpsc;
 
 use super::{
-    build_initial_prompt, session_config_from_env, whisper_backend_config_from_env,
-    INITIAL_PROMPT_ENV, LANG_ENV,
+    build_initial_prompt, build_real_transcribe_backend, resolve_stt_backend_from_env,
+    session_config_from_env, whisper_backend_config_from_env, RealBackendKind,
+    RealTranscribeBackend, INITIAL_PROMPT_ENV, LANG_ENV, STT_BACKEND_ENV,
 };
+use crate::dictate::backends::cloud::{STT_API_KEY_ENV, STT_BASE_URL_ENV, STT_MODEL_ENV};
 use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::runtime::rust_session_sink::build_production_sink;
 use crate::runtime::RuntimeEvent;
@@ -261,4 +263,115 @@ fn build_production_sink_emits_fallback_event_when_real_backend_fails() {
              round-2 env-helper tests pin the parse contracts unconditionally."
         );
     }
+}
+
+// ── Wave 5.5 gap #1: STT-backend routing ─────────────────────────────────────
+
+/// Unset / empty / whitespace VOICEPI_STT_BACKEND lands on Whisper --
+/// matches the production default `AppSettings::stt_backend = "whisper"`
+/// and Python's `vp_transcribe.STT_BACKEND` fallback.
+#[test]
+fn resolve_stt_backend_defaults_to_whisper_when_env_missing_or_blank() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _env = EnvVarGuard::unset(STT_BACKEND_ENV);
+    assert_eq!(
+        resolve_stt_backend_from_env(),
+        Some(RealBackendKind::Whisper)
+    );
+
+    let _env = EnvVarGuard::set(STT_BACKEND_ENV, "   ");
+    assert_eq!(
+        resolve_stt_backend_from_env(),
+        Some(RealBackendKind::Whisper)
+    );
+}
+
+/// `whisper` and its legacy `faster-whisper` alias both route to the
+/// local Whisper backend. Case-insensitive to match the Python parser.
+#[test]
+fn resolve_stt_backend_recognises_whisper_and_faster_whisper_alias() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    for value in ["whisper", "WHISPER", "faster-whisper", "Faster-Whisper"] {
+        let _env = EnvVarGuard::set(STT_BACKEND_ENV, value);
+        assert_eq!(
+            resolve_stt_backend_from_env(),
+            Some(RealBackendKind::Whisper),
+            "value {value:?} must route to Whisper",
+        );
+    }
+}
+
+/// Both `openai` and `groq` route to the cloud backend -- Groq is just
+/// an OpenAI-compatible base URL, so the top-level backend selection
+/// picks Cloud in both cases. The provider-specific base URL / model /
+/// key resolution happens inside `CloudBackendConfig::from_env`.
+#[test]
+fn resolve_stt_backend_recognises_openai_and_groq_as_cloud() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    for value in ["openai", "OpenAI", "groq", "GROQ"] {
+        let _env = EnvVarGuard::set(STT_BACKEND_ENV, value);
+        assert_eq!(
+            resolve_stt_backend_from_env(),
+            Some(RealBackendKind::Cloud),
+            "value {value:?} must route to Cloud",
+        );
+    }
+}
+
+/// Unrecognised value returns None so the factory surfaces a clean
+/// "unsupported stt_backend" error rather than silently falling
+/// through to Whisper. Guards against a stale Parakeet config or a
+/// typo in a hand-edited env.
+#[test]
+fn resolve_stt_backend_returns_none_for_unknown_value() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _env = EnvVarGuard::set(STT_BACKEND_ENV, "parakeet");
+    assert!(resolve_stt_backend_from_env().is_none());
+}
+
+/// End-to-end: with the cloud env vars set the factory returns a
+/// [`RealTranscribeBackend::Cloud`] variant. We can't call
+/// `transcribe` here without spinning up a stub server (that path is
+/// covered by `cloud_tests::transcribe_end_to_end_against_stub_server`);
+/// this test only pins the enum discriminant so a future refactor of
+/// the factory can't silently regress the routing.
+#[test]
+fn build_real_transcribe_backend_builds_cloud_variant_for_openai() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _base = EnvVarGuard::set(STT_BASE_URL_ENV, "https://api.openai.com/v1");
+    let _model = EnvVarGuard::set(STT_MODEL_ENV, "gpt-4o-mini-transcribe");
+    let _key = EnvVarGuard::set(STT_API_KEY_ENV, "sk-test");
+
+    let backend = build_real_transcribe_backend(RealBackendKind::Cloud)
+        .unwrap_or_else(|err| panic!("cloud backend builds with valid env: {err}"));
+    assert!(
+        matches!(backend, RealTranscribeBackend::Cloud(_)),
+        "expected Cloud variant"
+    );
+}
+
+/// A cloud config missing a required field (API key here) surfaces
+/// the underlying `CloudTranscribeBackend::new` rejection through
+/// the factory's `Result::Err` -- the sink then falls back to the
+/// PR 4 stubs and emits a stderr event naming the missing setting.
+#[test]
+fn build_real_transcribe_backend_surfaces_cloud_config_error() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _base = EnvVarGuard::set(STT_BASE_URL_ENV, "https://api.openai.com/v1");
+    let _model = EnvVarGuard::set(STT_MODEL_ENV, "gpt-4o-mini-transcribe");
+    let _key = EnvVarGuard::unset(STT_API_KEY_ENV);
+    // Also clear the fallback env vars so the resolver truly finds no
+    // key -- otherwise a developer with OPENAI_API_KEY exported would
+    // see this test pass on a mismatched condition.
+    let _openai = EnvVarGuard::unset(crate::dictate::backends::cloud::OPENAI_API_KEY_ENV);
+    let _groq = EnvVarGuard::unset(crate::dictate::backends::cloud::GROQ_API_KEY_ENV);
+
+    let err = match build_real_transcribe_backend(RealBackendKind::Cloud) {
+        Ok(_) => panic!("missing API key must fail the cloud builder"),
+        Err(err) => err,
+    };
+    assert!(
+        err.contains("API key"),
+        "expected API-key error, got: {err}"
+    );
 }
