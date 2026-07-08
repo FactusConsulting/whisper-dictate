@@ -79,11 +79,11 @@ pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelErro
 // have to reach into the `backends` submodule. Each re-export is gated
 // on the same cargo feature as the source module -- except the cloud
 // backend, which is unconditional (Wave 5.5 gap #1 of #348).
-pub use backends::{CloudBackendConfig, CloudTranscribeBackend};
 #[cfg(feature = "rust-injection")]
 pub use backends::EnigoInjectBackend;
 #[cfg(feature = "whisper-rs-local")]
 pub use backends::WhisperLocalTranscribeBackend;
+pub use backends::{CloudBackendConfig, CloudTranscribeBackend};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{

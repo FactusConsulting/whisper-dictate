@@ -164,7 +164,9 @@ fn resolve_api_key(base_url: &str) -> String {
 /// owned string. Returns `None` when the variable is unset (leaves the
 /// caller to decide between defaulting and erroring).
 fn env_trimmed(name: &str) -> Option<String> {
-    std::env::var(name).ok().map(|value| value.trim().to_owned())
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
 }
 
 /// Production [`TranscribeBackend`] that POSTs 16 kHz mono PCM to an

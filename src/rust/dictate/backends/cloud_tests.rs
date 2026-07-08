@@ -205,9 +205,7 @@ fn new_rejects_empty_model_before_network() {
 
 #[test]
 fn encode_pcm_as_wav_produces_16k_mono_16bit() {
-    let pcm: Vec<f32> = (0..16_000)
-        .map(|i| ((i as f32) / 16_000.0) * 0.5)
-        .collect();
+    let pcm: Vec<f32> = (0..16_000).map(|i| ((i as f32) / 16_000.0) * 0.5).collect();
     let bytes = encode_pcm_as_wav(&pcm, 16_000).expect("encode succeeds");
 
     let cursor = std::io::Cursor::new(bytes);

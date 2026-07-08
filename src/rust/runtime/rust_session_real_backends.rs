@@ -84,7 +84,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::dictate::audio_route::RouteConfig;
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
-use crate::dictate::backends::{CloudBackendConfig, CloudTranscribeBackend, WhisperLocalTranscribeBackend};
+use crate::dictate::backends::{
+    CloudBackendConfig, CloudTranscribeBackend, WhisperLocalTranscribeBackend,
+};
 use crate::dictate::{
     DictateSession, SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult,
 };
@@ -191,8 +193,7 @@ pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 /// enum so the same `DictateSession` type owns either the local
 /// whisper.cpp path or the OpenAI-compatible cloud path -- picked by
 /// [`resolve_stt_backend_from_env`] at session construction.
-pub(crate) type RealSession =
-    DictateSession<RealTranscribeBackend, ProductionInjectBackend>;
+pub(crate) type RealSession = DictateSession<RealTranscribeBackend, ProductionInjectBackend>;
 
 /// Bundle handed back from [`make_real_session`].
 ///
@@ -308,8 +309,7 @@ pub(crate) fn build_real_transcribe_backend(
         RealBackendKind::Whisper => {
             let model_path =
                 resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
-            let idle =
-                parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
+            let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
             let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
             Ok(RealTranscribeBackend::Whisper(
                 WhisperLocalTranscribeBackend::new(model, whisper_backend_config_from_env()),
@@ -317,7 +317,8 @@ pub(crate) fn build_real_transcribe_backend(
         }
         RealBackendKind::Cloud => {
             let cfg = CloudBackendConfig::from_env();
-            let backend = CloudTranscribeBackend::new(cfg).map_err(|e| format!("cloud STT: {e}"))?;
+            let backend =
+                CloudTranscribeBackend::new(cfg).map_err(|e| format!("cloud STT: {e}"))?;
             Ok(RealTranscribeBackend::Cloud(backend))
         }
     }
@@ -383,9 +384,7 @@ pub(crate) fn make_real_session(
         // more likely a misconfigured worker than an intentional
         // opt-in.
         let backend_kind = resolve_stt_backend_from_env().ok_or_else(|| {
-            format!(
-                "unsupported {STT_BACKEND_ENV} value; expected one of whisper, openai, groq"
-            )
+            format!("unsupported {STT_BACKEND_ENV} value; expected one of whisper, openai, groq")
         })?;
         let transcribe = build_real_transcribe_backend(backend_kind)?;
 
