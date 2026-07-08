@@ -4,15 +4,21 @@
 
 use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
+#[cfg(not(feature = "audio-in-rust"))]
+use crate::runtime::audio_devices_command;
 use crate::runtime::{
-    audio_devices_command, doctor_command, install_command, run_capture, test_audio_device_command,
-    windows_command, WorkerCommand,
+    doctor_command, install_command, run_capture, test_audio_device_command, windows_command,
+    WorkerCommand,
 };
+#[cfg(feature = "audio-in-rust")]
+use serde_json;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 
-/// Background-task label for the worker's `--list-audio-devices` run. Matched in
-/// `poll_background_task` to parse stdout into the Microphone picker options.
+/// Background-task label for the input-device enumeration run (Rust
+/// `devices::list_input_devices` when compiled with `audio-in-rust`; Python
+/// `--list-audio-devices` otherwise). Matched in `poll_background_task` to
+/// parse stdout into the Microphone picker options.
 pub(in crate::ui) const LIST_AUDIO_DEVICES_LABEL: &str = "list audio devices";
 
 /// Background-task label for the worker's `--list-windows` run. Matched in
@@ -22,6 +28,15 @@ pub(in crate::ui) const LIST_WINDOWS_LABEL: &str = "list windows";
 /// Background-task label for the worker's `--test-audio-device` run. Matched in
 /// `poll_background_task` to parse stdout into the Microphone "Test" result.
 pub(in crate::ui) const TEST_AUDIO_DEVICE_LABEL: &str = "test audio device";
+
+/// Serialise a slice of [`crate::devices::DeviceInfo`] to a JSON array string
+/// that [`parse_audio_devices_json`] can consume. On serialisation error
+/// (should never happen for well-formed `DeviceInfo`) returns `"[]"` so the UI
+/// always gets a valid (empty) array rather than an error state.
+#[cfg(feature = "audio-in-rust")]
+fn serialize_devices_for_ui(devices: &[crate::devices::DeviceInfo]) -> String {
+    serde_json::to_string(devices).unwrap_or_else(|_| "[]".to_owned())
+}
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn run_doctor(&mut self) {
@@ -50,10 +65,37 @@ impl WhisperDictateApp {
         self.run_background_command("install/repair", install_command());
     }
 
-    /// Refresh the Microphone picker's device list by running the worker with
-    /// `--list-audio-devices` off-thread. The captured stdout is parsed in
-    /// `poll_background_task` once the run completes.
+    /// Refresh the Microphone picker's device list by enumerating input devices
+    /// in-process via `crate::devices::list_input_devices()` when the
+    /// `audio-in-rust` feature is on, or by falling back to the Python worker's
+    /// `--list-audio-devices` otherwise. In both cases the JSON output is parsed
+    /// in `poll_background_task`.
     pub(in crate::ui) fn run_list_audio_devices(&mut self) {
+        #[cfg(feature = "audio-in-rust")]
+        {
+            if self.background_task.is_some() {
+                self.append_runtime_log("[ui] list audio devices skipped: another task is running");
+                return;
+            }
+            self.append_runtime_log("[ui] list audio devices: rust:devices list");
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                let devices = crate::devices::list_input_devices();
+                let stdout = serialize_devices_for_ui(&devices);
+                let _ = tx.send(BackgroundTaskResult {
+                    label: LIST_AUDIO_DEVICES_LABEL,
+                    command: "rust:devices list".to_owned(),
+                    stdout,
+                    stderr: String::new(),
+                    success: true,
+                    code: Some(0),
+                    error: None,
+                });
+            });
+            self.background_task = Some(rx);
+            self.background_task_label = Some(LIST_AUDIO_DEVICES_LABEL);
+        }
+        #[cfg(not(feature = "audio-in-rust"))]
         self.run_background_command(LIST_AUDIO_DEVICES_LABEL, audio_devices_command());
     }
 
@@ -518,6 +560,78 @@ impl WhisperDictateApp {
             ));
         }
         self.benchmark_results = Some(results);
+    }
+}
+
+#[cfg(all(test, feature = "audio-in-rust"))]
+mod devices_reroute_tests {
+    use super::*;
+    use crate::devices::DeviceInfo;
+
+    fn make_device(index: usize, name: &str, default: bool) -> DeviceInfo {
+        DeviceInfo {
+            index,
+            name: name.to_owned(),
+            max_input_channels: 2,
+            sample_rates: (16_000, 48_000),
+            default,
+        }
+    }
+
+    /// `serialize_devices_for_ui` must produce a JSON array whose elements
+    /// carry at least `name` and `default` fields — the exact contract
+    /// `parse_audio_devices_json` requires.
+    #[test]
+    fn serialised_device_info_round_trips_through_audio_devices_parser() {
+        let devices = vec![
+            make_device(0, "Mic A", true),
+            make_device(1, "Mic B", false),
+        ];
+        let json = serialize_devices_for_ui(&devices);
+        let options = parse_audio_devices_json(&json)
+            .expect("parse_audio_devices_json must accept DeviceInfo JSON");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].value, "Mic A");
+        assert_eq!(options[0].label, "Mic A (default)");
+        assert_eq!(options[1].value, "Mic B");
+        assert_eq!(options[1].label, "Mic B");
+    }
+
+    /// An empty device list must serialise to `[]` and produce zero options
+    /// (not an error).
+    #[test]
+    fn serialised_empty_device_list_yields_no_options() {
+        let json = serialize_devices_for_ui(&[]);
+        let options = parse_audio_devices_json(&json).expect("empty array must be valid");
+        assert!(options.is_empty());
+    }
+
+    /// `run_list_audio_devices` must start a background task (setting both
+    /// `background_task` and `background_task_label`) without panicking. We
+    /// don't wait for the thread to finish because the real `list_input_devices`
+    /// may take a moment and CI hosts may have no audio hardware — the goal is
+    /// just to confirm the Rust path is wired up and doesn't touch Python.
+    #[test]
+    fn run_list_audio_devices_starts_background_task_on_rust_path() {
+        use crate::config::AppSettings;
+        // tasks is a direct child of crate::ui; super::super resolves to
+        // crate::ui where test_support lives.
+        use super::super::test_support::test_app;
+        let mut app = test_app(AppSettings::default());
+        assert!(
+            app.background_task.is_none(),
+            "precondition: no task in flight"
+        );
+        app.run_list_audio_devices();
+        assert!(
+            app.background_task.is_some(),
+            "background task must have been started"
+        );
+        assert_eq!(
+            app.background_task_label,
+            Some(LIST_AUDIO_DEVICES_LABEL),
+            "task label must be the list-audio-devices label"
+        );
     }
 }
 
