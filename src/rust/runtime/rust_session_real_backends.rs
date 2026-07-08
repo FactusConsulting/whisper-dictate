@@ -145,21 +145,51 @@ pub(crate) struct RealSessionDeps {
 /// values are normalised to `None` so the backend's own per-call
 /// empty-string -> auto-detect collapse (see
 /// [`WhisperBackendConfig`] docs) does not even see a literal empty
-/// string. Pure helper so the parse is unit-testable. Codex P2 #423
+/// string.
+///
+/// Wave 5.5 gap #4: when the user's dictionary is enabled (the default
+/// for a stock install), overlay the dictionary-derived initial-prompt
+/// on top of the env-var base. `Dictionary::build_prompt` combines the
+/// base prompt with the budget-fitted vocabulary terms; without this,
+/// the rust-session path threw the dictionary away and got zero
+/// rare-word bias from whisper, silently regressing recognition
+/// against the Python worker.
+///
+/// Pure helper so the parse is unit-testable. Codex P2 #423
 /// rust_session_real_backends.rs:96 (finding 2).
 pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
     let language = std::env::var(LANG_ENV)
         .ok()
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty());
-    let initial_prompt = std::env::var(INITIAL_PROMPT_ENV)
+    let base_prompt = std::env::var(INITIAL_PROMPT_ENV)
         .ok()
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty());
+    let initial_prompt = build_initial_prompt(base_prompt.as_deref());
     WhisperBackendConfig {
         language,
         initial_prompt,
     }
+}
+
+/// Combine an optional env-var base prompt with the dictionary's
+/// vocabulary terms into the final `initial_prompt` string whisper.cpp
+/// consumes. Extracted so the fallback logic (dictionary disabled ->
+/// pass the env prompt through; both missing -> `None`) is
+/// unit-testable without touching the process env.
+///
+/// The dictionary module owns the budget-fitting + "Vocabulary:" prefix
+/// so this helper is a thin adapter around
+/// [`crate::dictionary::runtime_dictionary_result`]. When the runtime
+/// helper returns an error (missing / corrupt dictionary file), we
+/// fall back to the base prompt so a broken dictionary never blocks
+/// the session from starting -- mirrors the Python
+/// `_dictionary_runtime` fallback path.
+pub(crate) fn build_initial_prompt(base_prompt: Option<&str>) -> Option<String> {
+    let settings = crate::dictionary::RuntimeDictionarySettings::from_env_and_config();
+    let result = crate::dictionary::runtime_dictionary_result(&settings, base_prompt, "");
+    result.prompt
 }
 
 /// Build a [`SessionConfig`] that honors the live
