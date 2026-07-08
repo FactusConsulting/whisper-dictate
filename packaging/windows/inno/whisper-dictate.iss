@@ -35,12 +35,6 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\..\..\src\python\whisper_dictate\*.py"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
-Source: "..\..\..\src\python\whisper_dictate\*.json"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
-; The top-level *.py / *.json globs are NOT recursive, so the data subpackage
-; (hallucination_patterns.json, loaded at import via importlib.resources) needs
-; its own entry or it would be missing from the installed app.
-Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"; Flags: ignoreversion recursesubdirs
 Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; ONNX Runtime DLL(s) for the `audio-in-rust` feature (Wave 8 / rc.2):
 ; vad-rs -> ort dynamically loads onnxruntime.dll at startup. ort's
@@ -53,13 +47,11 @@ Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreve
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\docs\*.md";          DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\..\..\docs\examples\dictionary.example.json"; DestDir: "{app}\docs\examples"; Flags: ignoreversion
-Source: "..\..\..\requirements\*.txt"; DestDir: "{app}\requirements"; Flags: ignoreversion
 ; The golden-benchmark manifest (corpus.json only — NOT the user-local, gitignored
 ; audio recordings) so the System tab's "Run benchmark" resolves a corpus out of
 ; the box in the installed app. The worker looks for {app}\benchmark\corpus.json.
 Source: "..\..\..\benchmark\corpus.json"; DestDir: "{app}\benchmark"; Flags: ignoreversion
 Source: "..\..\..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\..\..\scripts\dev\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
@@ -164,8 +156,6 @@ begin
     '  $desktop = Get-CimInstance Win32_Process -Filter "name = ''whisper-dictate.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $_.ExecutablePath -eq $appExe }' + #13#10 +
     '} while ($desktop -and (Get-Date) -lt $deadline)' + #13#10 +
     '$desktop | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
-    '$workers = Get-CimInstance Win32_Process | Where-Object { ($_.Name -like ''python*.exe'' -or $_.Name -eq ''py.exe'') -and $_.CommandLine -like ''*whisper_dictate.runtime*'' -and $_.CommandLine -like (''*'' + $appRoot + ''*'') }' + #13#10 +
-    '$workers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
     '$deadline = (Get-Date).AddSeconds(10)' + #13#10 +
     'do {' + #13#10 +
     '  Start-Sleep -Milliseconds 250' + #13#10 +
