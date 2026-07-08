@@ -185,10 +185,7 @@ fn build_initial_prompt_appends_vocabulary_terms_when_dictionary_present() {
     )
     .unwrap();
     let _enabled = EnvVarGuard::set("VOICEPI_DICTIONARY_ENABLED", "1");
-    let _path = EnvVarGuard::set(
-        "VOICEPI_DICTIONARY",
-        dict_path.to_string_lossy().as_ref(),
-    );
+    let _path = EnvVarGuard::set("VOICEPI_DICTIONARY", dict_path.to_string_lossy().as_ref());
 
     let prompt = build_initial_prompt(Some("Base prompt")).expect("prompt");
     // Byte-identical to what `Dictionary::build_prompt` produces so a
@@ -201,18 +198,11 @@ fn whisper_backend_config_threads_dictionary_prompt_into_backend() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let dict_path = dir.path().join("dictionary.json");
-    std::fs::write(
-        &dict_path,
-        r#"{"terms":["Codex"],"replacements":{}}"#,
-    )
-    .unwrap();
+    std::fs::write(&dict_path, r#"{"terms":["Codex"],"replacements":{}}"#).unwrap();
     let _lang = EnvVarGuard::unset(LANG_ENV);
     let _prompt = EnvVarGuard::set(INITIAL_PROMPT_ENV, "Whisper Dictate");
     let _enabled = EnvVarGuard::set("VOICEPI_DICTIONARY_ENABLED", "1");
-    let _path = EnvVarGuard::set(
-        "VOICEPI_DICTIONARY",
-        dict_path.to_string_lossy().as_ref(),
-    );
+    let _path = EnvVarGuard::set("VOICEPI_DICTIONARY", dict_path.to_string_lossy().as_ref());
 
     let cfg = whisper_backend_config_from_env();
     assert_eq!(
