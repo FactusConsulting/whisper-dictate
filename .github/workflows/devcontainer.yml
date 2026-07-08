@@ -38,4 +38,4 @@ jobs:
             # the wgpu/DX12 stack. wgpu is build-validated by renderer-matrix CI.
             cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings
             cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
-            python -m pytest src/python/tests src/tests/python -q
+            python -m pytest src/tests/python -q

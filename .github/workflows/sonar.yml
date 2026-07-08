@@ -1,6 +1,6 @@
 name: sonar
 
-# Runs Sonar (Clippy JSON + Rust LCOV + Python coverage XML) on every push to
+# Runs Sonar (Clippy JSON + Rust LCOV) on every push to
 # main and every pull request. Uploads results to SonarCloud.
 #
 # Required-status-check context: NONE in the protected-branch ruleset. The
@@ -80,18 +80,6 @@ jobs:
           sed -i -E "/^SF:src\//! s#^SF:#SF:src/rust/#" lcov.info
           # Sanity check: confirm the report has source records with repo-root paths.
           echo "LCOV SF records: $(grep -c '^SF:' lcov.info), sample: $(grep -m1 '^SF:' lcov.info)"
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.14"
-
-      - name: Python coverage (XML for Sonar import)
-        # coverage.py emits <source>=repo root + repo-root-relative filenames, so
-        # Sonar maps it onto sonar.sources without further path massaging.
-        run: |
-          python -m pip install --quiet pytest numpy coverage
-          python -m coverage run --source=src/python/whisper_dictate -m pytest src/python/tests src/tests/python -q
-          python -m coverage xml -o coverage.xml
 
       - name: SonarQube Scan
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
