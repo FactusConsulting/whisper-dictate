@@ -74,9 +74,7 @@ impl WhisperDictateApp {
         #[cfg(feature = "audio-in-rust")]
         {
             if self.background_task.is_some() {
-                self.append_runtime_log(
-                    "[ui] list audio devices skipped: another task is running",
-                );
+                self.append_runtime_log("[ui] list audio devices skipped: another task is running");
                 return;
             }
             self.append_runtime_log("[ui] list audio devices: rust:devices list");
@@ -604,8 +602,7 @@ mod devices_reroute_tests {
     #[test]
     fn serialised_empty_device_list_yields_no_options() {
         let json = serialize_devices_for_ui(&[]);
-        let options =
-            parse_audio_devices_json(&json).expect("empty array must be valid");
+        let options = parse_audio_devices_json(&json).expect("empty array must be valid");
         assert!(options.is_empty());
     }
 
@@ -621,7 +618,10 @@ mod devices_reroute_tests {
         // crate::ui where test_support lives.
         use super::super::test_support::test_app;
         let mut app = test_app(AppSettings::default());
-        assert!(app.background_task.is_none(), "precondition: no task in flight");
+        assert!(
+            app.background_task.is_none(),
+            "precondition: no task in flight"
+        );
         app.run_list_audio_devices();
         assert!(
             app.background_task.is_some(),
