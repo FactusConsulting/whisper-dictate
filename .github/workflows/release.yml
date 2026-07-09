@@ -598,8 +598,82 @@ jobs:
           if ($p2.ExitCode -ne 0) { throw "whisper-dictate.exe config path exited $($p2.ExitCode)" }
           Write-Host "  ok  config path exit 0"
 
+      - name: Rust worker headless smoke (worker-rust --stdin-only)
+        if: steps.download.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:APP_ROOT 'whisper-dictate.exe'
+
+          # Wave 5 PR 7 of #348: the installed release build ships with the full
+          # feature set (whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys)
+          # so `worker-rust` is the production dictation entry point that
+          # RuntimeSupervisor::start delegates to. `--stdin-only` skips the rdev
+          # OS-listener install (headless runner has no display / accessibility
+          # permission) and drives the coordinator from stdin commands only —
+          # closing stdin is the documented clean-shutdown mechanism on Windows
+          # where SIGTERM isn't reliable.
+          #
+          # PR #441 review round 2 (Codex P1 finding 3): the smoke now drives the
+          # command loop end-to-end. Previously the stdin file was empty so the
+          # worker only proved "starts up, emits ready, sees EOF". That did not
+          # exercise the `press`/`release`/`cancel`/`quit` dispatcher and would
+          # not catch a regression where the worker exited before emitting
+          # `state=ready` — for example, if `run_stdin_loop` were reordered ahead
+          # of `emit_worker_ready`. Feeding `press\nrelease\ncancel\nquit\n`
+          # forces the worker to complete a full command cycle: startup heartbeat,
+          # coordinator press+release (no-op on --stdin-only without a chord),
+          # cancel, then an explicit `quit` that returns from the mainloop.
+          Write-Host "Running: whisper-dictate.exe worker-rust --stdin-only (with commands)"
+          $stdinFile = Join-Path $env:TEMP 'wd-worker-rust-commands.txt'
+          # Use LF endings so `run_stdin_loop`'s `.lines()` reader sees one
+          # command per line the same way the Rust supervisor would feed it in
+          # production. -NoNewline strips the trailing CRLF Set-Content would
+          # otherwise append, which the worker's dispatcher would treat as an
+          # empty final line (harmless but noisy in the stderr log).
+          [System.IO.File]::WriteAllText($stdinFile, "press`nrelease`ncancel`nquit`n")
+          $stderrFile = Join-Path $env:TEMP 'wd-worker-rust-stderr.log'
+          $p = Start-Process `
+            -FilePath $exe `
+            -ArgumentList 'worker-rust','--stdin-only' `
+            -Wait -PassThru -WindowStyle Hidden `
+            -RedirectStandardInput $stdinFile `
+            -RedirectStandardError $stderrFile
+          Remove-Item -LiteralPath $stdinFile -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $stderrFile) {
+            Write-Host "--- worker-rust stderr ---"
+            Get-Content -LiteralPath $stderrFile
+            Write-Host "---------------------------"
+          }
+          if ($p.ExitCode -ne 0) {
+            throw "whisper-dictate.exe worker-rust --stdin-only exited $($p.ExitCode) (expected 0 -- see stderr above)"
+          }
+          # Assert the startup heartbeat appeared on stderr: without this a
+          # future refactor that made the worker exit 0 before ever emitting a
+          # worker event would silently pass. The `[worker-event] ` prefix +
+          # `"state":"ready"` is the exact wire form
+          # RuntimeSupervisor::parse_worker_event consumes.
+          if (Test-Path -LiteralPath $stderrFile) {
+            $stderrText = Get-Content -LiteralPath $stderrFile -Raw
+            Remove-Item -LiteralPath $stderrFile -ErrorAction SilentlyContinue
+            if ($stderrText -notmatch '\[worker-event\][^\n]*"state":"ready"') {
+              throw "worker-rust did not emit startup [worker-event] state=ready heartbeat on stderr; got: $stderrText"
+            }
+            # PR #441 review round 2: also assert we did NOT emit
+            # hotkey_install_failed. In --stdin-only the rdev install is
+            # skipped (WorkerRunner::run branches on self.stdin_only) so the
+            # smoke run must never surface this signal; a regression that
+            # dropped the branch would light up here.
+            if ($stderrText -match '"reason":"hotkey_install_failed"') {
+              throw "worker-rust emitted hotkey_install_failed on --stdin-only (rdev install must be skipped): $stderrText"
+            }
+            Write-Host "  ok  worker-rust emitted startup state=ready heartbeat"
+            Write-Host "  ok  worker-rust did not signal hotkey_install_failed"
+          }
+          Write-Host "  ok  worker-rust --stdin-only exit 0 (full command loop drained via quit)"
+
       - name: Summary
         if: steps.download.outputs.found == 'true'
         shell: bash
         run: |
-          echo "install-smoke PASSED for $TAG: silent-install layout OK, Rust controller launches headless (exit 0)."
+          echo "install-smoke PASSED for $TAG: silent-install layout OK, Rust controller launches headless (exit 0), production worker-rust dictation entry point comes up end-to-end (emits state=ready, exits 0 on stdin EOF) — no Python required on the primary dictation path (Wave 5 PR 7 of #348)."

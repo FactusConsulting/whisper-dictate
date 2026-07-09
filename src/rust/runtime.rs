@@ -478,16 +478,22 @@ impl RuntimeSupervisor {
         self.state = RuntimeState::Starting;
         let mut effective_command = command;
 
-        // Wave 5 PR 6 of #348: delegate the dictation lifecycle to the
-        // `whisper-dictate worker-rust` subprocess when the user opted
-        // in via `VOICEPI_DICTATE_BACKEND=rust-session` AND the binary
-        // was built with the full feature set
+        // Wave 5 PR 6 (+ PR 7 default-flip) of #348: delegate the
+        // dictation lifecycle to the `whisper-dictate worker-rust`
+        // subprocess on any build compiled with the full feature set
         // (`whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`).
         // The subprocess owns the entire lifecycle in-process: it
         // installs its own rdev OS listener, runs the
         // `DictateSession` with the real backends, and emits worker
         // events back to us through stderr (already wired by
         // `stream_lines` below).
+        //
+        // PR 7 flipped the default: previously the user had to opt IN
+        // via `VOICEPI_DICTATE_BACKEND=rust-session`; now the Rust
+        // worker runs unconditionally on a full-feature build and the
+        // user opts OUT with `VOICEPI_DICTATE_BACKEND=python-legacy`
+        // for the Wave-7 → Wave-8 burn-in only. Wave 8 removes the
+        // Python bundle and this escape hatch together.
         //
         // When delegating we MUST also skip the supervisor's own
         // in-process Rust hotkey install -- otherwise the parent and
@@ -496,16 +502,25 @@ impl RuntimeSupervisor {
         // subprocess opens its own cpal stream via the audio pump in
         // `rust_session_audio.rs`).
         //
-        // Without the env var OR with any feature missing this path is
-        // a no-op and the supervisor stays on Python -- the production
-        // default until PR 7 ships.
+        // With the escape hatch set OR with any required feature
+        // missing (typical on stock CI builds), this path is a no-op
+        // and the supervisor stays on Python. `worker-rust` refuses
+        // to run on incomplete-feature builds anyway.
+        // Wave 5 PR 7 (#348): the delegate gate is env-only. The Rust
+        // worker's `unsupported_worker_rust_settings_reason()` is folded
+        // into `should_delegate_to_worker_rust()`, which reads
+        // `VOICEPI_STT_BACKEND` directly rather than the saved config --
+        // Wave 8 deletes the Python bundle so a per-setting fallback
+        // path would just be dead code the moment #348 lands.
         let delegate_requested = worker_rust::should_delegate_to_worker_rust();
         let mut swap_succeeded = true;
         if delegate_requested {
             if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
                 let _ = self.tx.send(RuntimeEvent::Stderr(format!(
                     "[runtime] worker-rust delegation failed ({err}); \
-                     falling back to the Python orchestrator"
+                     falling back to the Python orchestrator (set \
+                     VOICEPI_DICTATE_BACKEND=python-legacy to force this \
+                     fallback path proactively)"
                 )));
                 swap_succeeded = false;
             }
@@ -634,11 +649,27 @@ impl RuntimeSupervisor {
             )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if use_rust_audio {
-            // Only the Rust path needs to write to the worker's stdin
-            // (JSON frame events). Inherit otherwise — the Python path
-            // doesn't read stdin and a piped+unused stdin can confuse
-            // some libraries that probe `isatty()` on launch.
+        if use_rust_audio || delegate_to_worker_rust {
+            // Two callers need a piped stdin:
+            //
+            // 1. `use_rust_audio`: the audio bridge writes JSON frame
+            //    events to the worker's stdin.
+            // 2. `delegate_to_worker_rust` (PR #441 review round 2,
+            //    Codex P1 finding 3): `worker-rust` unconditionally
+            //    reads stdin in its command loop. On a Windows GUI
+            //    launch the parent has no console stdin, so
+            //    inheriting would leave the child with an invalid
+            //    handle -- the read errors immediately and the
+            //    worker exits before rdev can drive PTT. Piping
+            //    (without ever writing) parks the worker's main
+            //    thread on a blocked `read()`; closing the pipe at
+            //    supervisor shutdown yields EOF and the worker
+            //    exits cleanly.
+            //
+            // Piping unused stdin can confuse some libraries that
+            // probe `isatty()` on launch; neither the Rust audio
+            // bridge nor `worker-rust` does that, so this is safe on
+            // both branches.
             process.stdin(Stdio::piped());
         }
         configure_piped_python_stdio(&mut process);
@@ -2171,9 +2202,34 @@ fn stream_lines<R>(
                                 )));
                             }
                         }
+                        // PR #441 review round 2 (Codex P1 finding 4):
+                        // the delegated `worker-rust` subprocess emits
+                        // `state=error` with `reason=hotkey_install_failed`
+                        // when rdev refuses to install (missing display,
+                        // permission denied, unsupported chord, ...).
+                        // Surface a prominent stderr diagnostic so users
+                        // see the `python-legacy` escape hatch hint even
+                        // if the worker's raw stderr line was lost in
+                        // the noise. Actual auto-fallback (kill child,
+                        // respawn Python) is a Wave-5.5 gap: the worker
+                        // survives with PTT disabled today; users can
+                        // reach for the escape hatch to keep dictating.
+                        if worker.state.as_deref() == Some("error")
+                            && worker.payload.get("reason").and_then(|v| v.as_str())
+                                == Some("hotkey_install_failed")
+                        {
+                            let detail = worker
+                                .payload
+                                .get("detail")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("(no detail)");
+                            let _ = tx.send(RuntimeEvent::Stderr(format!(
+                                "[runtime] worker-rust hotkey install failed                                  ({detail}) -- PTT will not work in this session.                                  Set VOICEPI_DICTATE_BACKEND=python-legacy and                                  restart to fall back to the Python hotkey                                  listener while Wave-5.5 wires the auto-fallback."
+                            )));
+                        }
                         // Issue #324: persist one row per accepted
                         // utterance into the per-user SQLite history
-                        // store. Best-effort and feature-gated — the
+                        // store. Best-effort and feature-gated -- the
                         // wrapper logs failures and swallows them so
                         // a DB hiccup (locked file, disk full) never
                         // breaks the dictation pipeline.
@@ -2404,18 +2460,27 @@ pub mod audio_spawn;
 // The module ships the machinery; opt-in wire-up lives in
 // `main.rs::run()` behind `VOICEPI_SINGLE_INSTANCE`.
 pub mod single_instance;
-// Wave 5 PR 6 of #348: the `whisper-dictate worker-rust` CLI entry
+// Wave 5 PR 6+7 of #348: the `whisper-dictate worker-rust` CLI entry
 // point + supervisor-side "delegate to worker-rust subprocess" gate.
-// Production code path (without VOICEPI_DICTATE_BACKEND=rust-session +
-// all four features) is byte-for-byte unchanged: when the env var is
-// unset OR the feature set is incomplete, the supervisor stays on
-// Python. PR 7 will flip the default and delete the Python orchestrator.
+// After PR 7 (default flip) a full-feature build spawns the Rust
+// worker unconditionally; users opt out with
+// `VOICEPI_DICTATE_BACKEND=python-legacy` to fall back to the pre-flip
+// Python orchestrator during the Wave-7 → Wave-8 burn-in. Wave 8
+// removes the Python bundle and this fallback together.
 pub mod worker_rust;
 // Issue #326: CLI flags + Unix signals (SIGUSR1 = toggle, SIGUSR2 = cancel)
 // for compositor-driven external triggers. Lives in its own file so
 // `runtime.rs` does not grow past the 500-LOC modularity guideline. See
 // the module docs for the wire protocol and the daemon-side install hook.
 pub mod external_toggle;
+// PR #441 review round 2: env-var gate helpers split out of
+// `rust_session_sink` so that file stays under the AGENTS.md
+// ~500-LOC-per-file modularity guideline. Owns
+// `dictate_backend_python_legacy_requested` /
+// `dictate_backend_rust_session_requested`; `rust_session_sink`
+// re-exports them so external call sites are unchanged.
+pub(crate) mod rust_session_dictate_env;
+
 // Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
 // wiring that drives a `DictateSession` from the hotkey coordinator's
 // action sink. Stays out of the production path until PR 6 flips the

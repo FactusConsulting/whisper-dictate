@@ -1,8 +1,7 @@
-//! Wave 5 PR 6 of #348: the `whisper-dictate worker-rust` CLI entry
+//! Wave 5 PR 6+7 of #348: the `whisper-dictate worker-rust` CLI entry
 //! point — a long-running, in-process Rust dictation worker that
-//! replaces the Python `vp_dictate.py` / `runtime.py` orchestrator
-//! when `VOICEPI_DICTATE_BACKEND=rust-session` is set AND the binary
-//! was built with the full feature set
+//! REPLACES the Python `vp_dictate.py` / `runtime.py` orchestrator on
+//! any build compiled with the full feature set
 //! (`whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`).
 //!
 //! The subprocess driven by this entry point owns the full dictation
@@ -15,18 +14,30 @@
 //! wire format the supervisor's `parse_worker_event` consumer already
 //! ingests.
 //!
-//! # PR 6 is opt-in only
+//! # PR 7 default: Rust worker; escape hatch: Python
 //!
-//! * `VOICEPI_DICTATE_BACKEND` unset -> supervisor spawns Python
-//!   (byte-for-byte unchanged behaviour).
-//! * `VOICEPI_DICTATE_BACKEND=rust-session` + all four features ->
-//!   supervisor spawns this subcommand instead of Python.
-//! * `VOICEPI_DICTATE_BACKEND=rust-session` + any feature missing ->
-//!   supervisor stays on Python (this subcommand exits non-zero with
-//!   a clear "feature not compiled in" message if invoked directly).
+//! * `VOICEPI_DICTATE_BACKEND` unset + all four features ->
+//!   supervisor spawns THIS worker (production default; the Rust
+//!   worker owns dictation end-to-end).
+//! * `VOICEPI_DICTATE_BACKEND=python-legacy` (any casing/whitespace)
+//!   with the Python bundle still installed triggers an emergency
+//!   rollback: supervisor spawns Python
+//!   (`python -m whisper_dictate.runtime`) exactly like the pre-PR-7
+//!   default. Provided so a real-world regression during the Wave-7
+//!   -> Wave-8 burn-in can be un-stuck without a rollback build. Wave 8
+//!   deletes the Python bundle and drops this escape hatch (issue #348).
+//! * Any feature in the four-feature set missing -> supervisor stays
+//!   on Python regardless of the env var (this subcommand exits
+//!   non-zero with a clear "feature not compiled in" message if
+//!   invoked directly). This branch is compiled-out on stock CI
+//!   builds so PR 6's pre-flip semantics still hold for dev/test.
 //!
-//! PR 7 will delete `vp_dictate.py` / `runtime.py` and flip the
-//! default; until then production keeps shipping Python.
+//! Historical values (`VOICEPI_DICTATE_BACKEND=rust`,
+//! `=rust-session`) are still recognised by
+//! [`super::rust_session_sink::dictate_backend_rust_session_requested`]
+//! for the supervisor-side session-sink hotkey routing on the Python
+//! fallback path; on the new-default delegate path those knobs are
+//! moot because the subprocess owns everything.
 //!
 //! # Test mode (`--stdin-only`)
 //!
@@ -92,19 +103,28 @@ pub const fn all_required_features_enabled() -> bool {
 /// Whether the supervisor should delegate the dictation lifecycle to
 /// the worker-rust subprocess instead of Python. True iff all three:
 ///
-/// * the user requested the rust-session backend via env var, AND
 /// * the binary was built with [`all_required_features_enabled`], AND
+/// * the user did NOT set the Python-legacy escape hatch
+///   (`VOICEPI_DICTATE_BACKEND=python-legacy`) --
+///   [`rust_session_sink::dictate_backend_python_legacy_requested`], AND
 /// * the effective `VOICEPI_STT_BACKEND` names a backend the rust
-///   worker knows how to build ([`unsupported_worker_rust_settings_reason`]
-///   returns `None`).
+///   worker knows how to build
+///   ([`unsupported_worker_rust_settings_reason`] returns `None`).
+///
+/// Wave 5 PR 7 of #348 flipped this gate: PR 6 required the user to
+/// opt IN via `VOICEPI_DICTATE_BACKEND=rust-session`; PR 7 makes the
+/// Rust worker the production default and provides `python-legacy` as
+/// an emergency rollback for the Wave-7 -> Wave-8 burn-in. Wave 8
+/// deletes the Python bundle and this helper collapses to
+/// `all_required_features_enabled() && unsupported_worker_rust_settings_reason().is_none()`.
 ///
 /// Pure helper so the gate is unit-testable. The supervisor's
 /// `RuntimeSupervisor::start` consults this to swap its spawned
 /// command for the worker-rust subcommand AND to skip its own
 /// in-process Rust hotkey install (the subprocess installs its own).
 pub fn should_delegate_to_worker_rust() -> bool {
-    rust_session_sink::dictate_backend_rust_session_requested()
-        && all_required_features_enabled()
+    all_required_features_enabled()
+        && !rust_session_sink::dictate_backend_python_legacy_requested()
         && unsupported_worker_rust_settings_reason().is_none()
 }
 
@@ -339,14 +359,34 @@ impl WorkerRunner {
         }
 
         // Optionally install the rdev OS listener. Skipped on
-        // `--stdin-only` (integration test) and on stock builds where
-        // the `rust-hotkeys` feature is off (the `maybe_install_rust_hotkey`
-        // helper handles the feature gate internally -- we still call
-        // through it so the env-var-set + feature-off warning fires).
+        // `--stdin-only` (integration test); production builds MUST
+        // succeed here or the worker exits non-zero so the supervisor
+        // surfaces the failure. Codex #441 P1 (comment #3550913227):
+        // an earlier iteration returned None and fell through to the
+        // stdin loop, which meant PTT went silently dead while the
+        // subprocess kept blocking on an unwritten pipe.
         let hotkey_handle = if self.stdin_only {
             None
         } else {
-            install_listener(self.key_names.clone(), self.mode, coord_handle.clone())
+            match install_listener(self.key_names.clone(), self.mode, coord_handle.clone()) {
+                Some(handle) => Some(handle),
+                None => {
+                    // Tear the (already-built) coordinator + sink down so
+                    // captured resources drop cleanly, then bail. The
+                    // `emit_hotkey_install_failed` worker-event has
+                    // already fired from `install_listener`, so the
+                    // supervisor logs the specific failure reason. The
+                    // event pump hasn't spawned yet (`pump = ...` runs
+                    // below), so we only need to close its rx side by
+                    // dropping `tx`.
+                    coord_handle.shutdown();
+                    coord_thread.join();
+                    drop(tx);
+                    return Err(anyhow!(
+                        "worker-rust cannot install the OS hotkey listener;                          exiting so the supervisor can surface the failure                          (PTT would be silently dead otherwise)"
+                    ));
+                }
+            }
         };
 
         // Pump events from the channel to stderr/stdout in a background
@@ -459,6 +499,13 @@ fn install_listener(
                 "[worker-rust] rdev listener unavailable: build was compiled without \
                  --features rust-hotkeys; PTT chord will not work in this subprocess"
             );
+            // PR #441 review round 2 (Codex P1 finding 4): also emit a
+            // machine-parseable worker-event so the supervisor can log
+            // a prominent diagnostic pointing users to the
+            // `python-legacy` escape hatch. Actual auto-fallback (kill
+            // the child + respawn Python) is a Wave-5.5 gap tracked
+            // separately -- this signal is the first step.
+            emit_hotkey_install_failed("rust-hotkeys feature not compiled in");
             None
         }
         Err(err) => {
@@ -466,6 +513,11 @@ fn install_listener(
                 "[worker-rust] rdev hotkey install failed: {err}; PTT chord will not \
                  work in this subprocess (was a display / accessibility permission missing?)"
             );
+            // PR #441 review round 2 (Codex P1 finding 4): signal
+            // failure to the supervisor via a worker-event so it can
+            // surface the escape-hatch hint even if the user missed
+            // the plain-stderr warning above.
+            emit_hotkey_install_failed(&format!("{err}"));
             None
         }
     }
@@ -479,6 +531,34 @@ fn emit_worker_ready<W: Write>(writer: &mut W) -> Result<()> {
     let event = dictate_events::StatusEvent::new(dictate_events::WorkerStatus::Ready);
     dictate_events::emit_status(writer, &event)?;
     Ok(())
+}
+
+/// Machine-parseable wire signal for "the worker's rdev hotkey install
+/// just failed". Emits a `[worker-event]` line on stderr with
+/// `state=error` and `reason=hotkey_install_failed` so the parent
+/// supervisor's `parse_worker_event` consumer can detect the failure
+/// and log a prominent hint about
+/// `VOICEPI_DICTATE_BACKEND=python-legacy`. PR #441 review round 2
+/// (Codex P1 finding 4) added this alongside the pre-existing plain
+/// `eprintln!` so a supervisor that missed the raw stderr line still
+/// gets a structured signal it can react to.
+///
+/// Wave-5.5 will turn this into an actual auto-fallback (kill child +
+/// respawn Python); for PR #441 the supervisor only needs to log the
+/// signal so users see the escape hatch.
+fn emit_hotkey_install_failed(detail: &str) {
+    let mut event = dictate_events::StatusEvent::new(dictate_events::WorkerStatus::Error);
+    event.extras.insert(
+        "reason".to_owned(),
+        serde_json::Value::from("hotkey_install_failed"),
+    );
+    event
+        .extras
+        .insert("detail".to_owned(), serde_json::Value::from(detail));
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    // Best-effort: if stderr is dead we cannot signal anyway.
+    let _ = dictate_events::emit_status(&mut lock, &event);
 }
 
 /// Spawn the event-pump thread that forwards [`RuntimeEvent`]s off
