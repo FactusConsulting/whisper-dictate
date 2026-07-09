@@ -87,9 +87,14 @@ use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::{
     CloudBackendConfig, CloudTranscribeBackend, WhisperLocalTranscribeBackend,
 };
+use crate::dictate::env_gates::is_truthy;
 use crate::dictate::{
     DictateSession, SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult,
 };
+use crate::postprocess::{
+    default_base_url, normalized_base_url, normalized_model, PostprocessSettings,
+};
+use crate::postprocess_hotkey::resolve_api_key_from_env;
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 use crate::whisper::{
     parse_idle_timeout_from_env, resolve_model_path_from_env, IdleUnloadingModel,
@@ -276,18 +281,137 @@ pub(crate) fn build_initial_prompt(base_prompt: Option<&str>) -> Option<String> 
     result.prompt
 }
 
+/// Env vars carrying the post-processing pipeline configuration.
+/// Mirror the settings-schema keys under the `postprocess` category so
+/// a config-file value the schema surfaces reaches the session-sink
+/// path unchanged. Codex #441 P2 review round 3.
+pub(crate) const POST_PROCESSOR_ENV: &str = "VOICEPI_POST_PROCESSOR";
+pub(crate) const POST_MODE_ENV: &str = "VOICEPI_POST_MODE";
+pub(crate) const POST_MODEL_ENV: &str = "VOICEPI_POST_MODEL";
+pub(crate) const POST_BASE_URL_ENV: &str = "VOICEPI_POST_BASE_URL";
+pub(crate) const POST_TIMEOUT_MS_ENV: &str = "VOICEPI_POST_TIMEOUT_MS";
+pub(crate) const POST_MAX_INPUT_CHARS_ENV: &str = "VOICEPI_POST_MAX_INPUT_CHARS";
+pub(crate) const POST_MAX_OUTPUT_CHARS_ENV: &str = "VOICEPI_POST_MAX_OUTPUT_CHARS";
+pub(crate) const POST_REDACT_ENV: &str = "VOICEPI_POST_REDACT";
+pub(crate) const POST_REDACT_TERMS_ENV: &str = "VOICEPI_POST_REDACT_TERMS";
+/// Env var carrying the format-command language set (`"off"` /
+/// `"en"` / `"da"` / `"both"`). Off by default. Codex #441 P2 review
+/// round 3.
+pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
+/// Env var carrying the privacy-lock toggle. Shared with the STT gate
+/// in `worker_rust.rs`.
+pub(crate) const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
+
+/// Read `name` from the process env, trim ASCII whitespace, and drop
+/// empty results. Kept internal so the post-processor config parser
+/// does not have to spell out the pattern six times.
+fn env_string(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// Parse a `usize`-typed post-processor env var, falling back to
+/// `default` on unset / non-numeric / zero values. Matches the same
+/// clamp Python's `_parse_int_setting` applied.
+fn env_usize(name: &str, default: usize) -> usize {
+    env_string(name)
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+/// Parse a `u64`-typed post-processor env var, falling back to
+/// `default` on unset / non-numeric / zero values.
+fn env_u64(name: &str, default: u64) -> u64 {
+    env_string(name)
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+/// Build a [`PostprocessSettings`] from env vars. Applies the same
+/// `normalized_model` / `normalized_base_url` substitutions the
+/// Settings-UI / profile paths already run so a `stt_backend=openai`
+/// profile with an empty `post_model` still uses `gpt-4o-mini` instead
+/// of the Ollama default. Cloud API keys resolve at load time via
+/// [`resolve_api_key_from_env`] so a user with the key in the OS
+/// credential store never has to persist it in `config.json`. Codex
+/// #441 P2 review round 3.
+///
+/// Returns `None` when the pipeline is effectively disabled -- either
+/// `processor == "none"` (the schema default) or the env var is
+/// unset. The session then behaves as it did before Wave 5.5 wired
+/// postprocess into the coordinator (no LLM pass on the transcribed
+/// text).
+pub(crate) fn postprocess_settings_from_env() -> Option<PostprocessSettings> {
+    let processor = env_string(POST_PROCESSOR_ENV).unwrap_or_else(|| "none".to_owned());
+    if processor.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    let mode = env_string(POST_MODE_ENV).unwrap_or_else(|| "raw".to_owned());
+    let raw_model = env_string(POST_MODEL_ENV).unwrap_or_default();
+    let raw_base_url = env_string(POST_BASE_URL_ENV).unwrap_or_default();
+    let base_url = if raw_base_url.is_empty() {
+        default_base_url(&processor).to_owned()
+    } else {
+        normalized_base_url(&processor, raw_base_url.trim_end_matches('/'))
+    };
+    let model = if raw_model.is_empty() {
+        // `normalized_model` picks the provider default when the raw
+        // value is empty OR matches the Ollama placeholder.
+        normalized_model(&processor, "")
+    } else {
+        normalized_model(&processor, &raw_model)
+    };
+    let timeout_ms = env_u64(POST_TIMEOUT_MS_ENV, 4_000);
+    let max_input_chars = env_usize(POST_MAX_INPUT_CHARS_ENV, 4_000);
+    let max_output_chars = env_usize(POST_MAX_OUTPUT_CHARS_ENV, 4_000);
+    let redact = is_truthy(env_string(POST_REDACT_ENV).as_deref());
+    let redact_terms = env_string(POST_REDACT_TERMS_ENV).unwrap_or_default();
+    let local_only = is_truthy(env_string(LOCAL_ONLY_ENV).as_deref());
+    let api_key = resolve_api_key_from_env(&processor);
+    Some(PostprocessSettings {
+        processor,
+        mode,
+        model,
+        base_url,
+        timeout_ms,
+        max_input_chars,
+        max_output_chars,
+        api_key,
+        redact,
+        redact_terms,
+        local_only,
+    })
+}
+
+/// Read the format-command language set from the env, falling back to
+/// the `"off"` schema default. Codex #441 P2 review round 3.
+pub(crate) fn format_commands_from_env() -> String {
+    env_string(FORMAT_COMMANDS_ENV).unwrap_or_else(|| "off".to_owned())
+}
+
 /// Build a [`SessionConfig`] that honors the live
-/// `VOICEPI_MIN_RECORD_SECONDS` setting. Mirrors the audio_route's own
-/// env parser ([`RouteConfig::from_env`]) so both layers see the same
-/// value -- when the supervisor wires audio_route in a future PR the
-/// route will additionally re-read the env on every
-/// `start_recording`, but for the rust-session sink today the
-/// construction-time stamp is enough to fix Codex P2 #423
-/// rust_session_real_backends.rs:107 (finding 5).
+/// `VOICEPI_MIN_RECORD_SECONDS` + post-processing + format-command
+/// settings. Codex #441 P2 review round 3 extended this to close the
+/// gap where a user with `post_processor=ollama` or
+/// `format_commands=en` in their saved settings had those knobs
+/// silently discarded on the rust-session path -- `DictateSession`
+/// received `postprocess_settings: None` / `format_commands: "off"`
+/// so the post-processing pass never ran and the raw transcript was
+/// injected verbatim.
+///
+/// Mirrors [`RouteConfig::from_env`] / [`postprocess_settings_from_env`]
+/// / [`format_commands_from_env`] so a config-file value the schema
+/// surfaces reaches the session unchanged.
 pub(crate) fn session_config_from_env() -> SessionConfig {
     let route = RouteConfig::from_env();
     SessionConfig {
         min_record_seconds: route.min_record_seconds,
+        postprocess_settings: postprocess_settings_from_env(),
+        format_commands: format_commands_from_env(),
         ..SessionConfig::default()
     }
 }

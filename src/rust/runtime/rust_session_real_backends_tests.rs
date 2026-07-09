@@ -12,9 +12,13 @@
 use std::sync::mpsc;
 
 use super::{
-    build_initial_prompt, build_real_transcribe_backend, resolve_stt_backend_from_env,
-    session_config_from_env, whisper_backend_config_from_env, RealBackendKind,
-    RealTranscribeBackend, INITIAL_PROMPT_ENV, LANG_ENV, STT_BACKEND_ENV,
+    build_initial_prompt, build_real_transcribe_backend, format_commands_from_env,
+    postprocess_settings_from_env, resolve_stt_backend_from_env, session_config_from_env,
+    whisper_backend_config_from_env, RealBackendKind, RealTranscribeBackend,
+    FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV, LOCAL_ONLY_ENV, POST_BASE_URL_ENV,
+    POST_MAX_INPUT_CHARS_ENV, POST_MAX_OUTPUT_CHARS_ENV, POST_MODE_ENV, POST_MODEL_ENV,
+    POST_PROCESSOR_ENV, POST_REDACT_ENV, POST_REDACT_TERMS_ENV, POST_TIMEOUT_MS_ENV,
+    STT_BACKEND_ENV,
 };
 use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::dictate::backends::cloud::{STT_API_KEY_ENV, STT_BASE_URL_ENV, STT_MODEL_ENV};
@@ -374,4 +378,169 @@ fn build_real_transcribe_backend_surfaces_cloud_config_error() {
         err.contains("API key"),
         "expected API-key error, got: {err}"
     );
+}
+
+// ── Codex #441 P2 round 3: postprocess + format env loading ─────────────────
+//
+// Wave 5.5 Session-wire #446 wired `postprocess_settings` and
+// `format_commands` into `DictateSession`, but `session_config_from_env`
+// (the loader the rust-session sink uses on the delegate path) kept
+// returning `None` / `"off"` regardless of what the user had saved.
+// Now the loader reads the same env vars the AppSettings schema
+// surfaces so the saved knobs actually reach the session.
+
+/// The whole suite mutates process env; take the shared lock and
+/// snapshot the vars we touch so each test restores cleanly (avoids
+/// cross-test bleed even under `--test-threads=1`).
+fn guard_postprocess_env() -> Vec<EnvVarGuard> {
+    vec![
+        EnvVarGuard::unset(POST_PROCESSOR_ENV),
+        EnvVarGuard::unset(POST_MODE_ENV),
+        EnvVarGuard::unset(POST_MODEL_ENV),
+        EnvVarGuard::unset(POST_BASE_URL_ENV),
+        EnvVarGuard::unset(POST_TIMEOUT_MS_ENV),
+        EnvVarGuard::unset(POST_MAX_INPUT_CHARS_ENV),
+        EnvVarGuard::unset(POST_MAX_OUTPUT_CHARS_ENV),
+        EnvVarGuard::unset(POST_REDACT_ENV),
+        EnvVarGuard::unset(POST_REDACT_TERMS_ENV),
+        EnvVarGuard::unset(FORMAT_COMMANDS_ENV),
+        EnvVarGuard::unset(LOCAL_ONLY_ENV),
+    ]
+}
+
+#[test]
+fn postprocess_settings_returns_none_when_processor_is_none_or_unset() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _restore = guard_postprocess_env();
+
+    // Unset -> None (schema default is "none").
+    assert!(postprocess_settings_from_env().is_none());
+
+    // Explicit "none" -> None.
+    let _p = EnvVarGuard::set(POST_PROCESSOR_ENV, "none");
+    assert!(postprocess_settings_from_env().is_none());
+
+    // Case-insensitive "None" -> None (matches Python's tolerance for
+    // capitalisation in the schema value).
+    let _p = EnvVarGuard::set(POST_PROCESSOR_ENV, "None");
+    assert!(postprocess_settings_from_env().is_none());
+}
+
+#[test]
+fn postprocess_settings_reads_ollama_config_from_env() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _restore = guard_postprocess_env();
+    let _p = EnvVarGuard::set(POST_PROCESSOR_ENV, "ollama");
+    let _m = EnvVarGuard::set(POST_MODE_ENV, "clean");
+    let _model = EnvVarGuard::set(POST_MODEL_ENV, "qwen2.5:7b");
+    let _url = EnvVarGuard::set(POST_BASE_URL_ENV, "http://localhost:12345");
+    let _timeout = EnvVarGuard::set(POST_TIMEOUT_MS_ENV, "9000");
+    let _max_in = EnvVarGuard::set(POST_MAX_INPUT_CHARS_ENV, "1500");
+    let _max_out = EnvVarGuard::set(POST_MAX_OUTPUT_CHARS_ENV, "2500");
+
+    let settings = postprocess_settings_from_env().expect("processor != none must return Some");
+    assert_eq!(settings.processor, "ollama");
+    assert_eq!(settings.mode, "clean");
+    assert_eq!(settings.model, "qwen2.5:7b");
+    assert_eq!(settings.base_url, "http://localhost:12345");
+    assert_eq!(settings.timeout_ms, 9_000);
+    assert_eq!(settings.max_input_chars, 1_500);
+    assert_eq!(settings.max_output_chars, 2_500);
+    assert!(!settings.redact);
+    assert!(settings.redact_terms.is_empty());
+    assert!(!settings.local_only);
+}
+
+#[test]
+fn postprocess_settings_normalises_openai_defaults() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _restore = guard_postprocess_env();
+    let _p = EnvVarGuard::set(POST_PROCESSOR_ENV, "openai");
+    // Empty model + empty base URL -> provider defaults kick in via
+    // `normalized_model` / `default_base_url`.
+    let _m = EnvVarGuard::set(POST_MODE_ENV, "clean");
+
+    let settings = postprocess_settings_from_env().expect("openai processor is Some");
+    assert_eq!(settings.processor, "openai");
+    // OpenAI defaults: `gpt-4o-mini` model, `https://api.openai.com/v1`
+    // base URL. Mirrors the same defaults `PostprocessProfile::normalized`
+    // installs so the two loading paths agree.
+    assert_eq!(settings.model, "gpt-4o-mini");
+    assert_eq!(settings.base_url, "https://api.openai.com/v1");
+}
+
+#[test]
+fn postprocess_settings_honours_redact_and_local_only_flags() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _restore = guard_postprocess_env();
+    let _p = EnvVarGuard::set(POST_PROCESSOR_ENV, "ollama");
+    let _r = EnvVarGuard::set(POST_REDACT_ENV, "1");
+    let _rt = EnvVarGuard::set(POST_REDACT_TERMS_ENV, "Slack,Claude Code");
+    let _lo = EnvVarGuard::set(LOCAL_ONLY_ENV, "true");
+
+    let settings = postprocess_settings_from_env().expect("Some");
+    assert!(settings.redact);
+    assert_eq!(settings.redact_terms, "Slack,Claude Code");
+    assert!(settings.local_only);
+}
+
+#[test]
+fn postprocess_settings_falsy_flags_stay_false() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _restore = guard_postprocess_env();
+    let _p = EnvVarGuard::set(POST_PROCESSOR_ENV, "ollama");
+    let _r = EnvVarGuard::set(POST_REDACT_ENV, "0");
+    let _lo = EnvVarGuard::set(LOCAL_ONLY_ENV, "false");
+
+    let settings = postprocess_settings_from_env().expect("Some");
+    assert!(!settings.redact);
+    assert!(!settings.local_only);
+}
+
+#[test]
+fn format_commands_defaults_to_off_when_env_unset() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _fc = EnvVarGuard::unset(FORMAT_COMMANDS_ENV);
+    assert_eq!(format_commands_from_env(), "off");
+}
+
+#[test]
+fn format_commands_reads_env_value_verbatim() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    for value in ["en", "da", "both", "off"] {
+        let _fc = EnvVarGuard::set(FORMAT_COMMANDS_ENV, value);
+        assert_eq!(format_commands_from_env(), value);
+    }
+}
+
+#[test]
+fn session_config_from_env_threads_postprocess_and_format_into_session_config() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _restore = guard_postprocess_env();
+    let _p = EnvVarGuard::set(POST_PROCESSOR_ENV, "ollama");
+    let _m = EnvVarGuard::set(POST_MODE_ENV, "clean");
+    let _fc = EnvVarGuard::set(FORMAT_COMMANDS_ENV, "en");
+    // Also clear MIN_RECORD so we exercise only the new fields.
+    let _min = EnvVarGuard::unset(MIN_RECORD_ENV);
+
+    let cfg = session_config_from_env();
+    let post = cfg
+        .postprocess_settings
+        .as_ref()
+        .expect("postprocess must be Some for processor=ollama");
+    assert_eq!(post.processor, "ollama");
+    assert_eq!(post.mode, "clean");
+    assert_eq!(cfg.format_commands, "en");
+}
+
+#[test]
+fn session_config_from_env_stays_default_when_postprocess_disabled() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _restore = guard_postprocess_env();
+    // Processor unset (schema default is "none") -> None.
+    let _min = EnvVarGuard::unset(MIN_RECORD_ENV);
+
+    let cfg = session_config_from_env();
+    assert!(cfg.postprocess_settings.is_none());
+    assert_eq!(cfg.format_commands, "off");
 }
