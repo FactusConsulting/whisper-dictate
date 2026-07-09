@@ -359,14 +359,34 @@ impl WorkerRunner {
         }
 
         // Optionally install the rdev OS listener. Skipped on
-        // `--stdin-only` (integration test) and on stock builds where
-        // the `rust-hotkeys` feature is off (the `maybe_install_rust_hotkey`
-        // helper handles the feature gate internally -- we still call
-        // through it so the env-var-set + feature-off warning fires).
+        // `--stdin-only` (integration test); production builds MUST
+        // succeed here or the worker exits non-zero so the supervisor
+        // surfaces the failure. Codex #441 P1 (comment #3550913227):
+        // an earlier iteration returned None and fell through to the
+        // stdin loop, which meant PTT went silently dead while the
+        // subprocess kept blocking on an unwritten pipe.
         let hotkey_handle = if self.stdin_only {
             None
         } else {
-            install_listener(self.key_names.clone(), self.mode, coord_handle.clone())
+            match install_listener(self.key_names.clone(), self.mode, coord_handle.clone()) {
+                Some(handle) => Some(handle),
+                None => {
+                    // Tear the (already-built) coordinator + sink down so
+                    // captured resources drop cleanly, then bail. The
+                    // `emit_hotkey_install_failed` worker-event has
+                    // already fired from `install_listener`, so the
+                    // supervisor logs the specific failure reason. The
+                    // event pump hasn't spawned yet (`pump = ...` runs
+                    // below), so we only need to close its rx side by
+                    // dropping `tx`.
+                    coord_handle.shutdown();
+                    coord_thread.join();
+                    drop(tx);
+                    return Err(anyhow!(
+                        "worker-rust cannot install the OS hotkey listener;                          exiting so the supervisor can surface the failure                          (PTT would be silently dead otherwise)"
+                    ));
+                }
+            }
         };
 
         // Pump events from the channel to stderr/stdout in a background
