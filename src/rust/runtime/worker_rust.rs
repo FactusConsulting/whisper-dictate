@@ -159,6 +159,13 @@ const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 /// review round 3 (privacy leak).
 const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
 
+/// Env var carrying an explicit path to a GGML whisper.cpp model file.
+/// Mirrors [`crate::whisper::MODEL_PATH_ENV`] but redeclared as a
+/// module-local const so this file compiles on builds without
+/// `whisper-rs-local` (the `pub` re-export is feature-gated). Codex
+/// #441 P1 review round 3 (silent stub fallback).
+const WHISPER_MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";
+
 /// Resolve `key` against the same layered view the child worker will
 /// see: the supervisor's `effective_command.env` overrides win first
 /// (they materialise AppSettings on top of the parent env before
@@ -175,6 +182,47 @@ pub(crate) fn resolved_env(env: &[(String, String)], key: &str) -> Option<String
         return Some(value);
     }
     std::env::var(key).ok()
+}
+
+/// Return true when a local Whisper backend can find a GGML model to
+/// load. Mirrors the resolution rules of
+/// [`crate::whisper::dispatch::resolve_model_path_from_env`] but
+/// consults the effective env vec first so an AppSettings override
+/// (materialised into `effective_command.env`) is seen exactly as the
+/// child will see it. Codex #441 P1 review round 3 (silent stub
+/// fallback).
+///
+/// Order of resolution:
+///
+/// 1. Explicit `VOICEPI_WHISPER_MODEL_PATH` override -- trusted at
+///    face value (existence checked at load time; a bogus path fails
+///    fast in `LocalWhisper::new`).
+/// 2. Any catalog model whose SHA-verified file exists in the user
+///    cache dir (`model_manager::CATALOG` + `is_downloaded`).
+/// 3. Any custom `*.bin` / `*.gguf` file the user dropped into the
+///    cache directory (`local_discovery::discover_models`).
+///
+/// Uses only always-compiled helpers (`model_manager` /
+/// `local_discovery`) so the check compiles on stock builds without
+/// `whisper-rs-local`. On such a build the gate short-circuits on
+/// `all_required_features_enabled()` before ever calling this fn.
+pub(crate) fn local_whisper_model_available(env: &[(String, String)]) -> bool {
+    if let Some(raw) = resolved_env(env, WHISPER_MODEL_PATH_ENV) {
+        if !raw.trim().is_empty() {
+            return true;
+        }
+    }
+    for entry in crate::whisper::model_manager::CATALOG {
+        if crate::whisper::model_manager::is_downloaded(entry) {
+            return true;
+        }
+    }
+    if let Ok(dir) = crate::whisper::model_manager::models_cache_dir() {
+        if !crate::whisper::local_discovery::discover_models(&dir).is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Return `Some(reason)` when the effective env carries a
@@ -208,6 +256,25 @@ pub fn unsupported_worker_rust_settings_reason(env: &[(String, String)]) -> Opti
                  knows whisper / openai / groq -- staying on Python"
             ));
         }
+    }
+
+    // Codex #441 P1 review round 3 (silent stub fallback): a local
+    // Whisper backend needs a resolvable GGML model. Without it
+    // `make_real_session` fails, `build_production_sink` installs the
+    // `StubTranscribeBackend` fallback, and every utterance produces
+    // empty text -- the worker looks alive (emits `state=ready`) but
+    // does no work. Fail-closed instead: the supervisor logs the
+    // reason and refuses to spawn the worker.
+    if matches!(normalised.as_str(), "" | "whisper" | "faster-whisper")
+        && !local_whisper_model_available(env)
+    {
+        return Some(format!(
+            "{WHISPER_MODEL_PATH_ENV} is unset and no GGML model was found in the \
+             whisper-models cache directory; download one via \
+             `whisper-dictate models download tiny.en`, drop a *.bin/*.gguf file \
+             into the models cache directory, or set {WHISPER_MODEL_PATH_ENV} to \
+             point at a whisper.cpp GGML model file"
+        ));
     }
 
     // Codex #441 P1 review round 3 (privacy leak): `CloudTranscribeBackend`
