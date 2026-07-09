@@ -37,7 +37,7 @@ copy-paste end-to-end setups jump to the [scenario recipes](#scenario-recipes)
 further down.
 
 <!-- BEGIN GENERATED SETTINGS REFERENCE -->
-_Generated from `src/python/whisper_dictate/settings_schema.json` by `scripts/dev/gen_settings_docs.py` -- do not edit this block by hand; regenerate with `py -3.12 scripts/dev/gen_settings_docs.py`._
+_Generated from `src/rust/config/settings_schema.json` by `scripts/dev/gen_settings_docs.py` -- do not edit this block by hand; regenerate with `py -3.12 scripts/dev/gen_settings_docs.py`._
 
 Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
 

@@ -27,7 +27,7 @@ def _make_tree(root: pathlib.Path, version: str) -> None:
         f'[[package]]\nname = "whisper-dictate-app"\nversion = "{version}"\n',
         encoding="utf-8")
     (root / "nix" / "package.nix").write_text(
-        f'{{ version ? "{version}" }}: {{}}\n', encoding="utf-8")
+        f'{{ version = "{version}"; }}\n', encoding="utf-8")
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
@@ -52,7 +52,7 @@ class BumpVersionScriptTests(unittest.TestCase):
             self.assertIn('name = "whisper-dictate-app"\nversion = "1.8.6"', lock)
             # Other crates' versions are untouched.
             self.assertIn('name = "other"\nversion = "9.9.9"', lock)
-            self.assertIn('version ? "1.8.6"',
+            self.assertIn('version = "1.8.6"',
                           (root / "nix/package.nix").read_text(encoding="utf-8"))
 
     def test_bump_accepts_prerelease_rc_in_all_four_files(self):
@@ -74,7 +74,7 @@ class BumpVersionScriptTests(unittest.TestCase):
                 'name = "whisper-dictate-app"\nversion = "1.9.5-rc.1"', lock)
             # Other crates' versions are untouched.
             self.assertIn('name = "other"\nversion = "9.9.9"', lock)
-            self.assertIn('version ? "1.9.5-rc.1"',
+            self.assertIn('version = "1.9.5-rc.1"',
                           (root / "nix/package.nix").read_text(encoding="utf-8"))
 
     def test_bump_from_prerelease_to_final(self):
@@ -95,7 +95,7 @@ class BumpVersionScriptTests(unittest.TestCase):
                 'name = "whisper-dictate-app"\nversion = "1.9.5"', lock)
             # Other crates' versions are untouched.
             self.assertIn('name = "other"\nversion = "9.9.9"', lock)
-            self.assertIn('version ? "1.9.5"',
+            self.assertIn('version = "1.9.5"',
                           (root / "nix/package.nix").read_text(encoding="utf-8"))
 
     def test_rejects_malformed_prerelease(self):
@@ -122,7 +122,7 @@ class BumpVersionScriptTests(unittest.TestCase):
                         'name = "whisper-dictate-app"\nversion = "1.9.4"',
                         (root / "src/rust/Cargo.lock").read_text(encoding="utf-8"))
                     self.assertIn(
-                        'version ? "1.9.4"',
+                        'version = "1.9.4"',
                         (root / "nix/package.nix").read_text(encoding="utf-8"))
 
     def test_rejects_leading_zero_versions(self):
@@ -145,7 +145,7 @@ class BumpVersionScriptTests(unittest.TestCase):
                         'name = "whisper-dictate-app"\nversion = "1.9.4"',
                         (root / "src/rust/Cargo.lock").read_text(encoding="utf-8"))
                     self.assertIn(
-                        'version ? "1.9.4"',
+                        'version = "1.9.4"',
                         (root / "nix/package.nix").read_text(encoding="utf-8"))
 
     def test_accepts_zero_components_without_leading_zeros(self):
