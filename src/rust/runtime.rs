@@ -506,48 +506,13 @@ impl RuntimeSupervisor {
         // missing (typical on stock CI builds), this path is a no-op
         // and the supervisor stays on Python. `worker-rust` refuses
         // to run on incomplete-feature builds anyway.
-        // PR #441 review round 2 (Codex P1 findings 1 + 5): before
-        // committing to the delegate path we also consult the user's
-        // saved config. `worker_rust::unsupported_worker_rust_settings_reason`
-        // returns Some(reason) when the Rust worker cannot honour the
-        // config today (cloud STT, post-processor, format commands,
-        // dictionary prompt). On that branch we stay on Python and log
-        // a stderr diagnostic pointing at the specific missing feature
-        // so users understand why the escape hatch is being used
-        // implicitly.
-        let env_gate_ok = worker_rust::should_delegate_to_worker_rust();
-        let delegate_requested = if env_gate_ok {
-            match config::load_settings() {
-                Ok(settings) => {
-                    match worker_rust::unsupported_worker_rust_settings_reason(&settings) {
-                        Some(reason) => {
-                            let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-                                "[runtime] not delegating to worker-rust: {reason}. \
-                                 The Python orchestrator handles this configuration; \
-                                 clear the flagged setting to opt back in."
-                            )));
-                            false
-                        }
-                        None => true,
-                    }
-                }
-                Err(err) => {
-                    // Config load failure is treated as "stay safe on
-                    // Python" so a corrupt config.json cannot silently
-                    // strand a user on a partially-configured Rust
-                    // worker. Same fallback the swap-failure branch below
-                    // uses.
-                    let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-                        "[runtime] not delegating to worker-rust: config load failed \
-                         ({err}); staying on Python for safety. Fix config.json to \
-                         re-enable the delegate path."
-                    )));
-                    false
-                }
-            }
-        } else {
-            false
-        };
+        // Wave 5 PR 7 (#348): the delegate gate is env-only. The Rust
+        // worker's `unsupported_worker_rust_settings_reason()` is folded
+        // into `should_delegate_to_worker_rust()`, which reads
+        // `VOICEPI_STT_BACKEND` directly rather than the saved config --
+        // Wave 8 deletes the Python bundle so a per-setting fallback
+        // path would just be dead code the moment #348 lands.
+        let delegate_requested = worker_rust::should_delegate_to_worker_rust();
         let mut swap_succeeded = true;
         if delegate_requested {
             if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
@@ -2599,9 +2564,3 @@ mod windows_process_tests;
 mod worker_command_tests;
 #[cfg(test)]
 mod worker_event_tests;
-// PR #441 review round 2: sibling tests for
-// `worker_rust::unsupported_worker_rust_settings_reason`. Kept out of
-// the main `worker_rust_tests` file so both files stay under the
-// AGENTS.md 500-LOC modularity guideline.
-#[cfg(test)]
-mod worker_rust_config_gate_tests;
