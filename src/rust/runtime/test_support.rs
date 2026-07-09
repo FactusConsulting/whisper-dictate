@@ -2,13 +2,6 @@
 // Per-module locks/guards cannot serialise against tests in OTHER modules
 // that mutate the same process env, so a single crate-wide design is the
 // only sound one. See `crate::test_env_lock` for the full story.
+#[allow(unused_imports)]
+// Wave 8 Part 2: some test files were deleted; imports may not have callers on stock feature builds.
 pub(super) use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
-
-pub(super) fn runtime_module_args() -> Vec<String> {
-    vec![
-        "-m".to_owned(),
-        "whisper_dictate.runtime".to_owned(),
-        "--app-root".to_owned(),
-        "/tmp/whisper-dictate".to_owned(),
-    ]
-}

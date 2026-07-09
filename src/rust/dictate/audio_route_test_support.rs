@@ -122,7 +122,7 @@ pub(super) fn start_recording_with_cap_env<W: Write>(
     writer: &mut W,
     cap_seconds: f64,
 ) -> (u64, EnvVarGuard) {
-    let guard = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", &cap_seconds.to_string());
+    let guard = EnvVarGuard::set("VOICEPI_MAX_RECORD_S", cap_seconds.to_string());
     let id = route.start_recording(writer).expect("start_recording");
     (id, guard)
 }

@@ -67,101 +67,62 @@ fn env_with_model_path(extra: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[test]
-fn should_delegate_default_is_on_and_python_legacy_opts_out() {
-    // Wave 5 PR 7 of #348 flipped the semantics: previously the gate
-    // required `VOICEPI_DICTATE_BACKEND=rust-session` to opt IN; now
-    // the Rust worker is the default and the user opts OUT via
-    // `=python-legacy`. Feature-gated: the delegate can only be true
-    // when the four-feature set is compiled in.
+fn should_delegate_default_is_on_and_stale_python_legacy_is_ignored() {
+    // Wave 8 Part 2 (Codex #453 P2) collapsed the `python-legacy`
+    // escape hatch: it no longer participates in the delegate gate
+    // because the Python worker is gone. A stale value in an
+    // upgraded user's env must NOT block delegation -- otherwise the
+    // ONLY remaining worker would refuse to start.
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev_dictate = std::env::var_os("VOICEPI_DICTATE_BACKEND");
     let prev_hotkey = std::env::var_os("VOICEPI_HOTKEY_BACKEND");
     let prev_stt = std::env::var_os("VOICEPI_STT_BACKEND");
     let prev_model = std::env::var_os("VOICEPI_WHISPER_MODEL_PATH");
-    // Clear the STT-backend gate so this test only exercises the
-    // env+feature interaction. Wave 5.5 gap #1 added a third gate;
-    // it's covered by dedicated tests below.
     std::env::remove_var("VOICEPI_STT_BACKEND");
-    // Codex #441 P1 round 3 added a model-availability gate; seed a
-    // placeholder path so this test (which pins the escape-hatch
-    // semantics on a hypothetical full-feature build) does not fire
-    // the model gate on a runner with an empty cache dir.
     std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", "/dev/null/ggml-test.bin");
 
-    // env unset -> DEFAULT delegate (mirrors the feature gate). This
-    // is the load-bearing PR 7 assertion: without any env var, the
-    // gate returns true on a full-feature build so production hits
-    // the Rust worker path.
+    // env unset -> DEFAULT delegate on a full-feature build.
     std::env::remove_var("VOICEPI_DICTATE_BACKEND");
     std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
     assert_eq!(
         should_delegate_to_worker_rust(EMPTY_ENV),
         all_required_features_enabled(),
-        "PR 7 default: unset VOICEPI_DICTATE_BACKEND must delegate on a full-feature build"
+        "unset VOICEPI_DICTATE_BACKEND must delegate on a full-feature build"
     );
 
-    // env set to the historical `rust-session` opt-in -> still
-    // delegate. The value is redundant post-PR-7 but recognised so
-    // users with the setting exported in their profile keep the
-    // exact same behaviour they had on PR 6.
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
-    assert_eq!(
-        should_delegate_to_worker_rust(EMPTY_ENV),
-        all_required_features_enabled(),
-        "the historical `rust-session` value must still delegate post-PR-7"
-    );
+    // Historical `rust-session` and `rust` values are noise -- neither
+    // participates in the gate any more. Must still delegate.
+    for value in ["rust-session", "rust"] {
+        std::env::set_var("VOICEPI_DICTATE_BACKEND", value);
+        assert_eq!(
+            should_delegate_to_worker_rust(EMPTY_ENV),
+            all_required_features_enabled(),
+            "historical value {value:?} must not block delegation"
+        );
+    }
 
-    // env set to `rust` (historical Python-side shell-out gate) ->
-    // still delegate. That value is consumed by the Python wrapper
-    // NOT by the Rust supervisor's delegate gate, so it must not
-    // pull the supervisor off the new default.
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust");
-    assert_eq!(
-        should_delegate_to_worker_rust(EMPTY_ENV),
-        all_required_features_enabled(),
-        "`rust` value is a Python-side knob and must not block delegation"
-    );
+    // Codex #453 P2: stale `python-legacy` must ALSO delegate. The
+    // supervisor emits a one-line "value ignored" hint on start (see
+    // `warn_stale_python_legacy_if_set`) so users know to unset it;
+    // the gate itself no longer sees the value.
+    for value in ["python-legacy", "  Python-Legacy  "] {
+        std::env::set_var("VOICEPI_DICTATE_BACKEND", value);
+        assert_eq!(
+            should_delegate_to_worker_rust(EMPTY_ENV),
+            all_required_features_enabled(),
+            "stale python-legacy escape hatch {value:?} must NOT block delegation post-Wave-8"
+        );
+    }
 
-    // env set to the escape hatch -> NEVER delegate, regardless of
-    // features. This is the PR 7 rollback path: the supervisor
-    // stays on the pre-PR-7 Python orchestrator.
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "python-legacy");
-    assert!(
-        !should_delegate_to_worker_rust(EMPTY_ENV),
-        "python-legacy escape hatch must opt out of delegation"
-    );
-
-    // Escape hatch matching is case-insensitive + trims whitespace
-    // (shell-set values from a crash-cart edit must still work).
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "  Python-Legacy  ");
-    assert!(
-        !should_delegate_to_worker_rust(EMPTY_ENV),
-        "python-legacy escape hatch must match case-insensitively with surrounding whitespace"
-    );
-
-    // Claude review comment #3523185556 on PR #434 (preserved by PR
-    // 7): `VOICEPI_HOTKEY_BACKEND` MUST NOT gate delegation; the
-    // subprocess installs rdev on its own via `install_listener`
-    // regardless of the hotkey-backend env var. If a user opted out
-    // via python-legacy AND unset the hotkey backend, they must
-    // still land on Python (belt-and-braces: hotkey env being unset
-    // is the default state, so this also tests that the *combined*
-    // gate is python-legacy-dominant).
+    // `VOICEPI_HOTKEY_BACKEND` never participated in the delegate
+    // gate; keeping the assertion here so a future refactor that
+    // couples the two would fail a test before it could land.
     std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
-    std::env::set_var("VOICEPI_DICTATE_BACKEND", "python-legacy");
-    assert!(
-        !should_delegate_to_worker_rust(EMPTY_ENV),
-        "escape hatch must dominate over any hotkey-backend state"
-    );
-
-    // And once we clear the escape hatch AND leave hotkey backend
-    // unset, we're back on the new default -- the subprocess owns
-    // its own rdev install so no separate opt-in is needed.
     std::env::remove_var("VOICEPI_DICTATE_BACKEND");
     assert_eq!(
         should_delegate_to_worker_rust(EMPTY_ENV),
         all_required_features_enabled(),
-        "removing the escape hatch restores the PR 7 default even with hotkey backend unset"
+        "hotkey-backend env must not affect delegation"
     );
 
     // restore the previous env state so we don't pollute siblings.
@@ -213,30 +174,55 @@ fn unsupported_worker_rust_settings_reason_accepts_supported_backends() {
     }
 }
 
-/// An unrecognised STT backend value (stale parakeet, typo, ...) must
+/// An unrecognised STT backend value (typo, made-up name, ...) must
 /// surface a Some(reason) so the supervisor logs a clear message and
-/// falls back to the Python worker.
+/// refuses to spawn.
 #[test]
 fn unsupported_worker_rust_settings_reason_rejects_unknown_backend() {
-    let env = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
-    let reason = unsupported_worker_rust_settings_reason(&env).expect("parakeet is unsupported");
+    let env = env_with_model_path(&[("VOICEPI_STT_BACKEND", "typo-backend")]);
+    let reason =
+        unsupported_worker_rust_settings_reason(&env).expect("typo-backend is unsupported");
     assert!(
-        reason.contains("parakeet"),
+        reason.contains("typo-backend"),
         "reason must name the offending value: {reason}"
     );
     assert!(
-        reason.contains("staying on Python"),
-        "reason must explain the fallback: {reason}"
+        reason.contains("whisper") && reason.contains("openai"),
+        "reason must list the supported backends: {reason}"
     );
 }
 
-/// Codex #441 P2 round 3: an `stt_backend = "parakeet"` value that
-/// only appears in the supervisor's `effective_command.env` (materialised
-/// from AppSettings by `worker_env_overrides`) MUST veto delegation
-/// even when the parent process env has no `VOICEPI_STT_BACKEND` set.
-/// This is the load-bearing regression the round-3 signature change
-/// closes: previously the gate consulted `std::env::var` and missed
-/// config-file overrides.
+/// Codex #453 P2: a stale `stt_backend = "parakeet"` in an upgraded
+/// user's `config.json` migrates to `"whisper"` on the next save
+/// round-trip (see `AppSettings::from_value`). On the very FIRST cold
+/// start post-upgrade the raw value still flows through
+/// `worker_env_overrides`, so the delegate gate MUST normalise the
+/// legacy value here too -- otherwise the migration would only fix
+/// itself on the second run and the first launch would block the
+/// only remaining worker.
+#[test]
+fn unsupported_worker_rust_settings_reason_normalises_parakeet_to_whisper() {
+    let env = env_with_model_path(&[("VOICEPI_STT_BACKEND", "parakeet")]);
+    assert!(
+        unsupported_worker_rust_settings_reason(&env).is_none(),
+        "parakeet must be silently normalised to whisper (mirrors the AppSettings migration)"
+    );
+    // Case-insensitivity: the AppSettings migration uses
+    // eq_ignore_ascii_case, so mirror that here.
+    let env = env_with_model_path(&[("VOICEPI_STT_BACKEND", "PARAKEET")]);
+    assert!(
+        unsupported_worker_rust_settings_reason(&env).is_none(),
+        "uppercase Parakeet must also normalise"
+    );
+}
+
+/// Codex #441 P2 round 3: a config-derived `stt_backend` override
+/// that only appears in the supervisor's `effective_command.env`
+/// (materialised from AppSettings by `worker_env_overrides`) MUST
+/// participate in the gate even when the parent process env has no
+/// `VOICEPI_STT_BACKEND` set. This is the load-bearing regression the
+/// round-3 signature change closes: previously the gate consulted
+/// `std::env::var` and missed config-file overrides.
 #[test]
 fn unsupported_worker_rust_settings_reason_reads_effective_command_env() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -246,11 +232,11 @@ fn unsupported_worker_rust_settings_reason_reads_effective_command_env() {
     // and let the child through.
     std::env::remove_var("VOICEPI_STT_BACKEND");
 
-    let effective = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
+    let effective = env_with_model_path(&[("VOICEPI_STT_BACKEND", "typo-backend")]);
     let reason =
         unsupported_worker_rust_settings_reason(&effective).expect("effective env must veto");
     assert!(
-        reason.contains("parakeet"),
+        reason.contains("typo-backend"),
         "reason must name the offending value: {reason}"
     );
 
@@ -272,7 +258,7 @@ fn resolved_env_prefers_effective_command_env_over_process_env() {
     // with an empty cache: seed the process env with a placeholder
     // path (the gate only checks non-emptiness).
     std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", "/dev/null/ggml-test.bin");
-    let effective = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
+    let effective = vec![("VOICEPI_STT_BACKEND".to_owned(), "typo-backend".to_owned())];
     // Effective override wins -> reason surfaces.
     assert!(unsupported_worker_rust_settings_reason(&effective).is_some());
     // Fallback to process env when key is absent from the vec ->
@@ -531,7 +517,9 @@ fn should_delegate_fires_for_cloud_stt_backends_when_features_present() {
     }
 
     // And the unsupported-value branch must still veto delegation.
-    let env = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
+    // (Codex #453 P2 normalised parakeet to whisper, so use a typo
+    // that will never match a real backend name.)
+    let env = vec![("VOICEPI_STT_BACKEND".to_owned(), "typo-backend".to_owned())];
     assert!(
         !should_delegate_to_worker_rust(&env),
         "unsupported stt_backend must veto delegation"

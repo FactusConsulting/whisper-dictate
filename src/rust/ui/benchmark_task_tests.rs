@@ -11,49 +11,33 @@ use super::test_support::test_app;
 use super::*;
 use std::sync::mpsc;
 
+/// Wave 8 Part 2: `run_benchmark` is a stub that logs a "removed"
+/// hint instead of shelling out to the Python worker. The pre-v1.20
+/// behavioural tests
+/// (`run_benchmark_is_skipped_while_another_background_task_runs`,
+/// `run_benchmark_logs_immediate_start_line_when_it_starts`,
+/// `gated_run_keeps_previous_results_visible`) are gone alongside
+/// the gate + start-line + gated-preservation semantics they pinned;
+/// this smoke test keeps the "hint is surfaced" contract so a
+/// silent regression to a no-op cannot land.
 #[test]
-fn run_benchmark_is_skipped_while_another_background_task_runs() {
+fn run_benchmark_logs_removed_hint() {
     let mut app = test_app(AppSettings::default());
-
-    // Simulate an in-flight background task (e.g. a doctor/install run).
     let (_tx, rx) = mpsc::channel::<BackgroundTaskResult>();
     app.background_task = Some(rx);
     app.background_task_label = Some("install/repair");
 
     app.run_benchmark();
 
-    // The benchmark must NOT have replaced the running task...
+    assert!(
+        app.runtime_log.contains("removed in v1.20"),
+        "run_benchmark must surface the removed hint, got: {}",
+        app.runtime_log
+    );
+    // The stub does NOT touch the background-task slot (there is no
+    // real run to schedule), so a running install/repair keeps going.
     assert_eq!(app.background_task_label, Some("install/repair"));
     assert!(app.background_task.is_some());
-    // ...and the user is told it was skipped.
-    assert!(
-        app.runtime_log.contains("skipped"),
-        "expected a skip notice in the log, got: {}",
-        app.runtime_log
-    );
-    // ...and NO "benchmark started" line was emitted (the run never started).
-    assert!(
-        !app.runtime_log.contains("benchmark started"),
-        "no start line should be logged when the run is gated, got: {}",
-        app.runtime_log
-    );
-}
-
-#[test]
-fn run_benchmark_logs_immediate_start_line_when_it_starts() {
-    // The model load + corpus pass is slow, so the button prints an immediate
-    // "benchmark started" line (before the worker even spawns) so it never feels
-    // dead. No other task is running here, so the run starts and the line lands.
-    let mut app = test_app(AppSettings::default());
-
-    app.run_benchmark();
-
-    assert!(
-        app.runtime_log
-            .contains("[ui] benchmark started — results appear here when finished"),
-        "expected an immediate start line, got: {}",
-        app.runtime_log
-    );
 }
 
 #[test]
@@ -128,24 +112,6 @@ fn run_benchmark_clears_previous_results_when_a_new_run_starts() {
     assert!(
         app.benchmark_results.is_none(),
         "a new run must clear the previous parsed results"
-    );
-}
-
-#[test]
-fn gated_run_keeps_previous_results_visible() {
-    // When the run is GATED (another task in flight) the prior results must stay
-    // on screen — only an actually-starting run clears them.
-    let mut app = test_app(AppSettings::default());
-    app.apply_benchmark_results(&benchmark_result(true));
-    let (_tx, rx) = mpsc::channel::<BackgroundTaskResult>();
-    app.background_task = Some(rx);
-    app.background_task_label = Some("install/repair");
-
-    app.run_benchmark();
-
-    assert!(
-        app.benchmark_results.is_some(),
-        "a gated run must leave the previous results visible"
     );
 }
 

@@ -35,9 +35,15 @@ use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 // stays byte-identical to the pre-split shape (PR #441 review round 2).
 // Callers keep writing `rust_session_sink::dictate_backend_..._requested()`
 // exactly as before; the implementation lives in the sibling module.
-pub(crate) use super::rust_session_dictate_env::{
-    dictate_backend_python_legacy_requested, dictate_backend_rust_session_requested,
-};
+//
+// Wave 8 Part 2 dropped `dictate_backend_rust_session_requested` -- the
+// supervisor now unconditionally routes through the session sink on a
+// full-feature build, so the "opt in via VOICEPI_DICTATE_BACKEND=rust-session"
+// branch has no consumer.
+pub(crate) use super::rust_session_dictate_env::dictate_backend_python_legacy_requested_from;
+
+#[cfg(test)]
+pub(crate) use super::rust_session_dictate_env::dictate_backend_python_legacy_requested;
 
 // Constants are only referenced from `#[cfg(test)]` sibling test
 // modules; a non-test lib build has no consumer for the re-export and
@@ -246,6 +252,55 @@ where
 /// runtime — the two underlying closures have different capture types
 /// and so cannot share an `impl FnMut` return.
 pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send + 'static>;
+
+/// Codex #453 P2 (runtime.rs:662): strict variant of
+/// [`build_production_sink`] that FAILS instead of falling through
+/// to the PR-4 stub session on a real-backend init error. Used by
+/// `worker-rust`'s child mainloop where Wave 8 Part 2 made
+/// delegation mandatory -- silently downgrading to the stub would
+/// leave the worker looking alive (state=ready, hotkey installed)
+/// while every utterance produces empty text.
+///
+/// On a stock build (either feature missing) this returns Err right
+/// away: the stub fallback was the only way a stock build could
+/// exercise the sink, and the worker refuses to run on stock builds
+/// anyway (see [`crate::runtime::worker_rust::handle_worker_rust`]).
+///
+/// Delegates to [`build_production_sink`] on the happy path so the
+/// two entry points share exactly the same wire-up.
+pub(crate) fn try_build_real_production_sink(
+    tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+) -> Result<(CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>), anyhow::Error> {
+    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    {
+        // Route through the same real-backend constructor
+        // `build_production_sink` uses; propagate its Err instead of
+        // masking it with the stub fallback.
+        super::rust_session_real_backends::make_real_session(tx.clone(), repaint_notifier.clone())
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "real-backend session init failed ({err}); worker refuses to start with stub \
+                     backends -- fix VOICEPI_WHISPER_MODEL_PATH, download a model via \
+                     `whisper-dictate models download tiny.en`, or check audio/VAD/cpal init"
+                )
+            })?;
+        // Fall through to the shared builder so it wires the sink
+        // around a fresh `make_real_session` deps bundle. (Two
+        // construct calls: one to probe, one to install. Idempotent.)
+        Ok(build_production_sink(tx, repaint_notifier))
+    }
+    #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    {
+        let _ = (tx, repaint_notifier);
+        Err(anyhow::anyhow!(
+            "worker-rust cannot build a real session sink without the \
+             `whisper-rs-local + rust-injection` cargo features; this branch is \
+             unreachable in production because `handle_worker_rust` refuses to \
+             run on stock builds"
+        ))
+    }
+}
 
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
