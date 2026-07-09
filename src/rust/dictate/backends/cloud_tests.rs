@@ -173,7 +173,10 @@ fn default_stt_model_maps_openai_base_url_to_openai_default() {
         default_stt_model("https://api.openai.com/v1"),
         DEFAULT_OPENAI_STT_MODEL
     );
-    assert_eq!(default_stt_model(DEFAULT_OPENAI_STT_MODEL), DEFAULT_OPENAI_STT_MODEL); // any non-groq
+    assert_eq!(
+        default_stt_model(DEFAULT_OPENAI_STT_MODEL),
+        DEFAULT_OPENAI_STT_MODEL
+    ); // any non-groq
 }
 
 #[test]

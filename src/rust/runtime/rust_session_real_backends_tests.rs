@@ -14,11 +14,10 @@ use std::sync::mpsc;
 use super::{
     build_initial_prompt, build_real_transcribe_backend, format_commands_from_env,
     postprocess_settings_from_env, resolve_stt_backend_from_env, session_config_from_env,
-    whisper_backend_config_from_env, RealBackendKind, RealTranscribeBackend,
-    FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV, LOCAL_ONLY_ENV, POST_BASE_URL_ENV,
-    POST_MAX_INPUT_CHARS_ENV, POST_MAX_OUTPUT_CHARS_ENV, POST_MODE_ENV, POST_MODEL_ENV,
-    POST_PROCESSOR_ENV, POST_REDACT_ENV, POST_REDACT_TERMS_ENV, POST_TIMEOUT_MS_ENV,
-    STT_BACKEND_ENV,
+    whisper_backend_config_from_env, RealBackendKind, RealTranscribeBackend, FORMAT_COMMANDS_ENV,
+    INITIAL_PROMPT_ENV, LANG_ENV, LOCAL_ONLY_ENV, POST_BASE_URL_ENV, POST_MAX_INPUT_CHARS_ENV,
+    POST_MAX_OUTPUT_CHARS_ENV, POST_MODEL_ENV, POST_MODE_ENV, POST_PROCESSOR_ENV, POST_REDACT_ENV,
+    POST_REDACT_TERMS_ENV, POST_TIMEOUT_MS_ENV, STT_BACKEND_ENV,
 };
 use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::dictate::backends::cloud::{STT_API_KEY_ENV, STT_BASE_URL_ENV, STT_MODEL_ENV};

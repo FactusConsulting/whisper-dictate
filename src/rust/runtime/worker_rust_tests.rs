@@ -218,10 +218,7 @@ fn unsupported_worker_rust_settings_reason_accepts_supported_backends() {
 /// falls back to the Python worker.
 #[test]
 fn unsupported_worker_rust_settings_reason_rejects_unknown_backend() {
-    let env = vec![(
-        "VOICEPI_STT_BACKEND".to_owned(),
-        "parakeet".to_owned(),
-    )];
+    let env = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
     let reason = unsupported_worker_rust_settings_reason(&env).expect("parakeet is unsupported");
     assert!(
         reason.contains("parakeet"),
@@ -249,10 +246,7 @@ fn unsupported_worker_rust_settings_reason_reads_effective_command_env() {
     // and let the child through.
     std::env::remove_var("VOICEPI_STT_BACKEND");
 
-    let effective = vec![(
-        "VOICEPI_STT_BACKEND".to_owned(),
-        "parakeet".to_owned(),
-    )];
+    let effective = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
     let reason =
         unsupported_worker_rust_settings_reason(&effective).expect("effective env must veto");
     assert!(
@@ -471,7 +465,10 @@ fn unsupported_worker_rust_settings_reason_blocks_cloud_under_local_only() {
             "reason must name VOICEPI_LOCAL_ONLY: {reason}"
         );
         assert!(
-            reason.contains(cloud) || reason.to_ascii_lowercase().contains(&cloud.to_ascii_lowercase()),
+            reason.contains(cloud)
+                || reason
+                    .to_ascii_lowercase()
+                    .contains(&cloud.to_ascii_lowercase()),
             "reason must name the offending backend {cloud:?}: {reason}"
         );
     }
@@ -534,10 +531,7 @@ fn should_delegate_fires_for_cloud_stt_backends_when_features_present() {
     }
 
     // And the unsupported-value branch must still veto delegation.
-    let env = vec![(
-        "VOICEPI_STT_BACKEND".to_owned(),
-        "parakeet".to_owned(),
-    )];
+    let env = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
     assert!(
         !should_delegate_to_worker_rust(&env),
         "unsupported stt_backend must veto delegation"

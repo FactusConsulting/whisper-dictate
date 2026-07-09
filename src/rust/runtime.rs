@@ -53,8 +53,50 @@ impl RuntimeState {
 }
 
 pub fn run_terminal(args: Vec<String>) -> Result<()> {
-    let command = default_worker_command_with_args(args);
+    let mut command = default_worker_command_with_args(args);
+    // Codex #441 P2 review round 3 (finding 6, "Route foreground dictation
+    // through worker-rust too"): the `whisper-dictate run` entry point
+    // used to spawn Python's `-m whisper_dictate.runtime` directly and
+    // never consulted the delegate gate that `RuntimeSupervisor::start`
+    // applies for the UI-launched supervisor path. Wave 8 removed the
+    // Python bundle, so a foreground `run` on a full-feature install now
+    // has no viable non-Rust backend -- pre-fix behaviour is a hard
+    // spawn failure (Python missing) or, worse, an import failure deep
+    // inside a shell-out on a machine that still has a system Python.
+    //
+    // Route `run_terminal` through the same delegate swap the supervisor
+    // uses so a full-feature install runs the in-process Rust worker
+    // directly from the foreground command. When the gate declines
+    // (missing feature / escape hatch / unsupported settings) the
+    // command falls through unchanged, matching pre-fix behaviour on
+    // those paths.
+    apply_worker_rust_delegation_to_foreground(&mut command);
     run_foreground(&command)
+}
+
+/// Codex #441 P2 review round 3 (finding 6): swap the foreground
+/// worker command to `whisper-dictate worker-rust` iff the delegate
+/// gate approves. Extracted as a pure helper so the branch decision is
+/// unit-testable without spawning a subprocess -- the two callers are
+/// [`run_terminal`] and (in test builds) the module-level unit tests
+/// that assert command-in / command-out semantics.
+///
+/// On a failed `swap_command_to_worker_rust` we log a stderr line and
+/// leave `command` on the original (Python) values so `run_foreground`
+/// surfaces the pre-Wave-8 error path -- there is no fallback command
+/// to run when the current-exe lookup fails, and pretending otherwise
+/// would hide a real deployment problem.
+fn apply_worker_rust_delegation_to_foreground(command: &mut WorkerCommand) {
+    if !worker_rust::should_delegate_to_worker_rust(&command.env) {
+        return;
+    }
+    if let Err(err) = worker_rust::swap_command_to_worker_rust(command) {
+        eprintln!(
+            "[runtime] worker-rust delegation failed for foreground run ({err}); \
+             attempting the pre-Wave-8 Python command (which will error \
+             loudly if the bundle is missing)"
+        );
+    }
 }
 
 pub fn doctor() -> Result<()> {
@@ -2554,6 +2596,8 @@ mod process_capture_tests;
 // - `rust_session_sink_coverage_tests`: Sonar gate-uplift targets.
 // - `rust_session_sink_e2e_tests`: synthetic Press/Release/Cancel
 //   integration tests through the coordinator + session.
+#[cfg(test)]
+mod run_terminal_tests;
 #[cfg(test)]
 mod rust_session_sink_coverage_tests;
 #[cfg(test)]
