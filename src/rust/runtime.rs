@@ -70,7 +70,16 @@ pub fn run_terminal(args: Vec<String>) -> Result<()> {
              Ignored args: {args:?}"
         );
     }
-    let env_overrides = config::worker_env_overrides();
+    let mut env_overrides = config::worker_env_overrides();
+    // Codex #453 P2 (worker_rust.rs:276): the delegate gate normalises
+    // parakeet -> whisper on a LOCAL copy of the value, but the
+    // effective env vec still carries the raw legacy value. Rewrite
+    // in place so both the gate AND the worker's own backend resolver
+    // (`rust_session_real_backends::resolve_stt_backend_from_env`) see
+    // the migrated value -- otherwise the worker starts, resolves the
+    // backend to None, and `build_production_sink` falls through to
+    // the stub session (empty transcriptions).
+    worker_rust::migrate_legacy_stt_backend_env(&mut env_overrides);
     // Codex #453 P2: nudge users with a stale python-legacy escape
     // hatch to unset it now that Python is gone.
     worker_rust::warn_stale_python_legacy_if_set(&env_overrides);
@@ -102,6 +111,22 @@ pub fn run_terminal(args: Vec<String>) -> Result<()> {
         // returns keys that are `std::env`-reserved (empty / with `=`
         // in the key or a NUL byte).
         std::env::set_var(key, value);
+    }
+    // Codex #453 P2 (runtime.rs:106): the pre-Wave-8 foreground path
+    // spawned the worker as a child with `current_dir(app_root)`, so
+    // relative overrides like `VOICEPI_WHISPER_MODEL_PATH=models/xyz.bin`
+    // resolved against the install root regardless of the caller's
+    // shell cwd. The in-process handoff drops that guarantee unless we
+    // chdir here explicitly. A failing chdir is a warning, not a fatal
+    // error -- absolute overrides still work either way.
+    let root = app_root();
+    if let Err(err) = std::env::set_current_dir(&root) {
+        eprintln!(
+            "warning: could not set working directory to app root ({}): {err}. \
+             Relative VOICEPI_* paths in your config may resolve against the \
+             caller's cwd instead.",
+            root.display()
+        );
     }
     worker_rust::handle_worker_rust(false)
 }
@@ -572,6 +597,12 @@ impl RuntimeSupervisor {
 
         self.state = RuntimeState::Starting;
         let mut effective_command = command;
+        // Codex #453 P2 (worker_rust.rs:276): rewrite any legacy
+        // `VOICEPI_STT_BACKEND=parakeet` in the effective env to
+        // `whisper` BEFORE spawning. The delegate gate accepts the
+        // legacy value on its side, but the child worker's backend
+        // resolver would otherwise land on the stub session.
+        worker_rust::migrate_legacy_stt_backend_env(&mut effective_command.env);
 
         // Wave 5 PR 6 (+ PR 7 default-flip) of #348: delegate the
         // dictation lifecycle to the `whisper-dictate worker-rust`

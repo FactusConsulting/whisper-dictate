@@ -97,7 +97,14 @@ pub fn handle_corpus_record(id: &str) -> Result<()> {
          follow-up to #348. Meanwhile drop reference WAVs manually into the benchmark/audio \
          directory under your appdata (paths visible via `whisper-dictate config path`)."
     );
-    Ok(())
+    // Codex #453 P2 (corpus_record.rs:100): exit non-zero so a
+    // scripted caller cannot mark reference audio as captured when
+    // no WAV was actually written to `benchmark/audio/<id>.wav`.
+    Err(anyhow!(
+        "corpus-record: removed in v1.20; no audio written for id={id}. \
+         Drop the WAV manually or wait for the native recorder \
+         (Wave 8 Part 3 follow-up to #348)."
+    ))
 }
 
 #[cfg(test)]

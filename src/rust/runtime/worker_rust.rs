@@ -262,6 +262,31 @@ pub(crate) fn local_whisper_model_available(env: &[(String, String)]) -> bool {
 /// (case-insensitive, trims whitespace, accepts the `faster-whisper`
 /// alias) so the two decisions cannot drift -- a value the delegate
 /// gate accepts is one the factory can build.
+/// Codex #453 P2 (worker_rust.rs:276): rewrite any
+/// `VOICEPI_STT_BACKEND=parakeet` (any casing) in the effective
+/// command env to `"whisper"` so BOTH the delegate gate
+/// ([`unsupported_worker_rust_settings_reason`]) AND the worker
+/// child's backend resolver
+/// (`rust_session_real_backends::resolve_stt_backend_from_env`) see
+/// the migrated value. Without this the gate accepts the legacy
+/// value (via its local normalisation) but the child spawns, resolves
+/// the backend to `None`, and `build_production_sink` falls through
+/// to the PR-4 stub session -- the worker looks alive but produces
+/// empty transcriptions.
+///
+/// Pure helper: mutates the vec in place, idempotent, no-op when the
+/// key is absent or already normal. Mirrors what
+/// `AppSettings::from_value` does on the first save round-trip; this
+/// helper handles the very first cold start post-upgrade before the
+/// migration has landed on disk.
+pub fn migrate_legacy_stt_backend_env(env: &mut [(String, String)]) {
+    for (key, value) in env.iter_mut() {
+        if key == STT_BACKEND_ENV && value.trim().eq_ignore_ascii_case("parakeet") {
+            *value = "whisper".to_owned();
+        }
+    }
+}
+
 pub fn unsupported_worker_rust_settings_reason(env: &[(String, String)]) -> Option<String> {
     let raw = resolved_env(env, STT_BACKEND_ENV).unwrap_or_default();
     let mut normalised = raw.trim().to_ascii_lowercase();
@@ -503,7 +528,22 @@ impl WorkerRunner {
         // inject -> no-op) and there's no audio pump; production
         // builds get the real backends + cpal pump.
         let (tx, rx) = mpsc::channel::<RuntimeEvent>();
-        let (action_sink, coord_slot) = rust_session_sink::build_production_sink(tx.clone(), None);
+        // Codex #453 P2 (runtime.rs:662): use the strict variant so a
+        // real-backend init failure (bogus VOICEPI_WHISPER_MODEL_PATH,
+        // audio pump / VAD / cpal init error, ...) makes the child
+        // exit non-zero instead of silently downgrading to the PR-4
+        // stub session. The supervisor's Err path surfaces a clean
+        // error message; the alternative (worker looks alive, every
+        // utterance produces empty text) is a shipping-blocker post-
+        // Wave 8 because there is no Python fallback to unstick it.
+        let (action_sink, coord_slot) = if self.stdin_only {
+            // Integration test path -- runs on stock builds too and
+            // WANTS the stub sink so the coordinator wire-up is
+            // exercised end-to-end without a real GGML model.
+            rust_session_sink::build_production_sink(tx.clone(), None)
+        } else {
+            rust_session_sink::try_build_real_production_sink(tx.clone(), None)?
+        };
 
         // Spawn the coordinator with the session sink as its action sink.
         let (coord_handle, coord_thread) =

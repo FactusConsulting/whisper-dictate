@@ -25,7 +25,16 @@ else
     echo "cargo is required. Install Rust from https://rustup.rs/ and re-run this script." >&2
     exit 1
   }
-  cargo build --release -p whisper-dictate-app --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
+  # Codex #453 P2 (runtime.rs:634): the v1.20 supervisor requires
+  # the full worker-rust feature set (whisper-rs-local + rust-injection
+  # + audio-in-rust + rust-hotkeys) because Wave 8 removed the Python
+  # fallback. A default-features build would refuse to start dictation
+  # with the "missing rust-session feature set" error. Ship the full
+  # set from source too.
+  cargo build --release -p whisper-dictate-app \
+    --manifest-path "${CARGO_MANIFEST}" \
+    --target-dir "${HERE}/target" \
+    --features "whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys"
   SOURCE_BIN="${HERE}/target/release/whisper-dictate"
 fi
 

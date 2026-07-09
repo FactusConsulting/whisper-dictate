@@ -139,7 +139,16 @@ pub fn handle_bench() -> Result<()> {
          embedded by any future runner.",
         stringify!(normalize_words, levenshtein, wer, cer, term_report)
     );
-    Ok(())
+    // Codex #453 P2 (benchmark/mod.rs:142): exit non-zero so a CI /
+    // experiment script that only checks the return code cannot mark a
+    // never-ran benchmark as a successful measurement. The removal
+    // notice above still surfaces on stdout so a human user sees WHY
+    // it failed.
+    Err(anyhow!(
+        "benchmark: removed in v1.20; no measurements produced. \
+         Re-run under a build that ships the native benchmark harness \
+         (Wave 8 Part 3 follow-up to #348)."
+    ))
 }
 
 #[cfg(test)]
