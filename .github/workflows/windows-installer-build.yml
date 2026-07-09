@@ -94,7 +94,6 @@ jobs:
           changed=$(git diff --name-only "$prev" HEAD -- \
             src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
             src/ \
-            requirements/ \
             scripts/ \
             packaging/windows/ \
             .github/workflows/windows-installer-build.yml \
@@ -153,14 +152,10 @@ jobs:
           $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
           Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $bundle | Out-Null
-          # Ship only the Python worker package — not src\rust (compiled into the
-          # .exe) or the test trees. Mirrors the Inno installer's [Files] list.
-          New-Item -ItemType Directory -Force (Join-Path $bundle "src\python") | Out-Null
-          Copy-Item src\python\whisper_dictate (Join-Path $bundle "src\python") -Recurse
-          Get-ChildItem -LiteralPath $bundle -Directory -Recurse -Force -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          # Wave 8 (#348): the Python worker package has been deleted; the
+          # compiled Rust binary is the only runtime shipped in the ZIP bundle.
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
-          Copy-Item requirements $bundle -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
           Copy-Item target\release\whisper-dictate.exe $bundle
