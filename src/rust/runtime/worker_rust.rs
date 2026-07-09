@@ -152,6 +152,13 @@ pub fn should_delegate_to_worker_rust(env: &[(String, String)]) -> bool {
 /// itself feature-gated on `whisper-rs-local + rust-injection`.
 const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 
+/// Env var carrying the privacy lock. When truthy, the runtime MUST
+/// refuse to route audio to a non-loopback backend. Mirrors what the
+/// Python worker's `vp_transcribe._assert_local_backend` used to
+/// enforce before Wave 8 deleted that fallback path. Codex #441 P1
+/// review round 3 (privacy leak).
+const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
+
 /// Resolve `key` against the same layered view the child worker will
 /// see: the supervisor's `effective_command.env` overrides win first
 /// (they materialise AppSettings on top of the parent env before
@@ -192,13 +199,35 @@ pub(crate) fn resolved_env(env: &[(String, String)], key: &str) -> Option<String
 /// gate accepts is one the factory can build.
 pub fn unsupported_worker_rust_settings_reason(env: &[(String, String)]) -> Option<String> {
     let raw = resolved_env(env, STT_BACKEND_ENV).unwrap_or_default();
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "" | "whisper" | "faster-whisper" | "openai" | "groq" => None,
-        other => Some(format!(
-            "unsupported {STT_BACKEND_ENV}={other:?}; the rust-session worker \
-             knows whisper / openai / groq -- staying on Python"
-        )),
+    let normalised = raw.trim().to_ascii_lowercase();
+    match normalised.as_str() {
+        "" | "whisper" | "faster-whisper" | "openai" | "groq" => {}
+        other => {
+            return Some(format!(
+                "unsupported {STT_BACKEND_ENV}={other:?}; the rust-session worker \
+                 knows whisper / openai / groq -- staying on Python"
+            ));
+        }
     }
+
+    // Codex #441 P1 review round 3 (privacy leak): `CloudTranscribeBackend`
+    // POSTs the captured WAV to the configured base URL without
+    // consulting VOICEPI_LOCAL_ONLY. Python's `_assert_local_backend`
+    // used to refuse cloud STT under the privacy lock; Wave 8 removed
+    // that fallback, so if the child spawns with the wrong config the
+    // audio leaks to the internet before anything else notices. Refuse
+    // to delegate here -- the supervisor logs the reason and the worker
+    // exits, matching what `assert_local_backend` did in Python.
+    if crate::dictate::env_gates::is_truthy(resolved_env(env, LOCAL_ONLY_ENV).as_deref())
+        && matches!(normalised.as_str(), "openai" | "groq")
+    {
+        return Some(format!(
+            "{LOCAL_ONLY_ENV}=1 forbids cloud STT ({STT_BACKEND_ENV}={raw:?}); \
+             fix your config or unset {LOCAL_ONLY_ENV}"
+        ));
+    }
+
+    None
 }
 
 /// Swap an existing Python-orchestrator [`WorkerCommand`] in place so

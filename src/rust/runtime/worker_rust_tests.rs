@@ -256,6 +256,78 @@ fn resolved_env_prefers_effective_command_env_over_process_env() {
     }
 }
 
+// ── Codex #441 P1 round 3: VOICEPI_LOCAL_ONLY blocks cloud STT ──────────────
+
+/// `VOICEPI_LOCAL_ONLY=1` combined with `stt_backend=openai` (or `groq`)
+/// MUST veto delegation so the child worker's `CloudTranscribeBackend`
+/// never gets a chance to POST audio to the cloud provider. Mirrors
+/// Python's `_assert_local_backend` refusal (gone since Wave 8 deleted
+/// the fallback path). Fail-closed: any truthy value for the env var
+/// counts (`is_truthy` also matches "true" / "yes" / "on" case-
+/// insensitively).
+#[test]
+fn unsupported_worker_rust_settings_reason_blocks_cloud_under_local_only() {
+    for (local_only, cloud) in [
+        ("1", "openai"),
+        ("true", "openai"),
+        ("yes", "GROQ"),
+        ("on", "groq"),
+    ] {
+        let env = vec![
+            (LOCAL_ONLY_ENV.to_owned(), local_only.to_owned()),
+            (STT_BACKEND_ENV.to_owned(), cloud.to_owned()),
+        ];
+        let reason = unsupported_worker_rust_settings_reason(&env).unwrap_or_else(|| {
+            panic!(
+                "LOCAL_ONLY={local_only:?} + STT_BACKEND={cloud:?} must veto delegation, \
+                 got None"
+            )
+        });
+        assert!(
+            reason.contains("LOCAL_ONLY"),
+            "reason must name VOICEPI_LOCAL_ONLY: {reason}"
+        );
+        assert!(
+            reason.contains(cloud) || reason.to_ascii_lowercase().contains(&cloud.to_ascii_lowercase()),
+            "reason must name the offending backend {cloud:?}: {reason}"
+        );
+    }
+}
+
+/// Under `VOICEPI_LOCAL_ONLY`, the local Whisper backends are still
+/// allowed -- privacy lock only blocks the cloud path. This pins that
+/// the gate is not accidentally over-broad.
+#[test]
+fn unsupported_worker_rust_settings_reason_allows_local_whisper_under_local_only() {
+    for backend in ["", "whisper", "faster-whisper", "WHISPER"] {
+        let mut env = vec![(LOCAL_ONLY_ENV.to_owned(), "1".to_owned())];
+        if !backend.is_empty() {
+            env.push((STT_BACKEND_ENV.to_owned(), backend.to_owned()));
+        }
+        assert!(
+            unsupported_worker_rust_settings_reason(&env).is_none(),
+            "LOCAL_ONLY + local whisper backend {backend:?} must be allowed"
+        );
+    }
+}
+
+/// Falsy / unset `VOICEPI_LOCAL_ONLY` does NOT block cloud STT. This
+/// pins the negative case so a future refactor that swaps the truthy
+/// check for a mere presence check would fail here.
+#[test]
+fn unsupported_worker_rust_settings_reason_allows_cloud_when_local_only_falsy() {
+    for local_only in ["0", "false", "no", "off", ""] {
+        let mut env = vec![(STT_BACKEND_ENV.to_owned(), "openai".to_owned())];
+        if !local_only.is_empty() {
+            env.push((LOCAL_ONLY_ENV.to_owned(), local_only.to_owned()));
+        }
+        assert!(
+            unsupported_worker_rust_settings_reason(&env).is_none(),
+            "LOCAL_ONLY={local_only:?} must not block cloud STT"
+        );
+    }
+}
+
 /// End-to-end delegate gate: with the dictate-backend env, feature
 /// set, AND stt_backend=openai/groq all lined up, delegation fires so
 /// the supervisor swaps the command to worker-rust instead of Python.
