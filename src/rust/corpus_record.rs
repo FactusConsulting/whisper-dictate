@@ -25,8 +25,6 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::runtime;
-
 /// Speaking-pace heuristic: ~12 reference characters per spoken second (a
 /// relaxed, read-aloud cadence). Mirrors `_CHARS_PER_SECOND` in
 /// `vp_corpus_record`.
@@ -73,11 +71,16 @@ pub fn compute_record_seconds(text: &str) -> f64 {
 
 /// CLI entry point for `whisper-dictate corpus-record <id>`.
 ///
-/// Validates `id` against [`is_safe_corpus_id`] first (so a bogus id never
-/// reaches the worker, even though the worker re-checks), then shells out to
-/// the existing [`runtime::record_corpus_item_command`] — the same worker
-/// command the UI's "Record" button uses, so the resulting JSON event stream
-/// and the WAV destination are bit-identical regardless of the launcher.
+/// Still validates `id` against [`is_safe_corpus_id`] so a stray path
+/// component in a scripted invocation fails fast with a helpful error.
+///
+/// Wave 8 Part 2: pre-v1.20 the actual audio capture shelled out to
+/// the Python worker via `--record-corpus-item=<id>`; the Python
+/// bundle was deleted in v1.20 and a native-Rust corpus recorder is a
+/// follow-up. The CLI prints a "moved" message rather than spawning a
+/// stub. `is_safe_corpus_id` + `compute_record_seconds` are still
+/// exported (with full unit-test coverage) so a future recorder can
+/// reuse the exact same guards.
 pub fn handle_corpus_record(id: &str) -> Result<()> {
     let id = id.trim();
     if !is_safe_corpus_id(id) {
@@ -85,7 +88,16 @@ pub fn handle_corpus_record(id: &str) -> Result<()> {
             "unsafe corpus id '{id}': allowed chars are [A-Za-z0-9._-]"
         ));
     }
-    runtime::run_foreground(&runtime::record_corpus_item_command(id))
+    println!(
+        "whisper-dictate corpus-record: the Python-driven single-item recorder was removed \
+         in v1.20 (would have recorded id={id})."
+    );
+    println!(
+        "A native-Rust corpus recorder using the in-process cpal audio pump is tracked as a \
+         follow-up to #348. Meanwhile drop reference WAVs manually into the benchmark/audio \
+         directory under your appdata (paths visible via `whisper-dictate config path`)."
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -157,7 +169,10 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_id_short_circuits_before_shell_out() {
+    fn unsafe_id_still_short_circuits_the_cli() {
+        // Even after Wave 8 Part 2 removed the actual recorder, the
+        // safety guard must still reject a malformed id BEFORE the
+        // "moved" message would print.
         let err = handle_corpus_record("../evil").unwrap_err();
         assert!(err.to_string().contains("unsafe corpus id"));
     }

@@ -679,8 +679,6 @@ mod benchmark_task_tests;
 #[cfg(test)]
 mod cloud_settings_tests;
 #[cfg(test)]
-mod corpus_record_task_tests;
-#[cfg(test)]
 mod keyboard_layout_tests;
 #[cfg(test)]
 mod layout_tests;

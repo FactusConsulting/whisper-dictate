@@ -35,8 +35,6 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::runtime;
-
 pub mod reporting;
 pub mod scoring;
 
@@ -117,15 +115,31 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
     Ok(out)
 }
 
-/// CLI entry point for `whisper-dictate bench`. Shells out to the Python
-/// worker via the same [`runtime::benchmark_command`] the UI button drives, so
-/// the corpus resolution + JSONL output + final `[benchmark] ...` summary line
-/// is bit-identical no matter who started the run. The foreground worker is
-/// launched with `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` (see
-/// `runtime::run_foreground`) so a redirected stdout never mojibakes the
-/// Danish corpus text or `ensure_ascii=False` JSONL on Windows.
+/// CLI entry point for `whisper-dictate bench`.
+///
+/// Wave 8 Part 2: pre-v1.20 this shelled out to the Python worker via
+/// `--run-benchmark`, letting `vp_benchmark` orchestrate the corpus
+/// pass, model loads, and JSONL emit. The Python bundle was deleted in
+/// v1.20, so the CLI now prints a "moved" message + points at the
+/// pure-logic helpers this module still exports. A native-Rust
+/// benchmark runner (using the in-process `LocalWhisper` +
+/// `dictate::DictateSession`) is tracked as a follow-up to #348.
 pub fn handle_bench() -> Result<()> {
-    runtime::run_foreground(&runtime::benchmark_command())
+    println!(
+        "whisper-dictate bench: the Python-driven benchmark corpus runner was removed in v1.20."
+    );
+    println!(
+        "A native-Rust benchmark harness (using the in-process LocalWhisper backend) is tracked \
+         as a follow-up to #348. Meanwhile:"
+    );
+    println!("  * inspect the model cache:   `whisper-dictate models list`");
+    println!("  * inspect the effective STT config:  `whisper-dictate config show`");
+    println!(
+        "The pure-logic scoring helpers ({}) that this module exports are stable and can be \
+         embedded by any future runner.",
+        stringify!(normalize_words, levenshtein, wer, cer, term_report)
+    );
+    Ok(())
 }
 
 #[cfg(test)]

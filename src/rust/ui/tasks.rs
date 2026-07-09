@@ -4,12 +4,6 @@
 
 use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
-#[cfg(not(feature = "audio-in-rust"))]
-use crate::runtime::audio_devices_command;
-use crate::runtime::{
-    doctor_command, install_command, run_capture, test_audio_device_command, windows_command,
-    WorkerCommand,
-};
 #[cfg(feature = "audio-in-rust")]
 use serde_json;
 use std::sync::mpsc::{self, TryRecvError};
@@ -39,37 +33,34 @@ fn serialize_devices_for_ui(devices: &[crate::devices::DeviceInfo]) -> String {
 }
 
 impl WhisperDictateApp {
+    /// Wave 8 Part 2: the pre-v1.20 doctor shelled out to the Python
+    /// worker via `python -m whisper_dictate.runtime --doctor`; the
+    /// Python bundle is gone in v1.20 and a native-Rust doctor is a
+    /// follow-up. Meanwhile this button surfaces a friendly log entry
+    /// so the UI stays honest.
     pub(in crate::ui) fn run_doctor(&mut self) {
-        let command = doctor_command();
-        self.append_runtime_log(format!("[ui] doctor: {}", command.display()));
-        match run_capture(&command) {
-            Ok(output) => {
-                self.append_runtime_output(output.stdout.trim_end());
-                self.append_runtime_output(output.stderr.trim_end());
-                if output.success() {
-                    self.append_runtime_log("[ui] doctor passed");
-                } else {
-                    self.append_runtime_log(format!(
-                        "[ui] doctor failed with code {}",
-                        output
-                            .code()
-                            .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
-                    ));
-                }
-            }
-            Err(err) => self.append_runtime_log(format!("[ui] doctor failed to run: {err}")),
-        }
+        self.append_runtime_log(
+            "[ui] doctor: removed in v1.20 with the Python worker; the native-Rust doctor \
+             is tracked as a follow-up to #348. In the meantime use `whisper-dictate models list`, \
+             `whisper-dictate --version`, and `whisper-dictate config show` for diagnostics.",
+        );
     }
 
+    /// Wave 8 Part 2: `install` no longer runs `pip install` — the
+    /// packaged binary carries every runtime dependency. Kept as a log
+    /// entry so the button doesn't feel dead.
     pub(in crate::ui) fn run_install(&mut self) {
-        self.run_background_command("install/repair", install_command());
+        self.append_runtime_log(
+            "[ui] install/repair: removed in v1.20. The packaged binary ships every runtime \
+             dependency, so there is no venv or pip step. Download a model via \
+             `whisper-dictate models download tiny.en` when needed.",
+        );
     }
 
-    /// Refresh the Microphone picker's device list by enumerating input devices
-    /// in-process via `crate::devices::list_input_devices()` when the
-    /// `audio-in-rust` feature is on, or by falling back to the Python worker's
-    /// `--list-audio-devices` otherwise. In both cases the JSON output is parsed
-    /// in `poll_background_task`.
+    /// Refresh the Microphone picker's device list by enumerating input
+    /// devices in-process via `crate::devices::list_input_devices()`.
+    /// Wave 8 Part 2 dropped the Python fallback: on stock builds without
+    /// `audio-in-rust` the picker stays empty (documented follow-up).
     pub(in crate::ui) fn run_list_audio_devices(&mut self) {
         #[cfg(feature = "audio-in-rust")]
         {
@@ -96,26 +87,30 @@ impl WhisperDictateApp {
             self.background_task_label = Some(LIST_AUDIO_DEVICES_LABEL);
         }
         #[cfg(not(feature = "audio-in-rust"))]
-        self.run_background_command(LIST_AUDIO_DEVICES_LABEL, audio_devices_command());
+        self.append_runtime_log(
+            "[ui] list audio devices: this build was compiled without --features audio-in-rust; \
+             rebuild with the feature to enumerate microphones.",
+        );
     }
 
-    /// Refresh the Profiles tab window list by running the worker with
-    /// `--list-windows` off-thread. The captured stdout is parsed in
-    /// `poll_background_task` once the run completes.
+    /// Wave 8 Part 2: `--list-windows` was a Python-worker flag; the
+    /// Rust replacement is a follow-up. Surface a friendly log.
     pub(in crate::ui) fn run_list_windows(&mut self) {
-        self.run_background_command(LIST_WINDOWS_LABEL, windows_command());
+        self.append_runtime_log(
+            "[ui] list windows: removed in v1.20 with the Python worker. A native-Rust window \
+             enumerator is tracked as a follow-up.",
+        );
     }
 
-    /// Dry-run test the currently-saved microphone by running the worker with
-    /// `--test-audio-device "<name>"` off-thread (async, like Refresh devices, so
-    /// the UI never blocks). The captured stdout is parsed into the inline ✓/⚠/✗
-    /// result in `poll_background_task` once the run completes.
+    /// Wave 8 Part 2: `--test-audio-device` was a Python-worker flag;
+    /// the Rust replacement is a follow-up. Reset the previous result
+    /// so no stale ✓/⚠/✗ is shown.
     pub(in crate::ui) fn run_test_audio_device(&mut self) {
-        // Clear any previous result so the user sees the in-flight "Testing…"
-        // state and never a stale outcome from the last device.
         self.device_test_result = None;
-        let name = self.settings.audio_device.trim().to_owned();
-        self.run_background_command(TEST_AUDIO_DEVICE_LABEL, test_audio_device_command(&name));
+        self.append_runtime_log(
+            "[ui] test audio device: removed in v1.20 with the Python worker. Rebuild with the \
+             audio-in-rust feature and run `whisper-dictate devices` to inspect microphones.",
+        );
     }
 
     pub(in crate::ui) fn run_cloud_api_check(&mut self) {
@@ -219,49 +214,13 @@ impl WhisperDictateApp {
         self.stt_api_key_input.trim().to_owned()
     }
 
-    pub(in crate::ui) fn run_background_command(
-        &mut self,
-        label: &'static str,
-        command: WorkerCommand,
-    ) {
-        if self.background_task.is_some() {
-            self.append_runtime_log(format!("[ui] {label} skipped: another task is running"));
-            return;
-        }
-
-        let display = command.display();
-        self.append_runtime_log(format!("[ui] {label}: {display}"));
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let result = match run_capture(&command) {
-                Ok(output) => {
-                    let success = output.success();
-                    let code = output.code();
-                    BackgroundTaskResult {
-                        label,
-                        command: display,
-                        stdout: output.stdout,
-                        stderr: output.stderr,
-                        success,
-                        code,
-                        error: None,
-                    }
-                }
-                Err(err) => BackgroundTaskResult {
-                    label,
-                    command: display,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    success: false,
-                    code: None,
-                    error: Some(err.to_string()),
-                },
-            };
-            let _ = tx.send(result);
-        });
-        self.background_task = Some(rx);
-        self.background_task_label = Some(label);
-    }
+    // Wave 8 Part 2: `run_background_command` shelled out to
+    // `run_capture(command)` which spawned the Python worker with a
+    // subcommand flag (`--doctor`, `--list-audio-devices`, etc.). All
+    // those flags belonged to the deleted Python bundle; the generic
+    // "spawn a worker command and stream its output to the UI log"
+    // helper has no live caller now, so it was removed together with
+    // the callers.
 
     pub(in crate::ui) fn poll_background_task(&mut self) {
         let Some(rx) = self.background_task.as_ref() else {
@@ -451,24 +410,20 @@ impl WhisperDictateApp {
     }
 }
 
-// --- Run benchmark (appended; kept self-contained to ease merges) ------------
-// The golden-corpus benchmark run. Its own `use`, label const and `impl` block
-// live here at the end of the file so this feature can be added/removed without
-// touching the import list or the main `impl` block above (which a parallel UI
-// PR also edits).
-use crate::runtime::benchmark_command;
+// --- Run benchmark ----------------------------------------------------------
+// Wave 8 Part 2: the pre-v1.20 benchmark run shelled out to the Python
+// worker via `--run-benchmark`; a native-Rust benchmark harness is
+// tracked as a follow-up. Meanwhile the UI button surfaces a friendly
+// log entry so the button doesn't feel dead.
 
-/// Background-task label for the worker's `--run-benchmark` run. Mostly handled
-/// by the generic `poll_background_task`: the per-item JSONL + the `[benchmark]`
-/// summary line are streamed verbatim to the runtime log. The one special case
-/// there is the `[OK]` completion line — it normally echoes the whole stdout as
-/// its detail, which for the benchmark would re-dump the full JSONL into one
-/// giant line, so it carries only `benchmark_summary_line` instead.
+/// Retained label so any lingering match-on-label consumers keep
+/// compiling (see the `poll_background_task` `RUN_BENCHMARK_LABEL`
+/// arm). Nothing actually schedules a run against it any more.
 pub(in crate::ui) const RUN_BENCHMARK_LABEL: &str = "run benchmark";
 
-/// Extract the concise final `[benchmark] …` summary line from the run's stdout
-/// so the `[OK]` completion log line stays small instead of re-embedding the
-/// whole per-item JSONL. Returns `None` when no summary line is present.
+/// Extract the concise final `[benchmark] …` summary line — kept
+/// alongside the label so future Rust-benchmark wiring can plug it
+/// straight back in.
 fn benchmark_summary_line(stdout: &str) -> Option<&str> {
     stdout
         .lines()
@@ -477,58 +432,28 @@ fn benchmark_summary_line(stdout: &str) -> Option<&str> {
 }
 
 impl WhisperDictateApp {
-    /// Run the golden benchmark corpus off-thread via the worker's
-    /// `--run-benchmark`. Same non-blocking pattern as "Refresh devices" so the
-    /// (slow: model load + corpus) run never freezes the UI; gated on no other
-    /// background task running. The captured stdout/stderr — including the final
-    /// `[benchmark] …` summary line — lands in the runtime log when it completes.
-    ///
-    /// Prints an immediate "benchmark started" line (only when the run actually
-    /// starts, i.e. no other task is in flight) so the button never feels dead:
-    /// the model load + corpus pass is slow, and without this the runtime log
-    /// would stay silent for many seconds after the click.
+    /// Wave 8 Part 2 stub — logs a "removed" hint.
     pub(in crate::ui) fn run_benchmark(&mut self) {
-        if self.background_task.is_none() {
-            // Clear any previous parsed results so the digestible view shows the
-            // in-flight state, not a stale table from the last run. Only when the
-            // run actually starts (no other task in flight) — mirrors the start
-            // line so a gated click leaves the prior results visible.
-            self.benchmark_results = None;
-            self.append_runtime_log("[ui] benchmark started — results appear here when finished");
-        }
-        self.run_background_command(RUN_BENCHMARK_LABEL, benchmark_command());
+        self.benchmark_results = None;
+        self.append_runtime_log(
+            "[ui] benchmark: removed in v1.20 with the Python worker. A native-Rust benchmark \
+             harness is tracked as a follow-up to #348.",
+        );
     }
 
-    /// Handle a finished `--run-benchmark` run: parse the captured per-item JSONL
-    /// stdout into the digestible [`BenchmarkResults`] model the System tab
-    /// renders (a coloured headline + a worst-WER-first table), AND preserve the
-    /// exact runtime-log behaviour the user already relied on — the per-item
-    /// JSONL streamed verbatim plus the concise final `[benchmark] …` summary line
-    /// (re-using `benchmark_summary_line` so a large blob is never re-embedded in
-    /// one giant `[OK]` line). A run failure (worker couldn't even start) clears
-    /// the model and logs the error, mirroring the generic failure path.
+    /// Wave 8 Part 2 stub — no live scheduler emits a
+    /// `RUN_BENCHMARK_LABEL` result, so this function never runs. Kept
+    /// so `poll_background_task`'s match arm still resolves.
     pub(in crate::ui) fn apply_benchmark_results(&mut self, result: &BackgroundTaskResult) {
-        // Stream the raw output to the log first, unchanged: the per-item JSONL
-        // (and stderr) the user has always seen stays in the runtime log so the
-        // digestible view is purely additive and the raw remains inspectable.
         self.append_runtime_output(result.stdout.trim_end());
         self.append_runtime_output(result.stderr.trim_end());
-
         if let Some(error) = &result.error {
-            // The worker couldn't run at all — there is no stdout to parse. Clear
-            // any stale model and surface the failure like the generic path did.
             self.benchmark_results = None;
             self.append_runtime_log(format!("[ERROR] {} failed to run: {error}", result.label));
             return;
         }
-
-        // Parse the captured stdout into the model regardless of exit code — a
-        // non-zero exit can still carry usable per-item rows worth showing.
         let results = parse_benchmark_results(&result.stdout);
-
         if result.success {
-            // Preserve the original `[OK] … passed: [benchmark] …` line: carry only
-            // the concise summary line, never the whole JSONL blob.
             let detail = benchmark_summary_line(&result.stdout).unwrap_or("");
             let message = if detail.is_empty() {
                 format!("[OK] {} passed", result.label)
@@ -550,9 +475,6 @@ impl WhisperDictateApp {
             }
             self.append_runtime_log(message);
         }
-
-        // Log the digestible one-line headline (the localized view lives in the
-        // System tab) so even the log reader gets the at-a-glance result.
         if !results.is_empty() {
             self.append_runtime_log(format!(
                 "[ui] benchmark: {}",
