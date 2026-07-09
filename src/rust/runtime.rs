@@ -63,12 +63,22 @@ impl RuntimeState {
 /// that passes CLI flags here is likely reaching for the pre-Wave-8
 /// Python `argparse` surface; the warning documents the change.
 pub fn run_terminal(args: Vec<String>) -> Result<()> {
+    // Codex #453 P2 (runtime.rs:70): the pre-Wave-8 `run` subcommand
+    // parsed flags like `--key ctrl_r --lang da` and forwarded them to
+    // the Python worker's argparse; the docs (README.md,
+    // docs/CONFIGURATION.md) still document that usage. Silently
+    // ignoring them would let a scripted / headless run start with
+    // saved/default settings instead of the requested config -- a
+    // silent-wrong-configuration failure mode. Fail hard so the caller
+    // sees a non-zero exit and can migrate to VOICEPI_* env vars.
     if !args.is_empty() {
-        eprintln!(
-            "warning: `whisper-dictate run` no longer forwards CLI flags to the worker; \
-             the Rust dictation runtime reads its settings from VOICEPI_* env vars. \
-             Ignored args: {args:?}"
-        );
+        return Err(anyhow!(
+            "`whisper-dictate run` no longer forwards CLI flags to the worker \
+             (the Rust dictation runtime reads settings from VOICEPI_* env vars only). \
+             Migrate {args:?} to matching env exports (e.g. --key ctrl_r -> \
+             VOICEPI_KEY=ctrl_r, --lang da -> VOICEPI_LANG=da, --device cuda -> \
+             VOICEPI_DEVICE=cuda). See docs/CONFIGURATION.md for the full mapping."
+        ));
     }
     let mut env_overrides = config::worker_env_overrides();
     // Codex #453 P2 (worker_rust.rs:276): the delegate gate normalises
@@ -156,7 +166,18 @@ pub fn doctor() -> Result<()> {
     println!(
         "  * inspect the effective config:                       `whisper-dictate config show`"
     );
-    Ok(())
+    // Codex #453 P2 (runtime.rs:159): exit non-zero so a
+    // readiness/health-check caller that only inspects the exit code
+    // cannot mistake a stub for a passing suite of probes. The
+    // informational text above still prints so a human sees the
+    // actionable hints; the Err payload names the surviving one-shot
+    // check-scripts.
+    Err(anyhow!(
+        "doctor: Python-based diagnostics removed in v1.20; no readiness checks \
+         performed. Run `whisper-dictate models list` + `whisper-dictate config show` \
+         for the surviving one-shot checks, or wait for the native doctor \
+         (Wave 8 Part 3 follow-up to #348)."
+    ))
 }
 
 pub fn install() -> Result<()> {

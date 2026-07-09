@@ -192,6 +192,83 @@ fn unsupported_worker_rust_settings_reason_rejects_unknown_backend() {
     );
 }
 
+/// Codex #453 P2 (worker_rust.rs:276): `migrate_legacy_stt_backend_env`
+/// rewrites the raw `VOICEPI_STT_BACKEND=parakeet` value in the
+/// effective env vec to `"whisper"` in place. This mirrors what
+/// `AppSettings::from_value` does on the first save round-trip; the
+/// helper closes the cold-start window between config-load-with-legacy
+/// and first-save-migration. Pinning the invariant here so both the
+/// delegate gate AND the child worker's backend resolver see the
+/// migrated value.
+#[test]
+fn migrate_legacy_stt_backend_env_rewrites_parakeet_to_whisper() {
+    let mut env: Vec<(String, String)> = vec![
+        ("VOICEPI_KEY".to_owned(), "ctrl_r".to_owned()),
+        ("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned()),
+        ("VOICEPI_LANG".to_owned(), "da".to_owned()),
+    ];
+    migrate_legacy_stt_backend_env(&mut env);
+    let stt = env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_STT_BACKEND")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(stt, Some("whisper"));
+    // The other keys are left alone -- the helper is scoped to
+    // STT_BACKEND_ENV, not a wholesale filter.
+    assert!(env.iter().any(|(k, v)| k == "VOICEPI_KEY" && v == "ctrl_r"));
+    assert!(env.iter().any(|(k, v)| k == "VOICEPI_LANG" && v == "da"));
+}
+
+#[test]
+fn migrate_legacy_stt_backend_env_is_case_insensitive_and_trims() {
+    for value in [
+        "parakeet",
+        "Parakeet",
+        "PARAKEET",
+        "  parakeet  ",
+        "\tparakeet\n",
+    ] {
+        let mut env = vec![("VOICEPI_STT_BACKEND".to_owned(), value.to_owned())];
+        migrate_legacy_stt_backend_env(&mut env);
+        let stt = env
+            .iter()
+            .find(|(k, _)| k == "VOICEPI_STT_BACKEND")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            stt,
+            Some("whisper"),
+            "value {value:?} must be normalised to whisper"
+        );
+    }
+}
+
+#[test]
+fn migrate_legacy_stt_backend_env_leaves_supported_values_alone() {
+    // Idempotent + non-destructive: whisper / openai / groq / unset /
+    // any other value the delegate gate might see must pass through.
+    for value in ["whisper", "openai", "groq", "faster-whisper", ""] {
+        let mut env = vec![("VOICEPI_STT_BACKEND".to_owned(), value.to_owned())];
+        migrate_legacy_stt_backend_env(&mut env);
+        let stt = env
+            .iter()
+            .find(|(k, _)| k == "VOICEPI_STT_BACKEND")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            stt,
+            Some(value),
+            "supported value {value:?} must not be rewritten"
+        );
+    }
+}
+
+#[test]
+fn migrate_legacy_stt_backend_env_is_noop_when_key_absent() {
+    let mut env: Vec<(String, String)> = vec![("VOICEPI_KEY".to_owned(), "ctrl_r".to_owned())];
+    let original = env.clone();
+    migrate_legacy_stt_backend_env(&mut env);
+    assert_eq!(env, original);
+}
+
 /// Codex #453 P2: a stale `stt_backend = "parakeet"` in an upgraded
 /// user's `config.json` migrates to `"whisper"` on the next save
 /// round-trip (see `AppSettings::from_value`). On the very FIRST cold
