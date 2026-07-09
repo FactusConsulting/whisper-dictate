@@ -116,16 +116,34 @@ pub const fn all_required_features_enabled() -> bool {
 /// Rust worker the production default and provides `python-legacy` as
 /// an emergency rollback for the Wave-7 -> Wave-8 burn-in. Wave 8
 /// deletes the Python bundle and this helper collapses to
-/// `all_required_features_enabled() && unsupported_worker_rust_settings_reason().is_none()`.
+/// `all_required_features_enabled() && unsupported_worker_rust_settings_reason(env).is_none()`.
+///
+/// # The `env` parameter (Codex #441 P2 review round 3)
+///
+/// `env` is the effective command env the supervisor will pass to the
+/// worker-rust subprocess (`WorkerCommand::env`). AppSettings values
+/// (`stt_backend`, `local_only`, ...) materialise into that vec via
+/// [`crate::config::worker_env_overrides`] BEFORE they appear in
+/// `std::env`, so the gate MUST consult the vec first -- otherwise an
+/// upgraded config that still carries `stt_backend = "parakeet"` slips
+/// past the check (the parent process's env is unset), delegation
+/// fires, and the child's `make_real_session` rejects the value and
+/// falls through to the stub sink.
+///
+/// The lookup helper ([`resolved_env`]) falls back to `std::env::var`
+/// when the key is absent from the vec so process-env-only wiring
+/// (`VOICEPI_WHISPER_MODEL_PATH`, escape-hatch overrides in an
+/// interactive shell) still counts -- mirrors what the child actually
+/// sees once it inherits the parent env on top of the overrides.
 ///
 /// Pure helper so the gate is unit-testable. The supervisor's
 /// `RuntimeSupervisor::start` consults this to swap its spawned
 /// command for the worker-rust subcommand AND to skip its own
 /// in-process Rust hotkey install (the subprocess installs its own).
-pub fn should_delegate_to_worker_rust() -> bool {
+pub fn should_delegate_to_worker_rust(env: &[(String, String)]) -> bool {
     all_required_features_enabled()
         && !rust_session_sink::dictate_backend_python_legacy_requested()
-        && unsupported_worker_rust_settings_reason().is_none()
+        && unsupported_worker_rust_settings_reason(env).is_none()
 }
 
 /// Env var carrying the STT backend selection (whisper / openai /
@@ -134,11 +152,88 @@ pub fn should_delegate_to_worker_rust() -> bool {
 /// itself feature-gated on `whisper-rs-local + rust-injection`.
 const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 
-/// Return `Some(reason)` when the current env carries a
+/// Env var carrying the privacy lock. When truthy, the runtime MUST
+/// refuse to route audio to a non-loopback backend. Mirrors what the
+/// Python worker's `vp_transcribe._assert_local_backend` used to
+/// enforce before Wave 8 deleted that fallback path. Codex #441 P1
+/// review round 3 (privacy leak).
+const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
+
+/// Env var carrying an explicit path to a GGML whisper.cpp model file.
+/// Mirrors [`crate::whisper::MODEL_PATH_ENV`] but redeclared as a
+/// module-local const so this file compiles on builds without
+/// `whisper-rs-local` (the `pub` re-export is feature-gated). Codex
+/// #441 P1 review round 3 (silent stub fallback).
+const WHISPER_MODEL_PATH_ENV: &str = "VOICEPI_WHISPER_MODEL_PATH";
+
+/// Resolve `key` against the same layered view the child worker will
+/// see: the supervisor's `effective_command.env` overrides win first
+/// (they materialise AppSettings on top of the parent env before
+/// `Command::envs` is called), then we fall back to `std::env` so
+/// process-env-only wiring (e.g. `VOICEPI_WHISPER_MODEL_PATH` set by
+/// the parent binary at startup, or a debug knob exported in the
+/// user's shell) still counts. Missing / unset lands on `None`.
+pub(crate) fn resolved_env(env: &[(String, String)], key: &str) -> Option<String> {
+    if let Some(value) = env
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.to_owned())
+    {
+        return Some(value);
+    }
+    std::env::var(key).ok()
+}
+
+/// Return true when a local Whisper backend can find a GGML model to
+/// load. Mirrors the resolution rules of
+/// [`crate::whisper::dispatch::resolve_model_path_from_env`] but
+/// consults the effective env vec first so an AppSettings override
+/// (materialised into `effective_command.env`) is seen exactly as the
+/// child will see it. Codex #441 P1 review round 3 (silent stub
+/// fallback).
+///
+/// Order of resolution:
+///
+/// 1. Explicit `VOICEPI_WHISPER_MODEL_PATH` override -- trusted at
+///    face value (existence checked at load time; a bogus path fails
+///    fast in `LocalWhisper::new`).
+/// 2. Any catalog model whose SHA-verified file exists in the user
+///    cache dir (`model_manager::CATALOG` + `is_downloaded`).
+/// 3. Any custom `*.bin` / `*.gguf` file the user dropped into the
+///    cache directory (`local_discovery::discover_models`).
+///
+/// Uses only always-compiled helpers (`model_manager` /
+/// `local_discovery`) so the check compiles on stock builds without
+/// `whisper-rs-local`. On such a build the gate short-circuits on
+/// `all_required_features_enabled()` before ever calling this fn.
+pub(crate) fn local_whisper_model_available(env: &[(String, String)]) -> bool {
+    if let Some(raw) = resolved_env(env, WHISPER_MODEL_PATH_ENV) {
+        if !raw.trim().is_empty() {
+            return true;
+        }
+    }
+    for entry in crate::whisper::model_manager::CATALOG {
+        if crate::whisper::model_manager::is_downloaded(entry) {
+            return true;
+        }
+    }
+    if let Ok(dir) = crate::whisper::model_manager::models_cache_dir() {
+        if !crate::whisper::local_discovery::discover_models(&dir).is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Return `Some(reason)` when the effective env carries a
 /// `VOICEPI_STT_BACKEND` value the worker-rust subprocess cannot
 /// build. Returns `None` when the value is one of the recognised
 /// backends -- unset / empty / `whisper` / `faster-whisper` (local
 /// Whisper) OR `openai` / `groq` (cloud STT, Wave 5.5 gap #1 of #348).
+///
+/// `env` is the same effective command env passed to
+/// [`should_delegate_to_worker_rust`] -- see that fn's docs for why
+/// the gate cannot rely on `std::env` alone.
 ///
 /// Named ish to match `should_delegate_to_worker_rust`'s "supervisor
 /// stays on Python" fallback semantics: a `Some(reason)` return value
@@ -150,15 +245,56 @@ const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 /// (case-insensitive, trims whitespace, accepts the `faster-whisper`
 /// alias) so the two decisions cannot drift -- a value the delegate
 /// gate accepts is one the factory can build.
-pub fn unsupported_worker_rust_settings_reason() -> Option<String> {
-    let raw = std::env::var(STT_BACKEND_ENV).ok().unwrap_or_default();
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "" | "whisper" | "faster-whisper" | "openai" | "groq" => None,
-        other => Some(format!(
-            "unsupported {STT_BACKEND_ENV}={other:?}; the rust-session worker \
-             knows whisper / openai / groq -- staying on Python"
-        )),
+pub fn unsupported_worker_rust_settings_reason(env: &[(String, String)]) -> Option<String> {
+    let raw = resolved_env(env, STT_BACKEND_ENV).unwrap_or_default();
+    let normalised = raw.trim().to_ascii_lowercase();
+    match normalised.as_str() {
+        "" | "whisper" | "faster-whisper" | "openai" | "groq" => {}
+        other => {
+            return Some(format!(
+                "unsupported {STT_BACKEND_ENV}={other:?}; the rust-session worker \
+                 knows whisper / openai / groq -- staying on Python"
+            ));
+        }
     }
+
+    // Codex #441 P1 review round 3 (silent stub fallback): a local
+    // Whisper backend needs a resolvable GGML model. Without it
+    // `make_real_session` fails, `build_production_sink` installs the
+    // `StubTranscribeBackend` fallback, and every utterance produces
+    // empty text -- the worker looks alive (emits `state=ready`) but
+    // does no work. Fail-closed instead: the supervisor logs the
+    // reason and refuses to spawn the worker.
+    if matches!(normalised.as_str(), "" | "whisper" | "faster-whisper")
+        && !local_whisper_model_available(env)
+    {
+        return Some(format!(
+            "{WHISPER_MODEL_PATH_ENV} is unset and no GGML model was found in the \
+             whisper-models cache directory; download one via \
+             `whisper-dictate models download tiny.en`, drop a *.bin/*.gguf file \
+             into the models cache directory, or set {WHISPER_MODEL_PATH_ENV} to \
+             point at a whisper.cpp GGML model file"
+        ));
+    }
+
+    // Codex #441 P1 review round 3 (privacy leak): `CloudTranscribeBackend`
+    // POSTs the captured WAV to the configured base URL without
+    // consulting VOICEPI_LOCAL_ONLY. Python's `_assert_local_backend`
+    // used to refuse cloud STT under the privacy lock; Wave 8 removed
+    // that fallback, so if the child spawns with the wrong config the
+    // audio leaks to the internet before anything else notices. Refuse
+    // to delegate here -- the supervisor logs the reason and the worker
+    // exits, matching what `assert_local_backend` did in Python.
+    if crate::dictate::env_gates::is_truthy(resolved_env(env, LOCAL_ONLY_ENV).as_deref())
+        && matches!(normalised.as_str(), "openai" | "groq")
+    {
+        return Some(format!(
+            "{LOCAL_ONLY_ENV}=1 forbids cloud STT ({STT_BACKEND_ENV}={raw:?}); \
+             fix your config or unset {LOCAL_ONLY_ENV}"
+        ));
+    }
+
+    None
 }
 
 /// Swap an existing Python-orchestrator [`WorkerCommand`] in place so

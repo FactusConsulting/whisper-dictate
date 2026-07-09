@@ -42,6 +42,30 @@ fn all_required_features_enabled_reflects_cfg_set() {
     assert_eq!(all_required_features_enabled(), expected);
 }
 
+/// Empty env vec — the pattern most tests here use since they only
+/// exercise the process-env branches of `resolved_env`. Codex #441 P2
+/// review round 3 introduced the env-vec parameter; for legibility
+/// keep the "no override" case as a named constant.
+const EMPTY_ENV: &[(String, String)] = &[];
+
+/// Build a `(key, value)` env vec that satisfies the local-Whisper
+/// model check with a placeholder path. Tests that only exercise the
+/// STT-backend / LOCAL_ONLY branches use this so the model-availability
+/// gate (Codex #441 P1 round 3) does not fire on a CI runner with an
+/// empty cache dir. The path itself is never opened -- the gate only
+/// checks that `VOICEPI_WHISPER_MODEL_PATH` is set to a non-empty
+/// string.
+fn env_with_model_path(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut env = vec![(
+        "VOICEPI_WHISPER_MODEL_PATH".to_owned(),
+        "/dev/null/ggml-test.bin".to_owned(),
+    )];
+    for (k, v) in extra {
+        env.push(((*k).to_owned(), (*v).to_owned()));
+    }
+    env
+}
+
 #[test]
 fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     // Wave 5 PR 7 of #348 flipped the semantics: previously the gate
@@ -53,10 +77,16 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     let prev_dictate = std::env::var_os("VOICEPI_DICTATE_BACKEND");
     let prev_hotkey = std::env::var_os("VOICEPI_HOTKEY_BACKEND");
     let prev_stt = std::env::var_os("VOICEPI_STT_BACKEND");
+    let prev_model = std::env::var_os("VOICEPI_WHISPER_MODEL_PATH");
     // Clear the STT-backend gate so this test only exercises the
     // env+feature interaction. Wave 5.5 gap #1 added a third gate;
     // it's covered by dedicated tests below.
     std::env::remove_var("VOICEPI_STT_BACKEND");
+    // Codex #441 P1 round 3 added a model-availability gate; seed a
+    // placeholder path so this test (which pins the escape-hatch
+    // semantics on a hypothetical full-feature build) does not fire
+    // the model gate on a runner with an empty cache dir.
+    std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", "/dev/null/ggml-test.bin");
 
     // env unset -> DEFAULT delegate (mirrors the feature gate). This
     // is the load-bearing PR 7 assertion: without any env var, the
@@ -65,7 +95,7 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     std::env::remove_var("VOICEPI_DICTATE_BACKEND");
     std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
     assert_eq!(
-        should_delegate_to_worker_rust(),
+        should_delegate_to_worker_rust(EMPTY_ENV),
         all_required_features_enabled(),
         "PR 7 default: unset VOICEPI_DICTATE_BACKEND must delegate on a full-feature build"
     );
@@ -76,7 +106,7 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     // exact same behaviour they had on PR 6.
     std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
     assert_eq!(
-        should_delegate_to_worker_rust(),
+        should_delegate_to_worker_rust(EMPTY_ENV),
         all_required_features_enabled(),
         "the historical `rust-session` value must still delegate post-PR-7"
     );
@@ -87,7 +117,7 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     // pull the supervisor off the new default.
     std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust");
     assert_eq!(
-        should_delegate_to_worker_rust(),
+        should_delegate_to_worker_rust(EMPTY_ENV),
         all_required_features_enabled(),
         "`rust` value is a Python-side knob and must not block delegation"
     );
@@ -97,7 +127,7 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     // stays on the pre-PR-7 Python orchestrator.
     std::env::set_var("VOICEPI_DICTATE_BACKEND", "python-legacy");
     assert!(
-        !should_delegate_to_worker_rust(),
+        !should_delegate_to_worker_rust(EMPTY_ENV),
         "python-legacy escape hatch must opt out of delegation"
     );
 
@@ -105,7 +135,7 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     // (shell-set values from a crash-cart edit must still work).
     std::env::set_var("VOICEPI_DICTATE_BACKEND", "  Python-Legacy  ");
     assert!(
-        !should_delegate_to_worker_rust(),
+        !should_delegate_to_worker_rust(EMPTY_ENV),
         "python-legacy escape hatch must match case-insensitively with surrounding whitespace"
     );
 
@@ -120,7 +150,7 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
     std::env::set_var("VOICEPI_DICTATE_BACKEND", "python-legacy");
     assert!(
-        !should_delegate_to_worker_rust(),
+        !should_delegate_to_worker_rust(EMPTY_ENV),
         "escape hatch must dominate over any hotkey-backend state"
     );
 
@@ -129,7 +159,7 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
     // its own rdev install so no separate opt-in is needed.
     std::env::remove_var("VOICEPI_DICTATE_BACKEND");
     assert_eq!(
-        should_delegate_to_worker_rust(),
+        should_delegate_to_worker_rust(EMPTY_ENV),
         all_required_features_enabled(),
         "removing the escape hatch restores the PR 7 default even with hotkey backend unset"
     );
@@ -147,6 +177,10 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
         Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
         None => std::env::remove_var("VOICEPI_STT_BACKEND"),
     }
+    match prev_model {
+        Some(v) => std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", v),
+        None => std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH"),
+    }
 }
 
 // ── Wave 5.5 gap #1: STT-backend gate ────────────────────────────────────────
@@ -157,24 +191,25 @@ fn should_delegate_default_is_on_and_python_legacy_opts_out() {
 /// unsupported set so the supervisor stays on Python.
 #[test]
 fn unsupported_worker_rust_settings_reason_accepts_supported_backends() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var_os("VOICEPI_STT_BACKEND");
-
+    // Codex #441 P2 round 3: the gate now consults an explicit env
+    // vec (the supervisor's `effective_command.env`) so the STT-
+    // backend check does not depend on process env. Pass each
+    // supported value in the vec directly; no `ENV_LOCK` needed.
+    //
+    // We also seed VOICEPI_WHISPER_MODEL_PATH so the P1 round-3
+    // model-availability gate does not fire on a CI runner with an
+    // empty cache dir (this test is scoped to the STT_BACKEND branch;
+    // the model gate has its own tests below).
     for supported in ["", "whisper", "WHISPER", "faster-whisper", "openai", "GROQ"] {
-        if supported.is_empty() {
-            std::env::remove_var("VOICEPI_STT_BACKEND");
+        let env: Vec<(String, String)> = if supported.is_empty() {
+            env_with_model_path(&[])
         } else {
-            std::env::set_var("VOICEPI_STT_BACKEND", supported);
-        }
+            env_with_model_path(&[("VOICEPI_STT_BACKEND", supported)])
+        };
         assert!(
-            unsupported_worker_rust_settings_reason().is_none(),
+            unsupported_worker_rust_settings_reason(&env).is_none(),
             "value {supported:?} must be a supported STT backend"
         );
-    }
-
-    match prev {
-        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
-        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
     }
 }
 
@@ -183,11 +218,8 @@ fn unsupported_worker_rust_settings_reason_accepts_supported_backends() {
 /// falls back to the Python worker.
 #[test]
 fn unsupported_worker_rust_settings_reason_rejects_unknown_backend() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev = std::env::var_os("VOICEPI_STT_BACKEND");
-    std::env::set_var("VOICEPI_STT_BACKEND", "parakeet");
-
-    let reason = unsupported_worker_rust_settings_reason().expect("parakeet is unsupported");
+    let env = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
+    let reason = unsupported_worker_rust_settings_reason(&env).expect("parakeet is unsupported");
     assert!(
         reason.contains("parakeet"),
         "reason must name the offending value: {reason}"
@@ -196,10 +228,283 @@ fn unsupported_worker_rust_settings_reason_rejects_unknown_backend() {
         reason.contains("staying on Python"),
         "reason must explain the fallback: {reason}"
     );
+}
+
+/// Codex #441 P2 round 3: an `stt_backend = "parakeet"` value that
+/// only appears in the supervisor's `effective_command.env` (materialised
+/// from AppSettings by `worker_env_overrides`) MUST veto delegation
+/// even when the parent process env has no `VOICEPI_STT_BACKEND` set.
+/// This is the load-bearing regression the round-3 signature change
+/// closes: previously the gate consulted `std::env::var` and missed
+/// config-file overrides.
+#[test]
+fn unsupported_worker_rust_settings_reason_reads_effective_command_env() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var_os("VOICEPI_STT_BACKEND");
+    // Parent process env: not set. If the gate were still reading
+    // std::env alone it would see this as an "unset -> supported"
+    // and let the child through.
+    std::env::remove_var("VOICEPI_STT_BACKEND");
+
+    let effective = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
+    let reason =
+        unsupported_worker_rust_settings_reason(&effective).expect("effective env must veto");
+    assert!(
+        reason.contains("parakeet"),
+        "reason must name the offending value: {reason}"
+    );
 
     match prev {
         Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
         None => std::env::remove_var("VOICEPI_STT_BACKEND"),
+    }
+}
+
+/// The env vec wins over `std::env` when both carry a value. Mirrors
+/// the child's actual view (`Command::envs` overrides inherited env).
+#[test]
+fn resolved_env_prefers_effective_command_env_over_process_env() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev_stt = std::env::var_os("VOICEPI_STT_BACKEND");
+    let prev_model = std::env::var_os("VOICEPI_WHISPER_MODEL_PATH");
+    std::env::set_var("VOICEPI_STT_BACKEND", "whisper");
+    // Ensure the model-availability gate does not fire on a runner
+    // with an empty cache: seed the process env with a placeholder
+    // path (the gate only checks non-emptiness).
+    std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", "/dev/null/ggml-test.bin");
+    let effective = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
+    // Effective override wins -> reason surfaces.
+    assert!(unsupported_worker_rust_settings_reason(&effective).is_some());
+    // Fallback to process env when key is absent from the vec ->
+    // supported (the process env has whisper + a model path).
+    let empty: &[(String, String)] = &[];
+    assert!(unsupported_worker_rust_settings_reason(empty).is_none());
+    match prev_stt {
+        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
+    }
+    match prev_model {
+        Some(v) => std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", v),
+        None => std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH"),
+    }
+}
+
+// ── Codex #441 P1 round 3: block delegation on missing local Whisper model ──
+
+/// When the user's config selects a local Whisper backend (unset /
+/// whisper / faster-whisper) AND no model resolves via the env var OR
+/// the cache dir, the gate MUST veto delegation. The child worker
+/// would otherwise emit `state=ready` but every utterance would
+/// produce empty text -- worse than a hard failure. Codex #441 P1
+/// review round 3 (silent stub fallback).
+///
+/// Uses a temp `XDG_CACHE_HOME` / `HOME` so the cache-dir scan finds
+/// nothing regardless of what the CI runner or developer machine has
+/// downloaded.
+#[test]
+fn unsupported_worker_rust_settings_reason_blocks_local_whisper_without_model() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+    let prev_home = std::env::var_os("HOME");
+    let prev_localappdata = std::env::var_os("LOCALAPPDATA");
+    let prev_model = std::env::var_os("VOICEPI_WHISPER_MODEL_PATH");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("XDG_CACHE_HOME", dir.path());
+    std::env::set_var("HOME", dir.path());
+    std::env::set_var("LOCALAPPDATA", dir.path());
+    std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH");
+
+    for backend in ["", "whisper", "faster-whisper"] {
+        let env: Vec<(String, String)> = if backend.is_empty() {
+            Vec::new()
+        } else {
+            vec![(STT_BACKEND_ENV.to_owned(), backend.to_owned())]
+        };
+        let reason = unsupported_worker_rust_settings_reason(&env)
+            .unwrap_or_else(|| panic!("backend {backend:?} + no model must veto delegation"));
+        assert!(
+            reason.contains("GGML") || reason.contains(WHISPER_MODEL_PATH_ENV),
+            "reason must name the missing model: {reason}"
+        );
+    }
+
+    match prev_xdg {
+        Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+        None => std::env::remove_var("XDG_CACHE_HOME"),
+    }
+    match prev_home {
+        Some(v) => std::env::set_var("HOME", v),
+        None => std::env::remove_var("HOME"),
+    }
+    match prev_localappdata {
+        Some(v) => std::env::set_var("LOCALAPPDATA", v),
+        None => std::env::remove_var("LOCALAPPDATA"),
+    }
+    match prev_model {
+        Some(v) => std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", v),
+        None => std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH"),
+    }
+}
+
+/// An explicit `VOICEPI_WHISPER_MODEL_PATH` override in the effective
+/// env satisfies the gate even when no cache file exists. The gate
+/// trusts the path at face value; `LocalWhisper::new` fails fast if
+/// it turns out to be bogus, which is the pre-existing contract.
+#[test]
+fn unsupported_worker_rust_settings_reason_accepts_explicit_model_path_override() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+    let prev_home = std::env::var_os("HOME");
+    let prev_localappdata = std::env::var_os("LOCALAPPDATA");
+    let prev_model = std::env::var_os("VOICEPI_WHISPER_MODEL_PATH");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("XDG_CACHE_HOME", dir.path());
+    std::env::set_var("HOME", dir.path());
+    std::env::set_var("LOCALAPPDATA", dir.path());
+    std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH");
+
+    let env = vec![(
+        WHISPER_MODEL_PATH_ENV.to_owned(),
+        "/some/nonexistent/ggml.bin".to_owned(),
+    )];
+    assert!(
+        unsupported_worker_rust_settings_reason(&env).is_none(),
+        "explicit model path override must satisfy the gate"
+    );
+
+    match prev_xdg {
+        Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+        None => std::env::remove_var("XDG_CACHE_HOME"),
+    }
+    match prev_home {
+        Some(v) => std::env::set_var("HOME", v),
+        None => std::env::remove_var("HOME"),
+    }
+    match prev_localappdata {
+        Some(v) => std::env::set_var("LOCALAPPDATA", v),
+        None => std::env::remove_var("LOCALAPPDATA"),
+    }
+    match prev_model {
+        Some(v) => std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", v),
+        None => std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH"),
+    }
+}
+
+/// A cloud STT selection (`openai` / `groq`) does not require a local
+/// model. The gate must NOT fire the model check for cloud backends,
+/// otherwise a cloud-only user without any cached GGML file would be
+/// unable to delegate.
+#[test]
+fn unsupported_worker_rust_settings_reason_skips_model_check_for_cloud_backend() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+    let prev_home = std::env::var_os("HOME");
+    let prev_localappdata = std::env::var_os("LOCALAPPDATA");
+    let prev_model = std::env::var_os("VOICEPI_WHISPER_MODEL_PATH");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("XDG_CACHE_HOME", dir.path());
+    std::env::set_var("HOME", dir.path());
+    std::env::set_var("LOCALAPPDATA", dir.path());
+    std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH");
+
+    for cloud in ["openai", "groq"] {
+        let env = vec![(STT_BACKEND_ENV.to_owned(), cloud.to_owned())];
+        assert!(
+            unsupported_worker_rust_settings_reason(&env).is_none(),
+            "cloud STT {cloud:?} must not require a local model"
+        );
+    }
+
+    match prev_xdg {
+        Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+        None => std::env::remove_var("XDG_CACHE_HOME"),
+    }
+    match prev_home {
+        Some(v) => std::env::set_var("HOME", v),
+        None => std::env::remove_var("HOME"),
+    }
+    match prev_localappdata {
+        Some(v) => std::env::set_var("LOCALAPPDATA", v),
+        None => std::env::remove_var("LOCALAPPDATA"),
+    }
+    match prev_model {
+        Some(v) => std::env::set_var("VOICEPI_WHISPER_MODEL_PATH", v),
+        None => std::env::remove_var("VOICEPI_WHISPER_MODEL_PATH"),
+    }
+}
+
+// ── Codex #441 P1 round 3: VOICEPI_LOCAL_ONLY blocks cloud STT ──────────────
+
+/// `VOICEPI_LOCAL_ONLY=1` combined with `stt_backend=openai` (or `groq`)
+/// MUST veto delegation so the child worker's `CloudTranscribeBackend`
+/// never gets a chance to POST audio to the cloud provider. Mirrors
+/// Python's `_assert_local_backend` refusal (gone since Wave 8 deleted
+/// the fallback path). Fail-closed: any truthy value for the env var
+/// counts (`is_truthy` also matches "true" / "yes" / "on" case-
+/// insensitively).
+#[test]
+fn unsupported_worker_rust_settings_reason_blocks_cloud_under_local_only() {
+    for (local_only, cloud) in [
+        ("1", "openai"),
+        ("true", "openai"),
+        ("yes", "GROQ"),
+        ("on", "groq"),
+    ] {
+        let env = vec![
+            (LOCAL_ONLY_ENV.to_owned(), local_only.to_owned()),
+            (STT_BACKEND_ENV.to_owned(), cloud.to_owned()),
+        ];
+        let reason = unsupported_worker_rust_settings_reason(&env).unwrap_or_else(|| {
+            panic!(
+                "LOCAL_ONLY={local_only:?} + STT_BACKEND={cloud:?} must veto delegation, \
+                 got None"
+            )
+        });
+        assert!(
+            reason.contains("LOCAL_ONLY"),
+            "reason must name VOICEPI_LOCAL_ONLY: {reason}"
+        );
+        assert!(
+            reason.contains(cloud)
+                || reason
+                    .to_ascii_lowercase()
+                    .contains(&cloud.to_ascii_lowercase()),
+            "reason must name the offending backend {cloud:?}: {reason}"
+        );
+    }
+}
+
+/// Under `VOICEPI_LOCAL_ONLY`, the local Whisper backends are still
+/// allowed -- privacy lock only blocks the cloud path. This pins that
+/// the gate is not accidentally over-broad.
+#[test]
+fn unsupported_worker_rust_settings_reason_allows_local_whisper_under_local_only() {
+    for backend in ["", "whisper", "faster-whisper", "WHISPER"] {
+        let mut env = env_with_model_path(&[(LOCAL_ONLY_ENV, "1")]);
+        if !backend.is_empty() {
+            env.push((STT_BACKEND_ENV.to_owned(), backend.to_owned()));
+        }
+        assert!(
+            unsupported_worker_rust_settings_reason(&env).is_none(),
+            "LOCAL_ONLY + local whisper backend {backend:?} must be allowed"
+        );
+    }
+}
+
+/// Falsy / unset `VOICEPI_LOCAL_ONLY` does NOT block cloud STT. This
+/// pins the negative case so a future refactor that swaps the truthy
+/// check for a mere presence check would fail here.
+#[test]
+fn unsupported_worker_rust_settings_reason_allows_cloud_when_local_only_falsy() {
+    for local_only in ["0", "false", "no", "off", ""] {
+        let mut env = vec![(STT_BACKEND_ENV.to_owned(), "openai".to_owned())];
+        if !local_only.is_empty() {
+            env.push((LOCAL_ONLY_ENV.to_owned(), local_only.to_owned()));
+        }
+        assert!(
+            unsupported_worker_rust_settings_reason(&env).is_none(),
+            "LOCAL_ONLY={local_only:?} must not block cloud STT"
+        );
     }
 }
 
@@ -214,32 +519,27 @@ fn unsupported_worker_rust_settings_reason_rejects_unknown_backend() {
 fn should_delegate_fires_for_cloud_stt_backends_when_features_present() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev_dictate = std::env::var_os("VOICEPI_DICTATE_BACKEND");
-    let prev_stt = std::env::var_os("VOICEPI_STT_BACKEND");
 
     std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
     for cloud in ["openai", "groq"] {
-        std::env::set_var("VOICEPI_STT_BACKEND", cloud);
+        let env = vec![("VOICEPI_STT_BACKEND".to_owned(), cloud.to_owned())];
         assert_eq!(
-            should_delegate_to_worker_rust(),
+            should_delegate_to_worker_rust(&env),
             all_required_features_enabled(),
             "delegation must not refuse stt_backend={cloud:?}"
         );
     }
 
     // And the unsupported-value branch must still veto delegation.
-    std::env::set_var("VOICEPI_STT_BACKEND", "parakeet");
+    let env = vec![("VOICEPI_STT_BACKEND".to_owned(), "parakeet".to_owned())];
     assert!(
-        !should_delegate_to_worker_rust(),
+        !should_delegate_to_worker_rust(&env),
         "unsupported stt_backend must veto delegation"
     );
 
     match prev_dictate {
         Some(v) => std::env::set_var("VOICEPI_DICTATE_BACKEND", v),
         None => std::env::remove_var("VOICEPI_DICTATE_BACKEND"),
-    }
-    match prev_stt {
-        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
-        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
     }
 }
 

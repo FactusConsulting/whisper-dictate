@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "history-sqlite")]
 pub use dispatch::HistoryLastText;
 pub use dispatch::{dispatch_last_text, DispatchOutcome, DispatchSource, LastTextSource};
-pub use profile::{built_in_profiles, PostprocessProfile};
+pub use profile::{built_in_profiles, resolve_api_key_from_env, PostprocessProfile};
 pub use registry::{ProfileRegistry, RegistryError};
 
 /// Config key that stores the JSON-encoded profile list.

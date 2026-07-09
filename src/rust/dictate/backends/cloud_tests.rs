@@ -19,9 +19,10 @@ use std::thread;
 use hound::WavReader;
 
 use super::{
-    encode_pcm_as_wav, CloudBackendConfig, CloudTranscribeBackend, GROQ_API_KEY_ENV,
-    INITIAL_PROMPT_ENV, LANG_ENV, OPENAI_API_KEY_ENV, STT_API_KEY_ENV, STT_BASE_URL_ENV,
-    STT_MODEL_ENV, STT_TIMEOUT_MS_ENV,
+    default_stt_model, encode_pcm_as_wav, CloudBackendConfig, CloudTranscribeBackend,
+    DEFAULT_GROQ_STT_MODEL, DEFAULT_OPENAI_STT_MODEL, GROQ_API_KEY_ENV, INITIAL_PROMPT_ENV,
+    LANG_ENV, OPENAI_API_KEY_ENV, STT_API_KEY_ENV, STT_BASE_URL_ENV, STT_MODEL_ENV,
+    STT_TIMEOUT_MS_ENV,
 };
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::test_env_lock::ENV_LOCK;
@@ -155,6 +156,103 @@ fn config_from_env_language_and_prompt_collapse_blank_to_none() {
     let cfg = CloudBackendConfig::from_env();
     assert!(cfg.language.is_none());
     assert!(cfg.initial_prompt.is_none());
+}
+
+// ── Codex #441 P2 round 3: default STT model for cloud providers ────────────
+//
+// Python's `vp_external_api.load_stt_api_settings` supplied a
+// provider-specific default when `stt_model` was empty. The Rust cloud
+// backend requires a non-empty model at `new()` time, so without the
+// default a minimal `{stt_backend: "openai"}` config ended up in the
+// stub sink with every press producing `no_text`.
+
+#[test]
+fn default_stt_model_maps_openai_base_url_to_openai_default() {
+    // The stock OpenAI base URL falls through to the OpenAI default.
+    assert_eq!(
+        default_stt_model("https://api.openai.com/v1"),
+        DEFAULT_OPENAI_STT_MODEL
+    );
+    assert_eq!(
+        default_stt_model(DEFAULT_OPENAI_STT_MODEL),
+        DEFAULT_OPENAI_STT_MODEL
+    ); // any non-groq
+}
+
+#[test]
+fn default_stt_model_maps_groq_base_url_to_groq_default() {
+    // Any base URL containing `api.groq.com` -> Groq default. Case-
+    // insensitive so `API.GROQ.COM` still routes correctly.
+    assert_eq!(
+        default_stt_model("https://api.groq.com/openai/v1"),
+        DEFAULT_GROQ_STT_MODEL
+    );
+    assert_eq!(
+        default_stt_model("https://API.GROQ.COM/openai/v1"),
+        DEFAULT_GROQ_STT_MODEL
+    );
+}
+
+#[test]
+fn config_from_env_defaults_model_to_openai_when_backend_is_openai() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _base = EnvVarGuard::unset(STT_BASE_URL_ENV);
+    let _model = EnvVarGuard::unset(STT_MODEL_ENV);
+    let _key = EnvVarGuard::set(STT_API_KEY_ENV, "sk-test");
+    let _timeout = EnvVarGuard::unset(STT_TIMEOUT_MS_ENV);
+    let _lang = EnvVarGuard::unset(LANG_ENV);
+    let _prompt = EnvVarGuard::unset(INITIAL_PROMPT_ENV);
+
+    let cfg = CloudBackendConfig::from_env();
+    assert_eq!(cfg.model, DEFAULT_OPENAI_STT_MODEL);
+    // Backend also builds without the caller having to remember the
+    // default — the whole point of the round-3 fix.
+    assert!(CloudTranscribeBackend::new(cfg).is_ok());
+}
+
+#[test]
+fn config_from_env_defaults_model_to_groq_when_base_url_is_groq() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _base = EnvVarGuard::set(STT_BASE_URL_ENV, "https://api.groq.com/openai/v1");
+    let _model = EnvVarGuard::unset(STT_MODEL_ENV);
+    let _key = EnvVarGuard::set(STT_API_KEY_ENV, "gsk-test");
+    let _timeout = EnvVarGuard::unset(STT_TIMEOUT_MS_ENV);
+    let _lang = EnvVarGuard::unset(LANG_ENV);
+    let _prompt = EnvVarGuard::unset(INITIAL_PROMPT_ENV);
+
+    let cfg = CloudBackendConfig::from_env();
+    assert_eq!(cfg.model, DEFAULT_GROQ_STT_MODEL);
+    assert!(CloudTranscribeBackend::new(cfg).is_ok());
+}
+
+#[test]
+fn config_from_env_explicit_model_wins_over_default() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _base = EnvVarGuard::set(STT_BASE_URL_ENV, "https://api.groq.com/openai/v1");
+    let _model = EnvVarGuard::set(STT_MODEL_ENV, "distil-whisper");
+    let _key = EnvVarGuard::set(STT_API_KEY_ENV, "gsk-test");
+    let _timeout = EnvVarGuard::unset(STT_TIMEOUT_MS_ENV);
+    let _lang = EnvVarGuard::unset(LANG_ENV);
+    let _prompt = EnvVarGuard::unset(INITIAL_PROMPT_ENV);
+
+    let cfg = CloudBackendConfig::from_env();
+    assert_eq!(cfg.model, "distil-whisper");
+}
+
+#[test]
+fn config_from_env_blank_model_still_uses_provider_default() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _base = EnvVarGuard::unset(STT_BASE_URL_ENV);
+    // Whitespace-only model must collapse to the default, not
+    // propagate as a literal empty-after-trim value into the config.
+    let _model = EnvVarGuard::set(STT_MODEL_ENV, "   ");
+    let _key = EnvVarGuard::set(STT_API_KEY_ENV, "sk-test");
+    let _timeout = EnvVarGuard::unset(STT_TIMEOUT_MS_ENV);
+    let _lang = EnvVarGuard::unset(LANG_ENV);
+    let _prompt = EnvVarGuard::unset(INITIAL_PROMPT_ENV);
+
+    let cfg = CloudBackendConfig::from_env();
+    assert_eq!(cfg.model, DEFAULT_OPENAI_STT_MODEL);
 }
 
 // ── new() validation ─────────────────────────────────────────────────────────

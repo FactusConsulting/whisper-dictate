@@ -97,6 +97,16 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 /// every press into a socket-level failure. Matches `cloud_transcribe`'s
 /// own floor.
 const TIMEOUT_FLOOR_MS: u64 = 1_000;
+/// Default STT model for OpenAI when the user leaves `stt_model`
+/// empty. Matches Python's `vp_external_api.load_stt_api_settings`
+/// which mapped the default `VOICEPI_MODEL=large-v3-turbo` to
+/// `gpt-4o-mini-transcribe` under the cloud backend. Codex #441 P2
+/// review round 3.
+pub(crate) const DEFAULT_OPENAI_STT_MODEL: &str = "gpt-4o-mini-transcribe";
+/// Default STT model for Groq when the user leaves `stt_model` empty.
+/// Matches Python's cloud-provider default (Whisper Large v3 Turbo on
+/// Groq's OpenAI-compatible endpoint). Codex #441 P2 review round 3.
+pub(crate) const DEFAULT_GROQ_STT_MODEL: &str = "whisper-large-v3-turbo";
 
 impl CloudBackendConfig {
     /// Resolve every field from the process env, mirroring the Python
@@ -121,7 +131,17 @@ impl CloudBackendConfig {
         let base_url = env_trimmed(STT_BASE_URL_ENV)
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned());
-        let model = env_trimmed(STT_MODEL_ENV).unwrap_or_default();
+        // Codex #441 P2 review round 3: Python's `load_stt_api_settings`
+        // supplied a provider-specific default when the user left
+        // `stt_model` empty (openai -> gpt-4o-mini-transcribe,
+        // groq -> whisper-large-v3-turbo). Without the default, the
+        // Rust cloud backend's construction-time `new()` rejects the
+        // empty model, the sink falls through to the stub, and every
+        // press produces empty `no_text`. Preserve the Python default
+        // so a minimal `{stt_backend: "openai"}` config still works.
+        let model = env_trimmed(STT_MODEL_ENV)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default_stt_model(&base_url).to_owned());
         let api_key = resolve_api_key(&base_url);
         let timeout_ms = env_trimmed(STT_TIMEOUT_MS_ENV)
             .and_then(|value| value.parse::<u64>().ok())
@@ -137,6 +157,18 @@ impl CloudBackendConfig {
             initial_prompt,
             timeout_ms,
         }
+    }
+}
+
+/// Provider-specific default STT model, keyed off the resolved base
+/// URL. `api.groq.com` -> Groq's Whisper Large v3 Turbo; everything
+/// else (default OpenAI, self-hosted) -> OpenAI's `gpt-4o-mini-transcribe`.
+/// Mirrors Python's `load_stt_api_settings`. Codex #441 P2 round 3.
+pub(crate) fn default_stt_model(base_url: &str) -> &'static str {
+    if base_url.to_ascii_lowercase().contains("api.groq.com") {
+        DEFAULT_GROQ_STT_MODEL
+    } else {
+        DEFAULT_OPENAI_STT_MODEL
     }
 }
 
