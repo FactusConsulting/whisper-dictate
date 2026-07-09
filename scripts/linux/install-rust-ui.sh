@@ -42,6 +42,38 @@ mkdir -p "${BIN_DIR}" "${LIB_DIR}" "${APP_DIR}" "${ICON_DIR}"
 install -m 0755 "${SOURCE_BIN}" "${REAL_BIN}"
 install -m 0644 "${HERE}/assets/whisper-dictate-logo.svg" "${ICON}"
 
+# Codex #453 P2 (install-rust-ui.sh:37): the `audio-in-rust` feature set
+# pulls in `vad-rs` -> `ort`, which dynamically loads the ONNX Runtime
+# shared library at runtime. Without `libonnxruntime.so*` next to the
+# binary, VAD/audio init fails at first PTT press even though `doctor`
+# / `models list` succeed. The release workflow copies the sidecar into
+# the tarball for exactly this reason; mirror it for the from-source
+# path too. Two search locations, in priority order:
+#   1. Next to the pre-built SOURCE_BIN (release bundle case).
+#   2. Under the cargo build directory (from-source case).
+# Missing files are a soft warning -- an install without the sidecar
+# still succeeds (the user might have libonnxruntime.so.* installed
+# system-wide via their distro).
+_copy_onnxruntime_sidecar_from() {
+  local search_dir="$1"
+  [ -d "${search_dir}" ] || return 0
+  local copied=0
+  for lib in "${search_dir}"/libonnxruntime.so*; do
+    [ -e "${lib}" ] || continue
+    install -m 0755 "${lib}" "${LIB_DIR}/$(basename "${lib}")"
+    copied=1
+  done
+  return "$((1 - copied))"
+}
+if ! _copy_onnxruntime_sidecar_from "$(dirname "${SOURCE_BIN}")" \
+  && ! _copy_onnxruntime_sidecar_from "${HERE}/target/release" \
+  && ! _copy_onnxruntime_sidecar_from "${HERE}/target/release/deps"; then
+  echo "warning: libonnxruntime.so* not found next to ${SOURCE_BIN} nor under" >&2
+  echo "         ${HERE}/target/release/. Rust dictation will require the system" >&2
+  echo "         package (Debian/Ubuntu: 'onnxruntime') or a manual copy into" >&2
+  echo "         ${LIB_DIR}/ before first PTT press." >&2
+fi
+
 cat > "${BIN}" <<EOF
 #!/usr/bin/env bash
 export VOICEPI_APP_ROOT="${HERE}"

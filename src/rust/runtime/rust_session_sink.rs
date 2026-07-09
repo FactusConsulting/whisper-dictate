@@ -253,6 +253,37 @@ where
 /// and so cannot share an `impl FnMut` return.
 pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send + 'static>;
 
+/// Type-alias for the "processing finished" post-transcription
+/// fan-out slot. Populated by the caller AFTER the session
+/// coordinator + hotkey coordinator are both live. When a session's
+/// `stop_and_transcribe` completes, the sink fires every registered
+/// handle in this vec with `CoordinatorEvent::ProcessingFinished(id)`.
+///
+/// Codex #453 P1 (runtime.rs:718): the worker-rust subprocess spawns
+/// TWO coordinators -- the session coord (drives DictateSession) AND
+/// the internal `install_hotkey` coord (owns rdev state). If
+/// processing_finished only reaches the session coord, the hotkey
+/// coord stays in `Stage::Processing` forever and every subsequent
+/// PTT press is dropped. Route the fan-out through both.
+pub(crate) type ProcessingFinishedFanout = Arc<Mutex<Vec<CoordinatorHandle>>>;
+
+/// Fresh, empty fan-out slot. Callers populate before the first
+/// StopAndTranscribe fires.
+pub(crate) fn new_processing_finished_fanout() -> ProcessingFinishedFanout {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+/// Bundle returned from [`try_build_real_production_sink`]. Adds a
+/// secondary `hotkey_coord_slot` to the historical
+/// `(sink, coord_slot)` pair so the caller can wire the internal
+/// hotkey coordinator into the processing_finished fan-out AFTER
+/// `install_hotkey` returns a handle.
+pub(crate) struct StrictProductionSink {
+    pub sink: CoordinatorActionSink,
+    pub coord_slot: Arc<OnceLock<CoordinatorHandle>>,
+    pub processing_finished_fanout: ProcessingFinishedFanout,
+}
+
 /// Codex #453 P2 (runtime.rs:662): strict variant of
 /// [`build_production_sink`] that FAILS instead of falling through
 /// to the PR-4 stub session on a real-backend init error. Used by
@@ -261,34 +292,76 @@ pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send 
 /// leave the worker looking alive (state=ready, hotkey installed)
 /// while every utterance produces empty text.
 ///
-/// On a stock build (either feature missing) this returns Err right
-/// away: the stub fallback was the only way a stock build could
-/// exercise the sink, and the worker refuses to run on stock builds
-/// anyway (see [`crate::runtime::worker_rust::handle_worker_rust`]).
+/// **Codex #453 P2 (rust_session_sink.rs:291) round 2**: the earlier
+/// iteration probed via `make_real_session` and then delegated to
+/// `build_production_sink` -- which itself called `make_real_session`
+/// AGAIN and re-applied the permissive stub fallback. If the second
+/// init failed while the probe succeeded, the strict path returned
+/// Ok wrapping a stub. Route the sink build around the SAME `deps`
+/// bundle the probe produced so a single `make_real_session` call
+/// underpins both the probe result AND the shipped sink.
 ///
-/// Delegates to [`build_production_sink`] on the happy path so the
-/// two entry points share exactly the same wire-up.
+/// On a stock build (either feature missing) this returns Err right
+/// away.
 pub(crate) fn try_build_real_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
-) -> Result<(CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>), anyhow::Error> {
+) -> Result<StrictProductionSink, anyhow::Error> {
     #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
     {
-        // Route through the same real-backend constructor
-        // `build_production_sink` uses; propagate its Err instead of
-        // masking it with the stub fallback.
-        super::rust_session_real_backends::make_real_session(tx.clone(), repaint_notifier.clone())
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "real-backend session init failed ({err}); worker refuses to start with stub \
-                     backends -- fix VOICEPI_WHISPER_MODEL_PATH, download a model via \
-                     `whisper-dictate models download tiny.en`, or check audio/VAD/cpal init"
-                )
-            })?;
-        // Fall through to the shared builder so it wires the sink
-        // around a fresh `make_real_session` deps bundle. (Two
-        // construct calls: one to probe, one to install. Idempotent.)
-        Ok(build_production_sink(tx, repaint_notifier))
+        let deps = super::rust_session_real_backends::make_real_session(
+            tx.clone(),
+            repaint_notifier.clone(),
+        )
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "real-backend session init failed ({err}); worker refuses to start with stub \
+                 backends -- fix VOICEPI_WHISPER_MODEL_PATH, download a model via \
+                 `whisper-dictate models download tiny.en`, or check audio/VAD/cpal init"
+            )
+        })?;
+
+        let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+        let fanout = new_processing_finished_fanout();
+
+        let coord_slot_for_signal = Arc::clone(&coord_slot);
+        let fanout_for_signal = Arc::clone(&fanout);
+        let inner = build_session_action_sink(
+            Arc::clone(&deps.session),
+            tx,
+            move |id| {
+                // Session coord (owner of Stage transitions) first.
+                if let Some(handle) = coord_slot_for_signal.get() {
+                    handle.send(CoordinatorEvent::ProcessingFinished(id));
+                }
+                // Codex #453 P1 (runtime.rs:718) fan-out: every
+                // secondary coordinator registered by the caller
+                // (worker-rust's internal `install_hotkey` coord) also
+                // hears the completion so its Stage::Processing latch
+                // releases and the NEXT PTT press is not dropped.
+                if let Ok(handles) = fanout_for_signal.lock() {
+                    for handle in handles.iter() {
+                        handle.send(CoordinatorEvent::ProcessingFinished(id));
+                    }
+                }
+            },
+            repaint_notifier,
+        );
+
+        // Move deps into a wrapper closure so the audio pump + session
+        // Arc stay alive for the sink's lifetime. (Same shape as
+        // `build_production_sink`'s happy path.)
+        let mut inner = inner;
+        let _deps_keepalive = deps;
+        let owning_sink = move |action: CoordinatorAction| {
+            let _keepalive = &_deps_keepalive;
+            inner(action);
+        };
+        Ok(StrictProductionSink {
+            sink: Box::new(owning_sink),
+            coord_slot,
+            processing_finished_fanout: fanout,
+        })
     }
     #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
     {

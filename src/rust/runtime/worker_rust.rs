@@ -536,13 +536,34 @@ impl WorkerRunner {
         // error message; the alternative (worker looks alive, every
         // utterance produces empty text) is a shipping-blocker post-
         // Wave 8 because there is no Python fallback to unstick it.
-        let (action_sink, coord_slot) = if self.stdin_only {
+        //
+        // Codex #453 P1 (runtime.rs:718): the strict variant also
+        // returns a `processing_finished_fanout` slot -- we push the
+        // internal hotkey coordinator handle into it AFTER
+        // `install_listener` succeeds so the session's
+        // `stop_and_transcribe` completion drives BOTH coordinators
+        // out of `Stage::Processing`. Without this the hotkey coord
+        // gets latched on the first PTT and ignores every subsequent
+        // press.
+        let (action_sink, coord_slot, processing_finished_fanout) = if self.stdin_only {
             // Integration test path -- runs on stock builds too and
             // WANTS the stub sink so the coordinator wire-up is
-            // exercised end-to-end without a real GGML model.
-            rust_session_sink::build_production_sink(tx.clone(), None)
+            // exercised end-to-end without a real GGML model. The
+            // stub sink has no hotkey-coord fanout (no `install_hotkey`
+            // is run in stdin_only mode).
+            let (sink, slot) = rust_session_sink::build_production_sink(tx.clone(), None);
+            (
+                sink,
+                slot,
+                rust_session_sink::new_processing_finished_fanout(),
+            )
         } else {
-            rust_session_sink::try_build_real_production_sink(tx.clone(), None)?
+            let strict = rust_session_sink::try_build_real_production_sink(tx.clone(), None)?;
+            (
+                strict.sink,
+                strict.coord_slot,
+                strict.processing_finished_fanout,
+            )
         };
 
         // Spawn the coordinator with the session sink as its action sink.
@@ -568,11 +589,41 @@ impl WorkerRunner {
         // an earlier iteration returned None and fell through to the
         // stdin loop, which meant PTT went silently dead while the
         // subprocess kept blocking on an unwritten pipe.
+        // Silence the unused-variable warning when the fanout is
+        // unused (stock build without `rust-hotkeys`, OR `--stdin-only`
+        // integration-test path). The fanout is still bound because
+        // `try_build_real_production_sink` populates it; the
+        // registration below is `#[cfg(feature = "rust-hotkeys")]`.
+        let _ = &processing_finished_fanout;
         let hotkey_handle = if self.stdin_only {
             None
         } else {
             match install_listener(self.key_names.clone(), self.mode, coord_handle.clone()) {
-                Some(handle) => Some(handle),
+                Some(handle) => {
+                    // Codex #453 P1 (runtime.rs:718): the hotkey's
+                    // internal coordinator has to hear
+                    // ProcessingFinished when stop_and_transcribe
+                    // completes -- otherwise it stays in
+                    // Stage::Processing and every subsequent PTT
+                    // press is dropped. Register the internal
+                    // coordinator handle on the sink's fan-out slot
+                    // so the session's post-transcribe callback also
+                    // signals it.
+                    //
+                    // `HotkeyHandle::coordinator_handle` only exists
+                    // when the `rust-hotkeys` feature is on -- but a
+                    // `Some(handle)` return from `install_listener`
+                    // ALREADY implies the feature is on (stock builds
+                    // return `Err(InstallError::Unsupported)` -> None).
+                    // Feature-gate the fan-out registration so the code
+                    // still compiles on stock builds without exercising
+                    // an unreachable branch.
+                    #[cfg(feature = "rust-hotkeys")]
+                    if let Ok(mut handles) = processing_finished_fanout.lock() {
+                        handles.push(handle.coordinator_handle());
+                    }
+                    Some(handle)
+                }
                 None => {
                     // Tear the (already-built) coordinator + sink down so
                     // captured resources drop cleanly, then bail. The
