@@ -699,7 +699,12 @@ impl RuntimeSupervisor {
             // both branches.
             process.stdin(Stdio::piped());
         }
-        configure_piped_python_stdio(&mut process);
+        // Wave 8 Part 2: `configure_piped_python_stdio` used to set
+        // `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8` on the spawned Python
+        // worker so `ensure_ascii=False` JSONL round-tripped cleanly through
+        // non-UTF-8 Windows consoles. The child is now the Rust worker-rust
+        // subprocess (same binary as the parent) which writes UTF-8 stdio
+        // directly, so those env vars are moot and have been dropped.
         configure_background_process(&mut process);
         let mut child = match process.spawn() {
             Ok(c) => c,
