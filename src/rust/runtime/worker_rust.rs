@@ -116,16 +116,34 @@ pub const fn all_required_features_enabled() -> bool {
 /// Rust worker the production default and provides `python-legacy` as
 /// an emergency rollback for the Wave-7 -> Wave-8 burn-in. Wave 8
 /// deletes the Python bundle and this helper collapses to
-/// `all_required_features_enabled() && unsupported_worker_rust_settings_reason().is_none()`.
+/// `all_required_features_enabled() && unsupported_worker_rust_settings_reason(env).is_none()`.
+///
+/// # The `env` parameter (Codex #441 P2 review round 3)
+///
+/// `env` is the effective command env the supervisor will pass to the
+/// worker-rust subprocess (`WorkerCommand::env`). AppSettings values
+/// (`stt_backend`, `local_only`, ...) materialise into that vec via
+/// [`crate::config::worker_env_overrides`] BEFORE they appear in
+/// `std::env`, so the gate MUST consult the vec first -- otherwise an
+/// upgraded config that still carries `stt_backend = "parakeet"` slips
+/// past the check (the parent process's env is unset), delegation
+/// fires, and the child's `make_real_session` rejects the value and
+/// falls through to the stub sink.
+///
+/// The lookup helper ([`resolved_env`]) falls back to `std::env::var`
+/// when the key is absent from the vec so process-env-only wiring
+/// (`VOICEPI_WHISPER_MODEL_PATH`, escape-hatch overrides in an
+/// interactive shell) still counts -- mirrors what the child actually
+/// sees once it inherits the parent env on top of the overrides.
 ///
 /// Pure helper so the gate is unit-testable. The supervisor's
 /// `RuntimeSupervisor::start` consults this to swap its spawned
 /// command for the worker-rust subcommand AND to skip its own
 /// in-process Rust hotkey install (the subprocess installs its own).
-pub fn should_delegate_to_worker_rust() -> bool {
+pub fn should_delegate_to_worker_rust(env: &[(String, String)]) -> bool {
     all_required_features_enabled()
         && !rust_session_sink::dictate_backend_python_legacy_requested()
-        && unsupported_worker_rust_settings_reason().is_none()
+        && unsupported_worker_rust_settings_reason(env).is_none()
 }
 
 /// Env var carrying the STT backend selection (whisper / openai /
@@ -134,11 +152,33 @@ pub fn should_delegate_to_worker_rust() -> bool {
 /// itself feature-gated on `whisper-rs-local + rust-injection`.
 const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 
-/// Return `Some(reason)` when the current env carries a
+/// Resolve `key` against the same layered view the child worker will
+/// see: the supervisor's `effective_command.env` overrides win first
+/// (they materialise AppSettings on top of the parent env before
+/// `Command::envs` is called), then we fall back to `std::env` so
+/// process-env-only wiring (e.g. `VOICEPI_WHISPER_MODEL_PATH` set by
+/// the parent binary at startup, or a debug knob exported in the
+/// user's shell) still counts. Missing / unset lands on `None`.
+pub(crate) fn resolved_env(env: &[(String, String)], key: &str) -> Option<String> {
+    if let Some(value) = env
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.to_owned())
+    {
+        return Some(value);
+    }
+    std::env::var(key).ok()
+}
+
+/// Return `Some(reason)` when the effective env carries a
 /// `VOICEPI_STT_BACKEND` value the worker-rust subprocess cannot
 /// build. Returns `None` when the value is one of the recognised
 /// backends -- unset / empty / `whisper` / `faster-whisper` (local
 /// Whisper) OR `openai` / `groq` (cloud STT, Wave 5.5 gap #1 of #348).
+///
+/// `env` is the same effective command env passed to
+/// [`should_delegate_to_worker_rust`] -- see that fn's docs for why
+/// the gate cannot rely on `std::env` alone.
 ///
 /// Named ish to match `should_delegate_to_worker_rust`'s "supervisor
 /// stays on Python" fallback semantics: a `Some(reason)` return value
@@ -150,8 +190,8 @@ const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
 /// (case-insensitive, trims whitespace, accepts the `faster-whisper`
 /// alias) so the two decisions cannot drift -- a value the delegate
 /// gate accepts is one the factory can build.
-pub fn unsupported_worker_rust_settings_reason() -> Option<String> {
-    let raw = std::env::var(STT_BACKEND_ENV).ok().unwrap_or_default();
+pub fn unsupported_worker_rust_settings_reason(env: &[(String, String)]) -> Option<String> {
+    let raw = resolved_env(env, STT_BACKEND_ENV).unwrap_or_default();
     match raw.trim().to_ascii_lowercase().as_str() {
         "" | "whisper" | "faster-whisper" | "openai" | "groq" => None,
         other => Some(format!(

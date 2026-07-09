@@ -512,7 +512,15 @@ impl RuntimeSupervisor {
         // `VOICEPI_STT_BACKEND` directly rather than the saved config --
         // Wave 8 deletes the Python bundle so a per-setting fallback
         // path would just be dead code the moment #348 lands.
-        let delegate_requested = worker_rust::should_delegate_to_worker_rust();
+        // Codex #441 P2 review round 3: the gate must see the same
+        // `VOICEPI_STT_BACKEND` value the child worker will see, which is
+        // the merge of `effective_command.env` overrides (materialising
+        // AppSettings) on top of the parent process env. Passing the vec
+        // in explicitly avoids the false-negative where an upgraded
+        // `stt_backend = "parakeet"` config slips past a std::env-only
+        // check and the child then falls through to the stub sink.
+        let delegate_requested =
+            worker_rust::should_delegate_to_worker_rust(&effective_command.env);
         let mut swap_succeeded = true;
         if delegate_requested {
             if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
