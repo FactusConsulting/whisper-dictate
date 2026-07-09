@@ -101,22 +101,20 @@ pub const fn all_required_features_enabled() -> bool {
 }
 
 /// Whether the supervisor should delegate the dictation lifecycle to
-/// the worker-rust subprocess instead of Python. True iff all three:
+/// the worker-rust subprocess. True iff:
 ///
 /// * the binary was built with [`all_required_features_enabled`], AND
-/// * the user did NOT set the Python-legacy escape hatch
-///   (`VOICEPI_DICTATE_BACKEND=python-legacy`) --
-///   [`rust_session_sink::dictate_backend_python_legacy_requested`], AND
 /// * the effective `VOICEPI_STT_BACKEND` names a backend the rust
 ///   worker knows how to build
 ///   ([`unsupported_worker_rust_settings_reason`] returns `None`).
 ///
-/// Wave 5 PR 7 of #348 flipped this gate: PR 6 required the user to
-/// opt IN via `VOICEPI_DICTATE_BACKEND=rust-session`; PR 7 makes the
-/// Rust worker the production default and provides `python-legacy` as
-/// an emergency rollback for the Wave-7 -> Wave-8 burn-in. Wave 8
-/// deletes the Python bundle and this helper collapses to
-/// `all_required_features_enabled() && unsupported_worker_rust_settings_reason(env).is_none()`.
+/// **Wave 8 Part 2 (Codex #453 P2)**: the `python-legacy` escape hatch
+/// no longer participates in this gate. Wave 8 removed the Python
+/// bundle, so a stale `VOICEPI_DICTATE_BACKEND=python-legacy` in an
+/// upgraded user's env would otherwise block the ONLY remaining
+/// worker. The value is now silently ignored; a one-line stderr hint
+/// (see [`warn_stale_python_legacy`]) surfaces at supervisor startup
+/// so users know to unset it.
 ///
 /// # The `env` parameter (Codex #441 P2 review round 3)
 ///
@@ -124,11 +122,9 @@ pub const fn all_required_features_enabled() -> bool {
 /// worker-rust subprocess (`WorkerCommand::env`). AppSettings values
 /// (`stt_backend`, `local_only`, ...) materialise into that vec via
 /// [`crate::config::worker_env_overrides`] BEFORE they appear in
-/// `std::env`, so the gate MUST consult the vec first -- otherwise an
-/// upgraded config that still carries `stt_backend = "parakeet"` slips
-/// past the check (the parent process's env is unset), delegation
-/// fires, and the child's `make_real_session` rejects the value and
-/// falls through to the stub sink.
+/// `std::env`, so the gate MUST consult the vec first -- otherwise
+/// process-env-only wiring for the same key would miss the config-derived
+/// override.
 ///
 /// The lookup helper ([`resolved_env`]) falls back to `std::env::var`
 /// when the key is absent from the vec so process-env-only wiring
@@ -141,9 +137,30 @@ pub const fn all_required_features_enabled() -> bool {
 /// command for the worker-rust subcommand AND to skip its own
 /// in-process Rust hotkey install (the subprocess installs its own).
 pub fn should_delegate_to_worker_rust(env: &[(String, String)]) -> bool {
-    all_required_features_enabled()
-        && !rust_session_sink::dictate_backend_python_legacy_requested()
-        && unsupported_worker_rust_settings_reason(env).is_none()
+    all_required_features_enabled() && unsupported_worker_rust_settings_reason(env).is_none()
+}
+
+/// Emit a one-time stderr hint when a stale
+/// `VOICEPI_DICTATE_BACKEND=python-legacy` is present in `env`. Wave 8
+/// Part 2 dropped the escape hatch (Codex #453 P2), but users who
+/// upgraded from a Wave-7 install may still carry the value in their
+/// shell profile / config. Idempotent: called once by
+/// `RuntimeSupervisor::start`; guarded by an `AtomicBool` so a
+/// restart cycle does not spam the log.
+pub fn warn_stale_python_legacy_if_set(env: &[(String, String)]) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !rust_session_sink::dictate_backend_python_legacy_requested_from(env) {
+        return;
+    }
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "[runtime] VOICEPI_DICTATE_BACKEND=python-legacy is set but has no effect \
+         in v1.20 -- the Python worker was removed. Unset the env var to silence \
+         this hint."
+    );
 }
 
 /// Env var carrying the STT backend selection (whisper / openai /
@@ -247,13 +264,23 @@ pub(crate) fn local_whisper_model_available(env: &[(String, String)]) -> bool {
 /// gate accepts is one the factory can build.
 pub fn unsupported_worker_rust_settings_reason(env: &[(String, String)]) -> Option<String> {
     let raw = resolved_env(env, STT_BACKEND_ENV).unwrap_or_default();
-    let normalised = raw.trim().to_ascii_lowercase();
+    let mut normalised = raw.trim().to_ascii_lowercase();
+    // Codex #453 P2: mirror the `AppSettings::from_value` migration
+    // (Wave 8 of #348 dropped the Parakeet/NeMo backend) so an
+    // upgraded user with `stt_backend = "parakeet"` in `config.json`
+    // is not blocked from starting the ONLY remaining worker. The
+    // save-round-trip in `save.rs` rewrites the file to `"whisper"`
+    // eventually, but we normalise here too so the delegate gate does
+    // not reject the value on the very first cold start post-upgrade.
+    if normalised == "parakeet" {
+        normalised = "whisper".to_owned();
+    }
     match normalised.as_str() {
         "" | "whisper" | "faster-whisper" | "openai" | "groq" => {}
         other => {
             return Some(format!(
                 "unsupported {STT_BACKEND_ENV}={other:?}; the rust-session worker \
-                 knows whisper / openai / groq -- staying on Python"
+                 knows whisper / openai / groq"
             ));
         }
     }

@@ -71,6 +71,9 @@ pub fn run_terminal(args: Vec<String>) -> Result<()> {
         );
     }
     let env_overrides = config::worker_env_overrides();
+    // Codex #453 P2: nudge users with a stale python-legacy escape
+    // hatch to unset it now that Python is gone.
+    worker_rust::warn_stale_python_legacy_if_set(&env_overrides);
     if !worker_rust::should_delegate_to_worker_rust(&env_overrides) {
         let reason = worker_rust::unsupported_worker_rust_settings_reason(&env_overrides)
             .unwrap_or_else(|| {
@@ -82,6 +85,23 @@ pub fn run_terminal(args: Vec<String>) -> Result<()> {
         return Err(anyhow!(
             "cannot run dictation: {reason}. Python worker was removed in v1.20."
         ));
+    }
+    // Codex #453 P1: the in-process worker reads its configuration
+    // from `std::env::vars()` (via `WorkerRunner::from_env`); the
+    // supervisor path plumbs `env_overrides` through the child's
+    // `Command::envs`, but this foreground path spawns nothing --
+    // it invokes the worker in-process. Without this apply loop the
+    // defaults-from-schema (VOICEPI_KEY, VOICEPI_STT_BACKEND, model
+    // paths, etc.) are missing and the worker fails to install the
+    // hotkey listener / build the backend. Applying the overrides
+    // to `std::env` is safe because this process is dedicated to the
+    // worker for its entire remaining lifetime.
+    for (key, value) in &env_overrides {
+        // SAFETY: single-threaded pre-worker init; no other thread
+        // observes std::env here. `worker_env_overrides()` never
+        // returns keys that are `std::env`-reserved (empty / with `=`
+        // in the key or a NUL byte).
+        std::env::set_var(key, value);
     }
     worker_rust::handle_worker_rust(false)
 }
@@ -597,6 +617,10 @@ impl RuntimeSupervisor {
         // Wave 8 Part 2: Python is gone in v1.20. Delegation is the only
         // valid path -- when the gate declines we cannot fall back to
         // anything, so surface the reason and refuse to spawn.
+        // Codex #453 P2: a stale `VOICEPI_DICTATE_BACKEND=python-legacy`
+        // no longer blocks delegation (the value has no target); log a
+        // one-time hint so upgraded users know to unset it.
+        worker_rust::warn_stale_python_legacy_if_set(&effective_command.env);
         let delegate_requested =
             worker_rust::should_delegate_to_worker_rust(&effective_command.env);
         if !delegate_requested {
@@ -1619,23 +1643,52 @@ fn home_dir() -> Option<PathBuf> {
 /// 3. The workspace root, computed from `CARGO_MANIFEST_DIR` (`cargo
 ///    test`/`cargo run` from a checkout).
 ///
-/// Wave 8 Part 2 simplified the exe-based resolver: previously it
-/// required a `src/python/whisper_dictate/runtime.py` marker before
-/// accepting the exe's parent as the app root, because a stray binary
-/// dropped into `/tmp` could otherwise mis-resolve. v1.20 dropped the
-/// Python bundle so there is no such marker any more; the exe's
-/// parent is the correct answer for every production install. The
-/// dev-checkout path still falls back to `source_root`.
+/// Wave 8 Part 2 (Codex #453 P2): the resolver replaced the pre-v1.20
+/// `src/python/whisper_dictate/runtime.py` Python-source marker with a
+/// native-bundle marker (`VERSION` file next to the binary in every
+/// packaged install: chocolatey nupkg, Inno setup, Linux tarball, nix
+/// derivation). Without a marker check `cargo run` / `cargo test` /
+/// integration-test builds would return `target/debug` (or
+/// `target/release`) as the app root and the documented fallback to
+/// `source_root()` for the shipped resources (`benchmark/corpus.json`,
+/// `packaging/linux/ubuntu26.04/setup.sh`, ...) would never fire.
 fn app_root() -> PathBuf {
     if let Some(raw) = env::var_os(APP_ROOT_ENV) {
         return PathBuf::from(raw);
     }
     if let Ok(exe) = env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            return parent.to_path_buf();
+        if let Some(root) = app_root_from_exe_path(&exe) {
+            return root;
         }
     }
     source_root()
+}
+
+/// Bundle-marker check for the exe-based `app_root` resolver. Accepts
+/// the exe's parent directory only when it looks like a shipped
+/// whisper-dictate install: either a top-level `VERSION` file (chocolatey
+/// nupkg, Linux tarball, nix derivation all ship this) OR a
+/// `packaging/linux/ubuntu26.04/setup.sh` (source checkout used as the
+/// install root via `VOICEPI_APP_ROOT`).
+///
+/// A binary sitting in `target/debug/` under a checkout has neither, so
+/// `app_root` falls through to `source_root()` and the dev workflow
+/// (`cargo run -- ui`) keeps resolving `benchmark/corpus.json` /
+/// `packaging/linux/ubuntu26.04/setup.sh` from the workspace root.
+fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
+    let root = exe.parent()?;
+    let has_version_marker = root.join("VERSION").is_file();
+    let has_packaging_marker = root
+        .join("packaging")
+        .join("linux")
+        .join("ubuntu26.04")
+        .join("setup.sh")
+        .is_file();
+    if has_version_marker || has_packaging_marker {
+        Some(root.to_path_buf())
+    } else {
+        None
+    }
 }
 
 fn source_root() -> PathBuf {

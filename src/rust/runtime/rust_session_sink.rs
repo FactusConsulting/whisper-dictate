@@ -35,9 +35,15 @@ use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 // stays byte-identical to the pre-split shape (PR #441 review round 2).
 // Callers keep writing `rust_session_sink::dictate_backend_..._requested()`
 // exactly as before; the implementation lives in the sibling module.
-pub(crate) use super::rust_session_dictate_env::{
-    dictate_backend_python_legacy_requested, dictate_backend_rust_session_requested,
-};
+//
+// Wave 8 Part 2 dropped `dictate_backend_rust_session_requested` -- the
+// supervisor now unconditionally routes through the session sink on a
+// full-feature build, so the "opt in via VOICEPI_DICTATE_BACKEND=rust-session"
+// branch has no consumer.
+pub(crate) use super::rust_session_dictate_env::dictate_backend_python_legacy_requested_from;
+
+#[cfg(test)]
+pub(crate) use super::rust_session_dictate_env::dictate_backend_python_legacy_requested;
 
 // Constants are only referenced from `#[cfg(test)]` sibling test
 // modules; a non-test lib build has no consumer for the re-export and
