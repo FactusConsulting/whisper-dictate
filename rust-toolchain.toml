@@ -9,6 +9,6 @@
 # and rustup uses it for local `cargo`. Bump the channel deliberately — never
 # back to a floating channel — and keep it in step with the CI runners.
 [toolchain]
-channel = "1.96.1"
+channel = "1.97.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
