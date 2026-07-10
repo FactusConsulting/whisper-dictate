@@ -2,14 +2,16 @@
 //! 30 ms / 480-sample frames at 16 kHz that the Silero VAD and downstream
 //! consumers expect.
 //!
-//! Why a wrapper around `rubato::FftFixedIn`:
+//! Why a wrapper around `rubato::Fft` (with `FixedSync::Input`):
 //! * The capture callback gives us bursts of mono samples whose size depends
 //!   on the device buffer (CPAL doesn't promise a fixed callback size, and on
 //!   Windows WASAPI it's commonly 480–960 frames at 48 kHz). We need exactly
 //!   480-sample frames at 16 kHz to feed Silero, regardless of what the
 //!   device hands us.
-//! * `FftFixedIn` does the actual rate conversion but it expects a fixed
-//!   *input* chunk size per call and produces a variable output chunk size.
+//! * `Fft` with `FixedSync::Input` does the actual rate conversion but it
+//!   expects a fixed *input* chunk size per call and produces a variable
+//!   output chunk size (in rubato 3.x/earlier this was a separate type named
+//!   `FftFixedIn`; rubato 4.x merged them behind the `FixedSync` selector).
 //!   This wrapper buffers partial input until we have a full input chunk,
 //!   then chops the resampler's output into fixed 480-sample 30 ms frames.
 //! * On stop we call [`FrameResampler::finish`] which zero-pads any leftover
@@ -19,7 +21,8 @@
 //! The design is deliberately tiny and callback-based so it can be unit
 //! tested without any audio device or threading.
 
-use rubato::{FftFixedIn, Resampler};
+use rubato::audioadapter_buffers::direct::{SequentialSlice, SequentialSliceOfVecs};
+use rubato::{Fft, FixedSync, Resampler, WindowFunction};
 
 /// Output sample rate fed to Silero. 16 kHz is what the bundled
 /// Silero v4 ONNX model expects.
@@ -42,23 +45,25 @@ pub const OUTPUT_RATE: usize = 16_000;
 /// upstream model adds a documented 480-sample mode this comment can be
 /// dropped. See PR #335 review finding #3.
 pub const FRAME_SIZE: usize = 480;
-/// Fixed input chunk size handed to `FftFixedIn`. 1024 is a good balance
+/// Fixed input chunk size handed to `Fft`. 1024 is a good balance
 /// between resampler latency (≈ 21 ms at 48 kHz input) and FFT efficiency.
 pub const INPUT_CHUNK: usize = 1024;
 
 /// Mono resampler that emits exactly [`FRAME_SIZE`]-sample frames at
 /// [`OUTPUT_RATE`] via a `push(&[f32], callback)` API.
 pub struct FrameResampler {
-    inner: FftFixedIn<f32>,
+    inner: Fft<f32>,
     input_rate: usize,
     /// Pending raw input samples that haven't filled an [`INPUT_CHUNK`] yet.
     input_buffer: Vec<f32>,
     /// Pending resampled samples that haven't filled a [`FRAME_SIZE`]-sample
     /// output frame yet.
     output_buffer: Vec<f32>,
-    /// Pre-allocated scratch handed to `FftFixedIn::process_into_buffer`
-    /// every call. Sized at construction so we never reallocate on the audio
-    /// thread.
+    /// Pre-allocated scratch handed to `Fft::process_into_buffer` every
+    /// call. Sized at construction so we never reallocate on the audio
+    /// thread. Shape: one inner vec per channel (we're mono, so exactly
+    /// one), each vec pre-sized to `output_frames_max()`. Wrapped in a
+    /// [`SequentialSliceOfVecs`] adapter at call time.
     process_scratch: Vec<Vec<f32>>,
     /// Whether any non-empty input has been pushed since the last
     /// [`finish`] (or construction). Used as the [`finish`] guard so we
@@ -75,10 +80,26 @@ impl FrameResampler {
     /// Build a resampler that converts mono `input_rate` Hz audio to mono
     /// [`OUTPUT_RATE`] in fixed [`FRAME_SIZE`]-sample frames.
     pub fn new(input_rate: usize) -> Result<Self, rubato::ResamplerConstructionError> {
-        // FftFixedIn args: input_rate, output_rate, chunk_size_in, sub_chunks, channels
-        // 1 sub-chunk = vanilla FFT resampling (no chunked decimation). 1 channel
-        // because we already downmix to mono inside the capture callback.
-        let inner = FftFixedIn::<f32>::new(input_rate, OUTPUT_RATE, INPUT_CHUNK, 1, 1)?;
+        // rubato 4.x `Fft::new_custom` args:
+        //   (fs_in, fs_out, chunk_size, sub_chunks, nbr_channels, window, fixed).
+        // We pin `sub_chunks = 1` (vanilla FFT, no chunked decimation) and
+        // `WindowFunction::BlackmanHarris2` so we get the exact same
+        // frequency response the pre-v4 `FftFixedIn::new(_, _, _, 1, 1)`
+        // gave us — `Fft::new` would have picked `sub_chunks = chunk_size /
+        // 256 = 4` instead, which would be a silent behavioural change on
+        // this path. `FixedSync::Input` fixes the input chunk size at
+        // INPUT_CHUNK and lets the output size vary, matching the old
+        // "FixedIn" contract. 1 channel because we already downmix to mono
+        // inside the capture callback.
+        let inner = Fft::<f32>::new_custom(
+            input_rate,
+            OUTPUT_RATE,
+            INPUT_CHUNK,
+            1,
+            1,
+            WindowFunction::BlackmanHarris2,
+            FixedSync::Input,
+        )?;
         // Allocate the per-call output buffer once. `output_frames_max` is the
         // worst-case output count from a single `process_into_buffer` call,
         // which is what we need to size the scratch vec.
@@ -116,17 +137,26 @@ impl FrameResampler {
         // Resample as many full input chunks as we currently hold.
         while self.input_buffer.len() >= INPUT_CHUNK {
             // Drain the first INPUT_CHUNK samples out of input_buffer into a
-            // scratch input vec. We use the canonical Vec<Vec<f32>> shape
-            // rubato wants (one inner vec per channel; we're mono).
+            // scratch input vec. rubato 4.x wants an `Adapter`-shaped
+            // buffer; for a mono flat slice, `SequentialSlice` is the
+            // zero-copy wrapper.
             let chunk: Vec<f32> = self.input_buffer.drain(..INPUT_CHUNK).collect();
-            let in_buffers: [&[f32]; 1] = [&chunk];
 
             // Process into the pre-allocated scratch and append the produced
-            // samples onto our pending output buffer.
-            if let Ok((_in_len, out_len)) =
-                self.inner
-                    .process_into_buffer(&in_buffers, &mut self.process_scratch, None)
-            {
+            // samples onto our pending output buffer. Adapters are built in
+            // an inner block so the `&mut self.process_scratch` borrow is
+            // released before we re-borrow it immutably to copy out the
+            // produced samples.
+            let scratch_len = self.process_scratch[0].len();
+            let result = {
+                let input = SequentialSlice::new(&chunk, 1, INPUT_CHUNK)
+                    .expect("mono input adapter, chunk pre-sized to INPUT_CHUNK");
+                let mut output =
+                    SequentialSliceOfVecs::new_mut(&mut self.process_scratch, 1, scratch_len)
+                        .expect("mono scratch adapter, pre-sized to output_frames_max");
+                self.inner.process_into_buffer(&input, &mut output, None)
+            };
+            if let Ok((_in_len, out_len)) = result {
                 self.output_buffer
                     .extend_from_slice(&self.process_scratch[0][..out_len]);
             }
@@ -199,11 +229,16 @@ impl FrameResampler {
             return;
         }
         let chunk: Vec<f32> = self.input_buffer.drain(..INPUT_CHUNK).collect();
-        let in_buffers: [&[f32]; 1] = [&chunk];
-        if let Ok((_in_len, out_len)) =
-            self.inner
-                .process_into_buffer(&in_buffers, &mut self.process_scratch, None)
-        {
+        let scratch_len = self.process_scratch[0].len();
+        let result = {
+            let input = SequentialSlice::new(&chunk, 1, INPUT_CHUNK)
+                .expect("mono input adapter, chunk pre-sized to INPUT_CHUNK");
+            let mut output =
+                SequentialSliceOfVecs::new_mut(&mut self.process_scratch, 1, scratch_len)
+                    .expect("mono scratch adapter, pre-sized to output_frames_max");
+            self.inner.process_into_buffer(&input, &mut output, None)
+        };
+        if let Ok((_in_len, out_len)) = result {
             self.output_buffer
                 .extend_from_slice(&self.process_scratch[0][..out_len]);
         }
