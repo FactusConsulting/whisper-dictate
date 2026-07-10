@@ -553,7 +553,7 @@ jobs:
           # Wave 8 (#348) removed the Python worker package.
           $required = @(
             'whisper-dictate.exe',
-            'benchmark\corpus.json',
+            'benchmark\corpus.json'
           )
           foreach ($rel in $required) {
             $full = Join-Path $appRoot $rel
