@@ -58,10 +58,7 @@ where
 {
     let devices = open_keyboards();
     if debug_enabled() {
-        eprintln!(
-            "[hotkey] evdev matched {} keyboard device(s):",
-            devices.len()
-        );
+        eprintln!("[hotkey] evdev matched {} input device(s):", devices.len());
         for (path, dev) in &devices {
             eprintln!("[hotkey]   {} — {:?}", path.display(), dev.name());
         }
@@ -102,27 +99,30 @@ fn debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Enumerate `/dev/input/event*` and keep the nodes that look like keyboards
-/// AND that we can actually read. `evdev::enumerate` silently skips nodes it
+/// Enumerate `/dev/input/event*` and keep the nodes we can read that expose a
+/// key some PTT binding could use. `evdev::enumerate` silently skips nodes it
 /// cannot `open` (permission denied), so an empty result means "no readable
-/// keyboard" — which `spawn` turns into an actionable error.
+/// input device" — which `spawn` turns into an actionable error.
 fn open_keyboards() -> Vec<(PathBuf, Device)> {
     evdev::enumerate()
-        .filter(|(_, dev)| is_keyboard(dev))
+        .filter(|(_, dev)| is_ptt_capable(dev))
         .collect()
 }
 
-/// Heuristic: a real keyboard supports `EV_KEY` and reports at least one of
-/// the keys only keyboards carry (left Ctrl or a letter). This excludes mice,
-/// power buttons, and lid switches, which also advertise `EV_KEY` but never
-/// the keyboard keys we bind PTT to.
-fn is_keyboard(dev: &Device) -> bool {
+/// A device is relevant if it supports `EV_KEY` and exposes at least one key
+/// that [`code_to_name`] maps (any modifier, F-key, space/esc/tab/enter) OR a
+/// letter (a full keyboard). Filtering on the *mapped* keys — rather than only
+/// probing for Ctrl/letters — means a function-key-only macro pad or foot pedal
+/// used for an `f9`/`f12` binding is still picked up (Codex #462 P2), while
+/// mice, power buttons, and lid switches (no mapped keys) are still excluded.
+fn is_ptt_capable(dev: &Device) -> bool {
     if !dev.supported_events().contains(EventType::KEY) {
         return false;
     }
-    dev.supported_keys()
-        .map(|keys| keys.contains(Key::KEY_LEFTCTRL) || keys.contains(Key::KEY_A))
-        .unwrap_or(false)
+    let Some(keys) = dev.supported_keys() else {
+        return false;
+    };
+    keys.contains(Key::KEY_A) || keys.iter().any(|k| code_to_name(k.code()).is_some())
 }
 
 /// Blocking read loop for one device. Translates each key event into a

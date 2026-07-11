@@ -169,6 +169,14 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     "cmd_l",
     "cmd_r",
     "cmd",
+    // `super_l` / `super_r` are the Linux Meta/Win key names. rdev emits them
+    // as `cmd_*` via `key_to_name`, and `modifier_match` aliases the `super_*`
+    // *target* names into the cmd family, so they are valid PTT bindings on
+    // both backends (Codex #462 P2). Accept them here so install-time
+    // validation doesn't reject a saved `super_l` binding before the evdev
+    // backend gets a chance to observe the key.
+    "super_l",
+    "super_r",
     "f1",
     "f2",
     "f3",
@@ -335,10 +343,12 @@ mod tests {
 
     #[test]
     fn unsupported_names_are_rejected_by_validator() {
-        // Names accepted by the Python evdev/pynput backends but NOT by the
-        // rdev driver. Without the validator a configuration that contains
-        // any of these would install successfully but never fire (P2 #6).
-        for name in ["super_l", "super_r", "menu", "scroll_lock", "pause"] {
+        // Names the settings UI accepts but NO backend can translate to a
+        // PTT-able key. Without the validator a configuration containing any
+        // of these would install successfully but never fire (P2 #6).
+        // (`super_l`/`super_r` USED to live here, but Codex #462 P2 made them
+        // valid cmd-family aliases — see `super_names_...` in hotkey/mod.rs.)
+        for name in ["menu", "scroll_lock", "pause", "caps_lock", "insert"] {
             assert!(
                 !is_rdev_supported_name(name),
                 "rdev driver claims to support {name} — update the test or the map",
