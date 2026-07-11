@@ -713,8 +713,9 @@ fn install_listener(
         }
         Err(err) => {
             eprintln!(
-                "[worker-rust] rdev hotkey install failed: {err}; PTT chord will not \
-                 work in this subprocess (was a display / accessibility permission missing?)"
+                "[worker-rust] hotkey install failed: {err}; PTT chord will not \
+                 work in this subprocess (X11: missing display / accessibility \
+                 permission; Wayland/evdev: user not in the `input` group?)"
             );
             // PR #441 review round 2 (Codex P1 finding 4): signal
             // failure to the supervisor via a worker-event so it can

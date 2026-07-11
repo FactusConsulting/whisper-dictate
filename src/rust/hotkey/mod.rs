@@ -129,10 +129,10 @@ pub struct HotkeyHandle {
 ///   `rust-hotkeys` cargo feature. The supervisor logs a warning and stays
 ///   on the pynput path.
 /// * [`Self::EmptyConfig`] — the PTT binding came in empty.
-/// * [`Self::UnsupportedKey`] — a configured key name has no rdev
-///   translation (e.g. `super_l`, which the Python evdev backend accepts
-///   but rdev does not). Surfaced BEFORE the supervisor disables Python so
-///   it can keep the pynput path wired (P2 #6).
+/// * [`Self::UnsupportedKey`] — a configured key name no backend can
+///   translate to a PTT-able key (e.g. `caps_lock`, which the settings UI
+///   accepts but neither rdev nor evdev maps). Surfaced synchronously so a
+///   binding that can never fire is not treated as installed (P2 #6).
 /// * [`Self::ListenerStartup`] — `rdev::listen` failed at startup (no X
 ///   display, missing accessibility permission, ...). Surfaced
 ///   synchronously so the supervisor can fall back to pynput (P1 #2).
@@ -263,10 +263,10 @@ where
 /// the Python listener. Returns Err with the first unsupported name.
 ///
 /// Codex P2 #416 (round 2) runtime.rs:511 -- on the restart path the
-/// supervisor parks Python BEFORE calling `handle.resume(key_names)`;
-/// without this validation a Settings change to a key that the Python
-/// evdev backend accepts but rdev does not (eg `super_l`) would leave
-/// Python disabled and the Rust hotkey unable to fire.
+/// supervisor validates the (possibly updated) binding before calling
+/// `handle.resume(key_names)`; without this a Settings change to a key the
+/// UI accepts but no backend maps (eg `caps_lock`) would silently leave the
+/// hotkey unable to fire.
 ///
 /// In stub builds (no `rust-hotkeys` feature) this always succeeds --
 /// `install_hotkey` already returns `Unsupported` synchronously there,
@@ -486,19 +486,29 @@ mod integration {
 
     #[test]
     fn unsupported_key_is_rejected_up_front() {
-        // P2 #6: configs with names the rdev driver can't translate must
-        // be rejected synchronously so the supervisor never disables Python
-        // for a binding that will never fire. `super_l` is accepted by the
-        // Python evdev backend but not by our rdev key map.
-        let cfg = HotkeyConfig::hold_to_talk(vec!["super_l".to_owned()]);
+        // P2 #6: configs with names no backend can translate must be rejected
+        // synchronously so a binding that can never fire doesn't look
+        // installed. `caps_lock` is accepted by the settings UI but neither
+        // rdev nor evdev maps it to a PTT-able key. (`super_l` USED to be the
+        // example here, but Codex #462 P2 made it a valid cmd-family alias.)
+        let cfg = HotkeyConfig::hold_to_talk(vec!["caps_lock".to_owned()]);
         let err = match install_hotkey(cfg, |_| {}) {
             Ok(_) => panic!("expected UnsupportedKey error, got Ok"),
             Err(e) => e,
         };
         match err {
-            InstallError::UnsupportedKey(name) => assert_eq!(name, "super_l"),
+            InstallError::UnsupportedKey(name) => assert_eq!(name, "caps_lock"),
             other => panic!("expected UnsupportedKey, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn super_names_are_accepted_as_cmd_aliases() {
+        // Codex #462 P2: a saved `super_l`/`super_r` binding (Linux Meta/Win
+        // key, which both backends emit as `cmd_*`) must pass validation so
+        // PTT is not left dead on Wayland for those users.
+        assert!(validate_key_names(&["super_l".to_owned()]).is_ok());
+        assert!(validate_key_names(&["super_r".to_owned(), "ctrl_l".to_owned()]).is_ok());
     }
 
     /// Pins the feature-build behaviour of `validate_key_names`, the
@@ -515,15 +525,15 @@ mod integration {
             Err(InstallError::EmptyConfig)
         ));
         // First-bad-name is reported (deterministic for error UX).
-        match validate_key_names(&["ctrl_l".to_owned(), "super_l".to_owned()]) {
-            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "super_l"),
+        match validate_key_names(&["ctrl_l".to_owned(), "caps_lock".to_owned()]) {
+            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "caps_lock"),
             other => {
-                panic!("expected UnsupportedKey(\"super_l\") for first-bad-name, got: {other:?}")
+                panic!("expected UnsupportedKey(\"caps_lock\") for first-bad-name, got: {other:?}")
             }
         }
-        match validate_key_names(&["super_l".to_owned(), "ctrl_l".to_owned()]) {
-            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "super_l"),
-            other => panic!("expected UnsupportedKey(\"super_l\") first, got: {other:?}"),
+        match validate_key_names(&["caps_lock".to_owned(), "ctrl_l".to_owned()]) {
+            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "caps_lock"),
+            other => panic!("expected UnsupportedKey(\"caps_lock\") first, got: {other:?}"),
         }
         // All-supported -> Ok so the restart path proceeds to resume.
         assert!(validate_key_names(&["ctrl_l".to_owned(), "f9".to_owned()]).is_ok());
@@ -646,9 +656,9 @@ mod env_tests {
         // stub is unconditionally Ok.
         assert!(validate_key_names(&[]).is_ok());
         // Non-empty input including a name the feature build would reject
-        // (`super_l` is not in the rdev key map): stub still returns Ok
-        // because the supervisor never consults the result when
+        // (`caps_lock` is not in any backend's key map): stub still returns
+        // Ok because the supervisor never consults the result when
         // `hotkey_handle` is None.
-        assert!(validate_key_names(&["ctrl_l".to_owned(), "super_l".to_owned()]).is_ok());
+        assert!(validate_key_names(&["ctrl_l".to_owned(), "caps_lock".to_owned()]).is_ok());
     }
 }
