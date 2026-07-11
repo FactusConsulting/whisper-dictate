@@ -65,7 +65,7 @@ audio-in-rust = ["dep:cpal", "dep:rubato", "dep:vad-rs", "dep:base64", "dep:temp
 # shipping path for this PR. Activate at runtime with VOICEPI_HOTKEY_BACKEND=rust
 # AND a binary built with `--features rust-hotkeys`; otherwise the supervisor's
 # behaviour is byte-identical to today.
-rust-hotkeys = ["dep:rdev"]
+rust-hotkeys = ["dep:rdev", "dep:evdev"]
 # Phase 2.1 Rust-side keyboard injection (issue #348 sub-task 2.1). Pulls in
 # `enigo` as a cross-platform direct-injection baseline (SendInput on Windows,
 # CGEventTap on macOS, xdotest on Linux/X11). Linux Wayland still uses the
@@ -178,6 +178,15 @@ zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"
 # directly for `libc::kill` on the CLI forwarder side.
 signal-hook = "0.4"
 libc = "0.2"
+# evdev: direct /dev/input keyboard listener for the `rust-hotkeys` feature on
+# Linux. `rdev` only speaks X11 (XRecord), which cannot observe global key
+# events on Wayland — so on GNOME/KDE Wayland the rdev listener is deaf and PTT
+# never fires. `evdev` reads the kernel input devices directly (needs the user
+# in the `input` group), which works identically on X11 and Wayland; the deleted
+# Python backend used evdev for exactly this reason. Optional + Linux-only; the
+# `rust-hotkeys` feature enables it via `dep:evdev` and the driver is selected at
+# runtime by `manager::select` (evdev on Wayland, rdev on X11).
+evdev = { version = "0.12", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0", features = ["keychain"] }

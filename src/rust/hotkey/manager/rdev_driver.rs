@@ -27,93 +27,21 @@
 //! caller of `install_hotkey()` so the supervisor can keep the Python
 //! listener wired instead of parking it.
 
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
+use super::driver_common::{manager_channel, spawn_manager_thread};
 use super::tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput};
+
+pub use super::driver_common::{ManagerHandle, ManagerThread, SpawnError};
 
 /// Maximum time [`spawn`] waits after the listener thread reports "started"
 /// for `rdev::listen` to either return Err (and thus be a startup failure)
 /// or stay blocked (and thus be healthy). Tuned for fast-failure platforms
 /// like headless Linux without making CI slow.
 const READY_PROBE_WINDOW: Duration = Duration::from_millis(250);
-
-/// Commands the manager thread accepts on its inbound channel. Each carries
-/// a sync response sender so the caller can `recv()` confirmation from a
-/// non-listener thread; this is the "mpsc commands with sync response"
-/// pattern issue #318 calls out.
-pub enum ManagerCommand {
-    Register {
-        targets: Vec<String>,
-        ack: Sender<Result<(), String>>,
-    },
-    Unregister {
-        ack: Sender<Result<(), String>>,
-    },
-    Shutdown,
-}
-
-/// Public handle to the manager thread.
-#[derive(Clone)]
-pub struct ManagerHandle {
-    tx: Sender<ManagerCommand>,
-}
-
-impl ManagerHandle {
-    /// Install (or replace) the active PTT binding. Blocks until the manager
-    /// thread acknowledges, but the underlying operation is cheap — just
-    /// swapping a `Vec<String>` in a mutex.
-    pub fn register(&self, targets: Vec<String>) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::Register {
-                targets,
-                ack: ack_tx,
-            })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
-    }
-
-    /// Stop emitting tracker outputs without tearing down the listener
-    /// thread (the OS listener stays installed — `rdev` does not give us a
-    /// clean per-binding teardown — but the tracker is replaced with an
-    /// empty one so no events flow through).
-    pub fn unregister(&self) -> Result<(), String> {
-        let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(ManagerCommand::Unregister { ack: ack_tx })
-            .map_err(|e| format!("manager thread disconnected: {e}"))?;
-        ack_rx
-            .recv()
-            .map_err(|e| format!("ack channel closed: {e}"))?
-    }
-
-    /// Ask the manager thread to exit. The OS-level `rdev::listen()` thread
-    /// cannot be interrupted, so it leaks on shutdown — acceptable because
-    /// the supervisor only ever installs the hotkey subsystem once and tears
-    /// down on process exit.
-    pub fn shutdown(&self) {
-        let _ = self.tx.send(ManagerCommand::Shutdown);
-    }
-}
-
-/// Owned join handle for the manager thread (NOT the inner rdev listener
-/// thread, which cannot be joined). Kept by the supervisor for cleanup.
-pub struct ManagerThread {
-    join: Option<JoinHandle<()>>,
-}
-
-impl ManagerThread {
-    pub fn join(mut self) {
-        if let Some(h) = self.join.take() {
-            let _ = h.join();
-        }
-    }
-}
 
 /// Signals the listener thread sends to the spawn-side coordinator.
 enum ListenerSignal {
@@ -122,16 +50,6 @@ enum ListenerSignal {
     /// `rdev::listen` returned Err quickly (no display, missing OS
     /// permission, ...). The string is the rdev error formatted for logs.
     Failed(String),
-}
-
-/// Errors [`spawn`] surfaces on startup. Translated to `InstallError` by the
-/// hotkey module so the supervisor can pick a fallback strategy.
-#[derive(Debug, thiserror::Error)]
-pub enum SpawnError {
-    #[error("rdev listener startup failed: {0}")]
-    ListenerStartup(String),
-    #[error("rdev listener thread never reported it was started")]
-    ListenerHung,
 }
 
 /// Spawn the manager thread plus the `rdev` listener thread. Every tracker
@@ -146,7 +64,7 @@ pub fn spawn<F>(on_output: F) -> Result<(ManagerHandle, ManagerThread), SpawnErr
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
 {
-    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (handle, cmd_rx) = manager_channel();
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
 
@@ -204,34 +122,8 @@ where
         }
     }
 
-    let manager_tracker = Arc::clone(&tracker);
-    let join = thread::Builder::new()
-        .name("vp-hotkey-manager".to_owned())
-        .spawn(move || manager_loop(cmd_rx, manager_tracker))
-        .map_err(|e| SpawnError::ListenerStartup(format!("manager thread spawn failed: {e}")))?;
-
-    Ok((
-        ManagerHandle { tx: cmd_tx },
-        ManagerThread { join: Some(join) },
-    ))
-}
-
-fn manager_loop(rx: Receiver<ManagerCommand>, tracker: Arc<Mutex<KeyTracker>>) {
-    loop {
-        match rx.recv_timeout(Duration::from_secs(60)) {
-            Ok(ManagerCommand::Register { targets, ack }) => {
-                *tracker.lock().expect("tracker poisoned") = KeyTracker::new(targets);
-                let _ = ack.send(Ok(()));
-            }
-            Ok(ManagerCommand::Unregister { ack }) => {
-                *tracker.lock().expect("tracker poisoned") = KeyTracker::new(Vec::new());
-                let _ = ack.send(Ok(()));
-            }
-            Ok(ManagerCommand::Shutdown) => return,
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => return,
-        }
-    }
+    let manager_thread = spawn_manager_thread(cmd_rx, Arc::clone(&tracker))?;
+    Ok((handle, manager_thread))
 }
 
 /// Convert an `rdev::Event` into the platform-agnostic [`RawKeyEvent`] the
