@@ -13,7 +13,7 @@
 
 stdenv.mkDerivation {
   pname   = "whisper-dictate";
-  version = "1.20.0";
+  version = "1.20.1";
   # Placeholder: real recipe pending Wave 8 follow-up (see comment above).
   dontUnpack = true;
   dontBuild  = true;
