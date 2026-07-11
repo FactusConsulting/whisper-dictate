@@ -39,9 +39,11 @@ fn main() {
         .map(str::to_owned)
         .collect();
 
-    eprintln!("[probe] session: XDG_SESSION_TYPE={:?} WAYLAND_DISPLAY={:?}",
+    eprintln!(
+        "[probe] session: XDG_SESSION_TYPE={:?} WAYLAND_DISPLAY={:?}",
         std::env::var("XDG_SESSION_TYPE").ok(),
-        std::env::var("WAYLAND_DISPLAY").ok());
+        std::env::var("WAYLAND_DISPLAY").ok()
+    );
     eprintln!("[probe] installing listener for chord: {key_names:?}");
 
     // Bridge StopAndTranscribe → a channel so a helper thread can simulate the

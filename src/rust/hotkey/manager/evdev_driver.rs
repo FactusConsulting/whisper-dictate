@@ -58,7 +58,10 @@ where
 {
     let devices = open_keyboards();
     if debug_enabled() {
-        eprintln!("[hotkey] evdev matched {} keyboard device(s):", devices.len());
+        eprintln!(
+            "[hotkey] evdev matched {} keyboard device(s):",
+            devices.len()
+        );
         for (path, dev) in &devices {
             eprintln!("[hotkey]   {} — {:?}", path.display(), dev.name());
         }
@@ -203,15 +206,15 @@ fn code_to_name(code: u16) -> Option<&'static str> {
     // Numeric constants (not the `Key::` enum) so this table reads like the
     // kernel header and never depends on the evdev crate's naming.
     let name = match code {
-        29 => "ctrl_l",   // KEY_LEFTCTRL
-        97 => "ctrl_r",   // KEY_RIGHTCTRL
-        42 => "shift_l",  // KEY_LEFTSHIFT
-        54 => "shift_r",  // KEY_RIGHTSHIFT
-        56 => "alt_l",    // KEY_LEFTALT
-        100 => "alt_gr",  // KEY_RIGHTALT
-        125 => "cmd_l",   // KEY_LEFTMETA
-        126 => "cmd_r",   // KEY_RIGHTMETA
-        59 => "f1",       // KEY_F1
+        29 => "ctrl_l",  // KEY_LEFTCTRL
+        97 => "ctrl_r",  // KEY_RIGHTCTRL
+        42 => "shift_l", // KEY_LEFTSHIFT
+        54 => "shift_r", // KEY_RIGHTSHIFT
+        56 => "alt_l",   // KEY_LEFTALT
+        100 => "alt_gr", // KEY_RIGHTALT
+        125 => "cmd_l",  // KEY_LEFTMETA
+        126 => "cmd_r",  // KEY_RIGHTMETA
+        59 => "f1",      // KEY_F1
         60 => "f2",
         61 => "f3",
         62 => "f4",
