@@ -63,18 +63,33 @@ pub use rdev_driver::is_rdev_supported_name;
 /// (also accepts `x11` as an alias for `rdev`) for debugging or as an escape
 /// hatch. Everything downstream ([`ManagerHandle`], the tracker, the
 /// coordinator) is backend-agnostic, so callers never care which fired.
+///
+/// `injection_guard` is shared with the injector wrapper and is consulted by
+/// the rdev callback to drop events the app's own text injector is currently
+/// producing (Windows self-injection PTT wedge; see
+/// [`crate::hotkey::inject_guard`] for the full rationale). The evdev backend
+/// gets the guard for API symmetry but does not actively consult it — the
+/// Wayland/Linux equivalent bug (#467) is filtered at the `/dev/input` device
+/// level by `evdev_driver::open_keyboards`.
 #[cfg(feature = "rust-hotkeys")]
-pub fn spawn<F>(on_output: F) -> std::result::Result<(ManagerHandle, ManagerThread), SpawnError>
+pub fn spawn<F>(
+    injection_guard: std::sync::Arc<crate::hotkey::InjectionGuard>,
+    on_output: F,
+) -> std::result::Result<(ManagerHandle, ManagerThread), SpawnError>
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
 {
     #[cfg(target_os = "linux")]
     {
         if use_evdev() {
+            // evdev already excludes self-injection uinput devices in
+            // `open_keyboards` (#467), so the guard is redundant on this
+            // path. Drop it here rather than plumb it further.
+            let _ = injection_guard;
             return evdev_driver::spawn(on_output);
         }
     }
-    rdev_driver::spawn(on_output)
+    rdev_driver::spawn(injection_guard, on_output)
 }
 
 /// Decide whether the evdev backend should be used on Linux. Honours an

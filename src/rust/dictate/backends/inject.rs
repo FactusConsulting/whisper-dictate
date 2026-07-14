@@ -85,8 +85,26 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
+use crate::hotkey::InjectionGuard;
 use crate::injection::paste::{vk, Clipboard, PasteGuard};
 use crate::injection::{InjectMethod, Injector};
+
+/// Grace window armed BEFORE the injector calls into `SendInput`. Covers
+/// the microseconds of synthesis itself so the very first LL-hook event
+/// (a fast machine can dispatch it in single-digit microseconds) always
+/// finds the guard already raised. See
+/// [`crate::hotkey::inject_guard`] for the full timing model.
+const INJECT_PRE_GRACE: Duration = Duration::from_millis(50);
+
+/// Grace window armed AFTER `SendInput` returns. `WH_KEYBOARD_LL` events
+/// reach rdev's callback via the installing thread's message pump, which
+/// runs on a different thread than the injector — the pump can trail
+/// `SendInput`'s return by tens to a couple-hundred milliseconds under
+/// load. 300 ms is comfortably above every measurement I've seen on
+/// Windows 11 with the LL-hook timeout at its default 300 ms, and small
+/// enough that a user who genuinely re-presses PTT within a third of a
+/// second of the paste chord notices at most one dropped press.
+const INJECT_POST_GRACE: Duration = Duration::from_millis(300);
 
 /// VKs the wrapper releases before every injection, matching the full
 /// Shift / Alt / Ctrl / Cmd sweep in `vp_inject.py::_release_stale_modifiers`.
@@ -181,6 +199,20 @@ pub struct EnigoInjectBackend {
     /// `Duration::ZERO` via [`Self::with_restore_delay`] so they don't
     /// pay the 2 s wall-clock wait per paste assertion.
     restore_delay: Duration,
+    /// Optional shared self-injection guard obtained from
+    /// [`crate::hotkey::HotkeyHandle::injection_guard`]. When set, the
+    /// wrapper arms the guard just before + just after the SendInput
+    /// bursts (stale-modifier release + typing / paste chord). The
+    /// hotkey driver's callback drops every OS key event it sees while
+    /// the guard is active, which prevents the app's own injected
+    /// keystrokes from feeding back into the PTT tracker on Windows
+    /// (the wedge that leaves PTT "works once, then dead" — same class
+    /// as #467 on Linux/Wayland, filtered at the device level there).
+    ///
+    /// `None` when no hotkey subsystem is active (unit tests without
+    /// the guard, headless CI, non-worker-rust binaries): the arm
+    /// becomes a no-op and behaviour is unchanged.
+    injection_guard: Option<Arc<InjectionGuard>>,
 }
 
 impl std::fmt::Debug for EnigoInjectBackend {
@@ -193,6 +225,13 @@ impl std::fmt::Debug for EnigoInjectBackend {
         f.debug_struct("EnigoInjectBackend")
             .field("method", &self.method)
             .field("restore_delay", &self.restore_delay)
+            .field(
+                "injection_guard",
+                &self
+                    .injection_guard
+                    .as_ref()
+                    .map(|_| "<Arc<InjectionGuard>>"),
+            )
             .field("inner", &"<Mutex<State>>")
             .finish()
     }
@@ -219,7 +258,26 @@ impl EnigoInjectBackend {
             }),
             method,
             restore_delay: DEFAULT_CLIPBOARD_RESTORE_DELAY,
+            injection_guard: None,
         }
+    }
+
+    /// Install the shared self-injection guard obtained from
+    /// [`crate::hotkey::HotkeyHandle::injection_guard`]. Once set, every
+    /// `inject()` call arms the guard around its `SendInput` bursts so
+    /// the hotkey listener drops the app's own injected keystrokes
+    /// instead of feeding them into the PTT tracker. Without this the
+    /// tracker's bare-modifier rule 1 can trip on an injected foreign
+    /// key and silently block the *next* PTT press for the full 10 s
+    /// self-heal window — the exact wedge the user reports on Windows.
+    /// See [`crate::hotkey::inject_guard`] for the full rationale.
+    ///
+    /// Optional: a wrapper built without a guard (unit tests, headless
+    /// CI, binaries without a hotkey subsystem) behaves identically to
+    /// the old code path — the arm becomes a no-op.
+    pub fn with_injection_guard(mut self, guard: Arc<InjectionGuard>) -> Self {
+        self.injection_guard = Some(guard);
+        self
     }
 
     /// Install a [`Clipboard`] backend used by paste mode to save the
@@ -282,11 +340,32 @@ impl InjectBackend for EnigoInjectBackend {
         // `Clipboard` trait is stateless apart from the backing OS
         // surface — so we recover the inner value and proceed rather
         // than wedging the session forever.
-        let mut guard = self
+        let mut lock = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let state = &mut *guard;
+        let state = &mut *lock;
+
+        // Arm the self-injection guard BEFORE the first SendInput so
+        // the hotkey listener's callback discards the burst instead of
+        // feeding it back into the PTT tracker (Windows wedge; see
+        // module-level docs on `crate::hotkey::inject_guard`). The arm
+        // is monotonic and covers both the release sweep AND the
+        // typing / paste burst below — a second arm after the burst
+        // extends the window past the LL-hook drain latency.
+        //
+        // Prefer an explicitly-installed guard (test path via
+        // `with_injection_guard`); fall back to the process-wide slot
+        // that `install_hotkey` populates in production. The `Option`
+        // stays `None` on binaries with no hotkey subsystem — the arm
+        // then becomes a no-op and behaviour is unchanged.
+        let active_guard = self
+            .injection_guard
+            .clone()
+            .or_else(crate::hotkey::inject_guard::global);
+        if let Some(g) = active_guard.as_deref() {
+            g.arm(INJECT_PRE_GRACE);
+        }
 
         // Pre-injection cleanup #1: drop any modifiers still held from
         // a push-to-talk chord. Failures are logged + ignored to match
@@ -298,7 +377,7 @@ impl InjectBackend for EnigoInjectBackend {
             eprintln!("[inject] stale-modifier release failed: {e:#}");
         }
 
-        match self.method {
+        let result = match self.method {
             InjectMethod::Typing => state
                 .injector
                 .inject_text(text, InjectMethod::Typing)
@@ -306,7 +385,20 @@ impl InjectBackend for EnigoInjectBackend {
             InjectMethod::Paste(_) => {
                 inject_via_paste(state, text, self.method, self.restore_delay)
             }
+        };
+
+        // Second arm covers the LL-hook drain latency: `SendInput` on
+        // the injecting thread can return before rdev's message pump
+        // finishes delivering the tail of the burst to the hook, and
+        // a bool that we cleared on-return would let those trailing
+        // events through. The guard's monotonic-forward semantics
+        // ([`InjectionGuard::arm`]) mean this is safe to call even if
+        // the pre-arm's horizon is still further out.
+        if let Some(g) = active_guard.as_deref() {
+            g.arm(INJECT_POST_GRACE);
         }
+
+        result
     }
 }
 
