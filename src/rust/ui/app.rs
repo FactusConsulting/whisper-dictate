@@ -252,6 +252,7 @@ impl WhisperDictateApp {
             ctx,
             ui_state,
             Some(&self.whisper_model_downloads),
+            Some(&mut self.settings.model),
         );
         match outcome {
             super::onboarding::OnboardingOutcome::Active => {}

@@ -205,14 +205,23 @@ fn combo_enabled_labeled_w(
     grid_help_row(ui, show_help, help);
 }
 
-/// Model picker with accuracy/speed annotations and VRAM-aware grey-out.
+/// Whisper-model picker with accuracy/speed annotations, VRAM-aware
+/// grey-out, and a per-entry status suffix (cached ✓ / downloading NN% /
+/// size) so the dropdown is a single-source-of-truth for both "which
+/// model" and "is it on disk". The `status_for(model)` closure returns the
+/// trailing status fragment for each row; the selected-text also embeds
+/// it so the closed dropdown reflects the current model's state.
 ///
-/// `hint(value) -> (note, approx_mb)`. When `gpu_total_mb` is `Some`, options
-/// needing more VRAM than the GPU has total are disabled (they can't fit even
-/// with an idle GPU) and explain why on hover. With `None` (CPU / non-NVIDIA)
-/// nothing is greyed out — every model runs, large ones just slower.
-#[allow(clippy::too_many_arguments)] // a labelled, VRAM-gated form row genuinely needs them
-pub(in crate::ui) fn combo_model_vram(
+/// `hint(value) -> (note, approx_mb)`. When `gpu_total_mb` is `Some`,
+/// options needing more VRAM than the GPU has total are disabled and
+/// explain why on hover. With `None` (CPU / non-NVIDIA) nothing is greyed
+/// out — every model runs, large ones just slower.
+///
+/// Returns `true` when the user's click landed on a DIFFERENT model than
+/// `*value` was on entry — callers use this to auto-trigger a download for
+/// the newly-selected model in the same frame.
+#[allow(clippy::too_many_arguments)] // a labelled, VRAM-gated, status-decorated model row genuinely needs them
+pub(in crate::ui) fn combo_whisper_model_with_status(
     ui: &mut egui::Ui,
     enabled: bool,
     label: &str,
@@ -220,16 +229,26 @@ pub(in crate::ui) fn combo_model_vram(
     models: &[&str],
     hint: fn(&str) -> (&'static str, u32),
     gpu_total_mb: Option<u32>,
+    status_for: &dyn Fn(&str) -> String,
     help: &str,
-) {
+) -> bool {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
+    let before = value.clone();
     let (cur_note, _) = hint(value);
+    let cur_status = status_for(value);
     let selected_text = if value.is_empty() {
         "(empty)".to_owned()
-    } else if cur_note.is_empty() {
-        value.clone()
     } else {
-        format!("{value} — {cur_note}")
+        let mut base = if cur_note.is_empty() {
+            value.clone()
+        } else {
+            format!("{value} — {cur_note}")
+        };
+        if !cur_status.is_empty() {
+            base.push_str("  ");
+            base.push_str(&cur_status);
+        }
+        base
     };
     ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(label)
@@ -239,14 +258,17 @@ pub(in crate::ui) fn combo_model_vram(
                 for model in models {
                     let (note, mb) = hint(model);
                     let fits = gpu_total_mb.is_none_or(|total| mb <= total);
-                    let display = if note.is_empty() {
+                    let status = status_for(model);
+                    let mut display = if note.is_empty() {
                         (*model).to_owned()
                     } else {
                         format!("{model} — {note} (~{mb} MB)")
                     };
+                    if !status.is_empty() {
+                        display.push_str("  ");
+                        display.push_str(&status);
+                    }
                     let selected = value.as_str() == *model;
-                    // egui 0.34: `SelectableLabel::new(sel, text)` is replaced by
-                    // `Button::selectable(sel, text)` (same selectable-row look).
                     let response =
                         ui.add_enabled(fits, egui::Button::selectable(selected, display));
                     let response = match gpu_total_mb {
@@ -263,6 +285,7 @@ pub(in crate::ui) fn combo_model_vram(
     });
     ui.end_row();
     grid_help_row(ui, show_help, help);
+    *value != before
 }
 
 /// A labelled combo over a dynamically built `(value, display)` list (owned

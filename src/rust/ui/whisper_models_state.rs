@@ -94,9 +94,13 @@ impl WhisperModelDownloads {
         self.inner.lock().ok()?.jobs.get(name).cloned()
     }
 
-    /// True iff any catalog entry is currently being downloaded. Used to
-    /// disable other Download buttons while one is in flight (avoids the
-    /// user kicking off three multi-hundred-MB downloads at once).
+    /// True iff any catalog entry is currently being downloaded. Historically
+    /// used to disable other Download buttons while one was in flight; the
+    /// per-catalog-entry buttons have been removed in favour of an on-select
+    /// auto-download flow, so this helper now only survives to back the
+    /// state-machine unit tests that pin the InProgress/Failed/Done
+    /// transitions.
+    #[cfg(test)]
     pub fn any_in_progress(&self) -> bool {
         let Ok(state) = self.inner.lock() else {
             return false;
