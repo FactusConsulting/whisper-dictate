@@ -457,6 +457,24 @@ pub fn handle_worker_rust(stdin_only: bool) -> Result<()> {
     // if the sink construction itself fails.
     std::env::set_var(dictate_events::WORKER_EVENTS_ENV, "1");
 
+    // Wave 8 regression mitigation (#462 follow-up): on Linux the in-process
+    // cpal capture opens the default device, which on a PipeWire desktop routes
+    // through libpipewire's realtime "data-loop" thread. rtkit grants that
+    // thread SCHED_FIFO plus a per-thread RLIMIT_RTTIME; with the default small
+    // quantum the data-loop overruns that budget during stream startup and the
+    // kernel SIGKILLs the whole worker (~0.6 s after "ready" — no Rust panic,
+    // no core dump, flaky race). Forcing a larger PipeWire quantum gives the
+    // data-loop enough headroom per cycle to stay under the RT budget, which
+    // empirically stops the kill (2048/48000 is the smallest stable value on
+    // the reporter's Raptor Lake / SOF-HDA box; 4096 keeps margin). Only set it
+    // when the user hasn't already chosen a quantum, so an explicit override
+    // still wins. The trade-off is a slightly larger capture buffer (~85 ms),
+    // which is irrelevant for push-to-talk dictation.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("PIPEWIRE_QUANTUM").is_none() {
+        std::env::set_var("PIPEWIRE_QUANTUM", "4096/48000");
+    }
+
     let runner = WorkerRunner::from_env(stdin_only)?;
     runner.run()
 }
