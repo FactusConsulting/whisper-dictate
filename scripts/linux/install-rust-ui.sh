@@ -35,9 +35,12 @@ else
   # `whisper-rs-vulkan` (v1.20.3) supersedes `whisper-rs-local` — it
   # transitively enables the local feature AND compiles whisper.cpp with
   # Vulkan GPU support. Requires the Vulkan SDK on the build host
-  # (`sudo apt install libvulkan-dev spirv-tools glslang-tools` on
-  # Ubuntu). Runtime falls back to CPU if the user machine lacks a Vulkan
-  # driver, so this is safe to ship as the default.
+  # (`sudo apt install libvulkan-dev spirv-tools glslang-tools glslc` on
+  # Ubuntu — `glslc` is a separate package from `glslang-tools` and is
+  # required by whisper.cpp's ggml-vulkan CMake to compile the compute
+  # shaders; missing it broke the v1.20.3 tag on Linux CI). Runtime falls
+  # back to CPU if the user machine lacks a Vulkan driver, so this is safe
+  # to ship as the default.
   cargo build --release -p whisper-dictate-app \
     --manifest-path "${CARGO_MANIFEST}" \
     --target-dir "${HERE}/target" \
