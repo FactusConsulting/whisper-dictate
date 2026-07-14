@@ -431,8 +431,13 @@ pub(crate) fn build_real_transcribe_backend(
 ) -> Result<RealTranscribeBackend, String> {
     match kind {
         RealBackendKind::Whisper => {
-            let model_path =
-                resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
+            // Read the settings-picked model name from the effective env so
+            // the resolver honours the UI dropdown (bug 2 of the multilingual
+            // catalog PR). Empty / unset falls through to today's
+            // first-cached-catalog behaviour.
+            let preferred = crate::whisper::preferred_model_name_from_env();
+            let model_path = resolve_model_path_from_env(preferred.as_deref())
+                .map_err(|e| format!("model path: {e:#}"))?;
             let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
             let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
             Ok(RealTranscribeBackend::Whisper(

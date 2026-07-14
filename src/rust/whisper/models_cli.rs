@@ -44,7 +44,9 @@ pub(crate) fn print_list<W: std::io::Write, F: Fn(&ModelEntry) -> bool>(
         let status = if is_downloaded(entry) { "[ok]" } else { "[--]" };
         writeln!(
             out,
-            "  {status} {name:<10}  {size:>7}  {descr}",
+            // Name column widened to 16 chars post-multilingual-catalog:
+            // `large-v3-turbo` is 14, so 10 no longer aligns cleanly.
+            "  {status} {name:<16}  {size:>7}  {descr}",
             name = entry.name,
             size = human_bytes(entry.size_bytes),
             descr = entry.description,
@@ -207,21 +209,37 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         print_list(&mut buf, |entry| entry.name == first).unwrap();
         let out = String::from_utf8(buf).unwrap();
-        // The downloaded-marker line must include the entry name.
-        let first_line = out
-            .lines()
-            .find(|l| l.contains(first))
-            .expect("first entry must appear in list output");
+        // Match on the "<status> <name> " prefix so substring-in-substring
+        // catalog names (e.g. `tiny` inside `tiny.en`) don't false-hit the
+        // wrong row. `print_list` pads `name` to 10 chars in a `{:<10}`
+        // field, so the name is followed by whitespace on every row.
+        fn find_row<'a>(out: &'a str, name: &str) -> &'a str {
+            out.lines()
+                .find(|l| {
+                    let l = l.trim_start();
+                    (l.starts_with("[ok]") || l.starts_with("[--]"))
+                        && l[4..].trim_start().starts_with(name)
+                        // Guard against `tiny` matching the `tiny.en` row: the
+                        // next char after the name must be whitespace, not a
+                        // dot / hyphen extending the name.
+                        && l[4..]
+                            .trim_start()
+                            .as_bytes()
+                            .get(name.len())
+                            .map(|b| b.is_ascii_whitespace())
+                            .unwrap_or(false)
+                })
+                .unwrap_or_else(|| panic!("row for {name:?} must appear in list output"))
+        }
+
+        let first_line = find_row(&out, first);
         assert!(
             first_line.contains("[ok]"),
             "downloaded entry must be marked [ok]: {first_line}",
         );
         // Every other catalog entry must be marked missing.
         for entry in &model_manager::CATALOG[1..] {
-            let line = out
-                .lines()
-                .find(|l| l.contains(entry.name))
-                .expect("entry must appear in list output");
+            let line = find_row(&out, entry.name);
             assert!(
                 line.contains("[--]"),
                 "missing entry must be marked [--]: {line}",

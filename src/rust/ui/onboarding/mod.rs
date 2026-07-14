@@ -131,6 +131,7 @@ pub enum OnboardingOutcome {
 pub fn render_onboarding_modal(
     ctx: &egui::Context,
     ui_state: &mut OnboardingUi,
+    downloads: Option<&crate::ui::whisper_models_state::WhisperModelDownloads>,
 ) -> OnboardingOutcome {
     // Fast path: nothing to do if the state machine already reported the
     // wizard is dismissed.
@@ -165,6 +166,29 @@ pub fn render_onboarding_modal(
                 // The Permissions step embeds the per-OS guide inline.
                 if ui_state.state.current == Step::Permissions {
                     draw_permissions_body(ui, &mut ui_state.os_target);
+                }
+
+                // Bug 3 of the multilingual-catalog PR: embed the GGML
+                // downloader inline on the DownloadModel step so a
+                // first-run user finishes onboarding with a working local
+                // Whisper backend instead of a "worker won't start" wall
+                // on first PTT. Falls back to copy-only guidance when
+                // the caller didn't supply the shared downloads state
+                // (unit tests, headless smoke).
+                if ui_state.state.current == Step::DownloadModel {
+                    match downloads {
+                        Some(dl) => draw_download_model_body(ui, dl),
+                        None => {
+                            ui.label(
+                                egui::RichText::new(
+                                    "(Download rows appear here when the wizard is opened \
+                                     from the running app.)",
+                                )
+                                .italics()
+                                .weak(),
+                            );
+                        }
+                    }
                 }
 
                 if !content.skip_hint.is_empty() {
@@ -227,6 +251,96 @@ fn draw_step_header(ui: &mut egui::Ui, step: Step, content: StepContent) {
                 .small(),
         );
     });
+}
+
+/// Bug 3 of the multilingual-catalog PR: minimal in-wizard downloader for
+/// the [`Step::DownloadModel`] step. Renders one row per catalog entry
+/// (name + size + description on the left; status badge + Download button
+/// on the right; progress bar while running). Deliberately a
+/// slimmed-down variant of `tabs::whisper_models::whisper_model_download_section`
+/// so the wizard stays independent of the Settings tab's status message.
+fn draw_download_model_body(
+    ui: &mut egui::Ui,
+    downloads: &crate::ui::whisper_models_state::WhisperModelDownloads,
+) {
+    use crate::whisper::model_manager::{self, ModelEntry};
+    use crate::whisper::models_cli::human_bytes;
+
+    let any_running = downloads.any_in_progress();
+    for entry in model_manager::CATALOG {
+        wizard_model_row(ui, entry, downloads, any_running);
+        ui.add_space(2.0);
+    }
+
+    fn wizard_model_row(
+        ui: &mut egui::Ui,
+        entry: &'static ModelEntry,
+        downloads: &crate::ui::whisper_models_state::WhisperModelDownloads,
+        any_running: bool,
+    ) {
+        let job = downloads.job(entry.name);
+        let in_progress = matches!(
+            job.as_ref().map(|j| &j.status),
+            Some(crate::ui::whisper_models_state::DownloadStatus::InProgress),
+        );
+        let already_cached = downloads.is_verified_fast(entry);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(entry.name).strong().monospace());
+            ui.label(format!(
+                "  {}  {}",
+                human_bytes(entry.size_bytes),
+                entry.description
+            ));
+        });
+        ui.horizontal(|ui| {
+            let (status_text, status_color) =
+                crate::ui::tabs::whisper_models::whisper_model_status_label(
+                    already_cached,
+                    job.as_ref(),
+                    ui.visuals().text_color(),
+                );
+            ui.colored_label(status_color, status_text);
+            let button_label = if in_progress {
+                "Downloading\u{2026}"
+            } else if already_cached {
+                "Redownload"
+            } else if matches!(
+                job.as_ref().map(|j| &j.status),
+                Some(crate::ui::whisper_models_state::DownloadStatus::Failed(_)),
+            ) {
+                "Retry"
+            } else {
+                "Download"
+            };
+            if ui
+                .add_enabled(!any_running, egui::Button::new(button_label))
+                .on_hover_text(format!(
+                    "Download {} from {} to the user cache and verify its SHA-256.",
+                    entry.name, entry.url
+                ))
+                .clicked()
+            {
+                let _ = crate::ui::whisper_models_state::spawn_download(downloads, entry.name);
+            }
+        });
+        if let Some(job) = &job {
+            if let crate::ui::whisper_models_state::DownloadStatus::InProgress = job.status {
+                let fraction = job.fraction();
+                match fraction {
+                    Some(f) => {
+                        ui.add(
+                            egui::ProgressBar::new(f)
+                                .desired_width(220.0)
+                                .show_percentage(),
+                        );
+                    }
+                    None => {
+                        ui.add(egui::Spinner::new());
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn draw_permissions_body(ui: &mut egui::Ui, os_target: &mut OsTarget) {
@@ -501,7 +615,7 @@ mod tests {
                 dont_show_again: false,
             };
             ctx.begin_pass(input.clone());
-            let observed_outcome = render_onboarding_modal(&ctx, &mut ui_state);
+            let observed_outcome = render_onboarding_modal(&ctx, &mut ui_state, None);
             let _ = ctx.end_pass();
             assert_eq!(
                 observed_outcome,

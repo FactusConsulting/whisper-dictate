@@ -44,12 +44,95 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[test]
 fn catalog_contains_expected_models() {
-    // Encodes the curated scope decision (Wave 7-B): English-only,
-    // CPU-friendly. A future PR that drops one of these or accidentally
+    // Encodes the curated scope decision: the historical English-only trio
+    // (Wave 7-B) plus the multilingual set (bug 1 of this PR — the
+    // catalog now covers every value the UI's `WHISPER_MODELS` dropdown
+    // offers so a picked-then-downloaded round-trip lands on the right
+    // file). A future PR that drops one of these or accidentally
     // re-orders them will trip this — at which point the UI labels
     // should be re-audited alongside.
     let names: Vec<&str> = CATALOG.iter().map(|e| e.name).collect();
-    assert_eq!(names, vec!["tiny.en", "base.en", "small.en"]);
+    assert_eq!(
+        names,
+        vec![
+            "tiny.en",
+            "base.en",
+            "small.en",
+            "tiny",
+            "base",
+            "small",
+            "medium",
+            "large-v3-turbo",
+            "large-v3",
+        ]
+    );
+}
+
+#[test]
+fn catalog_covers_every_dropdown_value() {
+    // Bug 2 of this PR: settings.model is one of the WHISPER_MODELS
+    // dropdown values, and the resolver looks it up in CATALOG. If any
+    // dropdown value is missing from the catalog the picker is a lie
+    // (user selects `large-v3`, resolver returns first-cached instead).
+    for name in [
+        "large-v3",
+        "large-v3-turbo",
+        "medium",
+        "small",
+        "base",
+        "tiny",
+    ] {
+        assert!(
+            find(name).is_some(),
+            "WHISPER_MODELS dropdown value {name:?} must have a matching catalog entry"
+        );
+    }
+    // Historical English entries still resolve.
+    assert!(
+        find("tiny.en").is_some(),
+        "tiny.en catalog entry must remain"
+    );
+    assert!(
+        find("base.en").is_some(),
+        "base.en catalog entry must remain"
+    );
+    assert!(
+        find("small.en").is_some(),
+        "small.en catalog entry must remain"
+    );
+}
+
+#[test]
+fn multilingual_catalog_entries_have_realistic_metadata() {
+    // Bug 1 of this PR: each new multilingual entry must ship non-empty
+    // name/url/filename/description AND a realistic (>10 MiB) size so
+    // the UI progress bar has something to render before the first
+    // Content-Length header lands.
+    for name in [
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large-v3-turbo",
+        "large-v3",
+    ] {
+        let entry = find(name).unwrap_or_else(|| panic!("catalog must include {name:?}"));
+        assert!(!entry.sha256.is_empty(), "{name}: sha256 must be non-empty");
+        assert!(!entry.url.is_empty(), "{name}: url must be non-empty");
+        assert!(
+            !entry.filename.is_empty(),
+            "{name}: filename must be non-empty"
+        );
+        assert!(
+            !entry.description.is_empty(),
+            "{name}: description must be non-empty"
+        );
+        assert!(
+            entry.size_bytes > 10 * 1024 * 1024,
+            "{name}: size_bytes must be a realistic model size, got {}",
+            entry.size_bytes
+        );
+    }
 }
 
 #[test]

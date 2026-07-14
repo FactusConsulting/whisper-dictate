@@ -14,12 +14,18 @@ use crate::config::AppSettings;
 
 /// The wizard steps, in the order the user sees them. Ordering follows the
 /// "typical scope" of Issue #328: welcome banner → microphone → hotkey → STT
-/// backend selection → permissions guide → test recording → done screen.
+/// backend selection → download a whisper model → permissions guide → test
+/// recording → done screen.
 ///
 /// The permissions guide is kept together with the mic + hotkey steps rather
 /// than pushed to the end, so a user who bails halfway through has already
 /// seen the OS-level toggles that most often cause "I pressed the key and
 /// nothing happened" support tickets.
+///
+/// `DownloadModel` (bug 3 of the multilingual-catalog PR) sits directly
+/// after `Backend` — the local-Whisper picker on Backend is meaningless
+/// until a GGML file lives on disk, and prior to this step users hit a
+/// "worker won't start" wall the first time they pressed PTT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Step {
     /// Welcome banner + short "what this wizard does" copy.
@@ -30,6 +36,9 @@ pub enum Step {
     Hotkey,
     /// STT backend picker (local Whisper vs cloud STT).
     Backend,
+    /// Download a Whisper GGML model into the user cache. Skippable for
+    /// cloud-only users.
+    DownloadModel,
     /// Per-OS accessibility / input-monitoring guide (permissions.rs).
     Permissions,
     /// Test recording — the user presses PTT once and the wizard confirms
@@ -42,11 +51,12 @@ pub enum Step {
 impl Step {
     /// The ordered list of steps, used to compute the "step N of M" progress
     /// indicator and to advance / retreat between steps.
-    pub const ALL: [Step; 7] = [
+    pub const ALL: [Step; 8] = [
         Step::Welcome,
         Step::Microphone,
         Step::Hotkey,
         Step::Backend,
+        Step::DownloadModel,
         Step::Permissions,
         Step::TestRecording,
         Step::Done,
@@ -377,10 +387,29 @@ mod tests {
         assert!(!state.dont_show_again);
         assert!(state.is_active());
         // Advancing from a mid-flow resume must land on the correct next step,
-        // not restart from Welcome.
+        // not restart from Welcome. Bug 3 of the multilingual-catalog PR
+        // inserted DownloadModel between Backend and Permissions.
         let mut state = state;
         state.advance();
+        assert_eq!(state.current, Step::DownloadModel);
+        state.advance();
         assert_eq!(state.current, Step::Permissions);
+    }
+
+    #[test]
+    fn download_model_step_sits_between_backend_and_permissions() {
+        // Bug 3 of the multilingual-catalog PR: the DownloadModel step
+        // must sit directly after Backend (the picker only becomes
+        // actionable once a model is on disk) and before Permissions (the
+        // OS-toggle guide). A regression that moves it would either hide
+        // the required next step or push it past the end of the flow.
+        assert_eq!(Step::Backend.next(), Some(Step::DownloadModel));
+        assert_eq!(Step::DownloadModel.next(), Some(Step::Permissions));
+        assert_eq!(Step::DownloadModel.previous(), Some(Step::Backend));
+        assert!(
+            Step::ALL.contains(&Step::DownloadModel),
+            "DownloadModel must be listed in Step::ALL"
+        );
     }
 
     #[test]

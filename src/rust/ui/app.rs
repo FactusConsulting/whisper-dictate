@@ -248,7 +248,11 @@ impl WhisperDictateApp {
         let Some(ui_state) = self.onboarding.as_mut() else {
             return;
         };
-        let outcome = super::onboarding::render_onboarding_modal(ctx, ui_state);
+        let outcome = super::onboarding::render_onboarding_modal(
+            ctx,
+            ui_state,
+            Some(&self.whisper_model_downloads),
+        );
         match outcome {
             super::onboarding::OnboardingOutcome::Active => {}
             super::onboarding::OnboardingOutcome::DismissedTransient => {

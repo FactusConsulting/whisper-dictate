@@ -20,9 +20,26 @@ impl WhisperDictateApp {
     /// Whisper scope group. Designed to be cheap to call every frame —
     /// the only state mutation paths are click handlers + the shared
     /// `WhisperModelDownloads` snapshot.
-    pub(in crate::ui) fn whisper_model_download_section(&mut self, ui: &mut egui::Ui) {
+    ///
+    /// `no_model_hint` — when `true`, the section is being surfaced in
+    /// Simple mode as a first-run remedy (see bug 3 of the multilingual-
+    /// catalog PR). The heading is rewritten to make the required next
+    /// step obvious instead of reading like an Advanced power-user knob.
+    pub(in crate::ui) fn whisper_model_download_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        no_model_hint: bool,
+    ) {
         ui.add_space(8.0);
-        ui.label(egui::RichText::new("Whisper model downloads").strong());
+        if no_model_hint {
+            ui.label(
+                egui::RichText::new("No Whisper model on disk — download one:")
+                    .strong()
+                    .color(egui::Color32::from_rgb(220, 180, 80)),
+            );
+        } else {
+            ui.label(egui::RichText::new("Whisper model downloads").strong());
+        }
         ui.label(
             egui::RichText::new(
                 "Download a curated whisper.cpp GGML model into the user cache. \
@@ -193,6 +210,46 @@ impl WhisperDictateApp {
     }
 }
 
+/// Pure predicate for bug 3 of the multilingual-catalog PR: should the
+/// download section be shown in Simple mode?
+///
+/// Simple mode normally hides download management to keep the settings
+/// pane uncluttered. But a fresh install with NO model on disk gives the
+/// user a dropdown that can't do anything and a "worker won't start" wall
+/// with no visible remedy. Rule: show downloads in Simple mode iff there
+/// is neither a verified catalog model NOR a discovered custom GGML on
+/// disk. Once ANY model is present, revert to Advanced-only.
+///
+/// Split from the render code so the predicate is testable without a
+/// real egui context / filesystem.
+pub(in crate::ui) fn show_download_section_in_simple_mode(
+    any_catalog_verified: bool,
+    any_custom_discovered: bool,
+) -> bool {
+    !any_catalog_verified && !any_custom_discovered
+}
+
+/// Composite of [`show_download_section_in_simple_mode`] against the live
+/// [`WhisperModelDownloads`] verify cache + on-disk custom-model
+/// discovery. Kept as a thin wrapper so the speech-tab render can call
+/// one method AND the pure predicate above stays free of filesystem /
+/// thread-spawning side effects for tests.
+pub(in crate::ui) fn no_whisper_model_on_disk(
+    downloads: &crate::ui::whisper_models_state::WhisperModelDownloads,
+) -> bool {
+    let mut any_catalog_verified = false;
+    for entry in model_manager::CATALOG {
+        if downloads.is_verified_fast(entry) {
+            any_catalog_verified = true;
+            break;
+        }
+    }
+    let any_custom_discovered = model_manager::models_cache_dir()
+        .map(|dir| !crate::whisper::local_discovery::discover_models(&dir).is_empty())
+        .unwrap_or(false);
+    show_download_section_in_simple_mode(any_catalog_verified, any_custom_discovered)
+}
+
 /// Pure status-label resolver: decide what badge to show next to a catalog
 /// entry given (a) whether the file is already cached + verified on disk
 /// and (b) the most recent download job (if any). Returns a (text, colour)
@@ -284,6 +341,30 @@ mod tests {
             g > r,
             "expected greenish ok colour, got rgb({r},{g},{})",
             color.b()
+        );
+    }
+
+    #[test]
+    fn simple_mode_shows_downloader_only_when_no_model_on_disk() {
+        // Bug 3 of the multilingual-catalog PR: Simple mode must expose the
+        // downloader when there is neither a verified catalog model nor a
+        // discovered custom GGML. Once ANY model is on disk the section
+        // reverts to Advanced-only so Simple mode stays uncluttered.
+        assert!(
+            show_download_section_in_simple_mode(false, false),
+            "empty cache must expose the downloader in Simple mode"
+        );
+        assert!(
+            !show_download_section_in_simple_mode(true, false),
+            "verified catalog model hides the downloader in Simple mode"
+        );
+        assert!(
+            !show_download_section_in_simple_mode(false, true),
+            "discovered custom model hides the downloader in Simple mode"
+        );
+        assert!(
+            !show_download_section_in_simple_mode(true, true),
+            "either signal alone is enough to hide the downloader"
         );
     }
 
