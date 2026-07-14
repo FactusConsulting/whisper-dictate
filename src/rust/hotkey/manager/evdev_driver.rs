@@ -105,7 +105,7 @@ fn debug_enabled() -> bool {
 /// input device" — which `spawn` turns into an actionable error.
 fn open_keyboards() -> Vec<(PathBuf, Device)> {
     evdev::enumerate()
-        .filter(|(_, dev)| is_ptt_capable(dev))
+        .filter(|(_, dev)| is_ptt_capable(dev) && !is_injection_device(dev))
         .collect()
 }
 
@@ -123,6 +123,35 @@ fn is_ptt_capable(dev: &Device) -> bool {
         return false;
     };
     keys.contains(Key::KEY_A) || keys.iter().any(|k| code_to_name(k.code()).is_some())
+}
+
+/// Names (case-insensitive substrings) of the virtual uinput devices that
+/// whisper-dictate's OWN text injectors create. On Wayland the app types the
+/// transcribed text through `ydotool` (`injection::wayland`), whose `ydotoold`
+/// daemon exposes a "ydotoold virtual device" under `/dev/input`. If the hotkey
+/// listener reads that node, every injected keystroke feeds back into the PTT
+/// [`crate::hotkey::manager::tracker`]: for a bare-modifier chord the typed
+/// characters look like foreign keys and trip the "foreign key held" guard
+/// (rule 1), so the SECOND push-to-talk after a transcription is silently
+/// blocked until the stale key expires (~10 s). Excluding these self-injection
+/// nodes breaks the feedback loop. `enigo`'s X11/Wayland uinput node is listed
+/// too for the `rust-injection` path.
+const INJECTION_DEVICE_MARKERS: &[&str] = &["ydotool", "wtype", "dotool", "kwtype", "enigo"];
+
+/// True if `dev` is one of whisper-dictate's own injection uinput devices — see
+/// [`INJECTION_DEVICE_MARKERS`]. Matched by device name so a genuine keyboard
+/// is never excluded (no real keyboard carries these tool names).
+fn is_injection_device(dev: &Device) -> bool {
+    dev.name().is_some_and(name_is_injection_device)
+}
+
+/// Pure name test behind [`is_injection_device`], split out so it is unit
+/// testable without constructing an `evdev::Device`.
+fn name_is_injection_device(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    INJECTION_DEVICE_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 /// Blocking read loop for one device. Translates each key event into a
@@ -247,6 +276,25 @@ mod tests {
         assert_eq!(code_to_name(97), Some("ctrl_r"));
         assert_eq!(code_to_name(42), Some("shift_l"));
         assert_eq!(code_to_name(54), Some("shift_r"));
+    }
+
+    #[test]
+    fn injection_devices_are_excluded() {
+        // The app types transcribed text through ydotool on Wayland; its
+        // uinput node must NOT be read by the PTT listener, or every injected
+        // keystroke feeds back into the tracker and wedges the next chord.
+        assert!(name_is_injection_device("ydotoold virtual device"));
+        assert!(name_is_injection_device("wtype"));
+        assert!(name_is_injection_device("dotool keyboard"));
+        assert!(name_is_injection_device("Enigo virtual device"));
+    }
+
+    #[test]
+    fn real_keyboards_are_not_excluded() {
+        // Genuine keyboards must survive the injection-device filter.
+        assert!(!name_is_injection_device("AT Translated Set 2 keyboard"));
+        assert!(!name_is_injection_device("Raptor Lake-P/U/H cAVS HID"));
+        assert!(!name_is_injection_device("Logitech USB Keyboard"));
     }
 
     #[test]
