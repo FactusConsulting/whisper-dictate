@@ -98,14 +98,8 @@ impl LocalWhisper {
             )
         })?;
 
-        let params = WhisperContextParameters {
-            use_gpu: gpu::should_use_gpu(policy),
-            ..Default::default()
-        };
-
-        let ctx = WhisperContext::new_with_params(model_str, params).with_context(|| {
-            format!("failed to load whisper model from {}", model_path.display())
-        })?;
+        let want_gpu = gpu::should_use_gpu(policy);
+        let ctx = load_context_with_gpu_fallback(model_str, model_path, want_gpu)?;
         Ok(Self { ctx })
     }
 
@@ -212,6 +206,54 @@ impl LocalWhisper {
             out.push_str(&text);
         }
         Ok(out)
+    }
+}
+
+/// Load a `WhisperContext` with graceful GPU-to-CPU fallback.
+///
+/// Vulkan initialization inside whisper.cpp can fail at model load time on end-
+/// user machines that do not have a working Vulkan driver even when the binary
+/// was built with `whisper-rs-vulkan` (e.g. a Windows box with an ancient GPU
+/// driver missing `vulkan-1.dll`, or Linux without the ICD installed). Rather
+/// than crashing the app with a cryptic FFI error, we retry the load with
+/// `use_gpu = false` and continue on CPU — many-seconds-per-utterance CPU
+/// dictation is a worse experience than GPU but still usable, whereas a hard
+/// failure blocks dictation entirely.
+///
+/// The fallback only kicks in when we ACTUALLY asked for GPU; a CPU-only load
+/// that fails just propagates its error unchanged (there is no CPU fallback
+/// path to try, and the caller needs the original error message).
+fn load_context_with_gpu_fallback(
+    model_str: &str,
+    model_path: &Path,
+    want_gpu: bool,
+) -> Result<WhisperContext> {
+    let params = WhisperContextParameters {
+        use_gpu: want_gpu,
+        ..Default::default()
+    };
+    let first = WhisperContext::new_with_params(model_str, params);
+    match first {
+        Ok(ctx) => Ok(ctx),
+        Err(err) if want_gpu => {
+            eprintln!(
+                "whisper: GPU-accelerated model load failed ({err}); \
+                 retrying on CPU. Install/update your GPU driver's Vulkan \
+                 runtime (`vulkan-1.dll` on Windows) to restore GPU acceleration."
+            );
+            let cpu_params = WhisperContextParameters {
+                use_gpu: false,
+                ..Default::default()
+            };
+            WhisperContext::new_with_params(model_str, cpu_params).with_context(|| {
+                format!(
+                    "failed to load whisper model from {} on CPU after GPU fallback",
+                    model_path.display()
+                )
+            })
+        }
+        Err(err) => Err(err)
+            .with_context(|| format!("failed to load whisper model from {}", model_path.display())),
     }
 }
 

@@ -31,10 +31,17 @@ else
   # fallback. A default-features build would refuse to start dictation
   # with the "missing rust-session feature set" error. Ship the full
   # set from source too.
+  #
+  # `whisper-rs-vulkan` (v1.20.3) supersedes `whisper-rs-local` — it
+  # transitively enables the local feature AND compiles whisper.cpp with
+  # Vulkan GPU support. Requires the Vulkan SDK on the build host
+  # (`sudo apt install libvulkan-dev spirv-tools glslang-tools` on
+  # Ubuntu). Runtime falls back to CPU if the user machine lacks a Vulkan
+  # driver, so this is safe to ship as the default.
   cargo build --release -p whisper-dictate-app \
     --manifest-path "${CARGO_MANIFEST}" \
     --target-dir "${HERE}/target" \
-    --features "whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys"
+    --features "whisper-rs-vulkan,rust-injection,audio-in-rust,rust-hotkeys"
   SOURCE_BIN="${HERE}/target/release/whisper-dictate"
 fi
 
