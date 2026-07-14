@@ -8,6 +8,15 @@
 #ifndef VERSION_INFO
   #define VERSION_INFO VERSION
 #endif
+; BinDir points at the directory containing whisper-dictate.exe (and the ort
+; onnxruntime*.dll sidecars). Defaults to the in-tree `target\release` so
+; local `iscc packaging\windows\inno\whisper-dictate.iss` still works after
+; `cargo build --release`. CI overrides it (v1.20.5) with /DBinDir=D:\t\release
+; because the whisper.cpp Vulkan build blows past Windows MAX_PATH inside the
+; deep `target/release/build/whisper-rs-sys-*/out/build/...` tree.
+#ifndef BinDir
+  #define BinDir "..\..\..\target\release"
+#endif
 
 [Setup]
 AppId={{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}
@@ -35,14 +44,14 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; ONNX Runtime DLL(s) for the `audio-in-rust` feature (Wave 8 / rc.2):
 ; vad-rs -> ort dynamically loads onnxruntime.dll at startup. ort's
 ; `copy-dylibs` build feature drops it in target\release\ next to the
 ; .exe; we just have to ship it next to the installed binary too.
 ; `skipifsourcedoesntexist` keeps the local installer loop green for
 ; dev builds without the audio-in-rust feature enabled.
-Source: "..\..\..\target\release\onnxruntime*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#BinDir}\onnxruntime*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\docs\*.md";          DestDir: "{app}\docs"; Flags: ignoreversion
