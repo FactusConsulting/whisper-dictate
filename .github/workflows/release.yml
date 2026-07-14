@@ -95,7 +95,10 @@ jobs:
             libxkbcommon-dev \
             libxi-dev \
             libxtst-dev \
-            libasound2-dev
+            libasound2-dev \
+            libvulkan-dev \
+            glslang-tools \
+            spirv-tools
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
@@ -113,7 +116,14 @@ jobs:
           cache-on-failure: true
 
       - name: Build Rust desktop UI
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+        # `whisper-rs-vulkan` transitively enables `whisper-rs-local` and adds
+        # whisper.cpp's Vulkan GPU backend so end users with any modern GPU
+        # driver get sub-real-time decoding on large-v3 (v1.20.3 fix — a fresh
+        # v1.20.2 install ran large-v3 on CPU, ~many seconds per utterance).
+        # Missing/broken Vulkan at runtime is caught by
+        # `LocalWhisper::with_policy`'s CPU fallback so the binary never fails
+        # to load a model just because Vulkan init blew up.
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-vulkan
 
       - name: Build bundles
         run: |

@@ -3,7 +3,7 @@
 #
 # TODO Wave-8 follow-up: rewrite this derivation to build the Rust binary
 # from source (cargo build --release --features rust-injection,rust-hotkeys,
-# audio-in-rust,whisper-rs-local). The Python runtime shipped by this file
+# audio-in-rust,whisper-rs-vulkan). The Python runtime shipped by this file
 # was deleted in Wave 8 of #348, but a proper rustPlatform.buildRustPackage
 # recipe (with CMake for whisper.cpp + Vulkan optional) is a substantial
 # rewrite that lives in its own PR. Until then, Nix/NixOS users should
@@ -13,7 +13,7 @@
 
 stdenv.mkDerivation {
   pname   = "whisper-dictate";
-  version = "1.20.2";
+  version = "1.20.3";
   # Placeholder: real recipe pending Wave 8 follow-up (see comment above).
   dontUnpack = true;
   dontBuild  = true;
@@ -21,7 +21,7 @@ stdenv.mkDerivation {
     mkdir -p $out
     cat > $out/README <<EOF
     whisper-dictate: pending Nix packaging rewrite (Wave 8 of #348).
-    Build from source: cargo build --release --manifest-path src/rust/Cargo.toml       --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+    Build from source: cargo build --release --manifest-path src/rust/Cargo.toml       --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-vulkan
     EOF
   '';
 
