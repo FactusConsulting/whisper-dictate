@@ -64,10 +64,20 @@ impl WhisperDictateApp {
         );
         // Wave 7-B: in-app GGML model downloader. Sits next to the model
         // picker so users discover it where they already pick a model.
-        // Hidden in Simple mode — a fresh user picks a model; managing
-        // downloads is a power-user surface.
-        if show_advanced {
-            self.whisper_model_download_section(ui);
+        //
+        // Bug 3 of the multilingual-catalog PR: Simple mode normally hides
+        // download management, but a fresh install with no model on disk
+        // gives the user a dropdown that can't do anything AND a
+        // "worker won't start" wall. So: expose the downloader in Simple
+        // mode too WHEN there's no verified catalog model / discovered
+        // custom GGML — with a coloured "No Whisper model on disk" hint
+        // so the required next step is unmistakable. Once ANY model is
+        // present, Simple mode reverts to hiding the section for
+        // uncluttered day-to-day settings.
+        let no_model =
+            super::whisper_models::no_whisper_model_on_disk(&self.whisper_model_downloads);
+        if show_advanced || no_model {
+            self.whisper_model_download_section(ui, no_model && !show_advanced);
         }
 
         ui.add_space(6.0);

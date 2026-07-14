@@ -81,6 +81,21 @@ impl StepContent {
                 primary_label: "Next",
                 allow_skip: true,
             },
+            Step::DownloadModel => Self {
+                heading: "Download a Whisper model",
+                body: "The Local Whisper backend needs a whisper.cpp GGML model on \
+                       disk. Pick one below and click Download \u{2014} the file lands \
+                       under the user cache and the runtime resolves it \
+                       automatically.\n\n\
+                       Skip this if you plan to use Cloud STT (Groq / OpenAI) \
+                       or already have a model downloaded.",
+                skip_hint: "Without a Whisper model on disk the local backend \
+                            can\u{2019}t start (\u{201C}VOICEPI_WHISPER_MODEL_PATH \
+                            unset\u{201D} error on first PTT). You can always \
+                            download one later from Settings \u{2192} Speech.",
+                primary_label: "Next",
+                allow_skip: true,
+            },
             Step::Permissions => Self {
                 heading: "Grant accessibility permissions",
                 body: "Modern operating systems block global hotkeys and keystroke \

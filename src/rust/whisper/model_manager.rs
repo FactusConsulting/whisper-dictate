@@ -9,10 +9,15 @@
 //! power users who already have a custom GGML file (or want a model that isn't
 //! in the curated catalog).
 //!
-//! Scope is intentionally minimal:
-//! - **Catalog**: tiny.en / base.en / small.en (CPU-friendly English models).
-//!   Larger or multilingual models are explicitly out of scope for the first
-//!   cut — power users extend via the env var.
+//! Catalog scope:
+//! - **English-only, CPU-friendly**: `tiny.en`, `base.en`, `small.en` — the
+//!   original Wave 7-B set, still preserved by SHA-256.
+//! - **Multilingual** (added post-Wave-7-B once Danish / multilingual users
+//!   discovered the picker's `large-v3` etc. options were dead-ends): `tiny`,
+//!   `base`, `small`, `medium`, `large-v3-turbo`, `large-v3`. Names line up
+//!   1:1 with the `WHISPER_MODELS` dropdown in `ui.rs` so a user picking
+//!   `large-v3` and clicking Download actually gets the model the runtime
+//!   will later resolve.
 //! - **Format**: GGML only. whisper.cpp does not yet read GGUF (see the
 //!   `reject_gguf_model` guard in `whisper::local`), so a GGUF entry in the
 //!   catalog would only mislead.
@@ -73,10 +78,16 @@ pub struct ModelEntry {
     pub description: &'static str,
 }
 
-/// Curated catalog of CPU-friendly English GGML models. Order matches the UI
-/// presentation: smallest / fastest first so the cheapest option is the
-/// default eye-line pick. SHA-256 values are pinned to the current
-/// `ggerganov/whisper.cpp` HuggingFace main branch — re-verify when bumping.
+/// Curated catalog of whisper.cpp GGML models. The English-only trio comes
+/// first (historical order — the smallest / fastest CPU-friendly options
+/// stay top-of-list for eye-line discoverability), followed by the
+/// multilingual set that matches the `WHISPER_MODELS` dropdown in the UI so
+/// picking `large-v3` and clicking Download actually installs the file the
+/// runtime will later resolve.
+///
+/// SHA-256 values are pinned to the current `ggerganov/whisper.cpp`
+/// HuggingFace main branch — re-verify when bumping. Sizes are approximate
+/// (exact `Content-Length` from the CDN wins at download time).
 pub const CATALOG: &[ModelEntry] = &[
     ModelEntry {
         name: "tiny.en",
@@ -101,6 +112,57 @@ pub const CATALOG: &[ModelEntry] = &[
         sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
         size_bytes: 487_600_000,
         description: "English, balanced accuracy & speed (~488 MB)",
+    },
+    // --- Multilingual GGML models -----------------------------------------
+    // Names line up with the `WHISPER_MODELS` dropdown in `src/rust/ui.rs`
+    // so the UI's picker value maps 1:1 to a catalog entry name (Bug 2 fix).
+    ModelEntry {
+        name: "tiny",
+        filename: "ggml-tiny.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+        size_bytes: 77_700_000,
+        description: "Multilingual, fastest, lowest accuracy (~78 MB)",
+    },
+    ModelEntry {
+        name: "base",
+        filename: "ggml-base.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        size_bytes: 148_000_000,
+        description: "Multilingual, fast, low accuracy (~148 MB)",
+    },
+    ModelEntry {
+        name: "small",
+        filename: "ggml-small.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        size_bytes: 487_600_000,
+        description: "Multilingual, balanced accuracy & speed (~488 MB)",
+    },
+    ModelEntry {
+        name: "medium",
+        filename: "ggml-medium.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+        sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        size_bytes: 1_533_800_000,
+        description: "Multilingual, good accuracy, heavier (~1.5 GB)",
+    },
+    ModelEntry {
+        name: "large-v3-turbo",
+        filename: "ggml-large-v3-turbo.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+        size_bytes: 1_624_600_000,
+        description: "Multilingual, great accuracy, fast (~1.6 GB)",
+    },
+    ModelEntry {
+        name: "large-v3",
+        filename: "ggml-large-v3.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+        sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+        size_bytes: 3_095_100_000,
+        description: "Multilingual, most accurate, slowest (~3.1 GB)",
     },
 ];
 
