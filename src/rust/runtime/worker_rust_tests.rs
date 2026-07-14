@@ -910,3 +910,41 @@ fn emit_worker_ready_writes_a_status_ready_line() {
         None => std::env::remove_var("VOICEPI_WORKER_EVENTS"),
     }
 }
+
+// -------------------------------------------------------------------------
+// PIPEWIRE_QUANTUM crash-loop mitigation (#467). Pure decision helper so the
+// "unset -> default" / "user override wins" behaviour is pinned without
+// spawning the worker or touching the process environment.
+// -------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pipewire_quantum_defaulted_only_when_untuned() {
+    // Neither knob set: apply the mitigation quantum.
+    assert_eq!(desired_pipewire_quantum(None, None), Some("4096/48000"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pipewire_quantum_respects_existing_user_tuning() {
+    use std::ffi::OsStr;
+    // An explicit PIPEWIRE_QUANTUM wins.
+    assert_eq!(
+        desired_pipewire_quantum(Some(OsStr::new("2048/48000")), None),
+        None
+    );
+    // A per-stream PIPEWIRE_LATENCY the user exported must also be honoured --
+    // forcing our quantum on top would defeat their tuning (Codex #467 P2).
+    assert_eq!(
+        desired_pipewire_quantum(None, Some(OsStr::new("8192/48000"))),
+        None
+    );
+    // Both set: still leave the environment alone.
+    assert_eq!(
+        desired_pipewire_quantum(
+            Some(OsStr::new("1024/48000")),
+            Some(OsStr::new("8192/48000"))
+        ),
+        None
+    );
+}

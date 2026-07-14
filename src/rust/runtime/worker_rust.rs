@@ -457,8 +457,50 @@ pub fn handle_worker_rust(stdin_only: bool) -> Result<()> {
     // if the sink construction itself fails.
     std::env::set_var(dictate_events::WORKER_EVENTS_ENV, "1");
 
+    // Wave 8 regression mitigation (#462 follow-up): on Linux the in-process
+    // cpal capture opens the default device, which on a PipeWire desktop routes
+    // through libpipewire's realtime "data-loop" thread. rtkit grants that
+    // thread SCHED_FIFO plus a per-thread RLIMIT_RTTIME; with the default small
+    // quantum the data-loop overruns that budget during stream startup and the
+    // kernel SIGKILLs the whole worker (~0.6 s after "ready" — no Rust panic,
+    // no core dump, flaky race). Forcing a larger PipeWire quantum gives the
+    // data-loop enough headroom per cycle to stay under the RT budget, which
+    // empirically stops the kill (2048/48000 is the smallest stable value on
+    // the reporter's Raptor Lake / SOF-HDA box; 4096 keeps margin). Only set it
+    // when the user hasn't already tuned PipeWire themselves (via either
+    // `PIPEWIRE_QUANTUM` or the per-stream `PIPEWIRE_LATENCY` knob), so an
+    // explicit override always wins. The trade-off is a slightly larger capture
+    // buffer (~85 ms), which is irrelevant for push-to-talk dictation.
+    #[cfg(target_os = "linux")]
+    if let Some(quantum) = desired_pipewire_quantum(
+        std::env::var_os("PIPEWIRE_QUANTUM").as_deref(),
+        std::env::var_os("PIPEWIRE_LATENCY").as_deref(),
+    ) {
+        std::env::set_var("PIPEWIRE_QUANTUM", quantum);
+    }
+
     let runner = WorkerRunner::from_env(stdin_only)?;
     runner.run()
+}
+
+/// Decide the `PIPEWIRE_QUANTUM` value the Linux worker should force, or `None`
+/// to leave the environment untouched. Returns the mitigation quantum only when
+/// the user has NOT already tuned PipeWire — neither `PIPEWIRE_QUANTUM` nor the
+/// per-stream `PIPEWIRE_LATENCY` knob is set — so any explicit user tuning
+/// (e.g. a deliberately larger buffer) always wins over our crash-loop
+/// mitigation. Pure (takes the two env values as arguments) so the defaulting
+/// and override-wins behaviour is unit-testable without touching the process
+/// environment.
+#[cfg(target_os = "linux")]
+fn desired_pipewire_quantum(
+    existing_quantum: Option<&std::ffi::OsStr>,
+    existing_latency: Option<&std::ffi::OsStr>,
+) -> Option<&'static str> {
+    if existing_quantum.is_some() || existing_latency.is_some() {
+        None
+    } else {
+        Some("4096/48000")
+    }
 }
 
 /// Bundle of runtime configuration that the worker thread needs.
