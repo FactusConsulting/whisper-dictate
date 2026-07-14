@@ -465,12 +465,19 @@ pub fn handle_worker_rust(stdin_only: bool) -> Result<()> {
     // kernel SIGKILLs the whole worker (~0.6 s after "ready" — no Rust panic,
     // no core dump, flaky race). Forcing a larger PipeWire quantum gives the
     // data-loop enough headroom per cycle to stay under the RT budget, which
-    // empirically stops the kill (2048/48000 is the smallest stable value on
-    // the reporter's Raptor Lake / SOF-HDA box; 4096 keeps margin). Only set it
-    // when the user hasn't already tuned PipeWire themselves (via either
-    // `PIPEWIRE_QUANTUM` or the per-stream `PIPEWIRE_LATENCY` knob), so an
-    // explicit override always wins. The trade-off is a slightly larger capture
-    // buffer (~85 ms), which is irrelevant for push-to-talk dictation.
+    // empirically stops the kill.
+    //
+    // The value matters in BOTH directions and must land in a window:
+    // * too small (default ~1024) → the data-loop overruns → SIGKILL crash-loop;
+    // * too large (4096/48000) → EXCEEDS some DMIC's max supported quantum, so
+    //   the capture stream opens but delivers pure silence → every recording is
+    //   `no_audio` (the #467 v1.20.2 mitigation shipped 4096 and traded the
+    //   crash for silent capture on the reporter's SOF-HDA DMIC).
+    // 2048/48000 is validated on that box to do BOTH: 5/5 crash-free workers AND
+    // real captured audio (1024 crashed; 4096 was silent; 2048/3072 captured).
+    // Only set it when the user hasn't already tuned PipeWire themselves (via
+    // either `PIPEWIRE_QUANTUM` or the per-stream `PIPEWIRE_LATENCY` knob), so an
+    // explicit override always wins. The ~43 ms buffer is irrelevant for PTT.
     #[cfg(target_os = "linux")]
     if let Some(quantum) = desired_pipewire_quantum(
         std::env::var_os("PIPEWIRE_QUANTUM").as_deref(),
@@ -499,7 +506,9 @@ fn desired_pipewire_quantum(
     if existing_quantum.is_some() || existing_latency.is_some() {
         None
     } else {
-        Some("4096/48000")
+        // Must be large enough to avoid the RT-overrun SIGKILL yet small enough
+        // that the DMIC actually captures (4096 was silent) — see caller.
+        Some("2048/48000")
     }
 }
 

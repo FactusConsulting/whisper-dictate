@@ -920,8 +920,10 @@ fn emit_worker_ready_writes_a_status_ready_line() {
 #[cfg(target_os = "linux")]
 #[test]
 fn pipewire_quantum_defaulted_only_when_untuned() {
-    // Neither knob set: apply the mitigation quantum.
-    assert_eq!(desired_pipewire_quantum(None, None), Some("4096/48000"));
+    // Neither knob set: apply the mitigation quantum. 2048/48000 is the value
+    // validated to BOTH avoid the RT-overrun SIGKILL and still capture audio
+    // (4096 was crash-free but silent on the reporter's SOF-HDA DMIC).
+    assert_eq!(desired_pipewire_quantum(None, None), Some("2048/48000"));
 }
 
 #[cfg(target_os = "linux")]
