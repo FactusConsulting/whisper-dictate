@@ -57,7 +57,15 @@ impl WhisperDictateApp {
                     let cached = entry
                         .map(|e| downloads.is_verified_fast(e))
                         .unwrap_or(false);
-                    super::whisper_models::dropdown_status_suffix(entry, job.as_ref(), cached)
+                    let verify_pending = entry
+                        .map(|e| downloads.is_verification_pending(e))
+                        .unwrap_or(false);
+                    super::whisper_models::dropdown_status_suffix(
+                        entry,
+                        job.as_ref(),
+                        cached,
+                        verify_pending,
+                    )
                 };
                 selection_changed = combo_whisper_model_with_status(
                     ui,

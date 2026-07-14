@@ -270,16 +270,24 @@ fn draw_download_model_body(
     use crate::whisper::models_cli::human_bytes;
 
     // Pre-select the default onboarding model when the user has nothing set
-    // yet AND auto-kick the download so we don't need a second click. Uses
-    // the Settings' fallback (large-v3-turbo) so the wizard's default lines
-    // up with what `AppSettings::default()` seeds — no surprise divergence.
-    let pre_selected =
+    // yet. Uses the Settings' fallback (large-v3-turbo) so the wizard's
+    // default lines up with what `AppSettings::default()` seeds — no
+    // surprise divergence.
+    let _pre_seeded =
         onboarding_default_model_if_empty(selected_model, model_manager::find, || {
             !crate::whisper::model_manager::is_local_only()
         });
-    if pre_selected {
-        let _ = crate::ui::tabs::whisper_models::auto_download_if_needed(downloads, selected_model);
-    }
+
+    // Codex P2 fix: fresh installs already ship with
+    // `AppSettings::default().model = "large-v3-turbo"`, so the "seed only
+    // when empty" branch above almost never runs. Unconditionally attempt
+    // the auto-download every frame the DownloadModel step is visible —
+    // the internal guards (`any_in_progress`, `is_verified_fast`,
+    // `is_verification_pending`, `is_local_only`) short-circuit the second
+    // frame onwards, so the extra call is cheap. Without this a first-run
+    // user could Next past DownloadModel with no download ever having
+    // started, then hit a "worker won't start" wall on first PTT.
+    let _ = crate::ui::tabs::whisper_models::auto_download_if_needed(downloads, selected_model);
 
     let status_for = |model: &str| -> String {
         let entry = model_manager::find(model);
@@ -287,7 +295,15 @@ fn draw_download_model_body(
         let cached = entry
             .map(|e| downloads.is_verified_fast(e))
             .unwrap_or(false);
-        crate::ui::tabs::whisper_models::dropdown_status_suffix(entry, job.as_ref(), cached)
+        let verify_pending = entry
+            .map(|e| downloads.is_verification_pending(e))
+            .unwrap_or(false);
+        crate::ui::tabs::whisper_models::dropdown_status_suffix(
+            entry,
+            job.as_ref(),
+            cached,
+            verify_pending,
+        )
     };
 
     // Dropdown — mirrors the Speech tab's model picker so the two screens
@@ -774,6 +790,152 @@ mod tests {
         commit_close_intent(&ctx, &mut state, CloseIntent::Advance, false);
         assert!(state.finished);
         assert_eq!(decide_outcome(&state), OnboardingOutcome::PersistCompletion);
+    }
+
+    // ── draw_download_model_body render path (Claude coverage gap) ───────
+    //
+    // The unconditional `render_onboarding_modal_paints_every_step_without_panic`
+    // above only exercises the fallback branch (no downloads, no model) —
+    // the real ~130-line draw path was dark. The tests below drive each
+    // status state (missing / in-progress / cached / failed / verify-
+    // pending) through the live render path.
+
+    fn render_download_step(
+        downloads: &crate::ui::whisper_models_state::WhisperModelDownloads,
+        model: &mut String,
+    ) -> (OnboardingOutcome, String) {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let mut ui_state = OnboardingUi {
+            state: WizardState::resume_from(Step::DownloadModel),
+            os_target: permissions::OsTarget::LinuxX11,
+            dont_show_again: false,
+        };
+        ctx.begin_pass(input);
+        let outcome = render_onboarding_modal(&ctx, &mut ui_state, Some(downloads), Some(model));
+        let _ = ctx.end_pass();
+        (outcome, model.clone())
+    }
+
+    #[test]
+    fn download_step_paints_missing_default_and_records_the_model() {
+        // Fresh profile: no downloads state, empty model. The seed branch
+        // must fill in `large-v3-turbo` AND the render must not panic.
+        let downloads = crate::ui::whisper_models_state::WhisperModelDownloads::new();
+        let mut model = String::new();
+        let _lock = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+        let (outcome, final_model) = render_download_step(&downloads, &mut model);
+        assert_eq!(outcome, OnboardingOutcome::Active);
+        assert_eq!(
+            final_model, ONBOARDING_DEFAULT_MODEL,
+            "empty-model seed must have run on the DownloadModel step"
+        );
+    }
+
+    #[test]
+    fn download_step_paints_in_progress_state_without_panic() {
+        // Pre-seed the shared downloads state so the render walks the
+        // InProgress branch (progress bar + bytes) for the currently-
+        // selected model.
+        let downloads = crate::ui::whisper_models_state::WhisperModelDownloads::new();
+        downloads.start("tiny.en");
+        let mut model = "tiny.en".to_owned();
+        let (outcome, _) = render_download_step(&downloads, &mut model);
+        assert_eq!(outcome, OnboardingOutcome::Active);
+        // The InProgress job must still be present after the render pass —
+        // the render path must NOT clear/mutate it.
+        assert!(
+            downloads.job("tiny.en").is_some(),
+            "in-progress job must survive a render pass"
+        );
+    }
+
+    #[test]
+    fn download_step_paints_failed_state_without_panic() {
+        // The Failed branch renders a red error label + Retry button. The
+        // render must produce a well-formed UI whether the failure was
+        // "hash mismatch" or a network error.
+        let downloads = crate::ui::whisper_models_state::WhisperModelDownloads::new();
+        downloads.start("tiny.en");
+        downloads.finish_err("tiny.en", "hash mismatch".to_owned());
+        let mut model = "tiny.en".to_owned();
+        let (outcome, _) = render_download_step(&downloads, &mut model);
+        assert_eq!(outcome, OnboardingOutcome::Active);
+    }
+
+    #[test]
+    fn download_step_paints_cached_state_and_does_not_start_download() {
+        // Point the OS cache dir at a tempdir + drop a stand-in file so
+        // finish_ok can populate the verify_cache. The render then
+        // exercises the "cached / you're ready" branch AND the auto-
+        // download trigger must NOT spawn (guarded by already_cached=true).
+        let _lock = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _local_only = crate::test_env_lock::EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+        let tmp = tempfile::tempdir().unwrap();
+        const CACHE_ENV_VAR: &str = if cfg!(windows) {
+            "LOCALAPPDATA"
+        } else if cfg!(target_os = "macos") {
+            "HOME"
+        } else {
+            "XDG_CACHE_HOME"
+        };
+        let _cache_guard =
+            crate::test_env_lock::EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
+        let entry = crate::whisper::model_manager::find("tiny.en").unwrap();
+        let model_path = crate::whisper::model_manager::model_path(entry).unwrap();
+        std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+        std::fs::write(&model_path, b"placeholder").unwrap();
+        let downloads = crate::ui::whisper_models_state::WhisperModelDownloads::new();
+        downloads.start("tiny.en");
+        downloads.finish_ok("tiny.en", model_path.clone());
+        // Cached state → auto-download must not spawn a NEW job (start()
+        // is a no-op when a Done job already exists — but confirm no new
+        // InProgress transitions happen).
+        let mut model = "tiny.en".to_owned();
+        let (outcome, _) = render_download_step(&downloads, &mut model);
+        assert_eq!(outcome, OnboardingOutcome::Active);
+        let job = downloads.job("tiny.en").unwrap();
+        assert!(
+            matches!(
+                job.status,
+                crate::ui::whisper_models_state::DownloadStatus::Done(_)
+            ),
+            "cached model must stay in Done state — no redundant re-download"
+        );
+    }
+
+    #[test]
+    fn download_step_respects_local_only_mode() {
+        // Regression: local-only mode must suppress the auto-download
+        // AND (post-Codex-fix) the seed-when-empty branch must decline to
+        // pre-select a model we can't fetch.
+        let _lock = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
+        let downloads = crate::ui::whisper_models_state::WhisperModelDownloads::new();
+        let mut model = String::new();
+        let (outcome, final_model) = render_download_step(&downloads, &mut model);
+        assert_eq!(outcome, OnboardingOutcome::Active);
+        assert!(
+            final_model.is_empty(),
+            "local-only mode must leave the empty model empty (no silent seed of a model we can't fetch), got {final_model:?}"
+        );
+        assert!(
+            downloads.job(ONBOARDING_DEFAULT_MODEL).is_none() && downloads.job("tiny.en").is_none(),
+            "no download job must have been created in local-only mode"
+        );
     }
 
     // ── onboarding_default_model_if_empty predicate ─────────────────────

@@ -94,13 +94,14 @@ impl WhisperModelDownloads {
         self.inner.lock().ok()?.jobs.get(name).cloned()
     }
 
-    /// True iff any catalog entry is currently being downloaded. Historically
-    /// used to disable other Download buttons while one was in flight; the
-    /// per-catalog-entry buttons have been removed in favour of an on-select
-    /// auto-download flow, so this helper now only survives to back the
-    /// state-machine unit tests that pin the InProgress/Failed/Done
-    /// transitions.
-    #[cfg(test)]
+    /// True iff any catalog entry is currently being downloaded.
+    ///
+    /// After the per-catalog Download-button section was replaced by an
+    /// on-select auto-download flow, this stayed load-bearing: the
+    /// selection-change trigger consults it to refuse spawning a SECOND
+    /// download when one is already streaming (Codex P2: user picks
+    /// large-v3, 3 GB starts, they flip to medium → without this guard
+    /// both would run concurrently, saturating bandwidth and disk I/O).
     pub fn any_in_progress(&self) -> bool {
         let Ok(state) = self.inner.lock() else {
             return false;
@@ -190,6 +191,32 @@ impl WhisperModelDownloads {
             inner: self.inner.clone(),
             name,
         })
+    }
+
+    /// True while a background SHA-256 verify for `entry` is scheduled but
+    /// hasn't finished yet.
+    ///
+    /// Rationale (Codex P2 cold-start redownload race): the first call to
+    /// [`Self::is_verified_fast`] after app launch always returns `false`
+    /// because it schedules the SHA-256 check on a background thread. If
+    /// the user picks a model that IS on disk during that transient
+    /// window, the auto-download trigger would treat it as missing and
+    /// spawn a full redownload of a file that was already fine. Callers
+    /// use this predicate to DEFER the "should I auto-download?" decision
+    /// while verification is in flight instead of guessing.
+    ///
+    /// Returns `false` when the entry has never been queried (verify not
+    /// yet scheduled) OR when the verify completed. Pair with
+    /// `is_verified_fast` to distinguish the three real states:
+    /// verified / verification-pending / missing-or-unverified.
+    pub fn is_verification_pending(
+        &self,
+        entry: &'static crate::whisper::model_manager::ModelEntry,
+    ) -> bool {
+        let Ok(inner) = self.inner.lock() else {
+            return false;
+        };
+        inner.verify_running.contains(entry.name)
     }
 
     /// Fast cached check: is this catalog entry present and verified?

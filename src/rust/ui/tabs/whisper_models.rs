@@ -33,15 +33,24 @@ use crate::ui::whisper_models_state::{
 use crate::whisper::model_manager::{self, ModelEntry};
 use crate::whisper::models_cli::human_bytes;
 
-/// Pure predicate: given the current cache / local-only / in-progress
-/// state, should the auto-download trigger fire for the selected model?
+/// Pure predicate: given the current cache / local-only / in-progress /
+/// verify-pending state, should the auto-download trigger fire for the
+/// selected model?
 ///
 /// The trigger fires only when ALL are true:
 /// - `in_catalog` — the name resolves to a catalog `ModelEntry` (so we
 ///   know the URL + expected SHA-256).
 /// - `!local_only` — privacy mode disables silent outbound requests.
 /// - `!already_cached` — no point re-downloading a verified file.
-/// - `!in_progress` — a download for this model is already running.
+/// - `!this_in_progress` — a download for THIS model is already running
+///   (guards the "user changes selection twice in rapid succession" race).
+/// - `!any_in_progress` — NO other catalog download is running (Codex P2:
+///   picking large-v3 then flipping to medium must NOT spawn a second
+///   concurrent multi-GB download; single-download-in-flight is enforced).
+/// - `!verify_pending` — a background SHA-256 verify for this entry is
+///   scheduled but hasn't finished; the "not cached" answer is provisional
+///   during that window, so defer the decision to avoid a spurious
+///   redownload of a file that IS on disk (Codex P2 cold-start race).
 ///
 /// Split from `auto_download_if_needed` so the decision matrix is
 /// unit-testable without spawning threads.
@@ -49,16 +58,23 @@ pub(in crate::ui) fn should_auto_download(
     in_catalog: bool,
     local_only: bool,
     already_cached: bool,
-    in_progress: bool,
+    this_in_progress: bool,
+    any_in_progress: bool,
+    verify_pending: bool,
 ) -> bool {
-    in_catalog && !local_only && !already_cached && !in_progress
+    in_catalog
+        && !local_only
+        && !already_cached
+        && !this_in_progress
+        && !any_in_progress
+        && !verify_pending
 }
 
 /// Auto-download entry point invoked from the render code when the model
 /// dropdown selection changed. Resolves the catalog entry + queries the
-/// live cache/local-only/in-progress state, applies [`should_auto_download`],
-/// and forwards to [`spawn_download`] on the yes branch. Returns `true`
-/// when a download thread was actually spawned.
+/// live cache / local-only / in-progress / verify-pending state, applies
+/// [`should_auto_download`], and forwards to [`spawn_download`] on the yes
+/// branch. Returns `true` when a download thread was actually spawned.
 pub(in crate::ui) fn auto_download_if_needed(
     downloads: &WhisperModelDownloads,
     model_name: &str,
@@ -67,12 +83,21 @@ pub(in crate::ui) fn auto_download_if_needed(
         return false;
     };
     let already_cached = downloads.is_verified_fast(entry);
-    let in_progress = matches!(
+    let this_in_progress = matches!(
         downloads.job(entry.name).map(|j| j.status),
         Some(DownloadStatus::InProgress),
     );
+    let any_in_progress = downloads.any_in_progress();
+    let verify_pending = downloads.is_verification_pending(entry);
     let local_only = model_manager::is_local_only();
-    if !should_auto_download(true, local_only, already_cached, in_progress) {
+    if !should_auto_download(
+        true,
+        local_only,
+        already_cached,
+        this_in_progress,
+        any_in_progress,
+        verify_pending,
+    ) {
         return false;
     }
     spawn_download(downloads, entry.name)
@@ -83,6 +108,9 @@ pub(in crate::ui) fn auto_download_if_needed(
 /// - "· downloading NN%" (or "· downloading (X so far)" when the server
 ///   didn't send `Content-Length`) while a download runs,
 /// - "· download failed" for a Failed job that hasn't been retried,
+/// - "· checking…" while a background SHA-256 verify is in flight (so the
+///   user doesn't see the file blink from missing → cached mid-frame and
+///   isn't lied to about "· XX MB" when we don't actually know yet),
 /// - "· XX MB" for a missing catalog entry so the user sees the download
 ///   size before they commit,
 /// - "" for a value that isn't in the catalog (nothing meaningful to say).
@@ -93,6 +121,7 @@ pub(in crate::ui) fn dropdown_status_suffix(
     entry: Option<&'static ModelEntry>,
     job: Option<&DownloadJob>,
     cached: bool,
+    verify_pending: bool,
 ) -> String {
     if let Some(job) = job {
         match &job.status {
@@ -108,6 +137,9 @@ pub(in crate::ui) fn dropdown_status_suffix(
     }
     if cached {
         return "✓ cached".to_owned();
+    }
+    if verify_pending {
+        return "· checking…".to_owned();
     }
     if let Some(e) = entry {
         return format!("· {}", human_bytes(e.size_bytes));
@@ -165,6 +197,10 @@ impl WhisperDictateApp {
     ///   bytes / percentage.
     /// - `Failed` → red error text + inline "Retry" button so the user doesn't
     ///   silently see their selection stuck.
+    /// - Verification pending (background SHA-256 in flight, cold start) →
+    ///   a subtle spinner + "checking…" so the user doesn't see the row
+    ///   blink between "not downloaded / Download now" and "cached" for
+    ///   the duration of the check.
     /// - Not cached, no job, not local-only → "Not downloaded" + explicit
     ///   "Download now" button (covers the case where the user opens Settings
     ///   with a pre-existing selection that isn't on disk yet — auto-download
@@ -180,6 +216,7 @@ impl WhisperDictateApp {
         };
         let job = self.whisper_model_downloads.job(entry.name);
         let cached = self.whisper_model_downloads.is_verified_fast(entry);
+        let verify_pending = self.whisper_model_downloads.is_verification_pending(entry);
         let local_only = model_manager::is_local_only();
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -227,6 +264,16 @@ impl WhisperDictateApp {
                 }
             }
             if cached {
+                return;
+            }
+            if verify_pending {
+                // Cold-start SHA-256 verify is running — the "not cached"
+                // answer above is provisional. Show a quiet placeholder so
+                // the user doesn't chase a phantom "Download now" button
+                // that vanishes as soon as the check reports the file was
+                // fine.
+                ui.add(egui::Spinner::new());
+                ui.label(format!("Checking cached {} on disk…", entry.name));
                 return;
             }
             if local_only {
@@ -277,11 +324,12 @@ mod tests {
     #[test]
     fn auto_download_fires_when_missing_catalog_model_selected() {
         // Green path: a valid catalog entry that's not cached, no in-flight
-        // download, not in local-only mode → the dropdown selection change
-        // must trigger `spawn_download`.
+        // download of ANY kind, verify not pending, not in local-only mode →
+        // the dropdown selection change must trigger `spawn_download`.
         assert!(should_auto_download(
             /* in_catalog */ true, /* local_only */ false,
-            /* already_cached */ false, /* in_progress */ false,
+            /* already_cached */ false, /* this_in_progress */ false,
+            /* any_in_progress */ false, /* verify_pending */ false,
         ));
     }
 
@@ -289,28 +337,67 @@ mod tests {
     fn auto_download_suppressed_when_target_already_cached() {
         // Requirement: no re-download of a verified file when the user picks
         // it again.
-        assert!(!should_auto_download(true, false, true, false));
+        assert!(!should_auto_download(
+            true, false, true, false, false, false
+        ));
     }
 
     #[test]
     fn auto_download_suppressed_in_local_only_mode() {
         // Requirement: local-only mode must not silently exfiltrate a
         // download request even when the user picks a missing model.
-        assert!(!should_auto_download(true, true, false, false));
+        assert!(!should_auto_download(
+            true, true, false, false, false, false
+        ));
     }
 
     #[test]
     fn auto_download_suppressed_when_selection_is_not_in_catalog() {
         // A model name we don't know how to fetch (e.g. a custom user file
         // referenced only by env var) must not trigger the auto path.
-        assert!(!should_auto_download(false, false, false, false));
+        assert!(!should_auto_download(
+            false, false, false, false, false, false
+        ));
     }
 
     #[test]
-    fn auto_download_suppressed_when_already_in_progress() {
+    fn auto_download_suppressed_when_this_model_already_in_progress() {
         // Guards against re-spawning a second worker on top of a running
         // one when the render loop re-runs the trigger for the same model.
-        assert!(!should_auto_download(true, false, false, true));
+        assert!(!should_auto_download(true, false, false, true, true, false));
+    }
+
+    #[test]
+    fn auto_download_suppressed_when_a_different_download_is_in_flight() {
+        // Codex P2: user picks large-v3 (3 GB starts), then flips to
+        // medium. Without a global "any download running" guard, both
+        // would spawn concurrently and saturate bandwidth + disk. The
+        // second selection change must NO-OP while the first download is
+        // still streaming — the user has to wait for it to finish (or
+        // fail) before switching.
+        assert!(!should_auto_download(
+            /* in_catalog */ true, /* local_only */ false,
+            /* already_cached */ false,
+            /* this_in_progress */ false, // this specific model isn't running
+            /* any_in_progress */ true, // …but SOMETHING else is
+            /* verify_pending */ false,
+        ));
+    }
+
+    #[test]
+    fn auto_download_deferred_while_verify_pending() {
+        // Codex P2 cold-start race: `is_verified_fast` returns false while
+        // the background SHA-256 check for this entry is still running.
+        // If the user picks a model that IS on disk during that window,
+        // the trigger must DEFER (not spawn) so we don't full-redownload
+        // a file that's already fine. Next frame the verify completes and
+        // either `already_cached` becomes true (no download needed) or
+        // stays false (real download proceeds).
+        assert!(!should_auto_download(
+            /* in_catalog */ true, /* local_only */ false,
+            /* already_cached */ false, /* this_in_progress */ false,
+            /* any_in_progress */ false, /* verify_pending */ true,
+        ));
     }
 
     // ── auto_download_if_needed (thin integration wrapper) ──────────────────
@@ -406,7 +493,7 @@ mod tests {
     fn suffix_for_cached_catalog_entry_is_the_check_mark() {
         let entry = model_manager::find("tiny.en");
         assert_eq!(
-            dropdown_status_suffix(entry, None, /* cached */ true),
+            dropdown_status_suffix(entry, None, /* cached */ true, false),
             "✓ cached"
         );
     }
@@ -414,7 +501,7 @@ mod tests {
     #[test]
     fn suffix_for_missing_catalog_entry_shows_size() {
         let entry = model_manager::find("large-v3").unwrap();
-        let suffix = dropdown_status_suffix(Some(entry), None, false);
+        let suffix = dropdown_status_suffix(Some(entry), None, false, false);
         assert!(
             suffix.starts_with("· "),
             "size suffix must be prefixed with a bullet, got {suffix:?}"
@@ -432,7 +519,7 @@ mod tests {
         let entry = model_manager::find("tiny.en");
         let j = job(DownloadStatus::InProgress, 40, Some(100));
         assert_eq!(
-            dropdown_status_suffix(entry, Some(&j), false),
+            dropdown_status_suffix(entry, Some(&j), false, false),
             "· downloading 40%"
         );
     }
@@ -443,7 +530,7 @@ mod tests {
         // to a rolling byte counter instead of a fake percentage.
         let entry = model_manager::find("tiny.en");
         let j = job(DownloadStatus::InProgress, 1024, None);
-        let suffix = dropdown_status_suffix(entry, Some(&j), false);
+        let suffix = dropdown_status_suffix(entry, Some(&j), false, false);
         assert!(
             suffix.starts_with("· downloading ("),
             "byte-fallback suffix must not lie about a percent, got {suffix:?}"
@@ -458,7 +545,7 @@ mod tests {
         let entry = model_manager::find("tiny.en");
         let j = job(DownloadStatus::Failed("hash mismatch".to_owned()), 0, None);
         assert_eq!(
-            dropdown_status_suffix(entry, Some(&j), false),
+            dropdown_status_suffix(entry, Some(&j), false, false),
             "· download failed"
         );
     }
@@ -468,7 +555,7 @@ mod tests {
         // A custom/user model referenced only by env var isn't in the
         // catalog and has no download job. The dropdown must render just
         // the base name+hint, with no trailing marker.
-        assert_eq!(dropdown_status_suffix(None, None, false), "");
+        assert_eq!(dropdown_status_suffix(None, None, false, false), "");
     }
 
     #[test]
@@ -479,8 +566,59 @@ mod tests {
         let entry = model_manager::find("tiny.en");
         let j = job(DownloadStatus::Done(PathBuf::from("/x")), 0, None);
         assert_eq!(
-            dropdown_status_suffix(entry, Some(&j), /* cached */ true),
+            dropdown_status_suffix(entry, Some(&j), /* cached */ true, false),
             "✓ cached"
         );
+    }
+
+    #[test]
+    fn suffix_shows_checking_while_verify_pending() {
+        // Codex P2 cold-start race: on first launch `is_verified_fast`
+        // returns false while it schedules the SHA-256 check. If we
+        // rendered "· 78 MB" (the missing-entry size marker) during that
+        // window a user would see the dropdown flicker between "78 MB /
+        // will download" and "✓ cached" as the check landed. The
+        // dedicated "checking…" state keeps the row honest.
+        let entry = model_manager::find("tiny.en");
+        assert_eq!(
+            dropdown_status_suffix(entry, None, /* cached */ false, /* verify_pending */ true,),
+            "· checking…"
+        );
+    }
+
+    #[test]
+    fn suffix_prefers_verify_pending_over_size_marker() {
+        // Precedence check: for a MISSING catalog entry whose verify is
+        // still in flight, "checking…" must win over the "· <size>"
+        // fallback so the user doesn't see the size marker for a file
+        // that might actually be on disk.
+        let entry = model_manager::find("large-v3").unwrap();
+        assert_eq!(
+            dropdown_status_suffix(Some(entry), None, false, /* verify_pending */ true),
+            "· checking…"
+        );
+    }
+
+    #[test]
+    fn suffix_cached_wins_over_verify_pending() {
+        // If both flags are somehow true (verify just completed as we
+        // rendered), the ✓ wins — it's the terminal, correct answer.
+        let entry = model_manager::find("tiny.en");
+        assert_eq!(
+            dropdown_status_suffix(entry, None, /* cached */ true, /* verify_pending */ true,),
+            "✓ cached"
+        );
+    }
+
+    // ── is_verification_pending state ────────────────────────────────────
+
+    #[test]
+    fn verification_pending_is_false_before_any_query() {
+        // A freshly constructed downloads state has never scheduled a
+        // verify — the pending flag must default to false so the very
+        // first frame doesn't render "checking…" for every dropdown row.
+        let downloads = WhisperModelDownloads::new();
+        let entry = model_manager::find("tiny.en").unwrap();
+        assert!(!downloads.is_verification_pending(entry));
     }
 }
