@@ -82,6 +82,14 @@ jobs:
           bash -n packaging/linux/ubuntu26.04/setup.sh
 
       - name: Install Linux Rust UI build deps
+        # Vulkan build chain (v1.20.4 fix): whisper.cpp's ggml-vulkan CMake
+        # requires the `glslc` SPIR-V compiler binary at build time to compile
+        # the Vulkan compute shaders. It is NOT provided by `glslang-tools`
+        # (that ships `glslangValidator`, a different frontend). On Ubuntu it
+        # lives in its own `glslc` apt package (shaderc), so add it here or
+        # the ggml-vulkan CMake `find_package(Vulkan COMPONENTS glslc)` step
+        # fails hard with "Could NOT find Vulkan (missing: glslc)" — which is
+        # what broke the v1.20.3 tag on Linux.
         run: |
           sudo apt update
           sudo apt install -y \
@@ -98,6 +106,7 @@ jobs:
             libasound2-dev \
             libvulkan-dev \
             glslang-tools \
+            glslc \
             spirv-tools
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
