@@ -36,10 +36,13 @@ impl WhisperDictateApp {
         ui.add_space(6.0);
 
         // --- Whisper group -----------------------------------------------
-        // The download section needs `&mut self` so it can't live inside the
-        // `scope_group`'s `FnOnce(&mut egui::Ui)` (which borrows self for the
-        // closure capture). Render the existing model picker via the group
-        // first, then drop the closure scope before invoking the section.
+        // Simplified: the dropdown is the single source of truth. Changing
+        // the selection to a missing catalog model auto-triggers a
+        // background download (via `auto_download_if_needed`); the compact
+        // status line rendered directly under the group shows progress /
+        // errors / a manual "Download now" button for the edge case where
+        // the currently-loaded selection isn't cached yet.
+        let mut selection_changed = false;
         scope_group(
             ui,
             palette,
@@ -47,7 +50,24 @@ impl WhisperDictateApp {
             "speech_whisper",
             |ui| {
                 let gpu_total_mb = self.gpu_total_mb;
-                combo_model_vram(
+                let downloads = self.whisper_model_downloads.clone();
+                let status_for = |model: &str| -> String {
+                    let entry = crate::whisper::model_manager::find(model);
+                    let job = entry.and_then(|e| downloads.job(e.name));
+                    let cached = entry
+                        .map(|e| downloads.is_verified_fast(e))
+                        .unwrap_or(false);
+                    let verify_pending = entry
+                        .map(|e| downloads.is_verification_pending(e))
+                        .unwrap_or(false);
+                    super::whisper_models::dropdown_status_suffix(
+                        entry,
+                        job.as_ref(),
+                        cached,
+                        verify_pending,
+                    )
+                };
+                selection_changed = combo_whisper_model_with_status(
                     ui,
                     backend == SttBackendMode::Whisper,
                     "Whisper model",
@@ -55,29 +75,28 @@ impl WhisperDictateApp {
                     WHISPER_MODELS,
                     whisper_model_hint,
                     gpu_total_mb,
+                    &status_for,
                     "Larger models are more accurate but slower and use more VRAM. On a CUDA GPU, \
                      models that don't fit your VRAM are greyed out; on CPU every model runs (large \
                      ones just slower). The ~MB figure is the approximate VRAM at the int8_float16 \
-                     GPU default. Used only when STT backend is whisper.",
+                     GPU default. Selecting a model that isn't on disk auto-downloads it into the \
+                     user cache. Used only when STT backend is whisper.",
                 );
             },
         );
-        // Wave 7-B: in-app GGML model downloader. Sits next to the model
-        // picker so users discover it where they already pick a model.
-        //
-        // Bug 3 of the multilingual-catalog PR: Simple mode normally hides
-        // download management, but a fresh install with no model on disk
-        // gives the user a dropdown that can't do anything AND a
-        // "worker won't start" wall. So: expose the downloader in Simple
-        // mode too WHEN there's no verified catalog model / discovered
-        // custom GGML — with a coloured "No Whisper model on disk" hint
-        // so the required next step is unmistakable. Once ANY model is
-        // present, Simple mode reverts to hiding the section for
-        // uncluttered day-to-day settings.
-        let no_model =
-            super::whisper_models::no_whisper_model_on_disk(&self.whisper_model_downloads);
-        if show_advanced || no_model {
-            self.whisper_model_download_section(ui, no_model && !show_advanced);
+        if selection_changed {
+            let started = super::whisper_models::auto_download_if_needed(
+                &self.whisper_model_downloads,
+                &self.settings.model,
+            );
+            if started {
+                self.settings_status =
+                    format!("Downloading Whisper model {}…", self.settings.model);
+            }
+        }
+        self.render_selected_whisper_model_status(ui);
+        if show_advanced {
+            self.render_discovered_custom_models_section(ui);
         }
 
         ui.add_space(6.0);

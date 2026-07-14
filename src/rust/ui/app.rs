@@ -248,11 +248,30 @@ impl WhisperDictateApp {
         let Some(ui_state) = self.onboarding.as_mut() else {
             return;
         };
+        // Codex P2: don't hand the wizard direct mutable access to
+        // `self.settings.model` — a stealth mutation of that restart-
+        // required field would skip the app's normal persistence /
+        // dirty-tracking pathway. Instead scratch-clone it, let the
+        // wizard mutate the scratch, then route any change through the
+        // canonical settings-update flow (settings + saved_settings
+        // mirror, save_settings, restart-required badge) below.
+        let mut model_scratch = self.settings.model.clone();
         let outcome = super::onboarding::render_onboarding_modal(
             ctx,
             ui_state,
             Some(&self.whisper_model_downloads),
+            Some(&mut model_scratch),
         );
+        if model_scratch != self.settings.model {
+            // Adopt the wizard's pick as-if the user changed it from the
+            // Speech tab: the value goes into settings AND saved_settings
+            // (so restart-required correctly reflects "changed since
+            // worker started" and NOT "unsaved"). The persist below
+            // (Dismiss / PersistCompletion outcomes) then writes it to
+            // disk with the rest of the settings.
+            self.settings.model = model_scratch.clone();
+            self.saved_settings.model = model_scratch;
+        }
         match outcome {
             super::onboarding::OnboardingOutcome::Active => {}
             super::onboarding::OnboardingOutcome::DismissedTransient => {

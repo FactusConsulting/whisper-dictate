@@ -563,7 +563,11 @@ class WindowsRustUiSettingsRegressionTests(unittest.TestCase):
         self.assertIn('"Device"', speech)
         # WIDE combos with long option labels stay wide (no _short suffix).
         self.assertIn('combo_enabled_labeled(\n                        ui,\n                        backend != SttBackendMode::Cloud,\n                        "Compute type"', speech)
-        self.assertIn("combo_model_vram(", speech)
+        # combo_model_vram was replaced by combo_whisper_model_with_status
+        # (same VRAM-aware grey-out, now also carries per-entry download-status
+        # suffixes so the dropdown is the single source of truth for "which
+        # model" + "is it on disk").
+        self.assertIn("combo_whisper_model_with_status(", speech)
 
         # Post mode is short; Post model stays wide.
         post = Path("src/rust/ui/tabs/post.rs").read_text(encoding="utf-8")
