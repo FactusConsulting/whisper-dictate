@@ -43,7 +43,9 @@ pub mod evdev_driver;
 // Re-export the always-compiled tracker types at the manager level so call
 // sites can keep using `manager::KeyTracker` / `manager::RawKeyEvent` etc.
 // without caring about the sub-module split.
-pub use tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput, FOREIGN_KEY_EXPIRY};
+pub use tracker::{
+    KeyTracker, RawKeyEvent, RawKeyKind, TrackerDecision, TrackerOutput, FOREIGN_KEY_EXPIRY,
+};
 
 #[cfg(feature = "rust-hotkeys")]
 pub use driver_common::{ManagerHandle, ManagerThread, SpawnError};
