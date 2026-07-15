@@ -34,7 +34,8 @@ use std::time::{Duration, Instant};
 
 use super::driver_common::{manager_channel, spawn_manager_thread};
 use super::tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput};
-use crate::hotkey::inject_guard::{dispatch_raw_event, InjectionGuard};
+use crate::hotkey::diag::{self, handle_raw_event_with_diag};
+use crate::hotkey::inject_guard::InjectionGuard;
 
 pub use super::driver_common::{ManagerHandle, ManagerThread, SpawnError};
 
@@ -80,12 +81,27 @@ where
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
 
+    // Diagnostic counters + heartbeat thread (see `crate::hotkey::diag`).
+    // Both are process-global no-ops on second and later spawns, so a test
+    // binary that spins up multiple rdev drivers still only gets one
+    // heartbeat thread.
+    //
+    // The per-event `[hotkey-diag] evt#…` trace below is **always on**
+    // (not gated on `VOICEPI_HOTKEY_DEBUG`). The user's wedge fires on
+    // the very first PTT after a worker restart, so we cannot rely on
+    // them flipping an env var before the incident — we need the full
+    // event stream from the very first press. Once the fix ships this
+    // module (and its call sites) can be gated or removed.
+    let counters = diag::counters();
+    diag::spawn_heartbeat_once();
+
     // Listener thread — owns rdev. Translates raw events through the shared
     // tracker. Signals readiness / startup failure on a sync channel so
     // `spawn` can surface a quick-failure to the caller (P1 finding #2).
     let listener_tracker = Arc::clone(&tracker);
     let listener_sink = Arc::clone(&on_output);
     let listener_guard = Arc::clone(&injection_guard);
+    let listener_counters = Arc::clone(&counters);
     let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
     thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
@@ -96,16 +112,13 @@ where
             let _ = ready_tx.send(ListenerSignal::Started);
             let cb = move |event: rdev::Event| {
                 if let Some(raw) = raw_from_rdev(&event) {
-                    let mut t = listener_tracker.lock().expect("tracker poisoned");
-                    // `dispatch_raw_event` short-circuits when the guard is
-                    // armed — the injector's own SendInput bursts get
-                    // dropped here instead of feeding back into the
-                    // tracker (Windows PTT wedge; module doc explains
-                    // why the check must live below the mutex acquire so
-                    // event ordering is preserved).
-                    if let Some(out) = dispatch_raw_event(&listener_guard, &mut t, &raw) {
-                        (listener_sink)(out);
-                    }
+                    handle_raw_event_with_diag(
+                        &raw,
+                        &listener_tracker,
+                        &listener_guard,
+                        &listener_counters,
+                        listener_sink.as_ref(),
+                    );
                 }
             };
             if let Err(err) = rdev::listen(cb) {

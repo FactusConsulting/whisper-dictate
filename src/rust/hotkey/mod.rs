@@ -53,6 +53,7 @@
 //! drives the coordinator and tracker directly with synthetic events).
 
 pub mod coordinator;
+pub mod diag;
 pub mod inject_guard;
 pub mod manager;
 pub mod modifier_match;

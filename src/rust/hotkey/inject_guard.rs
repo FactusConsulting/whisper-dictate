@@ -58,7 +58,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use super::manager::tracker::{KeyTracker, RawKeyEvent, TrackerOutput};
+use super::manager::tracker::{KeyTracker, RawKeyEvent, TrackerDecision, TrackerOutput};
 
 /// Process-wide self-injection guard. Cloneable through `Arc` — one
 /// instance is created per `install_hotkey` call and shared with both the
@@ -114,6 +114,23 @@ impl InjectionGuard {
         self.arm_at(Instant::now(), grace);
     }
 
+    /// Time (relative to the guard's epoch) at which the "no events
+    /// before" horizon expires. `0` means "never armed". Exposed for the
+    /// diagnostic log so the rdev driver can report how far each event
+    /// is inside or outside the guard window (a wedge scenario where
+    /// injected events land *just outside* a too-short horizon shows up
+    /// as a small positive delta between `event_at_ms` and this value).
+    pub fn active_until_ms(&self) -> u64 {
+        self.active_until_millis.load(Ordering::SeqCst)
+    }
+
+    /// The [`Instant`] epoch this guard is measuring against. Used with
+    /// [`Self::active_until_ms`] and the incoming event's timestamp to
+    /// compute a diff in the diagnostic log.
+    pub fn epoch(&self) -> Instant {
+        self.epoch
+    }
+
     /// [`Self::arm`] with an injected `now` — used by unit tests.
     pub fn arm_at(&self, now: Instant, grace: Duration) {
         let now_ms = now.saturating_duration_since(self.epoch).as_millis() as u64;
@@ -147,15 +164,52 @@ impl Default for InjectionGuard {
 /// the hotkey driver's callback runs — extracted here so tests can drive
 /// the guard/tracker interaction end-to-end without spawning a real
 /// rdev/evdev listener.
+///
+/// Thin wrapper over [`dispatch_verbose`] for callers (and tests) that
+/// only care about the coordinator-visible side-effect. The rdev driver
+/// itself uses [`dispatch_verbose`] so its diagnostic logs can
+/// distinguish "guard swallowed this event" from "tracker classified it
+/// as X".
 pub fn dispatch_raw_event(
     guard: &InjectionGuard,
     tracker: &mut KeyTracker,
     event: &RawKeyEvent,
 ) -> Option<TrackerOutput> {
-    if guard.is_active_at(event.at) {
-        return None;
+    match dispatch_verbose(guard, tracker, event) {
+        DispatchOutcome::DroppedByGuard => None,
+        DispatchOutcome::Dispatched(decision) => decision.output(),
     }
-    tracker.handle(event)
+}
+
+/// Outcome of [`dispatch_verbose`] — either the injection guard swallowed
+/// the event, or the tracker reached a [`TrackerDecision`] (which the
+/// caller can inspect for the diagnostic reason even when it produced
+/// no coordinator-visible output).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchOutcome {
+    /// The guard was armed when this event arrived — event was dropped
+    /// before the tracker saw it. Behaviour-equivalent to the pre-#476
+    /// path where the tracker returned `None` for this event.
+    DroppedByGuard,
+    /// The guard was inactive; the tracker processed the event and
+    /// returned this decision. Use [`TrackerDecision::output`] to get
+    /// the classic `Option<TrackerOutput>` for the coordinator sink.
+    Dispatched(TrackerDecision),
+}
+
+/// [`dispatch_raw_event`] with a richer return type so the caller can
+/// tell the "guard swallowed the event" arm apart from every specific
+/// tracker decision. Semantics are identical to [`dispatch_raw_event`]
+/// on the state transition — this only widens the observed reason.
+pub fn dispatch_verbose(
+    guard: &InjectionGuard,
+    tracker: &mut KeyTracker,
+    event: &RawKeyEvent,
+) -> DispatchOutcome {
+    if guard.is_active_at(event.at) {
+        return DispatchOutcome::DroppedByGuard;
+    }
+    DispatchOutcome::Dispatched(tracker.handle_verbose(event))
 }
 
 // ------- process-global guard slot -------
@@ -346,6 +400,35 @@ mod tests {
             dispatch_raw_event(&g, &mut tr, &next_shift),
             Some(TrackerOutput::ChordPress),
             "second PTT press after injection must fire — this is the #467 Windows regression"
+        );
+    }
+
+    #[test]
+    fn dispatch_verbose_distinguishes_guard_drop_from_tracker_decision() {
+        // The diagnostic path needs to tell "guard swallowed" apart from
+        // every tracker "no output" reason. Pin both sides.
+        let g = InjectionGuard::new();
+        let mut tr = KeyTracker::new(vec!["ctrl_l".to_owned()]);
+        let t0 = g.epoch;
+        g.arm_at(t0, Duration::from_millis(200));
+
+        // Armed → DroppedByGuard, and the tracker never sees the event
+        // (verified indirectly: the follow-up ChordPress still fires
+        // after the guard expires, meaning `pressed` was not polluted).
+        let injected = press_at("__rdev_Unknown(231)", t0 + Duration::from_millis(10));
+        assert_eq!(
+            dispatch_verbose(&g, &mut tr, &injected),
+            DispatchOutcome::DroppedByGuard
+        );
+
+        // Guard expired → Dispatched(TrackerDecision::ChordPress) for a
+        // real user press.
+        let t_after = t0 + Duration::from_millis(400);
+        assert!(!g.is_active_at(t_after));
+        let real = press_at("ctrl_l", t_after);
+        assert_eq!(
+            dispatch_verbose(&g, &mut tr, &real),
+            DispatchOutcome::Dispatched(TrackerDecision::ChordPress)
         );
     }
 
