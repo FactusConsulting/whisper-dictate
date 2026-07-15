@@ -189,7 +189,7 @@ libc = "0.2"
 # Python backend used evdev for exactly this reason. Optional + Linux-only; the
 # `rust-hotkeys` feature enables it via `dep:evdev` and the driver is selected at
 # runtime by `manager::select` (evdev on Wayland, rdev on X11).
-evdev = { version = "0.12", optional = true }
+evdev = { version = "0.13", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0", features = ["keychain"] }
