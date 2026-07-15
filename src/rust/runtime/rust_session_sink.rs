@@ -4,19 +4,33 @@
 //! drives `session.start()` / `stop_and_transcribe()` / `cancel(epoch)`
 //! instead of merely logging.
 //!
-//! After PR 7 the sink is the production dictation path invoked from
-//! [`super::worker_rust::WorkerRunner::run`] via
-//! [`build_production_sink`]; on the `python-legacy` fallback path the
-//! supervisor's own hotkey install still routes to the session sink
-//! when a build carries `--features whisper-rs-local,rust-injection`.
+//! Wave 5 PR 4 of #348. **Opt-in only** behind
+//! `VOICEPI_DICTATE_BACKEND=rust-session` -- production keeps logging
+//! actions (and the Python orchestrator keeps owning the live PTT loop)
+//! until PR 6 ships the full Rust worker and flips the default.
 //!
-//! The env-var gate helpers that decide the fallback path live in the
-//! sibling [`super::rust_session_dictate_env`] module; this file
-//! re-exports them so callers keep writing
-//! `rust_session_sink::dictate_backend_rust_session_requested` /
-//! `_python_legacy_requested` unchanged (PR #441 review round 2 split
-//! for the AGENTS.md ~500-LOC-per-file modularity guideline). Sibling
-//! test files: `rust_session_sink_tests`, `_e2e_tests`, `_coverage_tests`.
+//! # Slicing
+//!
+//! - PR 4 (this module): coordinator → session wire-up + stub backends
+//!   so the end-to-end flow is observable without `whisper-rs-local` or
+//!   the OS injector. The stub `TranscribeBackend` always returns an
+//!   empty result with a `"rust-session-pr4-stub"` gate so the session
+//!   takes the `no_text` branch and emits the matching worker event;
+//!   the stub `InjectBackend` is a no-op for the same reason.
+//! - PR 5 (follow-up): swap the stubs for `LocalWhisper` +
+//!   the existing injection dispatcher; wire `audio_route` (PR 3 #415)
+//!   into [`crate::dictate::DictateSession::push_frame`].
+//! - PR 6 (follow-up): flip the default so the Rust supervisor owns the
+//!   PTT loop end-to-end (no env-var gate needed).
+//!
+//! # Why a tiny module instead of inline in `runtime.rs`
+//!
+//! `runtime.rs` is already past the 500-LOC guideline; the new wiring
+//! lives here so the guideline is respected (per AGENTS.md "Modularity").
+//! The integration test exercising the full coordinator → sink →
+//! session → worker-events loop lives in the `#[cfg(test)] mod tests`
+//! block at the bottom of this file so it sits next to the code under
+//! test.
 
 use std::io::Write;
 use std::sync::mpsc::Sender;
@@ -31,28 +45,15 @@ use crate::dictate::{
 use crate::hotkey::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle};
 use crate::runtime::{RepaintNotifier, RuntimeEvent, WorkerEvent};
 
-// Re-export the env-var gate helpers so the public API of this module
-// stays byte-identical to the pre-split shape (PR #441 review round 2).
-// Callers keep writing `rust_session_sink::dictate_backend_..._requested()`
-// exactly as before; the implementation lives in the sibling module.
-//
-// Wave 8 Part 2 dropped `dictate_backend_rust_session_requested` -- the
-// supervisor now unconditionally routes through the session sink on a
-// full-feature build, so the "opt in via VOICEPI_DICTATE_BACKEND=rust-session"
-// branch has no consumer.
-pub(crate) use super::rust_session_dictate_env::dictate_backend_python_legacy_requested_from;
+/// Env-var name. Matches the existing `VOICEPI_DICTATE_BACKEND` env var
+/// the Python wrapper reads -- the `rust-session` value is the new
+/// opt-in for the in-process Rust session sink (alongside the existing
+/// `rust` value the Python wrapper interprets as "shell out to
+/// `dictate-ops`").
+pub(crate) const DICTATE_BACKEND_ENV: &str = "VOICEPI_DICTATE_BACKEND";
 
-#[cfg(test)]
-pub(crate) use super::rust_session_dictate_env::dictate_backend_python_legacy_requested;
-
-// Constants are only referenced from `#[cfg(test)]` sibling test
-// modules; a non-test lib build has no consumer for the re-export and
-// clippy `-D unused-imports` fires. Gate the constant re-export on
-// test only.
-#[cfg(test)]
-pub(crate) use super::rust_session_dictate_env::{
-    DICTATE_BACKEND_ENV, DICTATE_BACKEND_PYTHON_LEGACY,
-};
+/// Value that enables the in-process Rust session sink wiring.
+pub(crate) const DICTATE_BACKEND_RUST_SESSION: &str = "rust-session";
 
 /// Prefix every `[worker-event] {…}` line carries. Mirrors the
 /// `WORKER_EVENT_PREFIX` const in `runtime.rs`; kept local so this
@@ -61,6 +62,16 @@ pub(crate) use super::rust_session_dictate_env::{
 /// the sibling [`super::rust_session_sink_tests`] module can spell the
 /// prefix literally in its assertions.
 pub(super) const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
+
+/// True when the user opted in to the Rust-session sink wiring via env
+/// var. Pure helper (no side effects) so the gate is unit-testable
+/// without spawning a coordinator. Returns false for unset / empty /
+/// any non-`rust-session` value.
+pub(crate) fn dictate_backend_rust_session_requested() -> bool {
+    std::env::var(DICTATE_BACKEND_ENV)
+        .map(|v| v.trim().eq_ignore_ascii_case(DICTATE_BACKEND_RUST_SESSION))
+        .unwrap_or(false)
+}
 
 // ── stub backends ────────────────────────────────────────────────────────────
 
@@ -253,55 +264,6 @@ where
 /// and so cannot share an `impl FnMut` return.
 pub(crate) type CoordinatorActionSink = Box<dyn FnMut(CoordinatorAction) + Send + 'static>;
 
-/// Codex #453 P2 (runtime.rs:662): strict variant of
-/// [`build_production_sink`] that FAILS instead of falling through
-/// to the PR-4 stub session on a real-backend init error. Used by
-/// `worker-rust`'s child mainloop where Wave 8 Part 2 made
-/// delegation mandatory -- silently downgrading to the stub would
-/// leave the worker looking alive (state=ready, hotkey installed)
-/// while every utterance produces empty text.
-///
-/// On a stock build (either feature missing) this returns Err right
-/// away: the stub fallback was the only way a stock build could
-/// exercise the sink, and the worker refuses to run on stock builds
-/// anyway (see [`crate::runtime::worker_rust::handle_worker_rust`]).
-///
-/// Delegates to [`build_production_sink`] on the happy path so the
-/// two entry points share exactly the same wire-up.
-pub(crate) fn try_build_real_production_sink(
-    tx: Sender<RuntimeEvent>,
-    repaint_notifier: Option<RepaintNotifier>,
-) -> Result<(CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>), anyhow::Error> {
-    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
-    {
-        // Route through the same real-backend constructor
-        // `build_production_sink` uses; propagate its Err instead of
-        // masking it with the stub fallback.
-        super::rust_session_real_backends::make_real_session(tx.clone(), repaint_notifier.clone())
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "real-backend session init failed ({err}); worker refuses to start with stub \
-                     backends -- fix VOICEPI_WHISPER_MODEL_PATH, download a model via \
-                     `whisper-dictate models download tiny.en`, or check audio/VAD/cpal init"
-                )
-            })?;
-        // Fall through to the shared builder so it wires the sink
-        // around a fresh `make_real_session` deps bundle. (Two
-        // construct calls: one to probe, one to install. Idempotent.)
-        Ok(build_production_sink(tx, repaint_notifier))
-    }
-    #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
-    {
-        let _ = (tx, repaint_notifier);
-        Err(anyhow::anyhow!(
-            "worker-rust cannot build a real session sink without the \
-             `whisper-rs-local + rust-injection` cargo features; this branch is \
-             unreachable in production because `handle_worker_rust` refuses to \
-             run on stock builds"
-        ))
-    }
-}
-
 pub(crate) fn build_production_sink(
     tx: Sender<RuntimeEvent>,
     repaint_notifier: Option<RepaintNotifier>,
@@ -411,12 +373,6 @@ pub(super) struct EventForwarder<'a> {
     tx: &'a Sender<RuntimeEvent>,
     buf: Vec<u8>,
     repaint_notifier: Option<&'a RepaintNotifier>,
-    /// Codex P2 (runtime.rs:2074, PR #440) — generation snapshot
-    /// captured at construction so the stale-observer guard in
-    /// `output_mute::session::observe_worker_state` can no-op a
-    /// forwarder from a previous session if the controller was
-    /// swapped mid-flight.
-    mute_generation: u64,
 }
 
 impl<'a> EventForwarder<'a> {
@@ -428,7 +384,6 @@ impl<'a> EventForwarder<'a> {
             tx,
             buf: Vec::new(),
             repaint_notifier,
-            mute_generation: crate::output_mute::session::current_generation(),
         }
     }
 
@@ -445,30 +400,6 @@ impl<'a> EventForwarder<'a> {
             // the forwarder defensive against a future emitter change.
             let line = String::from_utf8_lossy(without_nl).into_owned();
             let event = parse_or_stderr(line);
-            // Codex P2 (runtime.rs:1992, PR #440) — in the
-            // `VOICEPI_DICTATE_BACKEND=rust-session` path, worker
-            // events flow through the in-process EventForwarder rather
-            // than the supervisor's `stream_lines` subprocess reader.
-            // The auto-mute observer used to be hooked only into the
-            // latter, so the mute feature silently did nothing under
-            // the rust-session backend. Fanning every state transition
-            // into the observer here restores parity — cheap no-op
-            // when no controller is installed.
-            if let RuntimeEvent::Worker(worker) = &event {
-                // Codex P2 (runtime.rs:2074 + state.rs:158, PR #440) —
-                // pass the captured generation (stale-reader guard) and
-                // surface any backend failure through a Stderr event so
-                // the user sees when the mute silently didn't happen.
-                if let Some(err) = crate::output_mute::session::observe_worker_state(
-                    worker.state.as_deref(),
-                    self.mute_generation,
-                ) {
-                    let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-                        "[output-mute] backend failure while observing state {state:?}: {err}",
-                        state = worker.state.as_deref().unwrap_or(""),
-                    )));
-                }
-            }
             let _ = self.tx.send(event);
             if let Some(notifier) = self.repaint_notifier {
                 notifier();

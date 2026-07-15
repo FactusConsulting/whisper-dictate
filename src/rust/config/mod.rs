@@ -34,6 +34,28 @@ pub use keys::restart_required_keys;
 pub use schema::{effective_runtime_env, numeric_bounds, worker_env_overrides, NumericBounds};
 pub use settings::AppSettings;
 
+/// Test-only utilities shared across the config submodules.
+///
+/// `env::set_var`/`remove_var` mutate process-global state, so every test that
+/// touches the environment must serialize on the SAME lock — and that lock has
+/// to be **crate-wide**, not module-local, because other modules' tests mutate
+/// env too. We therefore re-export the single shared lock at
+/// [`crate::test_env_lock::ENV_LOCK`] under the old name so existing call
+/// sites need no churn.
+#[cfg(test)]
+pub(crate) mod test_support {
+    pub(crate) use crate::test_env_lock::ENV_LOCK;
+
+    /// Restore (or clear) an env var captured before a test mutated it.
+    pub(crate) fn restore_env(name: &str, value: Option<std::ffi::OsString>) {
+        if let Some(value) = value {
+            std::env::set_var(name, value);
+        } else {
+            std::env::remove_var(name);
+        }
+    }
+}
+
 /// Dispatch the `config` CLI subcommand (print the path or the resolved config).
 pub fn handle_command(command: ConfigCommand) -> Result<()> {
     match command {

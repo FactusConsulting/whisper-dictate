@@ -11,11 +11,12 @@
 #
 # What this does:
 #   1. Installs whisper-dictate via Homebrew (brew must be installed first)
-#   2. Adds user to the 'input' group (required for evdev/rdev hotkeys + ydotool)
-#   3. Creates udev rule so /dev/uinput is accessible to the input group
-#   4. Installs ydotool (Wayland text injection via kernel uinput)
-#   5. Sets up ydotoold as a systemd user service (auto-starts with session)
-#   6. When run directly, creates GNOME launcher/autostart entries and starts the UI
+#   2. Creates gcc-12 symlink needed to build the evdev Python package
+#   3. Adds user to the 'input' group (required for evdev hotkeys + ydotool)
+#   4. Creates udev rule so /dev/uinput is accessible to the input group
+#   5. Installs ydotool (Wayland text injection via kernel uinput)
+#   6. Sets up ydotoold as a systemd user service (auto-starts with session)
+#   7. When run directly, creates GNOME launcher/autostart entries and starts the UI
 #      (when run by `whisper-dictate setup-ubuntu`, Rust owns this final step)
 set -euo pipefail
 
@@ -57,6 +58,22 @@ if ! brew list whisper-dictate &>/dev/null 2>&1; then
 else
     info "Opdaterer whisper-dictate..."
     brew upgrade whisper-dictate 2>/dev/null && ok "whisper-dictate opdateret" || ok "whisper-dictate er allerede nyeste version"
+fi
+
+# ---------------------------------------------------------------------------
+step "evdev: gcc-12 symlink (kræves for at bygge evdev Python-pakken)"
+# ---------------------------------------------------------------------------
+# evdev kompileres med gcc-12, men Ubuntu 26.04 leverer gcc-15.
+if [[ ! -f /usr/local/bin/gcc-12 ]]; then
+    GCC=$(command -v gcc-15 || command -v gcc-14 || command -v gcc-13 || true)
+    if [[ -n "$GCC" ]]; then
+        sudo ln -sf "$GCC" /usr/local/bin/gcc-12
+        ok "gcc-12 → $GCC"
+    else
+        warn "Ingen gcc fundet — evdev bygges måske ikke korrekt"
+    fi
+else
+    ok "gcc-12 symlink findes allerede"
 fi
 
 # ---------------------------------------------------------------------------

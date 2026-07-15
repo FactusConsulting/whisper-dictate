@@ -5,12 +5,6 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
         let palette = ui_palette(&self.settings.ui_theme);
         let language = self.settings.ui_language.clone();
-        // Simple/Advanced mode (Issue #334). Advanced-only rows below are
-        // gated with `row_visible(mode, false)` so Simple mode shows only
-        // the fields a first-time user needs. Simple-marked rows (mic,
-        // hotkey, backend/model, language, API key) are always visible.
-        let mode = SettingsMode::from_raw(&self.settings.settings_mode);
-        let show_advanced = row_visible(mode, false);
         ui.heading("Speech recognition");
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
 
@@ -36,13 +30,10 @@ impl WhisperDictateApp {
         ui.add_space(6.0);
 
         // --- Whisper group -----------------------------------------------
-        // Simplified: the dropdown is the single source of truth. Changing
-        // the selection to a missing catalog model auto-triggers a
-        // background download (via `auto_download_if_needed`); the compact
-        // status line rendered directly under the group shows progress /
-        // errors / a manual "Download now" button for the edge case where
-        // the currently-loaded selection isn't cached yet.
-        let mut selection_changed = false;
+        // The download section needs `&mut self` so it can't live inside the
+        // `scope_group`'s `FnOnce(&mut egui::Ui)` (which borrows self for the
+        // closure capture). Render the existing model picker via the group
+        // first, then drop the closure scope before invoking the section.
         scope_group(
             ui,
             palette,
@@ -50,24 +41,7 @@ impl WhisperDictateApp {
             "speech_whisper",
             |ui| {
                 let gpu_total_mb = self.gpu_total_mb;
-                let downloads = self.whisper_model_downloads.clone();
-                let status_for = |model: &str| -> String {
-                    let entry = crate::whisper::model_manager::find(model);
-                    let job = entry.and_then(|e| downloads.job(e.name));
-                    let cached = entry
-                        .map(|e| downloads.is_verified_fast(e))
-                        .unwrap_or(false);
-                    let verify_pending = entry
-                        .map(|e| downloads.is_verification_pending(e))
-                        .unwrap_or(false);
-                    super::whisper_models::dropdown_status_suffix(
-                        entry,
-                        job.as_ref(),
-                        cached,
-                        verify_pending,
-                    )
-                };
-                selection_changed = combo_whisper_model_with_status(
+                combo_model_vram(
                     ui,
                     backend == SttBackendMode::Whisper,
                     "Whisper model",
@@ -75,29 +49,16 @@ impl WhisperDictateApp {
                     WHISPER_MODELS,
                     whisper_model_hint,
                     gpu_total_mb,
-                    &status_for,
                     "Larger models are more accurate but slower and use more VRAM. On a CUDA GPU, \
                      models that don't fit your VRAM are greyed out; on CPU every model runs (large \
                      ones just slower). The ~MB figure is the approximate VRAM at the int8_float16 \
-                     GPU default. Selecting a model that isn't on disk auto-downloads it into the \
-                     user cache. Used only when STT backend is whisper.",
+                     GPU default. Used only when STT backend is whisper.",
                 );
             },
         );
-        if selection_changed {
-            let started = super::whisper_models::auto_download_if_needed(
-                &self.whisper_model_downloads,
-                &self.settings.model,
-            );
-            if started {
-                self.settings_status =
-                    format!("Downloading Whisper model {}…", self.settings.model);
-            }
-        }
-        self.render_selected_whisper_model_status(ui);
-        if show_advanced {
-            self.render_discovered_custom_models_section(ui);
-        }
+        // Wave 7-B: in-app GGML model downloader. Sits next to the model
+        // picker so users discover it where they already pick a model.
+        self.whisper_model_download_section(ui);
 
         ui.add_space(6.0);
 
@@ -151,37 +112,22 @@ impl WhisperDictateApp {
                         "Remote transcription model for the selected cloud provider. OpenAI options include gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1.",
                     );
                 }
-                // Base URL is Advanced-only for the built-in providers (Groq
-                // and OpenAI have well-known endpoints), BUT `Custom` is the
-                // "self-hosted OpenAI-compatible server" escape hatch — hiding
-                // its URL row means a Simple-mode user could never point at a
-                // different host/port than the seeded `http://localhost:8000/v1`
-                // sentinel. Keep the URL visible whenever Custom is selected so
-                // the row a user needs is reachable from Simple mode too
-                // (Codex #435 P2).
-                if show_advanced || provider == CloudProvider::Custom {
-                    text_enabled(
-                        ui,
-                        backend == SttBackendMode::Cloud,
-                        "Cloud STT API URL",
-                        &mut self.settings.stt_base_url,
-                        "Base URL for the selected cloud transcription provider.",
-                    );
-                }
-                // Timeout stays Advanced-only regardless of provider — a fresh
-                // user can rely on the default 30 s regardless of whether the
-                // endpoint is Groq, OpenAI, or a self-hosted box.
-                if show_advanced {
-                    numeric_enabled(
-                        ui,
-                        &language,
-                        backend == SttBackendMode::Cloud,
-                        "stt_timeout_ms",
-                        "Cloud STT timeout ms",
-                        &mut self.settings.stt_timeout_ms,
-                        "Network timeout for cloud transcription requests.",
-                    );
-                }
+                text_enabled(
+                    ui,
+                    backend == SttBackendMode::Cloud,
+                    "Cloud STT API URL",
+                    &mut self.settings.stt_base_url,
+                    "Base URL for the selected cloud transcription provider.",
+                );
+                numeric_enabled(
+                    ui,
+                    &language,
+                    backend == SttBackendMode::Cloud,
+                    "stt_timeout_ms",
+                    "Cloud STT timeout ms",
+                    &mut self.settings.stt_timeout_ms,
+                    "Network timeout for cloud transcription requests.",
+                );
                 password_enabled(
                     ui,
                     backend == SttBackendMode::Cloud,
@@ -208,43 +154,37 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupGeneral),
             "speech_general",
             |ui| {
-                // Device + compute type are Advanced-only: the local
-                // Whisper "auto"/int8_float16 defaults handle the vast
-                // majority of setups; a new user shouldn't have to reason
-                // about precision.
-                if show_advanced {
-                    combo_enabled_short(
-                        ui,
-                        backend != SttBackendMode::Cloud,
-                        "Device",
-                        &mut self.settings.device,
-                        &["auto", "cuda", "cpu"],
-                        "Local inference device. auto chooses CUDA when available, otherwise CPU. Used by the local Whisper backend.",
-                    );
-                    combo_enabled_labeled(
-                        ui,
-                        backend != SttBackendMode::Cloud,
-                        "Compute type",
-                        &mut self.settings.compute_type,
-                        &[
-                            ("", "Auto — best precision for your device (recommended)"),
-                            ("float32", "float32 — most accurate, slowest, most memory"),
-                            ("bfloat16", "bfloat16 — near-float32 accuracy (newer GPUs)"),
-                            ("float16", "float16 — high accuracy, ~half the VRAM (GPU)"),
-                            (
-                                "int8_float16",
-                                "int8_float16 — fast, low VRAM (good GPU default)",
-                            ),
-                            (
-                                "int8",
-                                "int8 — fastest, least memory, slight accuracy loss (CPU)",
-                            ),
-                        ],
-                        "Numeric precision the local Whisper model runs at. Higher precision is more \
-                         accurate but slower and uses more VRAM/RAM; lower is faster and lighter for a \
-                         small accuracy cost. Auto picks a sensible default per device (GPU vs CPU).",
-                    );
-                }
+                combo_enabled_short(
+                    ui,
+                    backend != SttBackendMode::Cloud,
+                    "Device",
+                    &mut self.settings.device,
+                    &["auto", "cuda", "cpu"],
+                    "Local inference device. auto chooses CUDA when available, otherwise CPU. Used by the local Whisper backend.",
+                );
+                combo_enabled_labeled(
+                    ui,
+                    backend != SttBackendMode::Cloud,
+                    "Compute type",
+                    &mut self.settings.compute_type,
+                    &[
+                        ("", "Auto — best precision for your device (recommended)"),
+                        ("float32", "float32 — most accurate, slowest, most memory"),
+                        ("bfloat16", "bfloat16 — near-float32 accuracy (newer GPUs)"),
+                        ("float16", "float16 — high accuracy, ~half the VRAM (GPU)"),
+                        (
+                            "int8_float16",
+                            "int8_float16 — fast, low VRAM (good GPU default)",
+                        ),
+                        (
+                            "int8",
+                            "int8 — fastest, least memory, slight accuracy loss (CPU)",
+                        ),
+                    ],
+                    "Numeric precision the local Whisper model runs at. Higher precision is more \
+                     accurate but slower and uses more VRAM/RAM; lower is faster and lighter for a \
+                     small accuracy cost. Auto picks a sensible default per device (GPU vs CPU).",
+                );
                 self.microphone_settings(ui);
                 combo_help_labeled_short(
                     ui,
@@ -264,8 +204,7 @@ impl WhisperDictateApp {
                     ],
                     "Spoken language hint. Auto lets the backend autodetect when supported.",
                 );
-                // Linux xkb layout is a niche override — hidden in Simple.
-                if show_advanced && !cfg!(windows) {
+                if !cfg!(windows) {
                     combo_help_labeled_short(
                         ui,
                         "Linux keyboard layout",
@@ -292,39 +231,34 @@ impl WhisperDictateApp {
                     "Hold-to-talk key or chord, for example ctrl_r or shift_l+ctrl_l. \
                      Join keys with '+'. Tokens are key names (modifiers and named keys).",
                 );
-                // Toggle mode + the quit-key chord are Advanced-only —
-                // most users are fine with push-to-talk and don't need a
-                // global multi-press exit shortcut on top of it.
-                if show_advanced {
-                    checkbox_help(
-                        ui,
-                        "Toggle mode",
-                        &mut self.settings.toggle_mode,
-                        "Toggle mode: press the hotkey to start recording, press again to stop and transcribe — instead of holding it.",
-                    );
-                    text_help(
-                        ui,
-                        "Quit key",
-                        &mut self.settings.quit_key,
-                        "Global key used to quit the worker after Quit count presses. Examples: esc, f12, q.",
-                    );
-                    numeric_help(
-                        ui,
-                        &language,
-                        "quit_count",
-                        "Quit count",
-                        &mut self.settings.quit_count,
-                        "Number of consecutive quit-key presses required to stop the worker. 0 disables it.",
-                    );
-                    numeric_help(
-                        ui,
-                        &language,
-                        "quit_window_ms",
-                        "Quit window ms",
-                        &mut self.settings.quit_window_ms,
-                        "Maximum time window for consecutive quit-key presses.",
-                    );
-                }
+                checkbox_help(
+                    ui,
+                    "Toggle mode",
+                    &mut self.settings.toggle_mode,
+                    "Toggle mode: press the hotkey to start recording, press again to stop and transcribe — instead of holding it.",
+                );
+                text_help(
+                    ui,
+                    "Quit key",
+                    &mut self.settings.quit_key,
+                    "Global key used to quit the worker after Quit count presses. Examples: esc, f12, q.",
+                );
+                numeric_help(
+                    ui,
+                    &language,
+                    "quit_count",
+                    "Quit count",
+                    &mut self.settings.quit_count,
+                    "Number of consecutive quit-key presses required to stop the worker. 0 disables it.",
+                );
+                numeric_help(
+                    ui,
+                    &language,
+                    "quit_window_ms",
+                    "Quit window ms",
+                    &mut self.settings.quit_window_ms,
+                    "Maximum time window for consecutive quit-key presses.",
+                );
             },
         );
     }

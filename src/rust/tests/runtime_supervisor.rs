@@ -1,57 +1,328 @@
-//! Integration tests that survived Wave 8 Part 2.
-//!
-//! The pre-v1.20 supervisor lifecycle tests (start / stop / restart /
-//! stream_lines / repaint notifier / env passthrough / worker-event
-//! parse) spawned a plain `python -c "..."` child through the
-//! supervisor's `WorkerCommand`. Wave 8 Part 2 made
-//! `RuntimeSupervisor::start` UNCONDITIONALLY swap program+args to
-//! `<current-exe> worker-rust` (via
-//! `worker_rust::swap_command_to_worker_rust`) and REQUIRE the delegate
-//! gate to approve first — which needs a resolvable GGML model and the
-//! full feature set. Those preconditions cannot be met from a plain
-//! integration test binary, and the whole point of the tests was that
-//! the child WAS whatever the caller passed in. The supervisor's
-//! start/stop/poll/stream_lines/notifier mechanics are still covered by
-//! the module-level unit tests in `runtime/` (bridge_terminal_tests,
-//! rust_session_sink_e2e_tests, external_toggle_tests, ...); they no
-//! longer need an end-to-end Python subprocess.
-//!
-//! What stayed:
-//!
-//! * `windows_child_reads_piped_stdin_written_by_parent` — a low-level
-//!   Windows named-pipe round-trip test. Bypasses the supervisor
-//!   entirely (drives a bare `Command` with `Stdio::piped()` on stdin)
-//!   so it still exercises the pre-Wave-8 pipe-handling regression the
-//!   audio-in-rust bridge depended on.
-//! * `cleanup_stale_desktop_processes_stops_worker_from_same_app_root`
-//!   — exercises the Windows `cleanup_stale_desktop_processes` script.
-//!   The current PowerShell matcher still targets the legacy
-//!   `whisper_dictate.runtime` command-line pattern (an outdated
-//!   check tracked as a Wave 8 Part 3 follow-up), but the test
-//!   fixture spins up a real Python child matching that pattern so
-//!   the code path still runs end-to-end.
-
-// Wave 8 Part 2: every surviving test in this file is Windows-only
-// (cross-platform supervisor tests moved to module-level unit tests
-// in `runtime/`), so gate every import + helper on `windows` to keep
-// stock-Linux/macOS builds warning-free under `-D warnings`.
-#[cfg(windows)]
 use std::env;
 #[cfg(windows)]
 use std::ffi::{OsStr, OsString};
 #[cfg(windows)]
 use std::fs;
-#[cfg(windows)]
 use std::path::PathBuf;
 #[cfg(windows)]
-use std::process::{Child, Command};
-#[cfg(windows)]
+use std::process::Child;
+use std::process::Command;
 use std::thread;
-#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use whisper_dictate_app::runtime::cleanup_stale_desktop_processes;
+use whisper_dictate_app::runtime::{RuntimeEvent, RuntimeState, RuntimeSupervisor, WorkerCommand};
+
+#[test]
+fn supervisor_captures_stdout_and_exit() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "print('worker-ready', flush=True)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "worker-ready") && has_exit(events)
+    });
+
+    assert!(has_stdout(&events, "worker-ready"));
+    assert!(has_exit(&events));
+    assert_eq!(supervisor.state(), RuntimeState::Stopped);
+}
+
+#[test]
+fn supervisor_fires_repaint_notifier_on_every_event() {
+    // The whole point of the notifier — every runtime event published on the
+    // channel must wake the consumer (egui). Without this the tray icon stays
+    // GREEN through a full PTT cycle when the window has no foreground
+    // attention. Drive it with a real child so the counter covers start() and
+    // stream_lines (stdout); the stop()/wait thread is covered by the
+    // separate test below.
+    let Some(python) = test_python() else {
+        return;
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let count = Arc::new(AtomicUsize::new(0));
+    let count_for_cb = Arc::clone(&count);
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.set_repaint_notifier(Arc::new(move || {
+        count_for_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+    assert!(supervisor.has_repaint_notifier());
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec!["-c".to_owned(), "print('hello', flush=True)".to_owned()],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    let _ = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "hello") && has_exit(events)
+    });
+    // Two channel-sends are guaranteed: Started (from start()) and one
+    // Stdout (from the stream_lines thread). The Exited event is sent by
+    // poll() on the main thread which deliberately does NOT notify — the
+    // consumer is already there. So `>= 2` is the right bar.
+    let total = count.load(Ordering::SeqCst);
+    assert!(
+        total >= 2,
+        "repaint notifier should fire on every channel send; got {total}"
+    );
+}
+
+#[test]
+fn supervisor_fires_repaint_notifier_from_stop_thread() {
+    // stop() spawns a thread that waits for the child to terminate and then
+    // sends Exited (or Error on failure) through the channel and fires the
+    // notifier. Cover that explicit path so coverage hits both branches in
+    // the spawned closure.
+    let Some(python) = test_python() else {
+        return;
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let count = Arc::new(AtomicUsize::new(0));
+    let count_for_cb = Arc::clone(&count);
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor.set_repaint_notifier(Arc::new(move || {
+        count_for_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import time; print('ready', flush=True); time.sleep(30)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    let _ = collect_until(&mut supervisor, |events| has_stdout(events, "ready"));
+    let before_stop = count.load(Ordering::SeqCst);
+    supervisor.stop().unwrap();
+    let _ = collect_until(&mut supervisor, has_exit);
+    // stop()'s wait-thread is the only path that bumps the notifier between
+    // before_stop and now — the Exited send + notifier() inside that closure.
+    let after_stop = count.load(Ordering::SeqCst);
+    assert!(
+        after_stop > before_stop,
+        "stop() wait-thread should fire notifier; before={before_stop} after={after_stop}"
+    );
+}
+
+#[test]
+fn supervisor_forces_utf8_stdio_for_piped_python_worker() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                concat!(
+                    "import os; ",
+                    "print(os.environ.get('PYTHONUTF8'), flush=True); ",
+                    "print(os.environ.get('PYTHONIOENCODING'), flush=True); ",
+                    "print('ændret prøv', flush=True)"
+                )
+                .to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "ændret prøv") && has_exit(events)
+    });
+
+    assert!(has_stdout(&events, "1"));
+    assert!(has_stdout(&events, "utf-8"));
+    assert!(has_stdout(&events, "ændret prøv"));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::Stdout(line) if line.contains("Ã¦") || line.contains("Ã¸")
+    )));
+    assert!(has_exit(&events));
+}
+
+#[test]
+fn supervisor_stops_running_process() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import time; print('worker-ready', flush=True); time.sleep(30)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| has_stdout(events, "worker-ready"));
+    assert!(has_stdout(&events, "worker-ready"));
+    assert_eq!(supervisor.state(), RuntimeState::Running);
+
+    supervisor.stop().unwrap();
+    assert_eq!(supervisor.state(), RuntimeState::Stopped);
+    let events = collect_until(&mut supervisor, has_exit);
+    assert!(has_exit(&events));
+    assert_eq!(supervisor.state(), RuntimeState::Stopped);
+}
+
+#[test]
+fn supervisor_stop_returns_without_waiting_for_process_exit_event() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import time; print('worker-ready', flush=True); time.sleep(30)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| has_stdout(events, "worker-ready"));
+    assert!(has_stdout(&events, "worker-ready"));
+
+    let started = Instant::now();
+    supervisor.stop().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "stop should return immediately instead of waiting for process teardown"
+    );
+    assert_eq!(supervisor.state(), RuntimeState::Stopped);
+}
+
+#[test]
+fn supervisor_restart_returns_without_waiting_for_process_exit_event() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python.clone(),
+            args: vec![
+                "-c".to_owned(),
+                "import time; print('worker-ready', flush=True); time.sleep(30)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| has_stdout(events, "worker-ready"));
+    assert!(has_stdout(&events, "worker-ready"));
+
+    let started = Instant::now();
+    supervisor
+        .restart(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "print('worker-restarted', flush=True)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "restart should return immediately instead of waiting for process teardown"
+    );
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "worker-restarted")
+    });
+    assert!(has_stdout(&events, "worker-restarted"));
+}
+
+#[test]
+fn supervisor_parses_worker_events_from_stderr() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import os, sys; assert os.environ['VOICEPI_WORKER_EVENTS'] == '1'; print('[worker-event] {\"event\":\"status\",\"state\":\"ready\"}', file=sys.stderr, flush=True)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_worker_status(events, "ready") && has_exit(events)
+    });
+
+    assert!(has_worker_status(&events, "ready"));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::Stderr(line) if line.starts_with("[worker-event]")
+    )));
+}
+
+#[test]
+fn supervisor_passes_command_env_to_worker_without_logging_secret() {
+    let Some(python) = test_python() else {
+        return;
+    };
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "import os; print(len(os.environ.get('VOICEPI_TEST_SECRET', '')) == 12, flush=True)"
+                    .to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: vec![("VOICEPI_TEST_SECRET".to_owned(), "secret-value".to_owned())],
+        })
+        .unwrap();
+
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "True") && has_exit(events)
+    });
+
+    assert!(has_stdout(&events, "True"));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::Started { command } if command.contains("secret-value")
+    )));
+}
 
 /// Iteration-2 review finding #6: the audio-in-rust path adds
 /// `Stdio::piped()` on the worker's stdin and the supervisor writes
@@ -61,8 +332,8 @@ use whisper_dictate_app::runtime::cleanup_stale_desktop_processes;
 /// `CREATE_NO_WINDOW`), so we pin the round-trip end-to-end on
 /// Windows CI here. The test does NOT depend on the `audio-in-rust`
 /// cargo feature: it mirrors what the supervisor does — spawn a
-/// child with piped stdin, write bytes, verify the child read them
-/// and printed them back on stdout — so a regression in the
+/// Python child with piped stdin, write bytes, verify the child read
+/// them and printed them back on stdout — so a regression in the
 /// supervisor's Windows pipe-handling shows up even in default
 /// builds.
 #[cfg(windows)]
@@ -73,6 +344,11 @@ fn windows_child_reads_piped_stdin_written_by_parent() {
     let Some(python) = test_python() else {
         return;
     };
+    // Mirror what `RuntimeSupervisor::start` does for the
+    // audio-in-rust path: Stdio::piped() on stdin + the hidden-window
+    // creation flag. We bypass the supervisor itself because it owns
+    // stdin internally (the audio bridge takes it on spawn), so we
+    // drive a bare Command here and just prove the pipe round-trips.
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut child = Command::new(python)
@@ -98,6 +374,9 @@ fn windows_child_reads_piped_stdin_written_by_parent() {
             .expect("Windows pipe write succeeds");
         stdin.flush().expect("Windows pipe flush succeeds");
     }
+    // Dropping stdin closes the Windows pipe handle so the child sees
+    // EOF after the line above — same teardown shape the
+    // `BridgeHandle::stop` path uses for the real bridge.
     drop(child.stdin.take());
 
     let output = child
@@ -152,7 +431,6 @@ fn cleanup_stale_desktop_processes_stops_worker_from_same_app_root() {
     );
 }
 
-#[cfg(windows)]
 fn test_python() -> Option<PathBuf> {
     for candidate in python_candidates() {
         if Command::new(candidate)
@@ -205,7 +483,48 @@ impl Drop for EnvVarGuard {
     }
 }
 
-#[cfg(windows)]
 fn python_candidates() -> &'static [&'static str] {
-    &["py.exe", "py", "python.exe", "python"]
+    if cfg!(windows) {
+        &["py.exe", "py", "python.exe", "python"]
+    } else {
+        &["python3", "python"]
+    }
+}
+
+fn collect_until(
+    supervisor: &mut RuntimeSupervisor,
+    predicate: impl Fn(&[RuntimeEvent]) -> bool,
+) -> Vec<RuntimeEvent> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut events = Vec::new();
+    while Instant::now() < deadline {
+        events.extend(supervisor.poll());
+        if predicate(&events) {
+            return events;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    events
+}
+
+fn has_stdout(events: &[RuntimeEvent], expected: &str) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, RuntimeEvent::Stdout(line) if line == expected))
+}
+
+fn has_exit(events: &[RuntimeEvent]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, RuntimeEvent::Exited { .. }))
+}
+
+fn has_worker_status(events: &[RuntimeEvent], expected: &str) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::Worker(worker)
+                if worker.event == "status" && worker.state.as_deref() == Some(expected)
+        )
+    })
 }

@@ -37,7 +37,7 @@ copy-paste end-to-end setups jump to the [scenario recipes](#scenario-recipes)
 further down.
 
 <!-- BEGIN GENERATED SETTINGS REFERENCE -->
-_Generated from `src/rust/config/settings_schema.json` by `scripts/dev/gen_settings_docs.py` -- do not edit this block by hand; regenerate with `py -3.12 scripts/dev/gen_settings_docs.py`._
+_Generated from `src/python/whisper_dictate/settings_schema.json` by `scripts/dev/gen_settings_docs.py` -- do not edit this block by hand; regenerate with `py -3.12 scripts/dev/gen_settings_docs.py`._
 
 Every runtime setting, grouped by area. **Live** settings apply on the next record start/stop; **Restart** settings (backend, model, device, compute type, hotkey) need the worker restarted. The env var is read at startup; the same name without the `VOICEPI_` prefix, lower-cased, is the `config.json` key.
 
@@ -90,7 +90,6 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `min_snr_db` | `VOICEPI_MIN_SNR_DB` | `6` | Live | Reject utterances with speech-vs-noise contrast below this (dB) as 'no speech contrast'. |
 | `audio_ducking` | `VOICEPI_AUDIO_DUCKING` | _(unset)_ | Live | Windows only: while recording, lower other apps' audio sessions and restore them before transcription. Disabled by default. |
 | `audio_ducking_level` | `VOICEPI_AUDIO_DUCKING_LEVEL` | `0.25` | Live | Target volume (0.0-1.0) for other apps' audio while recording when audio ducking is enabled. |
-| `mute_output_while_recording` | `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING` | _(unset)_ | Live | While recording, mute the default system audio output (speakers/headphones) so meeting/video sound cannot leak into the microphone. Restores the prior mute state when recording ends. Disabled by default. |
 
 ### Dictionary & post-processing
 
@@ -110,9 +109,6 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `post_max_output_chars` | `VOICEPI_POST_MAX_OUTPUT_CHARS` | `4000` | Live | Maximum number of rewritten characters accepted back from the post-processor. |
 | `post_redact` | `VOICEPI_POST_REDACT` | _(unset)_ | Live | Opt-in local redaction before cloud post-processing: replace emails, phone numbers and common API tokens with placeholders, restored afterward when possible. |
 | `post_redact_terms` | `VOICEPI_POST_REDACT_TERMS` | _(unset)_ | Live | Extra comma-separated names/terms to redact before cloud post-processing. Original values are never written to metrics. |
-| `postprocess_hotkey` | `VOICEPI_POSTPROCESS_HOTKEY` | _(unset)_ | Restart | Optional second hotkey (issue #319): press-to-post-process the last dictated utterance through the active postprocess profile. Empty disables. Same key format as VOICEPI_KEY (e.g. ctrl_r+shift_r, f10). |
-| `postprocess_profiles` | `VOICEPI_POSTPROCESS_PROFILES` | _(unset)_ | Live | JSON array of postprocess profiles the second hotkey cycles through: each entry has name, processor, mode, model, base_url, timeout_ms, max_input_chars, max_output_chars, redact, redact_terms. Cloud API keys are read from VOICEPI_POST_API_KEY / VOICEPI_STT_API_KEY / provider env vars (never inline in this list). Empty falls back to the built-in grammar/email/bullets seed. |
-| `postprocess_profile_index` | `VOICEPI_POSTPROCESS_PROFILE_INDEX` | `0` | Live | Currently active postprocess profile index. The second hotkey cycles this modulo the profile-list length; the controller persists the value between runs. |
 
 ### Injection, hotkeys & feedback
 
@@ -429,68 +425,6 @@ Notes:
   `feedback_sounds`/`feedback_notify` for record/error cues. There is no separate
   "server mode"; it is the normal `whisper-dictate run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).
-
-### Recipe E — External toggle from a compositor keybinding (Linux / Wayland)
-
-On Wayland the compositor owns global hotkeys, not the application. Bind your
-compositor shortcut to one of the CLI flags (or send a Unix signal directly) to
-drive recording from a system-wide key without fighting the Wayland security
-model. Issue #326.
-
-```bash
-# Toggle start↔stop (the most useful binding).
-whisper-dictate --toggle-recording
-
-# Or, for explicit start/stop bindings (useful with two separate hotkeys):
-whisper-dictate --start-recording
-whisper-dictate --stop-recording
-
-# Emergency "discard whatever is buffered now" — discards audio, no transcript.
-whisper-dictate --cancel-recording
-
-# Equivalent raw signals (no extra process spawn — handy from a script):
-kill -USR1 "$(pidof whisper-dictate)"   # toggle (default action of SIGUSR1)
-kill -USR2 "$(pidof whisper-dictate)"   # cancel
-```
-
-How it works:
-
-- The daemon (the `whisper-dictate` UI process) writes its PID to
-  `$XDG_RUNTIME_DIR/whisper-dictate/whisper-dictate.pid` at startup and
-  installs SIGUSR1 (toggle / start / stop) + SIGUSR2 (cancel) handlers.
-- The CLI flag writes its action (`toggle` / `start` / `stop`) to a one-line
-  command file under the same directory, then sends SIGUSR1. The daemon's
-  signal handler reads-and-deletes the file to disambiguate. SIGUSR2 needs no
-  file — it always means cancel.
-- The triggered command flows into the same hotkey state machine as a
-  keyboard PTT chord, so the `Idle` / `Recording` / `Processing` guards
-  apply uniformly. External toggles bypass the 30 ms bouncing-key debounce
-  (they are user-driven, not key-jitter).
-
-Example sway config (`~/.config/sway/config`):
-
-```text
-bindsym $mod+grave exec whisper-dictate --toggle-recording
-bindsym $mod+Shift+grave exec whisper-dictate --cancel-recording
-```
-
-Example GNOME custom shortcut: Settings → Keyboard → Custom Shortcuts → Add,
-command `whisper-dictate --toggle-recording`, bind to your key of choice.
-
-Caveats:
-
-- **Linux only today.** macOS and Windows print a clear "not implemented"
-  error on the CLI side; a future PR can wire equivalent IPC (named pipes
-  on Windows, Distributed Notifications on macOS).
-- **Requires the Rust hotkey backend to act on the signal.** External
-  triggers route through the Rust hotkey coordinator
-  (`VOICEPI_HOTKEY_BACKEND=rust` on a binary built with `--features
-  rust-hotkeys`). On the default Python-backend build the signal still
-  arrives and shows in the runtime log, but does not start a recording.
-- **One daemon per user.** If you have multiple `whisper-dictate` UI
-  processes running, only the most recent one wins (it overwrites the PID
-  file). Use the tray menu or `pgrep whisper-dictate` to confirm before
-  binding the hotkey.
 
 ### Probing a hotkey before you commit — `scripts/dev/probe-key.py`
 

@@ -53,18 +53,6 @@ pub mod devices;
 pub mod dictionary;
 pub mod formatting;
 pub mod health;
-// Local SQLite-backed transcription history (issue #324). Owns the
-// schema, insert path, and search API for the per-user history.sqlite3
-// store. Gated behind the `history-sqlite` cargo feature (default-on)
-// so a `--no-default-features` build doesn't pull rusqlite + the
-// bundled SQLite C compile. The supervisor's utterance-event hook
-// (`crate::runtime::stream_lines`) calls into this module on each
-// `event="utterance"` line; failures are logged and swallowed so a DB
-// hiccup never breaks dictation. The `History` CLI subcommand
-// (`history list / last / search`) also routes through here when the
-// feature is on.
-#[cfg(feature = "history-sqlite")]
-pub mod history;
 // Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier
 // matcher and the stage state machine compile unconditionally so their unit
 // tests run on every CI job; the OS listener layer is gated behind the
@@ -77,14 +65,6 @@ pub mod model_capacity;
 // (unconditional). Extracted here to avoid a cross-module dependency that
 // crosses a feature boundary.
 pub(crate) mod os_cache;
-// Auto-mute the system audio output while recording (issue #322). Pure
-// state machine + tiny per-OS subprocess/COM shims; no cpal / ONNX
-// deps, so it compiles into every build regardless of `audio-in-rust`.
-// Feature is behind the AppSettings.mute_output_while_recording toggle
-// (default OFF); `runtime::stream_lines` fans worker-state events into
-// `output_mute::session::observe_worker_state`, which is a cheap no-op
-// when the toggle is off.
-pub mod output_mute;
 // Rust port of `vp_postprocess.py` (Wave 4-B of #348). Owns the full
 // post-STT formatting / LLM cleanup pipeline: settings validation,
 // cloud-safe redaction, prompt construction, provider call (local
@@ -92,14 +72,6 @@ pub mod output_mute;
 // extract-final-text and the redaction restore. Python shells out via
 // the `postprocess` subcommand when VOICEPI_POSTPROCESS_BACKEND=rust.
 pub mod postprocess;
-// Second-hotkey LLM post-processing (issue #319). Layered on top of the
-// Wave 4-B `postprocess` module: adds a profile registry the user can
-// cycle through with a second hotkey and a dispatcher that runs the
-// active profile against the last dictated utterance (SQLite history or
-// caller-supplied clipboard fallback). Exposes a hidden
-// `postprocess-hotkey` subcommand mirroring the `postprocess` envelope
-// shape so the Python worker can shell out to the same pipeline.
-pub mod postprocess_hotkey;
 pub mod privacy;
 pub mod profiles;
 pub mod redaction;

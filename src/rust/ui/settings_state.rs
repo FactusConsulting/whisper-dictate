@@ -22,39 +22,6 @@ impl WhisperDictateApp {
                 if update_check_settings_changed(&self.saved_settings, &self.settings) {
                     self.last_update_check = None;
                 }
-                // Codex P2 (settings_schema.json:323, PR #440) — honour
-                // the schema's `"live": true` claim by reinstalling
-                // (or clearing) the process-global auto-mute controller
-                // as soon as the user saves a change to this key. The
-                // controller was previously (re)installed only on
-                // worker start, so toggling this in Settings silently
-                // had no effect until the next manual restart. Uses
-                // `install_from_settings` so an env override still wins.
-                if self.saved_settings.mute_output_while_recording
-                    != self.settings.mute_output_while_recording
-                {
-                    // Codex P2 (session.rs:130, PR #440) — Save always
-                    // means "the user made this the on-disk value", so
-                    // pass Some(...) so env can never override.
-                    //
-                    // Codex P2 (session.rs:230, PR #443) — go through
-                    // the HOT variant so the live `stream_lines`
-                    // reader from the currently-running worker keeps
-                    // driving the new controller. Plain
-                    // `install_from_settings` bumps the observer
-                    // generation, which would silently no-op every
-                    // subsequent worker state from that reader (see
-                    // `install_from_settings_hot` docs). Settings
-                    // Save is the documented `live: true` path for
-                    // this key.
-                    crate::output_mute::session::install_from_settings_hot(Some(
-                        self.settings.mute_output_while_recording,
-                    ));
-                    self.append_runtime_log(format!(
-                        "[ui] mute-output-while-recording toggled -> {}",
-                        self.settings.mute_output_while_recording,
-                    ));
-                }
                 let key_message = self.save_stt_api_key_if_changed();
                 let post_key_message = self.save_post_api_key_if_changed();
                 self.saved_settings = self.settings.clone();
@@ -107,16 +74,6 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn reload_settings(&mut self) {
-        // Capture the mute-key flag BEFORE we replace `self.settings`
-        // so we can compare "on-disk before this reload" vs. "on-disk
-        // after this reload" and skip the controller reinstall when
-        // nothing changed. Claude + Codex P2 (settings_state.rs:122,
-        // PR #443) — the previous unconditional reinstall dropped the
-        // live controller mid-recording every time the user clicked
-        // Reload (even for an unrelated key edit), and its Drop
-        // restore silently unmuted the speakers for the rest of the
-        // current utterance.
-        let prior_mute_flag = self.saved_settings.mute_output_while_recording;
         match config::load_settings() {
             Ok(mut settings) => {
                 // Re-apply the same metrics_jsonl prefill used at app construction
@@ -129,45 +86,6 @@ impl WhisperDictateApp {
                 self.settings = settings;
                 self.reload_stt_api_key();
                 self.reload_post_api_key();
-                // Codex P2 (settings_state.rs:38, PR #440) — honour the
-                // schema's `"live": true` claim on this key by
-                // reinstalling (or clearing) the process-global
-                // auto-mute controller when Reload config picks up a
-                // change. Without this, editing config.json externally
-                // and clicking Reload left the UI showing the new value
-                // while the runtime kept the old mute state until a
-                // Save toggle or a restart.
-                //
-                // Codex P2 (settings_state.rs:122, PR #443) — read the
-                // RAW JSON to distinguish "config file has explicit
-                // false" from "key is absent" so an env-only user who
-                // set `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1` and left
-                // config.json silent does NOT have their env override
-                // clobbered by Reload. The typed `AppSettings` defaults
-                // a missing key to `false`, which is why the previous
-                // implementation silently disabled env-only setups on
-                // every Reload.
-                //
-                // Claude + Codex P2 (settings_state.rs:122, PR #443) —
-                // skip the reinstall entirely when the effective on-disk
-                // value did not change, so a Reload for an unrelated key
-                // edit does not drop a live controller mid-recording.
-                let new_mute_flag = self.settings.mute_output_while_recording;
-                if new_mute_flag != prior_mute_flag {
-                    let config_value = config::load_raw_config().ok().and_then(|value| {
-                        value
-                            .as_object()
-                            .and_then(crate::output_mute::session::read_mute_key_from_json)
-                    });
-                    // HOT swap: the live worker's `stream_lines` reader
-                    // is not stale, so we must not bump the observer
-                    // generation. See `install_from_settings_hot`
-                    // docs and Codex P2 session.rs:230 (PR #443).
-                    crate::output_mute::session::install_from_settings_hot(config_value);
-                    self.append_runtime_log(format!(
-                        "[ui] reload picked up mute-output-while-recording={new_mute_flag}",
-                    ));
-                }
                 self.settings_status = "Reloaded config".to_owned();
                 self.append_runtime_log(format!("[ui] settings loaded: {}", self.config_path));
             }

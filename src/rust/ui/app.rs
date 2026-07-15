@@ -141,13 +141,6 @@ impl eframe::App for WhisperDictateApp {
             self.pipeline_stage.is_some(),
         ));
 
-        // Recording overlay (Issue #320). Painted BEFORE the main panels so
-        // the secondary viewport gets first crack at repaint scheduling; the
-        // call is internally a no-op (and tears the viewport down) whenever
-        // the visibility rule in `overlay::settings::should_show_overlay`
-        // returns false.
-        self.render_overlay(&ctx, palette);
-
         // Compact mode: a single tiny CentralPanel with one control row — no
         // sidebar, tabs, log, or message bars. The viewport is already resized /
         // raised always-on-top by `set_compact_mode`; here we only render.
@@ -158,23 +151,6 @@ impl eframe::App for WhisperDictateApp {
                 ))
                 .show(ui, |ui| self.compact_panel(ui, palette));
             return;
-        }
-
-        // Issue #334 / Codex #435 P2: If the persisted `settings_mode` hides
-        // the currently-selected tab (e.g. a config reload flips Simple mode
-        // on while the user was parked on Quality), snap the selection back
-        // to Speech. Without this, the sidebar would hide the tab entry but
-        // the central panel below still dispatches off `selected_tab` and
-        // would render the "hidden" Advanced page — and Reset Page would
-        // target it. Doing this once per frame is a one-line defensive
-        // guarantee that Simple mode is enforced across every render
-        // surface, not just the sidebar filter.
-        {
-            let mode = SettingsMode::from_raw(&self.settings.settings_mode);
-            let normalized = normalize_selected_tab(mode, self.selected_tab);
-            if normalized != self.selected_tab {
-                self.selected_tab = normalized;
-            }
         }
 
         paint_sidebar_bridge(&ctx, palette, &self.settings.ui_text_scale);
@@ -231,81 +207,10 @@ impl eframe::App for WhisperDictateApp {
                 Tab::Profiles => self.settings_panel(ui, Self::profiles_tab),
                 Tab::System => self.settings_panel(ui, Self::system_tab),
             });
-
-        // Issue #328: paint the onboarding wizard modal LAST so it floats
-        // over the main panel. `render_onboarding_wizard` is a no-op when
-        // `self.onboarding` is None.
-        self.render_onboarding_wizard(&ctx);
     }
 }
 
 impl WhisperDictateApp {
-    /// Issue #328: paint the onboarding wizard modal when active, and react
-    /// to its outcome — persist the completion flag + save settings, or drop
-    /// the session state on a transient dismiss. No-op when the wizard is
-    /// not active (the common case after the first successful launch).
-    pub(in crate::ui) fn render_onboarding_wizard(&mut self, ctx: &egui::Context) {
-        let Some(ui_state) = self.onboarding.as_mut() else {
-            return;
-        };
-        // Codex P2: don't hand the wizard direct mutable access to
-        // `self.settings.model` — a stealth mutation of that restart-
-        // required field would skip the app's normal persistence /
-        // dirty-tracking pathway. Instead scratch-clone it, let the
-        // wizard mutate the scratch, then route any change through the
-        // canonical settings-update flow (settings + saved_settings
-        // mirror, save_settings, restart-required badge) below.
-        let mut model_scratch = self.settings.model.clone();
-        let outcome = super::onboarding::render_onboarding_modal(
-            ctx,
-            ui_state,
-            Some(&self.whisper_model_downloads),
-            Some(&mut model_scratch),
-        );
-        if model_scratch != self.settings.model {
-            // Adopt the wizard's pick as-if the user changed it from the
-            // Speech tab: the value goes into settings AND saved_settings
-            // (so restart-required correctly reflects "changed since
-            // worker started" and NOT "unsaved"). The persist below
-            // (Dismiss / PersistCompletion outcomes) then writes it to
-            // disk with the rest of the settings.
-            self.settings.model = model_scratch.clone();
-            self.saved_settings.model = model_scratch;
-        }
-        match outcome {
-            super::onboarding::OnboardingOutcome::Active => {}
-            super::onboarding::OnboardingOutcome::DismissedTransient => {
-                // Bare skip — record the "seen at" timestamp but leave the
-                // gate flag alone so first-run detection triggers again.
-                self.settings.onboarding_seen_at =
-                    super::onboarding::format_seen_at(std::time::SystemTime::now());
-                let _ = crate::config::save_settings(&self.settings);
-                self.onboarding = None;
-            }
-            super::onboarding::OnboardingOutcome::PersistCompletion => {
-                // Finish (or skip + "don't show again"): flip the gate,
-                // stamp the timestamp, save, and drop the session state.
-                self.settings.onboarding_completed = true;
-                self.settings.onboarding_seen_at =
-                    super::onboarding::format_seen_at(std::time::SystemTime::now());
-                self.saved_settings.onboarding_completed = true;
-                self.saved_settings.onboarding_seen_at = self.settings.onboarding_seen_at.clone();
-                let _ = crate::config::save_settings(&self.settings);
-                self.onboarding = None;
-                self.append_runtime_log(
-                    "[ui] onboarding wizard complete (onboarding_completed=true)",
-                );
-            }
-        }
-    }
-
-    /// Issue #328: re-open the wizard on demand (from the System tab's "Run
-    /// setup again" button). Always resets to the welcome step.
-    pub(in crate::ui) fn reopen_onboarding_wizard(&mut self) {
-        self.onboarding = Some(super::onboarding::OnboardingUi::reopen());
-        self.append_runtime_log("[ui] onboarding wizard re-opened from Settings");
-    }
-
     /// Recolour the system-tray icon to mirror the current dictation state and
     /// react to a tray left-click by focusing the main window. Purely additive:
     /// on non-Windows it is a no-op stub, and even on Windows a failed tray init
@@ -423,17 +328,6 @@ impl WhisperDictateApp {
                     .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
             }
         }
-        // Codex-P2 follow-up on #439: the second-hotkey feature (issue
-        // #319) lets a user run cloud post-processing via
-        // `postprocess_profiles` even when the *primary* `post_processor`
-        // stays `none`/`ollama`. Without the block above firing, the
-        // profile's env-based key resolver would see no key and every
-        // cloud dispatch would fall back with an empty-key error. Scan
-        // the saved profiles for cloud providers and inject the
-        // corresponding OS-credential-store key as the provider-specific
-        // env var so `PostprocessProfile::resolve_api_key_from_env`
-        // finds it.
-        inject_profile_cloud_keys_into_env(&self.settings.postprocess_profiles, &mut command);
         command
     }
 
@@ -740,16 +634,6 @@ impl WhisperDictateApp {
         if let Some(peak) = worker_event_f32(&event.payload, "peak") {
             self.audio_meter_peak = Some(peak);
         }
-        // Mirror the latest audio event onto the recording overlay's smoother
-        // so the floating meter (Issue #320) doesn't lag the in-window gauge.
-        // The smoother is internally a no-op when the overlay is disabled,
-        // but stepping it unconditionally keeps `last_tick` aligned with
-        // real time so a re-enabled overlay doesn't jump on the next frame.
-        self.overlay_state.tick(MeterFrame {
-            level: self.audio_meter_level,
-            peak: self.audio_meter_peak,
-            raw_dbfs: self.audio_meter_raw_dbfs,
-        });
         if let Some(state) = event.state.as_deref() {
             self.audio_capture_opening = state == "opening";
             if let Some(active) = audio_capture_active_for_worker_state(state) {
@@ -782,115 +666,6 @@ impl WhisperDictateApp {
             return;
         }
         self.append_runtime_log(output);
-    }
-
-    /// Per-frame overlay window driver. Resolves the persisted overlay
-    /// settings + the current worker phase into the visibility decision
-    /// (`overlay::settings::should_show_overlay`), feeds the smoothed
-    /// meter, and re-renders the secondary egui viewport. A user drag is
-    /// captured by `OverlayRender::on_drag` and persisted straight back into
-    /// `settings.overlay_position` so dragging across the screen is sticky.
-    fn render_overlay(&mut self, ctx: &egui::Context, palette: super::UiPalette) {
-        let config = OverlayConfig {
-            enabled: self.settings.overlay_enabled,
-            show_on_idle: self.settings.overlay_show_on_idle,
-        };
-        let phase = OverlayPhase::from_worker_state(
-            self.runtime_state,
-            &self.last_worker_status_state,
-            self.audio_capture_opening,
-            self.audio_capture_active,
-        );
-        let position = OverlayPosition::parse(&self.settings.overlay_position);
-        let mut next_position: Option<OverlayPosition> = None;
-        {
-            let mut on_drag = |new_position: OverlayPosition| {
-                // Coalesce drag deltas within a frame by overwriting; the
-                // settings string is only updated once per `render_overlay`
-                // call below so the dirty dot doesn't blink per-pixel.
-                next_position = Some(new_position);
-            };
-            render_recording_overlay(
-                ctx,
-                OverlayRender {
-                    config,
-                    phase,
-                    palette: OverlayPalette::from_main_palette(&palette),
-                    state: &mut self.overlay_state,
-                    position,
-                    active_device: &self.active_audio_device,
-                    on_drag: &mut on_drag,
-                },
-            );
-        }
-        if let Some(new_position) = next_position {
-            // Persist the dragged position by overwriting the typed setting;
-            // the next save round-trip flushes it to config.json via
-            // `apply_to_object`. Skipping the write when the new value
-            // equals the current one keeps the dirty flag from flapping when
-            // the user clicks-without-dragging.
-            let serialised = new_position.to_storage_string();
-            if serialised != self.settings.overlay_position {
-                self.settings.overlay_position = serialised;
-            }
-        }
-    }
-}
-
-/// Codex-P2 follow-up on #439: parse the saved `postprocess_profiles`
-/// JSON, collect the distinct cloud provider ids (`openai` / `groq`),
-/// and inject each provider's saved post API key as the corresponding
-/// provider-specific env var on the worker command.
-///
-/// This closes the gap where a user keeps the primary `post_processor`
-/// local (`none`/`ollama`) but binds a cloud-backed profile to the
-/// second hotkey — without this, `PostprocessProfile::resolve_api_key_from_env`
-/// (called at dispatch time) would see no env keys and every cloud
-/// dispatch would fall back with the empty-key error.
-///
-/// Uses the provider-specific env var names (`OPENAI_API_KEY` /
-/// `GROQ_API_KEY`) so the primary `VOICEPI_POST_API_KEY` handling above
-/// is preserved unchanged: when the primary IS cloud, its key still
-/// wins at the top of the resolver's fallback chain.
-///
-/// Silent no-op on parse errors — the runtime's own load path already
-/// surfaces those; blocking a runtime restart here would be worse than
-/// leaving the second-hotkey dispatch to fall back at press time.
-fn inject_profile_cloud_keys_into_env(profiles_json: &str, command: &mut WorkerCommand) {
-    let trimmed = profiles_json.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return;
-    };
-    let Some(items) = value.as_array() else {
-        return;
-    };
-    let mut seen_openai = false;
-    let mut seen_groq = false;
-    for item in items {
-        let processor = item
-            .get("processor")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
-        match processor.as_str() {
-            "openai" if !seen_openai => {
-                seen_openai = true;
-                if let Some(key) = saved_post_api_key_for("openai") {
-                    command.env.push(("OPENAI_API_KEY".to_owned(), key));
-                }
-            }
-            "groq" if !seen_groq => {
-                seen_groq = true;
-                if let Some(key) = saved_post_api_key_for("groq") {
-                    command.env.push(("GROQ_API_KEY".to_owned(), key));
-                }
-            }
-            _ => {}
-        }
     }
 }
 

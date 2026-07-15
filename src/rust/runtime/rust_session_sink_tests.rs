@@ -5,7 +5,7 @@
 //!
 //! Covers:
 //!
-//! - **Env gate** (`dictate_backend_python_legacy_requested`): case
+//! - **Env gate** (`dictate_backend_rust_session_requested`): case
 //!   insensitivity, whitespace trim, rejected values.
 //! - **Wire framing** (`EventForwarder`, `parse_or_stderr`): partial
 //!   writes get buffered; trailing partial lines surface on drop;
@@ -20,9 +20,8 @@
 //! in `rust_session_sink_coverage_tests.rs`.
 
 use super::rust_session_sink::{
-    build_production_sink, dictate_backend_python_legacy_requested, parse_or_stderr,
-    EventForwarder, StubInject, StubTranscribe, DICTATE_BACKEND_ENV, DICTATE_BACKEND_PYTHON_LEGACY,
-    STUB_GATE_STRING, WORKER_EVENT_PREFIX,
+    build_production_sink, dictate_backend_rust_session_requested, parse_or_stderr, EventForwarder,
+    StubInject, StubTranscribe, DICTATE_BACKEND_ENV, STUB_GATE_STRING, WORKER_EVENT_PREFIX,
 };
 use crate::dictate::{InjectBackend, TranscribeBackend};
 use crate::runtime::RuntimeEvent;
@@ -32,51 +31,31 @@ use std::sync::Arc;
 
 // ── pure-logic helpers ────────────────────────────────────────────────────────
 
-/// Wave 5 PR 7 of #348: the `python-legacy` escape hatch must be
-/// recognised on any casing / surrounding whitespace so a
-/// shell-set value from a crash-cart edit still opts out of the
-/// new Rust-worker default.
 #[test]
-fn dictate_backend_python_legacy_gate_reads_env_var_case_insensitive() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+fn dictate_backend_gate_reads_env_var_case_insensitive() {
+    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
     let prev = std::env::var(DICTATE_BACKEND_ENV).ok();
 
-    // Baseline: unset means default (delegate), not python-legacy.
     std::env::remove_var(DICTATE_BACKEND_ENV);
-    assert!(!dictate_backend_python_legacy_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, DICTATE_BACKEND_PYTHON_LEGACY);
-    assert!(dictate_backend_python_legacy_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "PYTHON-LEGACY");
-    assert!(dictate_backend_python_legacy_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "  Python-Legacy  ");
-    assert!(dictate_backend_python_legacy_requested());
-
-    // Wrong values must not trigger the escape hatch.
-    std::env::set_var(DICTATE_BACKEND_ENV, "python");
-    assert!(!dictate_backend_python_legacy_requested());
-
-    std::env::set_var(DICTATE_BACKEND_ENV, "legacy");
-    assert!(!dictate_backend_python_legacy_requested());
+    assert!(!dictate_backend_rust_session_requested());
 
     std::env::set_var(DICTATE_BACKEND_ENV, "rust-session");
-    assert!(!dictate_backend_python_legacy_requested());
+    assert!(dictate_backend_rust_session_requested());
+
+    std::env::set_var(DICTATE_BACKEND_ENV, "RUST-SESSION");
+    assert!(dictate_backend_rust_session_requested());
+
+    std::env::set_var(DICTATE_BACKEND_ENV, "  rust-session  ");
+    assert!(dictate_backend_rust_session_requested());
+
+    std::env::set_var(DICTATE_BACKEND_ENV, "rust");
+    assert!(!dictate_backend_rust_session_requested());
+
+    std::env::set_var(DICTATE_BACKEND_ENV, "python");
+    assert!(!dictate_backend_rust_session_requested());
 
     std::env::set_var(DICTATE_BACKEND_ENV, "");
-    assert!(!dictate_backend_python_legacy_requested());
-
-    // Wave 8 Part 2 collapsed the mutual-exclusion invariant (there is
-    // only one gate now -- `dictate_backend_rust_session_requested` was
-    // deleted along with the logger-sink branch that consumed it).
-    // Assert the surviving gate still rejects the retired value so a
-    // future re-introduction of `rust-session` semantics has to update
-    // this test rather than silently changing behaviour.
-    std::env::set_var(DICTATE_BACKEND_ENV, "rust-session");
-    assert!(!dictate_backend_python_legacy_requested());
+    assert!(!dictate_backend_rust_session_requested());
 
     match prev {
         Some(v) => std::env::set_var(DICTATE_BACKEND_ENV, v),

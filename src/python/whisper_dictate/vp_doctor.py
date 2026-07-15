@@ -1,0 +1,137 @@
+"""Doctor orchestration + Linux/Wayland injection checks.
+
+This module owns the Linux-specific injection checks (evdev, ydotool/ydotoold,
+the input group, session env vars, readable /dev/input) and the ``--doctor``
+orchestration. The cross-platform readiness probes (version, config, STT backend
++ deps, audio, GPU, cloud, disk) live in ``vp_doctor_checks``, which imports the
+heavy deps lazily so ``--help`` stays instant.
+"""
+from __future__ import annotations
+
+import glob
+import os
+import subprocess
+import sys
+from shutil import which
+
+from whisper_dictate.vp_doctor_checks import Check, readiness_checks
+from whisper_dictate.vp_inject import ydotool_socket_path, ydotoold_ready
+
+
+try:
+    import grp
+except ImportError:
+    grp = None
+
+
+def _in_group(name: str) -> bool:
+    if grp is None:
+        return False
+    try:
+        gid = grp.getgrnam(name).gr_gid
+    except KeyError:
+        return False
+    # Include the primary GID, not only supplementary groups (os.getgroups()),
+    # so membership via the user's primary group isn't a false FAIL.
+    return gid in os.getgroups() or gid == os.getgid()
+
+
+def _can_import(name: str) -> bool:
+    try:
+        __import__(name)
+        return True
+    except Exception:
+        return False
+
+
+def _event_devices_readable() -> tuple[bool, str]:
+    paths = sorted(glob.glob("/dev/input/event*"))
+    if not paths:
+        return False, "no /dev/input/event* devices found"
+    readable = [p for p in paths if os.access(p, os.R_OK)]
+    if readable:
+        return True, f"{len(readable)}/{len(paths)} readable"
+    return False, f"0/{len(paths)} readable; add user to input group and log in again"
+
+
+def _ydotoold_process_detail(socket_ready: bool) -> tuple[bool, str]:
+    if socket_ready:
+        return True, "accepting connections"
+    try:
+        r = subprocess.run(["pgrep", "-x", "ydotoold"], capture_output=True, text=True, encoding="utf-8", timeout=1)
+    except Exception as e:
+        return False, str(e)
+    if r.returncode == 0:
+        pids = " ".join(r.stdout.split())
+        return False, f"process exists but socket is not accepting connections ({pids})"
+    return False, "not running"
+
+
+def _base_checks(on_linux: bool, on_wayland: bool) -> list[Check]:
+    return [
+        Check("platform", on_linux, sys.platform, required=False),
+        Check("session", on_wayland, "Wayland detected" if on_wayland else "not a Wayland session", required=False),
+        Check("python", sys.version_info[:2] >= (3, 10), sys.version.split()[0]),
+    ]
+
+
+def _linux_checks() -> list[Check]:
+    checks: list[Check] = []
+    # Resolve PATH/group lookups once for consistent detail and fewer syscalls.
+    ydotool = which("ydotool")
+    ydotoold = which("ydotoold")
+    in_input_group = _in_group("input")
+    checks.append(Check("evdev", _can_import("evdev"), "import evdev"))
+    checks.append(Check("ydotool", ydotool is not None, ydotool or "not found"))
+    checks.append(Check("ydotoold", ydotoold is not None, ydotoold or "not found"))
+    checks.append(Check("input group", in_input_group, "current process groups include input" if in_input_group else "not in input group"))
+    ok, detail = _event_devices_readable()
+    checks.append(Check("/dev/input", ok, detail))
+    checks.append(Check("XDG_RUNTIME_DIR", bool(os.environ.get("XDG_RUNTIME_DIR")), os.environ.get("XDG_RUNTIME_DIR", "unset"), required=False))
+    checks.append(Check("WAYLAND_DISPLAY", bool(os.environ.get("WAYLAND_DISPLAY")), os.environ.get("WAYLAND_DISPLAY", "unset"), required=False))
+
+    sock = ydotool_socket_path()
+    socket_ready = ydotoold_ready(sock, timeout=0.6)
+    checks.append(Check("ydotool socket", os.path.exists(sock), sock, required=False))
+    checks.append(Check("ydotool socket ready", socket_ready, sock))
+    process_ok, process_detail = _ydotoold_process_detail(socket_ready)
+    checks.append(Check("ydotoold process", process_ok, process_detail))
+    return checks
+
+
+def _check_level(check: Check) -> str:
+    if check.ok:
+        return "OK"
+    return "FAIL" if check.required else "WARN"
+
+
+def _print_checks(checks: list[Check]) -> bool:
+    failed = False
+
+    for c in checks:
+        level = _check_level(c)
+        print(f"[doctor] {level:<4} {c.name}: {c.detail}", flush=True)
+        failed = failed or (c.required and not c.ok)
+    return failed
+
+
+def _print_fix_hints(on_linux: bool) -> None:
+    print("[doctor] Fix hints:", flush=True)
+    print("  python -m pip install -r requirements/cpu.txt  # STT + audio deps", flush=True)
+    set_key = "export VOICEPI_STT_API_KEY=..." if os.name == "posix" else "set VOICEPI_STT_API_KEY=..."
+    print(f"  {set_key}  # required for the cloud (openai) backend", flush=True)
+    if on_linux:
+        print("  sudo usermod -aG input $USER  # then log out and back in", flush=True)
+        print("  sudo apt install ydotool", flush=True)
+
+
+def run_doctor() -> int:
+    on_linux = sys.platform.startswith("linux")
+    on_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+    checks = _base_checks(on_linux, on_wayland) + readiness_checks()
+    if on_linux:
+        checks += _linux_checks()
+    failed = _print_checks(checks)
+    if failed:
+        _print_fix_hints(on_linux)
+    return 1 if failed else 0

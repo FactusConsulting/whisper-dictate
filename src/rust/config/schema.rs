@@ -94,8 +94,9 @@ struct SettingsSchema {
 //
 // NOTE: this `include_str!` path is relative to THIS file. From
 // src/rust/config/schema.rs the repo's `src/` is two directories up, so the
-// path is `settings_schema.json` in this directory.
-pub(crate) static SETTINGS_SCHEMA_JSON: &str = include_str!("settings_schema.json");
+// path is `../../python/whisper_dictate/settings_schema.json`.
+pub(crate) static SETTINGS_SCHEMA_JSON: &str =
+    include_str!("../../python/whisper_dictate/settings_schema.json");
 
 pub(crate) static RUNTIME_SETTINGS: LazyLock<Vec<RuntimeSetting>> = LazyLock::new(|| {
     serde_json::from_str::<SettingsSchema>(SETTINGS_SCHEMA_JSON)
@@ -153,15 +154,11 @@ fn value_to_env_string(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use crate::config::io::CONFIG_ENV;
-    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
+    use crate::config::test_support::{restore_env, ENV_LOCK};
 
     #[test]
     fn effective_runtime_env_uses_config_then_env_then_defaults() {
-        // Each mutation is wrapped in an RAII `EnvVarGuard` so the original
-        // value is restored on Drop even when an assertion below panics —
-        // the old tail-of-test `restore_env` calls would never run on
-        // panic, leaking six env vars into the next test (Codex P2 #415).
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(
@@ -175,12 +172,19 @@ mod tests {
         )
         .unwrap();
 
-        let _g_config = EnvVarGuard::set(CONFIG_ENV, &path);
-        let _g_model = EnvVarGuard::set("VOICEPI_MODEL", "env-model");
-        let _g_device = EnvVarGuard::set("VOICEPI_DEVICE", "cuda");
-        let _g_key = EnvVarGuard::remove("VOICEPI_KEY");
-        let _g_lang = EnvVarGuard::set("VOICEPI_LANG", "en");
-        let _g_debug = EnvVarGuard::remove("VOICEPI_DEBUG");
+        let old_config = env::var_os(CONFIG_ENV);
+        let old_model = env::var_os("VOICEPI_MODEL");
+        let old_device = env::var_os("VOICEPI_DEVICE");
+        let old_key = env::var_os("VOICEPI_KEY");
+        let old_lang = env::var_os("VOICEPI_LANG");
+        let old_debug = env::var_os("VOICEPI_DEBUG");
+
+        env::set_var(CONFIG_ENV, &path);
+        env::set_var("VOICEPI_MODEL", "env-model");
+        env::set_var("VOICEPI_DEVICE", "cuda");
+        env::remove_var("VOICEPI_KEY");
+        env::set_var("VOICEPI_LANG", "en");
+        env::remove_var("VOICEPI_DEBUG");
 
         let env_values = effective_runtime_env();
 
@@ -190,6 +194,13 @@ mod tests {
         assert_eq!(env_values["VOICEPI_KEY"], "ctrl_r");
         assert_eq!(env_values["VOICEPI_CONTEXT_MIN_SECONDS"], "5");
         assert_eq!(env_values["VOICEPI_DEBUG"], "True");
+
+        restore_env(CONFIG_ENV, old_config);
+        restore_env("VOICEPI_MODEL", old_model);
+        restore_env("VOICEPI_DEVICE", old_device);
+        restore_env("VOICEPI_KEY", old_key);
+        restore_env("VOICEPI_LANG", old_lang);
+        restore_env("VOICEPI_DEBUG", old_debug);
     }
 
     #[test]

@@ -23,7 +23,7 @@ mod speech;
 mod system;
 mod top_status_layout;
 mod update_badge;
-pub(in crate::ui) mod whisper_models;
+mod whisper_models;
 
 // The inline Test-API ✓/✗/testing indicator render shell (post.rs + speech.rs
 // reach it via `super::*`). The pure classifier + parts builder it wraps are
@@ -68,8 +68,6 @@ pub(in crate::ui) use runtime_format::{
 };
 #[cfg(test)]
 pub(in crate::ui) use settings::reset_tab_settings;
-#[cfg(test)]
-pub(in crate::ui) use settings::reset_tab_settings_for_mode;
 fn settings_grid(id: &'static str) -> egui::Grid {
     // Alignment is anchored by the label cell's `set_min_width(settings_label_width(ui))`
     // call inside `label_with_help` / `label_with_help_enabled` — no grid-wide

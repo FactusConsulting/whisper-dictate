@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::config;
-use crate::runtime::resource_app_root;
+use crate::runtime::{record_corpus_item_command, resource_app_root};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -86,12 +86,6 @@ impl WhisperDictateApp {
     /// take the identical proven capture path. The `run_background_command` call
     /// enforces the no-other-task half of the gate; a runtime that is not stopped
     /// is logged and skipped (the batch poll then stops the run on the next tick).
-    /// Wave 8 Part 2: the pre-v1.20 corpus-record launch shelled out to
-    /// the Python worker via `--record-corpus-item=<id>`. That flag
-    /// belonged to the deleted Python bundle; the native-Rust corpus
-    /// recorder is tracked as a follow-up. Meanwhile the launch is a
-    /// friendly log entry, gated on the same "runtime stopped"
-    /// invariant so a user click cannot fight the dictation runtime.
     pub(in crate::ui) fn launch_record_for(&mut self, id: &str) {
         if self.runtime_state != RuntimeState::Stopped {
             let hint = corpus_record_text(
@@ -102,15 +96,7 @@ impl WhisperDictateApp {
             return;
         }
         self.corpus_record_result = None;
-        self.append_runtime_log(format!(
-            "[ui] record corpus item ({id}): removed in v1.20 with the Python worker; \
-             a native-Rust corpus recorder is tracked as a follow-up to #348."
-        ));
-        // Terminate any active batch immediately -- there is nothing to
-        // wait for and no `apply_corpus_record` will run to advance the
-        // sequence for us.
-        self.corpus_batch = None;
-        self.corpus_batch_resume_at = None;
+        self.run_background_command(RECORD_CORPUS_ITEM_LABEL, record_corpus_item_command(id));
     }
 
     /// Whether the Record button should be enabled: an item is selected, the

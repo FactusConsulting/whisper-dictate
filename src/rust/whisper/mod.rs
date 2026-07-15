@@ -32,7 +32,6 @@
 
 pub mod gpu;
 pub mod idle;
-pub mod local_discovery;
 pub mod model_manager;
 pub mod models_cli;
 pub mod protocol;
@@ -56,11 +55,9 @@ pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 // the sink's real-backends module is gated on -- otherwise a
 // `whisper-rs-local`-only build (e.g. CI's release smoke leg) would
 // flag the unused import.
-#[cfg(feature = "whisper-rs-local")]
-pub use dispatch::{
-    handle_transcribe_server, handle_transcribe_wav, MODEL_NAME_ENV, MODEL_PATH_ENV,
-};
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
-pub(crate) use dispatch::{preferred_model_name_from_env, resolve_model_path_from_env};
+pub(crate) use dispatch::resolve_model_path_from_env;
+#[cfg(feature = "whisper-rs-local")]
+pub use dispatch::{handle_transcribe_server, handle_transcribe_wav, MODEL_PATH_ENV};
 #[cfg(feature = "whisper-rs-local")]
 pub use local::LocalWhisper;

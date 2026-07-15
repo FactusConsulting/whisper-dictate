@@ -107,7 +107,7 @@ desktop entries.
 ## Tests
 
 ```bash
-python -m pytest src/tests/python -q
+python -m pytest src/python/tests src/tests/python -q
 ```
 
 For Rust, clippy/fmt, and a CI-matched environment, use the dev container in

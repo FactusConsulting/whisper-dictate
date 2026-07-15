@@ -43,10 +43,6 @@ pub struct AppSettings {
     pub min_snr_db: String,
     pub audio_ducking: bool,
     pub audio_ducking_level: String,
-    /// Auto-mute the system audio output (default render endpoint) while
-    /// recording is active (issue #322). Opt-in, restores the prior mute
-    /// state on stop; see `crate::output_mute` for the per-OS backends.
-    pub mute_output_while_recording: bool,
     pub dictionary: String,
     pub dictionary_enabled: bool,
     pub dictionary_max_terms: String,
@@ -67,17 +63,6 @@ pub struct AppSettings {
     pub post_max_output_chars: String,
     pub post_redact: bool,
     pub post_redact_terms: String,
-    /// Second hotkey binding for the LLM post-processing dispatcher
-    /// (issue #319). Same string format as [`Self::key`]; empty disables.
-    pub postprocess_hotkey: String,
-    /// JSON-encoded list of postprocess profiles the second hotkey
-    /// cycles through. Kept as an opaque string here so the UI and the
-    /// Rust runtime can each parse it on demand with the shared
-    /// [`crate::postprocess_hotkey::ProfileRegistry`] helper.
-    pub postprocess_profiles: String,
-    /// Persisted active-profile index. Clamped to the profile list on
-    /// load so a stale value never crashes the second hotkey.
-    pub postprocess_profile_index: String,
     pub feedback_sounds: bool,
     pub feedback_notify: bool,
     pub debug: bool,
@@ -94,39 +79,7 @@ pub struct AppSettings {
     pub ui_log_view: String,
     pub ui_theme: String,
     pub ui_text_scale: String,
-    /// Whether the small always-on-top recording overlay (Issue #320) appears
-    /// during dictation. Stored as a typed bool but persisted through the
-    /// same `"1"`/`"0"` string contract as the rest of the bool settings.
-    pub overlay_enabled: bool,
-    /// One of: `top-left`, `top-right`, `bottom-left`, `bottom-right`, or
-    /// `custom:<x>,<y>` — see `crate::ui::overlay::position::OverlayPosition`.
-    /// Anything unrecognised decodes to the default (`bottom-right`) at
-    /// render time, so a hand-edited config can't crash the UI.
-    pub overlay_position: String,
-    /// When `true`, the overlay also shows while the worker is idle/ready —
-    /// useful for a permanent meter while configuring devices; default `false`
-    /// so the overlay only appears around live dictation.
-    pub overlay_show_on_idle: bool,
-    /// Simple/Advanced settings-mode toggle (Issue #334). Persisted as
-    /// `"simple"` or `"advanced"` so the choice survives across sessions.
-    /// A fresh install (no config file / empty object) defaults to
-    /// `"simple"`; an existing config with none of the mode key on load is
-    /// migrated to `"advanced"` so established users keep every knob they
-    /// had before. Anything unrecognised falls back to `"advanced"` at
-    /// render time — see `crate::ui::settings_mode::SettingsMode::from_raw`.
-    pub settings_mode: String,
     pub profiles_json: String,
-    /// Issue #328: first-run onboarding gate. Defaults to `false` so a fresh
-    /// install triggers the wizard on the first launch, then flips to `true`
-    /// on either "Finish" or "Skip + don't show again". Users can re-open the
-    /// wizard from the System tab, which does NOT flip this back to `false`
-    /// (re-runs are always explicit user actions, not first-run detection).
-    pub onboarding_completed: bool,
-    /// Issue #328: RFC 3339 timestamp of the last time the user actually saw
-    /// (opened) the onboarding wizard. Empty when the wizard has never been
-    /// shown. Stored as a plain string to match the rest of the settings
-    /// serialization contract; parsed on demand where needed.
-    pub onboarding_seen_at: String,
 }
 
 impl Default for AppSettings {
@@ -164,7 +117,6 @@ impl Default for AppSettings {
             min_snr_db: "6".to_owned(),
             audio_ducking: false,
             audio_ducking_level: "0.25".to_owned(),
-            mute_output_while_recording: false,
             dictionary: default_dictionary_path().display().to_string(),
             dictionary_enabled: true,
             dictionary_max_terms: "80".to_owned(),
@@ -185,9 +137,6 @@ impl Default for AppSettings {
             post_max_output_chars: "4000".to_owned(),
             post_redact: false,
             post_redact_terms: String::new(),
-            postprocess_hotkey: String::new(),
-            postprocess_profiles: String::new(),
-            postprocess_profile_index: "0".to_owned(),
             feedback_sounds: false,
             feedback_notify: false,
             debug: false,
@@ -204,22 +153,7 @@ impl Default for AppSettings {
             ui_log_view: "minimal".to_owned(),
             ui_theme: "dark".to_owned(),
             ui_text_scale: "1.15".to_owned(),
-            // Overlay defaults: off until the user opts in, bottom-right
-            // corner so it doesn't crowd the active app's title bar, and
-            // hidden while idle so the overlay only appears around live
-            // dictation. See `crate::ui::overlay`.
-            overlay_enabled: false,
-            overlay_position: "bottom-right".to_owned(),
-            overlay_show_on_idle: false,
-            // Fresh install default per Issue #334. A saved config that
-            // lacks the key is migrated to "advanced" in `from_value` so
-            // established users keep every knob they had before.
-            settings_mode: "simple".to_owned(),
             profiles_json: default_profiles_json(),
-            // Issue #328: false on a fresh install triggers the first-run
-            // wizard; users flip it to `true` by finishing / skipping it.
-            onboarding_completed: false,
-            onboarding_seen_at: String::new(),
         }
     }
 }
@@ -262,7 +196,6 @@ impl AppSettings {
             "quit_key" => Some(&self.quit_key),
             "quit_count" => Some(&self.quit_count),
             "quit_window_ms" => Some(&self.quit_window_ms),
-            "postprocess_hotkey" => Some(&self.postprocess_hotkey),
             // Iteration-3 review finding #3: not in the static
             // RESTART_KEYS table (Python backends are live-reloadable
             // for this key), but exposed here so the dynamic

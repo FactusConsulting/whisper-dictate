@@ -48,7 +48,6 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "min_snr_db",
     "audio_ducking",
     "audio_ducking_level",
-    "mute_output_while_recording",
     "dictionary",
     "dictionary_enabled",
     "dictionary_max_terms",
@@ -69,9 +68,6 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "post_max_output_chars",
     "post_redact",
     "post_redact_terms",
-    "postprocess_hotkey",
-    "postprocess_profiles",
-    "postprocess_profile_index",
     "feedback_sounds",
     "feedback_notify",
     "debug",
@@ -88,13 +84,6 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "ui_log_view",
     "ui_theme",
     "ui_text_scale",
-    "overlay_enabled",
-    "overlay_position",
-    "overlay_show_on_idle",
-    // Issue #328: onboarding wizard state.
-    "onboarding_completed",
-    "onboarding_seen_at",
-    "settings_mode",
 ];
 
 /// Keys whose change forces a worker restart (everything else is live-reloaded).
@@ -113,7 +102,6 @@ pub(crate) const RESTART_KEYS: &[&str] = &[
     "quit_key",
     "quit_count",
     "quit_window_ms",
-    "postprocess_hotkey",
 ];
 
 /// Legacy config.json keys we now strip on save so they fade out of users'
@@ -168,8 +156,9 @@ mod tests {
     #[test]
     fn restart_required_keys_marks_audio_device_under_rust_backend() {
         use crate::runtime::AUDIO_BACKEND_ENV;
-        use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
+        use crate::test_env_lock::ENV_LOCK;
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var(AUDIO_BACKEND_ENV).ok();
         let before = AppSettings::default();
         let after = AppSettings {
             audio_device: "Yeti X".to_owned(),
@@ -177,20 +166,16 @@ mod tests {
         };
 
         // Sounddevice path (env unset) → audio_device stays live.
-        {
-            let _env = EnvVarGuard::remove(AUDIO_BACKEND_ENV);
-            assert!(
-                restart_required_keys(&before, &after).is_empty(),
-                "audio_device must stay live on the default Python backend",
-            );
-        }
+        std::env::remove_var(AUDIO_BACKEND_ENV);
+        assert!(
+            restart_required_keys(&before, &after).is_empty(),
+            "audio_device must stay live on the default Python backend",
+        );
 
         // Rust path. The dynamic gate only fires when the feature is
         // also compiled in — mirror `audio_pipeline_available()` here
-        // so the test stays honest in both build modes. RAII guard
-        // restores the original env value even if the asserts panic
-        // (Codex P2 #415 pattern).
-        let _env = EnvVarGuard::set(AUDIO_BACKEND_ENV, "rust");
+        // so the test stays honest in both build modes.
+        std::env::set_var(AUDIO_BACKEND_ENV, "rust");
         let keys = restart_required_keys(&before, &after);
         if cfg!(feature = "audio-in-rust") {
             assert_eq!(
@@ -203,6 +188,11 @@ mod tests {
                 keys.is_empty(),
                 "without the audio-in-rust feature the env opt-in is ignored",
             );
+        }
+
+        match prev {
+            Some(v) => std::env::set_var(AUDIO_BACKEND_ENV, v),
+            None => std::env::remove_var(AUDIO_BACKEND_ENV),
         }
     }
 

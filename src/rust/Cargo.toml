@@ -1,6 +1,6 @@
 [package]
 name = "whisper-dictate-app"
-version = "1.20.8"
+version = "1.21.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
@@ -19,17 +19,9 @@ path = "main.rs"
 # `eframe::Renderer` by cfg. The renderer-matrix CI workflow builds BOTH so the
 # wgpu exit route never silently rots.
 [features]
-default = ["ui-egui-glow", "history-sqlite"]
+default = ["ui-egui-glow"]
 ui-egui-glow = ["eframe/glow"]
 ui-egui-wgpu = ["eframe/wgpu"]
-# Local SQLite-backed transcription history (issue #324). Pulls in
-# `rusqlite` with its `bundled` feature so we ship our own SQLite (no
-# system libsqlite3 dep — matches the project's "no system deps" stance).
-# Enabled by default: the history store is part of the shipping desktop
-# experience. Build with `--no-default-features` (or
-# `--no-default-features --features ui-egui-glow`) to opt out, e.g. for
-# minimal CI binaries that don't need the history table.
-history-sqlite = ["dep:rusqlite"]
 # Local Whisper inference via the whisper.cpp bindings (`whisper-rs`).
 # OFF by default: enabling this feature pulls in whisper-rs and requires
 # CMake and a C/C++ compiler (e.g. clang) on the build host, since
@@ -65,7 +57,7 @@ audio-in-rust = ["dep:cpal", "dep:rubato", "dep:vad-rs", "dep:base64", "dep:temp
 # shipping path for this PR. Activate at runtime with VOICEPI_HOTKEY_BACKEND=rust
 # AND a binary built with `--features rust-hotkeys`; otherwise the supervisor's
 # behaviour is byte-identical to today.
-rust-hotkeys = ["dep:rdev", "dep:evdev"]
+rust-hotkeys = ["dep:rdev"]
 # Phase 2.1 Rust-side keyboard injection (issue #348 sub-task 2.1). Pulls in
 # `enigo` as a cross-platform direct-injection baseline (SendInput on Windows,
 # CGEventTap on macOS, xdotest on Linux/X11). Linux Wayland still uses the
@@ -127,13 +119,10 @@ whisper-rs = { version = "0.16", optional = true }
 # tempfile: vad-rs only accepts a file path; we materialise the embedded
 #   silero_vad.onnx bytes to a temp file at startup.
 cpal = { version = "0.18", optional = true }
-# rubato 4.x collapsed the old `FftFixedIn` / `FftFixedInOut` types into a
-# single `Fft` with a `FixedSync` selector, and moved buffer handling to the
-# `audioadapter_buffers` crate (re-exported at `rubato::audioadapter_buffers`).
-# `src/rust/audio/resampler.rs` uses `Fft::new_custom(..., FixedSync::Input)`
-# with `SequentialSlice` / `SequentialSliceOfVecs` adapters to preserve the
-# pre-v4 "fixed input chunk, variable output" contract.
-rubato = { version = "4.0", optional = true }
+# Pinned to 0.16 — rubato 3.0 renamed FftFixedIn to Fft and changed the
+# constructor signature. The v3 migration is tracked separately; until
+# then the audio-in-rust feature stays on the v2 API in resampler.rs.
+rubato = { version = "0.16", optional = true }
 vad-rs = { version = "0.1", optional = true, default-features = false }
 base64 = { version = "0.22", optional = true }
 tempfile = { version = "3.14", optional = true }
@@ -161,35 +150,8 @@ rdev = { version = "0.5", optional = true }
 # dispatcher (each inject_text call constructs a fresh Enigo).
 enigo = { version = "0.6", optional = true }
 
-# --- history-sqlite feature dep (default-on)
-# rusqlite with the `bundled` feature compiles SQLite from source so we
-# don't depend on a system libsqlite3. The bundled build enables FTS5
-# (used for searchable history text); a runtime probe in
-# `history::schema` still detects missing FTS5 and falls back to LIKE.
-# The 0.32 line is the last release on SQLite 3.45 which compiles cleanly
-# in the devcontainer image without bumping the MSRV.
-rusqlite = { version = "0.40", features = ["bundled"], optional = true }
-
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }
-# Signal handling for issue #326 (CLI flags + Unix signals for external toggle).
-# Linux-only: SIGUSR1 (toggle) and SIGUSR2 (cancel) let compositor keybindings
-# drive recording via `kill -USR1 $(pidof whisper-dictate)` or `whisper-dictate
-# --toggle-recording`. signal-hook is the standard idiomatic wrapper over
-# signal-hook-registry (already a transitive dep, so no new crates pulled in).
-# libc is the cross-platform standard already in the dep graph; we use it
-# directly for `libc::kill` on the CLI forwarder side.
-signal-hook = "0.4"
-libc = "0.2"
-# evdev: direct /dev/input keyboard listener for the `rust-hotkeys` feature on
-# Linux. `rdev` only speaks X11 (XRecord), which cannot observe global key
-# events on Wayland — so on GNOME/KDE Wayland the rdev listener is deaf and PTT
-# never fires. `evdev` reads the kernel input devices directly (needs the user
-# in the `input` group), which works identically on X11 and Wayland; the deleted
-# Python backend used evdev for exactly this reason. Optional + Linux-only; the
-# `rust-hotkeys` feature enables it via `dep:evdev` and the driver is selected at
-# runtime by `manager::select` (evdev on Wayland, rdev on X11).
-evdev = { version = "0.12", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0", features = ["keychain"] }

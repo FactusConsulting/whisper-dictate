@@ -354,122 +354,28 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 })
             }
             Ok(result) => {
-                // Wave 5.5 gap #2 + #3: run post-processing then format
-                // commands between transcribe and inject. Mirrors
-                // `vp_dictate.py::_stop_and_transcribe`'s
-                // `_postprocess_and_format(text)` call (see the Python
-                // path around vp_dictate.py:810). Order is fixed:
-                // transcribe -> postprocess -> format -> inject so a
-                // format-command like "period" applied by the user
-                // after an LLM cleanup still becomes a real `.`.
-                let raw_text = result.text.clone();
-                let (post_text, post_extras) = self.run_postprocess(writer, &raw_text)?;
-                let (final_text, format_extras) = self.run_format_commands(&post_text);
-                let extras = wire::UtteranceExtras {
-                    raw_text: (final_text != raw_text).then(|| raw_text.clone()),
-                    postprocess_error: post_extras.error,
-                    post_provider: post_extras.provider,
-                    post_mode: post_extras.mode,
-                    post_latency_ms: post_extras.latency_ms,
-                    post_changed: post_extras.changed,
-                    post_fallback: post_extras.fallback,
-                    format_enabled: format_extras.enabled,
-                    format_command_set: format_extras.command_set,
-                    format_changed: format_extras.changed,
-                };
-                if let Err(err) = self.inject.inject(&final_text) {
+                // PR 5 will run post-processing + format commands here;
+                // for now the backend's text is what goes to the
+                // injector. The trait split keeps this PR pure-logic.
+                let text = result.text.clone();
+                if let Err(err) = self.inject.inject(&text) {
                     // Python logs and continues — the utterance event
                     // still fires with the text we attempted to inject.
                     // Surface the failure on the utterance event so the
                     // supervisor can decide whether to retry / show UI.
                     wire::emit_utterance(
                         writer,
-                        &final_text,
+                        &text,
                         &result,
                         recording_s.clone(),
                         Some(err.to_string()),
-                        extras,
                     )?;
-                    return Ok(UtteranceOutcome::Injected {
-                        text: final_text,
-                        result,
-                    });
+                    return Ok(UtteranceOutcome::Injected { text, result });
                 }
-                wire::emit_utterance(
-                    writer,
-                    &final_text,
-                    &result,
-                    recording_s.clone(),
-                    None,
-                    extras,
-                )?;
-                Ok(UtteranceOutcome::Injected {
-                    text: final_text,
-                    result,
-                })
+                wire::emit_utterance(writer, &text, &result, recording_s.clone(), None)?;
+                Ok(UtteranceOutcome::Injected { text, result })
             }
         }
-    }
-
-    /// Run the post-processing pipeline on the transcribed text. When
-    /// no post-processor settings are configured (the default), returns
-    /// the input text unchanged with empty extras -- the wire event
-    /// omits all `post_*` fields and stays byte-identical to the
-    /// pre-Wave-5.5 shape.
-    ///
-    /// Emits a `status=post-processing` worker event before the call
-    /// when the settings will actually invoke a provider (mirrors
-    /// `vp_dictate.py:798-809` -- only fires the UI card when the
-    /// processor is not `none` and the mode is not `raw`), so the live
-    /// pipeline card lights up in sync with the Python path.
-    ///
-    /// On failure the post-processor itself falls back to the original
-    /// text (see [`crate::postprocess::postprocess_text`]'s
-    /// `PostprocessResult::fallback` field), so this helper NEVER
-    /// aborts injection -- it surfaces the error via
-    /// [`PostprocessRunExtras::error`] so the utterance event can
-    /// report it.
-    fn run_postprocess<W: Write>(
-        &self,
-        writer: &mut W,
-        raw_text: &str,
-    ) -> Result<(String, PostprocessRunExtras), SessionError> {
-        let Some(settings) = &self.config.postprocess_settings else {
-            return Ok((raw_text.to_owned(), PostprocessRunExtras::default()));
-        };
-        let mode_short = crate::postprocess::normalize_mode(&settings.mode);
-        // Python fires the `post-processing` status card ONLY when a
-        // provider is actually going to run. Mirror that so the UI
-        // sequence stays identical.
-        if settings.processor != "none" && mode_short != "raw" {
-            wire::emit_status(writer, "post-processing", &self.capture_extras())?;
-        }
-        let result = crate::postprocess::postprocess_text(raw_text, settings);
-        let extras = PostprocessRunExtras {
-            provider: Some(result.provider.clone()),
-            mode: Some(result.mode.clone()),
-            latency_ms: Some(result.latency_ms),
-            changed: Some(result.changed),
-            fallback: Some(result.fallback),
-            error: (!result.error.is_empty()).then(|| result.error.clone()),
-        };
-        Ok((result.text, extras))
-    }
-
-    /// Run format commands on the (possibly post-processed) text.
-    /// Off by default via `SessionConfig::format_commands = "off"`.
-    /// Mirrors `vp_dictate.py::_postprocess_and_format`'s call to
-    /// `apply_format_commands(post_result.text)` -- the input is the
-    /// POST-PROCESSED text, matching Python order.
-    fn run_format_commands(&self, text: &str) -> (String, FormatRunExtras) {
-        let cmd_set = self.config.format_commands.as_str();
-        let result = crate::formatting::apply_format_commands(text, Some(cmd_set));
-        let extras = FormatRunExtras {
-            enabled: Some(result.enabled),
-            command_set: Some(result.command_set.clone()),
-            changed: Some(result.changed),
-        };
-        (result.text, extras)
     }
 
     /// Discard the in-flight recording if `requested_epoch` matches the
@@ -536,38 +442,4 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             ),
         ]
     }
-}
-
-/// Provenance extracted from one post-processing pass. Consumed by
-/// [`DictateSession::stop_and_transcribe`] to build the utterance event's
-/// `post_*` fields.
-///
-/// All fields are `Option` so a session with no post-processor
-/// configured emits `Default::default()` extras — every field stays
-/// `None`, which the wire emitter turns into an omitted field, and the
-/// event is byte-identical to the pre-Wave-5.5 shape.
-#[derive(Debug, Clone, Default)]
-struct PostprocessRunExtras {
-    provider: Option<String>,
-    mode: Option<String>,
-    latency_ms: Option<u64>,
-    changed: Option<bool>,
-    fallback: Option<bool>,
-    /// Only populated when the post-processor set a non-empty `error`
-    /// message. Surfaced on the utterance event via
-    /// [`wire::UtteranceExtras::postprocess_error`] so the supervisor
-    /// UI can drive a "post fallback" indicator without re-parsing
-    /// logs. Python's `_postprocess_and_format` prints the same
-    /// message to `[post]`; we surface it as structured wire data.
-    error: Option<String>,
-}
-
-/// Provenance extracted from one format-commands pass. Mirrors
-/// [`PostprocessRunExtras`]; empty defaults keep the utterance event
-/// backwards-compatible.
-#[derive(Debug, Clone, Default)]
-struct FormatRunExtras {
-    enabled: Option<bool>,
-    command_set: Option<String>,
-    changed: Option<bool>,
 }
