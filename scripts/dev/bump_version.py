@@ -87,7 +87,7 @@ def read_versions(root: pathlib.Path) -> dict[str, str | None]:
     out[CARGO_LOCK] = m.group(1) if m else None
 
     nix = _read(files[PACKAGE_NIX])
-    m = re.search(r'version\s*[?=]\s*"([^"]+)"', nix) if nix else None
+    m = re.search(r'version \? "([^"]+)"', nix) if nix else None
     out[PACKAGE_NIX] = m.group(1) if m else None
     return out
 
@@ -116,7 +116,7 @@ def _new_contents(root: pathlib.Path, old: str,
             f'name = "whisper-dictate-app"\nversion = "{old}"',
             f'name = "whisper-dictate-app"\nversion = "{new}"', False),
         files[PACKAGE_NIX]: (
-            f'version = "{old}"', f'version = "{new}"', False),
+            f'version ? "{old}"', f'version ? "{new}"', False),
     }
     out: dict[pathlib.Path, str] = {}
     for path, (needle, replacement, whole_file) in replacements.items():

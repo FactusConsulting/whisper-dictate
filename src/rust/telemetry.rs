@@ -73,80 +73,23 @@ pub fn preview_jsonl(path: impl Into<PathBuf>, limit: usize) -> Result<JsonlPrev
 }
 
 pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
+    let path = history_path_from_settings()?;
     match command {
         HistoryCommand::List { limit } => {
-            let path = history_path_from_settings()?;
             let preview = preview_jsonl(&path, limit)?;
             if !preview.text.is_empty() {
                 println!("{}", preview.text);
             }
-            Ok(())
         }
         HistoryCommand::Last => {
-            let path = history_path_from_settings()?;
             if let Some(row) = read_jsonl_rows(&path)?.pop() {
                 if let Some(text) = row.get("text").and_then(Value::as_str) {
                     println!("{text}");
                 }
             }
-            Ok(())
         }
-        HistoryCommand::Search {
-            query,
-            limit,
-            offset,
-        } => handle_history_search(&query, limit, offset),
-    }
-}
-
-/// SQLite-backed search subcommand for `whisper-dictate history search`.
-///
-/// Wired separately from the JSONL preview path used by `list` / `last`
-/// so the existing flat-file workflow stays unchanged (issue #324
-/// adds the SQLite store side-by-side with the JSONL sink rather
-/// than replacing it).
-#[cfg(feature = "history-sqlite")]
-fn handle_history_search(query: &str, limit: u32, offset: u32) -> Result<()> {
-    use crate::history::{open_default, search, SearchOptions};
-    let conn = open_default()?;
-    let query = query.trim();
-    let hits = search(
-        &conn,
-        &SearchOptions {
-            query: (!query.is_empty()).then(|| query.to_owned()),
-            limit: Some(limit),
-            offset,
-            ..Default::default()
-        },
-    )?;
-    for hit in hits {
-        let mut parts = vec![format!("ts={}", hit.ts)];
-        if let Some(backend) = hit.stt_backend.as_deref() {
-            parts.push(format!("backend={backend}"));
-        }
-        if let Some(model) = hit.model.as_deref() {
-            parts.push(format!("model={model}"));
-        }
-        if let Some(score) = hit.score {
-            parts.push(format!("score={score:.3}"));
-        }
-        parts.push(format!("text={}", hit.text));
-        println!("{}", parts.join("  "));
     }
     Ok(())
-}
-
-/// Stock-build stub for `whisper-dictate history search`. Users that
-/// rebuild with `--no-default-features` lose the SQLite store; the
-/// subcommand stays exposed so the CLI surface is feature-flag-stable
-/// but reports the missing-feature situation rather than silently
-/// returning no rows.
-#[cfg(not(feature = "history-sqlite"))]
-fn handle_history_search(_query: &str, _limit: u32, _offset: u32) -> Result<()> {
-    Err(anyhow::anyhow!(
-        "history search requires the `history-sqlite` feature \
-         (default on; rebuild without --no-default-features to enable)"
-    ))
 }
 
 pub fn handle_append_jsonl(path: &Path) -> Result<()> {

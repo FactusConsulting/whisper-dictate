@@ -8,15 +8,6 @@
 #ifndef VERSION_INFO
   #define VERSION_INFO VERSION
 #endif
-; BinDir points at the directory containing whisper-dictate.exe (and the ort
-; onnxruntime*.dll sidecars). Defaults to the in-tree `target\release` so
-; local `iscc packaging\windows\inno\whisper-dictate.iss` still works after
-; `cargo build --release`. CI overrides it (v1.20.5) with /DBinDir=D:\t\release
-; because the whisper.cpp Vulkan build blows past Windows MAX_PATH inside the
-; deep `target/release/build/whisper-rs-sys-*/out/build/...` tree.
-#ifndef BinDir
-  #define BinDir "..\..\..\target\release"
-#endif
 
 [Setup]
 AppId={{7B3F8A2C-4E1D-4F9A-B5C6-D2E8F0A1C3B7}
@@ -44,23 +35,31 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#BinDir}\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\src\python\whisper_dictate\*.py"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
+Source: "..\..\..\src\python\whisper_dictate\*.json"; DestDir: "{app}\src\python\whisper_dictate"; Flags: ignoreversion
+; The top-level *.py / *.json globs are NOT recursive, so the data subpackage
+; (hallucination_patterns.json, loaded at import via importlib.resources) needs
+; its own entry or it would be missing from the installed app.
+Source: "..\..\..\src\python\whisper_dictate\data\*"; DestDir: "{app}\src\python\whisper_dictate\data"; Flags: ignoreversion recursesubdirs
+Source: "..\..\..\target\release\whisper-dictate.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; ONNX Runtime DLL(s) for the `audio-in-rust` feature (Wave 8 / rc.2):
 ; vad-rs -> ort dynamically loads onnxruntime.dll at startup. ort's
 ; `copy-dylibs` build feature drops it in target\release\ next to the
 ; .exe; we just have to ship it next to the installed binary too.
 ; `skipifsourcedoesntexist` keeps the local installer loop green for
 ; dev builds without the audio-in-rust feature enabled.
-Source: "{#BinDir}\onnxruntime*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\..\target\release\onnxruntime*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\..\assets\whisper-dictate.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\README.md";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\..\docs\*.md";          DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\..\..\docs\examples\dictionary.example.json"; DestDir: "{app}\docs\examples"; Flags: ignoreversion
+Source: "..\..\..\requirements\*.txt"; DestDir: "{app}\requirements"; Flags: ignoreversion
 ; The golden-benchmark manifest (corpus.json only — NOT the user-local, gitignored
 ; audio recordings) so the System tab's "Run benchmark" resolves a corpus out of
 ; the box in the installed app. The worker looks for {app}\benchmark\corpus.json.
 Source: "..\..\..\benchmark\corpus.json"; DestDir: "{app}\benchmark"; Flags: ignoreversion
 Source: "..\..\..\VERSION";            DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\..\scripts\dev\inject-smoke.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; WorkingDir: "{app}"; IconFilename: "{app}\whisper-dictate.ico"
@@ -165,6 +164,8 @@ begin
     '  $desktop = Get-CimInstance Win32_Process -Filter "name = ''whisper-dictate.exe''" | Where-Object { $_.ProcessId -ne $currentPid -and $_.ExecutablePath -eq $appExe }' + #13#10 +
     '} while ($desktop -and (Get-Date) -lt $deadline)' + #13#10 +
     '$desktop | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
+    '$workers = Get-CimInstance Win32_Process | Where-Object { ($_.Name -like ''python*.exe'' -or $_.Name -eq ''py.exe'') -and $_.CommandLine -like ''*whisper_dictate.runtime*'' -and $_.CommandLine -like (''*'' + $appRoot + ''*'') }' + #13#10 +
+    '$workers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' + #13#10 +
     '$deadline = (Get-Date).AddSeconds(10)' + #13#10 +
     'do {' + #13#10 +
     '  Start-Sleep -Milliseconds 250' + #13#10 +

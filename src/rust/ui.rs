@@ -43,12 +43,9 @@ mod diagnostics_level;
 mod hotkey;
 mod icon;
 mod log_render;
-mod onboarding;
-mod overlay;
 mod platform;
 mod previews;
 mod secret_store;
-mod settings_mode;
 mod settings_state;
 mod tabs;
 mod tasks;
@@ -80,17 +77,9 @@ pub(in crate::ui) use self::window_list::parse_windows_json;
 // Re-exported so the secret-store `*_tests.rs` modules (which import `super::*`)
 // resolve these items; non-test code reaches them through `api_keys`.
 pub(in crate::ui) use self::log_render::*;
-pub(in crate::ui) use self::overlay::{
-    render_recording_overlay, MeterFrame, OverlayConfig, OverlayPalette, OverlayPhase,
-    OverlayPosition, OverlayRender, OverlayState,
-};
 pub(in crate::ui) use self::platform::*;
 #[cfg(test)]
 use self::secret_store::*;
-pub(in crate::ui) use self::settings_mode::{
-    normalize_selected_tab, row_visible, tab_visible as settings_mode_tab_visible, visible_tabs,
-    SettingsMode,
-};
 pub(in crate::ui) use self::text::*;
 pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
@@ -248,25 +237,6 @@ pub fn run() -> Result<()> {
     let renderer = eframe::Renderer::Wgpu;
     #[cfg(not(feature = "ui-egui-wgpu"))]
     let renderer = eframe::Renderer::Glow;
-
-    // Issue #326: write the daemon PID file and (on Linux) install the
-    // SIGUSR1/SIGUSR2 handlers BEFORE eframe takes the main thread. The
-    // returned guard removes the PID file on a clean exit; we bind it to a
-    // variable that lives for the whole UI lifetime so its Drop fires at
-    // shutdown. A failure here is logged but does NOT abort the UI — the
-    // user still gets a working app, just without external-toggle support
-    // for this session.
-    let _external_toggle_guard = match runtime::external_toggle::install_signal_handlers() {
-        Ok(guard) => guard,
-        Err(err) => {
-            eprintln!(
-                "[external-toggle] could not install signal handlers / PID file: {err}; \
-                 `whisper-dictate --toggle-recording` and `kill -USR1` will not work \
-                 for this session"
-            );
-            None
-        }
-    };
 
     let options = eframe::NativeOptions {
         renderer,
@@ -478,17 +448,6 @@ struct WhisperDictateApp {
     /// Empty when no downloads have been kicked off this session — never
     /// persisted.
     pub(in crate::ui) whisper_model_downloads: whisper_models_state::WhisperModelDownloads,
-    /// Time-smoothed audio meter + visibility bookkeeping for the recording
-    /// overlay window (Issue #320). Lives outside `AppSettings` because it is
-    /// session-only render state — the persisted toggle/position live in the
-    /// settings struct (`overlay_enabled` / `overlay_position` /
-    /// `overlay_show_on_idle`).
-    pub(in crate::ui) overlay_state: OverlayState,
-    /// Issue #328: first-run onboarding wizard state. `Some` when the wizard
-    /// is on screen (fresh install or "Run setup again" from the System
-    /// tab); `None` otherwise. Session-only — the persisted gate lives on
-    /// `AppSettings.onboarding_completed`.
-    pub(in crate::ui) onboarding: Option<onboarding::OnboardingUi>,
 }
 
 impl Default for WhisperDictateApp {
@@ -557,14 +516,6 @@ impl Default for WhisperDictateApp {
             benchmark_results: None,
             config_path,
             saved_settings: settings.clone(),
-            // Trigger the wizard on first launch (settings default is
-            // `onboarding_completed = false`); users flip that on skip/finish.
-            // On a bare skip (no "don't show again") the gate stays false and
-            // the wizard re-triggers on next launch. See
-            // `onboarding::should_trigger_first_run`. Computed BEFORE `settings`
-            // is moved into the struct.
-            onboarding: onboarding::should_trigger_first_run(&settings)
-                .then(onboarding::OnboardingUi::new),
             settings,
             settings_status,
             saved_stt_api_key_input,
@@ -600,7 +551,6 @@ impl Default for WhisperDictateApp {
             tray: TrayManager::new(),
             last_logged_tray_state: None,
             whisper_model_downloads: whisper_models_state::WhisperModelDownloads::new(),
-            overlay_state: OverlayState::default(),
         }
     }
 }
@@ -678,6 +628,8 @@ mod backend_option_tests;
 mod benchmark_task_tests;
 #[cfg(test)]
 mod cloud_settings_tests;
+#[cfg(test)]
+mod corpus_record_task_tests;
 #[cfg(test)]
 mod keyboard_layout_tests;
 #[cfg(test)]

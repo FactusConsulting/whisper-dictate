@@ -68,7 +68,7 @@ pub(super) fn parse_idle_timeout_str(raw: &str) -> Result<Option<Duration>> {
 mod tests {
     use super::*;
 
-    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
+    use crate::test_env_lock::ENV_LOCK;
 
     #[test]
     fn parse_env_unset_means_never() {
@@ -125,23 +125,32 @@ mod tests {
 
     #[test]
     fn parse_env_from_process_unset() {
-        // RAII guard restores the original IDLE_UNLOAD_ENV value (Some/None)
-        // even if the assertion panics — see Codex P2 #415 pattern.
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _env = EnvVarGuard::remove(IDLE_UNLOAD_ENV);
+        let saved = std::env::var(IDLE_UNLOAD_ENV).ok();
+        std::env::remove_var(IDLE_UNLOAD_ENV);
 
         assert_eq!(parse_idle_timeout_from_env().unwrap(), None);
+
+        if let Some(v) = saved {
+            std::env::set_var(IDLE_UNLOAD_ENV, v);
+        }
     }
 
     #[test]
     fn parse_env_from_process_set() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _env = EnvVarGuard::set(IDLE_UNLOAD_ENV, "42");
+        let saved = std::env::var(IDLE_UNLOAD_ENV).ok();
+        std::env::set_var(IDLE_UNLOAD_ENV, "42");
 
         assert_eq!(
             parse_idle_timeout_from_env().unwrap(),
             Some(Duration::from_secs(42))
         );
+
+        match saved {
+            Some(v) => std::env::set_var(IDLE_UNLOAD_ENV, v),
+            None => std::env::remove_var(IDLE_UNLOAD_ENV),
+        }
     }
 
     /// On Unix, an explicitly set non-UTF-8 value reaches us as
@@ -158,9 +167,10 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
 
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os(IDLE_UNLOAD_ENV);
         // Lone 0xFF bytes are invalid UTF-8 in any normalization.
         let bad = OsString::from_vec(vec![0xFF, 0xFE, 0x80]);
-        let _env = EnvVarGuard::set(IDLE_UNLOAD_ENV, &bad);
+        std::env::set_var(IDLE_UNLOAD_ENV, &bad);
 
         let err = parse_idle_timeout_from_env().unwrap_err();
         let msg = err.to_string();
@@ -168,5 +178,10 @@ mod tests {
             msg.contains("UTF-8"),
             "expected UTF-8 rejection message, got: {msg}"
         );
+
+        match saved {
+            Some(v) => std::env::set_var(IDLE_UNLOAD_ENV, v),
+            None => std::env::remove_var(IDLE_UNLOAD_ENV),
+        }
     }
 }

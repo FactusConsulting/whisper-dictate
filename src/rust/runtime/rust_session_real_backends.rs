@@ -84,98 +84,14 @@ use std::sync::{Arc, Mutex};
 
 use crate::dictate::audio_route::RouteConfig;
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
-use crate::dictate::backends::{
-    CloudBackendConfig, CloudTranscribeBackend, WhisperLocalTranscribeBackend,
-};
-use crate::dictate::env_gates::is_truthy;
-use crate::dictate::{
-    DictateSession, SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult,
-};
-use crate::postprocess::{
-    default_base_url, normalized_base_url, normalized_model, PostprocessSettings,
-};
-use crate::postprocess_hotkey::resolve_api_key_from_env;
+use crate::dictate::backends::WhisperLocalTranscribeBackend;
+use crate::dictate::{DictateSession, SessionConfig};
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 use crate::whisper::{
     parse_idle_timeout_from_env, resolve_model_path_from_env, IdleUnloadingModel,
 };
 
 use super::rust_session_inject::ProductionInjectBackend;
-
-/// Env var carrying the STT backend selection. Mirrors
-/// `vp_transcribe.STT_BACKEND` on the Python side. Recognised values
-/// (case-insensitive, `faster-whisper` normalised to `whisper` per
-/// [`crate::dictate::validate_backend`]):
-///
-/// - `"whisper"` (or unset / empty) -- local whisper.cpp inference.
-/// - `"openai"` -- OpenAI-compatible cloud STT (base URL determines
-///   OpenAI vs. Groq vs. self-hosted).
-///
-/// A user with `stt_provider = "groq"` and the Groq base URL saved
-/// still sets `stt_backend = "openai"` -- provider is a sub-choice of
-/// the cloud backend, so we only branch here on the top-level backend
-/// selection. See [`resolve_stt_backend_from_env`] for the parser.
-pub(crate) const STT_BACKEND_ENV: &str = "VOICEPI_STT_BACKEND";
-
-/// Result of [`resolve_stt_backend_from_env`]: which real backend the
-/// factory should build. Kept separate from the `dictate::BackendKind`
-/// enum so this layer can grow provider-specific variants (Cloud vs.
-/// Whisper is enough for Wave 5.5 gap #1; a future Wave could split
-/// Cloud into OpenAI / Groq if the wire divergence ever requires it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RealBackendKind {
-    /// In-process whisper.cpp inference via
-    /// [`WhisperLocalTranscribeBackend`]. Default when the env var is
-    /// unset -- matches the Python worker's fallback.
-    Whisper,
-    /// OpenAI-compatible cloud STT via [`CloudTranscribeBackend`].
-    Cloud,
-}
-
-/// Parse [`STT_BACKEND_ENV`] into a [`RealBackendKind`]. Recognises the
-/// same historical `faster-whisper` alias `vp_transcribe.py` does. An
-/// unset or blank env var lands on [`RealBackendKind::Whisper`] --
-/// production defaults to local inference just like the Python worker.
-/// Unrecognised values return `None` so the factory can surface a
-/// human-readable "unsupported stt_backend" error rather than falling
-/// through to a silent whisper build.
-pub(crate) fn resolve_stt_backend_from_env() -> Option<RealBackendKind> {
-    let raw = std::env::var(STT_BACKEND_ENV).ok().unwrap_or_default();
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "" | "whisper" | "faster-whisper" => Some(RealBackendKind::Whisper),
-        "openai" | "groq" => Some(RealBackendKind::Cloud),
-        _ => None,
-    }
-}
-
-/// Real production [`TranscribeBackend`] impl for the rust-session
-/// worker. Enum dispatch (rather than `Box<dyn>`) so the two variants
-/// share a single monomorphised session type and clippy's dead-code
-/// lint doesn't fire on the always-live `TranscribeBackend for
-/// DictateSession<...>` bound.
-///
-/// Wave 5.5 gap #1 of #348 -- see the [`super::rust_session_real_backends`]
-/// module docs for the "silent stub fallback for cloud STT" bug this
-/// enum closes.
-pub enum RealTranscribeBackend {
-    /// In-process whisper.cpp via [`WhisperLocalTranscribeBackend`].
-    Whisper(WhisperLocalTranscribeBackend),
-    /// OpenAI-compatible cloud STT via [`CloudTranscribeBackend`].
-    Cloud(CloudTranscribeBackend),
-}
-
-impl TranscribeBackend for RealTranscribeBackend {
-    fn transcribe(
-        &self,
-        pcm: &[f32],
-        sample_rate: u32,
-    ) -> Result<TranscribeResult, TranscribeError> {
-        match self {
-            Self::Whisper(inner) => inner.transcribe(pcm, sample_rate),
-            Self::Cloud(inner) => inner.transcribe(pcm, sample_rate),
-        }
-    }
-}
 
 /// Env var that supplies the spoken-language hint for the local
 /// Whisper backend. Mirrors `vp_cli.py` / `settings_schema.json:89` so
@@ -192,13 +108,8 @@ pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 
 /// The real production session type that PR 5 wires behind
 /// `VOICEPI_DICTATE_BACKEND=rust-session` when both features are on.
-///
-/// Wave 5.5 gap #1 of #348 widened this from a fixed
-/// [`WhisperLocalTranscribeBackend`] to the [`RealTranscribeBackend`]
-/// enum so the same `DictateSession` type owns either the local
-/// whisper.cpp path or the OpenAI-compatible cloud path -- picked by
-/// [`resolve_stt_backend_from_env`] at session construction.
-pub(crate) type RealSession = DictateSession<RealTranscribeBackend, ProductionInjectBackend>;
+pub(crate) type RealSession =
+    DictateSession<WhisperLocalTranscribeBackend, ProductionInjectBackend>;
 
 /// Bundle handed back from [`make_real_session`].
 ///
@@ -234,222 +145,36 @@ pub(crate) struct RealSessionDeps {
 /// values are normalised to `None` so the backend's own per-call
 /// empty-string -> auto-detect collapse (see
 /// [`WhisperBackendConfig`] docs) does not even see a literal empty
-/// string.
-///
-/// Wave 5.5 gap #4: when the user's dictionary is enabled (the default
-/// for a stock install), overlay the dictionary-derived initial-prompt
-/// on top of the env-var base. `Dictionary::build_prompt` combines the
-/// base prompt with the budget-fitted vocabulary terms; without this,
-/// the rust-session path threw the dictionary away and got zero
-/// rare-word bias from whisper, silently regressing recognition
-/// against the Python worker.
-///
-/// Pure helper so the parse is unit-testable. Codex P2 #423
+/// string. Pure helper so the parse is unit-testable. Codex P2 #423
 /// rust_session_real_backends.rs:96 (finding 2).
 pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
     let language = std::env::var(LANG_ENV)
         .ok()
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty());
-    let base_prompt = std::env::var(INITIAL_PROMPT_ENV)
+    let initial_prompt = std::env::var(INITIAL_PROMPT_ENV)
         .ok()
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty());
-    let initial_prompt = build_initial_prompt(base_prompt.as_deref());
     WhisperBackendConfig {
         language,
         initial_prompt,
     }
 }
 
-/// Combine an optional env-var base prompt with the dictionary's
-/// vocabulary terms into the final `initial_prompt` string whisper.cpp
-/// consumes. Extracted so the fallback logic (dictionary disabled ->
-/// pass the env prompt through; both missing -> `None`) is
-/// unit-testable without touching the process env.
-///
-/// The dictionary module owns the budget-fitting + "Vocabulary:" prefix
-/// so this helper is a thin adapter around
-/// [`crate::dictionary::runtime_dictionary_result`]. When the runtime
-/// helper returns an error (missing / corrupt dictionary file), we
-/// fall back to the base prompt so a broken dictionary never blocks
-/// the session from starting -- mirrors the Python
-/// `_dictionary_runtime` fallback path.
-pub(crate) fn build_initial_prompt(base_prompt: Option<&str>) -> Option<String> {
-    let settings = crate::dictionary::RuntimeDictionarySettings::from_env_and_config();
-    let result = crate::dictionary::runtime_dictionary_result(&settings, base_prompt, "");
-    result.prompt
-}
-
-/// Env vars carrying the post-processing pipeline configuration.
-/// Mirror the settings-schema keys under the `postprocess` category so
-/// a config-file value the schema surfaces reaches the session-sink
-/// path unchanged. Codex #441 P2 review round 3.
-pub(crate) const POST_PROCESSOR_ENV: &str = "VOICEPI_POST_PROCESSOR";
-pub(crate) const POST_MODE_ENV: &str = "VOICEPI_POST_MODE";
-pub(crate) const POST_MODEL_ENV: &str = "VOICEPI_POST_MODEL";
-pub(crate) const POST_BASE_URL_ENV: &str = "VOICEPI_POST_BASE_URL";
-pub(crate) const POST_TIMEOUT_MS_ENV: &str = "VOICEPI_POST_TIMEOUT_MS";
-pub(crate) const POST_MAX_INPUT_CHARS_ENV: &str = "VOICEPI_POST_MAX_INPUT_CHARS";
-pub(crate) const POST_MAX_OUTPUT_CHARS_ENV: &str = "VOICEPI_POST_MAX_OUTPUT_CHARS";
-pub(crate) const POST_REDACT_ENV: &str = "VOICEPI_POST_REDACT";
-pub(crate) const POST_REDACT_TERMS_ENV: &str = "VOICEPI_POST_REDACT_TERMS";
-/// Env var carrying the format-command language set (`"off"` /
-/// `"en"` / `"da"` / `"both"`). Off by default. Codex #441 P2 review
-/// round 3.
-pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
-/// Env var carrying the privacy-lock toggle. Shared with the STT gate
-/// in `worker_rust.rs`.
-pub(crate) const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
-
-/// Read `name` from the process env, trim ASCII whitespace, and drop
-/// empty results. Kept internal so the post-processor config parser
-/// does not have to spell out the pattern six times.
-fn env_string(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
-/// Parse a `usize`-typed post-processor env var, falling back to
-/// `default` on unset / non-numeric / zero values. Matches the same
-/// clamp Python's `_parse_int_setting` applied.
-fn env_usize(name: &str, default: usize) -> usize {
-    env_string(name)
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(default)
-}
-
-/// Parse a `u64`-typed post-processor env var, falling back to
-/// `default` on unset / non-numeric / zero values.
-fn env_u64(name: &str, default: u64) -> u64 {
-    env_string(name)
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(default)
-}
-
-/// Build a [`PostprocessSettings`] from env vars. Applies the same
-/// `normalized_model` / `normalized_base_url` substitutions the
-/// Settings-UI / profile paths already run so a `stt_backend=openai`
-/// profile with an empty `post_model` still uses `gpt-4o-mini` instead
-/// of the Ollama default. Cloud API keys resolve at load time via
-/// [`resolve_api_key_from_env`] so a user with the key in the OS
-/// credential store never has to persist it in `config.json`. Codex
-/// #441 P2 review round 3.
-///
-/// Returns `None` when the pipeline is effectively disabled -- either
-/// `processor == "none"` (the schema default) or the env var is
-/// unset. The session then behaves as it did before Wave 5.5 wired
-/// postprocess into the coordinator (no LLM pass on the transcribed
-/// text).
-pub(crate) fn postprocess_settings_from_env() -> Option<PostprocessSettings> {
-    let processor = env_string(POST_PROCESSOR_ENV).unwrap_or_else(|| "none".to_owned());
-    if processor.eq_ignore_ascii_case("none") {
-        return None;
-    }
-    let mode = env_string(POST_MODE_ENV).unwrap_or_else(|| "raw".to_owned());
-    let raw_model = env_string(POST_MODEL_ENV).unwrap_or_default();
-    let raw_base_url = env_string(POST_BASE_URL_ENV).unwrap_or_default();
-    let base_url = if raw_base_url.is_empty() {
-        default_base_url(&processor).to_owned()
-    } else {
-        normalized_base_url(&processor, raw_base_url.trim_end_matches('/'))
-    };
-    let model = if raw_model.is_empty() {
-        // `normalized_model` picks the provider default when the raw
-        // value is empty OR matches the Ollama placeholder.
-        normalized_model(&processor, "")
-    } else {
-        normalized_model(&processor, &raw_model)
-    };
-    let timeout_ms = env_u64(POST_TIMEOUT_MS_ENV, 4_000);
-    let max_input_chars = env_usize(POST_MAX_INPUT_CHARS_ENV, 4_000);
-    let max_output_chars = env_usize(POST_MAX_OUTPUT_CHARS_ENV, 4_000);
-    let redact = is_truthy(env_string(POST_REDACT_ENV).as_deref());
-    let redact_terms = env_string(POST_REDACT_TERMS_ENV).unwrap_or_default();
-    let local_only = is_truthy(env_string(LOCAL_ONLY_ENV).as_deref());
-    let api_key = resolve_api_key_from_env(&processor);
-    Some(PostprocessSettings {
-        processor,
-        mode,
-        model,
-        base_url,
-        timeout_ms,
-        max_input_chars,
-        max_output_chars,
-        api_key,
-        redact,
-        redact_terms,
-        local_only,
-    })
-}
-
-/// Read the format-command language set from the env, falling back to
-/// the `"off"` schema default. Codex #441 P2 review round 3.
-pub(crate) fn format_commands_from_env() -> String {
-    env_string(FORMAT_COMMANDS_ENV).unwrap_or_else(|| "off".to_owned())
-}
-
 /// Build a [`SessionConfig`] that honors the live
-/// `VOICEPI_MIN_RECORD_SECONDS` + post-processing + format-command
-/// settings. Codex #441 P2 review round 3 extended this to close the
-/// gap where a user with `post_processor=ollama` or
-/// `format_commands=en` in their saved settings had those knobs
-/// silently discarded on the rust-session path -- `DictateSession`
-/// received `postprocess_settings: None` / `format_commands: "off"`
-/// so the post-processing pass never ran and the raw transcript was
-/// injected verbatim.
-///
-/// Mirrors [`RouteConfig::from_env`] / [`postprocess_settings_from_env`]
-/// / [`format_commands_from_env`] so a config-file value the schema
-/// surfaces reaches the session unchanged.
+/// `VOICEPI_MIN_RECORD_SECONDS` setting. Mirrors the audio_route's own
+/// env parser ([`RouteConfig::from_env`]) so both layers see the same
+/// value -- when the supervisor wires audio_route in a future PR the
+/// route will additionally re-read the env on every
+/// `start_recording`, but for the rust-session sink today the
+/// construction-time stamp is enough to fix Codex P2 #423
+/// rust_session_real_backends.rs:107 (finding 5).
 pub(crate) fn session_config_from_env() -> SessionConfig {
     let route = RouteConfig::from_env();
     SessionConfig {
         min_record_seconds: route.min_record_seconds,
-        postprocess_settings: postprocess_settings_from_env(),
-        format_commands: format_commands_from_env(),
         ..SessionConfig::default()
-    }
-}
-
-/// Construct the [`RealTranscribeBackend`] variant matching `kind`,
-/// pulling every dependent config value from env. Split out of
-/// [`make_real_session`] so the two per-backend builders (model + idle
-/// wrapper for Whisper, base URL + key + model for Cloud) each stay in
-/// their own linear block and the routing test can drive the
-/// dispatcher without the audio-pump gate.
-///
-/// Returns `Err(String)` mirroring [`make_real_session`]'s error
-/// contract -- the supervisor logs the message and falls back to
-/// the stub sink.
-pub(crate) fn build_real_transcribe_backend(
-    kind: RealBackendKind,
-) -> Result<RealTranscribeBackend, String> {
-    match kind {
-        RealBackendKind::Whisper => {
-            // Read the settings-picked model name from the effective env so
-            // the resolver honours the UI dropdown (bug 2 of the multilingual
-            // catalog PR). Empty / unset falls through to today's
-            // first-cached-catalog behaviour.
-            let preferred = crate::whisper::preferred_model_name_from_env();
-            let model_path = resolve_model_path_from_env(preferred.as_deref())
-                .map_err(|e| format!("model path: {e:#}"))?;
-            let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
-            let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-            Ok(RealTranscribeBackend::Whisper(
-                WhisperLocalTranscribeBackend::new(model, whisper_backend_config_from_env()),
-            ))
-        }
-        RealBackendKind::Cloud => {
-            let cfg = CloudBackendConfig::from_env();
-            let backend =
-                CloudTranscribeBackend::new(cfg).map_err(|e| format!("cloud STT: {e}"))?;
-            Ok(RealTranscribeBackend::Cloud(backend))
-        }
     }
 }
 
@@ -505,17 +230,11 @@ pub(crate) fn make_real_session(
     }
     #[cfg(feature = "audio-in-rust")]
     {
-        // Wave 5.5 gap #1 of #348: branch on VOICEPI_STT_BACKEND so a
-        // `stt_backend = "openai"` install builds the cloud backend
-        // instead of the local Whisper one. Unrecognised backend values
-        // surface as an explicit error rather than silently falling
-        // back to whisper -- an unsupported value in the env is far
-        // more likely a misconfigured worker than an intentional
-        // opt-in.
-        let backend_kind = resolve_stt_backend_from_env().ok_or_else(|| {
-            format!("unsupported {STT_BACKEND_ENV} value; expected one of whisper, openai, groq")
-        })?;
-        let transcribe = build_real_transcribe_backend(backend_kind)?;
+        let model_path = resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
+        let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
+        let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
+        let transcribe =
+            WhisperLocalTranscribeBackend::new(model, whisper_backend_config_from_env());
 
         // Inject backend reads VOICEPI_INJECT_MODE itself; the Print
         // variant short-circuits all OS calls. The Enigo variant

@@ -94,14 +94,9 @@ impl WhisperModelDownloads {
         self.inner.lock().ok()?.jobs.get(name).cloned()
     }
 
-    /// True iff any catalog entry is currently being downloaded.
-    ///
-    /// After the per-catalog Download-button section was replaced by an
-    /// on-select auto-download flow, this stayed load-bearing: the
-    /// selection-change trigger consults it to refuse spawning a SECOND
-    /// download when one is already streaming (Codex P2: user picks
-    /// large-v3, 3 GB starts, they flip to medium → without this guard
-    /// both would run concurrently, saturating bandwidth and disk I/O).
+    /// True iff any catalog entry is currently being downloaded. Used to
+    /// disable other Download buttons while one is in flight (avoids the
+    /// user kicking off three multi-hundred-MB downloads at once).
     pub fn any_in_progress(&self) -> bool {
         let Ok(state) = self.inner.lock() else {
             return false;
@@ -191,32 +186,6 @@ impl WhisperModelDownloads {
             inner: self.inner.clone(),
             name,
         })
-    }
-
-    /// True while a background SHA-256 verify for `entry` is scheduled but
-    /// hasn't finished yet.
-    ///
-    /// Rationale (Codex P2 cold-start redownload race): the first call to
-    /// [`Self::is_verified_fast`] after app launch always returns `false`
-    /// because it schedules the SHA-256 check on a background thread. If
-    /// the user picks a model that IS on disk during that transient
-    /// window, the auto-download trigger would treat it as missing and
-    /// spawn a full redownload of a file that was already fine. Callers
-    /// use this predicate to DEFER the "should I auto-download?" decision
-    /// while verification is in flight instead of guessing.
-    ///
-    /// Returns `false` when the entry has never been queried (verify not
-    /// yet scheduled) OR when the verify completed. Pair with
-    /// `is_verified_fast` to distinguish the three real states:
-    /// verified / verification-pending / missing-or-unverified.
-    pub fn is_verification_pending(
-        &self,
-        entry: &'static crate::whisper::model_manager::ModelEntry,
-    ) -> bool {
-        let Ok(inner) = self.inner.lock() else {
-            return false;
-        };
-        inner.verify_running.contains(entry.name)
     }
 
     /// Fast cached check: is this catalog entry present and verified?
@@ -546,7 +515,38 @@ mod tests {
 
     // ── spawn_download tests ──────────────────────────────────────────────────
 
-    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
+    use crate::test_env_lock::ENV_LOCK;
+    use std::ffi::OsString;
+
+    /// Save/restore wrapper for env-var mutation in tests. Mirrors the pattern
+    /// in `model_manager_tests.rs` — defined inline so we don't need a
+    /// `pub(super)` dep on `ui::test_support`.
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     /// Platform-specific env var that controls the OS user-cache directory,
     /// mirroring `model_manager::user_cache_dir`'s resolution order.
@@ -563,7 +563,7 @@ mod tests {
         // The VOICEPI_LOCAL_ONLY guard in spawn_download must abort before
         // touching the download state so no job slot is created and no thread
         // is spawned. Covers the new `is_local_only()` early-return branch.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let _guard = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
         let state = WhisperModelDownloads::new();
         assert!(
@@ -580,7 +580,7 @@ mod tests {
     fn spawn_download_returns_false_for_unknown_model() {
         // Covers the `model_manager::find(name) == None` branch in
         // spawn_download: it must record a Failed job and return false.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let _guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
         let state = WhisperModelDownloads::new();
         assert!(
@@ -600,7 +600,7 @@ mod tests {
     fn spawn_download_returns_false_when_already_in_progress() {
         // Pre-reserve the slot so `start()` refuses a second caller — the
         // guard in `spawn_download` must detect this and abort cleanly.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let _guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
         let state = WhisperModelDownloads::new();
         state.start("tiny.en"); // reserves the slot
@@ -616,7 +616,7 @@ mod tests {
         // verify_cache. We verify this indirectly: after finish_ok with a
         // real tempdir file, is_verified_fast should find a cache entry and
         // skip the background verify thread, returning immediately.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -649,7 +649,7 @@ mod tests {
         // Exercise the main body of is_verified_fast: file exists → metadata
         // ok → lock acquired → cache miss → verify_running.insert → thread
         // spawned → return false.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -686,7 +686,7 @@ mod tests {
         //   4. Checking that is_verified_fast either returns false (cache miss
         //      or stale-detect) or re-schedules a new verify (returns false),
         //      but never returns true for the corrupt original hash result.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 
@@ -726,7 +726,7 @@ mod tests {
         // verify_cache with verified=true and the mtime+len match what
         // is_verified_fast reads from disk, it must return true without
         // scheduling another verify thread.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempfile::tempdir().unwrap();
         let _cache_guard = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path().to_str().unwrap());
 

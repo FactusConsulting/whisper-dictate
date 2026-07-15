@@ -1,7 +1,7 @@
 use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 #[cfg(feature = "audio-in-rust")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -14,8 +14,11 @@ use serde_json::Value;
 
 use crate::config;
 
+const PYTHON_ENV: &str = "VOICEPI_PYTHON";
+const BOOTSTRAP_PYTHON_ENV: &str = "VOICEPI_BOOTSTRAP_PYTHON";
 const APP_ROOT_ENV: &str = "VOICEPI_APP_ROOT";
 const WORKER_EVENTS_ENV: &str = "VOICEPI_WORKER_EVENTS";
+const RUST_INJECTOR_ENV: &str = "VOICEPI_RUST_INJECTOR";
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 /// Opt-in switch for the experimental Rust-side capture pipeline (cpal +
 /// rubato + Silero via vad-rs). Read at supervisor start. Has no effect
@@ -23,6 +26,12 @@ const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
 /// AND the env var is set to a truthy value. See
 /// [`audio_pipeline_requested`] for the parsing.
 pub const AUDIO_BACKEND_ENV: &str = "VOICEPI_AUDIO_BACKEND";
+const PYTHON_UTF8_ENV: &str = "PYTHONUTF8";
+const PYTHON_IO_ENCODING_ENV: &str = "PYTHONIOENCODING";
+const PYTHONPATH_ENV: &str = "PYTHONPATH";
+/// Maximum captured worker output kept in memory, measured in UTF-8 bytes
+/// (`str::len()`), despite the legacy `_CHARS` suffix in the public name.
+pub const CAPTURE_OUTPUT_MAX_CHARS: usize = 200_000;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -43,143 +52,18 @@ impl RuntimeState {
     }
 }
 
-/// `whisper-dictate run` — foreground dictation.
-///
-/// Wave 8 Part 2: v1.20 dropped the Python worker; the dictation
-/// runtime is now the in-process `worker-rust` subcommand. Rather than
-/// spawning a subprocess (which was necessary when the worker was a
-/// separate `python -m whisper_dictate.runtime` process), foreground
-/// `run` invokes [`worker_rust::handle_worker_rust`] directly.
-///
-/// The delegate gate ([`worker_rust::should_delegate_to_worker_rust`])
-/// is consulted first with the effective worker env; a declined gate
-/// (missing feature build / unsupported settings) surfaces the reason
-/// via a hard error instead of silently doing nothing, matching the
-/// no-fallback contract of the supervisor path.
-///
-/// Passthrough `args` from `whisper-dictate run --foo bar` are silently
-/// ignored — the Rust worker reads all of its configuration from env
-/// vars (materialised by [`config::worker_env_overrides`]). A user
-/// that passes CLI flags here is likely reaching for the pre-Wave-8
-/// Python `argparse` surface; the warning documents the change.
 pub fn run_terminal(args: Vec<String>) -> Result<()> {
-    if !args.is_empty() {
-        eprintln!(
-            "warning: `whisper-dictate run` no longer forwards CLI flags to the worker; \
-             the Rust dictation runtime reads its settings from VOICEPI_* env vars. \
-             Ignored args: {args:?}"
-        );
-    }
-    let mut env_overrides = config::worker_env_overrides();
-    // Codex #453 P2 (worker_rust.rs:276): the delegate gate normalises
-    // parakeet -> whisper on a LOCAL copy of the value, but the
-    // effective env vec still carries the raw legacy value. Rewrite
-    // in place so both the gate AND the worker's own backend resolver
-    // (`rust_session_real_backends::resolve_stt_backend_from_env`) see
-    // the migrated value -- otherwise the worker starts, resolves the
-    // backend to None, and `build_production_sink` falls through to
-    // the stub session (empty transcriptions).
-    worker_rust::migrate_legacy_stt_backend_env(&mut env_overrides);
-    // Codex #453 P2: nudge users with a stale python-legacy escape
-    // hatch to unset it now that Python is gone.
-    worker_rust::warn_stale_python_legacy_if_set(&env_overrides);
-    if !worker_rust::should_delegate_to_worker_rust(&env_overrides) {
-        let reason = worker_rust::unsupported_worker_rust_settings_reason(&env_overrides)
-            .unwrap_or_else(|| {
-                "this build was compiled without the full rust-session feature set \
-                 (whisper-rs-local + rust-injection + audio-in-rust + rust-hotkeys); \
-                 rebuild with those features to enable dictation"
-                    .to_owned()
-            });
-        return Err(anyhow!(
-            "cannot run dictation: {reason}. Python worker was removed in v1.20."
-        ));
-    }
-    // Codex #453 P1: the in-process worker reads its configuration
-    // from `std::env::vars()` (via `WorkerRunner::from_env`); the
-    // supervisor path plumbs `env_overrides` through the child's
-    // `Command::envs`, but this foreground path spawns nothing --
-    // it invokes the worker in-process. Without this apply loop the
-    // defaults-from-schema (VOICEPI_KEY, VOICEPI_STT_BACKEND, model
-    // paths, etc.) are missing and the worker fails to install the
-    // hotkey listener / build the backend. Applying the overrides
-    // to `std::env` is safe because this process is dedicated to the
-    // worker for its entire remaining lifetime.
-    for (key, value) in &env_overrides {
-        // SAFETY: single-threaded pre-worker init; no other thread
-        // observes std::env here. `worker_env_overrides()` never
-        // returns keys that are `std::env`-reserved (empty / with `=`
-        // in the key or a NUL byte).
-        std::env::set_var(key, value);
-    }
-    // Codex #453 P2 (runtime.rs:106): the pre-Wave-8 foreground path
-    // spawned the worker as a child with `current_dir(app_root)`, so
-    // relative overrides like `VOICEPI_WHISPER_MODEL_PATH=models/xyz.bin`
-    // resolved against the install root regardless of the caller's
-    // shell cwd. The in-process handoff drops that guarantee unless we
-    // chdir here explicitly. A failing chdir is a warning, not a fatal
-    // error -- absolute overrides still work either way.
-    let root = app_root();
-    if let Err(err) = std::env::set_current_dir(&root) {
-        eprintln!(
-            "warning: could not set working directory to app root ({}): {err}. \
-             Relative VOICEPI_* paths in your config may resolve against the \
-             caller's cwd instead.",
-            root.display()
-        );
-    }
-    worker_rust::handle_worker_rust(false)
+    let command = default_worker_command_with_args(args);
+    run_foreground(&command)
 }
 
-/// `whisper-dictate doctor` — dependency + platform readiness check.
-///
-/// Wave 8 Part 2: the pre-v1.20 doctor spawned the Python worker with
-/// `--doctor` so `vp_doctor.py` could probe `sounddevice`,
-/// `faster-whisper`, `pynput`, X display availability, etc. That
-/// module was deleted alongside the rest of the Python bundle.
-///
-/// A native-Rust doctor that reports on cpal / whisper.cpp / rdev /
-/// enigo will land in a follow-up; for v1.20 rc.1 the command reports
-/// what changed and points the user at the surviving diagnostics
-/// (`whisper-dictate --version`, `whisper-dictate models list`).
 pub fn doctor() -> Result<()> {
-    println!("whisper-dictate {}", version());
-    println!(
-        "The Python-based `doctor` diagnostics were removed in v1.20 along with the Python \
-         worker. A native-Rust doctor is tracked as a follow-up to #348."
-    );
-    println!("Meanwhile:");
-    println!("  * confirm your build has the rust-session features:  `whisper-dictate worker-rust --stdin-only` prints a clear error on stock builds.");
-    println!(
-        "  * inspect the model cache:                            `whisper-dictate models list`"
-    );
-    println!(
-        "  * inspect the effective config:                       `whisper-dictate config show`"
-    );
-    Ok(())
+    run_foreground(&doctor_command())
 }
 
 pub fn install() -> Result<()> {
-    // Wave 8 Part 2: the historic `install` step created a Python virtual
-    // environment under `~/.venv-whisper-dictate` (Unix) or
-    // `~/whisper-dictate-venv` (Windows) and ran `pip install -r
-    // requirements/{cpu,gpu}.txt` inside it. v1.20 dropped the entire
-    // Python bundle in favour of the in-process Rust worker, so there is
-    // no longer anything to install: the packaged binary carries every
-    // native dependency it needs.
-    //
-    // Kept as a subcommand (rather than dropped from the CLI surface) so
-    // the packaging scripts, docs and legacy install scripts that still
-    // shell out to `whisper-dictate install` don't error out on an
-    // unknown command; the invocation is now a graceful no-op that
-    // documents where the runtime deps went.
-    println!(
-        "whisper-dictate v1.20 no longer requires a Python venv or pip install. \
-         Everything ships in the native binary. If you want to download a Whisper \
-         model into the cache, run `whisper-dictate models download tiny.en` \
-         (or another catalog entry)."
-    );
-    Ok(())
+    let plan = InstallPlan::for_current_environment(app_root())?;
+    plan.run()
 }
 
 pub fn setup_ubuntu() -> Result<()> {
@@ -496,17 +380,19 @@ pub struct RuntimeSupervisor {
     /// `start()` on the next run.
     #[cfg(feature = "audio-in-rust")]
     bridge_cancel: Arc<AtomicBool>,
-    // Wave 8 Part 2: the pre-v1.20 supervisor could optionally install a
-    // Rust rdev hotkey listener directly (when
-    // `VOICEPI_HOTKEY_BACKEND=rust` was set) and hold a `HotkeyHandle`
-    // to drive the Python worker's dictation lifecycle from an
-    // in-process CoordinatorAction sink. v1.20 makes worker-rust
-    // delegation mandatory; the worker subprocess owns the rdev
-    // listener and the `DictateSession` in-process, so the supervisor
-    // no longer holds a hotkey handle. External-toggle CLI flags /
-    // Unix signals now surface as stderr trace lines
-    // (see [`Self::dispatch_external_command`]) until a
-    // parent<->child IPC lands (issue #326 follow-up).
+    /// Live Rust hotkey handle, installed the first time `start()` is called
+    /// when `VOICEPI_HOTKEY_BACKEND=rust` is set AND the binary was built
+    /// with the `rust-hotkeys` feature. `None` when the backend is not
+    /// requested or the install failed (supervisor stays on pynput then).
+    ///
+    /// Only installed once per process lifetime: the rdev listener thread
+    /// cannot be cleanly stopped, so subsequent `restart()` calls reuse the
+    /// existing handle. The coordinator retains its state machine across
+    /// restarts — that is fine because the coordinator only cares about
+    /// key-press events, not about which Python worker run they arrive in.
+    ///
+    /// P2 #346 finding 1.
+    hotkey_handle: Option<crate::hotkey::HotkeyHandle>,
 }
 
 impl Default for RuntimeSupervisor {
@@ -530,6 +416,7 @@ impl RuntimeSupervisor {
             bridge_terminal: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "audio-in-rust")]
             bridge_cancel: Arc::new(AtomicBool::new(false)),
+            hotkey_handle: None,
         }
     }
 
@@ -564,12 +451,6 @@ impl RuntimeSupervisor {
         #[cfg(feature = "audio-in-rust")]
         self.bridge_cancel.store(false, Ordering::SeqCst);
 
-        // Issue #322: install / clear the auto-mute controller based on
-        // the current `mute_output_while_recording` setting. Re-evaluated
-        // on each start() so a settings edit picks up on the next
-        // worker restart without needing a full app relaunch.
-        install_output_mute_from_config();
-
         // Phase-1 rollout (PR #341 — wiring the Rust audio pipeline):
         // If the user opted in via VOICEPI_AUDIO_BACKEND=rust AND this
         // binary was built with the `audio-in-rust` cargo feature, we
@@ -579,14 +460,7 @@ impl RuntimeSupervisor {
         // before — see `audio_spawn::should_use_rust_audio_backend` for
         // the precise gate. To disable in an emergency: unset the env
         // var, or rebuild without `--features audio-in-rust`.
-        // Wave 8 Part 2: `use_rust_audio` used to gate a Rust→Python
-        // audio bridge when the user opted in via
-        // `VOICEPI_AUDIO_BACKEND=rust`. The bridge only exists so the
-        // supervisor could pipe cpal frames into the Python worker's
-        // stdin. Wave 8 removed the Python worker; the worker-rust
-        // subprocess owns cpal in-process. The env-var warning is
-        // still surfaced below so a user with `VOICEPI_AUDIO_BACKEND=rust`
-        // in their config sees the "no longer applicable" hint.
+        let use_rust_audio = audio_spawn::should_use_rust_audio_backend();
         let warn_unavailable = audio_pipeline_requested() && !audio_pipeline_available();
         if warn_unavailable {
             let _ = self.tx.send(RuntimeEvent::Stderr(format!(
@@ -597,102 +471,11 @@ impl RuntimeSupervisor {
 
         self.state = RuntimeState::Starting;
         let mut effective_command = command;
-        // Codex #453 P2 (worker_rust.rs:276): rewrite any legacy
-        // `VOICEPI_STT_BACKEND=parakeet` in the effective env to
-        // `whisper` BEFORE spawning. The delegate gate accepts the
-        // legacy value on its side, but the child worker's backend
-        // resolver would otherwise land on the stub session.
-        worker_rust::migrate_legacy_stt_backend_env(&mut effective_command.env);
-
-        // Wave 5 PR 6 (+ PR 7 default-flip) of #348: delegate the
-        // dictation lifecycle to the `whisper-dictate worker-rust`
-        // subprocess on any build compiled with the full feature set
-        // (`whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`).
-        // The subprocess owns the entire lifecycle in-process: it
-        // installs its own rdev OS listener, runs the
-        // `DictateSession` with the real backends, and emits worker
-        // events back to us through stderr (already wired by
-        // `stream_lines` below).
-        //
-        // PR 7 flipped the default: previously the user had to opt IN
-        // via `VOICEPI_DICTATE_BACKEND=rust-session`; now the Rust
-        // worker runs unconditionally on a full-feature build and the
-        // user opts OUT with `VOICEPI_DICTATE_BACKEND=python-legacy`
-        // for the Wave-7 → Wave-8 burn-in only. Wave 8 removes the
-        // Python bundle and this escape hatch together.
-        //
-        // When delegating we MUST also skip the supervisor's own
-        // in-process Rust hotkey install -- otherwise the parent and
-        // the child would both register the same OS chord and race for
-        // every press / release. The audio bridge is N/A too (the
-        // subprocess opens its own cpal stream via the audio pump in
-        // `rust_session_audio.rs`).
-        //
-        // With the escape hatch set OR with any required feature
-        // missing (typical on stock CI builds), this path is a no-op
-        // and the supervisor stays on Python. `worker-rust` refuses
-        // to run on incomplete-feature builds anyway.
-        // Wave 5 PR 7 (#348): the delegate gate is env-only. The Rust
-        // worker's `unsupported_worker_rust_settings_reason()` is folded
-        // into `should_delegate_to_worker_rust()`, which reads
-        // `VOICEPI_STT_BACKEND` directly rather than the saved config --
-        // Wave 8 deletes the Python bundle so a per-setting fallback
-        // path would just be dead code the moment #348 lands.
-        // Codex #441 P2 review round 3: the gate must see the same
-        // `VOICEPI_STT_BACKEND` value the child worker will see, which is
-        // the merge of `effective_command.env` overrides (materialising
-        // AppSettings) on top of the parent process env. Passing the vec
-        // in explicitly avoids the false-negative where an upgraded
-        // `stt_backend = "parakeet"` config slips past a std::env-only
-        // check and the child then falls through to the stub sink.
-        // Wave 8 Part 2: Python is gone in v1.20. Delegation is the only
-        // valid path -- when the gate declines we cannot fall back to
-        // anything, so surface the reason and refuse to spawn.
-        // Codex #453 P2: a stale `VOICEPI_DICTATE_BACKEND=python-legacy`
-        // no longer blocks delegation (the value has no target); log a
-        // one-time hint so upgraded users know to unset it.
-        worker_rust::warn_stale_python_legacy_if_set(&effective_command.env);
-        let delegate_requested =
-            worker_rust::should_delegate_to_worker_rust(&effective_command.env);
-        if !delegate_requested {
-            self.suspend_session_sink_on_start_failure();
-            self.state = RuntimeState::Stopped;
-            let reason =
-                worker_rust::unsupported_worker_rust_settings_reason(&effective_command.env)
-                    .unwrap_or_else(|| {
-                        "this build was compiled without the full rust-session feature set \
-                 (whisper-rs-local + rust-injection + audio-in-rust + rust-hotkeys); \
-                 rebuild with those features to enable dictation"
-                            .to_owned()
-                    });
-            let msg =
-                format!("cannot start worker: {reason}. The Python worker was removed in v1.20.");
-            let _ = self.tx.send(RuntimeEvent::Error(msg.clone()));
-            return Err(anyhow!(msg));
+        if use_rust_audio {
+            effective_command
+                .args
+                .push("--audio-source=rust-stdin".to_owned());
         }
-        if let Err(err) = worker_rust::swap_command_to_worker_rust(&mut effective_command) {
-            self.suspend_session_sink_on_start_failure();
-            self.state = RuntimeState::Stopped;
-            let msg = format!(
-                "worker-rust delegation failed ({err}); \
-                 the Python fallback was removed in v1.20 -- \
-                 reinstall whisper-dictate or point VOICEPI_APP_ROOT at a full-feature build"
-            );
-            let _ = self.tx.send(RuntimeEvent::Error(msg.clone()));
-            return Err(anyhow!(msg));
-        }
-        // Wave 8 Part 2: delegation is the ONLY path now (Python is gone
-        // in v1.20). The worker-rust subprocess owns the entire audio
-        // pipeline in-process via its own cpal stream, so the parent
-        // supervisor MUST NOT open its own Rust audio bridge -- that
-        // would race the subprocess for the microphone. Force
-        // `use_rust_audio` off here so the downstream `Stdio::piped()`
-        // stdin is used only for the supervisor-side clean-shutdown
-        // signal (close pipe → child sees EOF and exits), NOT for the
-        // Rust audio-frame writer.
-        let delegate_to_worker_rust = true;
-        let use_rust_audio = false;
-        let _ = delegate_requested;
 
         // P2 #346 finding 1 / P1 #373: wire the Rust hotkey installer on the
         // first start() call when the user has opted in via
@@ -709,13 +492,67 @@ impl RuntimeSupervisor {
         // loop in-process so we MUST park the Python listener -- otherwise
         // both backends react to the same chord and produce duplicate /
         // conflicting state transitions. Codex P2 #416 runtime.rs:1427.
-        // Wave 8 Part 2: the worker-rust subprocess owns its own rdev
-        // OS hotkey listener + in-process DictateSession, so the
-        // supervisor MUST NOT install a second listener (it would race
-        // the subprocess for the same OS chord). The pre-v1.20
-        // logger/session-sink installer paths (and the restart-path
-        // resume) are gone with the Python worker.
-        let _ = &delegate_to_worker_rust;
+        if self.hotkey_handle.is_none() {
+            if let Some(handle) = install_rust_hotkey_from_command(
+                &effective_command,
+                self.tx.clone(),
+                self.repaint_notifier.clone(),
+            ) {
+                if rust_session_sink::dictate_backend_rust_session_requested() {
+                    disable_python_hotkey(&mut effective_command);
+                }
+                self.hotkey_handle = Some(handle);
+            }
+        } else if let Some(handle) = self.hotkey_handle.as_ref() {
+            // Restart path: the handle survived from a prior start(); the
+            // env-var-derived backend choice is fixed per-process so we
+            // re-evaluate whether to park Python every time.
+            //
+            // Codex P2 #416 (round 2) runtime.rs:511 -- validate the
+            // (possibly updated) key binding against the Rust backend's
+            // rdev-supported list BEFORE parking Python. Without this, a
+            // Settings change to a key that the Python evdev backend
+            // accepts but rdev does not (eg `super_l`) would leave Python
+            // disabled and the Rust hotkey unable to fire -- PTT goes
+            // silent for the whole session.
+            //
+            // `resume()` itself only calls `manager.register()` and does
+            // not re-run install-time validation, so this gate is the
+            // only place restart-time key changes are sanity-checked.
+            //
+            // Fix 3 (#373): Resume the manager with the (possibly new) PTT
+            // key names so a changed binding takes effect without
+            // restarting the whole process. The coordinator mode
+            // (hold-to-talk vs. toggle) is fixed at install time; mode
+            // changes require an app restart.
+            //
+            // The branch decision is extracted to `restart_hotkey_decision`
+            // so the three-way gate (no-key / unsupported / resume) is
+            // unit-testable without populating a live HotkeyHandle (Codex
+            // P2 PR #421 runtime.rs:530).
+            match restart_hotkey_decision(
+                &effective_command,
+                rust_session_sink::dictate_backend_rust_session_requested(),
+            ) {
+                RestartHotkeyDecision::SkipNoKey => {}
+                RestartHotkeyDecision::SkipUnsupported { key_names } => {
+                    eprintln!(
+                        "[hotkey] resume skipped: PTT keys {key_names:?} are not \
+                         supported by the Rust backend; keeping Python listener \
+                         engaged and skipping resume"
+                    );
+                }
+                RestartHotkeyDecision::Resume {
+                    key_names,
+                    park_python,
+                } => {
+                    if park_python {
+                        disable_python_hotkey(&mut effective_command);
+                    }
+                    handle.resume(key_names);
+                }
+            }
+        }
 
         let display = effective_command.display();
         let mut process = Command::new(&effective_command.program);
@@ -731,35 +568,14 @@ impl RuntimeSupervisor {
             )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if use_rust_audio || delegate_to_worker_rust {
-            // Two callers need a piped stdin:
-            //
-            // 1. `use_rust_audio`: the audio bridge writes JSON frame
-            //    events to the worker's stdin.
-            // 2. `delegate_to_worker_rust` (PR #441 review round 2,
-            //    Codex P1 finding 3): `worker-rust` unconditionally
-            //    reads stdin in its command loop. On a Windows GUI
-            //    launch the parent has no console stdin, so
-            //    inheriting would leave the child with an invalid
-            //    handle -- the read errors immediately and the
-            //    worker exits before rdev can drive PTT. Piping
-            //    (without ever writing) parks the worker's main
-            //    thread on a blocked `read()`; closing the pipe at
-            //    supervisor shutdown yields EOF and the worker
-            //    exits cleanly.
-            //
-            // Piping unused stdin can confuse some libraries that
-            // probe `isatty()` on launch; neither the Rust audio
-            // bridge nor `worker-rust` does that, so this is safe on
-            // both branches.
+        if use_rust_audio {
+            // Only the Rust path needs to write to the worker's stdin
+            // (JSON frame events). Inherit otherwise — the Python path
+            // doesn't read stdin and a piped+unused stdin can confuse
+            // some libraries that probe `isatty()` on launch.
             process.stdin(Stdio::piped());
         }
-        // Wave 8 Part 2: `configure_piped_python_stdio` used to set
-        // `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8` on the spawned Python
-        // worker so `ensure_ascii=False` JSONL round-tripped cleanly through
-        // non-UTF-8 Windows consoles. The child is now the Rust worker-rust
-        // subprocess (same binary as the parent) which writes UTF-8 stdio
-        // directly, so those env vars are moot and have been dropped.
+        configure_piped_python_stdio(&mut process);
         configure_background_process(&mut process);
         let mut child = match process.spawn() {
             Ok(c) => c,
@@ -821,20 +637,12 @@ impl RuntimeSupervisor {
         #[cfg(not(feature = "audio-in-rust"))]
         let ready_signal: Option<Sender<()>> = None;
 
-        // Codex P2 (runtime.rs:2074, PR #440) — capture the
-        // observer generation for THIS worker instance. Stale readers
-        // from a previous child will hold their old generation, so
-        // their late-arriving worker events no-op instead of poisoning
-        // the fresh controller. stdout doesn't emit worker events so
-        // it doesn't need a generation.
-        let mute_generation = crate::output_mute::session::current_generation();
         if let Some(stdout) = child.stdout.take() {
             stream_lines(
                 stdout,
                 self.tx.clone(),
                 RuntimeStream::Stdout,
                 self.repaint_notifier.clone(),
-                None,
                 None,
             );
         }
@@ -845,7 +653,6 @@ impl RuntimeSupervisor {
                 RuntimeStream::Stderr,
                 self.repaint_notifier.clone(),
                 ready_signal,
-                Some(mute_generation),
             );
         }
 
@@ -1041,19 +848,17 @@ impl RuntimeSupervisor {
             }
         }
 
-        // Wave 8 Part 2: the parent supervisor no longer installs a
-        // Rust hotkey listener -- the worker-rust subprocess owns the
-        // rdev listener and the DictateSession in-process, and its
-        // own drop path suspends the listener when the subprocess
-        // exits. The previous `self.hotkey_handle.suspend()` guard
-        // (Fix 4 #373) is therefore a no-op.
-
-        // Codex P1 (runtime.rs:458, PR #440): every teardown path must
-        // clear the process-global auto-mute controller. `install()`
-        // only runs on `Runtime::start`, so without this the controller
-        // would remain parked in its `Recording` phase after a stop and
-        // leave the user's speakers muted until the next start.
-        clear_output_mute_on_teardown();
+        // Fix 4 (#373): suspend Rust hotkey tracking while the worker is
+        // down so PTT presses during a stopped period don't leave the
+        // coordinator in Recording state at the next start(). The manager
+        // unregisters its binding so no tracker outputs flow; Cancel resets
+        // Recording → Idle. A coordinator stuck in Processing (transcription
+        // was in-flight at stop) remains there until the next
+        // ProcessingFinished — that is acceptable because Python handles
+        // actual recording so correctness is unaffected.
+        if let Some(handle) = self.hotkey_handle.as_ref() {
+            handle.suspend();
+        }
 
         let Some(mut child) = self.child.take() else {
             self.state = RuntimeState::Stopped;
@@ -1100,62 +905,48 @@ impl RuntimeSupervisor {
         self.bridge_terminal.store(true, Ordering::SeqCst);
     }
 
-    /// No-op preserved for call-site compatibility.
+    /// When the rust-session sink is active, suspend the hotkey
+    /// handle on an unexpected child exit so PTT presses do not keep
+    /// driving the in-process [`crate::dictate::DictateSession`] while
+    /// the UI considers the runtime stopped. Codex P2 #416
+    /// runtime.rs:1484.
     ///
-    /// Wave 8 Part 2: the parent supervisor no longer holds a
-    /// `HotkeyHandle`; the worker-rust subprocess owns the rdev
-    /// listener and the `DictateSession` in-process. On child exit
-    /// the subprocess's own drop path suspends its listener. Kept as
-    /// a stub so the existing call sites (`stop`, `poll`,
-    /// `bridge_terminal` teardown) don't need to be edited on every
-    /// review round.
-    fn suspend_session_sink_on_exit(&self) {}
-
-    /// Same story as [`Self::suspend_session_sink_on_exit`] for the
-    /// `start()` error-return paths.
-    fn suspend_session_sink_on_start_failure(&self) {}
-
-    /// Drain pending [`external_toggle::ExternalCommand`]s from the
-    /// process-global channel (filled by the Unix signal handler installed
-    /// in [`external_toggle::install_signal_handlers`] and by the CLI
-    /// forwarder when it sends SIGUSR1/SIGUSR2). Each command is routed to
-    /// the active hotkey coordinator so the same `Stage::Idle` /
-    /// `Stage::Recording` / `Stage::Processing` guards apply uniformly,
-    /// regardless of whether the trigger came from a keyboard chord or a
-    /// compositor keybinding.
+    /// No-op for the logger-sink path: the logger sink is harmless
+    /// (just stderr lines), and Python -- which owned the recording
+    /// lifecycle in that path -- already exited together with the
+    /// child. Leaving the Rust manager registered there preserves the
+    /// existing PR 1-3 behaviour exactly.
     ///
-    /// When the Rust hotkey coordinator is not installed (e.g. the user is
-    /// on the Python backend, the default in most builds), each command
-    /// surfaces as a stderr event so the user sees the trigger arrived and
-    /// understands why nothing happened. Issue #326.
-    pub fn dispatch_external_commands(&self) {
-        for cmd in external_toggle::take_pending_commands() {
-            self.dispatch_external_command(cmd);
+    /// The next `start()` call's restart-path branch then re-registers
+    /// the binding via `handle.resume(key_names)` so PTT comes back
+    /// online with the (possibly updated) chord.
+    fn suspend_session_sink_on_exit(&self) {
+        if !rust_session_sink::dictate_backend_rust_session_requested() {
+            return;
+        }
+        if let Some(handle) = self.hotkey_handle.as_ref() {
+            handle.suspend();
         }
     }
 
-    /// Single-shot variant of [`Self::dispatch_external_commands`] —
-    /// exposed for tests that synthesise commands directly without going
-    /// through the channel.
+    /// Mirror of [`Self::suspend_session_sink_on_exit`] for the
+    /// `start()` error-return paths. Codex P2 #416 (round 2)
+    /// runtime.rs:504: the Rust hotkey handle is installed (and the
+    /// session sink registered with the coordinator) BEFORE the
+    /// fallible `process.spawn()` + audio-bridge prep steps. If those
+    /// fail and `start()` returns Err, the UI flips to Stopped but
+    /// the hotkey handle is still live -- PTT presses can still drive
+    /// `DictateSession` against a worker that never started.
     ///
-    /// Wave 8 Part 2: the coordinator now lives in the worker-rust
-    /// subprocess, so the supervisor cannot dispatch events into it
-    /// directly. Until issue #326's parent<->child IPC is wired, the
-    /// command surfaces as a runtime-event stderr line so the user can
-    /// see the trigger arrived and the follow-up is documented.
-    pub fn dispatch_external_command(&self, cmd: external_toggle::ExternalCommand) {
-        let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-            "[external-toggle] received {cmd:?}; coordinator lives in the worker-rust \
-             subprocess (issue #326 follow-up will wire a parent<->child IPC)"
-        )));
+    /// Suspend the handle on those paths so the coordinator returns
+    /// to Idle and PTT goes silent until the next successful start.
+    /// Same gate as the on-exit path: only the session-sink build
+    /// needs cleanup (the logger sink is inert).
+    fn suspend_session_sink_on_start_failure(&self) {
+        self.suspend_session_sink_on_exit();
     }
 
     pub fn poll(&mut self) -> Vec<RuntimeEvent> {
-        // Issue #326: drain any external triggers (SIGUSR1/SIGUSR2 or
-        // `whisper-dictate --toggle-recording`) BEFORE the regular
-        // child-status check so the resulting events land in this poll's
-        // output vec.
-        self.dispatch_external_commands();
         // Iteration-2 review finding #3: act on a terminal bridge error
         // BEFORE the regular try_wait. The bridge watcher has already
         // emitted a `RuntimeEvent::Error` describing the failure; here
@@ -1181,11 +972,6 @@ impl RuntimeSupervisor {
                 // session sink driving DictateSession while the UI
                 // shows Stopped.
                 self.suspend_session_sink_on_exit();
-                // Codex P1 (runtime.rs:458, PR #440): clear the
-                // process-global auto-mute controller so the user's
-                // speakers are restored even on a bridge-terminal
-                // teardown.
-                clear_output_mute_on_teardown();
                 let _ = self.tx.send(RuntimeEvent::Exited { code: exit_code });
                 if let Some(notifier) = self.repaint_notifier.as_ref() {
                     notifier();
@@ -1198,9 +984,6 @@ impl RuntimeSupervisor {
                 // already gone, the hotkey handle could still be
                 // live.
                 self.suspend_session_sink_on_exit();
-                // Same Codex P1 (PR #440) — mute controller could
-                // still be installed even if the child is gone.
-                clear_output_mute_on_teardown();
             }
             return self.rx.try_iter().collect();
         }
@@ -1224,11 +1007,6 @@ impl RuntimeSupervisor {
                         }
                     }
                     self.suspend_session_sink_on_exit();
-                    // Codex P1 (runtime.rs:458, PR #440): unexpected-exit
-                    // path also needs to drop the mute controller so a
-                    // worker crash while muted leaves the speakers
-                    // restored.
-                    clear_output_mute_on_teardown();
                     let _ = self.tx.send(RuntimeEvent::Exited {
                         code: status.code(),
                     });
@@ -1247,8 +1025,6 @@ impl RuntimeSupervisor {
                         }
                     }
                     self.suspend_session_sink_on_exit();
-                    // Same Codex P1 (PR #440) — try_wait error path.
-                    clear_output_mute_on_teardown();
                     let _ = self.tx.send(RuntimeEvent::Error(err.to_string()));
                 }
             }
@@ -1280,55 +1056,254 @@ impl WorkerCommand {
     }
 }
 
-// Wave 8 Part 2: the historic `Platform`, `PlannedCommand`, `InstallPlan`,
-// `pip_install_command`, `run_install_command`, `wants_cuda_runtime`,
-// `requirements_path`, `first_existing_requirements`, `python_source_root`
-// helpers were the machinery behind `whisper-dictate install`: create a
-// Python virtual environment under `~/.venv-whisper-dictate`, upgrade
-// pip, and run `pip install -r requirements/{cpu,gpu}.txt` inside it.
-// v1.20 dropped the entire Python bundle in favour of the in-process
-// Rust worker, so the whole install pipeline (venv creation, pip
-// invocation, requirements resolution, per-platform venv layout,
-// Python-source-root marker) is dead code. The `install` subcommand
-// itself is now a graceful no-op (see [`install`] above).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Platform {
+    Windows,
+    Unix,
+}
 
-/// Build the base [`WorkerCommand`] the supervisor uses to spawn the
-/// in-process Rust dictation worker. `RuntimeSupervisor::start`
-/// unconditionally swaps `program` + `args` to
-/// `<current-exe> worker-rust` via
-/// [`worker_rust::swap_command_to_worker_rust`], so the seed values
-/// here are effectively placeholders -- the `env` vector is the only
-/// field the swap preserves, and that is what materialises the
-/// AppSettings-derived overrides (`config::worker_env_overrides()`)
-/// onto the child process.
-///
-/// Wave 8 Part 2 rewrite: the previous version built a Python `-m
-/// whisper_dictate.runtime` invocation with `PYTHONPATH`,
-/// `VOICEPI_RUST_INJECTOR`, and a pynput-hotkey-name normaliser. All
-/// three exist only because the Python worker consumed them; v1.20
-/// dropped the Python bundle, and the Rust worker reads its
-/// configuration directly from `VOICEPI_*` env vars (which
-/// `worker_env_overrides` already sets).
+impl Platform {
+    fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub working_dir: PathBuf,
+}
+
+impl PlannedCommand {
+    fn display(&self) -> String {
+        let mut parts = vec![self.program.display().to_string()];
+        parts.extend(self.args.iter().cloned());
+        parts.join(" ")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstallPlan {
+    app_root: PathBuf,
+    requirements: PathBuf,
+    venv_python: PathBuf,
+    create_venv: Option<PlannedCommand>,
+    install_commands: Vec<PlannedCommand>,
+}
+
+impl InstallPlan {
+    fn for_current_environment(app_root: PathBuf) -> Result<Self> {
+        let requirements = requirements_path(&app_root)?;
+        let platform = Platform::current();
+        let bootstrap_python = env::var_os(BOOTSTRAP_PYTHON_ENV)
+            .or_else(|| env::var_os(PYTHON_ENV))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(default_python_name()));
+
+        if let Some(override_python) = env::var_os(PYTHON_ENV) {
+            let mut plan =
+                Self::from_parts(app_root, requirements, PathBuf::from(override_python), None);
+            plan.add_optional_requirements();
+            return Ok(plan);
+        }
+
+        let home = home_dir().ok_or_else(|| anyhow!("HOME/USERPROFILE is not set"))?;
+        let venv_dir = default_venv_dir(&home, platform);
+        let venv_python = venv_python_path(&venv_dir, platform);
+        let create_venv = (!venv_python.exists()).then(|| PlannedCommand {
+            program: bootstrap_python,
+            args: vec![
+                "-m".to_owned(),
+                "venv".to_owned(),
+                venv_dir.display().to_string(),
+            ],
+            working_dir: app_root.clone(),
+        });
+
+        let mut plan = Self::from_parts(app_root, requirements, venv_python, create_venv);
+        plan.add_optional_requirements();
+        Ok(plan)
+    }
+
+    fn from_parts(
+        app_root: PathBuf,
+        requirements: PathBuf,
+        venv_python: PathBuf,
+        create_venv: Option<PlannedCommand>,
+    ) -> Self {
+        let install_commands = vec![
+            PlannedCommand {
+                program: venv_python.clone(),
+                args: vec![
+                    "-m".to_owned(),
+                    "pip".to_owned(),
+                    "install".to_owned(),
+                    "--upgrade".to_owned(),
+                    "pip".to_owned(),
+                ],
+                working_dir: app_root.clone(),
+            },
+            pip_install_command(&venv_python, &requirements, &app_root),
+        ];
+
+        Self {
+            app_root,
+            requirements,
+            venv_python,
+            create_venv,
+            install_commands,
+        }
+    }
+
+    fn add_optional_requirements(&mut self) {
+        if wants_cuda_runtime() {
+            if let Some(requirements) = first_existing_requirements(
+                &self.app_root,
+                &["requirements/gpu.txt", "requirements-gpu.txt"],
+            ) {
+                self.install_commands.push(pip_install_command(
+                    &self.venv_python,
+                    &requirements,
+                    &self.app_root,
+                ));
+            }
+        }
+        // Wave 8 of #348 removed the optional Parakeet/NeMo install
+        // step here together with the backend itself; the only optional
+        // requirements file the installer still appends is the CUDA
+        // bundle gated above on `wants_cuda_runtime()`.
+    }
+
+    fn run(&self) -> Result<()> {
+        println!(
+            "Installing whisper-dictate runtime with {}",
+            self.venv_python.display()
+        );
+        println!("Requirements: {}", self.requirements.display());
+        if let Some(command) = &self.create_venv {
+            run_install_command(command)?;
+        }
+        for command in &self.install_commands {
+            run_install_command(command)?;
+        }
+        println!("Install complete. Run `whisper-dictate doctor` to verify the runtime.");
+        Ok(())
+    }
+}
+
+fn pip_install_command(venv_python: &Path, requirements: &Path, app_root: &Path) -> PlannedCommand {
+    PlannedCommand {
+        program: venv_python.to_path_buf(),
+        args: vec![
+            "-m".to_owned(),
+            "pip".to_owned(),
+            "install".to_owned(),
+            "-r".to_owned(),
+            requirements.display().to_string(),
+        ],
+        working_dir: app_root.to_path_buf(),
+    }
+}
+
+fn run_install_command(command: &PlannedCommand) -> Result<()> {
+    println!("> {}", command.display());
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .current_dir(&command.working_dir);
+    configure_background_process(&mut process);
+    let status = process.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("install command failed with status {status}"))
+    }
+}
+
+fn wants_cuda_runtime() -> bool {
+    if env::var("VOICEPI_DEVICE").is_ok_and(|value| value.eq_ignore_ascii_case("cuda")) {
+        return true;
+    }
+    config::load_settings()
+        .map(|settings| settings.device.eq_ignore_ascii_case("cuda"))
+        .unwrap_or(false)
+}
+
+fn requirements_path(app_root: &Path) -> Result<PathBuf> {
+    if let Some(path) = first_existing_requirements(
+        app_root,
+        &[
+            "requirements/cpu.txt",
+            "requirements/gpu.txt",
+            "requirements-cpu.txt",
+            "requirements-gpu.txt",
+            "requirements.txt",
+        ],
+    ) {
+        return Ok(path);
+    }
+    Err(anyhow!(
+        "no requirements file found in {}",
+        app_root.display()
+    ))
+}
+
+fn first_existing_requirements(app_root: &Path, candidates: &[&str]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            candidate
+                .split('/')
+                .fold(app_root.to_path_buf(), |path, part| path.join(part))
+        })
+        .find(|path| path.exists())
+}
+
+fn python_source_root(app_root: &Path) -> PathBuf {
+    app_root.join("src").join("python")
+}
+
 pub fn worker_command(app_root: impl AsRef<Path>) -> WorkerCommand {
     worker_command_with_args(app_root, Vec::<String>::new())
 }
 
-/// Same as [`worker_command`] but allows the caller to append
-/// passthrough args to the seed command. The passthrough args are
-/// dropped by the delegation swap in [`RuntimeSupervisor::start`], so
-/// this function is really just a legacy shim that keeps the
-/// UI/CLI call sites compiling until they're refactored to build a
-/// direct `worker-rust` command themselves.
 pub fn worker_command_with_args(
     app_root: impl AsRef<Path>,
     passthrough_args: impl IntoIterator<Item = String>,
 ) -> WorkerCommand {
     let app_root = app_root.as_ref().to_path_buf();
-    let program = env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate"));
-    let args: Vec<String> = passthrough_args.into_iter().collect();
-    let env: Vec<(String, String)> = config::worker_env_overrides();
+    let mut args = vec![
+        "-m".to_owned(),
+        "whisper_dictate.runtime".to_owned(),
+        "--app-root".to_owned(),
+        app_root.display().to_string(),
+    ];
+    args.extend(passthrough_args);
+    let mut env = vec![(
+        PYTHONPATH_ENV.to_owned(),
+        python_source_root(&app_root).display().to_string(),
+    )];
+    env.extend(config::worker_env_overrides());
+    normalise_hotkey_aliases_for_python(&mut env);
+    if let Ok(exe) = env::current_exe() {
+        env.push((RUST_INJECTOR_ENV.to_owned(), exe.display().to_string()));
+    }
+    // NB: the Rust-hotkey "park Python listener" flag (VOICEPI_PYTHON_HOTKEY=0)
+    // used to be added here automatically based on env-var + feature gates,
+    // but that's unsound — the gates only say what the user *requested*,
+    // not whether the Rust listener actually came up. If we disabled
+    // Python before confirming Rust was wired, a startup failure (no X
+    // display, missing macOS accessibility permission, ...) left BOTH
+    // backends inert and PTT permanently broken (Codex P1 on PR #344).
+    // The supervisor now calls [`disable_python_hotkey`] explicitly only
+    // AFTER `maybe_install_rust_hotkey` returns a live handle.
     WorkerCommand {
-        program,
+        program: python_program(),
         args,
         working_dir: app_root,
         env,
@@ -1349,6 +1324,45 @@ pub(crate) fn parse_toggle_value(v: &str) -> bool {
     )
 }
 
+/// Normalise rdev-specific PTT-key aliases in the worker command's
+/// `VOICEPI_KEY` to their canonical pynput-compatible names so the Python
+/// listener doesn't terminate the worker at startup when it tries to
+/// resolve them against `pynput.keyboard.Key.<name>`.
+///
+/// Today this maps `right_alt` and `ralt` → `alt_gr` (the canonical
+/// right-Alt name pynput knows). The Rust hotkey backend accepts both
+/// aliases for user-facing convenience (P2 #346 finding 4); without this
+/// post-processing a user that configured `right_alt` would crash the
+/// Python worker even when the Rust listener took over the hotkey
+/// lifecycle, because pynput resolves the keyname at startup BEFORE the
+/// listener registers (so `VOICEPI_PYTHON_HOTKEY=0` does not save us).
+///
+/// Applied to every `+`-separated segment so chord bindings like
+/// `ctrl_r+right_alt` work too. P3 #383.
+pub(crate) fn normalise_hotkey_aliases_for_python(env: &mut [(String, String)]) {
+    for (key, value) in env.iter_mut() {
+        if key == "VOICEPI_KEY" {
+            *value = normalise_hotkey_chord_for_python(value);
+        }
+    }
+}
+
+/// Pure helper for [`normalise_hotkey_aliases_for_python`] — split out so
+/// the alias transformation can be unit-tested without constructing a
+/// full WorkerCommand env vector. Preserves the input's `+` separators
+/// and per-segment formatting; only the matched aliases are rewritten.
+pub(crate) fn normalise_hotkey_chord_for_python(raw: &str) -> String {
+    raw.split('+')
+        .map(
+            |segment| match segment.trim().to_ascii_lowercase().as_str() {
+                "right_alt" | "ralt" => "alt_gr".to_owned(),
+                _ => segment.to_owned(),
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// Extract PTT key names from a [`WorkerCommand`]'s environment: split
 /// `VOICEPI_KEY` on `+`, trim whitespace, drop empty segments. Returns an
 /// empty `Vec` when the env var is absent or blank — callers use this as a
@@ -1367,23 +1381,311 @@ pub(crate) fn extract_hotkey_key_names(command: &WorkerCommand) -> Vec<String> {
         .collect()
 }
 
-// Wave 8 Part 2: the parent supervisor used to install a Rust hotkey
-// listener directly whenever `VOICEPI_HOTKEY_BACKEND=rust` was set --
-// the coordinator either fired stderr `[hotkey]` log lines
-// (logger sink) or drove an in-process `DictateSession` (session
-// sink). Both paths existed to work around the Python worker owning
-// dictation; v1.20 dropped the Python worker and made worker-rust
-// delegation mandatory, so the whole hotkey install pipeline
-// (`RestartHotkeyDecision`, `restart_hotkey_decision`,
-// `rust_hotkey_backend_requested/active`, `maybe_install_rust_hotkey`,
-// `install_rust_hotkey_from_command`, `install_logger_sink_hotkey`,
-// `install_session_sink_hotkey`) is dead in the parent -- the
-// worker-rust subprocess owns rdev + the DictateSession in-process.
-//
-// The dispatch surface that external-toggle / signal-hook still
-// consumes is preserved in [`RuntimeSupervisor::dispatch_external_command`];
-// it degrades to a stderr line explaining the coordinator lives in
-// the worker-rust child now (issue #326 follow-up will wire an IPC).
+/// Set the `VOICEPI_PYTHON_HOTKEY=0` env var on `command` so the spawned
+/// Python worker's `KeyBackendMixin.run` parks itself instead of installing
+/// pynput/evdev. The supervisor MUST only call this after it has
+/// successfully installed the Rust hotkey subsystem
+/// ([`maybe_install_rust_hotkey`] returned `Ok`) — otherwise neither
+/// backend will be listening and PTT will be broken for the entire session.
+///
+/// Idempotent: if the flag is already present in `command.env`, the value
+/// is replaced.
+///
+/// **Known limitation (PR #344 P2 #7).** The Rust backend only owns the
+/// PTT chord; the user-configurable multi-press quit key
+/// (`VOICEPI_QUIT_KEY` / `VOICEPI_QUIT_COUNT`, default 3× Esc) lives in
+/// the Python listener that this flag parks. When the Rust backend is
+/// active, users can still quit via Ctrl+C from the terminal and via the
+/// UI tray menu, but the configured multi-press hotkey is inactive. A
+/// follow-up will carry the quit binding into the Rust path; the warning
+/// emitted at install time documents the current state.
+pub fn disable_python_hotkey(command: &mut WorkerCommand) {
+    const KEY: &str = "VOICEPI_PYTHON_HOTKEY";
+    if let Some(slot) = command.env.iter_mut().find(|(k, _)| k == KEY) {
+        slot.1 = "0".to_owned();
+        return;
+    }
+    command.env.push((KEY.to_owned(), "0".to_owned()));
+}
+
+/// Outcome of the restart-path key-binding decision (see
+/// [`restart_hotkey_decision`]). Mapped 1:1 onto the supervisor's
+/// restart branch in [`RuntimeSupervisor::start`] (`else if let
+/// Some(handle) = self.hotkey_handle.as_ref()`):
+///
+/// * [`SkipNoKey`](Self::SkipNoKey) — `VOICEPI_KEY` is unset or blank;
+///   nothing to resume. The previous successful install handled the
+///   Python-park gate; this branch must leave it alone.
+/// * [`SkipUnsupported`](Self::SkipUnsupported) — the configured key
+///   is not in the Rust (rdev) supported list. The supervisor MUST
+///   NOT park Python on this branch — otherwise PTT goes silent for
+///   the whole session, the regression Codex P2 PR #421
+///   runtime.rs:530 guards against.
+/// * [`Resume`](Self::Resume) — the key is supported; the supervisor
+///   calls `handle.resume(key_names)`. `park_python` is true only
+///   when [`rust_session_sink::dictate_backend_rust_session_requested`]
+///   is true (the in-process session sink owns the lifecycle).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RestartHotkeyDecision {
+    SkipNoKey,
+    SkipUnsupported {
+        key_names: Vec<String>,
+    },
+    Resume {
+        key_names: Vec<String>,
+        park_python: bool,
+    },
+}
+
+/// Pure decision helper for the supervisor's restart-path branch.
+/// Extracted so the gate is unit-testable WITHOUT populating a live
+/// [`crate::hotkey::HotkeyHandle`] (which requires the `rust-hotkeys`
+/// feature plus a working rdev install — neither available in
+/// headless CI).
+///
+/// Codex P2 PR #421 runtime.rs:530 — the matching unit test in
+/// `hotkey_supervisor_tests` asserts the three branches of this
+/// helper so a future edit that flipped the gate (e.g. parking
+/// Python BEFORE validating) would have to fail a test before it
+/// could land.
+pub(crate) fn restart_hotkey_decision(
+    command: &WorkerCommand,
+    rust_session_requested: bool,
+) -> RestartHotkeyDecision {
+    let key_names = extract_hotkey_key_names(command);
+    if key_names.is_empty() {
+        return RestartHotkeyDecision::SkipNoKey;
+    }
+    if crate::hotkey::validate_key_names(&key_names).is_err() {
+        return RestartHotkeyDecision::SkipUnsupported { key_names };
+    }
+    RestartHotkeyDecision::Resume {
+        key_names,
+        park_python: rust_session_requested,
+    }
+}
+
+/// Whether the user requested the Rust-side hotkey backend via
+/// `VOICEPI_HOTKEY_BACKEND=rust`. Pure helper so the gate is unit-testable.
+/// Delegates to [`crate::hotkey::rust_hotkey_backend_requested`].
+pub fn rust_hotkey_backend_requested() -> bool {
+    crate::hotkey::rust_hotkey_backend_requested()
+}
+
+/// True when the user requested the Rust hotkey backend AND the binary was
+/// built with the `rust-hotkeys` feature. The supervisor uses this to decide
+/// whether to install the Rust hotkey subsystem and silence the Python
+/// listener; both must be true, otherwise we stay on pynput (and log a
+/// one-line warning if only the env var is set — handled at install time).
+pub fn rust_hotkey_backend_active() -> bool {
+    crate::hotkey::rust_hotkey_backend_requested() && crate::hotkey::rust_hotkey_backend_available()
+}
+
+/// Install the Rust hotkey subsystem at supervisor startup, if requested.
+///
+/// Returns `Some(handle)` ONLY when the env var was set, the feature is
+/// compiled in, AND every layer (target validation, listener startup,
+/// register) succeeded. Returns `None` (and logs a one-line warning when
+/// there's something to warn about) in every other case.
+///
+/// **Python is NOT disabled** even on a successful install. The coordinator
+/// today only logs coordinator actions ([`crate::hotkey::coordinator::CoordinatorAction`]
+/// as `[hotkey]` lines); no IPC yet drives the worker's actual recording
+/// lifecycle. Disabling Python before that IPC is wired would leave PTT
+/// completely silent. Follow-up work will wire the IPC and then add the
+/// disable step. Until then both backends run side-by-side (PR #373 Fix 1).
+///
+/// `action_sink` is invoked on the coordinator thread for every
+/// [`crate::hotkey::coordinator::CoordinatorAction`] the state machine
+/// emits; the caller is responsible for translating those into worker
+/// start / stop commands (today: logging only — see above).
+///
+/// The caller MUST send
+/// [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`]
+/// (with the matching recording id) via
+/// [`crate::hotkey::HotkeyHandle::processing_finished`] when the worker
+/// finishes transcription — otherwise the coordinator stays parked in
+/// [`crate::hotkey::coordinator::Stage::Processing`] and ignores the next
+/// press.
+pub fn maybe_install_rust_hotkey<F>(
+    key_names: Vec<String>,
+    mode: crate::hotkey::coordinator::Mode,
+    action_sink: F,
+) -> Option<crate::hotkey::HotkeyHandle>
+where
+    F: FnMut(crate::hotkey::coordinator::CoordinatorAction) + Send + 'static,
+{
+    if !crate::hotkey::rust_hotkey_backend_requested() {
+        return None;
+    }
+    if !crate::hotkey::rust_hotkey_backend_available() {
+        eprintln!(
+            "[hotkey] VOICEPI_HOTKEY_BACKEND=rust was set but this binary was \
+             built without --features rust-hotkeys; falling back to the Python \
+             listener (pynput). Rebuild with the feature to use the Rust backend."
+        );
+        return None;
+    }
+    let cfg = crate::hotkey::HotkeyConfig { key_names, mode };
+    match crate::hotkey::install_hotkey(cfg, action_sink) {
+        Ok(handle) => {
+            // P2 #7: the Rust backend only owns the PTT chord; the
+            // configured multi-press quit key (VOICEPI_QUIT_KEY /
+            // VOICEPI_QUIT_COUNT, default 3× Esc) lives in the Python
+            // listener that the supervisor is about to park. Warn so
+            // users who rely on the hotkey quit know it's inactive.
+            eprintln!(
+                "[hotkey] Rust backend active; the configured multi-press \
+                 quit key (VOICEPI_QUIT_KEY / VOICEPI_QUIT_COUNT) is \
+                 currently only honoured by the Python listener. Quit \
+                 via Ctrl+C in the terminal or the tray menu."
+            );
+            Some(handle)
+        }
+        Err(err) => {
+            eprintln!(
+                "[hotkey] Rust hotkey backend install failed: {err}; \
+                 falling back to the Python listener (pynput)."
+            );
+            None
+        }
+    }
+}
+
+/// Extract the PTT key names and toggle mode from a [`WorkerCommand`]'s
+/// environment, then call [`maybe_install_rust_hotkey`] with one of two
+/// action sinks:
+///
+/// * **Default (production today):** a logger sink that turns each
+///   [`crate::hotkey::coordinator::CoordinatorAction`] into a
+///   `[hotkey]`-prefixed `RuntimeEvent::Stderr` line. The Python worker
+///   still owns the live recording lifecycle.
+/// * **`VOICEPI_DICTATE_BACKEND=rust-session`** (Wave 5 PR 4 of #348):
+///   a session-backed sink that drives an in-process
+///   [`crate::dictate::DictateSession`] (start / stop_and_transcribe /
+///   cancel) and signals
+///   [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`]
+///   back into the coordinator when the stop completes. Uses stub
+///   `TranscribeBackend` / `InjectBackend` impls (PR 5 swaps them for
+///   `LocalWhisper` + the real injection dispatcher). Frames stay
+///   unwired until PR 3 (#415) + PR 5 land; the env-var gate keeps
+///   production on the logger sink so PR 4 is observable but inert.
+///
+/// Returns the live handle on success so the caller can call
+/// [`disable_python_hotkey`]; returns `None` when the backend is not
+/// requested, not available, or the key config is missing / empty.
+///
+/// P2 #346 finding 1 (logger sink) + Wave 5 PR 4 (session sink).
+fn install_rust_hotkey_from_command(
+    command: &WorkerCommand,
+    tx: std::sync::mpsc::Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+) -> Option<crate::hotkey::HotkeyHandle> {
+    let key_names = extract_hotkey_key_names(command);
+    if key_names.is_empty() {
+        return None;
+    }
+    // P2 #373 finding 2: accept all truthy values (`true`, `1`, `yes`, `on`,
+    // case-insensitive) instead of only `"True"` and `"1"`.
+    let toggle = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_TOGGLE")
+        .map(|(_, v)| parse_toggle_value(v))
+        .unwrap_or(false);
+    let mode = if toggle {
+        crate::hotkey::coordinator::Mode::Toggle
+    } else {
+        crate::hotkey::coordinator::Mode::HoldToTalk
+    };
+    if rust_session_sink::dictate_backend_rust_session_requested() {
+        install_session_sink_hotkey(key_names, mode, tx, repaint_notifier)
+    } else {
+        // Logger sink does not need the notifier -- the existing
+        // stream_lines path already invokes the repaint_notifier after
+        // every event it enqueues, and the logger sink's outputs flow
+        // through the same channel without the in-process bypass that
+        // the session sink uses.
+        let _ = repaint_notifier;
+        install_logger_sink_hotkey(key_names, mode, tx)
+    }
+}
+
+/// The historical (PR 1-3) logger sink: turn every
+/// [`crate::hotkey::coordinator::CoordinatorAction`] into a stderr line
+/// on the runtime event channel. Production still uses this -- the
+/// Python worker owns the recording lifecycle until PR 6.
+fn install_logger_sink_hotkey(
+    key_names: Vec<String>,
+    mode: crate::hotkey::coordinator::Mode,
+    tx: std::sync::mpsc::Sender<RuntimeEvent>,
+) -> Option<crate::hotkey::HotkeyHandle> {
+    maybe_install_rust_hotkey(key_names, mode, move |action| {
+        use crate::hotkey::coordinator::CoordinatorAction;
+        let msg = match action {
+            CoordinatorAction::StartRecording(id) => {
+                format!("[hotkey] start_recording id={id}")
+            }
+            CoordinatorAction::StopAndTranscribe(id) => {
+                format!("[hotkey] stop_and_transcribe id={id}")
+            }
+            CoordinatorAction::CancelRecording(id) => {
+                format!("[hotkey] cancel_recording id={id}")
+            }
+        };
+        let _ = tx.send(RuntimeEvent::Stderr(msg));
+    })
+}
+
+/// Wave 5 PR 4 of #348: opt-in session-backed sink.
+///
+/// Wires the coordinator into a [`crate::dictate::DictateSession`] so
+/// PTT press/release actually drives `session.start()` /
+/// `stop_and_transcribe()` / `cancel(epoch)`. The session feeds
+/// worker events back through `tx` as
+/// [`RuntimeEvent::Worker`] just like the Python worker does, so the
+/// UI's log card / tray-state machine see the same shape.
+///
+/// After `install_hotkey` succeeds, the
+/// [`crate::hotkey::HotkeyHandle::coordinator_handle`] is poured into
+/// the shared `OnceLock` the sink captured, so the sink's
+/// `processing_finished` callback can send
+/// [`crate::hotkey::coordinator::CoordinatorEvent::ProcessingFinished`]
+/// back into the coordinator (the press latch otherwise stays parked
+/// in `Stage::Processing`). On stub builds (no `rust-hotkeys`
+/// feature) `maybe_install_rust_hotkey` returns `None` before we ever
+/// touch the slot, so the cfg-gated accessor is only invoked on
+/// builds where it exists.
+fn install_session_sink_hotkey(
+    key_names: Vec<String>,
+    mode: crate::hotkey::coordinator::Mode,
+    tx: std::sync::mpsc::Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+) -> Option<crate::hotkey::HotkeyHandle> {
+    let (sink, coord_slot) = rust_session_sink::build_production_sink(tx.clone(), repaint_notifier);
+    let handle = maybe_install_rust_hotkey(key_names, mode, sink)?;
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        // `set` returns Err iff the slot is already populated. This is
+        // the only writer; a duplicate `Some(handle)` from a future
+        // refactor would be a programming error worth logging but not
+        // panicking on -- the existing handle would still drive
+        // ProcessingFinished correctly.
+        if coord_slot.set(handle.coordinator_handle()).is_err() {
+            let _ = tx.send(RuntimeEvent::Stderr(
+                "[rust-session] coordinator handle slot already populated; \
+                 ignoring (this is a no-op but indicates a refactor regression)"
+                    .to_owned(),
+            ));
+        }
+    }
+    // Suppress `unused` warnings when `rust-hotkeys` is off: the slot
+    // would never be populated, but `build_production_sink` already
+    // returned it; explicitly discard so clippy stays quiet.
+    #[cfg(not(feature = "rust-hotkeys"))]
+    let _ = coord_slot;
+    Some(handle)
+}
 
 pub fn default_worker_command() -> WorkerCommand {
     worker_command(app_root())
@@ -1391,6 +1693,10 @@ pub fn default_worker_command() -> WorkerCommand {
 
 pub fn default_worker_command_with_args(args: Vec<String>) -> WorkerCommand {
     worker_command_with_args(app_root(), args)
+}
+
+pub fn doctor_command() -> WorkerCommand {
+    default_worker_command_with_args(vec!["--doctor".to_owned()])
 }
 
 /// Whether the user requested the Rust-side audio pipeline via
@@ -1405,9 +1711,121 @@ pub fn audio_pipeline_requested() -> bool {
 
 /// Whether the running binary can actually serve the request. The Rust
 /// pipeline is gated behind the `audio-in-rust` cargo feature so a stock
-/// build returns false even if the env var is set.
+/// build returns false even if the env var is set. The supervisor logs
+/// a one-line warning and falls back to the Python sounddevice path in
+/// that case so the user is never silently surprised.
 pub fn audio_pipeline_available() -> bool {
     cfg!(feature = "audio-in-rust")
+}
+
+/// Worker command that lists input (microphone) devices as JSON and exits
+/// without loading a model or opening audio. Drives the Speech tab's "Refresh
+/// devices" action.
+///
+/// When the supervisor's parent env has `VOICEPI_AUDIO_BACKEND=rust`, the
+/// command also exports `VOICEPI_DEVICES_BACKEND=rust` to the worker so
+/// the Python `list_input_devices` shells out to the Rust enumeration
+/// helper (`whisper-dictate devices`) instead of querying sounddevice.
+/// Without this propagation the picker would still surface non-default-host
+/// devices that the active Rust capture pipeline cannot open — a user that
+/// opted into Rust capture via the single documented env var would be left
+/// to discover the second `VOICEPI_DEVICES_BACKEND=rust` knob to keep the
+/// picker honest (P3 #376, late Codex finding on PR #369).
+///
+/// On a binary built WITHOUT `audio-in-rust` the Rust `devices` subcommand
+/// prints a structured error and exits non-zero, so the Python shell-out
+/// falls back to sounddevice transparently — the propagation is therefore
+/// safe to apply unconditionally and we do not gate it on the feature here.
+pub fn audio_devices_command() -> WorkerCommand {
+    let mut command = default_worker_command_with_args(vec!["--list-audio-devices".to_owned()]);
+    if audio_pipeline_requested() {
+        propagate_rust_devices_backend(&mut command);
+    }
+    command
+}
+
+/// Append `VOICEPI_DEVICES_BACKEND=rust` to `command.env` when neither
+/// `command.env` nor the process env already mentions the variable. Split
+/// out so the precedence + idempotency contract is unit-testable and so
+/// any future worker command that needs to honour Rust capture's
+/// device-enumeration limit can share the helper.
+///
+/// Precedence (highest first):
+/// 1. **`command.env` already has the key** — caller pre-populated it
+///    (e.g. test setup, a derived-from-config override added upstream);
+///    we leave it alone and add nothing.
+/// 2. **Process env has `VOICEPI_DEVICES_BACKEND` set** — the user
+///    deliberately exported a value (typically `=python` to force the
+///    sounddevice path for a debug session even while Rust capture is
+///    active). The spawned worker inherits the process env, so adding
+///    `=rust` to `command.env` would silently override that intent.
+///    Skip the propagation so the user's explicit choice wins.
+/// 3. **Neither set** — add `VOICEPI_DEVICES_BACKEND=rust` so the Python
+///    picker shells out to the Rust enumeration.
+///
+/// We deliberately do not error on a `NotUnicode` process-env value: if
+/// the user set the variable to bytes we can't decode, that's a problem
+/// for the Python side to surface; from the propagator's point of view
+/// the variable IS set so we skip, which preserves whatever bytes the
+/// inherited env carries.
+fn propagate_rust_devices_backend(command: &mut WorkerCommand) {
+    if command
+        .env
+        .iter()
+        .any(|(key, _)| key == "VOICEPI_DEVICES_BACKEND")
+    {
+        return;
+    }
+    if env::var_os("VOICEPI_DEVICES_BACKEND").is_some() {
+        return;
+    }
+    command
+        .env
+        .push(("VOICEPI_DEVICES_BACKEND".to_owned(), "rust".to_owned()));
+}
+
+/// Worker command that lists visible top-level windows as JSON and exits.
+/// Drives the Profiles tab's "List open windows" action.
+pub fn windows_command() -> WorkerCommand {
+    default_worker_command_with_args(vec!["--list-windows".to_owned()])
+}
+
+/// Worker command that dry-run opens the named microphone (resolve + try the
+/// same WASAPI/DirectSound/MME open matrix as capture, recording NO audio),
+/// prints a single JSON usability result and exits without loading a model.
+/// Drives the Speech tab's microphone "Test" action. An empty `name` tests the
+/// system default input.
+pub fn test_audio_device_command(name: &str) -> WorkerCommand {
+    default_worker_command_with_args(vec!["--test-audio-device".to_owned(), name.to_owned()])
+}
+
+/// Worker command that runs the golden benchmark corpus
+/// (`benchmark/corpus.json`) through the configured backend and prints per-item
+/// JSONL plus a final `[benchmark]` summary line, then exits. Drives the System
+/// tab's "Run benchmark" action. Slow (loads the model + runs the corpus), so
+/// the UI runs it as a background task. Inherits the same `--app-root` +
+/// effective-config env as every other worker command, so it uses the same
+/// model/device/backend settings the dictation run would.
+pub fn benchmark_command() -> WorkerCommand {
+    default_worker_command_with_args(vec!["--run-benchmark".to_owned()])
+}
+
+/// Worker command that records reference audio for the golden-corpus item `id`
+/// from the configured microphone (reusing the same negotiated capture path as
+/// dictation) and saves it to `<appdata>/benchmark/audio/<id>.wav`, printing
+/// start/progress/done JSON events. Drives the System tab's "Record" action.
+/// Inherits the same `--app-root` (corpus resolution) + effective-config env
+/// (so the configured microphone is used) as every other worker command.
+pub fn record_corpus_item_command(id: &str) -> WorkerCommand {
+    // P3 #372 finding 1: pass the id as a single `--flag=value` arg rather
+    // than two adjacent tokens. Python argparse processes `--flag value`
+    // by greedy lookahead, and a value that starts with `-` (legal in
+    // is_safe_corpus_id which allows `[A-Za-z0-9._-]`) can be parsed as
+    // an unknown flag — silently dropping or mis-routing the id. The
+    // `--flag=value` form is unambiguous regardless of how the value
+    // starts. `is_safe_corpus_id` upstream already forbids `=`, so the
+    // joined token is safe to round-trip through argparse.
+    default_worker_command_with_args(vec![format!("--record-corpus-item={id}")])
 }
 
 /// The app root used to resolve bundled resources (e.g. `benchmark/corpus.json`).
@@ -1417,17 +1835,92 @@ pub fn resource_app_root() -> PathBuf {
     app_root()
 }
 
-// Wave 8 Part 2: `doctor_command`, `benchmark_command`, `windows_command`,
-// `audio_devices_command`, `test_audio_device_command`,
-// `record_corpus_item_command`, `propagate_rust_devices_backend`,
-// `install_command`, `install_command_from_exe` were all thin builders
-// around the Python worker's flag-based dispatch
-// (`python -m whisper_dictate.runtime --doctor` etc.). v1.20 removed
-// the Python worker; the corresponding CLI subcommands
-// (`whisper-dictate doctor`, `bench`, `corpus-record ...`) now surface
-// a "moved-to-worker-rust" message in-process rather than spawning a
-// subprocess. The UI tasks that used these builders were removed at
-// the same time. Track `#348` follow-ups for the Rust replacements.
+pub fn install_command() -> WorkerCommand {
+    install_command_from_exe(
+        env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),
+        app_root(),
+    )
+}
+
+pub fn install_command_from_exe(
+    exe: impl Into<PathBuf>,
+    app_root: impl Into<PathBuf>,
+) -> WorkerCommand {
+    WorkerCommand {
+        program: exe.into(),
+        args: vec!["install".to_owned()],
+        working_dir: app_root.into(),
+        env: Vec::new(),
+    }
+}
+
+#[derive(Debug)]
+pub struct WorkerOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub status: ExitStatus,
+}
+
+impl WorkerOutput {
+    pub fn success(&self) -> bool {
+        self.status.success()
+    }
+
+    pub fn code(&self) -> Option<i32> {
+        self.status.code()
+    }
+}
+
+pub fn run_capture(command: &WorkerCommand) -> Result<WorkerOutput> {
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .current_dir(&command.working_dir)
+        .envs(command.env.iter().map(|(key, value)| (key, value)));
+    configure_piped_python_stdio(&mut process);
+    configure_background_process(&mut process);
+    let output = process.output()?;
+
+    Ok(WorkerOutput {
+        stdout: decode_capped_output(&output.stdout),
+        stderr: decode_capped_output(&output.stderr),
+        status: output.status,
+    })
+}
+
+pub fn decode_capped_output(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let text = text.as_ref();
+    if text.len() <= CAPTURE_OUTPUT_MAX_CHARS {
+        return text.to_owned();
+    }
+    let marker = "[ui] ...older captured output trimmed...\n";
+    let target = CAPTURE_OUTPUT_MAX_CHARS.saturating_sub(marker.len());
+    let mut start = text.len().saturating_sub(target);
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("{marker}{}", &text[start..])
+}
+
+pub fn run_foreground(command: &WorkerCommand) -> Result<()> {
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .current_dir(&command.working_dir)
+        .envs(command.env.iter().map(|(key, value)| (key, value)));
+    // Force the worker's stdio to UTF-8 so foreground commands like
+    // `whisper-dictate bench > out.txt` or `whisper-dictate corpus-record <id>`
+    // do not mojibake / EncodingError on Windows when the inherited console
+    // code page is non-UTF-8 (cp1252 / cp437 / Shift-JIS …). The Python
+    // worker writes `ensure_ascii=False` JSONL with Danish corpus text and
+    // user dictionary terms; matches the `configure_piped_python_stdio` the
+    // captured/background paths already set, so all foreground workers see
+    // the same encoding regardless of how the user shells in.
+    configure_piped_python_stdio(&mut process);
+    let status = process.status()?;
+    exit_status_to_result(status)
+}
 
 fn configure_background_process(_command: &mut Command) {
     #[cfg(windows)]
@@ -1437,23 +1930,32 @@ fn configure_background_process(_command: &mut Command) {
     }
 }
 
+fn configure_piped_python_stdio(command: &mut Command) {
+    command
+        .env(PYTHON_UTF8_ENV, "1")
+        .env(PYTHON_IO_ENCODING_ENV, "utf-8");
+}
+
+fn exit_status_to_result(status: ExitStatus) -> Result<()> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("worker exited with status {status}"))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum RuntimeStream {
     Stdout,
     Stderr,
 }
 
-/// `mute_observer_generation` — Codex P2 (runtime.rs:2074, PR #440):
-/// observer generation captured when this reader is created. `None` on
-/// streams that never emit worker events (e.g. stdout). See
-/// [`crate::output_mute::session::current_generation`].
 fn stream_lines<R>(
     reader: R,
     tx: Sender<RuntimeEvent>,
     stream: RuntimeStream,
     repaint_notifier: Option<RepaintNotifier>,
     ready_signal: Option<Sender<()>>,
-    mute_observer_generation: Option<u64>,
 ) where
     R: std::io::Read + Send + 'static,
 {
@@ -1475,67 +1977,6 @@ fn stream_lines<R>(
                             if let Some(signal) = ready_signal.take() {
                                 let _ = signal.send(());
                             }
-                        }
-                        // Issue #322: fan every worker-state transition
-                        // into the auto-mute observer. Cheap no-op when
-                        // the `mute_output_while_recording` setting is
-                        // off (no controller installed), so leaving this
-                        // permanently in the hot path is safe.
-                        //
-                        // Codex P2 (runtime.rs:2074 + state.rs:158,
-                        // PR #440) — passes the generation captured at
-                        // reader creation so a stale reader from a
-                        // stopped child no-ops, and surfaces any backend
-                        // failure through the runtime log so the user
-                        // sees when the mute silently didn't happen.
-                        if let Some(gen) = mute_observer_generation {
-                            if let Some(err) = crate::output_mute::session::observe_worker_state(
-                                worker.state.as_deref(),
-                                gen,
-                            ) {
-                                let _ = tx.send(RuntimeEvent::Stderr(format!(
-                                    "[output-mute] backend failure while observing state {state:?}: {err}",
-                                    state = worker.state.as_deref().unwrap_or(""),
-                                )));
-                            }
-                        }
-                        // PR #441 review round 2 (Codex P1 finding 4):
-                        // the delegated `worker-rust` subprocess emits
-                        // `state=error` with `reason=hotkey_install_failed`
-                        // when rdev refuses to install (missing display,
-                        // permission denied, unsupported chord, ...).
-                        // Surface a prominent stderr diagnostic so users
-                        // see a clear "PTT will not work" hint even if
-                        // the worker's raw stderr line was lost in the
-                        // noise. Wave 8 removed the Python fallback, so
-                        // the diagnostic now points to the ways to fix
-                        // the underlying rdev refusal rather than to an
-                        // escape hatch that no longer exists.
-                        if worker.state.as_deref() == Some("error")
-                            && worker.payload.get("reason").and_then(|v| v.as_str())
-                                == Some("hotkey_install_failed")
-                        {
-                            let detail = worker
-                                .payload
-                                .get("detail")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("(no detail)");
-                            let _ = tx.send(RuntimeEvent::Stderr(format!(
-                                "[runtime] worker-rust hotkey install failed ({detail}) -- \
-                                 PTT will not work in this session. Check that a display is \
-                                 attached, that accessibility permission is granted (macOS), \
-                                 and that the configured chord is one the rdev backend supports."
-                            )));
-                        }
-                        // Issue #324: persist one row per accepted
-                        // utterance into the per-user SQLite history
-                        // store. Best-effort and feature-gated -- the
-                        // wrapper logs failures and swallows them so
-                        // a DB hiccup (locked file, disk full) never
-                        // breaks the dictation pipeline.
-                        #[cfg(feature = "history-sqlite")]
-                        if worker.event == "utterance" {
-                            crate::history::try_record_utterance_default(&worker.payload);
                         }
                     }
                     let _ = tx.send(event);
@@ -1583,60 +2024,6 @@ fn parse_worker_event(line: &str) -> Option<WorkerEvent> {
     })
 }
 
-/// Read the user's current `mute_output_while_recording` setting from
-/// config.json (falling back to the [`crate::output_mute::session::MUTE_OUTPUT_ENV`]
-/// env var when set) and install (or clear) the process-global
-/// auto-mute controller accordingly (issue #322). Called from
-/// `Runtime::start` so a settings edit is picked up on the next worker
-/// restart.
-///
-/// A missing / unreadable config file is treated as "toggle off" — we
-/// never want to silently start muting the user's audio because we
-/// could not load their preferences.
-///
-/// Codex P2 (runtime.rs:2060, PR #440) — env-var precedence is now the
-/// same as the schema-derived worker overrides: an explicit
-/// `VOICEPI_MUTE_OUTPUT_WHILE_RECORDING=1` in the environment installs
-/// the controller even when config.json is silent or set to `false`,
-/// matching the schema's documented env-fallback semantics.
-fn install_output_mute_from_config() {
-    // Codex P2 (session.rs:130, PR #440) — pass Option<bool> so the
-    // session installer can distinguish "user explicitly set this in
-    // config.json" from "key is missing, fall back to env or default".
-    // A missing config file, an unreadable JSON payload, or a key that
-    // is absent all resolve to None so the env var can still take
-    // effect. `load_raw_config` returns an empty object for a
-    // nonexistent file (not an error), so a genuine parse failure is
-    // the only case where None comes from the Err path.
-    //
-    // Codex P2 (session.rs:130, PR #443) — the parse helper now lives
-    // in `output_mute::session` so the UI Reload path in
-    // `settings_state.rs` resolves the exact same config-vs-env
-    // precedence (see `read_mute_key_from_json`).
-    let config_value = config::load_raw_config().ok().and_then(|value| {
-        value
-            .as_object()
-            .and_then(crate::output_mute::session::read_mute_key_from_json)
-    });
-    crate::output_mute::session::install_from_settings(config_value);
-}
-
-/// Clear the process-global auto-mute controller on every worker
-/// teardown path (Codex P1 runtime.rs:458, PR #440).
-///
-/// `install_output_mute_from_config` only runs on `Runtime::start`, so
-/// a worker stop/kill/crash used to leave the controller parked in its
-/// `Recording` phase indefinitely — the controller's `Drop` restore
-/// never fired, and the user's speakers could stay muted until either
-/// another start replaced the controller or the app exited entirely.
-/// Dropping the controller via `install(false)` triggers `Drop` which
-/// runs the pending restore. Safe to call unconditionally: when no
-/// controller is installed (the setting is off) this is a mutex-lock +
-/// no-op.
-fn clear_output_mute_on_teardown() {
-    crate::output_mute::session::install(false);
-}
-
 fn kill_child(child: &mut Child) -> Result<()> {
     #[cfg(windows)]
     {
@@ -1657,32 +2044,81 @@ fn kill_child(child: &mut Child) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the user's home directory. Preserved from the pre-Wave-8
-/// installer helpers because [`install_linux_desktop_entries`] still
-/// needs to write `~/.local/share/applications/whisper-dictate.desktop`.
+fn python_program() -> PathBuf {
+    if let Some(raw) = env::var_os(PYTHON_ENV) {
+        return PathBuf::from(raw);
+    }
+    if let Some(path) = default_venv_python() {
+        return path;
+    }
+    PathBuf::from(default_python_name())
+}
+
+fn default_venv_python() -> Option<PathBuf> {
+    let home = home_dir()?;
+    let path = venv_python_path(
+        &default_venv_dir(&home, Platform::current()),
+        Platform::current(),
+    );
+    path.exists().then_some(path)
+}
+
+fn default_venv_dir(home: &Path, platform: Platform) -> PathBuf {
+    match platform {
+        Platform::Windows => windows_venv_dir(home),
+        Platform::Unix => home.join(".venv-whisper-dictate"),
+    }
+}
+
+/// Resolve the Windows venv directory with legacy-fallback logic.
+///
+/// Resolution order (no forced migration — existing installs keep working):
+/// 1. `<home>\whisper-dictate-venv` — the canonical post-rebrand name.
+/// 2. `<home>\voice-pi-venv`        — legacy pre-rebrand name; kept as-is.
+/// 3. `<home>\whisper-dictate-venv` — fresh-install default (neither exists).
+fn windows_venv_dir(home: &Path) -> PathBuf {
+    // is_dir(), not exists(): a stray FILE at either path must not be selected
+    // as the venv (python -m venv would then fail on the existing file).
+    let new_name = home.join("whisper-dictate-venv");
+    if new_name.is_dir() {
+        return new_name;
+    }
+    let legacy = home.join("voice-pi-venv");
+    if legacy.is_dir() {
+        return legacy;
+    }
+    new_name
+}
+
+fn venv_python_path(venv_dir: &Path, platform: Platform) -> PathBuf {
+    match platform {
+        Platform::Windows => venv_dir.join("Scripts").join("python.exe"),
+        Platform::Unix => venv_dir.join("bin").join("python"),
+    }
+}
+
 fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
 }
 
-/// Resolve the app root. Preferred order:
-///
-/// 1. `VOICEPI_APP_ROOT` override.
-/// 2. The directory containing the current executable (production
-///    installs).
-/// 3. The workspace root, computed from `CARGO_MANIFEST_DIR` (`cargo
-///    test`/`cargo run` from a checkout).
-///
-/// Wave 8 Part 2 (Codex #453 P2): the resolver replaced the pre-v1.20
-/// `src/python/whisper_dictate/runtime.py` Python-source marker with a
-/// native-bundle marker (`VERSION` file next to the binary in every
-/// packaged install: chocolatey nupkg, Inno setup, Linux tarball, nix
-/// derivation). Without a marker check `cargo run` / `cargo test` /
-/// integration-test builds would return `target/debug` (or
-/// `target/release`) as the app root and the documented fallback to
-/// `source_root()` for the shipped resources (`benchmark/corpus.json`,
-/// `packaging/linux/ubuntu26.04/setup.sh`, ...) would never fire.
+fn default_python_name() -> &'static str {
+    if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python3"
+    }
+}
+
+fn source_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
 fn app_root() -> PathBuf {
     if let Some(raw) = env::var_os(APP_ROOT_ENV) {
         return PathBuf::from(raw);
@@ -1695,69 +2131,16 @@ fn app_root() -> PathBuf {
     source_root()
 }
 
-/// Bundle-marker check for the exe-based `app_root` resolver. Accepts
-/// the exe's parent directory only when it looks like a shipped
-/// whisper-dictate install: either a top-level `VERSION` file (chocolatey
-/// nupkg, Linux tarball, nix derivation all ship this) OR a
-/// `packaging/linux/ubuntu26.04/setup.sh` (source checkout used as the
-/// install root via `VOICEPI_APP_ROOT`).
-///
-/// A binary sitting in `target/debug/` under a checkout has neither, so
-/// `app_root` falls through to `source_root()` and the dev workflow
-/// (`cargo run -- ui`) keeps resolving `benchmark/corpus.json` /
-/// `packaging/linux/ubuntu26.04/setup.sh` from the workspace root.
 fn app_root_from_exe_path(exe: &Path) -> Option<PathBuf> {
     let root = exe.parent()?;
-    let has_version_marker = root.join("VERSION").is_file();
-    let has_packaging_marker = root
-        .join("packaging")
-        .join("linux")
-        .join("ubuntu26.04")
-        .join("setup.sh")
-        .is_file();
-    if has_version_marker || has_packaging_marker {
-        Some(root.to_path_buf())
-    } else {
-        None
-    }
-}
-
-fn source_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
+    python_source_root(root)
+        .join("whisper_dictate")
+        .join("runtime.py")
+        .exists()
+        .then(|| root.to_path_buf())
 }
 
 pub mod audio_spawn;
-// Issue #327: cross-platform single-instance gate with CLI-arg
-// forwarding. Split into `single_instance/{mod,socket,lockfile}.rs`
-// so each file stays under the project's 500-LOC modularity ceiling.
-// The module ships the machinery; opt-in wire-up lives in
-// `main.rs::run()` behind `VOICEPI_SINGLE_INSTANCE`.
-pub mod single_instance;
-// Wave 5 PR 6+7 of #348: the `whisper-dictate worker-rust` CLI entry
-// point + supervisor-side "delegate to worker-rust subprocess" gate.
-// After PR 7 (default flip) a full-feature build spawns the Rust
-// worker unconditionally; users opt out with
-// `VOICEPI_DICTATE_BACKEND=python-legacy` to fall back to the pre-flip
-// Python orchestrator during the Wave-7 → Wave-8 burn-in. Wave 8
-// removes the Python bundle and this fallback together.
-pub mod worker_rust;
-// Issue #326: CLI flags + Unix signals (SIGUSR1 = toggle, SIGUSR2 = cancel)
-// for compositor-driven external triggers. Lives in its own file so
-// `runtime.rs` does not grow past the 500-LOC modularity guideline. See
-// the module docs for the wire protocol and the daemon-side install hook.
-pub mod external_toggle;
-// PR #441 review round 2: env-var gate helpers split out of
-// `rust_session_sink` so that file stays under the AGENTS.md
-// ~500-LOC-per-file modularity guideline. Owns
-// `dictate_backend_python_legacy_requested` /
-// `dictate_backend_rust_session_requested`; `rust_session_sink`
-// re-exports them so external call sites are unchanged.
-pub(crate) mod rust_session_dictate_env;
-
 // Wave 5 PR 4 of #348: opt-in (`VOICEPI_DICTATE_BACKEND=rust-session`)
 // wiring that drives a `DictateSession` from the hotkey coordinator's
 // action sink. Stays out of the production path until PR 6 flips the
@@ -1805,9 +2188,14 @@ mod audio_backend_tests;
 mod audio_spawn_tests;
 #[cfg(all(test, feature = "audio-in-rust"))]
 mod bridge_terminal_tests;
-// Issue #326: sibling tests for `external_toggle`.
 #[cfg(test)]
-mod external_toggle_tests;
+mod desktop_entry_tests;
+#[cfg(test)]
+mod hotkey_supervisor_tests;
+#[cfg(test)]
+mod install_plan_tests;
+#[cfg(test)]
+mod process_capture_tests;
 // Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split
 // across three files to keep each under the ~500-LOC modularity
 // guideline (AGENTS.md "Review guidelines", Codex P2 PR #421):
@@ -1829,5 +2217,7 @@ mod test_support;
 mod ubuntu_setup_tests;
 #[cfg(test)]
 mod windows_process_tests;
+#[cfg(test)]
+mod worker_command_tests;
 #[cfg(test)]
 mod worker_event_tests;

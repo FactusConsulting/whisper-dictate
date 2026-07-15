@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the settings reference in docs/CONFIGURATION.md from the schema.
 
-settings_schema.json (src/rust/config/settings_schema.json) is the
+settings_schema.json (src/python/whisper_dictate/settings_schema.json) is the
 SINGLE SOURCE OF TRUTH for whisper-dictate runtime settings. This script reads
 it and renders a Markdown reference -- one table per category with columns
 Key | Env var | Default | Live/Restart | Description -- writing ONLY between the
@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = REPO_ROOT / "src" / "rust" / "config" / "settings_schema.json"
+SCHEMA_PATH = REPO_ROOT / "src" / "python" / "whisper_dictate" / "settings_schema.json"
 DOCS_PATH = REPO_ROOT / "docs" / "CONFIGURATION.md"
 
 BEGIN_MARKER = "<!-- BEGIN GENERATED SETTINGS REFERENCE -->"
@@ -100,7 +100,7 @@ def render_block(settings: list[dict]) -> str:
     lines: list[str] = []
     lines.append(
         "_Generated from "
-        "`src/rust/config/settings_schema.json` by "
+        "`src/python/whisper_dictate/settings_schema.json` by "
         "`scripts/dev/gen_settings_docs.py` -- do not edit this block by hand; "
         "regenerate with `py -3.12 scripts/dev/gen_settings_docs.py`._"
     )

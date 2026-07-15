@@ -5,8 +5,8 @@ use clap::Parser;
 use whisper_dictate_app::cli::{Cli, Command};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, formatting,
-    health, injection, model_capacity, postprocess, postprocess_hotkey, privacy, profiles,
-    redaction, runtime, telemetry, ui, whisper,
+    health, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
+    telemetry, ui, whisper,
 };
 
 fn main() {
@@ -16,21 +16,6 @@ fn main() {
     }
 }
 
-/// Env var that opts the binary into the issue #327 single-instance
-/// gate. Left OFF by default so this PR ships the machinery + tests
-/// without changing default startup behaviour; the follow-up work that
-/// wires forwarded commands into the running instance's event loop
-/// flips the default. Kept next to the dispatch it guards so the
-/// rollout switch is easy to find.
-const SINGLE_INSTANCE_ENV: &str = "VOICEPI_SINGLE_INSTANCE";
-
-fn single_instance_enabled() -> bool {
-    matches!(
-        std::env::var(SINGLE_INSTANCE_ENV).as_deref(),
-        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
-    )
-}
-
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if cli.version {
@@ -38,42 +23,7 @@ fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Issue #326: forward `--toggle-recording` / `--start-recording` /
-    // `--stop-recording` / `--cancel-recording` to the running daemon
-    // BEFORE any subcommand dispatch (or the single-instance gate). The
-    // flags are mutually exclusive with each other AND with the subcommand
-    // path (enforced by clap), so this branch always wins over the UI
-    // fallback when set. Exits 0 on success, non-zero with a clear message
-    // when no daemon is running (so the user's wm keybinding shows a
-    // helpful error instead of silently failing).
-    if let Some(cmd) = cli.external_command() {
-        return runtime::external_toggle::forward_command(cmd);
-    }
-
-    // Issue #327 single-instance gate. Runs BEFORE dispatch so a second
-    // invocation short-circuits without touching any subcommand handler
-    // (which would otherwise fight for the same hotkey / tray slot).
-    // Only applies to the long-lived UI/foreground modes — one-shot
-    // helpers (`config path`, hidden worker RPCs, model catalogue, …)
-    // must never gate on it because the user regularly runs them
-    // alongside the daemon.
-    let cmd = cli.command.unwrap_or(Command::Ui);
-    if single_instance_enabled() && command_is_long_running(&cmd) {
-        let argv: Vec<String> = std::env::args().skip(1).collect();
-        match runtime::single_instance::try_acquire(argv)? {
-            runtime::single_instance::AcquireOutcome::Forwarded => return Ok(()),
-            runtime::single_instance::AcquireOutcome::Acquired(guard) => {
-                // Leak the guard for the lifetime of the process — the
-                // running instance holds the lock until exit. Dropping
-                // it at the end of `run()` would race with the UI
-                // shutting itself down and lose forwarded commands
-                // that arrive during teardown.
-                std::mem::forget(guard);
-            }
-        }
-    }
-
-    match cmd {
+    match cli.command.unwrap_or(Command::Ui) {
         Command::Ui | Command::Settings => ui::run(),
         Command::Run { args } => runtime::run_terminal(args),
         Command::Doctor => runtime::doctor(),
@@ -130,7 +80,6 @@ fn run() -> anyhow::Result<()> {
         Command::ApplyProfile => profiles::handle_apply_profile(),
         Command::Privacy => privacy::handle_privacy(),
         Command::Postprocess => postprocess::handle_postprocess(),
-        Command::PostprocessHotkey => postprocess_hotkey::handle_postprocess_hotkey(),
         Command::ExternalApi => cloud_api::handle_external_api(),
         Command::Health => health::handle_health(),
         Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
@@ -138,70 +87,7 @@ fn run() -> anyhow::Result<()> {
         Command::Inject => injection::handle_inject(),
         Command::Devices => handle_devices_command(),
         Command::Models { command } => whisper::models_cli::handle(command),
-        Command::SingleInstanceProbe {
-            serve_ms,
-            forward_args,
-        } => handle_single_instance_probe(serve_ms, forward_args),
-        Command::WorkerRust { stdin_only } => runtime::worker_rust::handle_worker_rust(stdin_only),
     }
-}
-
-/// Hidden helper backing the `single-instance-probe` subcommand — see
-/// its doc-comment in `cli.rs` for the two modes. Kept small on
-/// purpose: the underlying machinery is tested through the module's
-/// unit tests, so this handler is essentially a thin CLI wrapper the
-/// two-process integration test drives.
-fn handle_single_instance_probe(
-    serve_ms: Option<u64>,
-    forward_args: Vec<String>,
-) -> anyhow::Result<()> {
-    use std::time::{Duration, Instant};
-    match runtime::single_instance::try_acquire(forward_args)? {
-        runtime::single_instance::AcquireOutcome::Forwarded => {
-            println!("[forwarded]");
-            Ok(())
-        }
-        runtime::single_instance::AcquireOutcome::Acquired(guard) => {
-            if let Some(ms) = serve_ms {
-                // Advertise readiness so the driving test can wait for
-                // the port to be bound before spawning the client.
-                println!(
-                    "[acquired] port={} pid={}",
-                    guard.port(),
-                    std::process::id()
-                );
-                let deadline = Instant::now() + Duration::from_millis(ms);
-                while Instant::now() < deadline {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if let Some(cmd) = guard.recv_timeout(remaining.min(Duration::from_millis(50)))
-                    {
-                        let json = serde_json::to_string(&cmd.argv).unwrap_or_default();
-                        println!("[forwarded] {json}");
-                    }
-                }
-            } else {
-                println!("[acquired]");
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Which sub-commands the single-instance gate applies to. Only the
-/// long-lived foreground modes — the desktop UI, terminal supervisor,
-/// setup helpers — can collide over the hotkey / tray slot. One-shot
-/// helpers (`config path`, hidden RPC helpers used by the Python
-/// worker, model-catalogue queries, …) MUST bypass the gate: the user
-/// regularly runs those alongside the daemon.
-fn command_is_long_running(cmd: &Command) -> bool {
-    matches!(
-        cmd,
-        Command::Ui
-            | Command::Settings
-            | Command::Run { .. }
-            | Command::SetupUbuntu
-            | Command::Install
-    )
 }
 
 /// Dispatch the hidden `transcribe-wav` sub-command.

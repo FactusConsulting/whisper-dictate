@@ -34,7 +34,6 @@ impl AppSettings {
                 .transpose()?
                 .unwrap_or_else(|| defaults.profiles_json.clone());
             migrate_parakeet_backend(&mut settings, object, &defaults);
-            migrate_settings_mode(&mut settings, object);
         }
         Ok(settings)
     }
@@ -98,13 +97,6 @@ impl AppSettings {
         self.audio_ducking = bool_value(object, "audio_ducking", defaults.audio_ducking);
         self.audio_ducking_level =
             string_value(object, "audio_ducking_level", &defaults.audio_ducking_level);
-        // Issue #322: auto-mute the system output while recording. Opt-in bool,
-        // parsed with the same "0"/"1"/"true"/"false" contract as the rest.
-        self.mute_output_while_recording = bool_value(
-            object,
-            "mute_output_while_recording",
-            defaults.mute_output_while_recording,
-        );
     }
 
     /// Dictionary path and prompt-injection budget settings.
@@ -157,28 +149,6 @@ impl AppSettings {
         );
         self.post_redact = bool_value(object, "post_redact", defaults.post_redact);
         self.post_redact_terms = string_value(object, "post_redact_terms", "");
-        self.postprocess_hotkey = string_value(object, "postprocess_hotkey", "");
-        // Codex-2 finding on #439: users following the schema doc write
-        // `"postprocess_profiles": [{...}]` (a JSON array) in config.json,
-        // but the string-only path silently dropped the array and the
-        // next save wiped it. Accept both shapes — a raw string
-        // round-trips verbatim, an array is re-encoded to the string form
-        // the rest of the pipeline consumes.
-        //
-        // Follow-up Codex-P2 finding on #439: whichever shape the caller
-        // used, strip any inline `api_key` entries out of profile objects
-        // before the value round-trips back through `save.rs`. The
-        // `PostprocessProfile` struct no longer carries `api_key` (secrets
-        // resolve at dispatch time from env / OS credential store), so a
-        // legacy config or a hand-edited value that still contains one
-        // would otherwise be re-persisted in plaintext.
-        self.postprocess_profiles =
-            sanitize_postprocess_profiles(string_or_json_value(object, "postprocess_profiles", ""));
-        self.postprocess_profile_index = string_value(
-            object,
-            "postprocess_profile_index",
-            &defaults.postprocess_profile_index,
-        );
     }
 
     /// Debug flags and quit-shortcut settings.
@@ -212,48 +182,6 @@ impl AppSettings {
         self.ui_language = string_value(object, "ui_language", &defaults.ui_language);
         self.ui_log_view = string_value(object, "ui_log_view", &defaults.ui_log_view);
         self.ui_text_scale = string_value(object, "ui_text_scale", &defaults.ui_text_scale);
-        self.overlay_enabled = bool_value(object, "overlay_enabled", defaults.overlay_enabled);
-        self.overlay_position =
-            string_value(object, "overlay_position", &defaults.overlay_position);
-        self.overlay_show_on_idle = bool_value(
-            object,
-            "overlay_show_on_idle",
-            defaults.overlay_show_on_idle,
-        );
-        // Issue #328: first-run onboarding gate + last-seen timestamp.
-        self.onboarding_completed = bool_value(
-            object,
-            "onboarding_completed",
-            defaults.onboarding_completed,
-        );
-        self.onboarding_seen_at = string_value(object, "onboarding_seen_at", "");
-        // Load the persisted Simple/Advanced choice. Missing → keep the
-        // default; the "existing user" migration below then upgrades the
-        // implicit default when the rest of the config is non-empty.
-        self.settings_mode = string_value(object, "settings_mode", &defaults.settings_mode);
-    }
-}
-
-/// Issue #334 migration: an existing config that predates the
-/// Simple/Advanced toggle has no `settings_mode` key. Those users should
-/// default to **Advanced** so nothing they previously configured
-/// disappears. New/empty configs keep the schema default (`"simple"`)
-/// picked in [`AppSettings::default`], so first-time users land on the
-/// slim view.
-///
-/// "Existing user" is detected by looking for ANY other saved key on
-/// disk (`stt_backend`, `key`, etc.); an empty `{}` config counts as a
-/// fresh install even if the file itself was created accidentally.
-fn migrate_settings_mode(settings: &mut AppSettings, object: &Map<String, Value>) {
-    if object.contains_key("settings_mode") {
-        return;
-    }
-    // Any other key implies "the user has saved settings before" — flip
-    // them to Advanced. A stray empty object stays on the fresh-install
-    // default.
-    let has_other_settings = object.keys().any(|key| key != "settings_mode");
-    if has_other_settings {
-        settings.settings_mode = "advanced".to_owned();
     }
 }
 
@@ -304,59 +232,6 @@ fn string_value(object: &Map<String, Value>, key: &str, default: &str) -> String
         .and_then(Value::as_str)
         .unwrap_or(default)
         .to_owned()
-}
-
-/// Read a config value that the schema calls a string but power users
-/// may hand-edit as a raw JSON array/object. Strings pass through
-/// verbatim; anything else is re-encoded to JSON so downstream string
-/// parsers still get the same shape. Used by `postprocess_profiles`
-/// (Codex-2 finding on #439).
-fn string_or_json_value(object: &Map<String, Value>, key: &str, default: &str) -> String {
-    match object.get(key) {
-        Some(Value::String(s)) => s.clone(),
-        Some(other) => serde_json::to_string(other).unwrap_or_else(|_| default.to_owned()),
-        None => default.to_owned(),
-    }
-}
-
-/// Strip inline `api_key` entries out of a `postprocess_profiles` JSON
-/// payload before we store it in `AppSettings`. Codex-P2 finding on
-/// #439: the profile struct no longer carries `api_key` (secrets flow
-/// through env vars / OS credential store), but the config-load path
-/// still treated the field as opaque, so a legacy `{"api_key":"sk-..."}`
-/// entry would silently round-trip back out to `config.json` on the next
-/// save.
-///
-/// Contract:
-/// * Empty / whitespace-only input passes through unchanged (no work).
-/// * A JSON array of objects is parsed, each object's `api_key` field is
-///   removed, and the result re-serialized.
-/// * Anything that fails to parse as a JSON array is returned verbatim so
-///   we do not silently discard a hand-edited value the user still cares
-///   about — `PostprocessProfile::from_json` will surface the parse
-///   failure at dispatch time via the existing malformed-config path.
-fn sanitize_postprocess_profiles(raw: String) -> String {
-    if raw.trim().is_empty() {
-        return raw;
-    }
-    let Ok(mut parsed) = serde_json::from_str::<Value>(&raw) else {
-        return raw;
-    };
-    let Some(items) = parsed.as_array_mut() else {
-        return raw;
-    };
-    let mut mutated = false;
-    for item in items {
-        if let Some(obj) = item.as_object_mut() {
-            if obj.remove("api_key").is_some() {
-                mutated = true;
-            }
-        }
-    }
-    if !mutated {
-        return raw;
-    }
-    serde_json::to_string(&parsed).unwrap_or(raw)
 }
 
 fn bool_value(object: &Map<String, Value>, key: &str, default: bool) -> bool {
@@ -469,137 +344,6 @@ mod tests {
         let value = serde_json::json!({ "stt_backend": "whisper" });
         let settings = AppSettings::from_value(value).unwrap();
         assert_eq!(settings.stt_backend, "whisper");
-    }
-
-    /// Codex-2 finding on #439: schema/docs describe
-    /// `postprocess_profiles` as a JSON array, but the string-only load
-    /// path silently dropped array values and the next save (which owns
-    /// the key via `SETTINGS_KEYS`) wiped them. This test asserts both
-    /// shapes are accepted and end up as the string form the rest of the
-    /// pipeline consumes.
-    #[test]
-    fn postprocess_profiles_accepts_json_array_and_reencodes_to_string() {
-        let value = serde_json::json!({
-            "postprocess_profiles": [
-                {"name": "Grammar", "processor": "ollama", "mode": "clean"},
-                {"name": "Bullets", "processor": "ollama", "mode": "bullets"},
-            ],
-        });
-        let settings = AppSettings::from_value(value).unwrap();
-        assert!(!settings.postprocess_profiles.is_empty());
-        assert!(settings.postprocess_profiles.contains("Grammar"));
-        assert!(settings.postprocess_profiles.contains("Bullets"));
-        // The re-encoded value must round-trip back through the profile
-        // registry loader so the runtime keeps consuming it as-is.
-        let parsed: serde_json::Value =
-            serde_json::from_str(&settings.postprocess_profiles).unwrap();
-        assert_eq!(parsed.as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn postprocess_profiles_accepts_string_form_verbatim() {
-        // Back-compat: the previous string-only representation must
-        // still land in the field untouched (the load path used to be
-        // string-only, and hand-written configs / test fixtures may
-        // still use it).
-        let raw = r#"[{"name":"Only","processor":"none","mode":"raw"}]"#;
-        let value = serde_json::json!({
-            "postprocess_profiles": raw,
-        });
-        let settings = AppSettings::from_value(value).unwrap();
-        assert_eq!(settings.postprocess_profiles, raw);
-    }
-
-    /// Codex-P2 follow-up on #439: legacy configs that still carry an
-    /// inline `api_key` on a profile must NOT round-trip that secret
-    /// back out to `config.json`. The load path parses the string and
-    /// strips the field so the next save is clean.
-    #[test]
-    fn postprocess_profiles_strips_legacy_api_key_from_string_form() {
-        let raw = r#"[{"name":"Formal","processor":"openai","api_key":"sk-should-not-persist","mode":"clean"}]"#;
-        let value = serde_json::json!({ "postprocess_profiles": raw });
-        let settings = AppSettings::from_value(value).unwrap();
-        assert!(
-            !settings.postprocess_profiles.contains("api_key"),
-            "sanitized value must not carry api_key, got: {}",
-            settings.postprocess_profiles,
-        );
-        assert!(!settings
-            .postprocess_profiles
-            .contains("sk-should-not-persist"));
-        // Other fields survive so the user's profile setup is not lost.
-        assert!(settings.postprocess_profiles.contains("Formal"));
-        assert!(settings.postprocess_profiles.contains("openai"));
-    }
-
-    /// Same guarantee when the config uses the docs-friendly JSON array
-    /// shape rather than the string encoding — the sanitizer runs after
-    /// the array-to-string re-encoding.
-    #[test]
-    fn postprocess_profiles_strips_legacy_api_key_from_array_form() {
-        let value = serde_json::json!({
-            "postprocess_profiles": [
-                {
-                    "name": "Formal",
-                    "processor": "openai",
-                    "mode": "clean",
-                    "api_key": "sk-should-not-persist",
-                },
-            ],
-        });
-        let settings = AppSettings::from_value(value).unwrap();
-        assert!(!settings.postprocess_profiles.contains("api_key"));
-        assert!(!settings
-            .postprocess_profiles
-            .contains("sk-should-not-persist"));
-        assert!(settings.postprocess_profiles.contains("Formal"));
-    }
-
-    /// Sanity check: a payload that never had an `api_key` in the first
-    /// place is byte-for-byte identical after sanitisation — no needless
-    /// churn on save.
-    #[test]
-    fn postprocess_profiles_unchanged_when_no_api_key_present() {
-        let raw = r#"[{"name":"Clean","processor":"ollama","mode":"clean"}]"#;
-        let value = serde_json::json!({ "postprocess_profiles": raw });
-        let settings = AppSettings::from_value(value).unwrap();
-        assert_eq!(settings.postprocess_profiles, raw);
-    }
-
-    #[test]
-    fn settings_mode_defaults_to_simple_on_empty_config() {
-        // Issue #334: a fresh install (empty JSON object) is a first-time
-        // user; keep the Simple default so onboarding stays slim.
-        let settings = AppSettings::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(settings.settings_mode, "simple");
-    }
-
-    #[test]
-    fn settings_mode_migrates_to_advanced_for_existing_users() {
-        // Issue #334: an existing config that predates the toggle has no
-        // `settings_mode` key. Anything ELSE saved in the file means "the
-        // user has settings history" — flip them to Advanced so nothing
-        // they previously configured disappears from the UI.
-        let value = serde_json::json!({
-            "lang": "da",
-            "stt_backend": "whisper",
-        });
-        let settings = AppSettings::from_value(value).unwrap();
-        assert_eq!(settings.settings_mode, "advanced");
-    }
-
-    #[test]
-    fn settings_mode_is_respected_when_explicitly_saved() {
-        // When the user has already picked a mode, the saved value wins
-        // and the migration is a no-op regardless of what else is saved.
-        for mode in ["simple", "advanced"] {
-            let value = serde_json::json!({
-                "settings_mode": mode,
-                "lang": "en",
-            });
-            let settings = AppSettings::from_value(value).unwrap();
-            assert_eq!(settings.settings_mode, mode);
-        }
     }
 
     #[test]

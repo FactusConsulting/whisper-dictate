@@ -43,12 +43,7 @@ pub fn modifier_family(name: &str) -> Option<&'static str> {
         // `right_alt` / `ralt` are accepted aliases for `alt_gr` / `alt_r`
         // (P2 #346 finding 4): some users and documentation use these names.
         "alt" | "alt_l" | "alt_r" | "alt_gr" | "right_alt" | "ralt" => Some("alt"),
-        // `super_l` / `super_r` are the Linux names for the Meta / Win key, i.e.
-        // the SAME physical key rdev/macOS call `cmd`. The old evdev backend
-        // accepted them, so alias them into the cmd family (mirrors the alt_gr
-        // alias above) — otherwise a saved `super_l` binding would be rejected
-        // as UnsupportedKey and PTT would stay dead on Wayland (Codex #462 P2).
-        "cmd" | "cmd_l" | "cmd_r" | "super_l" | "super_r" => Some("cmd"),
+        "cmd" | "cmd_l" | "cmd_r" => Some("cmd"),
         _ => None,
     }
 }
@@ -59,17 +54,13 @@ fn is_generic_modifier(name: &str) -> bool {
     matches!(name, "ctrl" | "shift" | "alt" | "cmd")
 }
 
-/// Canonicalise side-aliases so a binding captured as one name matches a press
-/// delivered as another:
-/// * `alt_gr` / `right_alt` / `ralt` → `alt_r` (same physical key; P2 #346).
-/// * `super_l` / `super_r` → `cmd_l` / `cmd_r` — the Meta / Win key, which rdev
-///   and evdev's [`super::manager`] name `cmd_*`; aliasing lets a `super_l`
-///   target match a `cmd_l` press (Codex #462 P2).
+/// `alt_gr`, `right_alt`, and `ralt` are all the same physical key on every
+/// supported layout; canonicalise every alias to `alt_r` for side comparisons
+/// so a binding captured as one form matches a press delivered as another
+/// (P2 #346 finding 4).
 pub fn canonical_side(name: &str) -> &str {
     match name {
         "alt_gr" | "right_alt" | "ralt" => "alt_r",
-        "super_l" => "cmd_l",
-        "super_r" => "cmd_r",
         other => other,
     }
 }
@@ -200,21 +191,6 @@ mod tests {
     fn alt_gr_is_canonical_alt_r() {
         assert!(modifier_matches("alt_gr", "alt_r"));
         assert!(modifier_matches("alt_r", "alt_gr"));
-    }
-
-    #[test]
-    fn super_is_canonical_cmd() {
-        // Codex #462 P2: both backends emit the Meta/Win key as `cmd_*`, so a
-        // saved `super_*` binding must match the `cmd_*` press (and vice versa),
-        // and must NOT match the opposite side.
-        assert!(modifier_matches("cmd_l", "super_l"));
-        assert!(modifier_matches("super_l", "cmd_l"));
-        assert!(modifier_matches("cmd_r", "super_r"));
-        assert!(!modifier_matches("cmd_r", "super_l"));
-        // Generic cmd press (side unknown) still satisfies a super_l target.
-        assert!(modifier_matches("cmd", "super_l"));
-        // Different family stays a non-match.
-        assert!(!modifier_matches("ctrl_l", "super_l"));
     }
 
     #[test]

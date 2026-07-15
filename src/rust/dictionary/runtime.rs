@@ -49,12 +49,7 @@ impl RuntimeDictionarySettings {
         }
     }
 
-    /// Load runtime dictionary settings from the process env (winning),
-    /// falling back to `config.json`. Exposed so the rust-session
-    /// backend wiring (`runtime::rust_session_real_backends`) can build
-    /// the Whisper `initial_prompt` from the user's dictionary
-    /// vocabulary without duplicating the parse. Wave 5.5 gap #4 (#348).
-    pub fn from_env_and_config() -> Self {
+    fn from_env_and_config() -> Self {
         let configured = config::load_settings().unwrap_or_default();
         let enabled =
             env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled);

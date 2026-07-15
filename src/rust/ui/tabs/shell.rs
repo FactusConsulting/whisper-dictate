@@ -141,13 +141,7 @@ impl WhisperDictateApp {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        // Simple mode (Issue #334) hides the power-user tabs
-                        // so the sidebar shows only what a first-time user
-                        // needs (Dictation + Speech). The Simple/Advanced
-                        // toggle lives at the top of the settings body, so a
-                        // Simple-mode user can still flip back.
-                        let mode = SettingsMode::from_raw(&self.settings.settings_mode);
-                        for tab in visible_tabs(mode) {
+                        for tab in Tab::ALL {
                             let selected = self.selected_tab == tab;
                             if nav_button(
                                 ui,

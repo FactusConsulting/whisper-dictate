@@ -21,12 +21,40 @@ use crate::runtime::audio_spawn::{
     should_use_rust_audio_backend, AUDIO_DEVICE_ENV,
 };
 use crate::runtime::AUDIO_BACKEND_ENV;
-use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
+use crate::test_env_lock::ENV_LOCK;
+use std::env;
+
+struct EnvGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let prev = env::var(key).ok();
+        env::set_var(key, value);
+        Self { key, prev }
+    }
+    fn unset(key: &'static str) -> Self {
+        let prev = env::var(key).ok();
+        env::remove_var(key);
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(v) => env::set_var(self.key, v),
+            None => env::remove_var(self.key),
+        }
+    }
+}
 
 #[test]
 fn rust_backend_disabled_by_default_for_unset_env() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::remove(AUDIO_BACKEND_ENV);
+    let _g = EnvGuard::unset(AUDIO_BACKEND_ENV);
     assert!(
         !should_use_rust_audio_backend(),
         "unset VOICEPI_AUDIO_BACKEND must keep the Python sounddevice path",
@@ -36,7 +64,7 @@ fn rust_backend_disabled_by_default_for_unset_env() {
 #[test]
 fn rust_backend_engages_only_when_feature_compiled_and_env_opted_in() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::set(AUDIO_BACKEND_ENV, "rust");
+    let _g = EnvGuard::set(AUDIO_BACKEND_ENV, "rust");
     // The Phase-1 gate is the AND of feature + env var. Mirror the cfg
     // check here so the test stays honest in both build modes — without
     // the feature, the env var is acknowledged with a warning but the
@@ -70,7 +98,7 @@ fn warning_is_actionable_when_user_opts_in_without_feature() {
 #[test]
 fn resolved_audio_device_honours_voicepi_audio_device_env() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::set(AUDIO_DEVICE_ENV, "Yeti X");
+    let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "Yeti X");
     // Mirrors what the Python worker reads via `_audio_device_setting`,
     // so a user's saved mic choice applies to BOTH backends without a
     // separate Rust-only knob. Empty string (the unset case) means
@@ -81,7 +109,7 @@ fn resolved_audio_device_honours_voicepi_audio_device_env() {
 #[test]
 fn resolved_audio_device_defaults_to_empty_for_unset_env() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::remove(AUDIO_DEVICE_ENV);
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     assert!(
         resolved_audio_device().is_empty(),
         "unset VOICEPI_AUDIO_DEVICE must resolve to '' (= system default)",
@@ -102,7 +130,7 @@ fn resolve_audio_device_from_env_prefers_worker_command_env() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Even if the process env says something else (typical: shell
     // doesn't export it at all), the worker-command override wins.
-    let _g = EnvVarGuard::set(AUDIO_DEVICE_ENV, "system-shell-mic");
+    let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "system-shell-mic");
     let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "Saved Settings Mic".to_owned())];
     assert_eq!(
         resolve_audio_device_from_env(&overrides),
@@ -115,7 +143,7 @@ fn resolve_audio_device_from_env_falls_back_to_process_env() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // No override in the command env → process env is the next-best
     // source so legacy shell-export workflows keep working.
-    let _g = EnvVarGuard::set(AUDIO_DEVICE_ENV, "Process Env Mic");
+    let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "Process Env Mic");
     assert_eq!(
         resolve_audio_device_from_env(&[]),
         "Process Env Mic",
@@ -126,7 +154,7 @@ fn resolve_audio_device_from_env_falls_back_to_process_env() {
 #[test]
 fn resolve_audio_device_from_env_returns_empty_when_neither_set() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::remove(AUDIO_DEVICE_ENV);
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     assert!(
         resolve_audio_device_from_env(&[]).is_empty(),
         "neither source set → empty string = system default",
@@ -143,7 +171,7 @@ fn resolve_audio_device_from_env_returns_empty_when_neither_set() {
 #[test]
 fn resolve_audio_device_from_env_trims_whitespace_from_overrides() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::remove(AUDIO_DEVICE_ENV);
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "  Yeti X  ".to_owned())];
     assert_eq!(
         resolve_audio_device_from_env(&overrides),
@@ -155,7 +183,7 @@ fn resolve_audio_device_from_env_trims_whitespace_from_overrides() {
 #[test]
 fn resolve_audio_device_from_env_collapses_blank_override_to_empty() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::remove(AUDIO_DEVICE_ENV);
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "   ".to_owned())];
     assert_eq!(
         resolve_audio_device_from_env(&overrides),
@@ -169,14 +197,14 @@ fn resolve_audio_device_from_env_trims_process_env_fallback() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // No worker-command override → process env is consulted, and it
     // must be trimmed the same way the override path is.
-    let _g = EnvVarGuard::set(AUDIO_DEVICE_ENV, "\tHeadset Mic\n");
+    let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "\tHeadset Mic\n");
     assert_eq!(resolve_audio_device_from_env(&[]), "Headset Mic");
 }
 
 #[test]
 fn resolve_audio_device_from_env_ignores_unrelated_overrides() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _g = EnvVarGuard::remove(AUDIO_DEVICE_ENV);
+    let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     let overrides = vec![
         ("VOICEPI_MODEL".to_owned(), "small".to_owned()),
         ("PYTHONPATH".to_owned(), "/somewhere".to_owned()),

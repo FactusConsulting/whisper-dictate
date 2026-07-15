@@ -53,13 +53,9 @@
 //! drives the coordinator and tracker directly with synthetic events).
 
 pub mod coordinator;
-pub mod diag;
-pub mod inject_guard;
 pub mod manager;
 pub mod modifier_match;
 
-#[cfg(feature = "rust-hotkeys")]
-use std::sync::Arc;
 #[cfg(feature = "rust-hotkeys")]
 use std::time::Instant;
 
@@ -70,7 +66,6 @@ use coordinator::{
     spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, CoordinatorHandle,
     CoordinatorThread, Options,
 };
-pub use inject_guard::InjectionGuard;
 #[cfg(feature = "rust-hotkeys")]
 use manager::{
     is_rdev_supported_name, spawn as spawn_manager, ManagerHandle, ManagerThread, SpawnError,
@@ -118,14 +113,6 @@ pub struct HotkeyHandle {
     coordinator_thread: Option<CoordinatorThread>,
     manager: ManagerHandle,
     manager_thread: Option<ManagerThread>,
-    /// Shared self-injection guard. The driver callback reads this to
-    /// drop OS events that the app's own text injector is currently
-    /// producing (Windows self-injection PTT wedge; see
-    /// [`inject_guard`] for the full rationale). Exposed via
-    /// [`HotkeyHandle::injection_guard`] so the runtime can hand the
-    /// same handle to the injector — arms on the injector side, checks
-    /// on the driver side, no explicit disarm.
-    injection_guard: Arc<InjectionGuard>,
 }
 
 /// Stub handle for builds without the `rust-hotkeys` feature. Exists so
@@ -142,10 +129,10 @@ pub struct HotkeyHandle {
 ///   `rust-hotkeys` cargo feature. The supervisor logs a warning and stays
 ///   on the pynput path.
 /// * [`Self::EmptyConfig`] — the PTT binding came in empty.
-/// * [`Self::UnsupportedKey`] — a configured key name no backend can
-///   translate to a PTT-able key (e.g. `caps_lock`, which the settings UI
-///   accepts but neither rdev nor evdev maps). Surfaced synchronously so a
-///   binding that can never fire is not treated as installed (P2 #6).
+/// * [`Self::UnsupportedKey`] — a configured key name has no rdev
+///   translation (e.g. `super_l`, which the Python evdev backend accepts
+///   but rdev does not). Surfaced BEFORE the supervisor disables Python so
+///   it can keep the pynput path wired (P2 #6).
 /// * [`Self::ListenerStartup`] — `rdev::listen` failed at startup (no X
 ///   display, missing accessibility permission, ...). Surfaced
 ///   synchronously so the supervisor can fall back to pynput (P1 #2).
@@ -203,24 +190,10 @@ where
     let options = Options { mode: config.mode };
     let (coord_handle, coord_thread) = spawn_coordinator(options, action_sink, Instant::now);
 
-    // Shared self-injection guard — armed by the injector wrapper before
-    // every SendInput burst, checked by the driver callback below. See
-    // [`inject_guard`] for the full rationale (Windows PTT wedge, same
-    // class as #467 on Linux/Wayland but with no /dev/input equivalent).
-    //
-    // Also publish it to the process-wide slot so the runtime's
-    // `EnigoInjectBackend` (which was constructed BEFORE this call by
-    // the session builder) can pick it up on the next `inject()` call
-    // without needing per-layer wiring through the sink builder chain.
-    // Same-process second install (test hosts) is a no-op — first
-    // writer wins; production `install_hotkey` runs exactly once.
-    let injection_guard = Arc::new(InjectionGuard::new());
-    inject_guard::set_global(Arc::clone(&injection_guard));
-
     // Bridge: TrackerOutput → CoordinatorEvent. Cloneable handle so the
     // closure captures a Sender that's cheap to call from the rdev callback.
     let bridge = coord_handle.clone();
-    let (mgr_handle, mgr_thread) = match spawn_manager(Arc::clone(&injection_guard), move |out| {
+    let (mgr_handle, mgr_thread) = match spawn_manager(move |out| {
         let event = match out {
             TrackerOutput::ChordPress => CoordinatorEvent::Press,
             TrackerOutput::ChordRelease => CoordinatorEvent::Release,
@@ -257,7 +230,6 @@ where
         coordinator_thread: Some(coord_thread),
         manager: mgr_handle,
         manager_thread: Some(mgr_thread),
-        injection_guard,
     })
 }
 
@@ -291,10 +263,10 @@ where
 /// the Python listener. Returns Err with the first unsupported name.
 ///
 /// Codex P2 #416 (round 2) runtime.rs:511 -- on the restart path the
-/// supervisor validates the (possibly updated) binding before calling
-/// `handle.resume(key_names)`; without this a Settings change to a key the
-/// UI accepts but no backend maps (eg `caps_lock`) would silently leave the
-/// hotkey unable to fire.
+/// supervisor parks Python BEFORE calling `handle.resume(key_names)`;
+/// without this validation a Settings change to a key that the Python
+/// evdev backend accepts but rdev does not (eg `super_l`) would leave
+/// Python disabled and the Rust hotkey unable to fire.
 ///
 /// In stub builds (no `rust-hotkeys` feature) this always succeeds --
 /// `install_hotkey` already returns `Unsupported` synchronously there,
@@ -354,17 +326,6 @@ impl HotkeyHandle {
     /// over the inbound mpsc sender.
     pub fn coordinator_handle(&self) -> CoordinatorHandle {
         self.coordinator.clone()
-    }
-
-    /// Clone the shared self-injection guard. The runtime hands the
-    /// resulting `Arc` to the injector wrapper
-    /// ([`crate::dictate::backends::EnigoInjectBackend::with_injection_guard`])
-    /// so the injector can arm the guard around every `SendInput` burst
-    /// — the driver callback that already holds an `Arc` clone will
-    /// then drop the injected events instead of feeding them into the
-    /// tracker (Windows self-injection PTT wedge; see [`inject_guard`]).
-    pub fn injection_guard(&self) -> Arc<InjectionGuard> {
-        Arc::clone(&self.injection_guard)
     }
 
     /// Suspend key tracking: unregister the PTT binding from the manager and
@@ -525,29 +486,19 @@ mod integration {
 
     #[test]
     fn unsupported_key_is_rejected_up_front() {
-        // P2 #6: configs with names no backend can translate must be rejected
-        // synchronously so a binding that can never fire doesn't look
-        // installed. `caps_lock` is accepted by the settings UI but neither
-        // rdev nor evdev maps it to a PTT-able key. (`super_l` USED to be the
-        // example here, but Codex #462 P2 made it a valid cmd-family alias.)
-        let cfg = HotkeyConfig::hold_to_talk(vec!["caps_lock".to_owned()]);
+        // P2 #6: configs with names the rdev driver can't translate must
+        // be rejected synchronously so the supervisor never disables Python
+        // for a binding that will never fire. `super_l` is accepted by the
+        // Python evdev backend but not by our rdev key map.
+        let cfg = HotkeyConfig::hold_to_talk(vec!["super_l".to_owned()]);
         let err = match install_hotkey(cfg, |_| {}) {
             Ok(_) => panic!("expected UnsupportedKey error, got Ok"),
             Err(e) => e,
         };
         match err {
-            InstallError::UnsupportedKey(name) => assert_eq!(name, "caps_lock"),
+            InstallError::UnsupportedKey(name) => assert_eq!(name, "super_l"),
             other => panic!("expected UnsupportedKey, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn super_names_are_accepted_as_cmd_aliases() {
-        // Codex #462 P2: a saved `super_l`/`super_r` binding (Linux Meta/Win
-        // key, which both backends emit as `cmd_*`) must pass validation so
-        // PTT is not left dead on Wayland for those users.
-        assert!(validate_key_names(&["super_l".to_owned()]).is_ok());
-        assert!(validate_key_names(&["super_r".to_owned(), "ctrl_l".to_owned()]).is_ok());
     }
 
     /// Pins the feature-build behaviour of `validate_key_names`, the
@@ -564,15 +515,15 @@ mod integration {
             Err(InstallError::EmptyConfig)
         ));
         // First-bad-name is reported (deterministic for error UX).
-        match validate_key_names(&["ctrl_l".to_owned(), "caps_lock".to_owned()]) {
-            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "caps_lock"),
+        match validate_key_names(&["ctrl_l".to_owned(), "super_l".to_owned()]) {
+            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "super_l"),
             other => {
-                panic!("expected UnsupportedKey(\"caps_lock\") for first-bad-name, got: {other:?}")
+                panic!("expected UnsupportedKey(\"super_l\") for first-bad-name, got: {other:?}")
             }
         }
-        match validate_key_names(&["caps_lock".to_owned(), "ctrl_l".to_owned()]) {
-            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "caps_lock"),
-            other => panic!("expected UnsupportedKey(\"caps_lock\") first, got: {other:?}"),
+        match validate_key_names(&["super_l".to_owned(), "ctrl_l".to_owned()]) {
+            Err(InstallError::UnsupportedKey(name)) => assert_eq!(name, "super_l"),
+            other => panic!("expected UnsupportedKey(\"super_l\") first, got: {other:?}"),
         }
         // All-supported -> Ok so the restart path proceeds to resume.
         assert!(validate_key_names(&["ctrl_l".to_owned(), "f9".to_owned()]).is_ok());
@@ -582,36 +533,33 @@ mod integration {
 #[cfg(test)]
 mod env_tests {
     use super::*;
-    use crate::test_env_lock::{EnvVarGuard, ENV_LOCK};
 
     #[test]
     fn backend_requested_reads_env_var_truthy_rust_only() {
         // Hold the crate-wide env lock so we don't race other env-mutating
-        // tests in the same binary, AND wrap each mutation in an RAII guard
-        // so the original value is restored even if an assertion below
-        // panics (Codex P2 #415 pattern). See `crate::test_env_lock` for
-        // the full soundness contract.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // tests in the same binary — see crate::test_env_lock for the
+        // soundness contract.
+        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
 
-        {
-            let _g = EnvVarGuard::remove("VOICEPI_HOTKEY_BACKEND");
-            assert!(!rust_hotkey_backend_requested());
-        }
-        {
-            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
-            assert!(rust_hotkey_backend_requested());
-        }
-        {
-            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "RUST");
-            assert!(rust_hotkey_backend_requested());
-        }
-        {
-            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "pynput");
-            assert!(!rust_hotkey_backend_requested());
-        }
-        {
-            let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "");
-            assert!(!rust_hotkey_backend_requested());
+        std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
+        assert!(!rust_hotkey_backend_requested());
+
+        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "rust");
+        assert!(rust_hotkey_backend_requested());
+
+        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "RUST");
+        assert!(rust_hotkey_backend_requested());
+
+        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "pynput");
+        assert!(!rust_hotkey_backend_requested());
+
+        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "");
+        assert!(!rust_hotkey_backend_requested());
+
+        match prev {
+            Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
+            None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
         }
     }
 
@@ -634,12 +582,19 @@ mod env_tests {
     #[test]
     #[cfg(not(feature = "rust-hotkeys"))]
     fn backend_available_is_false_on_stock_build_regardless_of_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _g = EnvVarGuard::set("VOICEPI_HOTKEY_BACKEND", "rust");
+        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
+
+        std::env::set_var("VOICEPI_HOTKEY_BACKEND", "rust");
         assert!(
             !rust_hotkey_backend_available(),
             "backend_available must be false on a stock build even when env var is set"
         );
+
+        match prev {
+            Some(v) => std::env::set_var("VOICEPI_HOTKEY_BACKEND", v),
+            None => std::env::remove_var("VOICEPI_HOTKEY_BACKEND"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -695,9 +650,9 @@ mod env_tests {
         // stub is unconditionally Ok.
         assert!(validate_key_names(&[]).is_ok());
         // Non-empty input including a name the feature build would reject
-        // (`caps_lock` is not in any backend's key map): stub still returns
-        // Ok because the supervisor never consults the result when
+        // (`super_l` is not in the rdev key map): stub still returns Ok
+        // because the supervisor never consults the result when
         // `hotkey_handle` is None.
-        assert!(validate_key_names(&["ctrl_l".to_owned(), "caps_lock".to_owned()]).is_ok());
+        assert!(validate_key_names(&["ctrl_l".to_owned(), "super_l".to_owned()]).is_ok());
     }
 }

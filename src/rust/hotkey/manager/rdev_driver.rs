@@ -27,23 +27,93 @@
 //! caller of `install_hotkey()` so the supervisor can keep the Python
 //! listener wired instead of parking it.
 
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::driver_common::{manager_channel, spawn_manager_thread};
 use super::tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput};
-use crate::hotkey::diag::{self, handle_raw_event_with_diag};
-use crate::hotkey::inject_guard::InjectionGuard;
-
-pub use super::driver_common::{ManagerHandle, ManagerThread, SpawnError};
 
 /// Maximum time [`spawn`] waits after the listener thread reports "started"
 /// for `rdev::listen` to either return Err (and thus be a startup failure)
 /// or stay blocked (and thus be healthy). Tuned for fast-failure platforms
 /// like headless Linux without making CI slow.
 const READY_PROBE_WINDOW: Duration = Duration::from_millis(250);
+
+/// Commands the manager thread accepts on its inbound channel. Each carries
+/// a sync response sender so the caller can `recv()` confirmation from a
+/// non-listener thread; this is the "mpsc commands with sync response"
+/// pattern issue #318 calls out.
+pub enum ManagerCommand {
+    Register {
+        targets: Vec<String>,
+        ack: Sender<Result<(), String>>,
+    },
+    Unregister {
+        ack: Sender<Result<(), String>>,
+    },
+    Shutdown,
+}
+
+/// Public handle to the manager thread.
+#[derive(Clone)]
+pub struct ManagerHandle {
+    tx: Sender<ManagerCommand>,
+}
+
+impl ManagerHandle {
+    /// Install (or replace) the active PTT binding. Blocks until the manager
+    /// thread acknowledges, but the underlying operation is cheap — just
+    /// swapping a `Vec<String>` in a mutex.
+    pub fn register(&self, targets: Vec<String>) -> Result<(), String> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(ManagerCommand::Register {
+                targets,
+                ack: ack_tx,
+            })
+            .map_err(|e| format!("manager thread disconnected: {e}"))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("ack channel closed: {e}"))?
+    }
+
+    /// Stop emitting tracker outputs without tearing down the listener
+    /// thread (the OS listener stays installed — `rdev` does not give us a
+    /// clean per-binding teardown — but the tracker is replaced with an
+    /// empty one so no events flow through).
+    pub fn unregister(&self) -> Result<(), String> {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send(ManagerCommand::Unregister { ack: ack_tx })
+            .map_err(|e| format!("manager thread disconnected: {e}"))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("ack channel closed: {e}"))?
+    }
+
+    /// Ask the manager thread to exit. The OS-level `rdev::listen()` thread
+    /// cannot be interrupted, so it leaks on shutdown — acceptable because
+    /// the supervisor only ever installs the hotkey subsystem once and tears
+    /// down on process exit.
+    pub fn shutdown(&self) {
+        let _ = self.tx.send(ManagerCommand::Shutdown);
+    }
+}
+
+/// Owned join handle for the manager thread (NOT the inner rdev listener
+/// thread, which cannot be joined). Kept by the supervisor for cleanup.
+pub struct ManagerThread {
+    join: Option<JoinHandle<()>>,
+}
+
+impl ManagerThread {
+    pub fn join(mut self) {
+        if let Some(h) = self.join.take() {
+            let _ = h.join();
+        }
+    }
+}
 
 /// Signals the listener thread sends to the spawn-side coordinator.
 enum ListenerSignal {
@@ -54,6 +124,16 @@ enum ListenerSignal {
     Failed(String),
 }
 
+/// Errors [`spawn`] surfaces on startup. Translated to `InstallError` by the
+/// hotkey module so the supervisor can pick a fallback strategy.
+#[derive(Debug, thiserror::Error)]
+pub enum SpawnError {
+    #[error("rdev listener startup failed: {0}")]
+    ListenerStartup(String),
+    #[error("rdev listener thread never reported it was started")]
+    ListenerHung,
+}
+
 /// Spawn the manager thread plus the `rdev` listener thread. Every tracker
 /// output produced by a real OS key event is dispatched to `on_output`,
 /// which the coordinator hooks up to its press/release/cancel events.
@@ -62,46 +142,19 @@ enum ListenerSignal {
 /// [`READY_PROBE_WINDOW`] — for example missing X display on Linux, or
 /// missing accessibility permission on macOS. On success the listener thread
 /// runs forever (rdev limitation) and is reported as healthy.
-///
-/// `injection_guard` gates the callback: while the injector wrapper is
-/// bursting synthetic events through `SendInput` (Windows) / equivalent APIs
-/// on X11+macOS, the guard is armed and the callback drops every event
-/// rdev delivers. This closes the Windows self-injection PTT wedge — the
-/// same class of bug the Wayland fix in #467 solved via device-level
-/// filtering. See [`crate::hotkey::inject_guard`] for the full rationale
-/// and timing model.
-pub fn spawn<F>(
-    injection_guard: Arc<InjectionGuard>,
-    on_output: F,
-) -> Result<(ManagerHandle, ManagerThread), SpawnError>
+pub fn spawn<F>(on_output: F) -> Result<(ManagerHandle, ManagerThread), SpawnError>
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
 {
-    let (handle, cmd_rx) = manager_channel();
+    let (cmd_tx, cmd_rx) = mpsc::channel();
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
-
-    // Diagnostic counters + heartbeat thread (see `crate::hotkey::diag`).
-    // Both are process-global no-ops on second and later spawns, so a test
-    // binary that spins up multiple rdev drivers still only gets one
-    // heartbeat thread.
-    //
-    // The per-event `[hotkey-diag] evt#…` trace below is **always on**
-    // (not gated on `VOICEPI_HOTKEY_DEBUG`). The user's wedge fires on
-    // the very first PTT after a worker restart, so we cannot rely on
-    // them flipping an env var before the incident — we need the full
-    // event stream from the very first press. Once the fix ships this
-    // module (and its call sites) can be gated or removed.
-    let counters = diag::counters();
-    diag::spawn_heartbeat_once();
 
     // Listener thread — owns rdev. Translates raw events through the shared
     // tracker. Signals readiness / startup failure on a sync channel so
     // `spawn` can surface a quick-failure to the caller (P1 finding #2).
     let listener_tracker = Arc::clone(&tracker);
     let listener_sink = Arc::clone(&on_output);
-    let listener_guard = Arc::clone(&injection_guard);
-    let listener_counters = Arc::clone(&counters);
     let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
     thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
@@ -112,13 +165,10 @@ where
             let _ = ready_tx.send(ListenerSignal::Started);
             let cb = move |event: rdev::Event| {
                 if let Some(raw) = raw_from_rdev(&event) {
-                    handle_raw_event_with_diag(
-                        &raw,
-                        &listener_tracker,
-                        &listener_guard,
-                        &listener_counters,
-                        listener_sink.as_ref(),
-                    );
+                    let mut t = listener_tracker.lock().expect("tracker poisoned");
+                    if let Some(out) = t.handle(&raw) {
+                        (listener_sink)(out);
+                    }
                 }
             };
             if let Err(err) = rdev::listen(cb) {
@@ -154,8 +204,34 @@ where
         }
     }
 
-    let manager_thread = spawn_manager_thread(cmd_rx, Arc::clone(&tracker))?;
-    Ok((handle, manager_thread))
+    let manager_tracker = Arc::clone(&tracker);
+    let join = thread::Builder::new()
+        .name("vp-hotkey-manager".to_owned())
+        .spawn(move || manager_loop(cmd_rx, manager_tracker))
+        .map_err(|e| SpawnError::ListenerStartup(format!("manager thread spawn failed: {e}")))?;
+
+    Ok((
+        ManagerHandle { tx: cmd_tx },
+        ManagerThread { join: Some(join) },
+    ))
+}
+
+fn manager_loop(rx: Receiver<ManagerCommand>, tracker: Arc<Mutex<KeyTracker>>) {
+    loop {
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(ManagerCommand::Register { targets, ack }) => {
+                *tracker.lock().expect("tracker poisoned") = KeyTracker::new(targets);
+                let _ = ack.send(Ok(()));
+            }
+            Ok(ManagerCommand::Unregister { ack }) => {
+                *tracker.lock().expect("tracker poisoned") = KeyTracker::new(Vec::new());
+                let _ = ack.send(Ok(()));
+            }
+            Ok(ManagerCommand::Shutdown) => return,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
 }
 
 /// Convert an `rdev::Event` into the platform-agnostic [`RawKeyEvent`] the
@@ -201,14 +277,6 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     "cmd_l",
     "cmd_r",
     "cmd",
-    // `super_l` / `super_r` are the Linux Meta/Win key names. rdev emits them
-    // as `cmd_*` via `key_to_name`, and `modifier_match` aliases the `super_*`
-    // *target* names into the cmd family, so they are valid PTT bindings on
-    // both backends (Codex #462 P2). Accept them here so install-time
-    // validation doesn't reject a saved `super_l` binding before the evdev
-    // backend gets a chance to observe the key.
-    "super_l",
-    "super_r",
     "f1",
     "f2",
     "f3",
@@ -290,8 +358,7 @@ mod tests {
         // such platforms rather than assert success.
         let count = Arc::new(AtomicUsize::new(0));
         let count_cb = Arc::clone(&count);
-        let guard = Arc::new(InjectionGuard::new());
-        let (handle, _thread) = match spawn(guard, move |_out| {
+        let (handle, _thread) = match spawn(move |_out| {
             count_cb.fetch_add(1, Ordering::SeqCst);
         }) {
             Ok(pair) => pair,
@@ -327,8 +394,7 @@ mod tests {
         // We don't have a way to force the failure on platforms where the
         // hook genuinely works, so on those we treat success as "test not
         // applicable" rather than fail.
-        let guard = Arc::new(InjectionGuard::new());
-        match spawn(guard, |_out| {}) {
+        match spawn(|_out| {}) {
             Ok((handle, _thread)) => {
                 handle.shutdown();
             }
@@ -377,12 +443,10 @@ mod tests {
 
     #[test]
     fn unsupported_names_are_rejected_by_validator() {
-        // Names the settings UI accepts but NO backend can translate to a
-        // PTT-able key. Without the validator a configuration containing any
-        // of these would install successfully but never fire (P2 #6).
-        // (`super_l`/`super_r` USED to live here, but Codex #462 P2 made them
-        // valid cmd-family aliases — see `super_names_...` in hotkey/mod.rs.)
-        for name in ["menu", "scroll_lock", "pause", "caps_lock", "insert"] {
+        // Names accepted by the Python evdev/pynput backends but NOT by the
+        // rdev driver. Without the validator a configuration that contains
+        // any of these would install successfully but never fire (P2 #6).
+        for name in ["super_l", "super_r", "menu", "scroll_lock", "pause"] {
             assert!(
                 !is_rdev_supported_name(name),
                 "rdev driver claims to support {name} — update the test or the map",

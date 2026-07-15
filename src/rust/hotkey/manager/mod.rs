@@ -1,8 +1,8 @@
-//! Hotkey manager — owns the global key-event listener in its own thread and
-//! translates raw OS key events into the side-aware press / release / cancel
-//! signals the coordinator consumes.
+//! Hotkey manager — owns the `rdev` global key-event listener in its own
+//! thread and translates raw OS key events into the side-aware press /
+//! release / cancel signals the coordinator consumes.
 //!
-//! Layers, separated so the bulk is testable without any platform crate and so
+//! Two layers, separated so the bulk is testable without `rdev` and so the
 //! production logic stays within the repo-wide ≤500-LOC per file rule
 //! (`AGENTS.md`):
 //!
@@ -11,115 +11,27 @@
 //!   [`TrackerOutput`]s (`ChordPress`, `ChordRelease`, `ChordCancel`).
 //!   Holds the side-aware target/foreign membership using
 //!   [`super::modifier_match::modifier_matches`] and the rising-edge latch
-//!   so key-repeat never re-fires a press.
+//!   so key-repeat never re-fires a press. Mirrors the Python
+//!   `_PynputListener` semantics so behaviour is preserved.
 //!
-//! * [`driver_common`] — the backend-agnostic half: the `ManagerHandle` /
-//!   `ManagerThread` / `SpawnError` contract and the manager thread that
-//!   swaps the active binding via an mpsc command API (the OS listener runs
-//!   on its own thread with non-`Send` handles, so the rest of the runtime
-//!   talks to it only through this channel).
-//!
-//! * [`rdev_driver`] / [`evdev_driver`] (`#[cfg(feature = "rust-hotkeys")]`) —
-//!   the two platform listeners. rdev drives X11 / Windows / macOS via the
-//!   global hook; evdev reads `/dev/input` directly on Linux, the only path
-//!   that observes global keys under a Wayland compositor (rdev's X11 XRecord
-//!   is deaf there). [`spawn`] picks between them per session — see its docs.
-//!   Both surface startup failures (no X display / missing accessibility
-//!   permission for rdev; no readable keyboard node for evdev) to the caller.
+//! * [`rdev_driver`] (`#[cfg(feature = "rust-hotkeys")]`) — translates the
+//!   platform `rdev::Event` into a [`RawKeyEvent`] and feeds the tracker.
+//!   `rdev::listen()` is blocking and its native handles are not `Send` /
+//!   `Sync`, hence the dedicated thread + mpsc-command API for register /
+//!   unregister so the rest of the runtime can talk to it without touching
+//!   the raw listener. Surfaces startup failures (no X display, missing
+//!   accessibility permission, ...) to the caller of [`spawn`] so the
+//!   supervisor can fall back to Python.
 
 pub mod tracker;
 
 #[cfg(feature = "rust-hotkeys")]
-pub mod driver_common;
-
-#[cfg(feature = "rust-hotkeys")]
 pub mod rdev_driver;
-
-// evdev backend is Linux-only — it reads `/dev/input` directly, which is the
-// only listener that works under Wayland (rdev's X11 XRecord is deaf there).
-#[cfg(all(feature = "rust-hotkeys", target_os = "linux"))]
-pub mod evdev_driver;
 
 // Re-export the always-compiled tracker types at the manager level so call
 // sites can keep using `manager::KeyTracker` / `manager::RawKeyEvent` etc.
 // without caring about the sub-module split.
-pub use tracker::{
-    KeyTracker, RawKeyEvent, RawKeyKind, TrackerDecision, TrackerOutput, FOREIGN_KEY_EXPIRY,
-};
+pub use tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput, FOREIGN_KEY_EXPIRY};
 
 #[cfg(feature = "rust-hotkeys")]
-pub use driver_common::{ManagerHandle, ManagerThread, SpawnError};
-
-#[cfg(feature = "rust-hotkeys")]
-pub use rdev_driver::is_rdev_supported_name;
-
-/// Spawn the OS key-event listener, picking the backend that actually works on
-/// the running session:
-///
-/// * **Linux + Wayland** → [`evdev_driver`] (reads `/dev/input` directly; the
-///   only path that sees global keys under a Wayland compositor).
-/// * **Linux + X11**, **Windows**, **macOS** → [`rdev_driver`] (the global
-///   hook / XRecord path).
-///
-/// The choice can be forced on Linux with `VOICEPI_HOTKEY_LINUX=evdev|rdev`
-/// (also accepts `x11` as an alias for `rdev`) for debugging or as an escape
-/// hatch. Everything downstream ([`ManagerHandle`], the tracker, the
-/// coordinator) is backend-agnostic, so callers never care which fired.
-///
-/// `injection_guard` is shared with the injector wrapper and is consulted by
-/// the rdev callback to drop events the app's own text injector is currently
-/// producing (Windows self-injection PTT wedge; see
-/// [`crate::hotkey::inject_guard`] for the full rationale). The evdev backend
-/// gets the guard for API symmetry but does not actively consult it — the
-/// Wayland/Linux equivalent bug (#467) is filtered at the `/dev/input` device
-/// level by `evdev_driver::open_keyboards`.
-#[cfg(feature = "rust-hotkeys")]
-pub fn spawn<F>(
-    injection_guard: std::sync::Arc<crate::hotkey::InjectionGuard>,
-    on_output: F,
-) -> std::result::Result<(ManagerHandle, ManagerThread), SpawnError>
-where
-    F: Fn(TrackerOutput) + Send + Sync + 'static,
-{
-    #[cfg(target_os = "linux")]
-    {
-        if use_evdev() {
-            // evdev already excludes self-injection uinput devices in
-            // `open_keyboards` (#467), so the guard is redundant on this
-            // path. Drop it here rather than plumb it further.
-            let _ = injection_guard;
-            return evdev_driver::spawn(on_output);
-        }
-    }
-    rdev_driver::spawn(injection_guard, on_output)
-}
-
-/// Decide whether the evdev backend should be used on Linux. Honours an
-/// explicit `VOICEPI_HOTKEY_LINUX` override, otherwise auto-selects evdev for
-/// Wayland sessions (where rdev cannot observe global keys).
-#[cfg(all(feature = "rust-hotkeys", target_os = "linux"))]
-fn use_evdev() -> bool {
-    if let Ok(v) = std::env::var("VOICEPI_HOTKEY_LINUX") {
-        match v.trim().to_ascii_lowercase().as_str() {
-            "evdev" => return true,
-            "rdev" | "x11" => return false,
-            // Unknown value: fall through to auto-detection.
-            _ => {}
-        }
-    }
-    is_wayland_session()
-}
-
-/// True when the process is running under a Wayland session. Checks both
-/// `XDG_SESSION_TYPE=wayland` and a non-empty `WAYLAND_DISPLAY`, since some
-/// launch environments set only one.
-#[cfg(all(feature = "rust-hotkeys", target_os = "linux"))]
-fn is_wayland_session() -> bool {
-    let session_type_wayland = std::env::var("XDG_SESSION_TYPE")
-        .map(|v| v.eq_ignore_ascii_case("wayland"))
-        .unwrap_or(false);
-    let has_wayland_display = std::env::var("WAYLAND_DISPLAY")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-    session_type_wayland || has_wayland_display
-}
+pub use rdev_driver::{is_rdev_supported_name, spawn, ManagerHandle, ManagerThread, SpawnError};

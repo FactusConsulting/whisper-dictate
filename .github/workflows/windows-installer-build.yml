@@ -56,15 +56,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-    env:
-      # v1.20.5: whisper.cpp's Vulkan backend build (via whisper-rs-sys) spawns
-      # CMake TryCompile scratch dirs deep under `target/`. On the default
-      # `D:\a\whisper-dictate\whisper-dictate\` runner path those paths blow
-      # past Windows MAX_PATH (260) and the build fails with FileTracker
-      # FTK1011 in `vulkan-shaders-gen-prefix\...\CMakeScratch\TryCompile-*`.
-      # Relocating the target dir to `D:\t` saves ~40 chars of headroom; the
-      # long-paths registry step below is a belt-and-braces backup.
-      CARGO_TARGET_DIR: D:\t
     steps:
       - name: Resolve tag
         shell: bash
@@ -103,6 +94,7 @@ jobs:
           changed=$(git diff --name-only "$prev" HEAD -- \
             src/rust/Cargo.toml src/rust/Cargo.lock src/rust/ \
             src/ \
+            requirements/ \
             scripts/ \
             packaging/windows/ \
             .github/workflows/windows-installer-build.yml \
@@ -116,35 +108,10 @@ jobs:
             echo "No Windows-specific changes since $prev - skipping installer build"
           fi
 
-      # Belt-and-braces path-length mitigation for v1.20.5. The primary fix is
-      # the job-level `CARGO_TARGET_DIR: D:\t` above; enabling long paths in the
-      # OS + git is cheap insurance in case any future step or dependency writes
-      # under the repo tree with a >260-char path.
-      - name: Enable Windows long paths
-        if: steps.win-check.outputs.changed == 'true'
-        shell: pwsh
-        run: |
-          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
-          git config --system core.longpaths true
-
       - name: Install Inno Setup
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
         run: choco install innosetup -y --no-progress
-
-      # Vulkan SDK is required to build whisper.cpp with the Vulkan backend
-      # (`whisper-rs-vulkan` feature; v1.20.3 flip). windows-2025 ships the
-      # Vulkan loader (`vulkan-1.dll`) via the Windows SDK but NOT the SDK
-      # headers whisper.cpp's CMake needs at compile time. The runtime DLL is
-      # provided by any modern GPU driver on end-user machines — we do NOT
-      # bundle it in the installer (it would collide with the driver copy);
-      # `LocalWhisper::with_policy` falls back to CPU if Vulkan init fails.
-      - name: Install Vulkan SDK
-        if: steps.win-check.outputs.changed == 'true'
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.3.290.0
-          cache: true
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: steps.win-check.outputs.changed == 'true'
@@ -152,25 +119,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: steps.win-check.outputs.changed == 'true'
         with:
-          # Target dir is relocated to D:\t (v1.20.5 path-length fix) — point
-          # the cache action at the same absolute path so target/ caching still
-          # works. `key` bumped so we do not restore a target laid out under
-          # the old in-repo path.
-          workspaces: "src/rust -> D:\\t"
-          shared-key: "rust-release-windows-dt"
+          workspaces: "src/rust -> ../target"
+          shared-key: "rust-release-windows"
           cache-on-failure: true
 
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
-        # `whisper-rs-vulkan` transitively enables `whisper-rs-local` and adds
-        # whisper.cpp's Vulkan backend (v1.20.3 fix). Runtime GPU/CPU choice is
-        # gated by `VOICEPI_WHISPER_GPU` in `whisper::gpu`; `LocalWhisper` falls
-        # back to CPU if Vulkan init fails so users without a Vulkan driver
-        # still get working transcription.
-        # NB: no `--target-dir` here; the job-level `CARGO_TARGET_DIR: D:\t`
-        # env var wins only when the CLI flag is absent (CLI overrides env).
-        run: cargo build --manifest-path src/rust/Cargo.toml --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-vulkan
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
 
       - name: Build installers
         if: steps.win-check.outputs.changed == 'true'
@@ -185,11 +141,7 @@ jobs:
           $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $outDir  = "$PWD\Output"
           New-Item -ItemType Directory -Force $outDir | Out-Null
-          # /DBinDir points ISCC at the relocated CARGO_TARGET_DIR (v1.20.5
-          # path-length fix). Without this override the ISS's default
-          # `..\..\..\target\release` would resolve to an empty dir under the
-          # repo tree because cargo now writes to D:\t.
-          & $iscc /DVERSION=$version /DVERSION_INFO=$versionInfo "/DBinDir=$env:CARGO_TARGET_DIR\release" /O"$outDir" packaging\windows\inno\whisper-dictate.iss
+          & $iscc /DVERSION=$version /DVERSION_INFO=$versionInfo /O"$outDir" packaging\windows\inno\whisper-dictate.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
       - name: Build Windows ZIP packages
@@ -201,13 +153,17 @@ jobs:
           $bundle = Join-Path $outDir "zip-windows\whisper-dictate"
           Remove-Item (Split-Path $bundle -Parent) -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $bundle | Out-Null
-          # Wave 8 (#348): the Python worker package has been deleted; the
-          # compiled Rust binary is the only runtime shipped in the ZIP bundle.
+          # Ship only the Python worker package — not src\rust (compiled into the
+          # .exe) or the test trees. Mirrors the Inno installer's [Files] list.
+          New-Item -ItemType Directory -Force (Join-Path $bundle "src\python") | Out-Null
+          Copy-Item src\python\whisper_dictate (Join-Path $bundle "src\python") -Recurse
+          Get-ChildItem -LiteralPath $bundle -Directory -Recurse -Force -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item README.md,LICENSE,VERSION $bundle
           Copy-Item docs $bundle -Recurse
+          Copy-Item requirements $bundle -Recurse
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
-          Copy-Item "$env:CARGO_TARGET_DIR\release\whisper-dictate.exe" $bundle
+          Copy-Item target\release\whisper-dictate.exe $bundle
           # Ship ONNX Runtime next to the .exe (Wave 8 / rc.2): the
           # `audio-in-rust` feature pulls in vad-rs -> ort, which
           # dynamically loads onnxruntime.dll at startup. ort's
@@ -216,7 +172,7 @@ jobs:
           # ships related sidecar DLLs (providers/EP packs) lands
           # too. ErrorAction SilentlyContinue keeps the ZIP build
           # green during local dev runs without the feature on.
-          Copy-Item "$env:CARGO_TARGET_DIR\release\onnxruntime*.dll" $bundle -ErrorAction SilentlyContinue
+          Copy-Item target\release\onnxruntime*.dll $bundle -ErrorAction SilentlyContinue
           # Ship the golden-benchmark manifest (corpus.json only — NOT the
           # user-local, gitignored audio) so "Run benchmark" resolves a corpus
           # out of the box. Mirrors the Inno installer's benchmark\corpus.json.

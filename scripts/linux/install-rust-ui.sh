@@ -25,26 +25,7 @@ else
     echo "cargo is required. Install Rust from https://rustup.rs/ and re-run this script." >&2
     exit 1
   }
-  # Codex #453 P2 (runtime.rs:634): the v1.20 supervisor requires
-  # the full worker-rust feature set (whisper-rs-local + rust-injection
-  # + audio-in-rust + rust-hotkeys) because Wave 8 removed the Python
-  # fallback. A default-features build would refuse to start dictation
-  # with the "missing rust-session feature set" error. Ship the full
-  # set from source too.
-  #
-  # `whisper-rs-vulkan` (v1.20.3) supersedes `whisper-rs-local` — it
-  # transitively enables the local feature AND compiles whisper.cpp with
-  # Vulkan GPU support. Requires the Vulkan SDK on the build host
-  # (`sudo apt install libvulkan-dev spirv-tools glslang-tools glslc` on
-  # Ubuntu — `glslc` is a separate package from `glslang-tools` and is
-  # required by whisper.cpp's ggml-vulkan CMake to compile the compute
-  # shaders; missing it broke the v1.20.3 tag on Linux CI). Runtime falls
-  # back to CPU if the user machine lacks a Vulkan driver, so this is safe
-  # to ship as the default.
-  cargo build --release -p whisper-dictate-app \
-    --manifest-path "${CARGO_MANIFEST}" \
-    --target-dir "${HERE}/target" \
-    --features "whisper-rs-vulkan,rust-injection,audio-in-rust,rust-hotkeys"
+  cargo build --release -p whisper-dictate-app --manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"
   SOURCE_BIN="${HERE}/target/release/whisper-dictate"
 fi
 

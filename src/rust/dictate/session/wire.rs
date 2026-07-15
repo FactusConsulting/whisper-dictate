@@ -41,50 +41,16 @@ pub(super) fn emit_status<W: Write>(
     write_line(writer, &Value::Object(payload))
 }
 
-/// Extra postprocess / format-command / raw-text fields to weave into
-/// a `utterance` worker event. Extracted into a struct so the emitter's
-/// signature stays legible as new fields land (Wave 5.5 adds ten; PR 5
-/// will add more from the dictionary pipeline).
-///
-/// All fields are optional so a caller that has not wired post-processing
-/// yet still calls the emitter with `Default::default()` and produces a
-/// byte-identical event to the pre-Wave-5.5 wire.
-#[derive(Debug, Clone, Default)]
-pub(super) struct UtteranceExtras {
-    /// The transcribed text BEFORE post-processing / format commands.
-    /// Mirrors Python's `raw_text` field on the utterance event so
-    /// consumers that compare raw vs. final text keep working. When
-    /// `None`, the field is omitted (backwards-compatible default).
-    pub(super) raw_text: Option<String>,
-    /// Post-processing error message. Surfaced on the utterance event
-    /// so the supervisor / UI can drive a "post fallback" indicator
-    /// without re-parsing logs. `None` on success or when
-    /// post-processing did not run.
-    pub(super) postprocess_error: Option<String>,
-    /// Post-processing provenance mirroring Python's `post_*` fields.
-    pub(super) post_provider: Option<String>,
-    pub(super) post_mode: Option<String>,
-    pub(super) post_latency_ms: Option<u64>,
-    pub(super) post_changed: Option<bool>,
-    pub(super) post_fallback: Option<bool>,
-    /// Format-command provenance mirroring Python's
-    /// `format_commands_*` fields.
-    pub(super) format_enabled: Option<bool>,
-    pub(super) format_command_set: Option<String>,
-    pub(super) format_changed: Option<bool>,
-}
-
 /// Emit one `[worker-event] {…,"event":"utterance",…}` line. Carries
 /// the subset of fields `vp_dictate.py::_utterance_event` exposes from
-/// the trait surface plus optional postprocess / format extras added in
-/// Wave 5.5.
+/// the trait surface; the long-tail post-process / format / dictionary
+/// fields land with PR 5.
 pub(super) fn emit_utterance<W: Write>(
     writer: &mut W,
     text: &str,
     result: &TranscribeResult,
     recording_s: Value,
     inject_error: Option<String>,
-    extras: UtteranceExtras,
 ) -> Result<(), SessionError> {
     let mut payload: Map<String, Value> = Map::new();
     payload.insert("event".into(), Value::from("utterance"));
@@ -119,36 +85,6 @@ pub(super) fn emit_utterance<W: Write>(
     if let Some(err) = inject_error {
         payload.insert("inject_error".into(), Value::from(err));
     }
-    if let Some(raw) = extras.raw_text {
-        payload.insert("raw_text".into(), Value::from(raw));
-    }
-    if let Some(err) = extras.postprocess_error {
-        payload.insert("postprocess_error".into(), Value::from(err));
-    }
-    if let Some(provider) = extras.post_provider {
-        payload.insert("post_processor".into(), Value::from(provider));
-    }
-    if let Some(mode) = extras.post_mode {
-        payload.insert("post_mode".into(), Value::from(mode));
-    }
-    if let Some(latency) = extras.post_latency_ms {
-        payload.insert("post_latency_ms".into(), Value::from(latency));
-    }
-    if let Some(changed) = extras.post_changed {
-        payload.insert("post_changed".into(), Value::from(changed));
-    }
-    if let Some(fallback) = extras.post_fallback {
-        payload.insert("post_fallback".into(), Value::from(fallback));
-    }
-    if let Some(enabled) = extras.format_enabled {
-        payload.insert("format_commands_enabled".into(), Value::from(enabled));
-    }
-    if let Some(set) = extras.format_command_set {
-        payload.insert("format_commands_set".into(), Value::from(set));
-    }
-    if let Some(changed) = extras.format_changed {
-        payload.insert("format_commands_changed".into(), Value::from(changed));
-    }
     write_line(writer, &Value::Object(payload))
 }
 
@@ -165,19 +101,16 @@ fn is_droppable(value: &Value) -> bool {
 }
 
 fn write_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), SessionError> {
-    // NOTE: the previous `VOICEPI_WORKER_EVENTS` env-gate that used
-    // to live here was moved OUT of this state-machine helper.
-    // Rationale: re-reading a process-global env var on EVERY worker
-    // event created a Rust 2024 `set_var` race that manifested as a
-    // Windows-only flake on `inject_failure_still_emits_utterance`
-    // (the assertion "utterance event must still fire on inject
-    // failure" panicked mid-cascade). Env-gating is a policy that
-    // belongs at the caller boundary -- the RuntimeSupervisor now
-    // wraps stderr in a sink writer when `VOICEPI_WORKER_EVENTS`
-    // is unset/falsy, so a disabled caller still gets zero output
-    // but the state-machine's tests are no longer racing an
-    // unsynchronised env-block read. Codex P2 #413 wire.rs:98
-    // (round 3 -- follow-up to round 2 which introduced the race).
+    // Honour the VOICEPI_WORKER_EVENTS env gate (Python's
+    // `_emit_worker_event` returns early when the var is unset/falsy;
+    // PR 1's `events::write_line` does the same). Without the gate any
+    // session run outside the RuntimeSupervisor (e.g. a CLI smoke or
+    // tooling integration) would leak lines to whatever writer was
+    // passed in. Codex P2 #413 wire.rs:98 (round 2).
+    if !crate::dictate::env_gates::is_truthy(std::env::var("VOICEPI_WORKER_EVENTS").ok().as_deref())
+    {
+        return Ok(());
+    }
     writer.write_all(WORKER_EVENT_PREFIX.as_bytes())?;
     // ASCII-escape non-ASCII payload bytes so the worker-event line is
     // safe on Windows shells / hidden subprocess pipes with non-UTF-8

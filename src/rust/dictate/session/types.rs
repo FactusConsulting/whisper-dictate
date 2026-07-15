@@ -7,8 +7,6 @@
 
 use std::io;
 
-use crate::postprocess::PostprocessSettings;
-
 /// Sample rate (Hz) the Whisper model consumes. Mirrors `SR` in
 /// `vp_dictate.py`; pinned because the skip-gate and any future
 /// duration-from-samples conversions assume this rate.
@@ -120,25 +118,6 @@ pub struct SessionConfig {
     /// Number of capture channels surfaced on every status event.
     /// Mirrors `Dictate._capture_channels`.
     pub capture_channels: u32,
-    /// Post-processing pipeline settings. When `None`, no post-processing
-    /// runs on the transcribed text -- the session behaves as it did
-    /// before Wave 5.5. When `Some(settings)`, the session invokes
-    /// [`crate::postprocess::postprocess_text`] between the transcribe
-    /// and inject steps. Mirrors `Dictate.postprocess_settings` in
-    /// `vp_dictate.py`.
-    ///
-    /// The postprocess module handles its own "processor=none" /
-    /// "mode=raw" / "text is empty" short-circuits internally, so a
-    /// `Some(...)` value with `processor="none"` is a no-op and matches
-    /// Python's `_postprocess_and_format` behavior.
-    pub postprocess_settings: Option<PostprocessSettings>,
-    /// Format-command language set (`"en"` / `"da"` / `"both"` / `"off"`).
-    /// Mirrors the `format_commands` AppSettings field. Off by default so
-    /// existing test contracts stay green. The session calls
-    /// [`crate::formatting::apply_format_commands`] after post-processing;
-    /// `"off"` (or any value that `normalize_command_set` maps to `"off"`)
-    /// is a no-op.
-    pub format_commands: String,
 }
 
 impl Default for SessionConfig {
@@ -148,8 +127,6 @@ impl Default for SessionConfig {
             capture_backend: String::new(),
             audio_device: String::new(),
             capture_channels: 1,
-            postprocess_settings: None,
-            format_commands: "off".to_owned(),
         }
     }
 }

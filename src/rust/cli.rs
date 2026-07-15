@@ -9,84 +9,8 @@ pub struct Cli {
     #[arg(long)]
     pub version: bool,
 
-    /// Issue #326: forward a "toggle recording" command to the running
-    /// whisper-dictate daemon (start if idle, stop-and-transcribe if
-    /// recording) and exit. On Linux this sends SIGUSR1 to the PID from
-    /// the daemon's PID file; on macOS/Windows it currently errors with a
-    /// clear "not implemented" message (Linux-only IPC for now, per #326).
-    /// Mutually exclusive with `--start-recording`, `--stop-recording`,
-    /// `--cancel-recording`, and `--version` (clap-enforced). When combined
-    /// with a subcommand the flag wins — `main.rs` short-circuits to the
-    /// IPC forwarder before the subcommand match runs, matching the documented
-    /// "exactly one top-level action per invocation" contract.
-    #[arg(
-        long = "toggle-recording",
-        conflicts_with_all = [
-            "start_recording", "stop_recording", "cancel_recording", "version",
-        ],
-    )]
-    pub toggle_recording: bool,
-
-    /// Forward a "start recording" command to the running daemon. On the
-    /// wire this still uses SIGUSR1 (Unix signals carry no data); the CLI
-    /// writes the action token to a small command file so the daemon
-    /// distinguishes start / stop / toggle. No-op if the daemon is already
-    /// recording.
-    #[arg(
-        long = "start-recording",
-        conflicts_with_all = [
-            "toggle_recording", "stop_recording", "cancel_recording", "version",
-        ],
-    )]
-    pub start_recording: bool,
-
-    /// Forward a "stop and transcribe" command to the running daemon. Same
-    /// wire as `--start-recording` (SIGUSR1 + command file). No-op if no
-    /// recording is in flight.
-    #[arg(
-        long = "stop-recording",
-        conflicts_with_all = [
-            "toggle_recording", "start_recording", "cancel_recording", "version",
-        ],
-    )]
-    pub stop_recording: bool,
-
-    /// Forward a "cancel recording" command to the running daemon
-    /// (discard buffered audio, no transcription). Uses SIGUSR2 so it
-    /// works even when the command file is missing — the documented
-    /// "emergency stop" hotkey.
-    #[arg(
-        long = "cancel-recording",
-        conflicts_with_all = [
-            "toggle_recording", "start_recording", "stop_recording", "version",
-        ],
-    )]
-    pub cancel_recording: bool,
-
     #[command(subcommand)]
     pub command: Option<Command>,
-}
-
-impl Cli {
-    /// Map the four external-toggle flags onto an [`crate::runtime::external_toggle::ExternalCommand`].
-    /// Returns `None` when none of the flags are set; callers in `main.rs`
-    /// use this to short-circuit before dispatching the subcommand.
-    /// Mutual exclusion is enforced by clap (`conflicts_with_all`); this
-    /// helper just maps the matched flag to the IPC enum.
-    pub fn external_command(&self) -> Option<crate::runtime::external_toggle::ExternalCommand> {
-        use crate::runtime::external_toggle::ExternalCommand;
-        if self.toggle_recording {
-            Some(ExternalCommand::Toggle)
-        } else if self.start_recording {
-            Some(ExternalCommand::Start)
-        } else if self.stop_recording {
-            Some(ExternalCommand::Stop)
-        } else if self.cancel_recording {
-            Some(ExternalCommand::Cancel)
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -258,13 +182,6 @@ pub enum Command {
     /// path.
     #[command(hide = true)]
     Postprocess,
-    /// Internal helper used by the Python worker (or a future Rust
-    /// supervisor) to drive the second-hotkey LLM post-processing
-    /// pipeline (issue #319). JSON envelope on stdin, JSON response on
-    /// stdout — see `src/rust/postprocess_hotkey/mod.rs`. Actions:
-    /// `load_profiles`, `cycle_next`, `cycle_previous`, `dispatch`.
-    #[command(hide = true)]
-    PostprocessHotkey,
     /// Internal helper used by the Python worker for OpenAI-compatible chat
     /// completion (post-processor cloud backend) + transcription prompt
     /// capping. JSON envelope on stdin, JSON response on stdout — see
@@ -322,68 +239,6 @@ pub enum Command {
     /// error and exit non-zero so the Python caller can fall back to its own
     /// path. Used by `vp_devices.py` when `VOICEPI_DEVICES_BACKEND=rust`.
     Devices,
-    /// Internal helper used by the single-instance gate integration
-    /// tests (issue #327). NOT a supported user-facing entry point:
-    /// the flags and output format may change without notice.
-    ///
-    /// Two modes:
-    ///
-    /// * `--serve-ms N`: act as the running instance. Acquire the
-    ///   single-instance lock, listen for up to `N` milliseconds,
-    ///   print any forwarded argv as `[forwarded] <json>` lines to
-    ///   stdout, then release the lock and exit 0.
-    /// * default: act as the client. Attempt to forward `forward_args`
-    ///   to a running instance. Prints `[forwarded]` on success or
-    ///   `[acquired]` if there was no running instance (in which case
-    ///   the lock is released immediately and the process exits).
-    ///
-    /// Combined with `VOICEPI_SINGLE_INSTANCE_DIR=<tempdir>` this lets
-    /// the integration test drive two real processes without stomping
-    /// on a live user daemon.
-    #[command(hide = true)]
-    SingleInstanceProbe {
-        /// Serve mode: hold the lock for this many milliseconds while
-        /// printing forwarded argv to stdout.
-        #[arg(long)]
-        serve_ms: Option<u64>,
-        /// argv the client mode forwards to the running instance.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        forward_args: Vec<String>,
-    },
-    /// Wave 5 PR 6+7 of #348: long-running in-process Rust dictation worker.
-    /// REPLACES the Python `vp_dictate.py`/`runtime.py` orchestrator on any
-    /// build compiled with
-    /// `--features whisper-rs-local,rust-injection,audio-in-rust,rust-hotkeys`.
-    /// Users can force the pre-PR-7 Python fallback with
-    /// `VOICEPI_DICTATE_BACKEND=python-legacy` during the Wave-7 → Wave-8
-    /// burn-in only; Wave 8 removes the Python bundle and this escape
-    /// hatch together. Stock CI builds (any feature missing) still stay
-    /// on Python by construction — this subcommand refuses to run
-    /// there.
-    ///
-    /// Owns the full PTT lifecycle in-process: installs the Rust hotkey
-    /// listener (rdev), spawns the audio pump (cpal -> Silero VAD), drives
-    /// the [`crate::dictate::DictateSession`] from the hotkey coordinator,
-    /// and emits `[worker-event] {...}` lines on stderr.
-    ///
-    /// Always reads stdin: a line of `press`, `release`, `cancel`, or
-    /// `quit` drives the coordinator (or shuts the worker down). Used by
-    /// the integration test to drive synthetic chord events without a
-    /// real OS listener, and gives the supervisor a clean shutdown path
-    /// (close stdin → worker exits) without relying on signals on Windows.
-    ///
-    /// Hidden because it is invoked only by the supervisor and tests, not
-    /// directly by users.
-    #[command(hide = true)]
-    WorkerRust {
-        /// Skip installing the real rdev hotkey listener; drive the
-        /// coordinator from stdin commands only. Used by the integration
-        /// test in headless CI environments where no display is available
-        /// for rdev to attach to. Production callers leave this unset so
-        /// the OS hotkey listener takes over the PTT chord.
-        #[arg(long)]
-        stdin_only: bool,
-    },
     /// Manage local Whisper model files (catalog, download, verify).
     ///
     /// Backwards compatibility: `VOICEPI_WHISPER_MODEL_PATH` still wins for the
@@ -508,22 +363,6 @@ pub enum HistoryCommand {
     },
     /// Print the most recent history text.
     Last,
-    /// Substring-search the SQLite history store (issue #324). Returns
-    /// rows whose text matches `query` via FTS5 (when available) or
-    /// LIKE. Requires a binary built with the default `history-sqlite`
-    /// feature; otherwise the subcommand prints a friendly hint and
-    /// exits non-zero.
-    Search {
-        /// Search query — words are matched as a phrase. Pass an
-        /// empty string to scan recent rows without a text filter.
-        query: String,
-        /// Maximum rows to return.
-        #[arg(long, default_value_t = 20)]
-        limit: u32,
-        /// Skip this many leading rows (pagination offset).
-        #[arg(long, default_value_t = 0)]
-        offset: u32,
-    },
 }
 
 #[cfg(test)]
@@ -733,45 +572,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_history_search_subcommand_with_defaults() {
-        let cli = Cli::parse_from(["whisper-dictate", "history", "search", "rødgrød"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::History {
-                command: HistoryCommand::Search {
-                    query: "rødgrød".to_owned(),
-                    limit: 20,
-                    offset: 0,
-                },
-            })
-        );
-    }
-
-    #[test]
-    fn parses_history_search_subcommand_with_pagination_flags() {
-        let cli = Cli::parse_from([
-            "whisper-dictate",
-            "history",
-            "search",
-            "needle",
-            "--limit",
-            "5",
-            "--offset",
-            "10",
-        ]);
-        assert_eq!(
-            cli.command,
-            Some(Command::History {
-                command: HistoryCommand::Search {
-                    query: "needle".to_owned(),
-                    limit: 5,
-                    offset: 10,
-                },
-            })
-        );
-    }
-
-    #[test]
     fn parses_hidden_inject_text_subcommand() {
         let cli = Cli::parse_from([
             "whisper-dictate",
@@ -886,9 +686,6 @@ mod tests {
         let cli = Cli::parse_from(["whisper-dictate", "postprocess"]);
         assert_eq!(cli.command, Some(Command::Postprocess));
 
-        let cli = Cli::parse_from(["whisper-dictate", "postprocess-hotkey"]);
-        assert_eq!(cli.command, Some(Command::PostprocessHotkey));
-
         let cli = Cli::parse_from(["whisper-dictate", "external-api"]);
         assert_eq!(cli.command, Some(Command::ExternalApi));
 
@@ -976,96 +773,6 @@ mod tests {
                 command: ModelsCommand::Path,
             })
         );
-    }
-
-    // --- External toggle flags (issue #326) -------------------------------
-
-    #[test]
-    fn parses_toggle_recording_flag() {
-        use crate::runtime::external_toggle::ExternalCommand;
-        let cli = Cli::parse_from(["whisper-dictate", "--toggle-recording"]);
-        assert!(cli.toggle_recording);
-        assert_eq!(cli.external_command(), Some(ExternalCommand::Toggle));
-    }
-
-    #[test]
-    fn parses_start_recording_flag() {
-        use crate::runtime::external_toggle::ExternalCommand;
-        let cli = Cli::parse_from(["whisper-dictate", "--start-recording"]);
-        assert!(cli.start_recording);
-        assert_eq!(cli.external_command(), Some(ExternalCommand::Start));
-    }
-
-    #[test]
-    fn parses_stop_recording_flag() {
-        use crate::runtime::external_toggle::ExternalCommand;
-        let cli = Cli::parse_from(["whisper-dictate", "--stop-recording"]);
-        assert!(cli.stop_recording);
-        assert_eq!(cli.external_command(), Some(ExternalCommand::Stop));
-    }
-
-    #[test]
-    fn parses_cancel_recording_flag() {
-        use crate::runtime::external_toggle::ExternalCommand;
-        let cli = Cli::parse_from(["whisper-dictate", "--cancel-recording"]);
-        assert!(cli.cancel_recording);
-        assert_eq!(cli.external_command(), Some(ExternalCommand::Cancel));
-    }
-
-    #[test]
-    fn external_command_is_none_when_no_flag_set() {
-        let cli = Cli::parse_from(["whisper-dictate"]);
-        assert!(cli.external_command().is_none());
-    }
-
-    #[test]
-    fn external_toggle_flags_conflict_with_each_other() {
-        // clap enforces the conflicts_with_all attribute: invoking two
-        // mutually-exclusive flags must fail at parse time so we never
-        // silently pick one over the other.
-        let err = Cli::try_parse_from([
-            "whisper-dictate",
-            "--toggle-recording",
-            "--cancel-recording",
-        ])
-        .expect_err("conflicting flags must error");
-        assert!(
-            err.to_string()
-                .to_ascii_lowercase()
-                .contains("cannot be used with"),
-            "expected clap conflict error, got: {err}"
-        );
-    }
-
-    #[test]
-    fn external_toggle_flag_takes_precedence_over_subcommand() {
-        // Clap does not expose the `#[command(subcommand)]` field as a valid
-        // `conflicts_with` target, so a user that types
-        // `whisper-dictate --toggle-recording ui` parses without a parse-time
-        // error. `main.rs` short-circuits to the IPC forwarder when
-        // `external_command()` is `Some`, so the subcommand is silently
-        // ignored — assert the flag wins, documenting the precedence
-        // contract.
-        let cli = Cli::parse_from(["whisper-dictate", "--toggle-recording", "ui"]);
-        assert!(cli.toggle_recording);
-        assert_eq!(cli.command, Some(Command::Ui));
-        assert!(cli.external_command().is_some());
-    }
-
-    #[test]
-    fn parses_worker_rust_subcommand_default() {
-        // Wave 5 PR 6 of #348: the new long-running Rust dictation worker
-        // subcommand. Defaults `stdin_only=false` so production builds
-        // install the real rdev listener (the integration test sets the
-        // flag to skip it on headless CI).
-        let cli = Cli::parse_from(["whisper-dictate", "worker-rust"]);
-        assert_eq!(cli.command, Some(Command::WorkerRust { stdin_only: false }),);
-    }
-
-    #[test]
-    fn parses_worker_rust_with_stdin_only_flag() {
-        let cli = Cli::parse_from(["whisper-dictate", "worker-rust", "--stdin-only"]);
-        assert_eq!(cli.command, Some(Command::WorkerRust { stdin_only: true }));
     }
 
     #[test]

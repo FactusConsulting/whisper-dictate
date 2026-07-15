@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[test]
@@ -12,15 +13,7 @@ fn help_uses_public_binary_name_even_when_binary_path_differs() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success());
-    // After issue #326 added top-level `--toggle-recording` / etc. flags,
-    // clap renders `Usage: whisper-dictate [OPTIONS] [COMMAND]` instead of
-    // `[COMMAND]`. Accept either shape so the public binary-name assertion
-    // (the actual contract of this test) keeps holding regardless of how
-    // many top-level flags exist.
-    assert!(
-        stdout.contains("Usage: whisper-dictate"),
-        "expected public binary name in usage line, got: {stdout}"
-    );
+    assert!(stdout.contains("Usage: whisper-dictate [COMMAND]"));
     assert!(!stdout.contains("Usage: whisper-dictate-app"));
 }
 
@@ -330,37 +323,98 @@ fn privacy_helper_reports_local_only_backend_blocks_as_json() {
         .contains("VOICEPI_LOCAL_ONLY=1 blocks STT backend"));
 }
 
-// Wave 8 Part 2: `worker_failure_does_not_print_rust_backtrace` and
-// `foreground_worker_inherits_utf8_stdio_envs` used to build a fake
-// Python worker under `<tmp>/src/python/whisper_dictate/runtime.py`,
-// point `VOICEPI_PYTHON` at a real interpreter, and drive
-// `whisper-dictate doctor` against it to assert the runtime shelled
-// out with the right stdio envs and surfaced non-zero exit codes
-// cleanly. The Python fallback (and `run_foreground`) was deleted in
-// v1.20; `doctor` now prints a "moved to worker-rust" in-process
-// message and returns Ok, so both tests are moot.
-
 #[test]
-fn doctor_prints_moved_message_and_succeeds() {
-    // Confirm the Wave 8 Part 2 doctor stub is wired up: it must exit
-    // 0 (so users' packaging scripts that check the return code stay
-    // green) and mention the Python removal + the surviving Rust
-    // diagnostics.
+fn worker_failure_does_not_print_rust_backtrace() {
+    let Some(python) = test_python() else {
+        eprintln!("skipping: no Python launcher found on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir
+        .path()
+        .join("src")
+        .join("python")
+        .join("whisper_dictate");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    let worker = package.join("runtime.py");
+    fs::write(
+        &worker,
+        "import sys\nprint('fake doctor failed')\nsys.exit(7)\n",
+    )
+    .unwrap();
+
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
         .arg("doctor")
+        .env("VOICEPI_APP_ROOT", dir.path())
+        .env("VOICEPI_PYTHON", python)
+        .env("RUST_BACKTRACE", "1")
         .output()
         .unwrap();
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(!output.status.success());
+    assert!(stdout.contains("fake doctor failed"));
+    assert!(stderr.contains("worker exited with status"));
+    assert!(!stderr.contains("Stack backtrace"));
+}
+
+#[test]
+fn foreground_worker_inherits_utf8_stdio_envs() {
+    // Regression for the Codex P2 finding on PR #360: the foreground worker
+    // path (`run_foreground`) must apply the same `PYTHONUTF8=1` /
+    // `PYTHONIOENCODING=utf-8` envs that the captured / supervised paths set,
+    // so commands like `whisper-dictate bench > out.txt` or
+    // `whisper-dictate corpus-record <id>` do not mojibake the Danish corpus
+    // text or `ensure_ascii=False` JSONL when the inherited console code page
+    // is non-UTF-8 (Windows cp1252 / Shift-JIS / ...).
+    //
+    // Drives `doctor` (which goes through `run_foreground`) against a fake
+    // Python worker that prints the two env vars; the assertion is the
+    // foreground child saw the UTF-8 envs in its environment.
+    let Some(python) = test_python() else {
+        eprintln!("skipping: no Python launcher found on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir
+        .path()
+        .join("src")
+        .join("python")
+        .join("whisper_dictate");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    let worker = package.join("runtime.py");
+    fs::write(
+        &worker,
+        "import os, sys\n\
+         print(os.environ.get('PYTHONUTF8', '<unset>'))\n\
+         print(os.environ.get('PYTHONIOENCODING', '<unset>'))\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
+        .arg("doctor")
+        .env("VOICEPI_APP_ROOT", dir.path())
+        .env("VOICEPI_PYTHON", python)
+        .env_remove("PYTHONUTF8")
+        .env_remove("PYTHONIOENCODING")
+        .output()
+        .unwrap();
+
     assert!(
         output.status.success(),
-        "doctor stub failed\nstdout:\n{stdout}\nstderr:\n{}",
+        "doctor failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        stdout.contains("removed in v1.20"),
-        "expected v1.20 removal note in stdout, got: {stdout}"
-    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.first().copied(), Some("1"), "stdout: {stdout}");
+    assert_eq!(lines.get(1).copied(), Some("utf-8"), "stdout: {stdout}");
 }
 
 fn command_with_stdin(args: &[&str], stdin: &str) -> std::process::Output {
@@ -382,6 +436,32 @@ fn command_with_stdin(args: &[&str], stdin: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
-// `test_python`, `find_on_path`, `python_candidates` were the Python-
-// launcher discovery helpers used by the deleted Wave 8 Part 2 Python
-// worker regression tests. Removed alongside their callers.
+fn test_python() -> Option<PathBuf> {
+    for candidate in python_candidates() {
+        if let Some(path) = find_on_path(candidate) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    if name.contains(std::path::MAIN_SEPARATOR) {
+        let path = PathBuf::from(name);
+        return path.exists().then_some(path);
+    }
+
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(name))
+            .find(|path| path.exists())
+    })
+}
+
+fn python_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["py.exe", "py", "python.exe", "python"]
+    } else {
+        &["python3", "python"]
+    }
+}

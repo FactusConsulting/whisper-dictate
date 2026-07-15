@@ -54,11 +54,6 @@ impl AppSettings {
         set_string(object, "min_snr_db", &self.min_snr_db);
         set_bool(object, "audio_ducking", self.audio_ducking);
         set_string(object, "audio_ducking_level", &self.audio_ducking_level);
-        set_bool(
-            object,
-            "mute_output_while_recording",
-            self.mute_output_while_recording,
-        );
         set_string(object, "dictionary", &self.dictionary);
         set_bool(object, "dictionary_enabled", self.dictionary_enabled);
         set_string(object, "dictionary_max_terms", &self.dictionary_max_terms);
@@ -87,13 +82,6 @@ impl AppSettings {
         set_string(object, "post_max_output_chars", &self.post_max_output_chars);
         set_bool(object, "post_redact", self.post_redact);
         set_string(object, "post_redact_terms", &self.post_redact_terms);
-        set_string(object, "postprocess_hotkey", &self.postprocess_hotkey);
-        set_string(object, "postprocess_profiles", &self.postprocess_profiles);
-        set_string(
-            object,
-            "postprocess_profile_index",
-            &self.postprocess_profile_index,
-        );
         set_bool(object, "feedback_sounds", self.feedback_sounds);
         set_bool(object, "feedback_notify", self.feedback_notify);
         set_bool(object, "debug", self.debug);
@@ -118,15 +106,6 @@ impl AppSettings {
         set_string(object, "ui_language", &self.ui_language);
         set_string(object, "ui_log_view", &self.ui_log_view);
         set_string(object, "ui_text_scale", &self.ui_text_scale);
-        set_bool(object, "overlay_enabled", self.overlay_enabled);
-        set_string(object, "overlay_position", &self.overlay_position);
-        set_bool(object, "overlay_show_on_idle", self.overlay_show_on_idle);
-        // Issue #328: onboarding gate. `onboarding_seen_at` is an RFC 3339
-        // string (empty ⇒ never shown); `set_string` drops the key entirely
-        // when empty so a fresh config never carries a blank sentinel.
-        set_bool(object, "onboarding_completed", self.onboarding_completed);
-        set_string(object, "onboarding_seen_at", &self.onboarding_seen_at);
-        set_string(object, "settings_mode", &self.settings_mode);
         if let Ok(profiles) = serde_json::from_str::<Value>(&self.profiles_json) {
             if !profiles.as_array().is_some_and(Vec::is_empty) {
                 object.insert("profiles".to_owned(), profiles);
@@ -159,27 +138,6 @@ fn set_bool(object: &mut Map<String, Value>, key: &str, value: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn apply_to_object_persists_settings_mode() {
-        // Issue #334: the Simple/Advanced choice must survive a save
-        // round-trip so it can be reloaded on the next launch.
-        let mut object: Map<String, Value> = Map::new();
-        let settings = AppSettings {
-            settings_mode: "advanced".to_owned(),
-            ..AppSettings::default()
-        };
-        settings.apply_to_object(&mut object);
-        assert_eq!(object["settings_mode"], "advanced");
-
-        let mut object: Map<String, Value> = Map::new();
-        let settings = AppSettings {
-            settings_mode: "simple".to_owned(),
-            ..AppSettings::default()
-        };
-        settings.apply_to_object(&mut object);
-        assert_eq!(object["settings_mode"], "simple");
-    }
 
     #[test]
     fn apply_to_object_strips_deprecated_parakeet_keys() {
