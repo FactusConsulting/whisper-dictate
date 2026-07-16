@@ -24,6 +24,7 @@ use serde::Serialize;
 
 mod ops;
 mod parse;
+mod prompt;
 mod runtime;
 mod store;
 mod suggest;
@@ -31,6 +32,10 @@ mod training;
 
 pub use ops::handle_ops;
 pub use parse::{parse_dictionary, parse_json_dictionary, parse_text_dictionary};
+pub use prompt::{
+    build_prompt, effective_settings, handle_list, handle_prompt, load_or_empty, resolve_source,
+    BuiltPrompt, ListJson, PromptJson, PromptSettings,
+};
 pub use runtime::{
     handle_command, handle_runtime, preview_dictionary, runtime_dictionary_result,
     DictionaryPreview, RuntimeDictionaryResult, RuntimeDictionarySettings,
