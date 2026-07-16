@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::cli::HistoryCommand;
 use crate::config;
 
 const WORKER_EVENT_PREFIX: &str = "[worker-event] ";
@@ -70,26 +69,6 @@ pub fn preview_jsonl(path: impl Into<PathBuf>, limit: usize) -> Result<JsonlPrev
         shown_rows: shown.len(),
         text,
     })
-}
-
-pub fn handle_history_command(command: HistoryCommand) -> Result<()> {
-    let path = history_path_from_settings()?;
-    match command {
-        HistoryCommand::List { limit } => {
-            let preview = preview_jsonl(&path, limit)?;
-            if !preview.text.is_empty() {
-                println!("{}", preview.text);
-            }
-        }
-        HistoryCommand::Last => {
-            if let Some(row) = read_jsonl_rows(&path)?.pop() {
-                if let Some(text) = row.get("text").and_then(Value::as_str) {
-                    println!("{text}");
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 pub fn handle_append_jsonl(path: &Path) -> Result<()> {
@@ -163,7 +142,11 @@ pub fn history_event(event: &Value) -> Value {
     Value::Object(filtered)
 }
 
-fn history_path_from_settings() -> Result<PathBuf> {
+/// Resolve the on-disk history JSONL path from the user's settings, falling
+/// back to the platform default when unset. Public because both the legacy
+/// `history list [N]` verb (via [`preview_jsonl`]) and the new
+/// `crate::history` CLI verbs need the same resolution.
+pub fn history_path_from_settings() -> Result<PathBuf> {
     let settings = config::load_settings()?;
     if settings.history_jsonl.trim().is_empty() {
         Ok(config::default_history_path())
@@ -211,18 +194,10 @@ fn format_row(value: &Value) -> String {
     }
 }
 
-fn read_jsonl_rows(path: &PathBuf) -> Result<Vec<Value>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw = fs::read_to_string(path)?;
-    Ok(raw
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect())
-}
+// `read_jsonl_rows` moved to `crate::history::read_rows` when the CLI verbs
+// grew past the two-arm dispatch that lived here; the append + preview
+// helpers keep their homes so the Python worker's shell-out path stays
+// unchanged.
 
 #[cfg(test)]
 mod tests {
@@ -246,21 +221,9 @@ mod tests {
         assert!(!preview.text.contains("first"));
     }
 
-    #[test]
-    fn read_jsonl_rows_ignores_invalid_lines() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("history.jsonl");
-        fs::write(
-            &path,
-            "{\"text\":\"first\"}\nnot json\n{\"text\":\"last\"}\n",
-        )
-        .unwrap();
-
-        let rows = read_jsonl_rows(&path).unwrap();
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows.last().unwrap()["text"], "last");
-    }
+    // Moved: read_jsonl_rows coverage now lives in `crate::history::tests`
+    // (`read_rows_missing_file_is_empty_no_error`,
+    // `rows_from_str_skips_blank_and_malformed_lines`).
 
     #[test]
     fn append_jsonl_writes_utf8_json_line() {
