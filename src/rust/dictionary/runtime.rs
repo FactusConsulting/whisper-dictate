@@ -195,6 +195,16 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
                 std::process::exit(rc);
             }
         }
+        DictionaryCommand::Prompt {
+            dictionary,
+            json,
+            max_length,
+        } => {
+            super::prompt::handle_prompt(dictionary, json, max_length)?;
+        }
+        DictionaryCommand::List { dictionary, json } => {
+            super::prompt::handle_list(dictionary, json)?;
+        }
         DictionaryCommand::SuggestTerms {
             jsonl,
             dictionary,
@@ -216,6 +226,14 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Public re-export of the private `dictionary_command_settings` helper so
+/// the sibling `prompt` module can reuse the exact env / config precedence
+/// used by `dictionary status`. Kept as a distinct name to make the
+/// coupling obvious from `prompt.rs`.
+pub(super) fn dictionary_command_settings_for_prompt() -> Result<config::AppSettings> {
+    dictionary_command_settings()
 }
 
 fn dictionary_command_settings() -> Result<config::AppSettings> {

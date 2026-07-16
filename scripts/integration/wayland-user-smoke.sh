@@ -337,6 +337,39 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: dictionary prompt (build initial-prompt from user dictionary)
+#
+# `dictionary prompt --json` (audit item 2 chunk C) reads the on-disk
+# dictionary + config and prints the Whisper `initial_prompt` string
+# the runtime would use. Falling back to the per-user default is
+# permitted to succeed with an empty prompt on a fresh install (no
+# dictionary yet), so a clean box does not fail this section.
+# --------------------------------------------------------------------------
+section "dictionary prompt (build initial-prompt from user dictionary)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "dictionary prompt is a Rust subcommand — not exposed by the Python fallback"
+else
+    dict_out="$(whisper-dictate dictionary prompt --json 2>&1)"
+    dict_rc=$?
+    if [ "$dict_rc" -eq 0 ]; then
+        if printf '%s' "$dict_out" | grep -q '"prompt":' \
+           && printf '%s' "$dict_out" | grep -q '"length_chars":' \
+           && printf '%s' "$dict_out" | grep -q '"term_count":'; then
+            ok "dictionary prompt returns valid JSON"
+        else
+            bad "dictionary prompt exit 0 but JSON keys missing"
+            info "$(printf '%s\n' "$dict_out" | head -n 3)"
+        fi
+    else
+        # A missing default dictionary is NOT a failure — load_or_empty
+        # returns empty for the default path. Any non-zero exit here is
+        # a real regression (parse error, missing subcommand, etc.).
+        bad "dictionary prompt failed unexpectedly (exit $dict_rc)"
+        info "$(printf '%s\n' "$dict_out" | head -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: doctor / hotkey-listener startup smoke — PENDING
 # --------------------------------------------------------------------------
 section "doctor (platform readiness)"
