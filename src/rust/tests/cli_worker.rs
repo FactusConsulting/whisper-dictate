@@ -344,8 +344,12 @@ fn worker_failure_does_not_print_rust_backtrace() {
     )
     .unwrap();
 
+    // Drives `run` (which goes through `run_foreground`) — post-#500 the
+    // `doctor` subcommand is pure Rust and no longer spawns the Python
+    // worker, so this regression must exercise `run` to keep guarding
+    // the foreground-worker exit-code / no-backtrace behaviour.
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
-        .arg("doctor")
+        .arg("run")
         .env("VOICEPI_APP_ROOT", dir.path())
         .env("VOICEPI_PYTHON", python)
         .env("RUST_BACKTRACE", "1")
@@ -371,9 +375,11 @@ fn foreground_worker_inherits_utf8_stdio_envs() {
     // text or `ensure_ascii=False` JSONL when the inherited console code page
     // is non-UTF-8 (Windows cp1252 / Shift-JIS / ...).
     //
-    // Drives `doctor` (which goes through `run_foreground`) against a fake
+    // Drives `run` (which goes through `run_foreground`) against a fake
     // Python worker that prints the two env vars; the assertion is the
-    // foreground child saw the UTF-8 envs in its environment.
+    // foreground child saw the UTF-8 envs in its environment. Post-#500
+    // the `doctor` subcommand is pure Rust and no longer spawns the
+    // Python worker, so `run` is the surviving `run_foreground` handle.
     let Some(python) = test_python() else {
         eprintln!("skipping: no Python launcher found on PATH");
         return;
@@ -396,7 +402,7 @@ fn foreground_worker_inherits_utf8_stdio_envs() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_whisper-dictate"))
-        .arg("doctor")
+        .arg("run")
         .env("VOICEPI_APP_ROOT", dir.path())
         .env("VOICEPI_PYTHON", python)
         .env_remove("PYTHONUTF8")

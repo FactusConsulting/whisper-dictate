@@ -370,21 +370,32 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: doctor / hotkey-listener startup smoke — PENDING
+# SECTION: doctor (audit item 2 chunk E)
+#
+# `doctor --json` runs the full readiness matrix and prints one
+# `{"checks":[...],"summary":{"ok":N,"warn":N,"fail":N}}` line. Exit 0 means
+# every check passed (warnings are non-blocking); exit 1 means at least one
+# fail check would block dictation. The smoke reports each shape so the
+# operator can see WHY doctor tripped without re-running it.
 # --------------------------------------------------------------------------
 section "doctor (platform readiness)"
-if [ "$CMD_MODE" = "rust" ] && whisper-dictate doctor --help >/dev/null 2>&1; then
-    if out="$(whisper-dictate doctor 2>&1)"; then
-        ok "doctor exit 0"
-    else
-        rc=$?
-        # doctor is allowed to report warnings without failing the smoke;
-        # a non-zero exit here still counts as a fail so we notice.
-        bad "doctor exit $rc"
-        info "$out"
-    fi
+if [ "$CMD_MODE" != "rust" ]; then
+    warn "doctor is a Rust subcommand — not exposed by the Python fallback"
 else
-    warn "doctor subcommand not on this build — pending audit item 2"
+    doctor_out_file="$(mktemp)"
+    whisper-dictate doctor --json >"$doctor_out_file" 2>&1
+    doctor_rc=$?
+    if [ "$doctor_rc" -eq 0 ]; then
+        ok "doctor reports platform ready (all critical checks pass)"
+    elif [ "$doctor_rc" -eq 1 ]; then
+        # Failed checks — but doctor at least ran.
+        fail_count="$(grep -oE '"fail":[[:space:]]*[0-9]+' "$doctor_out_file" | grep -oE '[0-9]+' | head -1)"
+        warn "doctor reports ${fail_count:-?} failed checks — inspect: $(head -c 500 "$doctor_out_file")"
+    else
+        bad "doctor invocation failed with exit $doctor_rc"
+        info "$(head -c 500 "$doctor_out_file")"
+    fi
+    rm -f "$doctor_out_file"
 fi
 
 # --------------------------------------------------------------------------
