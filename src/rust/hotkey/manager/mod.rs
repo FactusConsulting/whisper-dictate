@@ -34,4 +34,7 @@ pub mod rdev_driver;
 pub use tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput, FOREIGN_KEY_EXPIRY};
 
 #[cfg(feature = "rust-hotkeys")]
-pub use rdev_driver::{is_rdev_supported_name, spawn, ManagerHandle, ManagerThread, SpawnError};
+pub use rdev_driver::{
+    is_rdev_supported_name, spawn, spawn_with_raw_tap, ManagerHandle, ManagerThread, NoopRawTap,
+    RawTap, SpawnError,
+};

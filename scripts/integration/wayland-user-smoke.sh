@@ -388,10 +388,39 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: hotkey listener verify — PENDING
+# SECTION: hotkey capture (listener install smoke — audit item 2 chunk F)
+#
+# `hotkey capture --for 0.5` installs the PTT listener for a bounded window
+# and prints every OS key event and chord match/release it observes. Here we
+# only use it as a smoke test — no keys are synthesised — so the assertion
+# is "did the listener install cleanly within the window?". On Linux without
+# an X display / evdev permissions the install correctly refuses (that's the
+# P1-#2 path in the Rust hotkey subsystem); we warn-skip so headless CI legs
+# don't fail on it.
 # --------------------------------------------------------------------------
-section "hotkey listener startup smoke"
-warn "no --verify-hotkey-only flag yet — pending audit item 2"
+section "hotkey capture (listener install smoke, --for 0.5s)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "hotkey capture is a Rust subcommand — not exposed by the Python fallback"
+else
+    hk_out="$(whisper-dictate hotkey capture --for 0.5 --json 2>&1)"
+    hk_rc=$?
+    if [ "$hk_rc" -eq 0 ]; then
+        # First line should be a listener_installed JSON envelope.
+        if printf '%s' "$hk_out" | head -n 1 | grep -q '"kind":"listener_installed"'; then
+            ok "hotkey capture: listener installed cleanly (0.5s window)"
+        else
+            warn "hotkey capture exit 0 but no listener_installed line: $(printf '%s\n' "$hk_out" | head -n 1)"
+        fi
+    else
+        # On Linux without evdev perms / X display / rust-hotkeys feature the
+        # install refusal is expected. Only fail on unexpected shapes.
+        if printf '%s' "$hk_out" | grep -qi "rust-hotkeys\|permission\|evdev\|X display\|no display\|listener failed"; then
+            warn "hotkey capture: listener unavailable on this platform (expected without display/permissions/feature)"
+        else
+            bad "hotkey capture failed (exit $hk_rc): $(printf '%s\n' "$hk_out" | head -n 2)"
+        fi
+    fi
+fi
 
 # --------------------------------------------------------------------------
 # SECTION: inject-text dry-run (audit item 2 chunk B)

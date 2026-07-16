@@ -146,15 +146,63 @@ pub fn spawn<F>(on_output: F) -> Result<(ManagerHandle, ManagerThread), SpawnErr
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
 {
+    spawn_with_raw_tap(on_output, NoopRawTap)
+}
+
+/// Marker type for [`spawn_with_raw_tap`] callers that don't want a raw tap.
+/// Cheaper than an `Option<Arc<dyn Fn>>` — the trait dispatch inlines to a
+/// no-op so the shipping supervisor path pays nothing for the diagnostic hook.
+pub struct NoopRawTap;
+
+/// Sink for raw OS key events, called BEFORE the tracker processes them.
+/// Implemented by [`NoopRawTap`] (drops silently) and any `Fn(&RawKeyEvent) +
+/// Send + Sync + 'static` closure. Kept as a trait so [`spawn_with_raw_tap`]
+/// can accept either without runtime overhead — the diagnostic
+/// `whisper-dictate hotkey capture` CLI wires up a real tap so the operator
+/// can see every keydown/keyup, not just the chord-level output the
+/// coordinator produces.
+pub trait RawTap: Send + Sync + 'static {
+    fn tap(&self, event: &RawKeyEvent);
+}
+
+impl RawTap for NoopRawTap {
+    #[inline]
+    fn tap(&self, _event: &RawKeyEvent) {}
+}
+
+impl<F> RawTap for F
+where
+    F: Fn(&RawKeyEvent) + Send + Sync + 'static,
+{
+    #[inline]
+    fn tap(&self, event: &RawKeyEvent) {
+        (self)(event);
+    }
+}
+
+/// Same as [`spawn`] but also invokes `raw_tap` for every raw OS key event
+/// BEFORE the tracker sees it. The tap runs on the rdev listener thread —
+/// keep it cheap and non-blocking (long work will delay the tracker and
+/// starve the coordinator).
+pub fn spawn_with_raw_tap<F, R>(
+    on_output: F,
+    raw_tap: R,
+) -> Result<(ManagerHandle, ManagerThread), SpawnError>
+where
+    F: Fn(TrackerOutput) + Send + Sync + 'static,
+    R: RawTap,
+{
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
+    let raw_tap = Arc::new(raw_tap);
 
     // Listener thread — owns rdev. Translates raw events through the shared
     // tracker. Signals readiness / startup failure on a sync channel so
     // `spawn` can surface a quick-failure to the caller (P1 finding #2).
     let listener_tracker = Arc::clone(&tracker);
     let listener_sink = Arc::clone(&on_output);
+    let listener_tap = Arc::clone(&raw_tap);
     let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
     thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
@@ -165,6 +213,7 @@ where
             let _ = ready_tx.send(ListenerSignal::Started);
             let cb = move |event: rdev::Event| {
                 if let Some(raw) = raw_from_rdev(&event) {
+                    listener_tap.tap(&raw);
                     let mut t = listener_tracker.lock().expect("tracker poisoned");
                     if let Some(out) = t.handle(&raw) {
                         (listener_sink)(out);

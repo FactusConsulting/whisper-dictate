@@ -120,6 +120,17 @@ pub enum Command {
         #[command(subcommand)]
         command: HistoryCommand,
     },
+    /// Diagnostic tools for the push-to-talk hotkey listener.
+    ///
+    /// `hotkey capture` installs the listener for a bounded window and prints
+    /// every OS key event plus every chord match/release the coordinator sees.
+    /// Intended for debugging PTT wedges ("does the listener see my chord?")
+    /// and as a headless smoke test that proves the install path works on the
+    /// running platform without opening the full dictation runtime.
+    Hotkey {
+        #[command(subcommand)]
+        command: HotkeyCommand,
+    },
     /// Inject text into the active window — scripting + smoke-test wrapper
     /// around the injection library. **Defaults to `--dry-run`**: the
     /// resolved backend + keystroke plan is printed and NOTHING is typed.
@@ -631,6 +642,44 @@ pub enum HistoryCommand {
         /// Emit a JSON array of the matching entries instead of plain text.
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum HotkeyCommand {
+    /// Install the PTT listener for a bounded window and print every OS key
+    /// event and chord match/release it observes. Exits 0 when the window
+    /// elapses (or immediately when `--exit-on-chord` is set and the
+    /// configured chord fires). A listener startup failure (no display,
+    /// missing accessibility permission, unsupported chord) exits non-zero
+    /// with a clear message so smoke scripts can distinguish "listener
+    /// unavailable on this platform" from a genuine regression.
+    ///
+    /// Output line prefix is `[hotkey-capture]`. `--json` switches to one
+    /// JSON object per line (JSONL): `{"t":<seconds>,"kind":"...","...":...}`.
+    /// The plain-text format is stable-ish (line prefix + kind tokens) but
+    /// the JSON keys are the contract callers should pin against.
+    Capture {
+        /// Duration in seconds to keep the listener installed. Fractional
+        /// values are allowed so smoke scripts can use a sub-second window
+        /// (e.g. `--for 0.5`). Parsed as `f64` in the handler; the string
+        /// carrier keeps the enum `Eq`-derivable so parse-shape tests can
+        /// still `assert_eq!` variants without a bespoke matcher.
+        #[arg(long = "for", value_name = "SECONDS", default_value = "5")]
+        for_secs: String,
+        /// Emit machine-readable JSONL instead of the human-readable
+        /// `[hotkey-capture] ...` lines.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Exit 0 as soon as the configured PTT chord fires. Useful for CI
+        /// smoke tests where a driven synthetic press proves the whole path.
+        #[arg(long = "exit-on-chord", default_value_t = false)]
+        exit_on_chord: bool,
+        /// Override the config file path used to look up the PTT chord.
+        /// Default: platform user config (honours `VOICEPI_CONFIG` when this
+        /// flag is omitted).
+        #[arg(long, value_name = "PATH")]
+        config: Option<String>,
     },
 }
 
@@ -1436,6 +1485,48 @@ mod tests {
             Some(Command::Models {
                 command: ModelsCommand::Download {
                     name: "tiny.en".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_hotkey_capture_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "hotkey", "capture"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Hotkey {
+                command: HotkeyCommand::Capture {
+                    for_secs: "5".to_owned(),
+                    json: false,
+                    exit_on_chord: false,
+                    config: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_hotkey_capture_all_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "hotkey",
+            "capture",
+            "--for",
+            "0.5",
+            "--json",
+            "--exit-on-chord",
+            "--config",
+            "/tmp/cfg.json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Hotkey {
+                command: HotkeyCommand::Capture {
+                    for_secs: "0.5".to_owned(),
+                    json: true,
+                    exit_on_chord: true,
+                    config: Some("/tmp/cfg.json".to_owned()),
                 },
             })
         );

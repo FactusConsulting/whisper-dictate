@@ -5,8 +5,8 @@ use clap::Parser;
 use whisper_dictate_app::cli::{Cli, Command, DevicesCommand};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, formatting,
-    health, history, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
-    telemetry, ui, whisper,
+    health, history, hotkey, injection, model_capacity, postprocess, privacy, profiles, redaction,
+    runtime, telemetry, ui, whisper,
 };
 
 fn main() {
@@ -89,6 +89,7 @@ fn run() -> anyhow::Result<()> {
             Some(DevicesCommand::Test { name }) => runtime::run_terminal(devices_test_args(&name)),
         },
         Command::Models { command } => whisper::models_cli::handle(command),
+        Command::Hotkey { command } => hotkey::capture::handle_hotkey_command(command),
     }
 }
 
