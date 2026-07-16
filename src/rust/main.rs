@@ -2,7 +2,7 @@
 
 use clap::Parser;
 
-use whisper_dictate_app::cli::{Cli, Command};
+use whisper_dictate_app::cli::{Cli, Command, DevicesCommand};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, formatting,
     health, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
@@ -92,7 +92,10 @@ fn run() -> anyhow::Result<()> {
         Command::TranscribeWav { probe } => handle_transcribe_wav(probe),
         Command::TranscribeServer => handle_transcribe_server(),
         Command::Inject => injection::handle_inject(),
-        Command::Devices => handle_devices_command(),
+        Command::Devices { command } => match command {
+            None => handle_devices_command(),
+            Some(DevicesCommand::Test { name }) => runtime::run_terminal(devices_test_args(&name)),
+        },
         Command::Models { command } => whisper::models_cli::handle(command),
     }
 }
@@ -194,6 +197,22 @@ fn simulate_ptt_args(
     args
 }
 
+/// Build the Python argv for `devices test <NAME>`.
+///
+/// The Rust `devices test` subcommand is a thin front for the Python worker's
+/// `--test-audio-device` query mode (`vp_device_test.test_audio_device`),
+/// which reuses the SAME WASAPI/DirectSound/MME open matrix as live capture
+/// (see `vp_capture._start_sounddevice`). Loads no ML model — the query mode
+/// short-circuits before the model-load path in `runtime.py`.
+///
+/// Kept as a pure function so the argv shape is unit-testable without
+/// spawning Python. Empty `name` is preserved verbatim: the Python side treats
+/// `""` as "test the system default input", which is a documented use case
+/// (e.g. headless CI containers where no named device is available).
+fn devices_test_args(name: &str) -> Vec<String> {
+    vec!["--test-audio-device".to_owned(), name.to_owned()]
+}
+
 #[cfg(feature = "audio-in-rust")]
 fn handle_devices_command() -> anyhow::Result<()> {
     whisper_dictate_app::devices::handle_devices()
@@ -211,7 +230,39 @@ fn handle_devices_command() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::simulate_ptt_args;
+    use super::{devices_test_args, simulate_ptt_args};
+
+    #[test]
+    fn devices_test_args_forwards_name_verbatim() {
+        let args = devices_test_args("Microphone (Yeti Classic)");
+        assert_eq!(
+            args,
+            vec![
+                "--test-audio-device".to_owned(),
+                "Microphone (Yeti Classic)".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn devices_test_args_preserves_empty_string_for_system_default() {
+        // Empty string is the documented way to test the system default input;
+        // it MUST survive the CLI hop unchanged so the Python query mode sees
+        // "" and picks device=None.
+        let args = devices_test_args("");
+        assert_eq!(args, vec!["--test-audio-device".to_owned(), String::new()]);
+    }
+
+    #[test]
+    fn devices_test_args_does_not_forward_extra_flags() {
+        // Only --test-audio-device NAME is forwarded. No stray flags that could
+        // accidentally load a model or open a hotkey listener — the Python
+        // query mode short-circuits before those code paths.
+        let args = devices_test_args("mic");
+        assert!(!args.iter().any(|a| a == "--simulate-ptt"));
+        assert!(!args.iter().any(|a| a == "--capture-hotkey"));
+        assert!(!args.iter().any(|a| a == "--run-benchmark"));
+    }
 
     #[test]
     fn simulate_ptt_args_dry_run_default() {

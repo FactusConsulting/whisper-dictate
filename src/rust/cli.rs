@@ -265,11 +265,26 @@ pub enum Command {
     /// shell out). Hidden because it's a worker-only RPC.
     #[command(hide = true)]
     Inject,
-    /// Enumerate input audio devices as JSON. Built into binaries with the
-    /// `audio-in-rust` feature; binaries without the feature print a structured
-    /// error and exit non-zero so the Python caller can fall back to its own
-    /// path. Used by `vp_devices.py` when `VOICEPI_DEVICES_BACKEND=rust`.
-    Devices,
+    /// Enumerate input audio devices as JSON, or dry-run test a specific
+    /// microphone. With no subcommand the binary reads a JSON envelope on
+    /// stdin (`{"action":"list"|"default"|"find","query":"..."}`) and prints
+    /// the matching JSON response — this is the hidden helper `vp_devices.py`
+    /// shells out to when `VOICEPI_DEVICES_BACKEND=rust`. Built into binaries
+    /// with the `audio-in-rust` feature; binaries without the feature print
+    /// a structured error and exit non-zero so the Python caller can fall
+    /// back to its own path.
+    ///
+    /// The `test <NAME>` subcommand shells out to the Python worker's
+    /// `--test-audio-device` query mode (which reuses the same live-capture
+    /// WASAPI/DirectSound/MME open matrix), prints a single JSON usability
+    /// result to stdout and exits — no ML model is loaded. Pass an empty
+    /// string to test the system default input. Enables headless mic
+    /// verification in the CI container (audit item 3 —
+    /// `docs/architecture-audit-2026-07-16.md`).
+    Devices {
+        #[command(subcommand)]
+        command: Option<DevicesCommand>,
+    },
     /// Manage local Whisper model files (catalog, download, verify).
     ///
     /// Backwards compatibility: `VOICEPI_WHISPER_MODEL_PATH` still wins for the
@@ -381,6 +396,31 @@ pub enum DictionaryCommand {
         /// Emit machine-readable JSON to stdout.
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum DevicesCommand {
+    /// Dry-run open the named microphone and print a single JSON usability
+    /// result. Resolves `name` against the live device list (case-insensitive
+    /// substring — same rule the picker uses), then tries the same
+    /// WASAPI/DirectSound/MME open matrix as live capture (opening and
+    /// immediately closing each candidate, capturing no audio). Loads no ML
+    /// model. Pass an empty string to test the system default input.
+    ///
+    /// Output shape (single JSON object, one line):
+    /// `{"device":"...", "usable":true|false, "endpoint":"wasapi|directsound|mme|default|null", "samplerate":<int|null>, "dtype":"...|null", "resampled":true|false, "reason":"...|null"}`.
+    /// A non-usable device still exits 0 — it's a normal reportable outcome,
+    /// not a CLI error. Only sub-process launch failures return non-zero.
+    Test {
+        /// Microphone name (case-insensitive substring; same matching rule as
+        /// the picker). Pass `""` to test the system default input.
+        ///
+        /// `allow_hyphen_values` lets rare device names that start with `-`
+        /// through clap so the Python resolver can decide, rather than clap
+        /// rejecting the value as a stray flag.
+        #[arg(allow_hyphen_values = true)]
+        name: String,
     },
 }
 
@@ -742,8 +782,58 @@ mod tests {
 
     #[test]
     fn parses_devices_subcommand() {
+        // Bare `devices` still parses (existing hidden JSON envelope helper
+        // vp_devices.py shells out to via VOICEPI_DEVICES_BACKEND=rust).
         let cli = Cli::parse_from(["whisper-dictate", "devices"]);
-        assert_eq!(cli.command, Some(Command::Devices));
+        assert_eq!(cli.command, Some(Command::Devices { command: None }));
+    }
+
+    #[test]
+    fn parses_devices_test_subcommand() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "devices",
+            "test",
+            "Microphone (Yeti Classic)",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Devices {
+                command: Some(DevicesCommand::Test {
+                    name: "Microphone (Yeti Classic)".to_owned(),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_devices_test_empty_name_for_system_default() {
+        // Empty string is the documented way to test the system default input.
+        let cli = Cli::parse_from(["whisper-dictate", "devices", "test", ""]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Devices {
+                command: Some(DevicesCommand::Test {
+                    name: String::new(),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_devices_test_with_hyphen_leading_name() {
+        // Rare hardware names can start with `-`; clap must let it through so
+        // the Python resolver decides "not found" rather than clap rejecting
+        // it as a stray flag. Matches the corpus-record hyphen precedent.
+        let cli = Cli::parse_from(["whisper-dictate", "devices", "test", "-hyphen-mic"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Devices {
+                command: Some(DevicesCommand::Test {
+                    name: "-hyphen-mic".to_owned(),
+                }),
+            })
+        );
     }
 
     #[test]
