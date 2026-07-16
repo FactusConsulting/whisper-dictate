@@ -52,6 +52,7 @@
 //! modules are `pub` for the unit tests and the integration test (which
 //! drives the coordinator and tracker directly with synthetic events).
 
+pub mod capture;
 pub mod coordinator;
 pub mod manager;
 pub mod modifier_match;
@@ -68,8 +69,8 @@ use coordinator::{
 };
 #[cfg(feature = "rust-hotkeys")]
 use manager::{
-    is_rdev_supported_name, spawn as spawn_manager, ManagerHandle, ManagerThread, SpawnError,
-    TrackerOutput,
+    is_rdev_supported_name, spawn_with_raw_tap as spawn_manager_with_tap, ManagerHandle,
+    ManagerThread, RawTap, SpawnError, TrackerOutput,
 };
 
 /// User-facing configuration for the Rust hotkey backend.
@@ -174,6 +175,27 @@ pub fn install_hotkey<F>(config: HotkeyConfig, action_sink: F) -> Result<HotkeyH
 where
     F: FnMut(CoordinatorAction) + Send + 'static,
 {
+    install_hotkey_with_raw_tap(config, action_sink, manager::NoopRawTap)
+}
+
+/// Same as [`install_hotkey`] but also invokes `raw_tap` for every OS key
+/// event the rdev listener translates, BEFORE the tracker processes it. The
+/// diagnostic `whisper-dictate hotkey capture` CLI uses this so the operator
+/// can see individual keydown/keyup events alongside the chord-level actions.
+///
+/// The tap runs on the rdev listener thread; keep it cheap and non-blocking.
+/// All the validation / startup-failure semantics from [`install_hotkey`]
+/// apply unchanged — this function is a thin generalisation.
+#[cfg(feature = "rust-hotkeys")]
+pub fn install_hotkey_with_raw_tap<F, R>(
+    config: HotkeyConfig,
+    action_sink: F,
+    raw_tap: R,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(CoordinatorAction) + Send + 'static,
+    R: RawTap,
+{
     if config.key_names.is_empty() {
         return Err(InstallError::EmptyConfig);
     }
@@ -193,14 +215,17 @@ where
     // Bridge: TrackerOutput → CoordinatorEvent. Cloneable handle so the
     // closure captures a Sender that's cheap to call from the rdev callback.
     let bridge = coord_handle.clone();
-    let (mgr_handle, mgr_thread) = match spawn_manager(move |out| {
-        let event = match out {
-            TrackerOutput::ChordPress => CoordinatorEvent::Press,
-            TrackerOutput::ChordRelease => CoordinatorEvent::Release,
-            TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
-        };
-        bridge.send(event);
-    }) {
+    let (mgr_handle, mgr_thread) = match spawn_manager_with_tap(
+        move |out| {
+            let event = match out {
+                TrackerOutput::ChordPress => CoordinatorEvent::Press,
+                TrackerOutput::ChordRelease => CoordinatorEvent::Release,
+                TrackerOutput::ChordCancel => CoordinatorEvent::Cancel,
+            };
+            bridge.send(event);
+        },
+        raw_tap,
+    ) {
         Ok(pair) => pair,
         Err(err) => {
             // Listener (or manager-thread) startup failed. Tear the
@@ -251,6 +276,23 @@ fn spawn_err_message(e: SpawnError) -> String {
 pub fn install_hotkey<F>(_config: HotkeyConfig, _action_sink: F) -> Result<HotkeyHandle>
 where
     F: FnMut(coordinator::CoordinatorAction) + Send + 'static,
+{
+    Err(InstallError::Unsupported)
+}
+
+/// Stub `install_hotkey_with_raw_tap` for builds without the feature. The
+/// `raw_tap` bound is intentionally erased to a no-op closure signature so
+/// callers (notably the diagnostic `hotkey capture` CLI) can share the same
+/// call shape across feature configurations.
+#[cfg(not(feature = "rust-hotkeys"))]
+pub fn install_hotkey_with_raw_tap<F, R>(
+    _config: HotkeyConfig,
+    _action_sink: F,
+    _raw_tap: R,
+) -> Result<HotkeyHandle>
+where
+    F: FnMut(coordinator::CoordinatorAction) + Send + 'static,
+    R: Send + Sync + 'static,
 {
     Err(InstallError::Unsupported)
 }
