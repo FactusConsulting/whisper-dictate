@@ -5,7 +5,7 @@ use clap::Parser;
 use whisper_dictate_app::cli::{Cli, Command, DevicesCommand};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, formatting,
-    health, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
+    health, history, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
     telemetry, ui, whisper,
 };
 
@@ -44,7 +44,7 @@ fn run() -> anyhow::Result<()> {
         Command::DictionaryRuntime => dictionary::handle_runtime(),
         Command::DictionaryOps => dictionary::handle_ops(),
         Command::DictateOps => dictate::ops::handle_ops(),
-        Command::History { command } => telemetry::handle_history_command(command),
+        Command::History { command } => history::handle_history_command(command),
         args @ Command::InjectText { .. } => dispatch_inject_text(args),
         Command::FormatText { text, command_set } => {
             formatting::handle_format_text(&text, &command_set)

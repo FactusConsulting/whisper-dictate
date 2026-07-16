@@ -53,6 +53,13 @@ pub mod devices;
 pub mod dictionary;
 pub mod formatting;
 pub mod health;
+// Public `history` CLI verbs (list, last, copy-last, reinject-last,
+// search) — audit item 2 chunk D. The append + preview helpers stay in
+// `telemetry` because the Python worker's hidden `append-*` RPC surface
+// lives there; this module wraps the READER side so the shipped CLI is a
+// superset of the Python `vp_history` extras. See `history.rs` for the
+// dispatch + clipboard subprocess helper.
+pub mod history;
 // Rust-side PTT hotkey coordinator (issue #318). The side-aware modifier
 // matcher and the stage state machine compile unconditionally so their unit
 // tests run on every CI job; the OS listener layer is gated behind the

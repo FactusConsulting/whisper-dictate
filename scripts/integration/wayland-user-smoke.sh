@@ -430,6 +430,48 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: history last / reinject-last (audit item 2 chunk D)
+#
+# The public `history` CLI verbs read the on-disk JSONL history file. On a
+# fresh install the file does not exist yet — that is not a smoke failure,
+# so an "empty history" / "no history" error downgrades to warn-skip.
+#
+# `copy-last` is deliberately NOT exercised here: it needs a live display
+# server + one of wl-copy / xclip / clip.exe / pbcopy installed, and the
+# smoke box is not the right place to verify that matrix (headless CI has
+# no clipboard). Users on Wayland get it via the manual real-world test.
+# --------------------------------------------------------------------------
+section "history last / reinject-last (dry-run)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "history is a Rust subcommand — not exposed by the Python fallback"
+else
+    hist_out="$(whisper-dictate history last --json 2>&1)"
+    hist_rc=$?
+    if [ "$hist_rc" -eq 0 ]; then
+        # Success shape: `[]` on empty, `[{…}]` when at least one entry.
+        # Either is a pass for the smoke — we're checking the verb runs
+        # cleanly, not that history exists on this box.
+        ok "history last --json returns JSON (payload: $(printf '%s' "$hist_out" | head -c 80)…)"
+    elif printf '%s' "$hist_out" | grep -qi "no history\|empty\|not found"; then
+        warn "history file empty or missing (expected on fresh install)"
+    else
+        bad "history last failed: $(printf '%s\n' "$hist_out" | head -n 2)"
+    fi
+
+    reinject_out="$(whisper-dictate history reinject-last --dry-run --json 2>&1)"
+    reinject_rc=$?
+    if [ "$reinject_rc" -eq 0 ] && \
+       printf '%s' "$reinject_out" | grep -q '"dry_run":true' && \
+       printf '%s' "$reinject_out" | grep -q '"typed":false'; then
+        ok "history reinject-last --dry-run --json returns keystroke plan"
+    elif printf '%s' "$reinject_out" | grep -qi "no history\|empty"; then
+        warn "no transcript to reinject (expected on fresh install)"
+    else
+        bad "history reinject-last failed: $(printf '%s\n' "$reinject_out" | head -n 2)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------
 section "Summary"
