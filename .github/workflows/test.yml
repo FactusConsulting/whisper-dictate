@@ -374,3 +374,81 @@ jobs:
         run: |
           cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help
           cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- config path
+
+  integration-ubuntu-2604:
+    # Runs the Rust + Python test suites inside a purpose-built Ubuntu
+    # 26.04 container (docker/ci-ubuntu2604/Dockerfile) so we get one
+    # environment that matches what users will be on when 26.04 becomes
+    # the default LTS. NOT a required check yet — informational until we
+    # have a few green runs. To promote to required: add
+    # `integration-ubuntu-2604` to the protected-branch ruleset and add
+    # this line to the required-status list header comment at the top of
+    # this file.
+    #
+    # Bootstrap-friendly image resolution: `docker pull` first (fast when
+    # `.github/workflows/build-ci-images.yml` has published the image on
+    # a prior merge), fall back to `docker build` when the tag doesn't
+    # exist yet. This keeps the very first PR (which introduces the
+    # container) exercising the same Dockerfile it will publish once
+    # merged, without a chicken-and-egg on the registry.
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+      IMAGE: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604:latest
+    steps:
+      - name: Skip on docs-only PRs
+        if: env.RUN_INTEG != 'true'
+        run: echo "::notice::Skipping ubuntu 26.04 integration — no code changes detected"
+      - uses: actions/checkout@v6
+        if: env.RUN_INTEG == 'true'
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Log in to GHCR (pull only)
+        if: env.RUN_INTEG == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve container image (pull or build)
+        if: env.RUN_INTEG == 'true'
+        run: |
+          set -euxo pipefail
+          if docker pull "$IMAGE"; then
+            echo "using published image"
+          else
+            echo "image not yet published, building inline from docker/ci-ubuntu2604/"
+            docker build -t "$IMAGE" docker/ci-ubuntu2604/
+          fi
+      - name: Rust tests inside container
+        if: env.RUN_INTEG == 'true'
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
+            bash -c "cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app"
+      - name: Python tests inside container
+        # Only src/tests/python for now — the same set the required `unit`
+        # job runs. `src/python/tests` (runtime-package tests under
+        # src/python/whisper_dictate/) needs the full STT stack
+        # (faster-whisper, sounddevice, pynput, ...) which is NOT baked
+        # into the CI image on purpose (keeps size down). Adding those
+        # via `pip install -r requirements/cpu.txt` before pytest is a
+        # follow-up once we know the container path is stable.
+        if: env.RUN_INTEG == 'true'
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
+            bash -c "python3.14 -m pytest src/tests/python -q"
+      - name: CLI smoke (models list) inside container
+        if: env.RUN_INTEG == 'true'
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
+            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- models list"
+      - name: CLI smoke (--version) inside container
+        if: env.RUN_INTEG == 'true'
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
+            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --version"

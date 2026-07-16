@@ -1,0 +1,63 @@
+name: build-ci-images
+
+# Builds and publishes the reusable CI container image(s) under
+# docker/ci-*/ to GHCR. Runs only on merges to main that actually touch
+# the Dockerfile (or this workflow); PRs use inline docker build via
+# the integration job in test.yml so a Dockerfile change is exercised
+# by the same PR that lands it.
+#
+# Image reference: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604
+# Consumers: the `integration-ubuntu-2604` job in test.yml.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/ci-ubuntu2604/**'
+      - '.github/workflows/build-ci-images.yml'
+  # Manual re-publish (e.g. after rotating a base-image CVE) — no inputs.
+  workflow_dispatch:
+
+concurrency:
+  group: build-ci-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ubuntu-2604:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          repo_lower=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${repo_lower}/whisper-dictate-ci-ubuntu2604" >>"$GITHUB_OUTPUT"
+          echo "sha_short=$(git rev-parse --short HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ci-ubuntu2604
+          push: true
+          # `:latest` is what test.yml pins; `:sha-<short>` gives a
+          # rollback target if a base-image update turns out red.
+          tags: |
+            ${{ steps.tags.outputs.image }}:latest
+            ${{ steps.tags.outputs.image }}:sha-${{ steps.tags.outputs.sha_short }}
+          # GHA cache keeps the apt/rustup layers warm across runs.
+          cache-from: type=gha,scope=ci-ubuntu2604
+          cache-to: type=gha,mode=max,scope=ci-ubuntu2604
