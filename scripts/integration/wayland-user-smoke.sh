@@ -186,6 +186,37 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: devices test (mic-open probe against the system default)
+#
+# `devices test <NAME>` (PR #495) opens the cpal input stream against a
+# named device (empty string = system default) and reports back — fast
+# check that the audio subsystem is reachable before the heavier
+# simulate-ptt run. A missing device on a headless box is not a hard
+# fail: the check downgrades to warn-skip so the smoke stays green on
+# CI runners with no audio hardware.
+# --------------------------------------------------------------------------
+section "devices test (default device)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "devices test is a Rust subcommand — not exposed by the Python fallback"
+else
+    dev_out="$(whisper-dictate devices test "" 2>&1)"
+    dev_rc=$?
+    if [ "$dev_rc" -eq 0 ]; then
+        ok "devices test runs against the system default"
+    else
+        # Not a hard fail when there's no audio hardware (headless CI):
+        # match cpal / whisper-dictate's usual "no device" phrasings and
+        # downgrade to a warn-skip. Anything else is a real regression.
+        if printf '%s' "$dev_out" | grep -qi "not found\|no device\|no audio\|no input\|no default"; then
+            warn "no default audio device (headless environment expected)"
+        else
+            bad "devices test failed unexpectedly (exit $dev_rc)"
+            info "$(printf '%s\n' "$dev_out" | head -n 3)"
+        fi
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: simulate-ptt (headless dictation pipeline)
 # --------------------------------------------------------------------------
 section "simulate-ptt (fixture WAV, dry-run, tiny.en, CPU)"

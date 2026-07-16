@@ -27,13 +27,19 @@ jobs:
     # caller grants -- when this `tests:` call had no `permissions:` block,
     # the entire release workflow startup-failed on tag push (zero jobs
     # spawned, conclusion: startup_failure) because the called job requested
-    # more than was offered. Forwarding the same two read scopes here makes
-    # the call valid; on a tag push there is no PR so paths-filter falls
-    # back to no-op (empty match set) and downstream jobs use the workflow
+    # more than was offered. Forwarding the same read scopes here makes the
+    # call valid; on a tag push there is no PR so paths-filter falls back to
+    # no-op (empty match set) and downstream jobs use the workflow
     # `!cancelled()` gates to run regardless.
+    #
+    # `packages: read` was added when the `integration-ubuntu-2604` job
+    # (PR #490) began pulling the ghcr.io Ubuntu 26.04 container image from
+    # inside the reusable workflow. Without forwarding this scope the
+    # release workflow again startup-failed on the v1.21.2 tag push.
     permissions:
       contents: read
       pull-requests: read
+      packages: read
     with:
       # Gate on the tag being shipped. On tag push this equals the workflow ref;
       # on manual workflow_dispatch it is the explicit tag input, not the dispatch branch.

@@ -38,7 +38,8 @@ The prioritised refactor list at the end targets the highest value-per-effort
 gaps under those two hotspots.
 
 Layout target (repeated for reference):
-```
+
+```text
 Core module (lib) ← tests hit here
     ↑             ↑
 UI (egui)      CLI (clap)
@@ -478,6 +479,7 @@ Ranked by (value × ease). "Value" weighs test-lever pull, CLI addressability,
 and enabling downstream retirement of Python parity code.
 
 ### 1. Split `runtime.rs` into modules (audio-bridge, hotkey-supervisor, worker-command)
+
 **Why now:** Enforces the 500-LOC modularity rule (memory
 `code-modularity-rule`), unlocks separate test files without cross-import
 grief, and *doesn't* require any behaviour change — pure structural
@@ -489,6 +491,7 @@ sub-modules `runtime/supervisor.rs`, `runtime/audio_bridge.rs`
 **Effort:** ~1-2 days.
 
 ### 2. Public Rust CLI verbs for one-shot ops (`inject-text`, `hotkey capture`, `config set`, `dictionary prompt`, `history copy-last/reinject-last`, `devices test`)
+
 **Why now:** Every one of these is a thin wrapper over an already-existing
 Rust library function. Ships CLI addressability for six features in one
 sweep; enables shell-scripted smoke tests in the Ubuntu 26.04 CI container
@@ -497,6 +500,7 @@ sweep; enables shell-scripted smoke tests in the Ubuntu 26.04 CI container
 **Effort:** ~1 day per verb group; ~3-4 days total.
 
 ### 3. Port `vp_device_test.py` (mic-open probe) to Rust; add `whisper-dictate devices test NAME`
+
 **Why now:** The cpal open-config matrix in `src/rust/audio/capture.rs`
 already exercises the same negotiation path as
 `vp_device_test._probe_device`. Moving it to Rust closes the last gap
@@ -508,6 +512,7 @@ subcommand + unit tests.
 **Effort:** ~2 days (needs cross-platform host-specific config matrix work).
 
 ### 4. Retire Python parity implementations of dictionary training / suggest
+
 **Why now:** Rust `dictionary/training/*` + `dictionary/suggest/*` are
 complete and covered; `vp_dictionary_training.py` (592 LOC) and
 `vp_dictionary_suggest.py` (509 LOC) exist only as parity fallbacks. Cutting
@@ -522,6 +527,7 @@ implementations.
 **Effort:** ~2-3 days (mostly test updates and verifying no import remnants).
 
 ### 5. Wire `dictate::DictateSession` into the shipping PTT loop (behind an env flag first)
+
 **Why now:** Highest strategic value, hardest work. All the pieces exist:
 `DictateSession` state machine (Wave 5 PR 2), audio-route bridge (PR 3),
 hotkey wiring (PR 4), real backends (PR 5). The final swap is what closes
@@ -546,6 +552,7 @@ Target: Ubuntu 26.04 dev container that runs on every PR to give a
 `local-dev-environment`) already covers most of this.
 
 **Install (apt):**
+
 - `build-essential`, `pkg-config`, `cmake` (for whisper.cpp behind
   `whisper-rs-local`)
 - `libasound2-dev` (cpal; already present as
@@ -557,6 +564,7 @@ Target: Ubuntu 26.04 dev container that runs on every PR to give a
 - `python3.12`, `python3.12-venv`, `pip` (per Python-side tests)
 
 **Runs green in that container:**
+
 - `cargo test --features "audio-in-rust,whisper-rs-local,rust-injection,rust-hotkeys"`
   — every `*_tests.rs`, every `src/rust/tests/*.rs`.
 - `pytest src/python/tests src/tests/python` — the full Python suite; the
@@ -573,6 +581,7 @@ Target: Ubuntu 26.04 dev container that runs on every PR to give a
   whisper-rs-local + a cached tiny.en).
 
 **Cannot test in that container (inherent limitations):**
+
 - Real keystrokes injected into a real focused window (no user-focused
   Wayland/Windows target).
 - Real hotkey capture (no OS input events beyond synthetic X events under
