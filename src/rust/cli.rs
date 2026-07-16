@@ -120,13 +120,59 @@ pub enum Command {
         #[command(subcommand)]
         command: HistoryCommand,
     },
-    /// Internal helper used by the Python worker for keyboard injection.
-    #[command(hide = true)]
+    /// Inject text into the active window — scripting + smoke-test wrapper
+    /// around the injection library. **Defaults to `--dry-run`**: the
+    /// resolved backend + keystroke plan is printed and NOTHING is typed.
+    /// Real injection requires `--do-it` (alias `--live`).
+    ///
+    /// Two invocation shapes coexist:
+    ///
+    /// * `inject-text <TEXT> [--dry-run|--do-it] [--backend NAME] [--json]`
+    ///   — the public scripting/smoke form (audit item 2 chunk B).
+    /// * `inject-text --mode {type|paste} --text ... --xkb-layout ...
+    ///   --target-title ... --target-process ...` — the legacy hidden
+    ///   helper that the Python worker still shells out to for Wayland
+    ///   layout-aware typing. Keep working for backwards-compat; the
+    ///   public path never sets `--mode`.
     InjectText {
-        /// Injection mode to execute.
-        #[arg(long, value_parser = ["type", "paste"])]
+        /// Text to inject (public form — positional). When present the
+        /// command runs the dry-run/inject flow; when absent the legacy
+        /// `--mode` + `--text` helper path runs.
+        #[arg(value_name = "TEXT")]
+        text_arg: Option<String>,
+        /// Explicit dry-run flag (matches the default). Set for clarity /
+        /// self-documenting shell scripts; `--do-it` overrides.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// REALLY inject the text into the active window (dangerous —
+        /// moves the cursor, types keys). Off by default. `--live` is an
+        /// alias for the same flag.
+        #[arg(long, alias = "live", default_value_t = false)]
+        do_it: bool,
+        /// Backend selector for the public form. `auto` picks per platform
+        /// via [`plan::pick_backend`]; explicit backends are echoed back;
+        /// `type` / `paste` are MODE aliases (not backend names).
+        #[arg(
+            long,
+            default_value = "auto",
+            value_parser = [
+                "auto", "pynput", "wtype", "ydotool", "xdotool", "kwtype",
+                "dotool", "enigo", "type", "paste",
+            ],
+        )]
+        backend: String,
+        /// Machine-readable JSON output (single line). Default is a
+        /// human-readable summary — the JSON keys are stable so tests can
+        /// pin them.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Legacy hidden-helper mode selector (`type` / `paste`). Non-empty
+        /// value selects the legacy Wayland keycode path used by the Python
+        /// worker; leave empty for the public dry-run form.
+        #[arg(long, default_value = "", value_parser = ["", "type", "paste"])]
         mode: String,
-        /// Text to inject for type mode.
+        /// Legacy hidden-helper text (used when `--mode` is set). The
+        /// public form uses the positional TEXT argument.
         #[arg(long, default_value = "")]
         text: String,
         /// XKB layout used for Wayland direct keycode typing.
@@ -643,7 +689,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_hidden_inject_text_subcommand() {
+    fn parses_legacy_hidden_inject_text_helper_flags() {
+        // Backwards-compat: the Python worker still shells out to
+        // `inject-text --mode type --text ... --xkb-layout ...` — that
+        // invocation MUST keep parsing exactly as before even though the
+        // command now grows public-form flags.
         let cli = Cli::parse_from([
             "whisper-dictate",
             "inject-text",
@@ -657,6 +707,11 @@ mod tests {
         assert_eq!(
             cli.command,
             Some(Command::InjectText {
+                text_arg: None,
+                dry_run: false,
+                do_it: false,
+                backend: "auto".to_owned(),
+                json: false,
                 mode: "type".to_owned(),
                 text: "høre".to_owned(),
                 xkb_layout: "dk".to_owned(),
@@ -664,6 +719,84 @@ mod tests {
                 target_process: String::new(),
             })
         );
+    }
+
+    #[test]
+    fn parses_public_inject_text_positional_defaults_to_dry_run() {
+        // Public form: positional TEXT + implicit dry-run (no --do-it).
+        let cli = Cli::parse_from(["whisper-dictate", "inject-text", "smoke test"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::InjectText {
+                text_arg: Some("smoke test".to_owned()),
+                dry_run: false, // flag not passed; handler still treats as dry-run
+                do_it: false,
+                backend: "auto".to_owned(),
+                json: false,
+                mode: String::new(),
+                text: String::new(),
+                xkb_layout: String::new(),
+                target_title: String::new(),
+                target_process: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_public_inject_text_with_explicit_dry_run_and_json_and_backend() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "inject-text",
+            "hej",
+            "--dry-run",
+            "--backend",
+            "wtype",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::InjectText {
+                text_arg: Some("hej".to_owned()),
+                dry_run: true,
+                do_it: false,
+                backend: "wtype".to_owned(),
+                json: true,
+                mode: String::new(),
+                text: String::new(),
+                xkb_layout: String::new(),
+                target_title: String::new(),
+                target_process: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_public_inject_text_do_it_and_live_alias() {
+        // `--do-it` opts into real injection.
+        let cli = Cli::parse_from(["whisper-dictate", "inject-text", "hi", "--do-it"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::InjectText { do_it: true, .. })
+        ));
+        // `--live` is an alias for the same flag — same parsed state.
+        let cli = Cli::parse_from(["whisper-dictate", "inject-text", "hi", "--live"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::InjectText { do_it: true, .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_backend_at_parse_time() {
+        // The value_parser allowlist stops typos before the handler runs.
+        let err = Cli::try_parse_from([
+            "whisper-dictate",
+            "inject-text",
+            "hi",
+            "--backend",
+            "notabackend",
+        ]);
+        assert!(err.is_err(), "expected clap to reject unknown backend");
     }
 
     #[test]
