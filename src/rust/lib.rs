@@ -51,6 +51,14 @@ pub mod corpus_profile;
 #[cfg(feature = "audio-in-rust")]
 pub mod devices;
 pub mod dictionary;
+// Platform-readiness diagnostic CLI (`whisper-dictate doctor`). Runs a
+// battery of read-only checks (OS, session, python, models cache, injection
+// backend availability, audio input, config validity, configured model) and
+// reports a pass/fail matrix in plain text or JSON. Designed to help users
+// troubleshoot without shelling out to the Python worker so it keeps working
+// when the venv is broken. Audit item 2 chunk E — see
+// `docs/architecture-audit-2026-07-16.md`.
+pub mod doctor;
 pub mod formatting;
 pub mod health;
 // Public `history` CLI verbs (list, last, copy-last, reinject-last,
