@@ -4,9 +4,9 @@ use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command, DevicesCommand};
 use whisper_dictate_app::{
-    benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, formatting,
-    health, history, injection, model_capacity, postprocess, privacy, profiles, redaction, runtime,
-    telemetry, ui, whisper,
+    benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, doctor,
+    formatting, health, history, injection, model_capacity, postprocess, privacy, profiles,
+    redaction, runtime, telemetry, ui, whisper,
 };
 
 fn main() {
@@ -26,7 +26,7 @@ fn run() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Ui) {
         Command::Ui | Command::Settings => ui::run(),
         Command::Run { args } => runtime::run_terminal(args),
-        Command::Doctor => runtime::doctor(),
+        Command::Doctor { json, config } => doctor::handle_doctor(json, config.as_deref()),
         Command::Bench => benchmark::handle_bench(),
         Command::CorpusRecord { id } => corpus_record::handle_corpus_record(&id),
         Command::SimulatePtt {

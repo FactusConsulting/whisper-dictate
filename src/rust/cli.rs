@@ -25,8 +25,26 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Check runtime dependencies and platform readiness.
-    Doctor,
+    /// Report platform readiness for dictation: OS + session, Python 3.12+,
+    /// whisper models cache, injection helper availability, audio input,
+    /// config file validity, and whether the configured model is downloaded.
+    ///
+    /// Exit code is 0 when no check `fail`s (warnings are non-blocking) and
+    /// 1 otherwise, so the same command drives interactive troubleshooting
+    /// and CI smoke gating. Every check is READ-ONLY — the doctor never
+    /// writes to config, downloads models, or opens the display server.
+    /// Audit item 2 chunk E.
+    Doctor {
+        /// Emit machine-readable JSON:
+        /// `{"checks":[{"name","status","detail"},...],"summary":{"ok","warn","fail"}}`.
+        #[arg(long)]
+        json: bool,
+        /// Override the config file path used by the `config` /
+        /// `configured-model` checks. Same precedence rule as `config get`:
+        /// this flag > `VOICEPI_CONFIG` env var > platform user config.
+        #[arg(long, value_name = "PATH")]
+        config: Option<String>,
+    },
     /// Run the golden benchmark corpus through the configured backend and
     /// print a one-line `[benchmark] ...` summary. Same code path as the
     /// "Run benchmark" button — the corpus is resolved relative to the app
@@ -685,6 +703,36 @@ mod tests {
     fn parses_settings_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "settings"]);
         assert_eq!(cli.command, Some(Command::Settings));
+    }
+
+    #[test]
+    fn parses_doctor_subcommand_with_defaults() {
+        let cli = Cli::parse_from(["whisper-dictate", "doctor"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Doctor {
+                json: false,
+                config: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_doctor_subcommand_with_json_and_config_override() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "doctor",
+            "--json",
+            "--config",
+            "/tmp/broken.json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Doctor {
+                json: true,
+                config: Some("/tmp/broken.json".to_owned()),
+            })
+        );
     }
 
     #[test]
