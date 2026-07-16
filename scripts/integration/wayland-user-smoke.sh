@@ -361,10 +361,40 @@ section "hotkey listener startup smoke"
 warn "no --verify-hotkey-only flag yet — pending audit item 2"
 
 # --------------------------------------------------------------------------
-# SECTION: injection dry-run per backend — PENDING
+# SECTION: inject-text dry-run (audit item 2 chunk B)
+#
+# The public `inject-text <TEXT>` verb wraps the injection library with a
+# dry-run default: it reports the resolved backend + keystroke plan without
+# touching the display server. Real injection is opt-in via `--do-it`. This
+# section only exercises the dry-run — no test in this smoke script should
+# ever move the user's cursor.
 # --------------------------------------------------------------------------
-section "injection dry-run (ydotool / wtype)"
-warn "inject-text CLI dry-run not yet exposed — pending audit item 2"
+section "inject-text dry-run (pynput / wtype / ydotool)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "inject-text is a Rust subcommand — not exposed by the Python fallback"
+else
+    inject_out="$(whisper-dictate inject-text "smoke test" --dry-run --json 2>&1)"
+    inject_rc=$?
+    if [ "$inject_rc" -eq 0 ] && \
+       printf '%s' "$inject_out" | grep -q '"dry_run":true' && \
+       printf '%s' "$inject_out" | grep -q '"typed":false'; then
+        ok "inject-text --dry-run --json returns keystroke plan"
+        # Extra assertion: `--do-it` was NOT passed so `typed` must be false.
+        # `dry_run:true` + `typed:false` is the smoke contract for a safe run.
+        if [ "$SESSION" = "wayland" ]; then
+            wt_out="$(whisper-dictate inject-text "hej" --dry-run --backend wtype --json 2>&1)"
+            wt_rc=$?
+            if [ "$wt_rc" -eq 0 ] && printf '%s' "$wt_out" | grep -q '"backend":"wtype"'; then
+                ok "inject-text --backend wtype --dry-run works"
+            else
+                warn "wtype backend dry-run failed: $(printf '%s\n' "$wt_out" | head -n 2)"
+            fi
+        fi
+    else
+        bad "inject-text --dry-run failed (exit $inject_rc)"
+        info "$(printf '%s\n' "$inject_out" | head -n 3)"
+    fi
+fi
 
 # --------------------------------------------------------------------------
 # Summary

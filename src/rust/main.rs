@@ -45,15 +45,7 @@ fn run() -> anyhow::Result<()> {
         Command::DictionaryOps => dictionary::handle_ops(),
         Command::DictateOps => dictate::ops::handle_ops(),
         Command::History { command } => telemetry::handle_history_command(command),
-        Command::InjectText {
-            mode,
-            text,
-            xkb_layout,
-            target_title,
-            target_process,
-        } => {
-            injection::handle_inject_text(&mode, &text, &xkb_layout, &target_title, &target_process)
-        }
+        args @ Command::InjectText { .. } => dispatch_inject_text(args),
         Command::FormatText { text, command_set } => {
             formatting::handle_format_text(&text, &command_set)
         }
@@ -154,6 +146,66 @@ fn handle_transcribe_server() -> anyhow::Result<()> {
          `whisper-rs-local` feature; the long-running transcribe-server \
          is unavailable - install a build with the feature enabled"
     ))
+}
+
+/// Route the `inject-text` subcommand to either the legacy hidden helper
+/// (`--mode {type|paste}` — Python worker path) or the public dry-run/inject
+/// verb (`inject-text <TEXT> [--dry-run|--do-it] [--backend NAME] [--json]`).
+///
+/// Selection rules (kept simple so the shape is unit-testable):
+///
+/// * `mode` non-empty → legacy path via [`injection::handle_inject_text`].
+///   Preserves the Python worker's on-disk contract without a shim.
+/// * `text_arg` some → public path via
+///   [`injection::handle_public_inject_text`].
+/// * neither → error: the user didn't tell us what to inject. Prints a hint
+///   at both invocation shapes so they know both exist.
+fn dispatch_inject_text(cmd: Command) -> anyhow::Result<()> {
+    // Destructuring the enum variant here keeps clippy's too-many-arguments
+    // check happy while still giving us named locals for each field.
+    let Command::InjectText {
+        text_arg,
+        dry_run,
+        do_it,
+        backend,
+        json,
+        mode,
+        text,
+        xkb_layout,
+        target_title,
+        target_process,
+    } = cmd
+    else {
+        unreachable!("dispatch_inject_text called with non-InjectText variant")
+    };
+    if !mode.is_empty() {
+        // Legacy hidden-helper path: honour --mode + --text + --xkb-layout,
+        // exactly as before this PR. The public flags are ignored on this
+        // path (they never coexist in the shipping Python invocation).
+        return injection::handle_inject_text(
+            &mode,
+            &text,
+            &xkb_layout,
+            &target_title,
+            &target_process,
+        );
+    }
+    let Some(text_positional) = text_arg else {
+        return Err(anyhow::anyhow!(
+            "inject-text: pass TEXT as a positional argument \
+             (e.g. `whisper-dictate inject-text \"smoke test\"`) or use the \
+             legacy `--mode {{type|paste}} --text ...` helper form"
+        ));
+    };
+    injection::handle_public_inject_text(
+        &text_positional,
+        &backend,
+        dry_run,
+        do_it,
+        json,
+        &target_title,
+        &target_process,
+    )
 }
 
 /// Build the Python argv for the `simulate-ptt` subcommand.
