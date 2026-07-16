@@ -5176,7 +5176,7 @@ dependencies = [
 
 [[package]]
 name = "whisper-dictate-app"
-version = "1.21.0"
+version = "1.21.1"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
