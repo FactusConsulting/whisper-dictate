@@ -26,11 +26,18 @@ pub fn config_path() -> PathBuf {
 
 /// Read the raw config.json as untyped JSON, treating a missing file as `{}`.
 pub fn load_raw_config() -> Result<Value> {
-    let path = config_path();
+    load_raw_config_from_path(&config_path())
+}
+
+/// Read the raw config JSON at an explicit path, treating a missing file as
+/// `{}`. Same shape as [`load_raw_config`] but honours a caller-supplied
+/// override (used by the `config get --config PATH` / `config set --config
+/// PATH` CLI verbs so a script can point at a scratch file without mutating
+/// the process's `VOICEPI_CONFIG` env var).
+pub fn load_raw_config_from_path(path: &Path) -> Result<Value> {
     if !path.exists() {
         return Ok(Value::Object(Map::new()));
     }
-
     let raw = fs::read_to_string(path)?;
     let value: Value = serde_json::from_str(&raw)?;
     Ok(value)
@@ -39,6 +46,13 @@ pub fn load_raw_config() -> Result<Value> {
 /// Load the on-disk config into the typed [`AppSettings`].
 pub fn load_settings() -> Result<AppSettings> {
     AppSettings::from_value(load_raw_config()?)
+}
+
+/// Load an explicit config file into the typed [`AppSettings`]. Missing file
+/// yields `AppSettings::default()`. Companion to [`load_raw_config_from_path`]
+/// for the CLI `config get`/`list` verbs.
+pub fn load_settings_from_path(path: &Path) -> Result<AppSettings> {
+    AppSettings::from_value(load_raw_config_from_path(path)?)
 }
 
 /// Persist `settings` to the active config path, preserving unknown keys.

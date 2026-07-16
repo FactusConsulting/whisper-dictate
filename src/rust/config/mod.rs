@@ -14,6 +14,7 @@
 //! Everything below is re-exported so existing `crate::config::NAME` paths keep
 //! working regardless of which submodule now defines a given item.
 
+mod cli_ops;
 mod io;
 mod keys;
 mod load;
@@ -22,13 +23,17 @@ mod schema;
 mod settings;
 mod validate;
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 
 use crate::cli::ConfigCommand;
 
+pub use cli_ops::{format_get_value, get_value, list_values, set_value, valid_keys};
 pub use io::{
-    config_path, default_history_path, ensure_dictionary_file, load_raw_config, load_settings,
-    open_dictionary, open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
+    config_path, default_history_path, ensure_dictionary_file, load_raw_config,
+    load_raw_config_from_path, load_settings, load_settings_from_path, open_dictionary,
+    open_existing_path, platform_config_dir, save_settings, save_settings_to_path,
 };
 pub use keys::restart_required_keys;
 pub use schema::{effective_runtime_env, numeric_bounds, worker_env_overrides, NumericBounds};
@@ -56,7 +61,7 @@ pub(crate) mod test_support {
     }
 }
 
-/// Dispatch the `config` CLI subcommand (print the path or the resolved config).
+/// Dispatch the `config` CLI subcommand (path / show / get / set / list).
 pub fn handle_command(command: ConfigCommand) -> Result<()> {
     match command {
         ConfigCommand::Path => {
@@ -68,6 +73,47 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&value)?);
             Ok(())
         }
+        ConfigCommand::Get { key, json, config } => {
+            let path = resolve_config_path(config.as_deref());
+            let value = get_value(&key, &path)?;
+            println!("{}", format_get_value(&key, &value, json)?);
+            Ok(())
+        }
+        ConfigCommand::Set { key, value, config } => {
+            let path = resolve_config_path(config.as_deref());
+            let saved_to = set_value(&key, &value, &path)?;
+            println!("{}", saved_to.display());
+            Ok(())
+        }
+        ConfigCommand::List { json, config } => {
+            let path = resolve_config_path(config.as_deref());
+            let entries = list_values(&path)?;
+            if json {
+                let object: serde_json::Map<String, serde_json::Value> =
+                    entries.into_iter().collect();
+                println!("{}", serde_json::to_string_pretty(&object)?);
+            } else {
+                for (key, value) in entries {
+                    let printable = value.as_str().map(str::to_owned).unwrap_or_else(|| {
+                        serde_json::to_string(&value).unwrap_or_else(|_| String::new())
+                    });
+                    println!("{key}={printable}");
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Resolve the config file path for a `config get`/`set`/`list` CLI call.
+///
+/// Precedence: `--config PATH` (explicit flag) > `VOICEPI_CONFIG` env var
+/// (via [`config_path`]) > platform user config file. Kept small so the
+/// dispatch above stays a flat match.
+fn resolve_config_path(override_path: Option<&str>) -> PathBuf {
+    match override_path {
+        Some(raw) => PathBuf::from(raw),
+        None => config_path(),
     }
 }
 
