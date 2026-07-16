@@ -203,25 +203,34 @@ mod tests {
         // real user cache. The first catalog entry is marked downloaded;
         // the rest are not. The output must mark them accordingly and
         // include each entry's name.
+        //
+        // Substring matching on `entry.name` alone would collide: the
+        // catalog contains both `tiny` and `tiny.en`, so a naive
+        // `line.contains("tiny")` picks up the `tiny.en` row. Match the
+        // second column of each rendered row instead — `<status> <name>` —
+        // so lookup is exact.
         let first = model_manager::CATALOG[0].name;
         let mut buf: Vec<u8> = Vec::new();
         print_list(&mut buf, |entry| entry.name == first).unwrap();
         let out = String::from_utf8(buf).unwrap();
+        let row_for = |name: &str| -> Option<String> {
+            out.lines()
+                .find(|l| {
+                    // Rendered as `  <status> <name>  <size>  <descr>`.
+                    // The second whitespace-separated column is the name.
+                    l.split_whitespace().nth(1) == Some(name)
+                })
+                .map(|l| l.to_owned())
+        };
         // The downloaded-marker line must include the entry name.
-        let first_line = out
-            .lines()
-            .find(|l| l.contains(first))
-            .expect("first entry must appear in list output");
+        let first_line = row_for(first).expect("first entry must appear in list output");
         assert!(
             first_line.contains("[ok]"),
             "downloaded entry must be marked [ok]: {first_line}",
         );
         // Every other catalog entry must be marked missing.
         for entry in &model_manager::CATALOG[1..] {
-            let line = out
-                .lines()
-                .find(|l| l.contains(entry.name))
-                .expect("entry must appear in list output");
+            let line = row_for(entry.name).expect("entry must appear in list output");
             assert!(
                 line.contains("[--]"),
                 "missing entry must be marked [--]: {line}",
