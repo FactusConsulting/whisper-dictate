@@ -78,12 +78,26 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[test]
 fn catalog_contains_expected_models() {
-    // Encodes the curated scope decision (Wave 7-B): English-only,
-    // CPU-friendly. A future PR that drops one of these or accidentally
-    // re-orders them will trip this — at which point the UI labels
-    // should be re-audited alongside.
+    // Encodes the curated scope decision (Tier 1 expansion, 2026-07):
+    // English-only trio first (smallest → largest), then the multilingual
+    // siblings, then the larger multilingual models. A future PR that drops
+    // one of these or accidentally re-orders them will trip this — at which
+    // point the UI labels should be re-audited alongside.
     let names: Vec<&str> = CATALOG.iter().map(|e| e.name).collect();
-    assert_eq!(names, vec!["tiny.en", "base.en", "small.en"]);
+    assert_eq!(
+        names,
+        vec![
+            "tiny.en",
+            "base.en",
+            "small.en",
+            "tiny",
+            "base",
+            "small",
+            "medium",
+            "large-v3-turbo",
+            "large-v3",
+        ]
+    );
 }
 
 #[test]
