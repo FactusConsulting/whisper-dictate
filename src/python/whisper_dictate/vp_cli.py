@@ -229,6 +229,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="transcribe an audio file with the selected backend, "
                          "then exit. 16-bit WAV works natively; mp3/m4a and "
                          "other formats require ffmpeg.")
+    # Library-first POC (see docs/…): drive the full PTT pipeline (transcribe →
+    # dictionary → post-process → inject) from a WAV file. Default is a
+    # dry-run — no keys are pressed unless --inject is also passed. Used by
+    # the Rust `whisper-dictate simulate-ptt` subcommand and by
+    # `python -m whisper_dictate.vp_simulate_ptt`.
+    ap.add_argument("--simulate-ptt", action="store_true",
+                    help="run the full PTT pipeline against --wav (no mic, "
+                         "no hotkey) and exit; default dry-run, pass --inject "
+                         "to really type into the active window.")
+    ap.add_argument("--wav", metavar="PATH", default=None,
+                    help="WAV/audio file for --simulate-ptt (16-bit PCM WAV "
+                         "native; other formats need ffmpeg).")
+    ap.add_argument("--inject", action="store_true",
+                    help="with --simulate-ptt, really invoke the injection "
+                         "backend (default: dry-run). Only the direct-typing "
+                         "strategy is implemented in this POC.")
     ap.add_argument("--benchmark-files", nargs="+", metavar="PATH",
                     help="run one or more audio files through benchmark "
                          "backend specs, then exit")

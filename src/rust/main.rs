@@ -29,6 +29,13 @@ fn run() -> anyhow::Result<()> {
         Command::Doctor => runtime::doctor(),
         Command::Bench => benchmark::handle_bench(),
         Command::CorpusRecord { id } => corpus_record::handle_corpus_record(&id),
+        Command::SimulatePtt {
+            wav,
+            inject,
+            language,
+            model,
+            json,
+        } => runtime::run_terminal(simulate_ptt_args(&wav, inject, &language, &model, json)),
         Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
         Command::ModelCapacity { json } => model_capacity::handle_command(json),
@@ -146,6 +153,47 @@ fn handle_transcribe_server() -> anyhow::Result<()> {
     ))
 }
 
+/// Build the Python argv for the `simulate-ptt` subcommand.
+///
+/// The Rust `simulate-ptt` command is a thin front for the Python worker's
+/// `--simulate-ptt` flag: this helper translates the parsed clap values back
+/// into the `--flag value` argv the Python argparse expects, skipping
+/// empty-string optional values so `_resolve_device` / `MODEL_NAME` fall
+/// back to their configured defaults. Kept as a pure function so the
+/// argv-shape is unit-testable without spawning Python.
+///
+/// No `--inject-mode` is forwarded: only the direct-typing strategy is
+/// implemented in this POC, so exposing a selector would let the caller
+/// ask for a mode the pipeline can't actually deliver.
+fn simulate_ptt_args(
+    wav: &str,
+    inject: bool,
+    language: &str,
+    model: &str,
+    json: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "--simulate-ptt".to_owned(),
+        "--wav".to_owned(),
+        wav.to_owned(),
+    ];
+    if inject {
+        args.push("--inject".to_owned());
+    }
+    if !language.trim().is_empty() {
+        args.push("--lang".to_owned());
+        args.push(language.to_owned());
+    }
+    if !model.trim().is_empty() {
+        args.push("--model".to_owned());
+        args.push(model.to_owned());
+    }
+    if json {
+        args.push("--json".to_owned());
+    }
+    args
+}
+
 #[cfg(feature = "audio-in-rust")]
 fn handle_devices_command() -> anyhow::Result<()> {
     whisper_dictate_app::devices::handle_devices()
@@ -159,4 +207,62 @@ fn handle_devices_command() -> anyhow::Result<()> {
     // returncode check trips the fallback path in vp_devices.
     println!("{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-in-rust feature\"}}");
     std::process::exit(2);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::simulate_ptt_args;
+
+    #[test]
+    fn simulate_ptt_args_dry_run_default() {
+        let args = simulate_ptt_args("hello.wav", false, "", "", false);
+        assert_eq!(
+            args,
+            vec![
+                "--simulate-ptt".to_owned(),
+                "--wav".to_owned(),
+                "hello.wav".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn simulate_ptt_args_forwards_all_flags() {
+        let args = simulate_ptt_args("path/hello.wav", true, "da", "tiny.en", true);
+        assert_eq!(
+            args,
+            vec![
+                "--simulate-ptt".to_owned(),
+                "--wav".to_owned(),
+                "path/hello.wav".to_owned(),
+                "--inject".to_owned(),
+                "--lang".to_owned(),
+                "da".to_owned(),
+                "--model".to_owned(),
+                "tiny.en".to_owned(),
+                "--json".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn simulate_ptt_args_skips_empty_language_and_model() {
+        let args = simulate_ptt_args("hello.wav", false, "   ", "  ", false);
+        // Blank language / model must NOT be forwarded — the Python side falls
+        // back to the configured default (VOICEPI_MODEL / auto-detect language)
+        // exactly like the live PTT loop does.
+        assert!(!args.contains(&"--lang".to_owned()));
+        assert!(!args.contains(&"--model".to_owned()));
+    }
+
+    #[test]
+    fn simulate_ptt_args_never_forwards_inject_mode() {
+        // POC-scope guard (fixes a Claude review finding from PR #491): only
+        // the direct-typing strategy is wired up right now, so the argv-builder
+        // MUST NOT emit a `--inject-mode` flag — the reported inject_strategy
+        // would otherwise lie about paste vs type. When paste is implemented,
+        // a follow-up can re-add the selector plus the wiring behind it.
+        let args = simulate_ptt_args("hello.wav", true, "da", "tiny.en", true);
+        assert!(!args.contains(&"--inject-mode".to_owned()));
+    }
 }

@@ -734,6 +734,22 @@ def _run_session(a, model, lang, backend: str, dev: str, ctype: str,
         )
         print_transcribe_file_result(event, as_json=a.json)
         raise SystemExit(0)
+    if getattr(a, "simulate_ptt", False):
+        # Library-first POC: drive the full PTT pipeline against a WAV file.
+        # Model is already loaded above; hand it to the simulator and exit.
+        from whisper_dictate.vp_simulate_ptt import (
+            _print_result, simulate_ptt,
+        )
+        if not a.wav:
+            raise SystemExit("--simulate-ptt requires --wav PATH")
+        result = simulate_ptt(
+            model,
+            a.wav,
+            lang=lang,
+            inject=bool(a.inject),
+        )
+        _print_result(result, as_json=a.json)
+        raise SystemExit(0)
     try:
         Dictate(
             model, a.key, a.mode, lang,

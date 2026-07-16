@@ -47,6 +47,37 @@ pub enum Command {
         #[arg(allow_hyphen_values = true)]
         id: String,
     },
+    /// Library-first POC: drive the full push-to-talk pipeline
+    /// (transcribe → dictionary → post-process → inject) against a WAV
+    /// file, without opening a microphone or installing a keyboard hook.
+    /// Defaults to a dry-run that prints the would-be-typed transcript;
+    /// pass `--inject` to really type into the active window.
+    ///
+    /// Forwards to the Python worker's `--simulate-ptt` flag so the same
+    /// pipeline the live PTT loop drives is exercised end to end. Intended
+    /// for headless verification in a build container (e.g. ubuntu:26.04)
+    /// where no audio hardware or WM keyboard hook is available.
+    SimulatePtt {
+        /// WAV/audio file to transcribe.
+        #[arg(long)]
+        wav: String,
+        /// Really invoke the injection backend (default: dry-run).
+        /// Only the direct-typing strategy is implemented in this POC —
+        /// a headless paste strategy is future work, so no `--inject-mode`
+        /// selector is exposed until it lands.
+        #[arg(long, default_value_t = false)]
+        inject: bool,
+        /// Spoken-language hint (`da`, `en`, ...); omit to let Whisper
+        /// auto-detect.
+        #[arg(long, default_value = "")]
+        language: String,
+        /// Whisper model name (default: read from config / `VOICEPI_MODEL`).
+        #[arg(long, default_value = "")]
+        model: String,
+        /// Emit the result as a single JSON line instead of the transcript.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Install or repair local runtime dependencies.
     Install,
     /// Run the Ubuntu Wayland desktop setup helper.
