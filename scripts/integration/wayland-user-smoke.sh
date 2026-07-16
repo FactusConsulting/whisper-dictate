@@ -261,9 +261,69 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: config get/set — PENDING (audit item 2)
+# SECTION: config get/set (persistence roundtrip — audit item 2 chunk A)
+#
+# Real exercise now that `whisper-dictate config get KEY` and
+# `whisper-dictate config set KEY VALUE` ship. Runs against a scratch
+# config file (VOICEPI_CONFIG override) so the smoke never mutates the
+# user's real config.json, and restores the previous env at the end.
+# The Python fallback path does not expose the Rust config verbs, so it
+# still warn-skips there — same discipline as `models list` and
+# `devices test`.
 # --------------------------------------------------------------------------
-section "config get/set"
+section "config get/set (persistence roundtrip)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "config get/set are Rust subcommands — not exposed by the Python fallback"
+else
+    old_voicepi_config="${VOICEPI_CONFIG:-}"
+    scratch_config="$(mktemp -t wd-cfg-smoke.XXXXXX.json)"
+    # mktemp creates the file empty; wipe so the "no file yet" branch is
+    # exercised on first `get` (that's the fresh-user case we care about).
+    rm -f "$scratch_config"
+    export VOICEPI_CONFIG="$scratch_config"
+
+    get_before="$(whisper-dictate config get audio_device 2>&1)"
+    get_before_rc=$?
+    if [ "$get_before_rc" -ne 0 ]; then
+        bad "config get on empty config failed (exit $get_before_rc)"
+        info "$(printf '%s\n' "$get_before" | head -n 2)"
+    else
+        ok "config get audio_device works on empty config"
+    fi
+
+    set_out="$(whisper-dictate config set audio_device wd-smoke-mic 2>&1)"
+    set_rc=$?
+    get_after="$(whisper-dictate config get audio_device 2>&1)"
+    get_after_rc=$?
+    if [ "$set_rc" -eq 0 ] && [ "$get_after_rc" -eq 0 ] && \
+       [ "$get_after" = "wd-smoke-mic" ]; then
+        ok "config set + get roundtrip persists across processes"
+    else
+        bad "config set/get roundtrip broken (set exit $set_rc, get exit $get_after_rc, got: $get_after)"
+        info "set stderr: $(printf '%s\n' "$set_out" | head -n 2)"
+    fi
+
+    # Unknown-key error path: must exit non-zero with a message that lists
+    # at least one valid key so the user has something to grep against.
+    if bad_out="$(whisper-dictate config get definitely-not-a-key 2>&1)"; then
+        bad "unknown-key get should fail but exited 0"
+        info "$(printf '%s\n' "$bad_out" | head -n 2)"
+    elif printf '%s' "$bad_out" | grep -q "audio_device"; then
+        ok "unknown-key error lists valid keys"
+    else
+        bad "unknown-key error did not list valid keys"
+        info "$(printf '%s\n' "$bad_out" | head -n 4)"
+    fi
+
+    rm -f "$scratch_config"
+    if [ -n "$old_voicepi_config" ]; then
+        export VOICEPI_CONFIG="$old_voicepi_config"
+    else
+        unset VOICEPI_CONFIG
+    fi
+fi
+
+section "config path"
 if [ "$CMD_MODE" = "rust" ] && whisper-dictate config --help >/dev/null 2>&1; then
     if out="$(whisper-dictate config path 2>&1)" && [ -n "$out" ]; then
         ok "config path resolves: $out"
@@ -273,7 +333,7 @@ if [ "$CMD_MODE" = "rust" ] && whisper-dictate config --help >/dev/null 2>&1; th
         info "$out"
     fi
 else
-    warn "config CLI not available on this build — pending audit item 2"
+    warn "config CLI not available on this build"
 fi
 
 # --------------------------------------------------------------------------

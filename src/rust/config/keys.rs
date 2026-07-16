@@ -14,7 +14,9 @@
 use crate::config::AppSettings;
 
 /// Every config.json key managed by [`AppSettings`]. Used by the serializer to
-/// remove stale keys before writing the current typed values back.
+/// remove stale keys before writing the current typed values back, and also by
+/// the `config get`/`set` CLI verbs as the allow-list of user-editable keys
+/// ([`crate::config::valid_keys`] returns a stable-order borrow of it).
 pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "key",
     "model",
