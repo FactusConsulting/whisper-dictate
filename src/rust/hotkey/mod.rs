@@ -57,6 +57,7 @@ pub mod coordinator;
 pub mod inject_guard;
 pub mod manager;
 pub mod modifier_match;
+pub mod self_test;
 
 #[cfg(feature = "rust-hotkeys")]
 use std::sync::Arc;

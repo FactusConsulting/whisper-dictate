@@ -472,6 +472,29 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: self-test ptt-wedge (regression test — v1.20.7 killer)
+#
+# Headless regression check for the self-injection PTT-wedge class of bugs
+# (Windows v1.20.7, Wayland via #467). Drives the guard + tracker directly
+# with synthetic events — no OS-level hook, no audio, no display — so it
+# runs on any container. If any iteration fails the wedge is back.
+# --------------------------------------------------------------------------
+section "self-test ptt-wedge (regression test — v1.20.7 killer)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
+else
+    st_out="$(whisper-dictate self-test ptt-wedge --iterations 3 --json 2>&1)"
+    st_rc=$?
+    if [ "$st_rc" -eq 0 ] && printf '%s' "$st_out" | grep -q '"all_passed":true'; then
+        ok "PTT wedge regression test passed (3 iterations)"
+    elif printf '%s' "$st_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
+        warn "self-test ptt-wedge requires rust-hotkeys,rust-injection features (skipped on this build)"
+    else
+        bad "PTT wedge regression test FAILED — v1.20.7-style bug is back: $(printf '%s\n' "$st_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: inject-text dry-run (audit item 2 chunk B)
 #
 # The public `inject-text <TEXT>` verb wraps the injection library with a

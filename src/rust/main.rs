@@ -2,7 +2,7 @@
 
 use clap::Parser;
 
-use whisper_dictate_app::cli::{Cli, Command, DevicesCommand};
+use whisper_dictate_app::cli::{Cli, Command, DevicesCommand, SelfTestCommand};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, doctor,
     formatting, health, history, hotkey, injection, model_capacity, postprocess, privacy, profiles,
@@ -89,6 +89,66 @@ fn run() -> anyhow::Result<()> {
         },
         Command::Models { command } => whisper::models_cli::handle(command),
         Command::Hotkey { command } => hotkey::capture::handle_hotkey_command(command),
+        Command::SelfTest { command } => handle_self_test(command),
+    }
+}
+
+/// Dispatch the `self-test` subcommand family. Every verb here is a pure,
+/// headless regression check — no OS hooks, no audio, no display. Exits
+/// non-zero on any failure so CI (and `wayland-user-smoke.sh`) can pin the
+/// check without shelling out for platform detects.
+fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
+    use whisper_dictate_app::hotkey::self_test::{
+        features_available, run_ptt_wedge_test, SelfTestDriver,
+    };
+
+    match cmd {
+        SelfTestCommand::PttWedge {
+            iterations,
+            json,
+            driver,
+        } => {
+            if iterations == 0 {
+                return Err(anyhow::anyhow!(
+                    "--iterations must be at least 1 (0 would be a vacuous pass)"
+                ));
+            }
+            // Reject typo'd `--driver` BEFORE running the test, matching the
+            // `hotkey capture --driver` policy (a smoke-script mis-spelling
+            // should fail fast, not silently pick the auto backend).
+            let parsed_driver = SelfTestDriver::parse(&driver).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--driver expects auto | rdev | evdev (or the x11 / wayland aliases); \
+                     got {driver:?}"
+                )
+            })?;
+            // Stock builds cannot exercise the guard bracket semantics (the
+            // injector's `arm_start` lives behind `rust-injection`) — a "pass"
+            // there would be a false negative and mask a real regression.
+            // Surface an actionable rebuild message and exit non-zero.
+            if !features_available() {
+                return Err(anyhow::anyhow!(
+                    "self-test ptt-wedge requires the `rust-hotkeys` and `rust-injection` \
+                     cargo features — rebuild with \
+                     `cargo build --features rust-hotkeys,rust-injection`"
+                ));
+            }
+            let report = run_ptt_wedge_test(iterations, parsed_driver);
+            if json {
+                println!("{}", report.to_json());
+            } else {
+                print!("{}", report.to_plain());
+            }
+            if report.all_passed() {
+                Ok(())
+            } else {
+                // Non-zero exit so CI trips. The report already printed the
+                // per-iteration detail; a bare error keeps the tail short.
+                Err(anyhow::anyhow!(
+                    "self-test ptt-wedge failed (see report above for the failing iteration and stage)"
+                ))
+            }
+        }
     }
 }
 
