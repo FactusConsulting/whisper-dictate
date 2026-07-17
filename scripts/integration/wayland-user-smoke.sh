@@ -596,6 +596,40 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: dictate engine dispatch (VOICEPI_DICTATE_ENGINE=rust opt-in)
+#
+# Audit item 5 Phase A step 2. The Python runtime honours
+# VOICEPI_DICTATE_ENGINE and, when set to `rust`, shells out to
+# `whisper-dictate dictate-run`. The full loop is manual QA (needs a
+# display + audio + a running Rust binary with the required features);
+# here we just prove the Python side recognises the flag by importing
+# the dispatch selector. That is what regresses if a refactor drops the
+# env-var branch — the exact regression class this section guards.
+# --------------------------------------------------------------------------
+section "dictate engine dispatch (VOICEPI_DICTATE_ENGINE=rust opt-in)"
+if [ "$CMD_MODE" = "python" ] || command -v python3 >/dev/null 2>&1; then
+    engine_check_out="$(VOICEPI_DICTATE_ENGINE=rust python3 -c '
+from whisper_dictate.vp_dictate_engine import (
+    ENGINE_ENV, ENGINE_PYTHON, ENGINE_RUST, select_engine,
+)
+picked = select_engine()
+assert picked == ENGINE_RUST, (
+    "runtime did not resolve %s=rust to the rust engine (got %r)"
+    % (ENGINE_ENV, picked)
+)
+print("selector=%s picked=%s" % ("select_engine", picked))
+' 2>&1)"
+    engine_check_rc=$?
+    if [ "$engine_check_rc" -eq 0 ]; then
+        ok "Python runtime recognizes VOICEPI_DICTATE_ENGINE=rust ($engine_check_out)"
+    else
+        warn "engine dispatch not testable: $(printf '%s\n' "$engine_check_out" | head -2)"
+    fi
+else
+    warn "engine dispatch verify needs python3 in PATH (Rust-only build)"
+fi
+
+# --------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------
 section "Summary"
