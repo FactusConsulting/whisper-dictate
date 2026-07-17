@@ -90,6 +90,15 @@ fn run() -> anyhow::Result<()> {
         Command::Models { command } => whisper::models_cli::handle(command),
         Command::Hotkey { command } => hotkey::capture::handle_hotkey_command(command),
         Command::SelfTest { command } => handle_self_test(command),
+        Command::DictateRun {
+            config,
+            json_events,
+            foreground,
+        } => runtime::dictate_run::handle_dictate_run(runtime::dictate_run::DictateRunArgs {
+            config,
+            json_events,
+            foreground,
+        }),
     }
 }
 

@@ -495,6 +495,29 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: dictate-run CLI (Rust dictation runtime — Phase A step 1)
+#
+# Audit item 5 Phase A step 1: adds the `whisper-dictate dictate-run` verb
+# that installs the full Rust dictation runtime in-process. The verb is not
+# wired into the Python entrypoint yet (Phase A step 2 does that), so this
+# section only verifies the CLI surface parses and the help text is
+# reachable. We deliberately do NOT run the real thing headless — it needs
+# a display server and an audio device that this smoke box doesn't provide.
+# --------------------------------------------------------------------------
+section "dictate-run CLI (Rust dictation runtime — Phase A step 1)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "dictate-run is a Rust subcommand — not exposed by the Python fallback"
+else
+    dr_out="$(whisper-dictate dictate-run --help 2>&1)"
+    dr_rc=$?
+    if [ "$dr_rc" -eq 0 ] && printf '%s' "$dr_out" | grep -q -- '--json-events'; then
+        ok "dictate-run --help works"
+    else
+        bad "dictate-run --help failed: $(printf '%s\n' "$dr_out" | head -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: inject-text dry-run (audit item 2 chunk B)
 #
 # The public `inject-text <TEXT>` verb wraps the injection library with a
