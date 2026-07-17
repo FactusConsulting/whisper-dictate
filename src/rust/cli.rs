@@ -142,6 +142,50 @@ pub enum Command {
         #[command(subcommand)]
         command: HotkeyCommand,
     },
+    /// Foreground driver for the full Rust dictation runtime: installs the
+    /// hotkey listener + coordinator, wires them into the in-process
+    /// `DictateSession` action sink (real backends when the required cargo
+    /// features are compiled in — see below), and runs until Ctrl-C.
+    ///
+    /// **Audit item 5 Phase A step 1** (see
+    /// `docs/design/item5-wire-dictate-session.md`). Adds the CLI verb only
+    /// — the Python entrypoint at `src/python/whisper_dictate/runtime.py`
+    /// still runs the shipping PTT loop unconditionally in this PR. A
+    /// follow-up (Phase A step 2) will branch on `VOICEPI_DICTATE_ENGINE`
+    /// and shell out to this verb when the operator has opted in. Nothing
+    /// here changes production behaviour on its own.
+    ///
+    /// Feature-gated behind `rust-hotkeys,rust-injection`. On a stock build
+    /// the CLI surface still parses (so smoke scripts can pin it without a
+    /// shell-level feature detect) but the handler exits non-zero with an
+    /// actionable "rebuild with --features …" message. Matching sibling
+    /// features (`whisper-rs-local` for real Whisper inference,
+    /// `audio-in-rust` for the cpal capture pump) upgrade the session from
+    /// PR 4 stubs to the real backends via
+    /// `runtime::rust_session_sink::build_production_sink`.
+    DictateRun {
+        /// Override the config file path (default: platform user config;
+        /// also honours `VOICEPI_CONFIG` when this flag is omitted). Same
+        /// precedence rule as `config get --config` / `doctor --config`.
+        #[arg(long, value_name = "PATH")]
+        config: Option<String>,
+        /// Emit machine-readable JSONL on stdout instead of the human-
+        /// readable `[dictate-run] …` lines. First line is a stable
+        /// `{"kind":"ready","ready":true,"engine":"rust","chord":"...","driver":"..."}`
+        /// envelope so a supervising parent process can gate on it before
+        /// forwarding OS key events; subsequent lines are one JSON per
+        /// `RuntimeEvent` observed. The `ready` envelope's keys are the
+        /// machine-readable contract callers should pin.
+        #[arg(long, default_value_t = false)]
+        json_events: bool,
+        /// Documentation flag — the verb always runs in the foreground
+        /// today (the process itself IS the dictation runtime). Accepted
+        /// so the Phase A step 2 Python dispatch can pass it through
+        /// verbatim and so the flag exists when a future background variant
+        /// lands; currently a no-op.
+        #[arg(long, default_value_t = false)]
+        foreground: bool,
+    },
     /// Headless self-tests for the shipped runtime — regression checks that
     /// exercise past-breakage classes without needing a display server, audio
     /// hardware, or root. Every sub-verb takes zero configuration and exits
@@ -1748,6 +1792,62 @@ mod tests {
             }) => assert_eq!(driver, "rdev"),
             other => panic!("expected self-test ptt-wedge --driver rdev, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // dictate-run — audit item 5 Phase A step 1
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parses_dictate_run_subcommand_with_defaults() {
+        // Bare `dictate-run` must parse — the flags all default so a Python
+        // parent can invoke without arguments and get the resolved-config
+        // behaviour.
+        let cli = Cli::parse_from(["whisper-dictate", "dictate-run"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::DictateRun {
+                config: None,
+                json_events: false,
+                foreground: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_dictate_run_subcommand_with_all_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "dictate-run",
+            "--config",
+            "/tmp/wd.json",
+            "--json-events",
+            "--foreground",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::DictateRun {
+                config: Some("/tmp/wd.json".to_owned()),
+                json_events: true,
+                foreground: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_dictate_run_json_events_alone() {
+        // The Python parent (Phase A step 2) will typically pass
+        // `--json-events` on its own — pin that shape so a clap-derive
+        // refactor cannot accidentally coalesce the flags.
+        let cli = Cli::parse_from(["whisper-dictate", "dictate-run", "--json-events"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::DictateRun {
+                config: None,
+                json_events: true,
+                foreground: false,
+            })
+        );
     }
 
     #[test]

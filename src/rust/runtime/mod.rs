@@ -28,6 +28,15 @@ use anyhow::{anyhow, Result};
 
 pub mod audio_spawn;
 
+// Audit item 5 Phase A step 1: the `whisper-dictate dictate-run` CLI verb —
+// foreground driver that installs the Rust dictation runtime end-to-end. Not
+// wired into the Python entrypoint yet; a follow-up PR (Phase A step 2)
+// adds the `VOICEPI_DICTATE_ENGINE=rust` dispatch branch in
+// `runtime.py::_run_session` that shells out to it. Kept as a top-level
+// module (not `pub(crate)`) so `main.rs::dispatch_dictate_run` can call the
+// handler without an extra re-export.
+pub mod dictate_run;
+
 mod control;
 pub(crate) mod hotkey_install;
 pub(crate) mod install_plan;

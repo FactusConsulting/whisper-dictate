@@ -82,6 +82,13 @@ anyhow = "1.0"
 # the port).
 caseless = "0.2"
 clap = { version = "4.5", features = ["derive"] }
+# ctrlc: cross-platform SIGINT / Ctrl-C handler used by the `dictate-run` CLI
+# verb (audit item 5 Phase A step 1) to shut the in-process dictation runtime
+# down cleanly when the operator (or a supervising Python parent) hits Ctrl-C.
+# Tiny, no transitive deps of note, and unconditional so the CLI surface
+# compiles on every build — the handler itself is only registered when the
+# subcommand runs.
+ctrlc = "3.4"
 # eframe 0.34 flipped its DEFAULT renderer from glow (OpenGL) to wgpu. We ship on
 # glow and keep wgpu as a continuously-validated exit route, so the renderer is
 # chosen by OUR features (see [features] below) rather than eframe's default:
