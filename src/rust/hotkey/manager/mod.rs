@@ -33,8 +33,14 @@ pub mod rdev_driver;
 // without caring about the sub-module split.
 pub use tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput, FOREIGN_KEY_EXPIRY};
 
+// `spawn` (no raw tap) is not re-exported: production callers always
+// go through `spawn_with_raw_tap` from `hotkey::install_hotkey`, and
+// the only remaining callers of `spawn` are the sibling
+// `rdev_driver` unit tests. Keeping the surface narrow means fewer
+// places to update if the signature grows again (e.g. next platform-
+// specific bit of state alongside `injection_guard`).
 #[cfg(feature = "rust-hotkeys")]
 pub use rdev_driver::{
-    is_rdev_supported_name, spawn, spawn_with_raw_tap, ManagerHandle, ManagerThread, NoopRawTap,
-    RawTap, SpawnError,
+    is_rdev_supported_name, spawn_with_raw_tap, ManagerHandle, ManagerThread, NoopRawTap, RawTap,
+    SpawnError,
 };
