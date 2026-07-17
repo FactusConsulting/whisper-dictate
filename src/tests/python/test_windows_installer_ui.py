@@ -17,6 +17,18 @@ def rust_config_source():
     paths = [single] if single.exists() else sorted((src / "config").rglob("*.rs"))
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
+def rust_runtime_source():
+    # runtime.rs OR every non-test .rs under runtime/ (resilient to the split).
+    src = Path("src/rust")
+    single = src / "runtime.rs"
+    if single.exists():
+        paths = [single]
+    else:
+        paths = sorted(
+            p for p in (src / "runtime").rglob("*.rs") if not p.name.endswith("_tests.rs")
+        )
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
 class WindowsLauncherRegressionTests(unittest.TestCase):
     def test_installer_no_longer_packages_legacy_launchers(self):
         with open("packaging/windows/inno/whisper-dictate.iss", encoding="utf-8") as f:
@@ -83,7 +95,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         )
 
     def test_rust_background_processes_hide_windows_console(self):
-        script = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
+        script = rust_runtime_source()
 
         self.assertIn("const CREATE_NO_WINDOW: u32 = 0x08000000;", script)
         self.assertIn("fn configure_background_process(", script)
@@ -111,7 +123,7 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
 
     def test_rust_ui_does_not_spawn_shell_cleanup_before_starting_window(self):
         ui_script = rust_ui_source()
-        runtime_script = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
+        runtime_script = rust_runtime_source()
 
         ui_run = ui_script.split("pub fn run() -> Result<()>", 1)[1].split(
             "impl Default for WhisperDictateApp", 1

@@ -18,6 +18,19 @@ def rust_config_source():
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
+def rust_runtime_source():
+    # runtime.rs OR every non-test .rs under runtime/ (resilient to the split).
+    src = Path("src/rust")
+    single = src / "runtime.rs"
+    if single.exists():
+        paths = [single]
+    else:
+        paths = sorted(
+            p for p in (src / "runtime").rglob("*.rs") if not p.name.endswith("_tests.rs")
+        )
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
+
 class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
     def test_config_maps_audio_ducking_and_cloud_redaction(self):
         config = Path("src/python/whisper_dictate/settings_schema.json").read_text(encoding="utf-8")
@@ -45,7 +58,7 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
     def test_rust_cli_has_explicit_ubuntu_setup_command(self):
         cli = Path("src/rust/cli.rs").read_text(encoding="utf-8")
         main = Path("src/rust/main.rs").read_text(encoding="utf-8")
-        runtime = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
+        runtime = rust_runtime_source()
 
         self.assertIn("SetupUbuntu", cli)
         self.assertIn('["whisper-dictate", "setup-ubuntu"]', cli)
@@ -66,7 +79,7 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
 
     def test_ubuntu_setup_creates_launcher_autostart_and_starts_rust_ui(self):
         script = Path("packaging/linux/ubuntu26.04/setup.sh").read_text(encoding="utf-8")
-        runtime = Path("src/rust/runtime.rs").read_text(encoding="utf-8")
+        runtime = rust_runtime_source()
 
         self.assertIn('VOICEPI_RUST_OWNS_DESKTOP', script)
         self.assertIn("fn linux_desktop_exec_command() -> String", runtime)
