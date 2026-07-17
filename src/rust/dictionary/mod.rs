@@ -1,18 +1,18 @@
 //! Custom dictionary support: parse + apply the user's prompt vocabulary and
 //! deterministic replacement table. Split into sub-modules to keep each file
-//! ≤500 LOC (Wave 4-A of the Python-removal roadmap #348 — see the issue for
-//! the file-by-file responsibility map):
+//! ≤500 LOC (see the file-by-file responsibility map in issue #348):
 //!
 //! * `parse` – JSON / plain-text parsers for the dictionary on-disk shape
 //! * `store` – disk IO: path resolution, sanitisation, ensure / add / write
 //! * `runtime` – `dictionary` + `dictionary-runtime` CLI command handlers and
 //!   the `RuntimeDictionarySettings` env/config plumbing
-//! * `training` – pure corpus-mining helpers ported from
-//!   `vp_dictionary_training.py` (extract / merge / suggest)
-//! * `suggest` – fuzzy replacement suggestions ported from
-//!   `vp_dictionary_suggest.py` (Ratcliff–Obershelp ratio)
-//! * `ops` – hidden `dictionary-ops` JSON RPC dispatcher exposed to the
-//!   Python shell-out fallback (`VOICEPI_DICTIONARY_BACKEND=rust`)
+//! * `training` – pure corpus-mining helpers plus the `build-from-corpus` /
+//!   `suggest-terms` CLI adapters. This module is the shipping implementation
+//!   for the dictionary training features — the Python parity code was
+//!   retired in audit item 4 (see `docs/architecture-audit-2026-07-16.md`).
+//! * `suggest` – fuzzy replacement suggestions (Ratcliff–Obershelp ratio)
+//!   plus the `suggest-replacements` CLI adapter — likewise the sole
+//!   implementation post audit item 4.
 
 use std::collections::HashSet;
 use std::env;
@@ -22,7 +22,6 @@ use anyhow::Result;
 use regex::RegexBuilder;
 use serde::Serialize;
 
-mod ops;
 mod parse;
 mod prompt;
 mod runtime;
@@ -30,7 +29,6 @@ mod store;
 mod suggest;
 mod training;
 
-pub use ops::handle_ops;
 pub use parse::{parse_dictionary, parse_json_dictionary, parse_text_dictionary};
 pub use prompt::{
     build_prompt, effective_settings, handle_list, handle_prompt, load_or_empty, resolve_source,
@@ -45,7 +43,9 @@ pub use store::{
     load_dictionary_document, resolve_dictionary_path, sanitize_dictionary_path,
     terms_from_document, write_terms,
 };
-pub use suggest::{suggest_replacements_from_rows, ReplacementSuggestion};
+pub use suggest::{
+    run_suggest_replacements, suggest_replacements_from_rows, ReplacementSuggestion,
+};
 pub use training::{
     extract_candidate_terms, merge_terms, run_build_from_corpus, run_suggest_from_misses,
     suggest_terms_from_misses, BuildFromCorpusOptions, MergePreview, SuggestFromMissesOptions,

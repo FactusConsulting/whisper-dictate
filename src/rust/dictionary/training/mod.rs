@@ -1,5 +1,6 @@
-//! Pure corpus → dictionary training helpers (port of
-//! `vp_dictionary_training.py`, Wave 4-A of the Python-removal roadmap #348).
+//! Pure corpus → dictionary training helpers. This is the shipping
+//! implementation — the Python `vp_dictionary_training.py` parity was
+//! retired in audit item 4 (`docs/architecture-audit-2026-07-16.md`).
 //!
 //! Split into sibling files to stay under the repo-wide ~500 LOC per-file
 //! gate:

@@ -13,7 +13,7 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+#[derive(Debug, Clone, PartialEq, Subcommand)]
 pub enum Command {
     /// Open the desktop UI.
     Ui,
@@ -119,13 +119,6 @@ pub enum Command {
     /// Internal helper used by the Python worker for dictionary prompt and replacements.
     #[command(hide = true)]
     DictionaryRuntime,
-    /// Internal helper used by the Python worker for the dictionary training /
-    /// suggestion ops (Wave 4-A shell-out fallback for
-    /// `VOICEPI_DICTIONARY_BACKEND=rust`). Reads a JSON envelope on stdin
-    /// (`{"op": "...", "params": {...}}`) and writes a JSON response on
-    /// stdout. See `src/rust/dictionary/ops.rs` for the op catalogue.
-    #[command(hide = true)]
-    DictionaryOps,
     /// Internal helper used by the Python worker for the dictation
     /// orchestrator pure-logic decisions (Wave 5 shell-out fallback for
     /// `VOICEPI_DICTATE_BACKEND=rust`). Reads a JSON envelope on stdin
@@ -447,7 +440,7 @@ pub enum ConfigCommand {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+#[derive(Debug, Clone, PartialEq, Subcommand)]
 pub enum DictionaryCommand {
     /// Print dictionary path, term count, replacement count and prompt preview.
     Status,
@@ -563,6 +556,33 @@ pub enum DictionaryCommand {
         #[arg(long)]
         apply: bool,
         /// Emit machine-readable JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read a benchmark / history JSONL and SUGGEST fuzzy REPLACEMENT pairs
+    /// (`from -> to`) mined from the transcripts — the fuzzy sibling of
+    /// `suggest-terms` (which proposes term additions). PREVIEW only: the
+    /// output is never written; a human/automation reviews it and then adds
+    /// the accepted pairs via `dictionary replace FROM=TO`.
+    ///
+    /// Reads the live dictionary snapshot (via `--dictionary` / the same
+    /// resolver as `dictionary status`) so already-known replacements and
+    /// existing dictionary terms are filtered out. The scoring rules mirror
+    /// the Python `--dictionary-suggest` flag byte-for-byte (audit item 4 —
+    /// `docs/architecture-audit-2026-07-16.md`).
+    #[command(name = "suggest-replacements")]
+    SuggestReplacements {
+        /// Path to the JSONL to scan (benchmark result rows or history rows).
+        jsonl: String,
+        /// Dictionary file to read for the "already known" snapshot. Default:
+        /// `$VOICEPI_DICTIONARY` or the per-user `dictionary.json`.
+        #[arg(long, value_name = "PATH")]
+        dictionary: Option<String>,
+        /// Minimum fuzzy-match confidence for a suggestion to surface (0.0 …
+        /// 1.0; default 0.62 — matches the pre-Wave-8 Python flag default).
+        #[arg(long, default_value_t = 0.62)]
+        min_confidence: f64,
+        /// Emit a JSON array of suggestions instead of the human preview.
         #[arg(long)]
         json: bool,
     },
@@ -1085,12 +1105,6 @@ mod tests {
     fn parses_hidden_dictionary_runtime_subcommand() {
         let cli = Cli::parse_from(["whisper-dictate", "dictionary-runtime"]);
         assert_eq!(cli.command, Some(Command::DictionaryRuntime));
-    }
-
-    #[test]
-    fn parses_hidden_dictionary_ops_subcommand() {
-        let cli = Cli::parse_from(["whisper-dictate", "dictionary-ops"]);
-        assert_eq!(cli.command, Some(Command::DictionaryOps));
     }
 
     #[test]

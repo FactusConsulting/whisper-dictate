@@ -1,6 +1,6 @@
 """Wave 5 shell-out shim for the dictation orchestrator pure helpers.
 
-Mirrors the Wave 4-A ``vp_dictionary_training._rust_dictionary_ops`` pattern:
+Same JSON-envelope shell-out shape as the other Rust worker helpers:
 the Python orchestrator stays the caller-facing implementation, but small
 pure-logic decisions (``Dictate._should_skip_pcm``, the restart-required
 key diff, STT-backend validation + human-label resolution, env-flag

@@ -48,7 +48,6 @@ Python source lives in `src/python/whisper_dictate`.
 | Config compatibility/live reload | `vp_config.py` | Temporary Python compatibility layer for direct Python execution and live reload inside the worker. Normal Rust launches now export effective config into the worker environment before imports. |
 | Post-processing orchestration | `vp_postprocess.py` | Loads post-processing settings, talks to Ollama/OpenAI-compatible chat fallback and restores local redactions. Rust owns redaction and local-only checks. |
 | Benchmark/evaluation | `vp_benchmark.py` | Corpus loading, WER/CER annotation and multi-backend benchmark orchestration around Python STT models. |
-| Dictionary suggestions | `vp_dictionary_suggest.py` | Heuristic suggestion mining over benchmark/history rows. It reads dictionary state from Rust but the ranking heuristics remain Python until they stabilize enough to move. |
 
 ## Migration Guidance
 
@@ -66,8 +65,6 @@ Good Rust candidates:
   Rust for reload state without preserving duplicate schema in Python.
 - More post-processing settings/prompt construction and cloud chat transport,
   if we want one Rust OpenAI-compatible HTTP path for both STT and cleanup.
-- Dictionary suggestion heuristics, after the ranking rules are stable enough
-  to justify moving them from Python tests to Rust tests.
 
 Keep in Python until there is a clear replacement:
 
