@@ -452,3 +452,18 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --version"
+      - name: PTT-wedge regression test (self-test)
+        # Regression coverage for the v1.20.7 (Windows) / v1.20.2 (Wayland,
+        # #467) push-to-talk wedge class of bugs — the headless harness added
+        # in #510 exercises the shared `hotkey::inject_guard` + tracker filter
+        # both drivers converge on, with a burst of synthetic self-injected
+        # events representative of the v1.20.7 wedge. Feature-gated behind
+        # `rust-hotkeys,rust-injection`; the Ubuntu 26.04 CI image bakes in
+        # every dep both features need (rdev via libxi-dev/libxtst-dev,
+        # evdev is pure-Rust, enigo pulls only crates already covered).
+        # NO `|| true` — a real regression here MUST fail CI. Iteration
+        # count intentionally >=5 so intermittent races cannot slip past.
+        if: env.RUN_INTEG == 'true'
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
+            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys,rust-injection -- self-test ptt-wedge --iterations 5 --json"
