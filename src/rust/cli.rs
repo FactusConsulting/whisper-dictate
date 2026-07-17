@@ -142,6 +142,15 @@ pub enum Command {
         #[command(subcommand)]
         command: HotkeyCommand,
     },
+    /// Headless self-tests for the shipped runtime — regression checks that
+    /// exercise past-breakage classes without needing a display server, audio
+    /// hardware, or root. Every sub-verb takes zero configuration and exits
+    /// non-zero on any observed regression, so CI (and the wayland-user-smoke
+    /// script) can pin them without a shell-level feature detect.
+    SelfTest {
+        #[command(subcommand)]
+        command: SelfTestCommand,
+    },
     /// Inject text into the active window — scripting + smoke-test wrapper
     /// around the injection library. **Defaults to `--dry-run`**: the
     /// resolved backend + keystroke plan is printed and NOTHING is typed.
@@ -727,6 +736,44 @@ pub enum HotkeyCommand {
         /// so the same selection logic the runtime uses fires here. Reject
         /// unrecognised values BEFORE installing anything so a typo does
         /// not silently fall back.
+        #[arg(long, value_name = "AUTO|RDEV|EVDEV", default_value = "auto")]
+        driver: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum SelfTestCommand {
+    /// Regression test for the PTT-wedge class of bugs (v1.20.7 Windows,
+    /// v1.20.2 Wayland via #467). Exercises the self-injection guard +
+    /// tracker end-to-end with synthetic events — NO OS-level hooks, NO
+    /// audio, NO display — so the check runs on any CI container.
+    ///
+    /// Each iteration simulates: first PTT chord → guard-bracketed
+    /// injection burst (unmapped VKs + STALE_MODIFIER_VKS-shaped releases)
+    /// → second PTT chord. Fails if any injected event leaks past the
+    /// guard OR the second chord silently doesn't fire (the classic wedge
+    /// symptom).
+    ///
+    /// Feature-gated behind `rust-hotkeys` + `rust-injection` — a stock
+    /// build exits with an actionable "rebuild with --features ..."
+    /// message rather than hanging or reporting a false pass.
+    PttWedge {
+        /// Iterations to run. Each iteration is independent (fresh guard
+        /// and tracker); the loop stops at the first failure so the report
+        /// unambiguously names the broken cycle.
+        #[arg(long, default_value_t = 5)]
+        iterations: usize,
+        /// Emit a single JSON object with `kind`, `driver`, `iterations`,
+        /// `all_passed`, and per-iteration `results` — the machine-
+        /// readable contract callers should pin.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Which listener path the test reports it exercised. Accepts the
+        /// same canonical names and aliases (`x11` / `wayland`) as the
+        /// `hotkey capture --driver` flag. The self-test drives the shared
+        /// guard + tracker filter both drivers converge on, so this flag
+        /// only affects the report label — the underlying assertions are
+        /// identical.
         #[arg(long, value_name = "AUTO|RDEV|EVDEV", default_value = "auto")]
         driver: String,
     },
@@ -1642,6 +1689,65 @@ mod tests {
                 command: ModelsCommand::Path,
             })
         );
+    }
+
+    #[test]
+    fn parses_self_test_ptt_wedge_default_flags() {
+        // Defaults: 5 iterations, plain output, auto driver. Pin the shape so
+        // a CLI-schema change is caught before the smoke script breaks.
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "ptt-wedge"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::PttWedge {
+                    iterations: 5,
+                    json: false,
+                    driver: "auto".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_ptt_wedge_all_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "ptt-wedge",
+            "--iterations",
+            "3",
+            "--json",
+            "--driver",
+            "evdev",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::PttWedge {
+                    iterations: 3,
+                    json: true,
+                    driver: "evdev".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_ptt_wedge_rdev_driver() {
+        // Explicit rdev override for smoke-script pinning on X11 boxes.
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "ptt-wedge",
+            "--driver",
+            "rdev",
+        ]);
+        match cli.command {
+            Some(Command::SelfTest {
+                command: SelfTestCommand::PttWedge { driver, .. },
+            }) => assert_eq!(driver, "rdev"),
+            other => panic!("expected self-test ptt-wedge --driver rdev, got {other:?}"),
+        }
     }
 
     #[test]
