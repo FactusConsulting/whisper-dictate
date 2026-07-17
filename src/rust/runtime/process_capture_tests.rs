@@ -63,7 +63,12 @@ fn decode_capped_output_keeps_utf8_tail_with_marker() {
 
 #[test]
 fn install_commands_use_background_process_flags() {
-    let runtime = include_str!("../runtime.rs");
+    // After the 500-LOC modularity refactor, `run_install_command`
+    // (and `wants_cuda_runtime`, `pip_install_command`, …) live in
+    // `runtime/install_plan.rs`; the source-inspection pattern points
+    // at that file. The assertion is unchanged from the pre-split
+    // version.
+    let runtime = include_str!("install_plan.rs");
     // After Wave 8 of #348 removed `wants_parakeet_backend`, the next
     // function below `run_install_command` is `wants_cuda_runtime`.
     let run_install_command = runtime
@@ -80,14 +85,13 @@ fn install_commands_use_background_process_flags() {
 
 #[test]
 fn windows_taskkill_stop_uses_background_process_flags() {
-    let runtime = include_str!("../runtime.rs");
-    let kill_child = runtime
-        .split_once("fn kill_child")
-        .unwrap()
-        .1
-        .split_once("fn python_program")
-        .unwrap()
-        .0;
+    // Post-500-LOC-refactor: `kill_child` lives in `runtime/process.rs`
+    // together with `configure_background_process`. The next function
+    // in that file is no longer `python_program` (which moved to
+    // `worker_command.rs`); the file ends right after `kill_child`, so
+    // we consume up to end-of-file instead.
+    let runtime = include_str!("process.rs");
+    let kill_child = runtime.split_once("fn kill_child").unwrap().1;
 
     assert!(kill_child.contains("Command::new(\"taskkill\")"));
     assert!(kill_child.contains("configure_background_process(&mut command);"));

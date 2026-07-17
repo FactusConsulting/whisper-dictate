@@ -675,7 +675,9 @@ fn record_corpus_item_command_joins_typical_id_too() {
 
 #[test]
 fn run_foreground_configures_python_utf8_stdio() {
-    let runtime = include_str!("../runtime.rs");
+    // Post-500-LOC-refactor: run_foreground + configure_*_stdio live
+    // in `runtime/process.rs`.
+    let runtime = include_str!("process.rs");
     let run_foreground_body = runtime
         .split_once("pub fn run_foreground(command: &WorkerCommand)")
         .expect("run_foreground signature should still exist")
@@ -702,7 +704,8 @@ fn configure_piped_python_stdio_sets_both_utf8_envs() {
     // read; PYTHONIOENCODING is the seatbelt. We inspect the function
     // source directly because std::process::Command does not expose an
     // env getter to assert against at runtime.
-    let runtime = include_str!("../runtime.rs");
+    // Post-500-LOC-refactor: this helper lives in `runtime/process.rs`.
+    let runtime = include_str!("process.rs");
     let helper_body = runtime
         .split_once("fn configure_piped_python_stdio(command: &mut Command)")
         .expect("configure_piped_python_stdio signature should still exist")
