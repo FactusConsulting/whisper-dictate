@@ -718,6 +718,17 @@ pub enum HotkeyCommand {
         /// flag is omitted).
         #[arg(long, value_name = "PATH")]
         config: Option<String>,
+        /// Force a specific OS listener: `auto` (default; picks evdev on
+        /// Linux Wayland, rdev everywhere else), `rdev` (X11 / Windows /
+        /// macOS global hook), or `evdev` (Linux `/dev/input`, the only
+        /// Wayland-capable backend). `x11`/`wayland` are accepted aliases.
+        ///
+        /// Setting this flag sets `VOICEPI_HOTKEY_DRIVER` for the process
+        /// so the same selection logic the runtime uses fires here. Reject
+        /// unrecognised values BEFORE installing anything so a typo does
+        /// not silently fall back.
+        #[arg(long, value_name = "AUTO|RDEV|EVDEV", default_value = "auto")]
+        driver: String,
     },
 }
 
@@ -1563,6 +1574,10 @@ mod tests {
                     json: false,
                     exit_on_chord: false,
                     config: None,
+                    // Default driver is `auto` — the shipping selection logic
+                    // (evdev on Linux Wayland, rdev everywhere else). Pin
+                    // the default here so a CLI-schema change is caught.
+                    driver: "auto".to_owned(),
                 },
             })
         );
@@ -1580,6 +1595,8 @@ mod tests {
             "--exit-on-chord",
             "--config",
             "/tmp/cfg.json",
+            "--driver",
+            "evdev",
         ]);
         assert_eq!(
             cli.command,
@@ -1589,9 +1606,31 @@ mod tests {
                     json: true,
                     exit_on_chord: true,
                     config: Some("/tmp/cfg.json".to_owned()),
+                    driver: "evdev".to_owned(),
                 },
             })
         );
+    }
+
+    #[test]
+    fn parses_hotkey_capture_driver_flag_rdev() {
+        // `--driver rdev` must be accepted as an explicit override so the
+        // smoke script can pin the X11 backend on a mixed session too.
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "hotkey",
+            "capture",
+            "--for",
+            "0.1",
+            "--driver",
+            "rdev",
+        ]);
+        match cli.command {
+            Some(Command::Hotkey {
+                command: HotkeyCommand::Capture { driver, .. },
+            }) => assert_eq!(driver, "rdev"),
+            other => panic!("expected hotkey capture with --driver rdev, got {other:?}"),
+        }
     }
 
     #[test]

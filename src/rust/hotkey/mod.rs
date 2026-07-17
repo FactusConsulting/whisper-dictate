@@ -77,6 +77,12 @@ use manager::{
     ManagerThread, RawTap, SpawnError, TrackerOutput,
 };
 
+/// Alias for the `(driver_name, ManagerHandle, ManagerThread)` triple that
+/// [`manager::spawn_with_raw_tap`] returns. Named so the docs elsewhere in
+/// this module can refer to the tuple without inlining its full type.
+#[cfg(feature = "rust-hotkeys")]
+type SpawnManagerOk = (&'static str, ManagerHandle, ManagerThread);
+
 /// User-facing configuration for the Rust hotkey backend.
 ///
 /// `key_names` is the PTT setting `key` split on `+`, with names matching
@@ -124,8 +130,16 @@ pub struct HotkeyHandle {
     /// [`inject_guard`] for the full rationale). Exposed via
     /// [`HotkeyHandle::injection_guard`] so the runtime can hand the
     /// same handle to the injector — arms on the injector side, checks
-    /// on the driver side.
+    /// on the driver side. On the evdev backend it is the belt-and-braces
+    /// second layer behind device-enumeration exclusion; on rdev it is
+    /// the sole in-Rust defense.
     injection_guard: Arc<InjectionGuard>,
+    /// Concrete OS listener the manager thread is wired to. Stable for the
+    /// lifetime of this handle; exposed via [`HotkeyHandle::driver_name`] so
+    /// callers (log lines, install envelopes) can surface which backend the
+    /// selector picked. `"rdev"` for the X11 / Windows / macOS global hook,
+    /// `"evdev"` for the Linux/Wayland `/dev/input` reader.
+    driver: &'static str,
 }
 
 /// Stub handle for builds without the `rust-hotkeys` feature. Exists so
@@ -239,9 +253,11 @@ where
     inject_guard::set_global(Arc::clone(&injection_guard));
 
     // Bridge: TrackerOutput → CoordinatorEvent. Cloneable handle so the
-    // closure captures a Sender that's cheap to call from the rdev callback.
+    // closure captures a Sender that's cheap to call from the OS listener
+    // callback (rdev on the LL-hook thread, evdev on the per-device
+    // reader thread).
     let bridge = coord_handle.clone();
-    let (mgr_handle, mgr_thread) = match spawn_manager_with_tap(
+    let (driver, mgr_handle, mgr_thread): SpawnManagerOk = match spawn_manager_with_tap(
         Arc::clone(&injection_guard),
         move |out| {
             let event = match out {
@@ -253,7 +269,7 @@ where
         },
         raw_tap,
     ) {
-        Ok(pair) => pair,
+        Ok(triple) => triple,
         Err(err) => {
             // Listener (or manager-thread) startup failed. Tear the
             // coordinator down so we don't leak the thread, and surface
@@ -283,6 +299,7 @@ where
         manager: mgr_handle,
         manager_thread: Some(mgr_thread),
         injection_guard,
+        driver,
     })
 }
 
@@ -362,6 +379,15 @@ pub fn validate_key_names(_key_names: &[String]) -> Result<()> {
 
 #[cfg(feature = "rust-hotkeys")]
 impl HotkeyHandle {
+    /// Name of the OS listener the manager thread is wired to (`"rdev"` on
+    /// X11 / Windows / macOS, `"evdev"` on Linux/Wayland). Used by the
+    /// diagnostic `whisper-dictate hotkey capture` CLI to surface the picked
+    /// backend in its `listener_installed` envelope so the operator can tell
+    /// at a glance which path fired without needing `VOICEPI_HOTKEY_DEBUG=1`.
+    pub fn driver_name(&self) -> &'static str {
+        self.driver
+    }
+
     /// Send a [`coordinator::CoordinatorEvent::ProcessingFinished`] for the
     /// given recording id. The host calls this from the transcription
     /// worker when the pass completes so the
@@ -471,6 +497,12 @@ impl HotkeyHandle {
     pub fn suspend(&self) {}
     /// No-op: stub build has no manager to resume.
     pub fn resume(&self, _key_names: Vec<String>) {}
+    /// Stub build has no listener installed — the CLI/caller shouldn't be
+    /// calling this on a stub handle, but returning a constant lets the
+    /// call site type-check without a feature-gate at every use.
+    pub fn driver_name(&self) -> &'static str {
+        "none"
+    }
 }
 
 /// Has the user requested the Rust hotkey backend via env var? Pure helper

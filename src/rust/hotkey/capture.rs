@@ -285,14 +285,55 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             json,
             exit_on_chord,
             config,
+            driver,
         } => {
             let duration = parse_duration_secs(&for_secs)?;
+            // Route the driver preference through the same env var the
+            // shipping install path consults (`VOICEPI_HOTKEY_DRIVER`).
+            // Rejecting unrecognised values BEFORE install matches the
+            // rest of the CLI's fail-fast policy — a `--driver foo` typo
+            // should not silently fall back to `auto`.
+            validate_driver_flag(&driver)?;
+            std::env::set_var("VOICEPI_HOTKEY_DRIVER", driver);
             run_capture(
                 duration,
                 json,
                 exit_on_chord,
                 config.as_deref().map(Path::new),
             )
+        }
+    }
+}
+
+/// Reject `--driver` values that the manager's [`crate::hotkey::manager::DriverKind::parse`]
+/// would silently coerce to `Auto`. The runtime tolerates typos (falls back
+/// to Auto) because the env var may be set from many sources; the CLI is
+/// stricter so a smoke script that mis-spells the flag fails fast instead of
+/// installing the wrong backend.
+pub(crate) fn validate_driver_flag(raw: &str) -> Result<()> {
+    // Reuse the manager's canonical name/alias set so the CLI accepts exactly
+    // what the runtime does — extending one extends the other automatically.
+    #[cfg(feature = "rust-hotkeys")]
+    {
+        if crate::hotkey::manager::DriverKind::parse(raw).is_none() {
+            return Err(anyhow!(
+                "--driver expects auto | rdev | evdev (or the x11 / wayland \
+                 aliases); got {raw:?}"
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "rust-hotkeys"))]
+    {
+        // Stock build has no driver-selection logic — accept the canonical
+        // names so the flag parses cleanly, but install will fail with
+        // `InstallError::Unsupported` below.
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" | "" | "rdev" | "x11" | "evdev" | "wayland" => Ok(()),
+            other => Err(anyhow!(
+                "--driver expects auto | rdev | evdev (or the x11 / wayland \
+                 aliases); got {other:?}"
+            )),
         }
     }
 }
@@ -391,9 +432,14 @@ fn run_capture(
 
     let stdout = io::stdout();
     let mut lock = stdout.lock();
+    // Take the driver name from the live handle so it reflects the ACTUAL
+    // backend the manager picked (rdev vs evdev), not a hardcoded default.
+    // On a stock build (no `rust-hotkeys`) install fails above and this
+    // branch is unreachable, so the "none" stub never surfaces here.
+    let driver = handle.driver_name();
     emit(
         &CaptureEvent::ListenerInstalled {
-            driver: driver_name(),
+            driver,
             chord: display_chord,
         },
         json,
@@ -443,13 +489,10 @@ fn run_capture(
     Ok(())
 }
 
-/// Return the driver name the install path used. Kept as a static string so
-/// the JSON `driver` field is stable across platforms. Currently always
-/// `"rdev"` — the evdev fallback lives in the Python listener path, and
-/// this Rust CLI only wires up the rdev backend.
-fn driver_name() -> &'static str {
-    "rdev"
-}
+// `driver_name` was previously a hard-coded `"rdev"` because the CLI only
+// wired up that backend. The evdev listener (audit item 5 prereq 2) now
+// makes the choice a runtime decision — read via `HotkeyHandle::driver_name()`
+// right after `install_hotkey_with_raw_tap` returns instead.
 
 /// Build the raw-event tap the manager thread invokes for every OS key
 /// event. Isolated into its own helper so the closure has a well-defined
@@ -804,6 +847,48 @@ mod tests {
             }
             other => panic!("expected ExitOnChord, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_driver_flag — CLI-level driver selection (audit item 5 prereq 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_driver_flag_accepts_canonical_names() {
+        // The three canonical values map to the runtime's DriverKind enum.
+        assert!(validate_driver_flag("auto").is_ok());
+        assert!(validate_driver_flag("rdev").is_ok());
+        assert!(validate_driver_flag("evdev").is_ok());
+    }
+
+    #[test]
+    fn validate_driver_flag_accepts_session_aliases() {
+        // Session-name aliases mirror the manager's `DriverKind::parse`
+        // acceptance set so a user can type the display server name.
+        assert!(validate_driver_flag("x11").is_ok());
+        assert!(validate_driver_flag("wayland").is_ok());
+    }
+
+    #[test]
+    fn validate_driver_flag_is_case_insensitive() {
+        assert!(validate_driver_flag("AUTO").is_ok());
+        assert!(validate_driver_flag(" Evdev ").is_ok());
+    }
+
+    #[test]
+    fn validate_driver_flag_rejects_typos_up_front() {
+        // CLI-side strictness: unlike the env-var path, `--driver` must
+        // fail-fast on a typo so a smoke script sees a clear error instead
+        // of silently installing the auto-selected backend.
+        let err = validate_driver_flag("uinput").unwrap_err().to_string();
+        assert!(
+            err.contains("--driver"),
+            "error should mention --driver: {err}"
+        );
+        assert!(
+            err.contains("uinput"),
+            "error should echo the bad value: {err}"
+        );
     }
 
     #[test]
