@@ -85,8 +85,30 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
+use crate::hotkey::InjectionGuard;
 use crate::injection::paste::{vk, Clipboard, PasteGuard};
 use crate::injection::{InjectMethod, Injector};
+
+/// Pre-arm grace opened just before the injector calls `SendInput` for
+/// the first time. Covers the microseconds between raising the
+/// [`InjectionGuard`] bracket and the first LL-hook event landing (a
+/// fast machine dispatches it in single-digit microseconds so we don't
+/// want a race between "arm the counter" and "issue SendInput"). See
+/// [`crate::hotkey::inject_guard`] for the full timing model.
+const INJECT_PRE_GRACE: Duration = Duration::from_millis(50);
+
+/// Post-arm grace armed AFTER the last `SendInput` returns.
+/// `WH_KEYBOARD_LL` events reach rdev's callback via the installing
+/// thread's message pump, which runs on a different thread than the
+/// injector — the pump can trail `SendInput`'s return by tens to a
+/// couple-hundred milliseconds under load. 200 ms sits comfortably
+/// above every measurement I've seen on Windows 11 with the LL-hook
+/// timeout at its default 300 ms, and small enough that a user who
+/// genuinely re-presses PTT within a fifth of a second of the paste
+/// chord notices at most one dropped press. (Original PR #476 used
+/// 300 ms; halved here per the design-doc's Codex feedback that the
+/// bracket makes the horizon-only slack less load-bearing.)
+const INJECT_POST_GRACE: Duration = Duration::from_millis(200);
 
 /// VKs the wrapper releases before every injection, matching the full
 /// Shift / Alt / Ctrl / Cmd sweep in `vp_inject.py::_release_stale_modifiers`.
@@ -181,6 +203,21 @@ pub struct EnigoInjectBackend {
     /// `Duration::ZERO` via [`Self::with_restore_delay`] so they don't
     /// pay the 2 s wall-clock wait per paste assertion.
     restore_delay: Duration,
+    /// Optional shared self-injection guard obtained from
+    /// [`crate::hotkey::HotkeyHandle::injection_guard`]. When set (or
+    /// when the process-wide `inject_guard::global` slot has been
+    /// populated by `install_hotkey`), the wrapper brackets the guard
+    /// around the SendInput bursts. The hotkey driver's callback then
+    /// drops every OS key event it sees while the guard is active,
+    /// preventing the app's own injected keystrokes from feeding back
+    /// into the PTT tracker on Windows (the wedge that leaves PTT
+    /// "works once, then dead" — same class as #467 on Linux/Wayland,
+    /// filtered at the device level there).
+    ///
+    /// `None` when no hotkey subsystem is active (unit tests without
+    /// the guard, headless CI, non-worker-rust binaries): the arm
+    /// becomes a no-op and behaviour is unchanged.
+    injection_guard: Option<Arc<InjectionGuard>>,
 }
 
 impl std::fmt::Debug for EnigoInjectBackend {
@@ -193,6 +230,13 @@ impl std::fmt::Debug for EnigoInjectBackend {
         f.debug_struct("EnigoInjectBackend")
             .field("method", &self.method)
             .field("restore_delay", &self.restore_delay)
+            .field(
+                "injection_guard",
+                &self
+                    .injection_guard
+                    .as_ref()
+                    .map(|_| "<Arc<InjectionGuard>>"),
+            )
             .field("inner", &"<Mutex<State>>")
             .finish()
     }
@@ -219,7 +263,27 @@ impl EnigoInjectBackend {
             }),
             method,
             restore_delay: DEFAULT_CLIPBOARD_RESTORE_DELAY,
+            injection_guard: None,
         }
+    }
+
+    /// Install the shared self-injection guard obtained from
+    /// [`crate::hotkey::HotkeyHandle::injection_guard`]. Once set, every
+    /// `inject()` call brackets the guard around its `SendInput` bursts
+    /// so the hotkey listener drops the app's own injected keystrokes
+    /// instead of feeding them into the PTT tracker. Without this the
+    /// tracker's bare-modifier rule 1 can trip on an injected foreign
+    /// key and silently block the *next* PTT press for the full 10 s
+    /// self-heal window — the exact wedge the user reports on Windows.
+    /// See [`crate::hotkey::inject_guard`] for the full rationale.
+    ///
+    /// Optional: a wrapper built without a guard AND with no process-
+    /// wide slot populated (unit tests, headless CI, binaries without a
+    /// hotkey subsystem) behaves identically to the old code path — the
+    /// arm becomes a no-op.
+    pub fn with_injection_guard(mut self, guard: Arc<InjectionGuard>) -> Self {
+        self.injection_guard = Some(guard);
+        self
     }
 
     /// Install a [`Clipboard`] backend used by paste mode to save the
@@ -282,11 +346,28 @@ impl InjectBackend for EnigoInjectBackend {
         // `Clipboard` trait is stateless apart from the backing OS
         // surface — so we recover the inner value and proceed rather
         // than wedging the session forever.
-        let mut guard = self
+        let mut lock = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let state = &mut *guard;
+        let state = &mut *lock;
+
+        // Resolve the self-injection guard for THIS call: prefer an
+        // explicitly-installed guard (test path via
+        // `with_injection_guard`), fall back to the process-wide slot
+        // that `install_hotkey` populates in production. The `Option`
+        // stays `None` on binaries with no hotkey subsystem — the
+        // bracket then becomes a no-op and behaviour is unchanged.
+        //
+        // `active_guard` is dropped at end-of-function; the `arm_end`
+        // in [`InjectionBracket`] fires from `Drop` so an early
+        // `?`/panic path inside the burst still closes the bracket
+        // (and covers the LL-hook drain with the post-grace horizon).
+        let active_guard = self
+            .injection_guard
+            .clone()
+            .or_else(crate::hotkey::inject_guard::global);
+        let _bracket = active_guard.as_deref().map(InjectionBracket::open);
 
         // Pre-injection cleanup #1: drop any modifiers still held from
         // a push-to-talk chord. Failures are logged + ignored to match
@@ -294,6 +375,9 @@ impl InjectBackend for EnigoInjectBackend {
         // losing a release would land the burst as shortcuts but
         // failing the inject would lose the transcript outright.
         // Codex P2 #417 inject.rs:110.
+        //
+        // The bracket is already open here — the release-modifiers
+        // SendInput calls are covered.
         if let Err(e) = state.injector.release_held_modifiers(STALE_MODIFIER_VKS) {
             eprintln!("[inject] stale-modifier release failed: {e:#}");
         }
@@ -307,6 +391,42 @@ impl InjectBackend for EnigoInjectBackend {
                 inject_via_paste(state, text, self.method, self.restore_delay)
             }
         }
+        // `_bracket` drops here, extending the horizon by the post-arm
+        // grace (covers WH_KEYBOARD_LL drain latency after the last
+        // SendInput returns).
+    }
+}
+
+/// RAII wrapper around [`InjectionGuard::arm_start`] /
+/// [`InjectionGuard::arm_end`]. Opening the bracket immediately
+/// arms the guard's counter (keeping it active for the whole burst,
+/// no matter how many seconds a long typing loop takes); dropping
+/// the bracket extends the horizon by [`INJECT_POST_GRACE`] and
+/// decrements the counter.
+///
+/// Using RAII rather than a manual `arm_end` call means an early
+/// return (`?` on the inject result), or a panic inside the burst,
+/// still closes the bracket cleanly — otherwise a leaked counter
+/// would keep PTT deaf for the rest of the process's lifetime.
+///
+/// The type holds a bare `&InjectionGuard` reference rather than an
+/// `Arc` clone so the caller (`inject` above) can keep its
+/// `active_guard: Option<Arc<_>>` alive for the full lifetime of
+/// the borrow without an extra atomic-refcount bump per inject.
+struct InjectionBracket<'a> {
+    guard: &'a InjectionGuard,
+}
+
+impl<'a> InjectionBracket<'a> {
+    fn open(guard: &'a InjectionGuard) -> Self {
+        guard.arm_start(INJECT_PRE_GRACE);
+        Self { guard }
+    }
+}
+
+impl Drop for InjectionBracket<'_> {
+    fn drop(&mut self) {
+        self.guard.arm_end(INJECT_POST_GRACE);
     }
 }
 

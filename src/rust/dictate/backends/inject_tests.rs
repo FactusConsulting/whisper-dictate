@@ -11,10 +11,13 @@
 //! ~500-line modularity gate. Shared recording fakes live in
 //! `inject_test_support`.
 
+use std::sync::Arc;
+
 use super::inject_test_support::{
     backend_with, backend_with_clipboard, RecordingBackend, RecordingClipboard,
 };
 use crate::dictate::session::types::{InjectBackend, InjectError};
+use crate::hotkey::InjectionGuard;
 use crate::injection::{InjectMethod, PasteShortcut};
 
 #[test]
@@ -132,5 +135,102 @@ fn injection_method_can_be_invoked_multiple_times() {
         types,
         vec![&"type:first".to_owned(), &"type:second".to_owned()],
         "expected ordered type events, got {recorded:?}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Self-injection guard bracket integration (Windows PTT wedge — re-land
+// of PR #476 with the bracket-pattern fix for long bursts). Verifies the
+// wrapper actually raises the shared guard around the SendInput bursts
+// so the hotkey listener drops them. See
+// `crate::hotkey::inject_guard` for the timing model and the standalone
+// unit tests of the guard itself.
+// -----------------------------------------------------------------------
+
+/// The counter-based bracket must be open while the injector is
+/// running. Uses a recording backend that observes the guard state
+/// mid-`type_text` — if the wrapper armed the guard AFTER the
+/// SendInput (or not at all), the recorded state would be `inactive`
+/// and the assertion below would fail. This is the load-bearing
+/// invariant: an inject that leaves the guard inactive during the
+/// burst leaks synthesised events into the PTT tracker on Windows.
+#[test]
+fn inject_arms_shared_guard_during_the_send_burst() {
+    use crate::injection::enigo_backend::InjectorBackend;
+    use crate::injection::Injector;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// Recording backend that captures `is_active` on the shared
+    /// guard AT the moment its `type_text` is called. This is the
+    /// closest we can get to "was the guard raised at the exact
+    /// moment SendInput would have fired" in a unit test without
+    /// spawning an rdev listener.
+    struct GuardObservingBackend {
+        guard: Arc<InjectionGuard>,
+        observed_active: Arc<Mutex<Option<bool>>>,
+    }
+    impl InjectorBackend for GuardObservingBackend {
+        fn type_text(&mut self, _text: &str) -> Result<(), anyhow::Error> {
+            *self.observed_active.lock().unwrap() = Some(self.guard.is_active());
+            Ok(())
+        }
+        fn key_chord(&mut self, _modifiers: &[u16], _key: u16) -> Result<(), anyhow::Error> {
+            // Unused by this test (typing method only), but the trait
+            // is not defaulted here so we implement a no-op.
+            Ok(())
+        }
+    }
+
+    let guard = Arc::new(InjectionGuard::new());
+    let observed = Arc::new(Mutex::new(None));
+    let backend = GuardObservingBackend {
+        guard: Arc::clone(&guard),
+        observed_active: Arc::clone(&observed),
+    };
+    let wrapper = super::EnigoInjectBackend::new(
+        Injector::new().with_backend(Box::new(backend)),
+        InjectMethod::Typing,
+    )
+    .with_restore_delay(Duration::ZERO)
+    .with_injection_guard(Arc::clone(&guard));
+
+    wrapper.inject("guarded").expect("typing inject");
+
+    let seen = observed.lock().unwrap();
+    assert_eq!(
+        *seen,
+        Some(true),
+        "guard must be active during the SendInput burst; if this fails, \
+         the bracket is not being opened around inject_text (Windows PTT wedge \
+         will recur — see crate::hotkey::inject_guard)"
+    );
+
+    // And after inject() returns, the counter-based bracket has been
+    // closed, so `is_active` depends purely on the post-arm horizon.
+    // 200 ms POST_GRACE means the guard is still active immediately
+    // after return — a small waited window then decays.
+    assert!(
+        guard.is_active(),
+        "post-arm grace horizon must still cover us immediately after inject returns"
+    );
+}
+
+/// If no guard is installed AND no process-wide slot is populated,
+/// the wrapper is a no-op around the shared guard — the arm becomes a
+/// silent skip and the existing (pre-#476) delegation behaviour is
+/// preserved. This is what makes the guard opt-in for unit tests /
+/// headless CI / binaries with no hotkey subsystem.
+#[test]
+fn inject_without_guard_delegates_unchanged() {
+    let fake = RecordingBackend::new();
+    let events = fake.events.clone();
+    let backend = backend_with(InjectMethod::Typing, fake);
+    // Deliberately NO with_injection_guard call.
+    backend.inject("plain").expect("inject ok");
+    let recorded = events.lock().unwrap().clone();
+    assert!(
+        recorded.iter().any(|e| e == "type:plain"),
+        "type event must reach backend even with no guard installed, got {recorded:?}"
     );
 }

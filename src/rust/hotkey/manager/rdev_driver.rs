@@ -33,6 +33,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput};
+use crate::hotkey::inject_guard::{dispatch_raw_event, InjectionGuard};
 
 /// Maximum time [`spawn`] waits after the listener thread reports "started"
 /// for `rdev::listen` to either return Err (and thus be a startup failure)
@@ -142,11 +143,23 @@ pub enum SpawnError {
 /// [`READY_PROBE_WINDOW`] — for example missing X display on Linux, or
 /// missing accessibility permission on macOS. On success the listener thread
 /// runs forever (rdev limitation) and is reported as healthy.
-pub fn spawn<F>(on_output: F) -> Result<(ManagerHandle, ManagerThread), SpawnError>
+///
+/// `injection_guard` gates the callback: while the injector wrapper is
+/// bursting synthetic events through `SendInput` (Windows) / equivalent
+/// APIs on X11+macOS, the guard is armed and the callback drops every
+/// event rdev delivers. This closes the Windows self-injection PTT
+/// wedge — the same class of bug the Wayland fix in #467 solved via
+/// device-level filtering. See [`crate::hotkey::inject_guard`] for the
+/// full rationale and timing model.
+#[cfg(test)]
+pub fn spawn<F>(
+    injection_guard: Arc<InjectionGuard>,
+    on_output: F,
+) -> Result<(ManagerHandle, ManagerThread), SpawnError>
 where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
 {
-    spawn_with_raw_tap(on_output, NoopRawTap)
+    spawn_with_raw_tap(injection_guard, on_output, NoopRawTap)
 }
 
 /// Marker type for [`spawn_with_raw_tap`] callers that don't want a raw tap.
@@ -184,7 +197,14 @@ where
 /// BEFORE the tracker sees it. The tap runs on the rdev listener thread —
 /// keep it cheap and non-blocking (long work will delay the tracker and
 /// starve the coordinator).
+///
+/// The raw tap DOES run for self-injected events too (before the
+/// [`InjectionGuard`] check), so the diagnostic `hotkey capture` CLI
+/// can still surface the injector's own SendInput bursts. Only the
+/// tracker (and therefore the coordinator's chord state) is protected
+/// from the feedback loop.
 pub fn spawn_with_raw_tap<F, R>(
+    injection_guard: Arc<InjectionGuard>,
     on_output: F,
     raw_tap: R,
 ) -> Result<(ManagerHandle, ManagerThread), SpawnError>
@@ -203,6 +223,7 @@ where
     let listener_tracker = Arc::clone(&tracker);
     let listener_sink = Arc::clone(&on_output);
     let listener_tap = Arc::clone(&raw_tap);
+    let listener_guard = Arc::clone(&injection_guard);
     let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
     thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
@@ -214,8 +235,18 @@ where
             let cb = move |event: rdev::Event| {
                 if let Some(raw) = raw_from_rdev(&event) {
                     listener_tap.tap(&raw);
+                    // `dispatch_raw_event` short-circuits when the guard
+                    // is armed — the injector's own SendInput bursts get
+                    // dropped here instead of feeding back into the
+                    // tracker (Windows PTT wedge; module doc explains
+                    // why the check must live below the mutex acquire so
+                    // event ordering is preserved). Fast path when the
+                    // guard is inactive is two atomic loads + a compare
+                    // and does NOT allocate — matters because this
+                    // callback runs on the LL-hook thread for every
+                    // desktop-wide keydown/keyup (PR #478 regression).
                     let mut t = listener_tracker.lock().expect("tracker poisoned");
-                    if let Some(out) = t.handle(&raw) {
+                    if let Some(out) = dispatch_raw_event(&listener_guard, &mut t, &raw) {
                         (listener_sink)(out);
                     }
                 }
@@ -407,7 +438,8 @@ mod tests {
         // such platforms rather than assert success.
         let count = Arc::new(AtomicUsize::new(0));
         let count_cb = Arc::clone(&count);
-        let (handle, _thread) = match spawn(move |_out| {
+        let guard = Arc::new(InjectionGuard::new());
+        let (handle, _thread) = match spawn(guard, move |_out| {
             count_cb.fetch_add(1, Ordering::SeqCst);
         }) {
             Ok(pair) => pair,
@@ -443,7 +475,8 @@ mod tests {
         // We don't have a way to force the failure on platforms where the
         // hook genuinely works, so on those we treat success as "test not
         // applicable" rather than fail.
-        match spawn(|_out| {}) {
+        let guard = Arc::new(InjectionGuard::new());
+        match spawn(guard, |_out| {}) {
             Ok((handle, _thread)) => {
                 handle.shutdown();
             }

@@ -54,9 +54,12 @@
 
 pub mod capture;
 pub mod coordinator;
+pub mod inject_guard;
 pub mod manager;
 pub mod modifier_match;
 
+#[cfg(feature = "rust-hotkeys")]
+use std::sync::Arc;
 #[cfg(feature = "rust-hotkeys")]
 use std::time::Instant;
 
@@ -67,6 +70,7 @@ use coordinator::{
     spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, CoordinatorHandle,
     CoordinatorThread, Options,
 };
+pub use inject_guard::InjectionGuard;
 #[cfg(feature = "rust-hotkeys")]
 use manager::{
     is_rdev_supported_name, spawn_with_raw_tap as spawn_manager_with_tap, ManagerHandle,
@@ -114,6 +118,14 @@ pub struct HotkeyHandle {
     coordinator_thread: Option<CoordinatorThread>,
     manager: ManagerHandle,
     manager_thread: Option<ManagerThread>,
+    /// Shared self-injection guard. The driver callback reads this to
+    /// drop OS events that the app's own text injector is currently
+    /// producing (Windows self-injection PTT wedge; see
+    /// [`inject_guard`] for the full rationale). Exposed via
+    /// [`HotkeyHandle::injection_guard`] so the runtime can hand the
+    /// same handle to the injector — arms on the injector side, checks
+    /// on the driver side.
+    injection_guard: Arc<InjectionGuard>,
 }
 
 /// Stub handle for builds without the `rust-hotkeys` feature. Exists so
@@ -212,10 +224,25 @@ where
     let options = Options { mode: config.mode };
     let (coord_handle, coord_thread) = spawn_coordinator(options, action_sink, Instant::now);
 
+    // Shared self-injection guard — armed by the injector wrapper around
+    // every SendInput burst, checked by the driver callback below. See
+    // [`inject_guard`] for the full rationale (Windows PTT wedge, same
+    // class as #467 on Linux/Wayland but with no /dev/input equivalent).
+    //
+    // Also publish it to the process-wide slot so the runtime's
+    // `EnigoInjectBackend` (which was constructed BEFORE this call by
+    // the session builder) can pick it up on the next `inject()` call
+    // without needing per-layer wiring through the sink builder chain.
+    // Same-process second install (test hosts) is a no-op — first
+    // writer wins; production `install_hotkey` runs exactly once.
+    let injection_guard = Arc::new(InjectionGuard::new());
+    inject_guard::set_global(Arc::clone(&injection_guard));
+
     // Bridge: TrackerOutput → CoordinatorEvent. Cloneable handle so the
     // closure captures a Sender that's cheap to call from the rdev callback.
     let bridge = coord_handle.clone();
     let (mgr_handle, mgr_thread) = match spawn_manager_with_tap(
+        Arc::clone(&injection_guard),
         move |out| {
             let event = match out {
                 TrackerOutput::ChordPress => CoordinatorEvent::Press,
@@ -255,6 +282,7 @@ where
         coordinator_thread: Some(coord_thread),
         manager: mgr_handle,
         manager_thread: Some(mgr_thread),
+        injection_guard,
     })
 }
 
@@ -368,6 +396,17 @@ impl HotkeyHandle {
     /// over the inbound mpsc sender.
     pub fn coordinator_handle(&self) -> CoordinatorHandle {
         self.coordinator.clone()
+    }
+
+    /// Clone the shared self-injection guard. The runtime hands the
+    /// resulting `Arc` to the injector wrapper
+    /// ([`crate::dictate::backends::EnigoInjectBackend::with_injection_guard`])
+    /// so the injector can arm the guard around every `SendInput` burst
+    /// — the driver callback that already holds an `Arc` clone will
+    /// then drop the injected events instead of feeding them into the
+    /// tracker (Windows self-injection PTT wedge; see [`inject_guard`]).
+    pub fn injection_guard(&self) -> Arc<InjectionGuard> {
+        Arc::clone(&self.injection_guard)
     }
 
     /// Suspend key tracking: unregister the PTT binding from the manager and
