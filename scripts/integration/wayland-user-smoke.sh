@@ -431,6 +431,44 @@ else
             bad "hotkey capture failed (exit $hk_rc): $(printf '%s\n' "$hk_out" | head -n 2)"
         fi
     fi
+
+    # ---------------------------------------------------------------------
+    # Additional Wayland-only probe: `--driver evdev` verifies the item-5
+    # prereq-2 evdev listener installs cleanly (audit item 5). Under Wayland
+    # rdev's XRecord path is deaf, so evdev is the ONLY listener that works
+    # for real PTT — and its own `/dev/input` enumeration must accept the
+    # user's keyboard while excluding whisper-dictate's ydotoold virtual node
+    # (prereq 3). A permission failure (user not in `input` group) is a
+    # warn — the fix is a user action (`sudo usermod -aG input $USER`),
+    # not a code regression.
+    # ---------------------------------------------------------------------
+    if [ "$SESSION" = "wayland" ]; then
+        # Detect whether the `--driver` flag exists at all (older builds
+        # skip this probe). `--help` output on the capture subcommand
+        # lists flags one per section.
+        if whisper-dictate hotkey capture --help 2>&1 | grep -q -- "--driver"; then
+            hk_ev_out="$(whisper-dictate hotkey capture --for 0.5 --driver evdev --json 2>&1)"
+            hk_ev_rc=$?
+            if [ "$hk_ev_rc" -eq 0 ]; then
+                # Envelope should now carry `"driver":"evdev"` since we
+                # forced the backend explicitly.
+                first_line="$(printf '%s\n' "$hk_ev_out" | head -n 1)"
+                if printf '%s' "$first_line" | grep -q '"driver":"evdev"'; then
+                    ok "hotkey capture --driver evdev installs cleanly under Wayland"
+                else
+                    warn "hotkey capture --driver evdev exit 0 but envelope missing evdev tag: $first_line"
+                fi
+            elif printf '%s' "$hk_ev_out" | grep -qi "permission\|input group\|no readable\|usermod"; then
+                warn "hotkey capture --driver evdev: user lacks /dev/input access (add user to 'input' group)"
+            elif printf '%s' "$hk_ev_out" | grep -qi "rust-hotkeys\|listener failed"; then
+                warn "hotkey capture --driver evdev: rust-hotkeys not compiled in or evdev backend unavailable"
+            else
+                bad "hotkey capture --driver evdev failed (exit $hk_ev_rc): $(printf '%s\n' "$hk_ev_out" | head -n 2)"
+            fi
+        else
+            warn "hotkey capture --driver flag not present in this build (pre-item-5-prereq2)"
+        fi
+    fi
 fi
 
 # --------------------------------------------------------------------------
