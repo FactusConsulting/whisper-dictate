@@ -224,6 +224,23 @@ pub fn handle_command(command: DictionaryCommand) -> Result<()> {
                 std::process::exit(rc);
             }
         }
+        DictionaryCommand::SuggestReplacements {
+            jsonl,
+            dictionary,
+            min_confidence,
+            json,
+        } => {
+            let opts = super::suggest::SuggestReplacementsOptions {
+                jsonl_path: jsonl,
+                dictionary_path: dictionary,
+                min_confidence,
+                as_json: json,
+            };
+            let rc = super::suggest::run_suggest_replacements(opts);
+            if rc != 0 {
+                std::process::exit(rc);
+            }
+        }
     }
     Ok(())
 }
@@ -268,8 +285,7 @@ pub fn handle_runtime() -> Result<()> {
 }
 
 /// In-process equivalent of [`handle_runtime`] — same shape, but the caller
-/// supplies the settings + request directly (used by unit tests and the
-/// `dictionary-ops` snapshot RPC).
+/// supplies the settings + request directly (used by unit tests).
 pub fn runtime_dictionary_result(
     settings: &RuntimeDictionarySettings,
     base_prompt: Option<&str>,

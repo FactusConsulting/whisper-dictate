@@ -1,7 +1,8 @@
 //! `dictate-ops` JSON-RPC dispatcher (hidden CLI subcommand).
 //!
 //! The Python shell-out fallback (`VOICEPI_DICTATE_BACKEND=rust`) lives in
-//! `vp_dictate_rust.py`. Same pattern as `dictionary-ops` (Wave 4-A): one
+//! `vp_dictate_rust.py`. Same JSON-on-stdin, JSON-on-stdout pattern the
+//! rest of the worker helpers use: one
 //! hidden subcommand handles every dictate-side pure-logic decision via
 //! a JSON envelope on stdin:
 //!

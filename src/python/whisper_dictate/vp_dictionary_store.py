@@ -7,11 +7,15 @@ is the plain JSON object the Rust ``dictionary`` command reads/writes
 
     {"terms": ["Claude Code", ...], "replacements": {"Cloud Code": "Claude Code"}}
 
-This module owns ONLY the side-effecting bits — path resolution and load/save —
-so the term-extraction/merge logic in :mod:`vp_dictionary_training` stays pure and
-unit-testable. On write we PRESERVE every other top-level key (``replacements``
-and any future fields), exactly like the Rust writer does, so growing the term
-list never clobbers a user's replacements.
+This module owns ONLY the side-effecting bits — path resolution and load/save.
+Audit item 4 (``docs/architecture-audit-2026-07-16.md``) retired the Python
+term-extraction/merge parity (``vp_dictionary_training.py`` /
+``vp_dictionary_suggest.py``) — those routes are the Rust ``dictionary``
+subcommands now. This shim survives because :mod:`vp_transcribe` still uses
+:func:`default_dictionary_path` for its cache directory resolver. On write we
+PRESERVE every other top-level key (``replacements`` and any future fields),
+exactly like the Rust writer does, so growing the term list never clobbers a
+user's replacements.
 
 Path resolution mirrors the Rust ``RuntimeDictionarySettings`` env path and the
 :func:`vp_cli._default_dictionary_path` default so the file the trainer appends to

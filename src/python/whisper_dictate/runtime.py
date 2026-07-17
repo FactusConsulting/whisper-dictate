@@ -361,110 +361,98 @@ def _handle_post_process(a) -> None:
     print(result.text, flush=True)
 
 
-def _handle_dictionary_suggest(a, ap) -> None:
-    from whisper_dictate.vp_dictionary_suggest import print_suggestions, suggest_replacements
-    try:
-        suggestions = suggest_replacements(
-            a.dictionary_suggest,
-            min_confidence=a.dictionary_suggest_min_confidence,
+def _handle_dictionary_suggest(a, ap) -> int:
+    """Shell out to ``whisper-dictate dictionary suggest-replacements``.
+
+    Audit item 4 (`docs/architecture-audit-2026-07-16.md`): the Python
+    fuzzy-replacement suggester (`vp_dictionary_suggest.py`) was retired
+    once the Rust `dictionary/suggest` port shipped as the shipping
+    implementation. The Python `--dictionary-suggest` flag now delegates to
+    the Rust subcommand, which owns the loader, matcher and preview
+    formatter. The Rust binary MUST be available (`VOICEPI_RUST_INJECTOR`);
+    without it we fail cleanly rather than silently do nothing.
+    """
+    args = ["suggest-replacements", str(a.dictionary_suggest)]
+    if getattr(a, "dictionary_suggest_min_confidence", None) is not None:
+        args.extend(["--min-confidence", str(a.dictionary_suggest_min_confidence)])
+    if a.dictionary is not None:
+        args.extend(["--dictionary", str(a.dictionary)])
+    if a.json:
+        args.append("--json")
+    rc = _rust_dictionary_subcommand(args)
+    if rc is None:
+        ap.error(
+            "the Rust `whisper-dictate` binary is required for "
+            "--dictionary-suggest (VOICEPI_RUST_INJECTOR unset or points at a "
+            "missing helper). Install/repair the app or run "
+            "`whisper-dictate dictionary suggest-replacements` directly."
         )
-        print_suggestions(suggestions, as_json=a.json)
-    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-        ap.error(str(e))
+    return rc
 
 
 def _handle_dictionary_training(a, ap) -> int:
     """Dispatch the two corpus->dictionary training commands (Feature A).
 
-    Wave 6 follow-up to the Python-removal roadmap (#348): the user-facing
-    flags ``--dictionary-build-from-corpus`` / ``--dictionary-suggest-terms``
-    now shell out to the Rust binary's ``dictionary build-from-corpus`` /
-    ``dictionary suggest-terms`` subcommands. The Python in-process path
-    (``vp_dictionary_training_cli.run_build_from_corpus`` /
-    ``run_suggest_from_misses``) is kept as a fallback for binaries that lack
-    the new subcommand (older installs, dev checkouts without a built Rust
-    helper) so behaviour never regresses. Both still honour --dictionary /
-    --apply / --min-count, preview by default, and read TEXT only — never
-    record audio.
+    Both `--dictionary-build-from-corpus` and `--dictionary-suggest-terms`
+    shell out to the Rust binary's `dictionary build-from-corpus` /
+    `dictionary suggest-terms` subcommands. Audit item 4 (`docs/architecture-
+    audit-2026-07-16.md`) retired the in-process Python parity — the Rust
+    subcommands are the sole implementation now, so a missing binary is a
+    hard error (previous versions silently fell back).
     """
-    rc = _rust_dictionary_training(a)
-    if rc is not None:
-        return rc
-    from whisper_dictate.vp_dictionary_training_cli import (
-        run_build_from_corpus, run_suggest_from_misses,
-    )
-    try:
-        if getattr(a, "dictionary_suggest_terms", None):
-            return run_suggest_from_misses(
-                a.dictionary_suggest_terms,
-                dictionary_path=a.dictionary,
-                min_count=a.min_count,
-                apply=a.apply,
-                as_json=a.json,
-            )
-        return run_build_from_corpus(
-            corpus_manifest=a.benchmark_corpus,
-            app_root=getattr(a, "app_root", None),
-            dictionary_path=a.dictionary,
-            language=a.language,
-            category=a.category,
-            min_count=a.min_count,
-            apply=a.apply,
-            as_json=a.json,
+    args = _rust_dictionary_training_args(a)
+    if args is None:
+        # Defensive: the dispatcher should only call this when one of the
+        # recognised flags is set — surface a clear error rather than an
+        # empty argv.
+        ap.error(
+            "no dictionary training flag set — expected "
+            "--dictionary-build-from-corpus or --dictionary-suggest-terms"
         )
-    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-        # ap.error() prints usage and raises SystemExit(2); it never returns, so the
-        # function ends here (no unreachable return follows).
-        ap.error(str(e))
+    rc = _rust_dictionary_subcommand(args)
+    if rc is None:
+        ap.error(
+            "the Rust `whisper-dictate` binary is required for "
+            "--dictionary-build-from-corpus / --dictionary-suggest-terms "
+            "(VOICEPI_RUST_INJECTOR unset or points at a missing helper). "
+            "Install/repair the app or run `whisper-dictate dictionary "
+            "build-from-corpus` / `dictionary suggest-terms` directly."
+        )
+    return rc
 
 
-def _rust_dictionary_training(a) -> int | None:
-    """Shell out to ``whisper-dictate dictionary build-from-corpus|suggest-terms``.
+def _rust_dictionary_subcommand(args: list[str]) -> int | None:
+    """Shell out to ``whisper-dictate dictionary <args>``.
 
     Returns the subprocess exit code on success, or ``None`` when the Rust
-    binary is unavailable (the env var is unset / the helper is missing) so
-    the caller falls back to the in-process Python path. Sets
-    ``VOICEPI_DICTIONARY_BACKEND=python`` for the child to force the
-    Wave 4-A in-process logic inside the helper (the env-gated shell-out
-    inside ``vp_dictionary_training`` would otherwise re-enter the same
-    binary recursively).
+    binary is unavailable (env var unset OR the helper file is missing OR
+    the subprocess itself failed to launch). Never falls back to Python —
+    audit item 4 retired the parity code; callers surface a clear error.
     """
     helper = os.environ.get("VOICEPI_RUST_INJECTOR") or ""
     if not helper:
         return None
     if not Path(helper).exists():
         return None
-    args = _rust_dictionary_training_args(a)
-    if args is None:
-        return None
-    env = dict(os.environ)
-    # Force the child's dictionary backend off Rust so the helper's own
-    # `dictionary-ops` shell-out (gated on VOICEPI_DICTIONARY_BACKEND=rust)
-    # does not re-enter the same binary on top of our subprocess.
-    env["VOICEPI_DICTIONARY_BACKEND"] = "python"
     try:
         result = subprocess.run(
             [helper, "dictionary", *args],
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=env,
             shell=False,
         )
-    except Exception as exc:  # noqa: BLE001 - helper failures fall back to Python
-        print(f"[rust:dictionary-training] {exc}", file=sys.stderr, flush=True)
+    except Exception as exc:  # noqa: BLE001 - launch failure surfaces via caller
+        print(f"[rust:dictionary] {exc}", file=sys.stderr, flush=True)
         return None
-    # The Rust subcommand prints the preview / JSON itself; we just relay
-    # its exit code to the caller (and ultimately to the process).
     return result.returncode
 
 
 def _rust_dictionary_training_args(a) -> list[str] | None:
-    """Translate argparse flags into the Rust subcommand argv.
+    """Translate the training argparse flags into the Rust subcommand argv.
 
-    Returns None when no recognised training flag is present (defensive — the
-    dispatcher should only call this when one of them is set, but keeping
-    the fallback explicit avoids a silent miscall).
+    Returns ``None`` when no recognised training flag is present so the
+    dispatcher can surface a clean error rather than run an empty argv.
     """
     if getattr(a, "dictionary_suggest_terms", None):
         args = ["suggest-terms", str(a.dictionary_suggest_terms)]
@@ -558,8 +546,7 @@ def _run_utility_subcommands(a, ap) -> None:
         _handle_post_process(a)
         raise SystemExit(0)
     if a.dictionary_suggest:
-        _handle_dictionary_suggest(a, ap)
-        raise SystemExit(0)
+        raise SystemExit(_handle_dictionary_suggest(a, ap))
     if getattr(a, "dictionary_build_from_corpus", False) or getattr(a, "dictionary_suggest_terms", None):
         raise SystemExit(_handle_dictionary_training(a, ap))
 

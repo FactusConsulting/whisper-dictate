@@ -1,12 +1,15 @@
 //! Suggest dictionary REPLACEMENTS from benchmark / history JSONL rows.
 //!
-//! Port of `vp_dictionary_suggest.py` (Wave 4-A of #348). Split into smaller
-//! files to stay under the repo-wide ~500 LOC per-file gate:
+//! Post audit item 4 (`docs/architecture-audit-2026-07-16.md`) this is the
+//! sole implementation — the Python `vp_dictionary_suggest.py` parity was
+//! retired. Split into smaller files to stay under the repo-wide ~500 LOC
+//! per-file gate:
 //!
 //! * `filters` – curated risky-source word/phrase lists + the shared
 //!   `words` / `normalize` helpers
 //! * `similarity` – Ratcliff–Obershelp ratio used to score fuzzy matches
 //! * `matching` – `SuggestionState`, position-match + fuzzy-match accumulators
+//! * `cli` – the `dictionary suggest-replacements` CLI adapter
 //!
 //! The two match families are documented on the `matching` module. Risky
 //! sources (sentence connectors like "the"/"og"/"med", lone 1–2 letter tokens
@@ -17,9 +20,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+mod cli;
 mod filters;
 mod matching;
 mod similarity;
+
+pub use cli::{run_suggest_replacements, SuggestReplacementsOptions};
 
 use filters::{normalize, words};
 use matching::{add_fuzzy_matches, add_position_matches, known_targets, SuggestionState};

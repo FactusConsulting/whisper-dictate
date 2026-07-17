@@ -1,5 +1,6 @@
-//! CLI orchestration for corpus → dictionary training (Rust port of
-//! `vp_dictionary_training_cli.py`, Wave 6 follow-up to #348).
+//! CLI orchestration for corpus → dictionary training. This is the sole
+//! implementation — the Python `vp_dictionary_training_cli.py` parity was
+//! retired in audit item 4 (`docs/architecture-audit-2026-07-16.md`).
 //!
 //! Glues the PURE term-mining logic (`extract`, `merge`, `misses` in this
 //! module's siblings) to the IO (corpus loader in [`crate::corpus`], dictionary
