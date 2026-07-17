@@ -146,6 +146,11 @@ from whisper_dictate.vp_capture import (  # noqa: E402,F401
 )
 from whisper_dictate.vp_dictate import Dictate, FIRST_AUDIO_WAIT_S  # noqa: E402,F401
 from whisper_dictate import vp_dictate  # noqa: E402
+from whisper_dictate import vp_dictate_engine  # noqa: E402
+from whisper_dictate.vp_dictate_engine import (  # noqa: E402,F401
+    ENGINE_ENV, ENGINE_PYTHON, ENGINE_RUST,
+    is_known_engine, run_rust_engine, select_engine,
+)
 from whisper_dictate.vp_feedback import notify_error  # noqa: E402
 
 
@@ -738,19 +743,63 @@ def _run_session(a, model, lang, backend: str, dev: str, ctype: str,
         _print_result(result, as_json=a.json)
         raise SystemExit(0)
     try:
-        Dictate(
-            model, a.key, a.mode, lang,
-            json_output=a.json,
-            metrics_jsonl=os.environ.get("VOICEPI_METRICS_JSONL"),
-            model_name=loaded_model_name,
-            device=dev,
-            compute_type=ctype,
-            model_load_s=model_load_s,
-            # See vp_cli.build_arg_parser: defaults to "sounddevice".
-            audio_source=getattr(a, "audio_source", "sounddevice"),
-        ).run()
+        _dispatch_engine(
+            a, model, lang, backend, dev, ctype,
+            loaded_model_name, model_load_s,
+        )
     except KeyboardInterrupt:
         print("\nbye")
+
+
+def _dispatch_engine(a, model, lang, backend: str, dev: str, ctype: str,
+                     loaded_model_name: str, model_load_s: float) -> None:
+    """Pick the engine that runs the push-to-talk loop.
+
+    Reads ``VOICEPI_DICTATE_ENGINE`` and — when set to ``rust`` — shells
+    out to ``whisper-dictate dictate-run --json-events`` (audit item 5
+    Phase A step 2, see docs/design/item5-wire-dictate-session.md).
+    Anything else (unset, empty, ``python``, or an unknown value) runs
+    the in-process ``Dictate(...).run()`` loop unchanged.
+
+    Rust engine failures at start-up (binary missing, features not
+    compiled in, spawn error, early crash before the READY signal) are
+    surfaced as a log line and then fall back to the Python engine. The
+    opt-in must never take down the worker.
+
+    Split from ``_run_session`` so tests can drive the dispatch decision
+    without stubbing out the whole session function's argparse surface.
+    """
+    raw = os.environ.get(vp_dictate_engine.ENGINE_ENV)
+    engine = vp_dictate_engine.select_engine()
+    if not vp_dictate_engine.is_known_engine(raw):
+        print(
+            f"[runtime] Unknown {vp_dictate_engine.ENGINE_ENV}={raw!r} "
+            "— falling back to python engine",
+            file=sys.stderr,
+            flush=True,
+        )
+        engine = vp_dictate_engine.ENGINE_PYTHON
+
+    if engine == vp_dictate_engine.ENGINE_RUST:
+        ran, code = vp_dictate_engine.run_rust_engine(
+            config_path=os.environ.get("VOICEPI_CONFIG"),
+        )
+        if ran:
+            raise SystemExit(code if isinstance(code, int) else 0)
+        # else: fall through to the Python engine so a failed opt-in is
+        # never a total worker failure.
+
+    Dictate(
+        model, a.key, a.mode, lang,
+        json_output=a.json,
+        metrics_jsonl=os.environ.get("VOICEPI_METRICS_JSONL"),
+        model_name=loaded_model_name,
+        device=dev,
+        compute_type=ctype,
+        model_load_s=model_load_s,
+        # See vp_cli.build_arg_parser: defaults to "sounddevice".
+        audio_source=getattr(a, "audio_source", "sounddevice"),
+    ).run()
 
 
 def _force_initial_prompt(prompt: str | None) -> None:
