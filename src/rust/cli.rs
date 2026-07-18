@@ -821,6 +821,63 @@ pub enum SelfTestCommand {
         #[arg(long, value_name = "AUTO|RDEV|EVDEV", default_value = "auto")]
         driver: String,
     },
+    /// Regression test for INJECTION-side state accumulation bugs.
+    /// Different bug class from `self-test ptt-wedge`: this verb probes
+    /// the injection path itself (plan builder + guard bracket counter)
+    /// for state that should reset between successive `inject()` calls
+    /// but doesn't — modifier stickiness, character-position leaks,
+    /// backend-selection cache staleness, and unbalanced `arm_start` /
+    /// `arm_end` pairs.
+    ///
+    /// Each iteration builds a fresh [`crate::injection::plan::build_plan`]
+    /// for a per-iteration payload, compares its derived fields against a
+    /// reference plan for determinism, then round-trips
+    /// [`crate::hotkey::inject_guard::InjectionGuard::arm_start`] /
+    /// `arm_end` and asserts the guard's `is_active` returns to false
+    /// past the post-grace horizon. Runs no OS side effects on the
+    /// default (dry-run) path — safe in CI.
+    ///
+    /// `--live` opts into the dangerous path: `execute_plan` really types
+    /// into the active window. NEVER passed by the smoke script or CI.
+    ///
+    /// Feature-gated behind `rust-hotkeys` + `rust-injection` — a stock
+    /// build exits with an actionable "rebuild with --features ..."
+    /// message rather than hanging or reporting a false pass.
+    InjectionIdempotency {
+        /// Iterations to run. Each iteration uses a fresh guard so a
+        /// failure in one does not cascade into the next; the loop stops
+        /// at the first failure so the report unambiguously names the
+        /// broken cycle. Default 10 — an order of magnitude higher than
+        /// `ptt-wedge` so intermittent state leaks are more likely to
+        /// surface.
+        #[arg(long, default_value_t = 10)]
+        iterations: usize,
+        /// Emit a single JSON object with `kind`, `backend`, `live`,
+        /// `iterations`, `all_passed`, and per-iteration `results` — the
+        /// machine-readable contract callers should pin.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Override the auto-picked backend. Accepts the same names as
+        /// `inject-text --backend` (auto / pynput / wtype / ydotool /
+        /// xdotool / kwtype / dotool / enigo / type / paste). Useful for
+        /// exercising a specific injection path without waiting for the
+        /// host platform's default to line up.
+        #[arg(
+            long,
+            default_value = "auto",
+            value_parser = [
+                "auto", "pynput", "wtype", "ydotool", "xdotool", "kwtype",
+                "dotool", "enigo", "type", "paste",
+            ],
+        )]
+        backend: String,
+        /// REALLY execute the plan (dangerous — types into the active
+        /// window using the resolved backend). Off by default; the smoke
+        /// script and CI never pass this. Use only on a scratch VM /
+        /// unfocused window when hunting a live-only regression.
+        #[arg(long, default_value_t = false)]
+        live: bool,
+    },
 }
 
 #[cfg(test)]
@@ -1792,6 +1849,94 @@ mod tests {
             }) => assert_eq!(driver, "rdev"),
             other => panic!("expected self-test ptt-wedge --driver rdev, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // self-test injection-idempotency — sibling to ptt-wedge, different
+    // bug class (injection-side state accumulation).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parses_self_test_injection_idempotency_default_flags() {
+        // Defaults: 10 iterations, plain output, auto backend, dry-run
+        // (live=false). Pin the shape so a CLI-schema change is caught
+        // before the smoke script breaks.
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "injection-idempotency"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::InjectionIdempotency {
+                    iterations: 10,
+                    json: false,
+                    backend: "auto".to_owned(),
+                    live: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_injection_idempotency_all_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "injection-idempotency",
+            "--iterations",
+            "3",
+            "--json",
+            "--backend",
+            "enigo",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::InjectionIdempotency {
+                    iterations: 3,
+                    json: true,
+                    backend: "enigo".to_owned(),
+                    live: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_injection_idempotency_live_flag() {
+        // `--live` opts into real injection — must parse but never
+        // default to true. The handler treats live=true as the dangerous
+        // path and prints a warning before executing.
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "injection-idempotency",
+            "--live",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::InjectionIdempotency {
+                    iterations: 10,
+                    json: false,
+                    backend: "auto".to_owned(),
+                    live: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_backend_for_injection_idempotency() {
+        // The value_parser allowlist stops typos at parse time so the
+        // handler never has to defend against them — mirrors the
+        // `inject-text --backend` guardrail.
+        let err = Cli::try_parse_from([
+            "whisper-dictate",
+            "self-test",
+            "injection-idempotency",
+            "--backend",
+            "notabackend",
+        ]);
+        assert!(err.is_err(), "expected clap to reject unknown backend");
     }
 
     // -----------------------------------------------------------------------

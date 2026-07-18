@@ -467,3 +467,16 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys,rust-injection -- self-test ptt-wedge --iterations 5 --json"
+      - name: injection-idempotency regression test (self-test)
+        # Sibling of ptt-wedge, different bug class: this verb probes
+        # INJECTION-side state accumulation (plan-builder determinism,
+        # guard bracket counter, backend-selection cache) instead of the
+        # hotkey tracker. Default dry-run — no OS side effects — so it's
+        # safe in this container. Iteration count intentionally >=10
+        # (higher than ptt-wedge) so intermittent state leaks are more
+        # likely to surface. Same feature-gate as ptt-wedge.
+        # NO `|| true` — a real regression here MUST fail CI.
+        if: env.RUN_INTEG == 'true'
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
+            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys,rust-injection -- self-test injection-idempotency --iterations 10 --json"

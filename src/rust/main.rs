@@ -108,7 +108,10 @@ fn run() -> anyhow::Result<()> {
 /// check without shelling out for platform detects.
 fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
     use whisper_dictate_app::hotkey::self_test::{
-        features_available, run_ptt_wedge_test, SelfTestDriver,
+        features_available as ptt_features_available, run_ptt_wedge_test, SelfTestDriver,
+    };
+    use whisper_dictate_app::injection::self_test::{
+        features_available as inj_features_available, run_injection_idempotency_test,
     };
 
     match cmd {
@@ -135,7 +138,7 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
             // injector's `arm_start` lives behind `rust-injection`) — a "pass"
             // there would be a false negative and mask a real regression.
             // Surface an actionable rebuild message and exit non-zero.
-            if !features_available() {
+            if !ptt_features_available() {
                 return Err(anyhow::anyhow!(
                     "self-test ptt-wedge requires the `rust-hotkeys` and `rust-injection` \
                      cargo features — rebuild with \
@@ -155,6 +158,53 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
                 // per-iteration detail; a bare error keeps the tail short.
                 Err(anyhow::anyhow!(
                     "self-test ptt-wedge failed (see report above for the failing iteration and stage)"
+                ))
+            }
+        }
+        SelfTestCommand::InjectionIdempotency {
+            iterations,
+            json,
+            backend,
+            live,
+        } => {
+            if iterations == 0 {
+                return Err(anyhow::anyhow!(
+                    "--iterations must be at least 1 (0 would be a vacuous pass)"
+                ));
+            }
+            // Same feature-gate policy as ptt-wedge: on a stock build the
+            // idempotency assertions can't fire (both the plan builder and
+            // the guard bracket counter live behind those features), so a
+            // "pass" would be a false negative. Surface a rebuild message.
+            if !inj_features_available() {
+                return Err(anyhow::anyhow!(
+                    "self-test injection-idempotency requires the `rust-hotkeys` and \
+                     `rust-injection` cargo features — rebuild with \
+                     `cargo build --features rust-hotkeys,rust-injection`"
+                ));
+            }
+            if live {
+                // Loud stderr warning BEFORE any execution — mirrors the
+                // `inject-text --do-it` policy so an operator who typed
+                // `--live` by mistake sees the warning while they still
+                // have a chance to Ctrl-C.
+                eprintln!(
+                    "warning: `self-test injection-idempotency --live` is REAL and will \
+                     type into the active window on every iteration. Focus a scratch \
+                     window NOW or Ctrl-C to abort."
+                );
+            }
+            let report = run_injection_idempotency_test(iterations, &backend, live);
+            if json {
+                println!("{}", report.to_json());
+            } else {
+                print!("{}", report.to_plain());
+            }
+            if report.all_passed() {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!(
+                    "self-test injection-idempotency failed (see report above for the failing iteration and stage)"
                 ))
             }
         }

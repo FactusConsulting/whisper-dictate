@@ -25,6 +25,7 @@ pub mod keymap;
 pub mod linux_helpers;
 pub mod paste;
 pub mod plan;
+pub mod self_test;
 pub mod wayland;
 
 pub use dispatcher::{
