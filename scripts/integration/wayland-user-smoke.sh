@@ -608,7 +608,7 @@ fi
 # --------------------------------------------------------------------------
 section "dictate engine dispatch (VOICEPI_DICTATE_ENGINE=rust opt-in)"
 if [ "$CMD_MODE" = "python" ] || command -v python3 >/dev/null 2>&1; then
-    engine_check_out="$(VOICEPI_DICTATE_ENGINE=rust python3 -c '
+    engine_check_out="$(VOICEPI_DICTATE_ENGINE=rust PYTHONPATH="${REPO_ROOT}/src/python" python3 -c '
 from whisper_dictate.vp_dictate_engine import (
     ENGINE_ENV, ENGINE_PYTHON, ENGINE_RUST, select_engine,
 )
