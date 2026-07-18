@@ -495,6 +495,33 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: self-test injection-idempotency (regression — no state leak
+# between successive inject calls)
+#
+# Different bug class from ptt-wedge: this verb probes INJECTION-side state
+# (plan-builder determinism, guard bracket counter, backend-selection cache)
+# rather than the hotkey tracker. Fails if `build_plan` drifts across calls,
+# if the guard's `arm_start` / `arm_end` counter leaks, or if the horizon
+# stays extended past the post-grace window. Default is dry-run — no OS
+# side effects — so it's safe in this smoke script and in CI. `--live`
+# would type into the active window and is NEVER used here.
+# --------------------------------------------------------------------------
+section "self-test injection-idempotency (regression — no state leak between injects)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
+else
+    inj_out="$(whisper-dictate self-test injection-idempotency --iterations 10 --json 2>&1)"
+    inj_rc=$?
+    if [ "$inj_rc" -eq 0 ] && printf '%s' "$inj_out" | grep -q '"all_passed":true'; then
+        ok "injection idempotency: 10 iterations no state accumulation"
+    elif printf '%s' "$inj_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
+        warn "self-test injection-idempotency requires rust-hotkeys,rust-injection features (skipped on this build)"
+    else
+        bad "injection idempotency FAILED — state leaks between injects: $(printf '%s\n' "$inj_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: dictate-run CLI (Rust dictation runtime — Phase A step 1)
 #
 # Audit item 5 Phase A step 1: adds the `whisper-dictate dictate-run` verb
