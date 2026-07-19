@@ -374,6 +374,20 @@ jobs:
         run: |
           cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help
           cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- config path
+      - name: injection-idempotency regression test (self-test)
+        # Codex #518 F6: the ubuntu 26.04 integration job runs this same
+        # verb on Linux (see `integration-ubuntu-2604` below), but the
+        # bug class this catches — modifier state leakage on the
+        # SendInput path — is *Windows*-specific. Running the harness on
+        # both matrix legs (ubuntu-latest + windows-2025) exercises the
+        # `enigo` backend on the Windows runner where a stuck-Shift
+        # regression would actually surface.
+        #
+        # Default dry-run: no OS side effects on either matrix leg, so
+        # this is safe under `-D warnings` alongside every other rust
+        # step. NO `|| true` — a real regression here MUST fail CI.
+        if: env.RUN_RUST == 'true'
+        run: cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys,rust-injection -- self-test injection-idempotency --iterations 10 --json
 
   integration-ubuntu-2604:
     # Runs the Rust + Python test suites inside a purpose-built Ubuntu

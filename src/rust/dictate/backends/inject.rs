@@ -85,7 +85,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
-use crate::hotkey::InjectionGuard;
+use crate::hotkey::{InjectionBracket, InjectionGuard};
 use crate::injection::paste::{vk, Clipboard, PasteGuard};
 use crate::injection::{InjectMethod, Injector};
 
@@ -367,7 +367,9 @@ impl InjectBackend for EnigoInjectBackend {
             .injection_guard
             .clone()
             .or_else(crate::hotkey::inject_guard::global);
-        let _bracket = active_guard.as_deref().map(InjectionBracket::open);
+        let _bracket = active_guard
+            .as_deref()
+            .map(|g| InjectionBracket::open(g, INJECT_PRE_GRACE, INJECT_POST_GRACE));
 
         // Pre-injection cleanup #1: drop any modifiers still held from
         // a push-to-talk chord. Failures are logged + ignored to match
@@ -394,39 +396,6 @@ impl InjectBackend for EnigoInjectBackend {
         // `_bracket` drops here, extending the horizon by the post-arm
         // grace (covers WH_KEYBOARD_LL drain latency after the last
         // SendInput returns).
-    }
-}
-
-/// RAII wrapper around [`InjectionGuard::arm_start`] /
-/// [`InjectionGuard::arm_end`]. Opening the bracket immediately
-/// arms the guard's counter (keeping it active for the whole burst,
-/// no matter how many seconds a long typing loop takes); dropping
-/// the bracket extends the horizon by [`INJECT_POST_GRACE`] and
-/// decrements the counter.
-///
-/// Using RAII rather than a manual `arm_end` call means an early
-/// return (`?` on the inject result), or a panic inside the burst,
-/// still closes the bracket cleanly — otherwise a leaked counter
-/// would keep PTT deaf for the rest of the process's lifetime.
-///
-/// The type holds a bare `&InjectionGuard` reference rather than an
-/// `Arc` clone so the caller (`inject` above) can keep its
-/// `active_guard: Option<Arc<_>>` alive for the full lifetime of
-/// the borrow without an extra atomic-refcount bump per inject.
-struct InjectionBracket<'a> {
-    guard: &'a InjectionGuard,
-}
-
-impl<'a> InjectionBracket<'a> {
-    fn open(guard: &'a InjectionGuard) -> Self {
-        guard.arm_start(INJECT_PRE_GRACE);
-        Self { guard }
-    }
-}
-
-impl Drop for InjectionBracket<'_> {
-    fn drop(&mut self) {
-        self.guard.arm_end(INJECT_POST_GRACE);
     }
 }
 

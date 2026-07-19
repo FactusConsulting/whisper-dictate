@@ -875,6 +875,13 @@ pub enum SelfTestCommand {
         /// window using the resolved backend). Off by default; the smoke
         /// script and CI never pass this. Use only on a scratch VM /
         /// unfocused window when hunting a live-only regression.
+        ///
+        /// Known limitation with `--live --backend paste`: the OS
+        /// clipboard is shared across iterations. The harness inserts a
+        /// spacer between iterations to let async clipboard writes
+        /// flush, but stale content from prior sessions may still leak
+        /// (Codex #518 F5). Inspect each iteration's pasted output
+        /// manually rather than trusting the summary alone.
         #[arg(long, default_value_t = false)]
         live: bool,
     },

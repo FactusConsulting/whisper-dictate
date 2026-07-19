@@ -247,11 +247,71 @@ impl InjectionGuard {
     fn arm_at(&self, now: Instant, grace: Duration) {
         self.extend_horizon(now, grace);
     }
+
+    /// Snapshot of the open-bracket count. Used by the
+    /// injection-idempotency self-test to prove the counter returns to
+    /// zero after every simulated burst — a leak here is the "unbalanced
+    /// arm_end" bug class the harness is designed to catch (see
+    /// [`crate::injection::self_test`]).
+    ///
+    /// Not on the hot path — a `Relaxed` load is fine here because the
+    /// caller pairs this with a bracket drop that already ordered its
+    /// own decrement with `SeqCst`.
+    #[inline]
+    pub fn active_brackets(&self) -> usize {
+        self.active_brackets.load(Ordering::Relaxed)
+    }
 }
 
 impl Default for InjectionGuard {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// RAII wrapper around [`InjectionGuard::arm_start`] /
+/// [`InjectionGuard::arm_end`]. Opening the bracket immediately arms
+/// the guard's counter (keeping it active for the whole burst, no
+/// matter how many seconds a long typing loop takes); dropping the
+/// bracket extends the horizon by `post_grace` and decrements the
+/// counter.
+///
+/// Using RAII rather than a manual `arm_end` call means an early
+/// return (`?` on the inject result), or a panic inside the burst,
+/// still closes the bracket cleanly — otherwise a leaked counter
+/// would keep PTT deaf for the rest of the process's lifetime.
+///
+/// The type holds a bare `&InjectionGuard` reference rather than an
+/// `Arc` clone so callers can keep their `Option<Arc<_>>` alive for
+/// the full lifetime of the borrow without an extra atomic-refcount
+/// bump per inject.
+///
+/// This is the *single* bracket primitive used by both the shipping
+/// `EnigoInjectBackend::inject` path (via the [`crate::dictate`] wrapper
+/// with production `INJECT_PRE_GRACE` / `INJECT_POST_GRACE` constants)
+/// AND the `self-test injection-idempotency` regression harness (see
+/// [`crate::injection::self_test`]) — the whole point of exposing it
+/// here is that the self-test exercises the *same* RAII bracket the
+/// real inject path uses, not a hand-rolled arm_start/arm_end pair
+/// that could drift.
+pub struct InjectionBracket<'a> {
+    guard: &'a InjectionGuard,
+    post_grace: Duration,
+}
+
+impl<'a> InjectionBracket<'a> {
+    /// Open a bracket around a burst. `pre_grace` is applied
+    /// immediately (via [`InjectionGuard::arm_start`]); `post_grace`
+    /// is stashed and applied on drop.
+    pub fn open(guard: &'a InjectionGuard, pre_grace: Duration, post_grace: Duration) -> Self {
+        guard.arm_start(pre_grace);
+        Self { guard, post_grace }
+    }
+}
+
+impl Drop for InjectionBracket<'_> {
+    fn drop(&mut self) {
+        self.guard.arm_end(self.post_grace);
     }
 }
 
