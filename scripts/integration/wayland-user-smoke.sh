@@ -522,6 +522,37 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: self-test whisper-load (regression — Whisper cold-load latency + OOM)
+#
+# Item 5 prereq 5: load the tiny.en GGML model through the same background
+# preloader the supervisor will use in Phase C step 2. Regression coverage for
+# the v1.20.7 silent-PTT scenario (whisper.cpp load hanging the main thread)
+# + the OOM path (whisper.cpp panics on a memory-starved host, caught by
+# `load_catch_unwind`). Requires the binary to be built with the
+# `whisper-rs-local` feature — a stock build surfaces an actionable
+# "rebuild with --features" message which this section treats as a warn/skip.
+# Also skips gracefully when the model isn't cached — smoke script must NOT
+# download 78MB behind the operator's back on every run.
+# --------------------------------------------------------------------------
+section "self-test whisper-load (Whisper cold-load latency + OOM)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test whisper-load is a Rust subcommand — not exposed by the Python fallback"
+else
+    wl_out="$(whisper-dictate self-test whisper-load --model tiny.en --json 2>&1)"
+    wl_rc=$?
+    if [ "$wl_rc" -eq 0 ] && printf '%s' "$wl_out" | grep -q '"ok":true'; then
+        elapsed=$(printf '%s' "$wl_out" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
+        ok "whisper-load: tiny.en loaded in ${elapsed:-?}ms (status=ready)"
+    elif printf '%s' "$wl_out" | grep -qi "whisper-rs-local\|rebuild with"; then
+        warn "self-test whisper-load requires whisper-rs-local feature (skipped on this build)"
+    elif printf '%s' "$wl_out" | grep -qi "not in the cache\|models download"; then
+        warn "self-test whisper-load: tiny.en not in cache — run 'whisper-dictate models download tiny.en' first"
+    else
+        bad "whisper-load FAILED — Phase B whisper backend is broken: $(printf '%s\n' "$wl_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: dictate-run CLI (Rust dictation runtime — Phase A step 1)
 #
 # Audit item 5 Phase A step 1: adds the `whisper-dictate dictate-run` verb

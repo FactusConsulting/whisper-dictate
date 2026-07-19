@@ -60,4 +60,12 @@ pub(crate) use dispatch::resolve_model_path_from_env;
 #[cfg(feature = "whisper-rs-local")]
 pub use dispatch::{handle_transcribe_server, handle_transcribe_wav, MODEL_PATH_ENV};
 #[cfg(feature = "whisper-rs-local")]
-pub use local::LocalWhisper;
+pub use local::{load_blocking, LoadFailure, LoadStatus, LocalWhisper, Preloader};
+
+// Self-test verb wiring for the `whisper-load` regression check. Kept as
+// a first-class module so the CLI dispatcher can call it via a stable
+// module path (`whisper::self_test::run_whisper_load_test`) that
+// matches the `injection::self_test` / `hotkey::self_test` pattern the
+// other verbs use.
+#[cfg(feature = "whisper-rs-local")]
+pub mod self_test;

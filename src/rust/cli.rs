@@ -885,6 +885,39 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         live: bool,
     },
+    /// Regression test for Whisper cold-load latency + OOM (item 5 prereq 5,
+    /// `docs/design/item5-wire-dictate-session.md` risk #5). Loads a GGML
+    /// model through the same background preloader the supervisor will
+    /// use in Phase C, reports wall-clock elapsed + on-disk file size,
+    /// and exits non-zero on any load failure.
+    ///
+    /// Feature-gated behind `whisper-rs-local` — a stock build exits with
+    /// an actionable "rebuild with --features whisper-rs-local" message
+    /// rather than pretending to run the check.
+    ///
+    /// The verb DOES NOT download the model — it expects the file to
+    /// already be in the cache (run `whisper-dictate models download
+    /// <name>` first). This keeps the self-test hermetic: a slow CI
+    /// runner isn't punished by a HuggingFace fetch happening inside
+    /// the elapsed measurement.
+    WhisperLoad {
+        /// Catalog model name (`tiny.en`, `base`, `small`, `medium`,
+        /// `large-v3-turbo`, `large-v3`, or the multilingual siblings)
+        /// or an absolute path to a custom GGML file. The catalog names
+        /// resolve via [`crate::whisper::model_manager::find`]; anything
+        /// containing `/` or `\`, or ending in `.bin` / `.gguf`, is
+        /// treated as a literal path.
+        #[arg(long, default_value = "tiny.en")]
+        model: String,
+        /// Emit the [`crate::whisper::self_test::WhisperLoadReport`] as
+        /// one JSON object with a stable field shape (`kind`, `model`,
+        /// `path`, `file_size_bytes`, `elapsed_ms`, `status`, `ok`,
+        /// `error`, `error_kind`). Consumed by
+        /// `scripts/integration/wayland-user-smoke.sh` and the CI
+        /// `integration-ubuntu-2604` job.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[cfg(test)]

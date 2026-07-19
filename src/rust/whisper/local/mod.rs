@@ -21,7 +21,16 @@
 //!
 //! ## Module layout
 //! - [`wav`] — WAV decoding helpers (`decode_wav_16k_mono`, `WHISPER_SAMPLE_RATE_HZ`)
-//! - This file — `LocalWhisper` struct, inference, GGUF guard
+//! - This file — `LocalWhisper` struct, inference, GGUF guard,
+//!   `load_catch_unwind` wrapper (item 5 prereq 5, catches whisper.cpp OOM
+//!   panics so the supervisor can fall back to Python instead of aborting).
+//! - [`preload`] — background load primitive (`Preloader`, `LoadStatus`) so
+//!   the supervisor can start the model load BEFORE first PTT press.
+//!   `docs/design/item5-wire-dictate-session.md` risk #5.
+
+pub mod preload;
+
+pub use preload::{load_blocking, LoadStatus, Preloader};
 
 // WAV decode helpers live in the unconditional `whisper::wav` module so they
 // are compiled and tested without the `whisper-rs-local` CMake dependency.
@@ -32,9 +41,77 @@ pub use super::wav::decode_wav_16k_mono;
 
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
+use std::sync::Arc;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use super::gpu::{self, GpuPolicy};
+
+/// Failure envelope returned by [`LocalWhisper::load_catch_unwind`].
+///
+/// Two variants because the supervisor's response should differ:
+/// - `Errored` is the normal Rust `Result::Err` shape — a missing file, a
+///   GGUF-not-GGML mismatch, a whisper-rs API error. Callers log at
+///   INFO/WARN and fall back to the Python engine.
+/// - `Panicked` is a caught unwind from inside whisper.cpp (typically an
+///   OOM on model load, or a `libc::abort()` that Rust's panic runtime
+///   catches). Callers log at ERROR because "we almost took down the
+///   supervisor" is worth a stack-trace-level signal, then still fall
+///   back to Python. Item 5 prereq 5 requirement — pre-Phase B the
+///   supervisor would exit hard here.
+#[derive(Debug)]
+pub enum LoadFailure {
+    /// A clean `anyhow::Error` from the load path. Wrapped in `Arc` so
+    /// `LoadStatus::Failed` can be `Clone`d cheaply across preloader
+    /// pollers without dragging in an `anyhow::Error: Clone` bound
+    /// (which doesn't exist upstream).
+    Errored(Arc<anyhow::Error>),
+    /// Caught panic message from `catch_unwind`. Kept as a string
+    /// because `Box<dyn Any>` isn't `Send + Sync`-friendly for storing
+    /// in the shared preloader state. The typical shape is
+    /// `"whisper.cpp: failed to allocate ..."` or the raw C++ message.
+    Panicked(String),
+}
+
+impl LoadFailure {
+    /// Convenience for callers building a `LoadFailure::Errored` from an
+    /// `anyhow::Error` directly.
+    pub fn errored(err: anyhow::Error) -> Self {
+        LoadFailure::Errored(Arc::new(err))
+    }
+
+    /// Machine-readable label for JSON envelopes. Kept stable so log
+    /// scrapers can grep for `"kind": "panicked"` when hunting the
+    /// OOM class of bug this wrapper was added for.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            LoadFailure::Errored(_) => "errored",
+            LoadFailure::Panicked(_) => "panicked",
+        }
+    }
+
+    /// Rendered message for humans and JSON envelopes.
+    pub fn message(&self) -> String {
+        match self {
+            LoadFailure::Errored(e) => format!("{e:#}"),
+            LoadFailure::Panicked(msg) => msg.clone(),
+        }
+    }
+}
+
+impl Clone for LoadFailure {
+    fn clone(&self) -> Self {
+        match self {
+            LoadFailure::Errored(e) => LoadFailure::Errored(Arc::clone(e)),
+            LoadFailure::Panicked(msg) => LoadFailure::Panicked(msg.clone()),
+        }
+    }
+}
+
+impl std::fmt::Display for LoadFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.kind(), self.message())
+    }
+}
 
 /// Loaded whisper.cpp model + a per-call inference helper.
 ///
@@ -107,6 +184,41 @@ impl LocalWhisper {
             format!("failed to load whisper model from {}", model_path.display())
         })?;
         Ok(Self { ctx })
+    }
+
+    /// Load a GGML whisper.cpp model with a caught unwind around the
+    /// whisper.cpp allocation, so an OOM inside the C++ tensor allocator
+    /// returns [`LoadFailure::Panicked`] instead of aborting the process.
+    ///
+    /// Runs on any thread — the preloader spawns a dedicated background
+    /// worker, but tests and the self-test verb can also invoke this
+    /// directly for a synchronous "load with safety net" shape. See
+    /// [`super::preload`] for the shipping preload primitive.
+    ///
+    /// Non-panic errors (missing file, GGUF file, whisper-rs API error)
+    /// come back as [`LoadFailure::Errored`] preserving the original
+    /// `anyhow` context. Panic messages are stringified via the standard
+    /// `Any::downcast_ref::<&str>()` / `<String>()` dance so the caller
+    /// gets *something* readable even for exotic panic payloads.
+    pub fn load_catch_unwind(model_path: &Path) -> Result<Self, LoadFailure> {
+        let path = model_path.to_path_buf();
+        // AssertUnwindSafe is safe here: LocalWhisper::new does not
+        // capture any shared mutable state — it takes an owned path and
+        // produces a fresh WhisperContext. Even if whisper.cpp leaves
+        // static/global state in an inconsistent shape after a caught
+        // panic (unlikely for a load-time OOM), we treat the resulting
+        // process as "must not use whisper-rs again this session" —
+        // the caller falls back to Python, matching item 5 prereq 5.
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || Self::new(&path)));
+        match result {
+            Ok(Ok(model)) => Ok(model),
+            Ok(Err(err)) => Err(LoadFailure::errored(err)),
+            Err(panic_payload) => {
+                let msg = panic_payload_to_string(&panic_payload);
+                Err(LoadFailure::Panicked(msg))
+            }
+        }
     }
 
     /// Decode a 16 kHz mono PCM WAV file and run Whisper inference on it.
@@ -238,6 +350,82 @@ fn reject_gguf_model(model_path: &Path) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Best-effort stringification of a caught panic payload.
+///
+/// `catch_unwind` returns a `Box<dyn Any + Send>` — the shape of the
+/// payload depends on how the panic was raised. `panic!("msg")` gives a
+/// `String`; `panic!("{}", x)` also gives a `String`; a bare
+/// `&'static str` panic gives `&str`. C++ code that unwinds into Rust
+/// via a foreign-function-interface panic hook typically ends up as
+/// `String`. Anything else falls back to a sentinel so the caller
+/// always has a message to log.
+fn panic_payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_owned()
+    } else {
+        "whisper.cpp panic with non-string payload (likely an OOM inside \
+         whisper.cpp's tensor allocator — install more RAM or pick a smaller \
+         model)"
+            .to_owned()
+    }
+}
+
+#[cfg(test)]
+mod catch_unwind_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Missing-file error surfaces as `Errored`, not `Panicked`. The
+    /// distinction matters for the Preloader: `Errored` is expected on
+    /// a fresh install (no model downloaded yet); `Panicked` is the
+    /// "something is very wrong" signal.
+    #[test]
+    fn load_catch_unwind_missing_file_returns_errored() {
+        let bogus = PathBuf::from("/definitely/not/a/real/path/model.bin");
+        // Can't use `expect_err` — `LocalWhisper: !Debug` (see the
+        // module-level note; whisper-rs's `WhisperContext` doesn't
+        // implement Debug and forwarding an FFI pointer would be
+        // meaningless anyway). Match the Err variant manually.
+        let failure = match LocalWhisper::load_catch_unwind(&bogus) {
+            Err(f) => f,
+            Ok(_) => panic!("load of {} must fail", bogus.display()),
+        };
+        assert_eq!(failure.kind(), "errored");
+        assert!(
+            failure.message().contains("not found") || failure.message().contains("open"),
+            "unexpected message: {}",
+            failure.message()
+        );
+    }
+
+    #[test]
+    fn load_failure_display_is_kind_colon_message() {
+        let e = LoadFailure::errored(anyhow::anyhow!("out of memory"));
+        assert_eq!(format!("{e}"), "errored: out of memory");
+        let p = LoadFailure::Panicked("boom".to_owned());
+        assert_eq!(format!("{p}"), "panicked: boom");
+    }
+
+    #[test]
+    fn load_failure_clone_preserves_variant_and_message() {
+        let e = LoadFailure::errored(anyhow::anyhow!("out of memory"));
+        let cloned = e.clone();
+        assert_eq!(cloned.kind(), "errored");
+        assert!(cloned.message().contains("out of memory"));
+    }
+
+    /// Panic payloads that aren't `String` / `&str` (e.g. `panic!(42)`)
+    /// still produce a non-empty message so the log line is useful.
+    #[test]
+    fn panic_payload_to_string_handles_non_string_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42_i32);
+        let msg = panic_payload_to_string(&payload);
+        assert!(msg.contains("OOM") || msg.contains("non-string"));
+    }
 }
 
 #[cfg(test)]
