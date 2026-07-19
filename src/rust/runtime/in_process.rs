@@ -3,11 +3,10 @@
 //! When the operator opts in with `VOICEPI_DICTATE_ENGINE=rust`, the
 //! [`super::supervisor::RuntimeSupervisor::start`] entry point installs
 //! the full Rust dictation runtime (hotkey listener + coordinator +
-//! session sink + real backends when the required features are compiled
-//! in) inside the UI process itself, instead of spawning a Python worker
-//! child. This removes the Python-side dispatcher that Phase A
-//! introduced (`whisper-dictate dictate-run` subprocess) from the
-//! runtime supervision ladder.
+//! session sink + real backends when the required features are
+//! compiled in) inside the UI process itself, instead of spawning a
+//! Python worker child — removing the Phase A `whisper-dictate
+//! dictate-run` subprocess from the runtime supervision ladder.
 //!
 //! See `docs/design/item5-phase-b-inprocess.md` for the design and the
 //! five risks (config-parsing drift, status-event parity, panic
@@ -16,40 +15,32 @@
 //!
 //! ## Env-var contract
 //!
-//! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) — canonical Phase A/B
-//!   switch. Values: [`ENGINE_PYTHON`] (default), [`ENGINE_RUST`]
-//!   (in-process from Phase B onward). Case-insensitive; blank / unknown
-//!   values fall through to the Python path with a stderr warning.
-//! * `VOICEPI_DICTATE_BACKEND=rust-session` — older, lower-level opt-in
-//!   at
-//!   [`super::rust_session_sink::dictate_backend_rust_session_requested`].
-//!   When set alongside `VOICEPI_DICTATE_ENGINE=rust`, the ENGINE flag
-//!   wins (Phase B design doc risk #5): the supervisor treats
-//!   `ENGINE=rust` as the authoritative signal and skips the Python
-//!   worker. An informational stderr line names the effective backend
-//!   so an operator with both variables set sees which one won.
+//! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) — Phase A/B switch:
+//!   [`ENGINE_PYTHON`] (default), [`ENGINE_RUST`] (in-process).
+//!   Case-insensitive; blank / unknown values fall back to Python
+//!   with a stderr warning.
+//! * `VOICEPI_DICTATE_BACKEND=rust-session` — older lower-level opt-in.
+//!   When set alongside `VOICEPI_DICTATE_ENGINE=rust`, ENGINE wins
+//!   (design doc risk #5) and an informational stderr line names the
+//!   effective backend.
 //!
 //! ## Failure model
 //!
-//! * **Feature-gated.** Requires `rust-hotkeys` + `rust-injection`. On a
-//!   stock build the install refuses with an actionable rebuild message
-//!   and the supervisor falls back to the Python subprocess path.
-//! * **Panic containment.** [`try_install`] wraps the install in
-//!   [`std::panic::catch_unwind`] and converts any panic into an
-//!   [`InProcessInstallError::Panicked`], from which the supervisor's
-//!   caller falls back to the Python worker path. Panics AFTER install
-//!   (on the coordinator / manager threads) still abort the process —
-//!   that scope is limited to what the design doc calls "install
-//!   boundary".
-//! * **Auto-fallback.** Any [`InProcessInstallError`] is a fallback
-//!   signal: the supervisor logs a stderr line naming the reason and
-//!   spawns the Python worker with `VOICEPI_DICTATE_ENGINE` cleared for
-//!   the child so it does not attempt to re-enter Phase A's
-//!   subprocess-of-a-subprocess pipeline.
+//! Any [`InProcessInstallError`] is a fallback signal — the supervisor
+//! logs a stderr line naming the reason and spawns the Python worker
+//! with `VOICEPI_DICTATE_ENGINE` cleared for the child so it does not
+//! re-enter Phase A's subprocess pipeline. Feature-gated (`rust-hotkeys`
+//! + `rust-injection`); [`try_install`] wraps setup in
+//! [`std::panic::catch_unwind`] so a panic at the install boundary
+//! surfaces as [`InProcessInstallError::Panicked`] rather than aborting
+//! the UI process. Panics AFTER install (on coordinator / manager
+//! threads) still abort — that scope is intentionally "install
+//! boundary" only.
 
 use std::sync::mpsc::Sender;
 
 use super::supervisor::{RuntimeEvent, WorkerEvent};
+use super::worker_command::WorkerCommand;
 
 // ── env-var gate ─────────────────────────────────────────────────────────────
 
@@ -136,6 +127,11 @@ pub(crate) enum InProcessInstallError {
     /// Config's PTT `settings.key` was empty. Same message shape as the
     /// `dictate-run` verb so users get consistent guidance.
     EmptyChord,
+    /// Real Rust backend refused: missing feature, cpal device
+    /// unavailable, model resolution failed, Silero ONNX missing.
+    /// Wraps the reason from `try_build_production_sink`; triggers
+    /// Python fallback (Codex P1 PR #519 in_process.rs:373).
+    MissingBackend(String),
     /// [`crate::hotkey::install_hotkey`] failed. Wraps the underlying
     /// [`crate::hotkey::InstallError`] message; keeps the supervisor
     /// independent of the concrete error variants (they may grow).
@@ -165,6 +161,14 @@ impl std::fmt::Display for InProcessInstallError {
                  (settings.key is empty); set one via \
                  `whisper-dictate config set key ctrl_l+shift_l` and retry. \
                  Falling back to the Python worker for this run"
+            ),
+            Self::MissingBackend(msg) => write!(
+                f,
+                "in-process Rust runtime cannot serve PTT ({msg}); \
+                 falling back to the Python worker. Rebuild with the \
+                 `whisper-rs-local`, `rust-injection`, and `audio-in-rust` \
+                 cargo features and download a Whisper model to enable \
+                 the in-process path"
             ),
             Self::HotkeyInstallFailed(msg) => write!(
                 f,
@@ -365,12 +369,17 @@ fn install_supported(
         coordinator::Mode::HoldToTalk
     };
 
-    // 2. Build the same production session sink `dictate-run` builds.
-    //    Reuses `rust_session_sink::build_production_sink` so the
-    //    worker-event stream the UI observes is identical whether the
-    //    engine ran under the CLI verb (Phase A) or in-process (Phase B).
+    // 2. Build the REAL production session sink. The strict variant
+    //    returns Err when the whisper + inject session cannot be
+    //    constructed; that Err becomes `MissingBackend`, which
+    //    triggers the supervisor's Python-worker fallback. Without
+    //    this the silent-stub fallback in the historical
+    //    `build_production_sink` would leave a no-op sink installed
+    //    and the advertised auto-fallback would never fire (Codex P1
+    //    PR #519 in_process.rs:373).
     let (sink, coord_slot) =
-        super::rust_session_sink::build_production_sink(tx.clone(), repaint_notifier);
+        super::rust_session_sink::try_build_production_sink(tx.clone(), repaint_notifier)
+            .map_err(InProcessInstallError::MissingBackend)?;
 
     // 3. Install the hotkey with the sink as the action target. Wraps
     //    `install_hotkey`'s per-error variants into a single
@@ -438,209 +447,51 @@ fn split_key_names(chord: &str) -> Vec<String> {
         .collect()
 }
 
-// ── tests ────────────────────────────────────────────────────────────────────
+// ── worker-command env application ───────────────────────────────────────────
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::mpsc;
+/// Env-var key prefix the in-process runtime cares about — the
+/// `VOICEPI_*` entries in [`WorkerCommand::env`] are the
+/// config-derived settings the real Rust backends read from process
+/// env. Child-only knobs (`PYTHONPATH`, `VOICEPI_RUST_INJECTOR`) are
+/// filtered out so the runtime's process env surface stays small.
+const IN_PROCESS_ENV_PREFIX: &str = "VOICEPI_";
 
-    #[test]
-    fn engine_choice_unset_is_python() {
-        assert_eq!(EngineChoice::from_env_value(None), EngineChoice::Python);
-    }
-
-    #[test]
-    fn engine_choice_blank_is_python() {
-        assert_eq!(EngineChoice::from_env_value(Some("")), EngineChoice::Python);
-        assert_eq!(
-            EngineChoice::from_env_value(Some("   ")),
-            EngineChoice::Python
-        );
-    }
-
-    #[test]
-    fn engine_choice_explicit_python() {
-        assert_eq!(
-            EngineChoice::from_env_value(Some("python")),
-            EngineChoice::Python
-        );
-        // Case-insensitive so `PYTHON`, `Python` and stray whitespace
-        // all resolve to the same canonical variant.
-        assert_eq!(
-            EngineChoice::from_env_value(Some(" Python ")),
-            EngineChoice::Python
-        );
-    }
-
-    #[test]
-    fn engine_choice_rust() {
-        assert_eq!(
-            EngineChoice::from_env_value(Some("rust")),
-            EngineChoice::Rust
-        );
-        assert_eq!(
-            EngineChoice::from_env_value(Some("RUST")),
-            EngineChoice::Rust
-        );
-        assert_eq!(
-            EngineChoice::from_env_value(Some(" rust ")),
-            EngineChoice::Rust
-        );
-    }
-
-    #[test]
-    fn engine_choice_unknown_carries_raw_value() {
-        match EngineChoice::from_env_value(Some("go")) {
-            EngineChoice::Unknown(raw) => assert_eq!(raw, "go"),
-            other => panic!("expected Unknown(\"go\"), got {other:?}"),
+/// F1 (Codex P1 PR #519 supervisor.rs:467): apply the
+/// [`WorkerCommand`]'s `VOICEPI_*` env vector to the process
+/// environment so the in-process backends see the same view a Python
+/// child would inherit through `.envs()`. Without this, saved schema
+/// settings (language, initial prompt, audio device, inject mode,
+/// recording thresholds, ...) that the UI wrote via `worker_command()`
+/// are silently discarded when the supervisor takes the Phase B path,
+/// and the real backends fall back to defaults.
+///
+/// Semantics match `Command::envs()`: command values clobber any
+/// pre-existing process env entry, mirroring what the Python child
+/// would see. One-shot mutation, same pattern as
+/// [`super::rust_session_sink::build_production_sink`]'s
+/// `WORKER_EVENTS_ENV` set — the supervisor is single-threaded with
+/// respect to its own setup and this is called at most once per
+/// process lifetime (the `hotkey_handle` slot short-circuits
+/// subsequent starts), so no `ENV_LOCK` is needed.
+pub(crate) fn apply_worker_command_env(command: &WorkerCommand) {
+    for (key, value) in command.env.iter() {
+        if !key.starts_with(IN_PROCESS_ENV_PREFIX) {
+            continue;
         }
-    }
-
-    #[test]
-    fn features_available_matches_cfg() {
-        assert_eq!(
-            features_available(),
-            cfg!(all(feature = "rust-hotkeys", feature = "rust-injection"))
-        );
-    }
-
-    #[test]
-    fn ready_worker_event_shape_matches_python_ready() {
-        // Contract with the UI: emit a WorkerEvent whose `event="status"`
-        // and `state=Some("ready")` so `worker_ready_for_state("ready")`
-        // fires the same latch the Python worker triggers. Regression
-        // test for design doc risk #2.
-        let (tx, rx) = mpsc::channel();
-        emit_ready_worker_event(&tx);
-        let received = rx.try_recv().expect("ready worker event enqueued");
-        match received {
-            RuntimeEvent::Worker(worker) => {
-                assert_eq!(worker.event, "status");
-                assert_eq!(worker.state.as_deref(), Some("ready"));
-                // The `engine` field is Phase B-specific so operators
-                // can tell an in-process ready apart from a Python one.
-                assert_eq!(
-                    worker.payload.get("engine").and_then(|v| v.as_str()),
-                    Some("rust"),
-                );
-            }
-            other => panic!("expected RuntimeEvent::Worker, got {other:?}"),
+        // Skip child-only knobs (`VOICEPI_RUST_INJECTOR` is the
+        // Python child's shell-back pointer to `whisper-dictate
+        // inject`; in-process injects directly through enigo) and
+        // the engine env var we already resolved in
+        // `engine_choice_from_env` (re-applying would be a no-op
+        // but skip so a test seeding the var deliberately after
+        // resolution is not clobbered by an in-vector duplicate).
+        if key == "VOICEPI_RUST_INJECTOR" || key == ENGINE_ENV {
+            continue;
         }
-    }
-
-    #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
-    #[test]
-    fn try_install_stock_build_returns_features_missing() {
-        // On a stock build the supervisor's Phase B branch MUST fail
-        // fast with an actionable message so the caller can fall back
-        // to the Python worker without spinning up any threads. This
-        // pins the contract the fallback path relies on.
-        let (tx, _rx) = mpsc::channel();
-        let result = try_install(tx, None);
-        assert!(
-            matches!(result, Err(InProcessInstallError::FeaturesMissing)),
-            "stock build must refuse in-process install with FeaturesMissing",
-        );
-        let err = result
-            .err()
-            .expect("stock build must refuse in-process install");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("rust-hotkeys") && msg.contains("rust-injection"),
-            "error must name the missing features: {msg}"
-        );
-        assert!(
-            msg.contains("cargo build --features"),
-            "error must include the rebuild command: {msg}"
-        );
-    }
-
-    #[test]
-    fn catch_unwind_panic_string_literal_lands_as_panicked_error() {
-        // Design doc risk #3: a panic inside the install path must
-        // convert into a recoverable InProcessInstallError::Panicked
-        // rather than aborting the UI process. This pins the
-        // stringifier that runs on the recovery path so a future
-        // refactor that swaps `catch_unwind` for something else is
-        // caught by a test failure. Feature-independent because the
-        // stringifier itself is pure.
-        let payload = std::panic::catch_unwind(|| panic!("boom-from-test"))
-            .expect_err("literal panic must land in catch_unwind Err arm");
-        let msg = stringify_panic(payload);
-        assert!(msg.contains("boom-from-test"), "stringifier lost the payload: {msg}");
-        // And the same round-trips for owned-String payloads (which is
-        // what `assert!(false, "…")` produces internally).
-        let payload = std::panic::catch_unwind(|| panic!("owned {}", "message"))
-            .expect_err("formatted panic must land in Err");
-        let msg = stringify_panic(payload);
-        assert!(msg.contains("owned message"), "stringifier lost owned payload: {msg}");
-    }
-
-    #[test]
-    fn env_precedence_note_fires_only_when_both_env_vars_set() {
-        // Design doc risk #5: with BOTH `VOICEPI_DICTATE_ENGINE=rust`
-        // AND `VOICEPI_DICTATE_BACKEND=rust-session` set, the
-        // supervisor emits an informational line naming the effective
-        // backend. With only ENGINE=rust set, no line fires.
-        //
-        // Uses a process-wide mutex because `std::env::set_var` is not
-        // thread-safe on Unix.
-        use std::sync::{Mutex, OnceLock};
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _guard = ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let previous = std::env::var("VOICEPI_DICTATE_BACKEND").ok();
-
-        // Case 1: backend unset — no line.
-        std::env::remove_var("VOICEPI_DICTATE_BACKEND");
-        let (tx, rx) = mpsc::channel();
-        maybe_emit_env_precedence_note(&tx);
-        assert!(rx.try_recv().is_err(), "no line without rust-session set");
-
-        // Case 2: backend set to rust-session — informational line
-        // fires naming both env vars.
-        std::env::set_var("VOICEPI_DICTATE_BACKEND", "rust-session");
-        let (tx, rx) = mpsc::channel();
-        maybe_emit_env_precedence_note(&tx);
-        match rx.try_recv().expect("precedence note enqueued") {
-            RuntimeEvent::Stderr(line) => {
-                assert!(line.contains("VOICEPI_DICTATE_ENGINE"), "line names ENGINE: {line}");
-                assert!(line.contains("VOICEPI_DICTATE_BACKEND"), "line names BACKEND: {line}");
-                assert!(line.contains("wins"), "line names the precedence: {line}");
-            }
-            other => panic!("expected Stderr, got {other:?}"),
-        }
-
-        // Restore.
-        match previous {
-            Some(v) => std::env::set_var("VOICEPI_DICTATE_BACKEND", v),
-            None => std::env::remove_var("VOICEPI_DICTATE_BACKEND"),
-        }
-    }
-
-    #[test]
-    fn install_error_display_covers_every_variant() {
-        // Sonar-friendly: every user-facing error variant must have a
-        // non-empty Display impl so the supervisor's stderr forwarding
-        // has something to log. Missing a variant here is a refactor
-        // regression signal.
-        assert!(!InProcessInstallError::FeaturesMissing
-            .to_string()
-            .is_empty());
-        assert!(!InProcessInstallError::ConfigLoadFailed("boom".to_owned())
-            .to_string()
-            .is_empty());
-        assert!(!InProcessInstallError::EmptyChord.to_string().is_empty());
-        assert!(
-            !InProcessInstallError::HotkeyInstallFailed("nope".to_owned())
-                .to_string()
-                .is_empty()
-        );
-        assert!(!InProcessInstallError::Panicked("crash".to_owned())
-            .to_string()
-            .is_empty());
+        std::env::set_var(key, value);
     }
 }
+
+// Unit tests moved to sibling `in_process_tests.rs` (Codex P2 PR
+// #519 in_process.rs:444) so the production module stays under the
+// AGENTS.md 500-LOC modularity limit.

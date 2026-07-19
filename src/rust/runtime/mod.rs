@@ -116,6 +116,12 @@ mod desktop_entry_tests;
 mod hotkey_supervisor_tests;
 #[cfg(test)]
 mod install_plan_tests;
+// Sibling tests for `in_process` (Phase B step 1). Moved out of the
+// module body in the review-response round so the production module
+// stays under the AGENTS.md 500-LOC modularity limit (Codex P2 PR
+// #519 in_process.rs:444).
+#[cfg(test)]
+mod in_process_tests;
 #[cfg(test)]
 mod process_capture_tests;
 // Sibling tests for `rust_session_sink` (Wave 5 PR 4 of #348). Split

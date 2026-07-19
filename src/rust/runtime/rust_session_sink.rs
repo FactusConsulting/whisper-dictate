@@ -352,6 +352,85 @@ pub(crate) fn build_production_sink(
     (Box::new(sink), coord_slot)
 }
 
+/// Strict variant of [`build_production_sink`] for the in-process
+/// Phase B path: returns Err when the real backends cannot be
+/// constructed instead of silently falling back to the PR 4 stub sink.
+///
+/// Phase B (`VOICEPI_DICTATE_ENGINE=rust`) promises auto-fallback to
+/// the Python worker when the in-process runtime cannot service PTT.
+/// The silent-stub fallback in [`build_production_sink`] defeats that
+/// contract: a build missing `whisper-rs-local` / `audio-in-rust`, or
+/// one where model resolution fails, would install a stub sink that
+/// returns empty transcriptions on every PTT press. The advertised
+/// fallback never triggers because `try_install` returns Ok. Codex P1
+/// PR #519 in_process.rs:373.
+///
+/// Two failure modes are surfaced:
+///
+/// 1. **Feature missing** — the build lacks `whisper-rs-local` +
+///    `rust-injection`, so [`super::rust_session_real_backends`] is
+///    not compiled. Returns Err with a rebuild message.
+/// 2. **Real backend init failed** — features are present but
+///    `make_real_session` returned Err (missing Whisper model, cpal
+///    device open failure, Silero ONNX missing, etc.). Returns Err
+///    with the underlying error string.
+///
+/// Only compiled when the in-process runtime's feature gate
+/// (`rust-hotkeys` + `rust-injection`) is on — the only caller is
+/// [`super::in_process::install_supported`], which itself is
+/// feature-gated. On stock builds the module's `try_install` stub
+/// returns [`super::in_process::InProcessInstallError::FeaturesMissing`]
+/// before ever needing this helper.
+#[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+pub(crate) fn try_build_production_sink(
+    tx: Sender<RuntimeEvent>,
+    repaint_notifier: Option<RepaintNotifier>,
+) -> std::result::Result<(CoordinatorActionSink, Arc<OnceLock<CoordinatorHandle>>), String> {
+    // Same one-shot env mutation the silent-fallback variant does
+    // (line 277). The supervisor calls this at most once per process
+    // lifetime, matching the existing guarantee.
+    std::env::set_var(crate::dictate::events::WORKER_EVENTS_ENV, "1");
+
+    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    {
+        let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+        let deps = super::rust_session_real_backends::make_real_session(
+            tx.clone(),
+            repaint_notifier.clone(),
+        )?;
+        let coord_slot_for_signal = Arc::clone(&coord_slot);
+        let inner = build_session_action_sink(
+            Arc::clone(&deps.session),
+            tx,
+            move |id| {
+                if let Some(handle) = coord_slot_for_signal.get() {
+                    handle.send(CoordinatorEvent::ProcessingFinished(id));
+                }
+            },
+            repaint_notifier,
+        );
+        let mut inner = inner;
+        let _deps_keepalive = deps;
+        let owning_sink = move |action: CoordinatorAction| {
+            let _keepalive = &_deps_keepalive;
+            inner(action);
+        };
+        Ok((Box::new(owning_sink), coord_slot))
+    }
+    #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    {
+        // Consume unused args so the signature stays constant across
+        // feature configs.
+        let _ = (tx, repaint_notifier);
+        Err(
+            "rust-session real backends require the `whisper-rs-local` + \
+             `rust-injection` cargo features (rebuild with `cargo build \
+             --features whisper-rs-local,rust-injection,rust-hotkeys,audio-in-rust`)"
+                .to_owned(),
+        )
+    }
+}
+
 // ── event forwarder ──────────────────────────────────────────────────────────
 
 /// `Write` adapter that buffers bytes until a newline, then ships each

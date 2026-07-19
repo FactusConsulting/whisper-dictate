@@ -546,6 +546,87 @@ fn supervisor_phase_b_stock_build_falls_back_to_python_on_engine_rust() {
 }
 
 #[test]
+fn supervisor_phase_b_falls_back_when_real_backend_unavailable() {
+    // F2 (Codex P1 PR #519 in_process.rs:373): on a build that HAS
+    // `rust-hotkeys` + `rust-injection` but lacks the whisper +
+    // audio features, the in-process install must return
+    // `MissingBackend` and the supervisor MUST fall back to the
+    // Python worker path. Without this the older silent-stub
+    // fallback in `rust_session_sink::build_production_sink` would
+    // install a no-op sink that returns empty transcriptions on
+    // every PTT press and the advertised auto-fallback would never
+    // fire.
+    //
+    // Feature matrix this test covers:
+    //   - rust-hotkeys + rust-injection but NOT whisper-rs-local +
+    //     audio-in-rust: `try_build_production_sink` returns the
+    //     "features required" error string; supervisor falls back.
+    //
+    // The stock-build case (no rust-hotkeys/rust-injection) is
+    // covered by `supervisor_phase_b_stock_build_falls_back_to_python_on_engine_rust`
+    // above. The all-features case is not exercised here because it
+    // would actually install the in-process runtime, which needs a
+    // display + audio + a live rdev listener the CI harness cannot
+    // provide.
+    #[cfg(all(
+        feature = "rust-hotkeys",
+        feature = "rust-injection",
+        not(all(feature = "whisper-rs-local", feature = "audio-in-rust"))
+    ))]
+    {
+        let Some(python) = test_python() else {
+            return;
+        };
+        let _guard = EngineEnvGuard::set("rust");
+        let mut supervisor = RuntimeSupervisor::new();
+        supervisor
+            .start(WorkerCommand {
+                program: python,
+                args: vec![
+                    "-c".to_owned(),
+                    "print('missing-backend-fallback-ran', flush=True)".to_owned(),
+                ],
+                working_dir: env::current_dir().unwrap(),
+                env: Vec::new(),
+            })
+            .unwrap();
+        let events = collect_until(&mut supervisor, |events| {
+            has_stdout(events, "missing-backend-fallback-ran") && has_exit(events)
+        });
+        // Python fallback ran.
+        assert!(
+            has_stdout(&events, "missing-backend-fallback-ran"),
+            "Python fallback must run when the real backend cannot init"
+        );
+        // AND supervisor emitted the F2 fallback stderr line naming
+        // the reason. The exact wording lives in
+        // `InProcessInstallError::MissingBackend`'s Display impl.
+        let saw_fallback_stderr = events.iter().any(|e| {
+            matches!(
+                e,
+                RuntimeEvent::Stderr(line)
+                    if line.contains("Phase B in-process dispatch refused")
+                        && line.contains("cannot serve PTT")
+            )
+        });
+        assert!(
+            saw_fallback_stderr,
+            "supervisor must log the MissingBackend fallback line; events: {events:#?}",
+        );
+    }
+    #[cfg(any(
+        not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+        all(feature = "whisper-rs-local", feature = "audio-in-rust"),
+    ))]
+    {
+        // Nothing to exercise on this feature configuration; the
+        // stock case is covered by the sibling test above, and the
+        // fully-featured case cannot be driven from the CI harness.
+        let _ = EngineEnvGuard::set;
+    }
+}
+
+#[test]
 fn supervisor_phase_b_engine_python_leaves_default_path_intact() {
     // Regression: an explicit `VOICEPI_DICTATE_ENGINE=python` MUST run
     // the exact same Python-worker code path as the unset case. This

@@ -172,7 +172,18 @@ impl RuntimeSupervisor {
     }
 
     pub fn is_running(&self) -> bool {
-        self.child.is_some()
+        // The Python-worker path pins liveness through `self.child`;
+        // the in-process Phase B path never sets `self.child` (there
+        // is no Python child to shepherd) but does move `self.state`
+        // to `Running` after `try_install` succeeds. Callers like the
+        // Settings save path use `is_running()` to gate whether a
+        // config change requires a restart -- without the state
+        // fallback below, changing `key` / `toggle_mode` / model
+        // while Phase B is active would silently skip
+        // `restart_runtime` and leave the old binding in effect
+        // until a manual stop/start (Codex P2 PR #519
+        // supervisor.rs:503).
+        self.child.is_some() || matches!(self.state, RuntimeState::Running)
     }
 
     pub fn start(&mut self, command: WorkerCommand) -> Result<()> {
@@ -458,13 +469,17 @@ impl RuntimeSupervisor {
         &mut self,
         command: &WorkerCommand,
     ) -> std::result::Result<(), InProcessInstallError> {
-        // Consume the `command` reference so a future refactor that
-        // needs to plumb config-file overrides from the WorkerCommand
-        // into the in-process install has an obvious insertion point.
-        // Today `crate::config::load_settings` reads VOICEPI_CONFIG
-        // from the process env directly, matching the CLI verb's
-        // behaviour.
-        let _ = command;
+        // F1 (Codex P1 PR #519 supervisor.rs:467): apply the
+        // WorkerCommand's `VOICEPI_*` env vector to the process
+        // environment so the in-process backends see the same view a
+        // Python child would inherit through `.envs()`. Without this,
+        // saved schema settings (language, initial prompt, audio
+        // device, inject mode, recording thresholds, ...) that the UI
+        // wrote via `worker_command()` are silently discarded when
+        // the supervisor takes the Phase B path and the real backends
+        // fall back to defaults. See `in_process::apply_worker_command_env`
+        // for the filtering (VOICEPI_* only, RUST_INJECTOR skipped).
+        in_process::apply_worker_command_env(command);
 
         // Design-doc risk #5: if the operator has both `ENGINE=rust`
         // AND the older `VOICEPI_DICTATE_BACKEND=rust-session` set,

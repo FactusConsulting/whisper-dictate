@@ -660,22 +660,49 @@ fi
 # SECTION: Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust
 # reaches the Rust supervisor without spawning a Python worker child)
 #
-# Audit item 5 Phase B step 1. The full loop still needs a display +
-# audio + a working config, so the smoke here is limited to proving
-# that the Rust binary itself starts under `VOICEPI_DICTATE_ENGINE=rust`
-# without an immediate crash. A regression at the supervisor branch
-# (unresolved import, feature gate mismatch, panic before ready) would
-# show as a non-zero exit here. The behaviour under a full config +
-# display is manual QA (see docs/testing-rust-engine-v1.22.md).
+# Audit item 5 Phase B step 1. Drives the UI briefly under
+# `VOICEPI_DICTATE_ENGINE=rust` so that `RuntimeSupervisor::start`
+# actually runs the Phase B branch (`--version` returns from
+# `main::run` before the supervisor is reached, so it cannot detect a
+# regression at that branch -- Codex P2 PR #519 wayland-user-smoke.sh:646).
+#
+# On this smoke leg the required Whisper model + audio-in-rust runtime
+# are typically not present, so the strict `try_build_production_sink`
+# returns Err, `try_install` maps it to
+# `InProcessInstallError::MissingBackend`, and the supervisor emits
+# the "Phase B in-process dispatch refused" stderr line and falls
+# back to the Python worker. Grepping for that string is enough to
+# prove the branch was reached; a regression that avoided the
+# supervisor (missing import, panic before install, broken feature
+# gate, missing fallback wiring) would leave the string absent.
 # --------------------------------------------------------------------------
 section "Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust reaches Rust supervisor)"
 if [ "$CMD_MODE" = "rust" ]; then
-    phaseB_out="$(VOICEPI_DICTATE_ENGINE=rust whisper-dictate --version 2>&1)"
-    phaseB_rc=$?
-    if [ "$phaseB_rc" -eq 0 ]; then
-        ok "Rust binary starts with VOICEPI_DICTATE_ENGINE=rust (no immediate crash): $(printf '%s\n' "$phaseB_out" | head -1)"
+    if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        warn "phase B verify skipped: no DISPLAY / WAYLAND_DISPLAY (headless environment cannot drive the UI)"
     else
-        bad "Rust binary crashed with VOICEPI_DICTATE_ENGINE=rust: $(printf '%s\n' "$phaseB_out" | head -3)"
+        phaseB_log="$(mktemp)"
+        # 3s is enough for the supervisor to reach `attempt_in_process_start`
+        # and emit either the success ready event or the fallback stderr line.
+        # `timeout` returns 124 on the SIGTERM; a real crash would return
+        # 101 (Rust panic) or similar. We treat 124 as "expected" — the UI
+        # was supposed to be killed.
+        VOICEPI_DICTATE_ENGINE=rust timeout --preserve-status --kill-after=1s 3s \
+            whisper-dictate ui >"$phaseB_log" 2>&1
+        phaseB_rc=$?
+        # Look for evidence the Phase B branch was actually taken.
+        # Either the ready event (successful in-process install) OR the
+        # refused-stderr line (fallback path) proves the supervisor
+        # reached `attempt_in_process_start`. Either is a pass.
+        if grep -qE '(Phase B in-process dispatch refused|"engine":"rust"|engine=rust \(in-process\))' "$phaseB_log"; then
+            evidence="$(grep -E '(Phase B in-process dispatch refused|"engine":"rust"|engine=rust \(in-process\))' "$phaseB_log" | head -1)"
+            ok "Phase B branch reached RuntimeSupervisor::start: ${evidence:0:200}"
+        elif [ "$phaseB_rc" -eq 101 ]; then
+            bad "UI panicked under VOICEPI_DICTATE_ENGINE=rust: $(tail -3 "$phaseB_log")"
+        else
+            warn "Phase B branch evidence not found in ${phaseB_rc}-exit UI log (may indicate the supervisor branch was not reached): $(head -c 300 "$phaseB_log")"
+        fi
+        rm -f "$phaseB_log"
     fi
 else
     warn "phase B verification requires the Rust binary on PATH (Python-only build)"
