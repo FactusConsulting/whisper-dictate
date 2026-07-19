@@ -522,6 +522,46 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)
+#
+# Opens the cpal input stream for 1 s, tallies samples, and reports RMS +
+# peak. Applies the v1.20.6 PipeWire quantum lesson (`PIPEWIRE_QUANTUM=2048`
+# when unset on Linux) BEFORE opening the stream so the fix is exercised on
+# every run. Two failure modes it catches:
+#   1. Stream opens but never delivers samples (v1.20.6 DMIC crash class) —
+#      the verb exits non-zero.
+#   2. Missing audio device / feature gate — reported as a distinctive
+#      error message the section below greps for and warns on.
+#
+# Feature-gated behind `audio-in-rust`. On stock builds the verb refuses
+# with an actionable rebuild message; we warn-skip. On feature builds
+# without an audio device (headless CI containers, Wayland with mic
+# muted), we also warn-skip rather than fail — the smoke script is for
+# an interactive user who might not have a mic hooked up.
+# --------------------------------------------------------------------------
+section "self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test audio-capture is a Rust subcommand — not exposed by the Python fallback"
+else
+    ac_out="$(whisper-dictate self-test audio-capture --duration-ms 1000 --json 2>&1)"
+    ac_rc=$?
+    if [ "$ac_rc" -eq 0 ] && printf '%s' "$ac_out" | grep -q '"succeeded":true'; then
+        # Extract RMS + peak with a permissive regex so a JSON-key reorder
+        # doesn't blow up parsing. `sed`/`grep -oE` avoids a jq dep.
+        rms="$(printf '%s' "$ac_out" | grep -oE '"rms":[^,}]+' | head -n1 | cut -d: -f2)"
+        peak="$(printf '%s' "$ac_out" | grep -oE '"peak":[^,}]+' | head -n1 | cut -d: -f2)"
+        quantum_branch="$(printf '%s' "$ac_out" | grep -oE '"pipewire_quantum_branch":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+        ok "audio-capture: 1 s captured (rms=$rms peak=$peak quantum=$quantum_branch)"
+    elif printf '%s' "$ac_out" | grep -qi "requires the .audio-in-rust. cargo feature\|rebuild with"; then
+        warn "self-test audio-capture requires audio-in-rust feature (skipped on this build)"
+    elif printf '%s' "$ac_out" | grep -qi "no default input device\|input device not found\|no audio device delivered"; then
+        warn "no audio device available (expected on headless / muted setups)"
+    else
+        bad "audio-capture FAILED unexpectedly — v1.20.6 PipeWire class may be back: $(printf '%s\n' "$ac_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: self-test whisper-load (regression — Whisper cold-load latency + OOM)
 #
 # Item 5 prereq 5: load the tiny.en GGML model through the same background

@@ -885,6 +885,50 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         live: bool,
     },
+    /// Regression test for the audio-capture path (item 5 prereq 4 —
+    /// PipeWire quantum handling + foundation for real Rust dictation).
+    /// Opens the cpal input stream for `--duration` seconds, tallies
+    /// samples, and reports RMS + peak. Applies the v1.20.6 PipeWire
+    /// quantum lesson (`PIPEWIRE_QUANTUM=2048` when unset on Linux)
+    /// BEFORE opening the stream so the fix is exercised on every run.
+    ///
+    /// Two failure modes this catches:
+    ///   1. Stream opens but never delivers samples (v1.20.6 DMIC crash
+    ///      class) — `frames_captured == 0` → non-zero exit.
+    ///   2. Optionally, capture succeeds but the signal is silence
+    ///      (permission / mute bug). Off by default; enable with
+    ///      `--fail-on-silence` where a live device is guaranteed.
+    ///
+    /// Feature-gated behind `audio-in-rust` — a stock build exits with an
+    /// actionable "rebuild with --features audio-in-rust" message rather
+    /// than hanging or reporting a false pass. Safe in headless CI: a
+    /// missing device fails gracefully with a distinctive error message
+    /// the smoke script can grep for.
+    AudioCapture {
+        /// Capture duration in milliseconds. Sub-100 ms values risk
+        /// missing even the first cpal callback on high-latency devices,
+        /// so a stderr warning fires below that. Milliseconds (not
+        /// seconds with a decimal) so the enum stays `Eq`-derivable
+        /// alongside the other subcommands.
+        #[arg(long, default_value_t = 2000)]
+        duration_ms: u64,
+        /// Input device selector. Same lookup precedence as `devices`
+        /// (exact → substring → numeric); empty string picks the
+        /// system default.
+        #[arg(long, default_value = "")]
+        device: String,
+        /// Emit a single JSON object with the machine-readable contract
+        /// (`kind`, `device`, `frames_captured`, `rms`, `peak`,
+        /// `pipewire_quantum_branch`, ...).
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Promote "captured only silence" (RMS < 1e-6) from a warning
+        /// to a hard failure. Off by default because most CI containers
+        /// have no audio device wired to an ALSA loopback; enable only
+        /// where a live audio source is guaranteed.
+        #[arg(long, default_value_t = false)]
+        fail_on_silence: bool,
+    },
     /// Regression test for Whisper cold-load latency + OOM (item 5 prereq 5,
     /// `docs/design/item5-wire-dictate-session.md` risk #5). Loads a GGML
     /// model through the same background preloader the supervisor will
@@ -1977,6 +2021,54 @@ mod tests {
             "notabackend",
         ]);
         assert!(err.is_err(), "expected clap to reject unknown backend");
+    }
+
+    // self-test audio-capture — item 5 prereq 4 (audio-in-rust foundation).
+    // Wires the cpal capture path into a headless self-test that also
+    // applies the v1.20.6 PipeWire quantum lesson before opening the
+    // stream. The CLI-shape tests here run on every build so the smoke
+    // script's pinned flags survive an accidental rename.
+
+    #[test]
+    fn parses_self_test_audio_capture_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "audio-capture"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::AudioCapture {
+                    duration_ms: 2000,
+                    device: String::new(),
+                    json: false,
+                    fail_on_silence: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_audio_capture_all_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "audio-capture",
+            "--duration-ms",
+            "500",
+            "--device",
+            "Yeti Classic",
+            "--json",
+            "--fail-on-silence",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::AudioCapture {
+                    duration_ms: 500,
+                    device: "Yeti Classic".to_owned(),
+                    json: true,
+                    fail_on_silence: true,
+                },
+            })
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -224,8 +224,81 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
                 ))
             }
         }
+        SelfTestCommand::AudioCapture {
+            duration_ms,
+            device,
+            json,
+            fail_on_silence,
+        } => handle_audio_capture_self_test(duration_ms, device, json, fail_on_silence),
         SelfTestCommand::WhisperLoad { model, json } => handle_whisper_load(&model, json),
     }
+}
+
+/// Feature-on path for `self-test audio-capture` — opens the cpal input
+/// stream via [`whisper_dictate_app::audio::self_test::run_audio_capture_test`]
+/// and prints either a JSON envelope or a plain summary. Returns Err (and
+/// exits non-zero) when the report says the capture failed so CI trips.
+#[cfg(feature = "audio-in-rust")]
+fn handle_audio_capture_self_test(
+    duration_ms: u64,
+    device: String,
+    json: bool,
+    fail_on_silence: bool,
+) -> anyhow::Result<()> {
+    use whisper_dictate_app::audio::self_test::{run_audio_capture_test, AudioCaptureOptions};
+    // Reject nonsense before we open a device. `--duration-ms 0` is a
+    // vacuous "pass"; refuse loudly.
+    if duration_ms == 0 {
+        return Err(anyhow::anyhow!(
+            "--duration-ms must be at least 1 (0 would be a vacuous pass)"
+        ));
+    }
+    // Warn under 100 ms — cpal callback intervals on WASAPI can approach
+    // 20-40 ms, so sub-100 ms runs risk zero callbacks and a false FAIL
+    // for reasons other than a real regression. Not a hard cap; just a
+    // one-line hint on stderr the caller can pipe away.
+    if duration_ms < 100 {
+        eprintln!(
+            "warning: --duration-ms {duration_ms} is below the recommended 100ms floor \
+             — cpal may not deliver even one callback in that window"
+        );
+    }
+    let opts = AudioCaptureOptions {
+        duration: std::time::Duration::from_millis(duration_ms),
+        device,
+        fail_on_silence,
+    };
+    let report = run_audio_capture_test(opts);
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.is_ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test audio-capture failed (see report above for the specific error)"
+        ))
+    }
+}
+
+/// Stock-build stub: the audio module isn't compiled in without the
+/// `audio-in-rust` feature, so we can't open a cpal stream. Emit an
+/// actionable rebuild message (matching the pattern the `ptt-wedge` and
+/// `injection-idempotency` verbs use for their own feature gates) and
+/// exit non-zero so CI / the smoke script pin-check trips.
+#[cfg(not(feature = "audio-in-rust"))]
+fn handle_audio_capture_self_test(
+    _duration_ms: u64,
+    _device: String,
+    _json: bool,
+    _fail_on_silence: bool,
+) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "self-test audio-capture requires the `audio-in-rust` cargo feature — \
+         rebuild with `cargo build --features audio-in-rust`"
+    ))
 }
 
 /// Dispatch `self-test whisper-load`. Feature-gated: on a stock build we
