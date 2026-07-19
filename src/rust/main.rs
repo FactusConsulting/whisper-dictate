@@ -224,7 +224,42 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
                 ))
             }
         }
+        SelfTestCommand::WhisperLoad { model, json } => handle_whisper_load(&model, json),
     }
+}
+
+/// Dispatch `self-test whisper-load`. Feature-gated: on a stock build we
+/// return the same shape of "rebuild" error the sibling verbs return, so
+/// the smoke script's `grep` on the message keeps working across verbs.
+#[cfg(feature = "whisper-rs-local")]
+fn handle_whisper_load(model: &str, json: bool) -> anyhow::Result<()> {
+    use whisper_dictate_app::whisper::self_test::run_whisper_load_test;
+    let report = run_whisper_load_test(model)?;
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.ok {
+        Ok(())
+    } else {
+        // Non-zero exit so CI trips. The report already printed the
+        // details; the tail keeps the error concise.
+        Err(anyhow::anyhow!(
+            "self-test whisper-load failed: {} ({})",
+            report.error.unwrap_or_default(),
+            report.error_kind.unwrap_or("unknown"),
+        ))
+    }
+}
+
+#[cfg(not(feature = "whisper-rs-local"))]
+fn handle_whisper_load(_model: &str, _json: bool) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "self-test whisper-load requires the `whisper-rs-local` cargo feature — \
+         rebuild with `cargo build --features whisper-rs-local` (needs cmake + a \
+         C/C++ toolchain on the build host)"
+    ))
 }
 
 /// Dispatch the hidden `transcribe-wav` sub-command.

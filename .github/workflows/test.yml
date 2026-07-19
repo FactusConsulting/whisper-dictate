@@ -494,3 +494,27 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
             bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys,rust-injection -- self-test injection-idempotency --iterations 10 --json"
+      - name: whisper-load regression test (self-test)
+        # Item 5 prereq 5 (Whisper cold-load latency + OOM). The self-test
+        # loads a GGML model through the same background preloader the
+        # supervisor will use in Phase C step 2, catching any regression
+        # in the whisper-rs API surface, the whisper.cpp OOM behaviour,
+        # or the preloader wiring BEFORE it ships to users. Downloads
+        # tiny.en (~78 MB) into the runner-scoped cache first — we
+        # deliberately don't bake the model into the CI image (see
+        # docker/ci-ubuntu2604/README for the "no models baked in"
+        # rationale). Combined `--features whisper-rs-local,rust-hotkeys,
+        # rust-injection` so this shares the previous step's compile
+        # artifacts and doesn't pay a second cold cargo build.
+        #
+        # continue-on-error: the HuggingFace fetch can flake in CI
+        # (rate-limits, transient 5xx) — the ubuntu-2604 job is still
+        # informational until model download reliability is proven; a
+        # failing tiny.en fetch shouldn't red-X the whole matrix leg.
+        # Promote to a hard failure (remove the flag) once model download
+        # has ≥50 consecutive green runs.
+        if: env.RUN_INTEG == 'true'
+        continue-on-error: true
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
+            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local,rust-hotkeys,rust-injection -- models download tiny.en && cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local,rust-hotkeys,rust-injection -- self-test whisper-load --model tiny.en --json"
