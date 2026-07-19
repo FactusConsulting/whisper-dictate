@@ -71,7 +71,7 @@ use coordinator::{
     spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, CoordinatorHandle,
     CoordinatorThread, Options,
 };
-pub use inject_guard::InjectionGuard;
+pub use inject_guard::{InjectionBracket, InjectionGuard};
 #[cfg(feature = "rust-hotkeys")]
 use manager::{
     is_rdev_supported_name, spawn_with_raw_tap as spawn_manager_with_tap, ManagerHandle,

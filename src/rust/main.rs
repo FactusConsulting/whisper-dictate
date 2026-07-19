@@ -193,6 +193,22 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
                      type into the active window on every iteration. Focus a scratch \
                      window NOW or Ctrl-C to abort."
                 );
+                // Codex #518 F5: on `--live --backend paste` the OS
+                // clipboard is a shared resource. The harness inserts a
+                // small spacer between iterations to let async clipboard
+                // writes flush, but the operator is responsible for
+                // ensuring the scratch window doesn't retain stale
+                // content across iterations — surface this as a
+                // documented limitation so nobody mistakes the run for a
+                // hermetic test.
+                if backend == "paste" {
+                    eprintln!(
+                        "warning: `--live --backend paste` shares the OS clipboard between \
+                         iterations. Stale clipboard content from prior sessions may leak; \
+                         inspect each iteration's pasted output manually rather than trusting \
+                         the summary alone."
+                    );
+                }
             }
             let report = run_injection_idempotency_test(iterations, &backend, live);
             if json {
