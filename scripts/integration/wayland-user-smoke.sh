@@ -657,6 +657,31 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust
+# reaches the Rust supervisor without spawning a Python worker child)
+#
+# Audit item 5 Phase B step 1. The full loop still needs a display +
+# audio + a working config, so the smoke here is limited to proving
+# that the Rust binary itself starts under `VOICEPI_DICTATE_ENGINE=rust`
+# without an immediate crash. A regression at the supervisor branch
+# (unresolved import, feature gate mismatch, panic before ready) would
+# show as a non-zero exit here. The behaviour under a full config +
+# display is manual QA (see docs/testing-rust-engine-v1.22.md).
+# --------------------------------------------------------------------------
+section "Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust reaches Rust supervisor)"
+if [ "$CMD_MODE" = "rust" ]; then
+    phaseB_out="$(VOICEPI_DICTATE_ENGINE=rust whisper-dictate --version 2>&1)"
+    phaseB_rc=$?
+    if [ "$phaseB_rc" -eq 0 ]; then
+        ok "Rust binary starts with VOICEPI_DICTATE_ENGINE=rust (no immediate crash): $(printf '%s\n' "$phaseB_out" | head -1)"
+    else
+        bad "Rust binary crashed with VOICEPI_DICTATE_ENGINE=rust: $(printf '%s\n' "$phaseB_out" | head -3)"
+    fi
+else
+    warn "phase B verification requires the Rust binary on PATH (Python-only build)"
+fi
+
+# --------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------
 section "Summary"

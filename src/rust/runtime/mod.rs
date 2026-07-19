@@ -37,6 +37,13 @@ pub mod audio_spawn;
 // handler without an extra re-export.
 pub mod dictate_run;
 
+// Audit item 5 Phase B step 1: in-process Rust dictation dispatch. When the
+// operator opts in via `VOICEPI_DICTATE_ENGINE=rust`, the supervisor
+// installs the Rust runtime inside the UI process instead of spawning a
+// Python worker child — removing the Phase A subprocess layer from the
+// runtime supervision ladder. See `docs/design/item5-phase-b-inprocess.md`.
+pub(crate) mod in_process;
+
 mod control;
 pub(crate) mod hotkey_install;
 pub(crate) mod install_plan;
