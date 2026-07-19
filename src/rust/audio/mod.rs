@@ -25,7 +25,9 @@ use std::thread::{self, JoinHandle};
 pub mod capture;
 pub(crate) mod model_cache;
 pub mod pipe;
+pub mod pipewire;
 pub mod resampler;
+pub mod self_test;
 pub mod stdin_bridge;
 pub mod vad;
 
