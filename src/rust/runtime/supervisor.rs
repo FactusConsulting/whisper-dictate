@@ -232,7 +232,7 @@ impl RuntimeSupervisor {
             }
             EngineChoice::Unknown(raw) => {
                 let _ = self.tx.send(RuntimeEvent::Stderr(format!(
-                    "[runtime] Unknown {ENGINE_ENV}={raw:?} — falling back to the Python engine"
+                    "[runtime] Unknown {ENGINE_ENV}={raw:?} - falling back to the Python engine"
                 )));
             }
             EngineChoice::Python => {}

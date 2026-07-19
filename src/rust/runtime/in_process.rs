@@ -29,13 +29,13 @@
 //! Any [`InProcessInstallError`] is a fallback signal — the supervisor
 //! logs a stderr line naming the reason and spawns the Python worker
 //! with `VOICEPI_DICTATE_ENGINE` cleared for the child so it does not
-//! re-enter Phase A's subprocess pipeline. Feature-gated (`rust-hotkeys`
-//! + `rust-injection`); [`try_install`] wraps setup in
-//! [`std::panic::catch_unwind`] so a panic at the install boundary
-//! surfaces as [`InProcessInstallError::Panicked`] rather than aborting
-//! the UI process. Panics AFTER install (on coordinator / manager
-//! threads) still abort — that scope is intentionally "install
-//! boundary" only.
+//! re-enter Phase A's subprocess pipeline. Feature-gated on both
+//! `rust-hotkeys` and `rust-injection`; [`try_install`] wraps setup
+//! in [`std::panic::catch_unwind`] so a panic at the install boundary
+//! surfaces as [`InProcessInstallError::Panicked`] rather than
+//! aborting the UI process. Panics AFTER install (on coordinator /
+//! manager threads) still abort — that scope is intentionally
+//! "install boundary" only.
 
 use std::sync::mpsc::Sender;
 
@@ -178,7 +178,7 @@ impl std::fmt::Display for InProcessInstallError {
             Self::Panicked(msg) => write!(
                 f,
                 "in-process Rust runtime install panicked ({msg}); \
-                 falling back to the Python worker. This is a bug — please file \
+                 falling back to the Python worker. This is a bug - please file \
                  an issue at https://github.com/lars-frost/whisper-dictate/issues"
             ),
         }
