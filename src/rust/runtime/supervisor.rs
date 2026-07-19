@@ -22,6 +22,9 @@ use super::hotkey_install::{
     disable_python_hotkey, install_rust_hotkey_from_command, restart_hotkey_decision,
     RestartHotkeyDecision,
 };
+use super::in_process::{
+    self, engine_choice_from_env, EngineChoice, InProcessInstallError, ENGINE_ENV,
+};
 use super::process::{
     configure_background_process, configure_piped_python_stdio, stream_lines, RuntimeStream,
 };
@@ -169,7 +172,18 @@ impl RuntimeSupervisor {
     }
 
     pub fn is_running(&self) -> bool {
-        self.child.is_some()
+        // The Python-worker path pins liveness through `self.child`;
+        // the in-process Phase B path never sets `self.child` (there
+        // is no Python child to shepherd) but does move `self.state`
+        // to `Running` after `try_install` succeeds. Callers like the
+        // Settings save path use `is_running()` to gate whether a
+        // config change requires a restart -- without the state
+        // fallback below, changing `key` / `toggle_mode` / model
+        // while Phase B is active would silently skip
+        // `restart_runtime` and leave the old binding in effect
+        // until a manual stop/start (Codex P2 PR #519
+        // supervisor.rs:503).
+        self.child.is_some() || matches!(self.state, RuntimeState::Running)
     }
 
     pub fn start(&mut self, command: WorkerCommand) -> Result<()> {
@@ -182,6 +196,47 @@ impl RuntimeSupervisor {
         // bridge.
         #[cfg(feature = "audio-in-rust")]
         self.bridge_cancel.store(false, Ordering::SeqCst);
+
+        // Audit item 5 Phase B step 1: `VOICEPI_DICTATE_ENGINE=rust`
+        // routes through the in-process dispatch path (Rust supervisor
+        // installs the hotkey + session sink directly, no Python
+        // worker child spawned). See `docs/design/item5-phase-b-inprocess.md`.
+        //
+        // The branch runs BEFORE any Python-worker setup so the
+        // fallback path is a clean fall-through: on any Err from
+        // `attempt_in_process_start` the supervisor emits a stderr
+        // line, clears `VOICEPI_DICTATE_ENGINE` on the effective
+        // command's env so the spawned Python worker does not attempt
+        // to re-enter the Phase A subprocess pipeline, and drops
+        // through to the Python-worker spawn below.
+        let mut effective_command = command;
+        match engine_choice_from_env() {
+            EngineChoice::Rust => {
+                match self.attempt_in_process_start(&effective_command) {
+                    Ok(()) => return Ok(()),
+                    Err(err) => {
+                        let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                            "[runtime] Phase B in-process dispatch refused: {err}"
+                        )));
+                        // Prevent the spawned Python worker from
+                        // recursively re-triggering Phase A's subprocess
+                        // path: the Phase A shim reads the same env var
+                        // via `vp_dictate_engine.run_rust_engine`, and
+                        // without this clear a stale `=rust` inherited
+                        // by the child would attempt to shell back out
+                        // to `whisper-dictate dictate-run` on top of the
+                        // already-failed in-process attempt.
+                        clear_engine_env_for_child(&mut effective_command);
+                    }
+                }
+            }
+            EngineChoice::Unknown(raw) => {
+                let _ = self.tx.send(RuntimeEvent::Stderr(format!(
+                    "[runtime] Unknown {ENGINE_ENV}={raw:?} - falling back to the Python engine"
+                )));
+            }
+            EngineChoice::Python => {}
+        }
 
         // Phase-1 rollout (PR #341 — wiring the Rust audio pipeline):
         // If the user opted in via VOICEPI_AUDIO_BACKEND=rust AND this
@@ -202,7 +257,6 @@ impl RuntimeSupervisor {
         }
 
         self.state = RuntimeState::Starting;
-        let mut effective_command = command;
         if use_rust_audio {
             effective_command
                 .args
@@ -396,6 +450,118 @@ impl RuntimeSupervisor {
         }
         Ok(())
     }
+
+    /// Audit item 5 Phase B: install the Rust dictation runtime in the
+    /// UI process itself and mark the supervisor as Running without
+    /// spawning a Python worker child. Any Err is a fallback signal —
+    /// the caller emits a stderr line and falls through to the
+    /// Python-worker path.
+    ///
+    /// The install is idempotent WITH the supervisor's existing
+    /// `hotkey_handle` slot: on a restart() a previously-installed
+    /// hotkey handle survives (the rdev / evdev listener threads
+    /// cannot be cleanly stopped anyway), so we short-circuit the
+    /// install and just re-enter the Running state. The very-first
+    /// start() populates the slot; subsequent starts inherit the
+    /// coordinator's state machine, matching the Python-worker path's
+    /// P2 #346 finding 1 behaviour.
+    fn attempt_in_process_start(
+        &mut self,
+        command: &WorkerCommand,
+    ) -> std::result::Result<(), InProcessInstallError> {
+        // F1 (Codex P1 PR #519 supervisor.rs:467): apply the
+        // WorkerCommand's `VOICEPI_*` env vector to the process
+        // environment so the in-process backends see the same view a
+        // Python child would inherit through `.envs()`. Without this,
+        // saved schema settings (language, initial prompt, audio
+        // device, inject mode, recording thresholds, ...) that the UI
+        // wrote via `worker_command()` are silently discarded when
+        // the supervisor takes the Phase B path and the real backends
+        // fall back to defaults. See `in_process::apply_worker_command_env`
+        // for the filtering (VOICEPI_* only, RUST_INJECTOR skipped).
+        in_process::apply_worker_command_env(command);
+
+        // Design-doc risk #5: if the operator has both `ENGINE=rust`
+        // AND the older `VOICEPI_DICTATE_BACKEND=rust-session` set,
+        // ENGINE wins and the supervisor emits an informational line
+        // naming the effective backend so the operator sees which one
+        // won.
+        in_process::maybe_emit_env_precedence_note(&self.tx);
+
+        // Reuse the existing hotkey handle across restart()s: the
+        // in-process runtime installs the manager + coordinator
+        // threads once per process (same as the Python-worker path).
+        // A fresh start() installs, subsequent restart()s just
+        // re-resume the manager binding — `stop()` previously called
+        // `handle.suspend()` which unregistered it, so without a
+        // matching resume PTT would go silent on the second run.
+        if let Some(handle) = self.hotkey_handle.as_ref() {
+            let key_names = in_process::resume_key_names_from_env()
+                .map_err(InProcessInstallError::ConfigLoadFailed)?;
+            if key_names.is_empty() {
+                return Err(InProcessInstallError::EmptyChord);
+            }
+            handle.resume(key_names);
+        } else {
+            let installation =
+                in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;
+            self.stash_in_process_installation(installation);
+        }
+
+        // Emit Started + ready worker event so the UI's ready-latch
+        // fires identically to the Python-worker path (design-doc
+        // risk #2: status-event parity).
+        self.state = RuntimeState::Running;
+        let _ = self.tx.send(RuntimeEvent::Started {
+            command: format!("{ENGINE_ENV}=rust (in-process)"),
+        });
+        in_process::emit_ready_worker_event(&self.tx);
+        if let Some(notifier) = self.repaint_notifier.as_ref() {
+            notifier();
+        }
+        Ok(())
+    }
+
+    /// Feature-gated stash — moves the installation's live handle into
+    /// the supervisor's `hotkey_handle` slot AND leaks the coord-slot
+    /// keepalive so the session sink's `on_processing_finished`
+    /// callback survives for the process lifetime. On a stock build
+    /// this is a no-op because [`try_install`] returned Err before
+    /// ever constructing an `InProcessInstallation`.
+    #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+    fn stash_in_process_installation(&mut self, installation: in_process::InProcessInstallation) {
+        self.hotkey_handle = Some(installation.hotkey_handle);
+        // Leak the coord-slot keepalive so the sink's closure survives
+        // for the process lifetime. This is intentional: the sink was
+        // built inside `in_process::try_install` and captures its own
+        // clone of the same `Arc<OnceLock<_>>`; dropping our clone
+        // here has no visible effect on the sink, but leaking makes
+        // the shape symmetric with `install_session_sink_hotkey` where
+        // the slot is `Arc::clone`d into the coordinator callback.
+        std::mem::forget(installation.coord_slot_keepalive);
+    }
+
+    #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
+    #[allow(dead_code)]
+    fn stash_in_process_installation(&mut self, _installation: in_process::InProcessInstallation) {
+        // Unreachable: `try_install` returned FeaturesMissing before
+        // constructing an installation on stock builds. Kept so the
+        // supervisor's `start()` type-checks under every feature
+        // configuration without a `#[cfg]` at every call site.
+    }
+}
+
+/// Strip `VOICEPI_DICTATE_ENGINE` from the effective worker command's
+/// env vector so a fallback-to-Python spawn does not re-enter the Phase
+/// A subprocess pipeline (the Python worker would see `=rust` and
+/// shell out to `whisper-dictate dictate-run` on top of our
+/// already-failed in-process attempt). Idempotent — the entry may be
+/// absent because the UI process propagates its own env by default.
+fn clear_engine_env_for_child(command: &mut WorkerCommand) {
+    command.env.retain(|(key, _)| key != ENGINE_ENV);
+    command
+        .env
+        .push((ENGINE_ENV.to_owned(), in_process::ENGINE_PYTHON.to_owned()));
 }
 
 impl Drop for RuntimeSupervisor {

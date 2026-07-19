@@ -431,6 +431,272 @@ fn cleanup_stale_desktop_processes_stops_worker_from_same_app_root() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Audit item 5 Phase B step 1: `VOICEPI_DICTATE_ENGINE=rust` in-process
+// dispatch. See `docs/design/item5-phase-b-inprocess.md`.
+// ---------------------------------------------------------------------------
+//
+// The unit tests for the env-var gate + install-error taxonomy live next
+// to the code under test at `src/rust/runtime/in_process.rs::tests`. This
+// file carries the integration-level tests that DRIVE
+// `RuntimeSupervisor::start` under the different engine choices.
+//
+// These tests set / clear `VOICEPI_DICTATE_ENGINE` inside a process-wide
+// mutex (`ENGINE_ENV_LOCK`) because `std::env::set_var` is not
+// thread-safe on Unix and the harness runs tests in parallel by default.
+// The lock is scoped to the supervisor-facing tests only; unrelated
+// tests in this file leave the env untouched.
+
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+fn engine_env_lock() -> MutexGuard<'static, ()> {
+    static ENGINE_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    ENGINE_ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
+struct EngineEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    previous: Option<String>,
+}
+
+impl EngineEnvGuard {
+    fn set(value: &str) -> Self {
+        let lock = engine_env_lock();
+        let previous = env::var("VOICEPI_DICTATE_ENGINE").ok();
+        env::set_var("VOICEPI_DICTATE_ENGINE", value);
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
+}
+
+impl Drop for EngineEnvGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(v) => env::set_var("VOICEPI_DICTATE_ENGINE", v),
+            None => env::remove_var("VOICEPI_DICTATE_ENGINE"),
+        }
+    }
+}
+
+#[test]
+fn supervisor_phase_b_stock_build_falls_back_to_python_on_engine_rust() {
+    // Contract for stock builds (no rust-hotkeys+rust-injection): the
+    // supervisor logs the actionable fallback message on stderr AND
+    // spawns the Python worker anyway. Without this fallback, an
+    // operator who set `=rust` on a stock build would see no PTT at
+    // all — the design doc's risk #3 auto-fallback covers exactly
+    // this class.
+    #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
+    {
+        let Some(python) = test_python() else {
+            return;
+        };
+        let _guard = EngineEnvGuard::set("rust");
+        let mut supervisor = RuntimeSupervisor::new();
+        supervisor
+            .start(WorkerCommand {
+                program: python,
+                args: vec![
+                    "-c".to_owned(),
+                    "print('python-fallback-ran', flush=True)".to_owned(),
+                ],
+                working_dir: env::current_dir().unwrap(),
+                env: Vec::new(),
+            })
+            .unwrap();
+        let events = collect_until(&mut supervisor, |events| {
+            has_stdout(events, "python-fallback-ran") && has_exit(events)
+        });
+        // The Python fallback actually ran — the child produced our stdout.
+        assert!(
+            has_stdout(&events, "python-fallback-ran"),
+            "Python fallback must run when Phase B refuses on stock build"
+        );
+        // AND the supervisor emitted the actionable fallback stderr line
+        // naming why Phase B refused.
+        let saw_fallback_stderr = events.iter().any(|e| {
+            matches!(
+                e,
+                RuntimeEvent::Stderr(line)
+                    if line.contains("Phase B in-process dispatch refused")
+                        && line.contains("rust-hotkeys")
+            )
+        });
+        assert!(
+            saw_fallback_stderr,
+            "supervisor must log the Phase B fallback reason on stock build; events: {events:#?}",
+        );
+    }
+    // On a feature-complete build this test is a no-op because the
+    // in-process install would actually run (which needs a display,
+    // audio, and a live rdev listener — not something the CI harness
+    // can drive). The feature-complete path is verified by
+    // `supervisor_phase_b_engine_python_leaves_default_path_intact`
+    // below plus the `in_process::tests` unit tests.
+    #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+    {
+        // Silence unused-import warnings on the feature build.
+        let _ = EngineEnvGuard::set;
+    }
+}
+
+#[test]
+fn supervisor_phase_b_falls_back_when_real_backend_unavailable() {
+    // F2 (Codex P1 PR #519 in_process.rs:373): on a build that HAS
+    // `rust-hotkeys` + `rust-injection` but lacks the whisper +
+    // audio features, the in-process install must return
+    // `MissingBackend` and the supervisor MUST fall back to the
+    // Python worker path. Without this the older silent-stub
+    // fallback in `rust_session_sink::build_production_sink` would
+    // install a no-op sink that returns empty transcriptions on
+    // every PTT press and the advertised auto-fallback would never
+    // fire.
+    //
+    // Feature matrix this test covers:
+    //   - rust-hotkeys + rust-injection but NOT whisper-rs-local +
+    //     audio-in-rust: `try_build_production_sink` returns the
+    //     "features required" error string; supervisor falls back.
+    //
+    // The stock-build case (no rust-hotkeys/rust-injection) is
+    // covered by `supervisor_phase_b_stock_build_falls_back_to_python_on_engine_rust`
+    // above. The all-features case is not exercised here because it
+    // would actually install the in-process runtime, which needs a
+    // display + audio + a live rdev listener the CI harness cannot
+    // provide.
+    #[cfg(all(
+        feature = "rust-hotkeys",
+        feature = "rust-injection",
+        not(all(feature = "whisper-rs-local", feature = "audio-in-rust"))
+    ))]
+    {
+        let Some(python) = test_python() else {
+            return;
+        };
+        let _guard = EngineEnvGuard::set("rust");
+        let mut supervisor = RuntimeSupervisor::new();
+        supervisor
+            .start(WorkerCommand {
+                program: python,
+                args: vec![
+                    "-c".to_owned(),
+                    "print('missing-backend-fallback-ran', flush=True)".to_owned(),
+                ],
+                working_dir: env::current_dir().unwrap(),
+                env: Vec::new(),
+            })
+            .unwrap();
+        let events = collect_until(&mut supervisor, |events| {
+            has_stdout(events, "missing-backend-fallback-ran") && has_exit(events)
+        });
+        // Python fallback ran.
+        assert!(
+            has_stdout(&events, "missing-backend-fallback-ran"),
+            "Python fallback must run when the real backend cannot init"
+        );
+        // AND supervisor emitted the F2 fallback stderr line naming
+        // the reason. The exact wording lives in
+        // `InProcessInstallError::MissingBackend`'s Display impl.
+        let saw_fallback_stderr = events.iter().any(|e| {
+            matches!(
+                e,
+                RuntimeEvent::Stderr(line)
+                    if line.contains("Phase B in-process dispatch refused")
+                        && line.contains("cannot serve PTT")
+            )
+        });
+        assert!(
+            saw_fallback_stderr,
+            "supervisor must log the MissingBackend fallback line; events: {events:#?}",
+        );
+    }
+    #[cfg(any(
+        not(all(feature = "rust-hotkeys", feature = "rust-injection")),
+        all(feature = "whisper-rs-local", feature = "audio-in-rust"),
+    ))]
+    {
+        // Nothing to exercise on this feature configuration; the
+        // stock case is covered by the sibling test above, and the
+        // fully-featured case cannot be driven from the CI harness.
+        let _ = EngineEnvGuard::set;
+    }
+}
+
+#[test]
+fn supervisor_phase_b_engine_python_leaves_default_path_intact() {
+    // Regression: an explicit `VOICEPI_DICTATE_ENGINE=python` MUST run
+    // the exact same Python-worker code path as the unset case. This
+    // guarantees the Phase A fallback path stays a live escape hatch
+    // for the whole Phase B rollout window (design doc's non-goal
+    // "Deleting the Phase A subprocess path").
+    let Some(python) = test_python() else {
+        return;
+    };
+    let _guard = EngineEnvGuard::set("python");
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "print('explicit-python-ran', flush=True)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "explicit-python-ran") && has_exit(events)
+    });
+    assert!(has_stdout(&events, "explicit-python-ran"));
+    // No Phase B stderr line should appear when engine=python.
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            RuntimeEvent::Stderr(line) if line.contains("Phase B in-process dispatch")
+        )),
+        "engine=python must not trigger the Phase B code path"
+    );
+}
+
+#[test]
+fn supervisor_phase_b_unknown_engine_warns_and_falls_back() {
+    // Contract: an unknown engine value logs a stderr warning naming
+    // the raw value AND falls back to the Python worker. Mirrors the
+    // Python-side `_dispatch_engine`'s behaviour for unknown values.
+    let Some(python) = test_python() else {
+        return;
+    };
+    let _guard = EngineEnvGuard::set("mojo");
+    let mut supervisor = RuntimeSupervisor::new();
+    supervisor
+        .start(WorkerCommand {
+            program: python,
+            args: vec![
+                "-c".to_owned(),
+                "print('unknown-fallback-ran', flush=True)".to_owned(),
+            ],
+            working_dir: env::current_dir().unwrap(),
+            env: Vec::new(),
+        })
+        .unwrap();
+    let events = collect_until(&mut supervisor, |events| {
+        has_stdout(events, "unknown-fallback-ran") && has_exit(events)
+    });
+    assert!(has_stdout(&events, "unknown-fallback-ran"));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            RuntimeEvent::Stderr(line) if line.contains("Unknown VOICEPI_DICTATE_ENGINE") && line.contains("mojo")
+        )),
+        "supervisor must log the unknown-engine warning naming the raw value"
+    );
+}
+
 fn test_python() -> Option<PathBuf> {
     for candidate in python_candidates() {
         if Command::new(candidate)
