@@ -12,7 +12,8 @@
 use std::sync::mpsc;
 
 use super::{
-    session_config_from_env, whisper_backend_config_from_env, INITIAL_PROMPT_ENV, LANG_ENV,
+    format_command_set_from_env, session_config_from_env, whisper_backend_config_from_env,
+    FORMAT_COMMANDS_ENV, INITIAL_PROMPT_ENV, LANG_ENV,
 };
 use crate::dictate::audio_route::MIN_RECORD_ENV;
 use crate::runtime::rust_session_sink::build_production_sink;
@@ -129,6 +130,37 @@ fn session_config_falls_back_to_route_default_when_env_missing() {
         "expected the 0.5 s default, got {}",
         cfg.min_record_seconds
     );
+}
+
+/// A set value in `VOICEPI_FORMAT_COMMANDS` is threaded verbatim into
+/// `SessionConfig::format_command_set` so the in-process rust-session
+/// path honours the saved `format_commands` setting.
+#[test]
+fn session_config_threads_format_commands_from_env() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _fmt = EnvVarGuard::set(FORMAT_COMMANDS_ENV, "en");
+    let cfg = session_config_from_env();
+    assert_eq!(cfg.format_command_set.as_deref(), Some("en"));
+}
+
+/// Unset / blank `VOICEPI_FORMAT_COMMANDS` collapses to `None` so the
+/// session short-circuits to a passthrough (no format-command layer),
+/// matching the schema default of `off`.
+#[test]
+fn format_command_set_from_env_is_none_when_unset_or_blank() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    {
+        let _fmt = EnvVarGuard::unset(FORMAT_COMMANDS_ENV);
+        assert_eq!(format_command_set_from_env(), None);
+    }
+    {
+        let _fmt = EnvVarGuard::set(FORMAT_COMMANDS_ENV, "   ");
+        assert_eq!(
+            format_command_set_from_env(),
+            None,
+            "whitespace-only must normalise to None, not Some(\"\")"
+        );
+    }
 }
 
 // ── production sink integration ───────────────────────────────────────────────

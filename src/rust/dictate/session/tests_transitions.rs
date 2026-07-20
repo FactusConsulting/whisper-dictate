@@ -17,7 +17,7 @@
 //! - epochs increase monotonically across start() calls.
 
 use super::tests_support::*;
-use super::{SessionError, SessionState, UtteranceOutcome};
+use super::{SessionConfig, SessionError, SessionState, UtteranceOutcome};
 
 #[test]
 fn push_frame_while_idle_is_dropped() {
@@ -165,6 +165,82 @@ fn inject_failure_still_emits_utterance() {
     assert_eq!(
         utterance["inject_error"],
         "inject backend error: clipboard busy"
+    );
+}
+
+#[test]
+fn format_commands_off_by_default_injects_raw_text() {
+    // Default config leaves `format_command_set` = None, so spoken
+    // command words like "comma" stay literal and the raw transcript is
+    // what gets injected -- byte-identical to the pre-format-wiring
+    // behaviour.
+    let transcribe = TestTranscribe::returning_text("write comma literally");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject);
+    let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["write comma literally".to_owned()],
+    );
+    let utterance = parse_events(&bytes)
+        .into_iter()
+        .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("utterance event");
+    assert_eq!(utterance["text"], "write comma literally");
+}
+
+#[test]
+fn format_commands_applied_between_transcribe_and_inject() {
+    // With `format_command_set = Some("en")` the session applies the
+    // deterministic spoken-command dictionary before injection, exactly
+    // like Python's `formatting.apply_format_commands` step. The
+    // injected text AND the emitted utterance event both carry the
+    // formatted result (what was actually typed), not the raw transcript.
+    let transcribe = TestTranscribe::returning_text("first item comma new line second item period");
+    let inject = TestInject::new();
+    let config = SessionConfig {
+        format_command_set: Some("en".to_owned()),
+        ..SessionConfig::default()
+    };
+    let (s, _, _guard) = session_with_config(transcribe, inject, config);
+    let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["first item,\nsecond item.".to_owned()],
+        "the format-command dictionary must be applied before inject",
+    );
+    let utterance = parse_events(&bytes)
+        .into_iter()
+        .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("utterance event");
+    assert_eq!(utterance["text"], "first item,\nsecond item.");
+    // `text_chars` is derived from the emitted (formatted) text.
+    assert_eq!(
+        utterance["text_chars"],
+        "first item,\nsecond item.".chars().count()
+    );
+}
+
+#[test]
+fn format_commands_explicit_off_is_passthrough() {
+    // An explicit `Some("off")` normalises to a passthrough just like
+    // `None` -- the transcript is injected verbatim.
+    let transcribe = TestTranscribe::returning_text("new line stays literal");
+    let inject = TestInject::new();
+    let config = SessionConfig {
+        format_command_set: Some("off".to_owned()),
+        ..SessionConfig::default()
+    };
+    let (s, _, _guard) = session_with_config(transcribe, inject, config);
+    let (_outcome, _bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["new line stays literal".to_owned()],
     );
 }
 

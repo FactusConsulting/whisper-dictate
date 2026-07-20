@@ -106,6 +106,16 @@ pub(crate) const LANG_ENV: &str = "VOICEPI_LANG";
 /// rust_session_real_backends.rs:96 (finding 2).
 pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 
+/// Env var that selects the spoken formatting-command set applied to
+/// the final transcript before injection (`off` / `en` / `da` /
+/// `both`). Mirrors `settings_schema.json`'s `format_commands` key so
+/// the in-process rust-session path honours the same saved setting the
+/// Python worker reads. The value flows into
+/// [`crate::dictate::SessionConfig::format_command_set`]; empty / unset
+/// resolves to `None`, which
+/// [`crate::formatting::apply_format_commands`] treats as `off`.
+pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
+
 /// The real production session type that PR 5 wires behind
 /// `VOICEPI_DICTATE_BACKEND=rust-session` when both features are on.
 pub(crate) type RealSession =
@@ -174,8 +184,22 @@ pub(crate) fn session_config_from_env() -> SessionConfig {
     let route = RouteConfig::from_env();
     SessionConfig {
         min_record_seconds: route.min_record_seconds,
+        format_command_set: format_command_set_from_env(),
         ..SessionConfig::default()
     }
+}
+
+/// Read the spoken formatting-command set from [`FORMAT_COMMANDS_ENV`].
+/// Empty / unset / whitespace-only normalises to `None` so the session
+/// short-circuits to a passthrough; any other value is handed through
+/// verbatim to [`crate::formatting::apply_format_commands`], whose own
+/// `normalize_command_set` maps unknown/falsy tokens to `off`. Pure
+/// helper so the parse is unit-testable without process env.
+pub(crate) fn format_command_set_from_env() -> Option<String> {
+    std::env::var(FORMAT_COMMANDS_ENV)
+        .ok()
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
 }
 
 /// Build the real-backend session, wrapped in `Arc<Mutex<...>>` so the

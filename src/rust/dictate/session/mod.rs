@@ -354,10 +354,26 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 })
             }
             Ok(result) => {
-                // PR 5 will run post-processing + format commands here;
-                // for now the backend's text is what goes to the
-                // injector. The trait split keeps this PR pure-logic.
-                let text = result.text.clone();
+                // Apply the deterministic spoken formatting-command
+                // layer (`new line` -> "\n", `comma` -> ",", ...)
+                // between transcription and injection, mirroring the
+                // Python loop's `formatting.apply_format_commands` step
+                // in `vp_dictate.py`. This is a pure string transform,
+                // so it stays inside the session's pure-logic boundary;
+                // a `None` / `off` command set is a passthrough, so a
+                // default-config session injects `result.text`
+                // unchanged. The emitted `utterance` event carries this
+                // formatted text (what was actually injected), matching
+                // Python. LLM post-processing -- the other, I/O-bound
+                // half of the deferred `wave5-pr5-postprocess`
+                // follow-up -- is not wired here yet; when it lands it
+                // runs BEFORE this format pass, matching Python's
+                // `postprocess -> format` order.
+                let text = crate::formatting::apply_format_commands(
+                    &result.text,
+                    self.config.format_command_set.as_deref(),
+                )
+                .text;
                 if let Err(err) = self.inject.inject(&text) {
                     // Python logs and continues — the utterance event
                     // still fires with the text we attempted to inject.
