@@ -79,13 +79,13 @@ fn select_cloud_builds_cloud_and_skips_local_builder() {
     let local_built = Cell::new(false);
     let backend = ProductionTranscribeBackend::<StubLocal>::select(
         true,
-        || CloudTranscribeBackend::new(cloud_config_no_key()),
+        || Ok::<_, String>(CloudTranscribeBackend::new(cloud_config_no_key())),
         || {
             local_built.set(true);
             Ok::<_, String>(StubLocal { text: "unused" })
         },
     )
-    .expect("cloud arm is infallible");
+    .expect("cloud arm builds");
     assert!(matches!(backend, ProductionTranscribeBackend::Cloud(_)));
     assert!(
         !local_built.get(),
@@ -102,7 +102,7 @@ fn select_local_builds_local_and_skips_cloud_builder() {
         false,
         || {
             cloud_built.set(true);
-            CloudTranscribeBackend::new(cloud_config_no_key())
+            Ok::<_, String>(CloudTranscribeBackend::new(cloud_config_no_key()))
         },
         || Ok::<_, String>(StubLocal { text: "local hi" }),
     )
@@ -127,11 +127,27 @@ fn select_local_builds_local_and_skips_cloud_builder() {
 fn select_propagates_local_build_error() {
     let result = ProductionTranscribeBackend::<StubLocal>::select(
         false,
-        || CloudTranscribeBackend::new(cloud_config_no_key()),
+        || Ok::<_, String>(CloudTranscribeBackend::new(cloud_config_no_key())),
         || Err::<StubLocal, String>("model path: missing".to_owned()),
     );
     match result {
         Ok(_) => panic!("local build error must propagate, got Ok"),
         Err(e) => assert_eq!(e, "model path: missing"),
+    }
+}
+
+/// A cloud-arm build failure (e.g. the local-only privacy lock refusing a
+/// remote endpoint) propagates out of `select` too, so `make_real_session`
+/// falls back to the stub session rather than dictating remotely.
+#[test]
+fn select_propagates_cloud_build_error() {
+    let result = ProductionTranscribeBackend::<StubLocal>::select(
+        true,
+        || Err::<CloudTranscribeBackend, String>("VOICEPI_LOCAL_ONLY=1 blocks STT".to_owned()),
+        || Ok::<_, String>(StubLocal { text: "unused" }),
+    );
+    match result {
+        Ok(_) => panic!("cloud build error must propagate, got Ok"),
+        Err(e) => assert!(e.contains("LOCAL_ONLY"), "{e}"),
     }
 }

@@ -51,19 +51,23 @@ impl<L> ProductionTranscribeBackend<L> {
     /// [`crate::dictate::backends::cloud_transcribe::cloud_backend_requested_from_env`]'s
     /// verdict. Critically, on the cloud path `build_local` is **never
     /// called** -- so a cloud user pays no local model-path / idle-timeout
-    /// resolution (and needs no GGML model installed at all). `build_local`
-    /// may fail (model resolution); `build_cloud` is infallible. Kept
-    /// generic over `L` + the error type so it is unit-testable in a stock
-    /// build with a stub local backend, independent of the feature-gated
+    /// resolution (and needs no GGML model installed at all). BOTH thunks
+    /// are fallible: `build_local` can fail on model resolution, and
+    /// `build_cloud` can fail when the local-only privacy lock blocks a
+    /// remote endpoint (see
+    /// [`crate::dictate::backends::cloud_transcribe::cloud_backend_local_only_checked`]).
+    /// Kept generic over `L` + the error type so it is unit-testable in a
+    /// stock build with a stub local backend, independent of the
+    /// feature-gated
     /// [`crate::dictate::backends::WhisperLocalTranscribeBackend`] the
     /// production caller binds.
     pub fn select<E>(
         cloud_requested: bool,
-        build_cloud: impl FnOnce() -> CloudTranscribeBackend,
+        build_cloud: impl FnOnce() -> Result<CloudTranscribeBackend, E>,
         build_local: impl FnOnce() -> Result<L, E>,
     ) -> Result<Self, E> {
         if cloud_requested {
-            Ok(Self::Cloud(build_cloud()))
+            Ok(Self::Cloud(build_cloud()?))
         } else {
             Ok(Self::Local(build_local()?))
         }

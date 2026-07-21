@@ -83,12 +83,13 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use crate::dictate::audio_route::RouteConfig;
-use crate::dictate::backends::cloud_transcribe::cloud_backend_requested_from_env;
+use crate::dictate::backends::cloud_transcribe::{
+    cloud_backend_local_only_checked, cloud_backend_requested_from_env,
+};
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
 use crate::dictate::{
-    CloudTranscribeBackend, CloudTranscribeConfig, DictateSession, ProductionTranscribeBackend,
-    SessionConfig,
+    CloudTranscribeConfig, DictateSession, ProductionTranscribeBackend, SessionConfig,
 };
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 use crate::whisper::{
@@ -280,9 +281,22 @@ pub(crate) fn make_real_session(
         // other `VOICEPI_STT_BACKEND` value (incl. unset) keeps local
         // Whisper, the default. The selection logic is unit-tested in
         // `production_transcribe_tests.rs` (stock build).
+        //
+        // The cloud thunk enforces the local-only privacy lock FIRST
+        // (`cloud_backend_local_only_checked`): under `VOICEPI_LOCAL_ONLY`
+        // a non-loopback remote endpoint is refused so mic audio never
+        // leaves the machine, matching the Python worker's
+        // `_assert_local_backend` gate. On refusal the `Err` bubbles out of
+        // `make_real_session` and the sink falls back to the stub session
+        // (never silently POSTing audio remotely).
         let transcribe = ProductionTranscribeBackend::select(
             cloud_backend_requested_from_env(),
-            || CloudTranscribeBackend::new(CloudTranscribeConfig::from_env()),
+            || {
+                cloud_backend_local_only_checked(
+                    crate::whisper::model_manager::is_local_only(),
+                    CloudTranscribeConfig::from_env(),
+                )
+            },
             || -> Result<WhisperLocalTranscribeBackend, String> {
                 let model_path =
                     resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
