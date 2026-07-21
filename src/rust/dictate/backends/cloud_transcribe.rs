@@ -17,7 +17,8 @@
 use std::io::Cursor;
 use std::time::Instant;
 
-use crate::cloud_api::cloud_transcribe;
+use super::hallucination::is_hallucination;
+use crate::cloud_api::{cloud_transcribe, CloudTranscriptionResult};
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
 /// `settings_schema.json` env keys for the cloud STT backend.
@@ -163,6 +164,38 @@ pub fn encode_wav_mono_16bit(pcm: &[f32], sample_rate: u32) -> Result<Vec<u8>, S
     Ok(cursor.into_inner())
 }
 
+/// Map a cloud `/audio/transcriptions` response onto the session's
+/// [`TranscribeResult`], applying the whole-text hallucination blacklist.
+///
+/// Split out of [`CloudTranscribeBackend::transcribe`] so the mapping —
+/// especially the `is_hallucination` assignment — is hermetically testable
+/// without a live endpoint (the transcribe method's only untestable part
+/// is the `cloud_transcribe` network call).
+///
+/// Runs the same whole-text hallucination gate Python applies in the
+/// backend-agnostic `_transcribe_pcm` (`vp_dictate.py:379`), so the cloud
+/// `stt_backend=openai` path filters `"tak"` / `"thank you"`-family credits
+/// identically to local Whisper. The text is trimmed first: the endpoint
+/// may return surrounding whitespace and the blacklist match rstrips only,
+/// so a leading space would otherwise defeat it — mirroring the local
+/// path's `normalize_whitespace` pre-step.
+fn map_cloud_result(
+    result: CloudTranscriptionResult,
+    latency_ms: u64,
+    pcm_len: usize,
+    sample_rate: u32,
+) -> TranscribeResult {
+    let hallucinated = is_hallucination(result.text.trim());
+    TranscribeResult {
+        text: result.text,
+        language: result.language.unwrap_or_default(),
+        latency_ms,
+        duration_s: pcm_len as f64 / f64::from(sample_rate.max(1)),
+        is_hallucination: hallucinated,
+        gate: None,
+    }
+}
+
 /// Cloud STT backend. Holds a resolved [`CloudTranscribeConfig`] snapshot
 /// (stamped at construction, like the session's other settings today).
 pub struct CloudTranscribeBackend {
@@ -199,18 +232,8 @@ impl TranscribeBackend for CloudTranscribeBackend {
             self.config.timeout_ms,
         )
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
-        Ok(TranscribeResult {
-            text: result.text,
-            language: result.language.unwrap_or_default(),
-            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            duration_s: pcm.len() as f64 / f64::from(sample_rate.max(1)),
-            // The cloud endpoint does its own decoding; the session's
-            // empty-text gate handles a blank result. Hallucination
-            // filtering for the cloud path is a follow-up (the pattern
-            // filter currently lives behind the local-whisper feature).
-            is_hallucination: false,
-            gate: None,
-        })
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Ok(map_cloud_result(result, latency_ms, pcm.len(), sample_rate))
     }
 }
 

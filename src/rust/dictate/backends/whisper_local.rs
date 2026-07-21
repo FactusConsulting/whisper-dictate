@@ -12,86 +12,21 @@
 //! coordinator-sink wiring (PR 4) continues to use the stub backend
 //! until PR 5 swaps it for this one.
 //!
-//! # Hallucination filter — partial port
+//! # Hallucination filter
 //!
-//! The Python `is_hallucination` helper in
-//! `src/python/whisper_dictate/vp_transcribe.py` checks two things:
-//!
-//! 1. **Exact blacklist match** — the lowercased / rstripped text is in
-//!    `HALLUCINATIONS` (data: `whisper_dictate/data/hallucination_patterns.json::exact_blacklist`).
-//! 2. **Credit regex match** — the whole text matches one of the
-//!    subtitle-credit patterns assembled by `_build_credit_re`.
-//!
-//! Only (1) is ported here. The credit-regex port is deferred to a Wave 5
-//! PR 5 follow-up because porting the regex assembler + the JSON loader
-//! is its own multi-file change. The blacklist is the most common path
-//! in practice (every observed false positive on quiet Danish input has
-//! been an exact `"tak"`-family match) and the session's empty-text
-//! branch catches credit-style hallucinations through the
-//! `_exceeds_speech_rate` guard once that is wired.
-//!
-//! The blacklist literals are kept in sync with
-//! `whisper_dictate/data/hallucination_patterns.json::exact_blacklist`
-//! by copying verbatim — see [`EXACT_BLACKLIST`].
+//! The exact-blacklist [`is_hallucination`] filter now lives in the stock
+//! [`super::hallucination`] module so the cloud backend shares it (matching
+//! Python's backend-agnostic gate). This backend runs it after
+//! [`normalize_whitespace`], exactly as before.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::Instant;
 
 use regex::Regex;
 
+use super::hallucination::is_hallucination;
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
-
-/// Exact-match hallucination blacklist, ported verbatim from
-/// `src/python/whisper_dictate/data/hallucination_patterns.json::exact_blacklist`.
-///
-/// Whisper emits one of these strings on quiet / empty audio — they are
-/// subtitle / caption credits the multilingual model picked up from its
-/// training set. Matched against `text.to_lowercase().trim_end()` to
-/// mirror Python's `text.lower().rstrip()`.
-///
-/// MUST stay byte-identical to the JSON data file. When the JSON file
-/// gains a new entry the same entry must be added here (and a regression
-/// test should catch the drift — see [`is_hallucination`]'s tests).
-pub(crate) const EXACT_BLACKLIST: &[&str] = &[
-    "tak",
-    "tak.",
-    "tak for din opmærksomhed",
-    "tak for din opmærksomhed.",
-    "tak fordi du så med",
-    "tak fordi du så med.",
-    "tak fordi du lyttede med",
-    "tak fordi du lyttede med.",
-    "tak for at du så med",
-    "tak for at du så med.",
-    "tak for at i så med",
-    "tak for at i så med.",
-    "tak fordi i så med",
-    "tak fordi i så med.",
-    "thank you",
-    "thank you.",
-    "thank you for watching",
-    "thank you for watching.",
-    "thank you for listening",
-    "thank you for listening.",
-    "thanks for watching",
-    "thanks for watching.",
-    "undertekster af",
-    "undertekstet af",
-];
-
-/// `true` iff `text` is on the exact-match hallucination blacklist.
-///
-/// Partial port of Python's `vp_transcribe.is_hallucination` — only the
-/// `text.lower().rstrip() in HALLUCINATIONS` branch is implemented. See
-/// the module docs for the credit-regex deferral note.
-pub fn is_hallucination(text: &str) -> bool {
-    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    let set = SET.get_or_init(|| EXACT_BLACKLIST.iter().copied().collect());
-    let lowered = text.to_lowercase();
-    set.contains(lowered.trim_end())
-}
 
 /// Collapse internal whitespace runs to a single space and trim both
 /// ends. Mirrors Python's
