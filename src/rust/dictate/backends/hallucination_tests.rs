@@ -54,3 +54,40 @@ fn is_empty_safe() {
     // handles it separately. We just make sure we don't panic on it.
     assert!(!is_hallucination(""));
 }
+
+// ── anchored credit regex (parity with Python's _looks_like_credit) ──────────
+
+#[test]
+fn credit_regex_flags_whole_text_subtitle_credits_with_year() {
+    // A phrase prefix + trailing year is a credit hallucination.
+    assert!(is_hallucination("Undertekster af Nicolai Winther 2021"));
+    assert!(is_hallucination("Danske tekster af TV2 2019."));
+    assert!(is_hallucination("Tekstet af Someone 1998"));
+    assert!(is_hallucination("Subtitles by Acme 2005"));
+    // Case-insensitive + trailing punctuation/space tolerated.
+    assert!(is_hallucination("  TRANSLATED BY BOB 2014 !!  "));
+}
+
+#[test]
+fn credit_regex_flags_bare_company_names() {
+    // Company-name branches match with an optional year.
+    assert!(is_hallucination("Scandinavian Text Service"));
+    assert!(is_hallucination("Broadcast Text International 2005"));
+    assert!(is_hallucination("Dansk Videotekst"));
+    assert!(is_hallucination("Dansk Video Tekst 2011"));
+}
+
+#[test]
+fn credit_regex_does_not_flag_yearless_prefix_or_real_dictation() {
+    // The whole-text gate requires the trailing year on a phrase prefix, so
+    // real dictation that merely BEGINS like a credit must survive (the
+    // year-less prefix path is Python's segment-level gate, not this one).
+    assert!(!is_hallucination("danske tekster af høj kvalitet"));
+    assert!(!is_hallucination("tekstet af hånd i dag"));
+    // A credit phrase embedded mid-sentence is not an anchored whole-text
+    // match.
+    assert!(!is_hallucination(
+        "jeg skrev undertekster af vane i 2021 og nød det"
+    ));
+    assert!(!is_hallucination("send oversat af to me"));
+}
