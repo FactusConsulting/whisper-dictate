@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use serde_json::Value;
 
 use super::{
-    DictateSession, InjectBackend, InjectError, PostProcessBackend, SessionConfig,
-    TranscribeBackend, TranscribeError, TranscribeResult, SR,
+    DictateSession, InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome,
+    SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult, SR,
 };
 
 // ── test backends ────────────────────────────────────────────────────────────
@@ -141,8 +141,17 @@ impl TestPostProcess {
 }
 
 impl PostProcessBackend for TestPostProcess {
-    fn post_process(&self, _text: &str) -> String {
-        self.output.clone()
+    fn post_process(&self, text: &str) -> PostProcessOutcome {
+        PostProcessOutcome {
+            text: self.output.clone(),
+            processor: "ollama".to_owned(),
+            mode: "clean".to_owned(),
+            model: "test-model".to_owned(),
+            latency_ms: 12,
+            changed: self.output != text,
+            fallback: false,
+            error: String::new(),
+        }
     }
 }
 

@@ -48,7 +48,7 @@ use std::io::{self, Read};
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::dictate::PostProcessBackend;
+use crate::dictate::{PostProcessBackend, PostProcessOutcome};
 
 /// Adapter that drives the full [`postprocess_text`] pipeline as a session
 /// [`crate::dictate::PostProcessBackend`], so the in-process Rust engine can
@@ -97,8 +97,18 @@ impl SessionPostProcess {
 }
 
 impl PostProcessBackend for SessionPostProcess {
-    fn post_process(&self, text: &str) -> String {
-        postprocess_text(text, &self.settings).text
+    fn post_process(&self, text: &str) -> PostProcessOutcome {
+        let result = postprocess_text(text, &self.settings);
+        PostProcessOutcome {
+            text: result.text,
+            processor: result.provider,
+            mode: result.mode,
+            model: result.model,
+            latency_ms: result.latency_ms,
+            changed: result.changed,
+            fallback: result.fallback,
+            error: result.error,
+        }
     }
 }
 
@@ -202,7 +212,10 @@ mod session_backend_tests {
         // skipped via `from_settings` -> None, but constructing it directly
         // pins the passthrough contract.)
         let backend = SessionPostProcess::new(settings("none"));
-        assert_eq!(backend.post_process("keep me exactly"), "keep me exactly");
+        assert_eq!(
+            backend.post_process("keep me exactly").text,
+            "keep me exactly"
+        );
     }
 
     #[test]
@@ -216,6 +229,12 @@ mod session_backend_tests {
         s.base_url = "http://127.0.0.1:1".to_owned();
         s.timeout_ms = 100;
         let backend = SessionPostProcess::new(s);
-        assert_eq!(backend.post_process("dictated text"), "dictated text");
+        let outcome = backend.post_process("dictated text");
+        assert_eq!(outcome.text, "dictated text");
+        assert!(
+            outcome.fallback,
+            "unreachable provider must report fallback"
+        );
+        assert!(!outcome.error.is_empty());
     }
 }

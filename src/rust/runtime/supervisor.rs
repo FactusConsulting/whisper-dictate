@@ -279,6 +279,21 @@ impl RuntimeSupervisor {
         // both backends react to the same chord and produce duplicate /
         // conflicting state transitions. Codex P2 #416 runtime.rs:1427.
         if self.hotkey_handle.is_none() {
+            // Legacy in-process diagnostic path
+            // (`VOICEPI_DICTATE_BACKEND=rust-session` WITHOUT the Phase B
+            // `VOICEPI_DICTATE_ENGINE=rust` branch, which already applies
+            // this at the in-process install site): the session sink built
+            // inside `install_rust_hotkey_from_command` sources its settings
+            // from the process env via `*_from_env()` (whisper hints,
+            // min-record floor, format commands, post-processing). Those
+            // saved values live only in the worker command's env vector, so
+            // apply them to the process env FIRST -- otherwise the in-process
+            // session silently runs on parent-process defaults while the
+            // Python child would have received the configured values
+            // (Codex P2 #531).
+            if rust_session_sink::dictate_backend_rust_session_requested() {
+                in_process::apply_worker_command_env(&effective_command);
+            }
             if let Some(handle) = install_rust_hotkey_from_command(
                 &effective_command,
                 self.tx.clone(),

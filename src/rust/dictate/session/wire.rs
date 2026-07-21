@@ -43,14 +43,15 @@ pub(super) fn emit_status<W: Write>(
 
 /// Emit one `[worker-event] {…,"event":"utterance",…}` line. Carries
 /// the subset of fields `vp_dictate.py::_utterance_event` exposes from
-/// the trait surface; the long-tail post-process / format / dictionary
-/// fields land with PR 5.
+/// the trait surface, plus the `post_*` post-processing metadata when a
+/// pass ran (`post` is `Some`), matching `vp_dictate.py:469-475`.
 pub(super) fn emit_utterance<W: Write>(
     writer: &mut W,
     text: &str,
     result: &TranscribeResult,
     recording_s: Value,
     inject_error: Option<String>,
+    post: Option<&super::PostProcessOutcome>,
 ) -> Result<(), SessionError> {
     let mut payload: Map<String, Value> = Map::new();
     payload.insert("event".into(), Value::from("utterance"));
@@ -84,6 +85,23 @@ pub(super) fn emit_utterance<W: Write>(
     }
     if let Some(err) = inject_error {
         payload.insert("inject_error".into(), Value::from(err));
+    }
+    // Post-processing metadata (only when a pass ran), mirroring the
+    // `post_*` fields `vp_dictate.py:469-475` emits so
+    // `ui/log_render.rs::post_processing_summary` shows the active
+    // provider/mode and telemetry/history record latency + failures.
+    if let Some(p) = post {
+        payload.insert("post_processor".into(), Value::from(p.processor.clone()));
+        payload.insert("post_mode".into(), Value::from(p.mode.clone()));
+        payload.insert("post_model".into(), Value::from(p.model.clone()));
+        payload.insert("post_latency_ms".into(), Value::from(p.latency_ms));
+        payload.insert("post_changed".into(), Value::from(p.changed));
+        payload.insert("post_fallback".into(), Value::from(p.fallback));
+        // Python emits `error or None`; drop the field when empty so the
+        // UI does not render a blank error.
+        if !p.error.is_empty() {
+            payload.insert("post_error".into(), Value::from(p.error.clone()));
+        }
     }
     write_line(writer, &Value::Object(payload))
 }

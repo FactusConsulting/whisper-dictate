@@ -151,6 +151,39 @@ The relevant sections:
 Neither of those exercises real PTT; they just guard the plumbing so a
 future refactor can't silently drop the branch.
 
+## Manual verification: in-process post-processing (Windows-first)
+
+The in-process Rust engine now runs the LLM post-processing pass itself
+(the `SessionPostProcess` backend attached in
+`runtime::rust_session_real_backends::make_real_session`). Because that
+constructor needs a real Whisper model **and** a live capture device, it
+cannot be exercised by a headless unit test — CI covers the settings
+parser + attach decision in isolation, but the end-to-end attachment must
+be verified manually on a real machine before promoting the RC. Do this
+on **Windows first** (the primary desktop), then repeat on Ubuntu
+Wayland/X11:
+
+1. Configure a post-processor in Settings → Post (or set
+   `VOICEPI_POST_PROCESSOR=ollama` and `VOICEPI_POST_MODE=clean`, with a
+   local Ollama running). Cloud providers need an API key saved in
+   Settings.
+2. Launch with the in-process engine:
+   `VOICEPI_DICTATE_ENGINE=rust` (PowerShell:
+   `$env:VOICEPI_DICTATE_ENGINE = "rust"`).
+3. Dictate a short utterance and confirm, in the log/history:
+   - the status sequence shows `recording → transcribing →
+     post-processing → …`, and
+   - the utterance carries the `post_*` fields (`post_processor`,
+     `post_mode`, `post_latency_ms`, …) so the UI reads
+     **"Post-processing: clean (ollama)"** rather than
+     "Post-processing off".
+4. Confirm a **provider failure is non-fatal**: stop Ollama (or use a
+   bad base URL) and dictate again — the raw transcript must still be
+   injected, `post_fallback=true` and `post_error` should be recorded,
+   and the loop must not wedge.
+5. Confirm `VOICEPI_POST_PROCESSOR=none` (the default) attaches no
+   backend: no `post-processing` status, no `post_*` fields.
+
 ## Reporting issues
 
 If the Rust engine wedges, hangs, or misbehaves after N attempts:

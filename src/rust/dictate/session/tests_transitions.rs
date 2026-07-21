@@ -291,12 +291,38 @@ fn post_processor_rewrites_text_and_emits_status() {
         matches!((tr, pp), (Some(t), Some(p)) if t < p),
         "expected transcribing before post-processing, got {trace:?}"
     );
-    // The utterance event carries the rewritten text.
+    // The utterance event carries the rewritten text AND the post_*
+    // metadata so the UI/telemetry report post-processing ran (Codex #2 /
+    // vp_dictate.py:469-475).
     let utterance = parse_events(&bytes)
         .into_iter()
         .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
         .expect("utterance event");
     assert_eq!(utterance["text"], "clean transcript");
+    assert_eq!(utterance["post_processor"], "ollama");
+    assert_eq!(utterance["post_mode"], "clean");
+    assert_eq!(utterance["post_model"], "test-model");
+    assert_eq!(utterance["post_latency_ms"], 12);
+    assert_eq!(utterance["post_changed"], true);
+    assert_eq!(utterance["post_fallback"], false);
+    // No error -> the field is dropped, matching Python's `error or None`.
+    assert!(utterance.get("post_error").is_none());
+}
+
+#[test]
+fn no_post_processor_omits_post_fields() {
+    // Without a post-processor the utterance event carries NO post_*
+    // fields, so `log_render::post_processing_summary` reads "off".
+    let transcribe = TestTranscribe::returning_text("plain");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject);
+    let (_outcome, bytes, _s) = run_one_utterance(s, &one_second_pcm());
+    let utterance = parse_events(&bytes)
+        .into_iter()
+        .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("utterance event");
+    assert!(utterance.get("post_processor").is_none());
+    assert!(utterance.get("post_mode").is_none());
 }
 
 #[test]

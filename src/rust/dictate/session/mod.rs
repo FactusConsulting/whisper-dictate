@@ -52,8 +52,9 @@ mod tests_support;
 mod tests_transitions;
 
 pub use types::{
-    InjectBackend, InjectError, PostProcessBackend, SessionConfig, SessionError, SessionState,
-    TranscribeBackend, TranscribeError, TranscribeResult, UtteranceOutcome, SR,
+    InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome, SessionConfig,
+    SessionError, SessionState, TranscribeBackend, TranscribeError, TranscribeResult,
+    UtteranceOutcome, SR,
 };
 
 /// Translate the backend's free-form gate text (as `result.gate` carries
@@ -397,12 +398,21 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 // The emitted `utterance` event carries the fully
                 // pipelined text (what was actually injected), matching
                 // Python.
-                let post_processed = if let Some(backend) = self.post_process.as_ref() {
+                // The `post` outcome (when a backend ran) carries the
+                // metadata mirrored onto the utterance event as the
+                // `post_*` fields, so `ui/log_render.rs` and telemetry see
+                // the pass ran / its provider / latency / fallback --
+                // matching Python (`vp_dictate.py:469-475`).
+                let post = if let Some(backend) = self.post_process.as_ref() {
                     wire::emit_status(writer, "post-processing", &self.capture_extras())?;
-                    backend.post_process(&result.text)
+                    Some(backend.post_process(&result.text))
                 } else {
-                    result.text.clone()
+                    None
                 };
+                let post_processed = post
+                    .as_ref()
+                    .map(|o| o.text.clone())
+                    .unwrap_or_else(|| result.text.clone());
                 let text = crate::formatting::apply_format_commands(
                     &post_processed,
                     self.config.format_command_set.as_deref(),
@@ -419,10 +429,18 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                         &result,
                         recording_s.clone(),
                         Some(err.to_string()),
+                        post.as_ref(),
                     )?;
                     return Ok(UtteranceOutcome::Injected { text, result });
                 }
-                wire::emit_utterance(writer, &text, &result, recording_s.clone(), None)?;
+                wire::emit_utterance(
+                    writer,
+                    &text,
+                    &result,
+                    recording_s.clone(),
+                    None,
+                    post.as_ref(),
+                )?;
                 Ok(UtteranceOutcome::Injected { text, result })
             }
         }
