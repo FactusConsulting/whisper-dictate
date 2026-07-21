@@ -142,6 +142,25 @@ fn run(args: DictateRunArgs) -> Result<()> {
         mode,
     };
 
+    // 1b. `--config PATH`: the settings loaded above cover the PTT chord,
+    //     but the production session sink sources every backend setting
+    //     (whisper hints, min-record floor, format commands, post-processing
+    //     + its `local_only` policy) from the process env via `*_from_env()`.
+    //     Materialise the config file into that env so `--config PATH` is
+    //     honoured end-to-end, not just for the chord (Codex P2 #531). No-op
+    //     in the default `None` case, where the parent (Phase A Python
+    //     dispatch, or the invoking shell) already exported the effective
+    //     env. `worker_env_overrides()` resolves the file via `VOICEPI_CONFIG`
+    //     (config value wins over any pre-existing env, then schema default).
+    //     Safe to `set_var` here: this runs single-threaded before the
+    //     coordinator / hotkey threads spawn in steps 2-3.
+    if let Some(p) = config.as_deref() {
+        std::env::set_var("VOICEPI_CONFIG", p);
+        for (key, value) in crate::config::worker_env_overrides() {
+            std::env::set_var(key, value);
+        }
+    }
+
     // 2. Build the production session action-sink. Mirrors the supervisor's
     //    setup path (`runtime::supervisor::RuntimeSupervisor::start` when
     //    the rust-session backend is requested) — same helper, so a change
