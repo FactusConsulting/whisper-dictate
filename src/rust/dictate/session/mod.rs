@@ -52,9 +52,9 @@ mod tests_support;
 mod tests_transitions;
 
 pub use types::{
-    InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome, SessionConfig,
-    SessionError, SessionState, TranscribeBackend, TranscribeError, TranscribeResult,
-    UtteranceOutcome, SR,
+    InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome, PostRedaction,
+    SessionConfig, SessionError, SessionState, TranscribeBackend, TranscribeError,
+    TranscribeResult, UtteranceOutcome, SR,
 };
 
 /// Translate the backend's free-form gate text (as `result.gate` carries

@@ -150,6 +150,27 @@ pub struct PostProcessOutcome {
     /// `post_error`: provider/transport error message; empty when none
     /// (emitted as `null`/absent, matching Python's `error or None`).
     pub error: String,
+    /// `post_redacted`: whether cloud-safe redaction replaced any terms
+    /// before the provider call.
+    pub redacted: bool,
+    /// `post_redactions`: the public-safe redaction summary (placeholder /
+    /// kind / char-count only, never the original values), mirroring
+    /// Python's `post_result.redactions or []`.
+    pub redactions: Vec<PostRedaction>,
+}
+
+/// One entry of [`PostProcessOutcome::redactions`] -- the public-safe
+/// summary of a single redaction (`ui`/telemetry never see the original
+/// value). Mirrors `crate::postprocess::RedactionSummary` /
+/// Python's `RedactionResult.public_summary()` shape.
+#[derive(Debug, Clone)]
+pub struct PostRedaction {
+    /// Placeholder token that replaced the sensitive value (e.g. `[[WD_1]]`).
+    pub placeholder: String,
+    /// Redaction kind (`email`, `phone`, `term`, ...).
+    pub kind: String,
+    /// Character length of the original value (length only, never the text).
+    pub chars: usize,
 }
 
 /// Per-session configuration that mirrors the subset of `Dictate`

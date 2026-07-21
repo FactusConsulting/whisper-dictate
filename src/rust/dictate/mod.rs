@@ -86,7 +86,7 @@ pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
     DictateSession, InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome,
-    SessionConfig, SessionError, SessionState, TranscribeBackend, TranscribeError,
+    PostRedaction, SessionConfig, SessionError, SessionState, TranscribeBackend, TranscribeError,
     TranscribeResult, UtteranceOutcome,
 };
 pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};

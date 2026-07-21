@@ -48,7 +48,7 @@ use std::io::{self, Read};
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::dictate::{PostProcessBackend, PostProcessOutcome};
+use crate::dictate::{PostProcessBackend, PostProcessOutcome, PostRedaction};
 
 /// Adapter that drives the full [`postprocess_text`] pipeline as a session
 /// [`crate::dictate::PostProcessBackend`], so the in-process Rust engine can
@@ -99,6 +99,15 @@ impl SessionPostProcess {
 impl PostProcessBackend for SessionPostProcess {
     fn post_process(&self, text: &str) -> PostProcessOutcome {
         let result = postprocess_text(text, &self.settings);
+        let redactions = result
+            .redactions
+            .into_iter()
+            .map(|r| PostRedaction {
+                placeholder: r.placeholder,
+                kind: r.kind,
+                chars: r.chars,
+            })
+            .collect();
         PostProcessOutcome {
             text: result.text,
             processor: result.provider,
@@ -108,6 +117,8 @@ impl PostProcessBackend for SessionPostProcess {
             changed: result.changed,
             fallback: result.fallback,
             error: result.error,
+            redacted: result.redacted,
+            redactions,
         }
     }
 }

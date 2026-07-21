@@ -102,6 +102,23 @@ pub(super) fn emit_utterance<W: Write>(
         if !p.error.is_empty() {
             payload.insert("post_error".into(), Value::from(p.error.clone()));
         }
+        // Redaction provenance (public-safe: placeholder / kind / char
+        // count only). Always emitted when a pass ran -- `post_redactions`
+        // is `[]` when nothing was redacted, matching Python's
+        // `redactions or []`.
+        payload.insert("post_redacted".into(), Value::from(p.redacted));
+        let redactions: Vec<Value> = p
+            .redactions
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "placeholder": r.placeholder,
+                    "kind": r.kind,
+                    "chars": r.chars,
+                })
+            })
+            .collect();
+        payload.insert("post_redactions".into(), Value::from(redactions));
     }
     write_line(writer, &Value::Object(payload))
 }

@@ -91,6 +91,26 @@
     "wgpu",
     "XDG",
     "ydotool",
-    "ydotoold"
+    "ydotoold",
+    "characterisation",
+    "colours",
+    "dedups",
+    "DMIC",
+    "driveable",
+    "enigo",
+    "façade",
+    "headlessly",
+    "hotspots",
+    "impls",
+    "mgmt",
+    "prereqs",
+    "prioritised",
+    "PYTHONIOENCODING",
+    "rdev",
+    "realised",
+    "respawns",
+    "summariser",
+    "ureq",
+    "XFAIL"
   ]
 }

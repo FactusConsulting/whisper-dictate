@@ -307,6 +307,11 @@ fn post_processor_rewrites_text_and_emits_status() {
     assert_eq!(utterance["post_fallback"], false);
     // No error -> the field is dropped, matching Python's `error or None`.
     assert!(utterance.get("post_error").is_none());
+    // Redaction provenance is always present when a pass ran (empty list
+    // when nothing was redacted), matching vp_dictate.py's
+    // `post_redactions or []`.
+    assert_eq!(utterance["post_redacted"], false);
+    assert_eq!(utterance["post_redactions"], serde_json::json!([]));
 }
 
 #[test]

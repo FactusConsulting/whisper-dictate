@@ -151,6 +151,8 @@ impl PostProcessBackend for TestPostProcess {
             changed: self.output != text,
             fallback: false,
             error: String::new(),
+            redacted: false,
+            redactions: Vec::new(),
         }
     }
 }
