@@ -138,7 +138,6 @@ pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
         session = session.with_post_process(Box::new(post));
     }
 
-    let stdout = std::io::stdout();
     let outcome = if json {
         // The session gates its worker-event lines behind VOICEPI_WORKER_EVENTS
         // (so an ungated CLI drive never leaks them). `--json` explicitly asks
@@ -149,8 +148,16 @@ pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
         ) {
             std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
         }
-        let mut handle = stdout.lock();
-        drive_session_over_pcm(&mut session, &pcm, &mut handle)?
+        // Buffer, then strip the session's `[worker-event] ` line prefix so
+        // stdout is valid JSONL (one JSON object per line) as `--json`
+        // promises, rather than the wire-format `[worker-event] {…}` lines.
+        let mut buf = Vec::new();
+        let outcome = drive_session_over_pcm(&mut session, &pcm, &mut buf)?;
+        let jsonl = to_clean_jsonl(&String::from_utf8_lossy(&buf));
+        if !jsonl.is_empty() {
+            println!("{jsonl}");
+        }
+        outcome
     } else {
         let mut sink = std::io::sink();
         drive_session_over_pcm(&mut session, &pcm, &mut sink)?
@@ -163,6 +170,22 @@ pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Convert the session's buffered worker-event stream into clean JSONL:
+/// drop the `[worker-event] ` line prefix the wire emitter adds (see
+/// [`crate::dictate::events::WORKER_EVENT_PREFIX`]) and skip blank lines, so
+/// `--json` output is one valid JSON object per line. Lines without the
+/// prefix pass through unchanged.
+fn to_clean_jsonl(raw: &str) -> String {
+    raw.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.strip_prefix(crate::dictate::events::WORKER_EVENT_PREFIX)
+                .unwrap_or(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

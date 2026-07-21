@@ -97,6 +97,32 @@ fn capture_inject_records_texts_in_order() {
 }
 
 #[test]
+fn to_clean_jsonl_strips_prefix_and_yields_valid_json() {
+    // Real wire-format lines (prefixed) + a blank line, as the session emits.
+    let raw = "[worker-event] {\"event\":\"status\",\"state\":\"opening\"}\n\
+               \n\
+               [worker-event] {\"event\":\"utterance\",\"text\":\"hi\"}\n";
+    let out = to_clean_jsonl(raw);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "blank line dropped; got {out:?}");
+    for line in &lines {
+        assert!(
+            !line.starts_with("[worker-event]"),
+            "prefix must be stripped: {line}"
+        );
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|e| panic!("line is not valid JSON ({e}): {line}"));
+    }
+}
+
+#[test]
+fn to_clean_jsonl_passes_through_unprefixed_and_empty() {
+    assert_eq!(to_clean_jsonl("{\"a\":1}"), "{\"a\":1}");
+    assert_eq!(to_clean_jsonl(""), "");
+    assert_eq!(to_clean_jsonl("   \n\n"), "");
+}
+
+#[test]
 fn config_reads_format_commands_from_env() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     std::env::set_var(FORMAT_COMMANDS_ENV, "en");
