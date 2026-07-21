@@ -39,14 +39,89 @@ pub use run::{
 };
 pub use settings::{
     default_base_url, looks_like_http_url, normalized_base_url, normalized_model,
-    PostprocessSettings, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_POST_MODEL, VALID_MODES,
-    VALID_PROCESSORS,
+    settings_from_env, settings_from_env_with, PostprocessSettings, DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_OLLAMA_POST_MODEL, VALID_MODES, VALID_PROCESSORS,
 };
 
 use std::io::{self, Read};
 
 use anyhow::Result;
 use serde::Deserialize;
+
+use crate::dictate::{PostProcessBackend, PostProcessOutcome, PostRedaction};
+
+/// Adapter that drives the full [`postprocess_text`] pipeline as a session
+/// [`crate::dictate::PostProcessBackend`], so the in-process Rust engine can
+/// run the same LLM cleanup pass the Python worker did -- without a Python
+/// child building the settings envelope.
+///
+/// Holds a snapshot of [`PostprocessSettings`] stamped at construction
+/// (like the session's other live settings today; a per-utterance re-read
+/// is deferred to the same follow-up that refreshes the audio-route env).
+/// `post_process` returns [`PostprocessResult::text`], which
+/// [`postprocess_text`] guarantees falls back to the input text on any
+/// provider / transport error or empty rewrite -- so attaching this backend
+/// can never drop the user's dictation, only improve it.
+pub struct SessionPostProcess {
+    settings: PostprocessSettings,
+}
+
+impl SessionPostProcess {
+    /// Wrap an explicit settings snapshot (used by tests and by
+    /// [`Self::from_settings`]).
+    pub fn new(settings: PostprocessSettings) -> Self {
+        Self { settings }
+    }
+
+    /// Build from a settings snapshot, returning `None` when the pass would
+    /// be a no-op: no processor configured (`processor == "none"`) OR a
+    /// passthrough `raw` mode. Python gates the `post-processing` status on
+    /// BOTH `processor != "none"` and `mode != "raw"`; skipping the attach
+    /// here keeps the session from emitting a `post-processing` status for a
+    /// stage that never runs (and avoids per-utterance overhead for the
+    /// default config).
+    pub fn from_settings(settings: PostprocessSettings) -> Option<Self> {
+        if settings.processor == "none" || normalize_mode(&settings.mode) == "raw" {
+            None
+        } else {
+            Some(Self::new(settings))
+        }
+    }
+
+    /// Build from the process environment (the `VOICEPI_POST_*` vars the UI
+    /// exports into the worker env). `None` when the operator has not
+    /// enabled a post-processor.
+    pub fn from_env() -> Option<Self> {
+        Self::from_settings(settings_from_env())
+    }
+}
+
+impl PostProcessBackend for SessionPostProcess {
+    fn post_process(&self, text: &str) -> PostProcessOutcome {
+        let result = postprocess_text(text, &self.settings);
+        let redactions = result
+            .redactions
+            .into_iter()
+            .map(|r| PostRedaction {
+                placeholder: r.placeholder,
+                kind: r.kind,
+                chars: r.chars,
+            })
+            .collect();
+        PostProcessOutcome {
+            text: result.text,
+            processor: result.provider,
+            mode: result.mode,
+            model: result.model,
+            latency_ms: result.latency_ms,
+            changed: result.changed,
+            fallback: result.fallback,
+            error: result.error,
+            redacted: result.redacted,
+            redactions,
+        }
+    }
+}
 
 /// JSON envelope for the hidden `postprocess` subcommand. Mirrors the
 /// `health` envelope shape: a single top-level `action` discriminator that
@@ -111,4 +186,66 @@ pub fn handle_postprocess() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod session_backend_tests {
+    use super::*;
+
+    fn settings(processor: &str) -> PostprocessSettings {
+        // Default to a rewriting mode so `from_settings` attaches; the
+        // `none`/`raw` gating is covered by dedicated tests below.
+        let mut s = settings_from_env_with(|_| None);
+        s.processor = processor.to_owned();
+        s.mode = "clean".to_owned();
+        s
+    }
+
+    #[test]
+    fn from_settings_returns_none_for_disabled_processor() {
+        assert!(SessionPostProcess::from_settings(settings("none")).is_none());
+        assert!(SessionPostProcess::from_settings(settings("ollama")).is_some());
+    }
+
+    #[test]
+    fn from_settings_returns_none_for_raw_mode() {
+        // A selected processor with `raw` mode is a passthrough -- do not
+        // attach (parity with Python's `mode != "raw"` gate).
+        let mut s = settings("ollama");
+        s.mode = "raw".to_owned();
+        assert!(SessionPostProcess::from_settings(s).is_none());
+    }
+
+    #[test]
+    fn post_process_is_passthrough_when_processor_none() {
+        // A `none` processor never touches the network: `post_process`
+        // returns the input verbatim. (The backend would normally be
+        // skipped via `from_settings` -> None, but constructing it directly
+        // pins the passthrough contract.)
+        let backend = SessionPostProcess::new(settings("none"));
+        assert_eq!(
+            backend.post_process("keep me exactly").text,
+            "keep me exactly"
+        );
+    }
+
+    #[test]
+    fn post_process_falls_back_to_input_on_unreachable_provider() {
+        // Ollama pointed at a closed port fails fast and
+        // `postprocess_text` falls back to the original text -- the seam
+        // must never drop the user's dictation. Mirrors run.rs's
+        // `ollama_failure_falls_back_to_original_text`.
+        let mut s = settings("ollama");
+        s.mode = "clean".to_owned();
+        s.base_url = "http://127.0.0.1:1".to_owned();
+        s.timeout_ms = 100;
+        let backend = SessionPostProcess::new(s);
+        let outcome = backend.post_process("dictated text");
+        assert_eq!(outcome.text, "dictated text");
+        assert!(
+            outcome.fallback,
+            "unreachable provider must report fallback"
+        );
+        assert!(!outcome.error.is_empty());
+    }
 }

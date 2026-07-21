@@ -112,16 +112,65 @@ pub trait InjectBackend {
 /// (threading a `P` through the coordinator sink, audio route, and every
 /// test) is disproportionate churn.
 ///
-/// The production impl (a follow-up slice) wraps
-/// [`crate::postprocess::postprocess_text`], which ALWAYS falls back to
-/// the input text on any provider / transport error. So an implementation
-/// MUST NOT lose the user's dictation: returning the input unchanged is
-/// the correct behaviour when the rewrite is unavailable or empty.
+/// The production impl wraps [`crate::postprocess::postprocess_text`],
+/// which ALWAYS falls back to the input text on any provider / transport
+/// error. So an implementation MUST NOT lose the user's dictation:
+/// returning the input unchanged (via [`PostProcessOutcome`]) is the
+/// correct behaviour when the rewrite is unavailable or empty.
 pub trait PostProcessBackend {
-    /// Rewrite `text` (cleanup / reformat). Return the input unchanged
-    /// when post-processing is a no-op or fails -- never an empty string
-    /// for non-empty input.
-    fn post_process(&self, text: &str) -> String;
+    /// Rewrite `text` (cleanup / reformat) and report the pass metadata.
+    /// The returned [`PostProcessOutcome::text`] must never be empty for
+    /// non-empty input (fall back to the input instead).
+    fn post_process(&self, text: &str) -> PostProcessOutcome;
+}
+
+/// Result of a [`PostProcessBackend`] pass: the (possibly rewritten) text
+/// plus the metadata the session mirrors onto the `utterance` event as the
+/// `post_*` fields Python emits (`vp_dictate.py:469-475`), consumed by
+/// `ui/log_render.rs::post_processing_summary` + `telemetry.rs`. Kept as a
+/// neutral struct in the session layer so `dictate` does not depend on
+/// `crate::postprocess`; the production backend maps its
+/// `PostprocessResult` onto these fields.
+#[derive(Debug, Clone)]
+pub struct PostProcessOutcome {
+    /// Final text to inject (rewritten, or the input on fallback).
+    pub text: String,
+    /// `post_processor`: the provider that ran (`ollama` / `openai` / ...).
+    pub processor: String,
+    /// `post_mode`: the rewrite style (`clean` / `email` / ...).
+    pub mode: String,
+    /// `post_model`: the text model used.
+    pub model: String,
+    /// `post_latency_ms`: wall-clock time the provider call took.
+    pub latency_ms: u64,
+    /// `post_changed`: whether the rewrite differed from the input.
+    pub changed: bool,
+    /// `post_fallback`: whether the pass fell back to the input text.
+    pub fallback: bool,
+    /// `post_error`: provider/transport error message; empty when none
+    /// (emitted as `null`/absent, matching Python's `error or None`).
+    pub error: String,
+    /// `post_redacted`: whether cloud-safe redaction replaced any terms
+    /// before the provider call.
+    pub redacted: bool,
+    /// `post_redactions`: the public-safe redaction summary (placeholder /
+    /// kind / char-count only, never the original values), mirroring
+    /// Python's `post_result.redactions or []`.
+    pub redactions: Vec<PostRedaction>,
+}
+
+/// One entry of [`PostProcessOutcome::redactions`] -- the public-safe
+/// summary of a single redaction (`ui`/telemetry never see the original
+/// value). Mirrors `crate::postprocess::RedactionSummary` /
+/// Python's `RedactionResult.public_summary()` shape.
+#[derive(Debug, Clone)]
+pub struct PostRedaction {
+    /// Placeholder token that replaced the sensitive value (e.g. `[[WD_1]]`).
+    pub placeholder: String,
+    /// Redaction kind (`email`, `phone`, `term`, ...).
+    pub kind: String,
+    /// Character length of the original value (length only, never the text).
+    pub chars: usize,
 }
 
 /// Per-session configuration that mirrors the subset of `Dictate`
