@@ -782,14 +782,25 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             self.assertGreaterEqual(major, 5, f"{path} uses checkout older than v5 (Node20)")
 
     def test_workflows_use_node24_python_action(self):
-        for path in Path(".github/workflows").glob("*.yml"):
+        # Guard the Node24 floor: every actions/setup-python must be v6+ (reject
+        # the deprecated Node20 v5 and older). Regex-based rather than pinned to
+        # an exact major so Renovate can bump v6 -> v7 -> ... without tripping
+        # this guard. Mirrors test_workflows_use_node24_checkout_action. Scan
+        # both extensions so a future `.yaml` workflow can't slip past.
+        workflows = [
+            *Path(".github/workflows").glob("*.yml"),
+            *Path(".github/workflows").glob("*.yaml"),
+        ]
+        majors = []
+        for path in workflows:
             workflow = path.read_text(encoding="utf-8")
-            self.assertNotIn("actions/setup-python@v5", workflow, path.as_posix())
-        workflow_text = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in Path(".github/workflows").glob("*.yml")
-        )
-        self.assertIn("actions/setup-python@v6", workflow_text)
+            for major in re.findall(r"uses:\s*actions/setup-python@v(\d+)", workflow):
+                majors.append((path.as_posix(), int(major)))
+        self.assertTrue(majors, "no workflow uses actions/setup-python")
+        for path, major in majors:
+            self.assertGreaterEqual(
+                major, 6, f"{path} uses setup-python older than v6 (Node20)"
+            )
 
     def test_smoke_workflow_sets_pythonpath_with_cross_shell_env(self):
         workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")

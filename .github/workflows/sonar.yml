@@ -81,7 +81,7 @@ jobs:
           # Sanity check: confirm the report has source records with repo-root paths.
           echo "LCOV SF records: $(grep -c '^SF:' lcov.info), sample: $(grep -m1 '^SF:' lcov.info)"
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 

@@ -619,7 +619,7 @@ jobs:
           if ($p2.ExitCode -ne 0) { throw "whisper-dictate.exe config path exited $($p2.ExitCode)" }
           Write-Host "  ok  config path exit 0"
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: steps.download.outputs.found == 'true'
         with:
           python-version: "3.14"

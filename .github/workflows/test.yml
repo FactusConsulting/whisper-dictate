@@ -140,7 +140,7 @@ jobs:
         if: env.RUN_UNIT == 'true'
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: env.RUN_UNIT == 'true'
         with:
           python-version: "3.14"
@@ -162,7 +162,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - name: Install test deps
@@ -178,7 +178,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - name: Install PyYAML
@@ -236,7 +236,7 @@ jobs:
         if: env.RUN_SMOKE == 'true'
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: env.RUN_SMOKE == 'true'
         with:
           python-version: "3.14"
