@@ -71,6 +71,10 @@ pub mod restart;
 // this PR — PR 3 (audio_route) and PR 4 (hotkey wiring) consume it.
 // See module docs for the design rationale.
 pub mod session;
+// Offline WAV-driven drive of a `DictateSession` for CLI integration
+// testing of the Rust engine (the `simulate-session` verb). Stock: cloud
+// backend + preview inject, no feature gate.
+pub mod simulate;
 pub mod skip;
 
 pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelError};
