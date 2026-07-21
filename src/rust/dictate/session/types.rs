@@ -95,6 +95,35 @@ pub trait InjectBackend {
     fn inject(&self, text: &str) -> Result<(), InjectError>;
 }
 
+/// Optional boundary for the LLM post-processing pass that runs AFTER
+/// transcription and BEFORE the format-command layer + injection,
+/// mirroring the `postprocess -> format -> inject` order in
+/// `vp_dictate.py`.
+///
+/// Unlike [`TranscribeBackend`] / [`InjectBackend`] this seam is
+/// OPTIONAL: a session with no post-processor configured
+/// ([`super::DictateSession::post_process`] is `None`) skips the pass
+/// entirely and does not emit the `post-processing` status, so the
+/// default behaviour is byte-identical to a session that never knew
+/// about post-processing. That is why it is a boxed `dyn` field with a
+/// `None` default rather than a third generic type parameter on
+/// [`super::DictateSession`] -- the pass runs at most once per
+/// utterance, so the vtable indirection is irrelevant and the alternative
+/// (threading a `P` through the coordinator sink, audio route, and every
+/// test) is disproportionate churn.
+///
+/// The production impl (a follow-up slice) wraps
+/// [`crate::postprocess::postprocess_text`], which ALWAYS falls back to
+/// the input text on any provider / transport error. So an implementation
+/// MUST NOT lose the user's dictation: returning the input unchanged is
+/// the correct behaviour when the rewrite is unavailable or empty.
+pub trait PostProcessBackend {
+    /// Rewrite `text` (cleanup / reformat). Return the input unchanged
+    /// when post-processing is a no-op or fails -- never an empty string
+    /// for non-empty input.
+    fn post_process(&self, text: &str) -> String;
+}
+
 /// Per-session configuration that mirrors the subset of `Dictate`
 /// fields the per-utterance state machine actually reads. Loaded once
 /// at session construction; live-reload is the supervisor's job (PR 5).
