@@ -118,6 +118,18 @@ pub struct SessionConfig {
     /// Number of capture channels surfaced on every status event.
     /// Mirrors `Dictate._capture_channels`.
     pub capture_channels: u32,
+    /// Spoken formatting-command set applied to the final transcript
+    /// just before injection, mirroring Python's `format_commands`
+    /// setting (`VOICEPI_FORMAT_COMMANDS`: `off` / `en` / `da` /
+    /// `both`). Passed straight to
+    /// [`crate::formatting::apply_format_commands`], whose
+    /// `normalize_command_set` treats `None`, `Some("off")`, and any
+    /// unknown-but-falsy value as a passthrough -- so a default-config
+    /// session injects the raw transcript exactly as before this field
+    /// existed. Stamped once at construction like `min_record_seconds`;
+    /// live re-read is deferred to the same future PR that wires the
+    /// audio route's per-`start_recording` env refresh.
+    pub format_command_set: Option<String>,
 }
 
 impl Default for SessionConfig {
@@ -127,6 +139,7 @@ impl Default for SessionConfig {
             capture_backend: String::new(),
             audio_device: String::new(),
             capture_channels: 1,
+            format_command_set: None,
         }
     }
 }

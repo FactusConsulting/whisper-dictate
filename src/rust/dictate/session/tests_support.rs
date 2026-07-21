@@ -152,12 +152,27 @@ pub(super) fn session<T: TranscribeBackend, I: InjectBackend>(
     Vec<u8>,
     std::sync::MutexGuard<'static, ()>,
 ) {
+    session_with_config(transcribe, inject, SessionConfig::default())
+}
+
+/// Same as [`session`] but with a caller-supplied [`SessionConfig`], so
+/// a test can drive a non-default field (e.g. `format_command_set`)
+/// without duplicating the `ENV_LOCK` + `VOICEPI_WORKER_EVENTS` dance.
+pub(super) fn session_with_config<T: TranscribeBackend, I: InjectBackend>(
+    transcribe: T,
+    inject: I,
+    config: SessionConfig,
+) -> (
+    DictateSession<T, I>,
+    Vec<u8>,
+    std::sync::MutexGuard<'static, ()>,
+) {
     let guard = crate::test_env_lock::ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
     (
-        DictateSession::new(transcribe, inject, SessionConfig::default()),
+        DictateSession::new(transcribe, inject, config),
         Vec::new(),
         guard,
     )
