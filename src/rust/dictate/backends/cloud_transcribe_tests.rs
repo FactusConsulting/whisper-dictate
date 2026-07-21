@@ -163,6 +163,61 @@ fn cloud_checked_allows_loopback_under_local_only() {
     }
 }
 
+// ── map_cloud_result — response mapping + hallucination gate (Codex P2 #543) ──
+
+fn cloud_response(text: &str, language: Option<&str>) -> CloudTranscriptionResult {
+    CloudTranscriptionResult {
+        text: text.to_owned(),
+        language: language.map(str::to_owned),
+    }
+}
+
+#[test]
+fn map_cloud_result_flags_blacklisted_transcript_as_hallucination() {
+    // A blacklisted credit ("tak") from the cloud endpoint must set
+    // is_hallucination so the session drops it as no_speech — the parity
+    // fix this guards against a revert to `false`.
+    let result = map_cloud_result(cloud_response("tak", None), 12, 16_000, 16_000);
+    assert!(result.is_hallucination, "blacklisted 'tak' must be flagged");
+    assert_eq!(result.text, "tak");
+}
+
+#[test]
+fn map_cloud_result_trims_before_the_blacklist_check() {
+    // Endpoint whitespace must not defeat the match (leading space would,
+    // since the blacklist rstrips only) — mirrors normalize_whitespace.
+    let result = map_cloud_result(cloud_response("  tak  ", None), 0, 16_000, 16_000);
+    assert!(
+        result.is_hallucination,
+        "surrounding whitespace must be trimmed before the check"
+    );
+}
+
+#[test]
+fn map_cloud_result_keeps_normal_dictation() {
+    let result = map_cloud_result(cloud_response("hello world", Some("en")), 5, 16_000, 16_000);
+    assert!(
+        !result.is_hallucination,
+        "normal dictation must not be flagged"
+    );
+    assert_eq!(result.text, "hello world");
+    assert_eq!(result.language, "en");
+}
+
+#[test]
+fn map_cloud_result_maps_fields_and_duration() {
+    // Absent language collapses to ""; duration_s = pcm_len / sample_rate.
+    let result = map_cloud_result(cloud_response("noget tekst", None), 42, 8_000, 16_000);
+    assert_eq!(result.language, "");
+    assert_eq!(result.latency_ms, 42);
+    assert!(
+        (result.duration_s - 0.5).abs() < 1e-9,
+        "{}",
+        result.duration_s
+    );
+    assert_eq!(result.gate, None);
+}
+
 #[test]
 fn transcribe_empty_model_errors_before_network() {
     let backend = CloudTranscribeBackend::new(CloudTranscribeConfig {
