@@ -111,11 +111,15 @@ where
 /// stream is written to stdout (one JSON object per line); otherwise the
 /// final injected transcript is printed (and a diagnostic line on any
 /// no-text outcome).
-pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
-    // This verb drives the cloud path (stock, no local model needed). Require
-    // a configured cloud backend and fail with an actionable message so CI /
-    // users understand what to set.
-    let config = CloudTranscribeConfig::from_env();
+/// Resolve the cloud transcribe backend for the drive: require a configured
+/// backend (non-empty key + model) with an actionable error otherwise, then
+/// enforce the local-only privacy lock. `local_only` is passed in (the
+/// handler supplies [`crate::whisper::model_manager::is_local_only`]) so the
+/// resolution is unit-testable without touching process env / network.
+fn resolve_cloud_transcribe(
+    config: CloudTranscribeConfig,
+    local_only: bool,
+) -> Result<crate::dictate::CloudTranscribeBackend> {
     if config.api_key.trim().is_empty() || config.model.trim().is_empty() {
         return Err(anyhow!(
             "simulate-session drives the Rust DictateSession over the cloud STT \
@@ -124,10 +128,15 @@ pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
              VOICEPI_STT_BASE_URL)."
         ));
     }
-    // Honour the local-only privacy lock exactly like the real session.
-    let transcribe =
-        cloud_backend_local_only_checked(crate::whisper::model_manager::is_local_only(), config)
-            .map_err(|e| anyhow!(e))?;
+    cloud_backend_local_only_checked(local_only, config).map_err(|e| anyhow!(e))
+}
+
+pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
+    // This verb drives the cloud path (stock, no local model needed).
+    let transcribe = resolve_cloud_transcribe(
+        CloudTranscribeConfig::from_env(),
+        crate::whisper::model_manager::is_local_only(),
+    )?;
 
     let pcm = decode_wav_16k_mono(Path::new(wav_path))
         .map_err(|e| anyhow!("decode {wav_path}: {e:#}"))?;

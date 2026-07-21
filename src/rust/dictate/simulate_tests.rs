@@ -122,6 +122,52 @@ fn to_clean_jsonl_passes_through_unprefixed_and_empty() {
     assert_eq!(to_clean_jsonl("   \n\n"), "");
 }
 
+fn cloud_cfg(base_url: &str) -> CloudTranscribeConfig {
+    CloudTranscribeConfig {
+        base_url: base_url.to_owned(),
+        api_key: "test-key".to_owned(),
+        model: "whisper-large-v3-turbo".to_owned(),
+        timeout_ms: 100,
+        language: None,
+        prompt: None,
+    }
+}
+
+#[test]
+fn resolve_cloud_transcribe_errors_on_empty_config() {
+    let empty = CloudTranscribeConfig {
+        api_key: String::new(),
+        model: String::new(),
+        ..cloud_cfg("https://api.groq.com/openai/v1")
+    };
+    match resolve_cloud_transcribe(empty, false) {
+        Ok(_) => panic!("empty config must error"),
+        Err(e) => assert!(e.to_string().contains("cloud STT"), "{e}"),
+    }
+}
+
+#[test]
+fn resolve_cloud_transcribe_blocks_remote_under_local_only() {
+    match resolve_cloud_transcribe(cloud_cfg("https://api.groq.com/openai/v1"), true) {
+        Ok(_) => panic!("remote endpoint under local-only must error"),
+        Err(e) => assert!(e.to_string().contains("LOCAL_ONLY"), "{e}"),
+    }
+}
+
+#[test]
+fn resolve_cloud_transcribe_ok_remote_when_not_local_only() {
+    let backend = resolve_cloud_transcribe(cloud_cfg("https://api.groq.com/openai/v1"), false)
+        .expect("remote allowed when local-only off");
+    assert_eq!(backend.config().base_url, "https://api.groq.com/openai/v1");
+}
+
+#[test]
+fn resolve_cloud_transcribe_allows_loopback_under_local_only() {
+    let backend = resolve_cloud_transcribe(cloud_cfg("http://127.0.0.1:1234/v1"), true)
+        .expect("loopback allowed under local-only");
+    assert_eq!(backend.config().base_url, "http://127.0.0.1:1234/v1");
+}
+
 #[test]
 fn config_reads_format_commands_from_env() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
