@@ -28,11 +28,15 @@
 //! gated on the same feature so they only run when the underlying
 //! dependency is available.
 
+// Cloud STT is stock (cloud_api + hound are unconditional deps), so unlike
+// the local-whisper / enigo backends it carries no cargo-feature gate.
+pub mod cloud_transcribe;
 #[cfg(feature = "rust-injection")]
 pub mod inject;
 #[cfg(feature = "whisper-rs-local")]
 pub mod whisper_local;
 
+pub use cloud_transcribe::{CloudTranscribeBackend, CloudTranscribeConfig};
 #[cfg(feature = "rust-injection")]
 pub use inject::EnigoInjectBackend;
 #[cfg(feature = "whisper-rs-local")]

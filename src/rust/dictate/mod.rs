@@ -78,10 +78,12 @@ pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelErro
 // `crate::dictate` namespace so PR 5's swap is a one-liner that doesn't
 // have to reach into the `backends` submodule. Each re-export is gated
 // on the same cargo feature as the source module.
+// Cloud STT backend is stock (no cargo-feature gate).
 #[cfg(feature = "rust-injection")]
 pub use backends::EnigoInjectBackend;
 #[cfg(feature = "whisper-rs-local")]
 pub use backends::WhisperLocalTranscribeBackend;
+pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
