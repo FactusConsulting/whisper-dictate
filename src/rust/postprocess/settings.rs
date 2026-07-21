@@ -66,6 +66,92 @@ fn default_max_chars() -> usize {
     4_000
 }
 
+// ── env-var sourcing (in-process Rust engine) ────────────────────────────────
+//
+// The Python worker builds `PostprocessSettings` from config + the keyring
+// and ships it to the Rust `postprocess` verb as a JSON envelope. The
+// in-process Rust engine (`VOICEPI_DICTATE_ENGINE=rust`) has no Python, so it
+// sources the same settings from the `VOICEPI_POST_*` process env the UI's
+// worker command already exports (`config::worker_env_overrides` +
+// `ui/app.rs`'s API-key push). Field-for-field mirror of `settings_schema.json`.
+
+/// `settings_schema.json` env keys for the post-processor. Kept as named
+/// consts so the parser and its tests reference one source of truth.
+pub const POST_PROCESSOR_ENV: &str = "VOICEPI_POST_PROCESSOR";
+pub const POST_MODE_ENV: &str = "VOICEPI_POST_MODE";
+pub const POST_MODEL_ENV: &str = "VOICEPI_POST_MODEL";
+pub const POST_BASE_URL_ENV: &str = "VOICEPI_POST_BASE_URL";
+pub const POST_TIMEOUT_MS_ENV: &str = "VOICEPI_POST_TIMEOUT_MS";
+pub const POST_MAX_INPUT_CHARS_ENV: &str = "VOICEPI_POST_MAX_INPUT_CHARS";
+pub const POST_MAX_OUTPUT_CHARS_ENV: &str = "VOICEPI_POST_MAX_OUTPUT_CHARS";
+pub const POST_REDACT_ENV: &str = "VOICEPI_POST_REDACT";
+pub const POST_REDACT_TERMS_ENV: &str = "VOICEPI_POST_REDACT_TERMS";
+/// Shared local-only privacy gate (`settings_schema.json` `local_only`).
+pub const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
+
+/// API-key env vars in resolution order, highest precedence first: the
+/// post-specific override, then the STT-shared key the UI mirrors into the
+/// worker env (`ui/app.rs`), then the provider-generic vars a user may
+/// already export. Matches the precedence in `ui/api_keys.rs`.
+pub const API_KEY_ENV_PRECEDENCE: &[&str] = &[
+    "VOICEPI_POST_API_KEY",
+    "VOICEPI_STT_API_KEY",
+    "OPENAI_API_KEY",
+    "GROQ_API_KEY",
+];
+
+/// Build [`PostprocessSettings`] from the process environment. Convenience
+/// wrapper around [`settings_from_env_with`] for production callers.
+pub fn settings_from_env() -> PostprocessSettings {
+    settings_from_env_with(|name| std::env::var(name).ok())
+}
+
+/// Testable core of [`settings_from_env`]: resolves every field through the
+/// caller-supplied `lookup` so tests can drive it hermetically without
+/// touching process env. Empty / whitespace-only values fall back to the
+/// same defaults `PostprocessSettings` uses for a missing JSON field, and
+/// `model` / `base_url` go through the same `normalized_*` substitution the
+/// Python path applies so a saved Ollama default is swapped for the right
+/// cloud default when the processor is `openai` / `groq`.
+pub fn settings_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> PostprocessSettings {
+    let get = |name: &str| {
+        lookup(name)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
+    let processor = get(POST_PROCESSOR_ENV)
+        .map(|v| v.to_lowercase())
+        .unwrap_or_else(default_processor);
+    let raw_model = get(POST_MODEL_ENV).unwrap_or_default();
+    // Unset base_url falls back to the same Ollama default the serde field
+    // uses, so `normalized_base_url` yields a real URL (the `none` / local
+    // processors keep the Ollama default; cloud processors get substituted).
+    let raw_base_url = get(POST_BASE_URL_ENV).unwrap_or_else(default_base_url_str);
+    let api_key = API_KEY_ENV_PRECEDENCE
+        .iter()
+        .find_map(|name| get(name))
+        .unwrap_or_default();
+    PostprocessSettings {
+        model: normalized_model(&processor, &raw_model),
+        base_url: normalized_base_url(&processor, &raw_base_url),
+        mode: get(POST_MODE_ENV).unwrap_or_else(default_mode),
+        timeout_ms: get(POST_TIMEOUT_MS_ENV)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(default_timeout_ms),
+        max_input_chars: get(POST_MAX_INPUT_CHARS_ENV)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(default_max_chars),
+        max_output_chars: get(POST_MAX_OUTPUT_CHARS_ENV)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(default_max_chars),
+        redact: crate::dictate::is_truthy(lookup(POST_REDACT_ENV).as_deref()),
+        redact_terms: get(POST_REDACT_TERMS_ENV).unwrap_or_default(),
+        local_only: crate::dictate::is_truthy(lookup(LOCAL_ONLY_ENV).as_deref()),
+        api_key,
+        processor,
+    }
+}
+
 /// Cloud-provider default base URL for the configured processor.
 pub fn default_base_url(processor: &str) -> &'static str {
     match processor {
@@ -150,7 +236,96 @@ pub fn looks_like_http_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+
+    /// Build a `lookup` closure over a fixed `(env, value)` map for the
+    /// hermetic `settings_from_env_with` tests.
+    fn lookup_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |name: &str| map.get(name).cloned()
+    }
+
+    #[test]
+    fn settings_from_env_uses_defaults_when_unset() {
+        let s = settings_from_env_with(lookup_from(&[]));
+        assert_eq!(s.processor, "none");
+        assert_eq!(s.mode, "raw");
+        assert_eq!(s.model, DEFAULT_OLLAMA_POST_MODEL);
+        assert_eq!(s.base_url, DEFAULT_OLLAMA_BASE_URL);
+        assert_eq!(s.timeout_ms, 4000);
+        assert_eq!(s.max_input_chars, 4000);
+        assert_eq!(s.max_output_chars, 4000);
+        assert!(!s.redact);
+        assert!(!s.local_only);
+        assert!(s.api_key.is_empty());
+    }
+
+    #[test]
+    fn settings_from_env_reads_and_normalizes_fields() {
+        // groq processor with the saved Ollama model/base_url defaults ->
+        // normalized to the groq cloud defaults (parity with Python).
+        let s = settings_from_env_with(lookup_from(&[
+            (POST_PROCESSOR_ENV, "Groq"), // case-insensitive
+            (POST_MODE_ENV, "clean"),
+            (POST_MODEL_ENV, DEFAULT_OLLAMA_POST_MODEL),
+            (POST_BASE_URL_ENV, DEFAULT_OLLAMA_BASE_URL),
+            (POST_TIMEOUT_MS_ENV, "9000"),
+            (POST_MAX_INPUT_CHARS_ENV, "2500"),
+            (POST_MAX_OUTPUT_CHARS_ENV, "1200"),
+            (POST_REDACT_ENV, "1"),
+            (POST_REDACT_TERMS_ENV, "Codex, Falcon"),
+            (LOCAL_ONLY_ENV, "0"),
+        ]));
+        assert_eq!(s.processor, "groq");
+        assert_eq!(s.mode, "clean");
+        assert_eq!(s.model, "llama-3.1-8b-instant");
+        assert_eq!(s.base_url, GROQ_BASE_URL);
+        assert_eq!(s.timeout_ms, 9000);
+        assert_eq!(s.max_input_chars, 2500);
+        assert_eq!(s.max_output_chars, 1200);
+        assert!(s.redact);
+        assert_eq!(s.redact_terms, "Codex, Falcon");
+        assert!(!s.local_only);
+    }
+
+    #[test]
+    fn settings_from_env_api_key_precedence() {
+        // Post-specific override wins over the STT-shared and generic vars.
+        let s = settings_from_env_with(lookup_from(&[
+            ("VOICEPI_POST_API_KEY", "post-key"),
+            ("VOICEPI_STT_API_KEY", "stt-key"),
+            ("OPENAI_API_KEY", "openai-key"),
+        ]));
+        assert_eq!(s.api_key, "post-key");
+
+        // Falls through to the STT-shared key, then the provider-generic.
+        let s = settings_from_env_with(lookup_from(&[
+            ("VOICEPI_STT_API_KEY", "stt-key"),
+            ("GROQ_API_KEY", "groq-key"),
+        ]));
+        assert_eq!(s.api_key, "stt-key");
+        let s = settings_from_env_with(lookup_from(&[("GROQ_API_KEY", "groq-key")]));
+        assert_eq!(s.api_key, "groq-key");
+    }
+
+    #[test]
+    fn settings_from_env_blank_values_fall_back_to_defaults() {
+        // Whitespace-only env values must not override the defaults nor
+        // parse into a zero timeout.
+        let s = settings_from_env_with(lookup_from(&[
+            (POST_PROCESSOR_ENV, "   "),
+            (POST_TIMEOUT_MS_ENV, "  "),
+            (POST_MODE_ENV, ""),
+        ]));
+        assert_eq!(s.processor, "none");
+        assert_eq!(s.mode, "raw");
+        assert_eq!(s.timeout_ms, 4000);
+    }
 
     #[test]
     fn default_base_url_for_processor() {

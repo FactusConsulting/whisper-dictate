@@ -266,11 +266,19 @@ pub(crate) fn make_real_session(
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
         let inject = ProductionInjectBackend::from_env();
 
-        let session: Arc<Mutex<RealSession>> = Arc::new(Mutex::new(DictateSession::new(
-            transcribe,
-            inject,
-            session_config_from_env(),
-        )));
+        // Attach the LLM post-processing pass when the operator configured
+        // one (`VOICEPI_POST_PROCESSOR` != `none`). `from_env` returns None
+        // for the default `none` processor, so a stock config installs no
+        // backend and pays zero per-utterance cost. The pass runs before
+        // the format-command layer inside the session (Python's
+        // `postprocess -> format -> inject` order); `SessionPostProcess`
+        // falls back to the raw transcript on any provider error, so this
+        // can only improve output, never drop dictation.
+        let mut dictate = DictateSession::new(transcribe, inject, session_config_from_env());
+        if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
+            dictate = dictate.with_post_process(Box::new(post));
+        }
+        let session: Arc<Mutex<RealSession>> = Arc::new(Mutex::new(dictate));
 
         // Spawn the audio pump LAST so a model-path / idle-timeout
         // parse failure does not leak the cpal stream + Silero
