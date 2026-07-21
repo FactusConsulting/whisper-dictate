@@ -31,6 +31,10 @@
 // Cloud STT is stock (cloud_api + hound are unconditional deps), so unlike
 // the local-whisper / enigo backends it carries no cargo-feature gate.
 pub mod cloud_transcribe;
+// Stock hallucination blacklist filter shared by the local + cloud
+// backends (Python applies it backend-agnostically). No feature gate so
+// the cloud path can filter too and the filter is tested on every build.
+pub mod hallucination;
 #[cfg(feature = "rust-injection")]
 pub mod inject;
 // Runtime local-vs-cloud transcribe selector. Stock (generic over the
@@ -41,8 +45,9 @@ pub mod production_transcribe;
 pub mod whisper_local;
 
 pub use cloud_transcribe::{CloudTranscribeBackend, CloudTranscribeConfig};
+pub use hallucination::is_hallucination;
 #[cfg(feature = "rust-injection")]
 pub use inject::EnigoInjectBackend;
 pub use production_transcribe::ProductionTranscribeBackend;
 #[cfg(feature = "whisper-rs-local")]
-pub use whisper_local::{is_hallucination, WhisperLocalTranscribeBackend};
+pub use whisper_local::WhisperLocalTranscribeBackend;

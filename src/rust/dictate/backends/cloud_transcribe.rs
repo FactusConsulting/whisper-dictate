@@ -17,6 +17,7 @@
 use std::io::Cursor;
 use std::time::Instant;
 
+use super::hallucination::is_hallucination;
 use crate::cloud_api::cloud_transcribe;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
@@ -199,16 +200,20 @@ impl TranscribeBackend for CloudTranscribeBackend {
             self.config.timeout_ms,
         )
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
+        // Apply the same whole-text hallucination blacklist Python runs in
+        // the backend-agnostic `_transcribe_pcm` gate (so the cloud
+        // `stt_backend=openai` path filters "tak"/"thank you"-family
+        // credits identically to local Whisper). Trim first: the endpoint
+        // may return surrounding whitespace, and the blacklist match
+        // rstrips only, so a leading space would otherwise defeat it —
+        // mirroring the local path's `normalize_whitespace` pre-step.
+        let hallucinated = is_hallucination(result.text.trim());
         Ok(TranscribeResult {
             text: result.text,
             language: result.language.unwrap_or_default(),
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             duration_s: pcm.len() as f64 / f64::from(sample_rate.max(1)),
-            // The cloud endpoint does its own decoding; the session's
-            // empty-text gate handles a blank result. Hallucination
-            // filtering for the cloud path is a follow-up (the pattern
-            // filter currently lives behind the local-whisper feature).
-            is_hallucination: false,
+            is_hallucination: hallucinated,
             gate: None,
         })
     }

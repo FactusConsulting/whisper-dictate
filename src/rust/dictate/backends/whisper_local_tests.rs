@@ -1,5 +1,8 @@
-//! Tests for [`super::WhisperLocalTranscribeBackend`] and the
-//! [`super::is_hallucination`] blacklist filter.
+//! Tests for [`super::WhisperLocalTranscribeBackend`] and its
+//! `normalize_whitespace` pre-step. The exact-blacklist
+//! [`is_hallucination`] filter itself is stock and tested in
+//! `hallucination_tests.rs`; the one test kept here pins the
+//! normalize-then-filter ordering the trait impl relies on.
 //!
 //! Live in a sibling file (declared via `#[path]` in the production
 //! module) so the unit-test surface is co-located with the impl while
@@ -20,63 +23,10 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 
-use super::{
-    is_hallucination, normalize_whitespace, WhisperBackendConfig, WhisperLocalTranscribeBackend,
-};
+use super::super::hallucination::is_hallucination;
+use super::{normalize_whitespace, WhisperBackendConfig, WhisperLocalTranscribeBackend};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
-
-// ── is_hallucination — exact-blacklist matching ──────────────────────────────
-
-#[test]
-fn is_hallucination_matches_exact_blacklist_entry() {
-    // Most frequent observed false positive on quiet Danish input.
-    assert!(is_hallucination("tak"));
-    assert!(is_hallucination("Tak"));
-    assert!(is_hallucination("TAK"));
-}
-
-#[test]
-fn is_hallucination_matches_with_trailing_whitespace() {
-    // Python uses `text.lower().rstrip()` — trailing whitespace must
-    // not defeat the match.
-    assert!(is_hallucination("tak  \n"));
-    assert!(is_hallucination("thank you for watching   "));
-}
-
-#[test]
-fn is_hallucination_matches_danish_entries_case_insensitively() {
-    // Non-ASCII (Danish "å") must still match under
-    // `str::to_lowercase()` (Unicode-aware in Rust, matching Python).
-    assert!(is_hallucination("Tak fordi du så med"));
-    assert!(is_hallucination("Tak fordi du så med."));
-}
-
-#[test]
-fn is_hallucination_does_not_match_normal_dictation() {
-    assert!(!is_hallucination("hello world"));
-    assert!(!is_hallucination("dette er en almindelig sætning"));
-    // Leading whitespace is NOT stripped by Python (`rstrip` is
-    // right-only); preserve that semantic so the blacklist exact-match
-    // doesn't false-positive on substrings.
-    assert!(!is_hallucination("  tak"));
-}
-
-#[test]
-fn is_hallucination_does_not_match_partial_substring() {
-    // Python's check is `text.lower().rstrip() in HALLUCINATIONS`
-    // (whole-text exact match, not a substring scan). A real sentence
-    // that contains "tak" inside it must NOT be flagged.
-    assert!(!is_hallucination("tak for hjælpen"));
-    assert!(!is_hallucination("thank you very much"));
-}
-
-#[test]
-fn is_hallucination_is_empty_safe() {
-    // `""` is not on the blacklist — the session's empty-text branch
-    // handles it separately. We just make sure we don't panic on it.
-    assert!(!is_hallucination(""));
-}
 
 // ── trait-impl error mapping ─────────────────────────────────────────────────
 
