@@ -93,13 +93,10 @@ where
     session
         .start(writer)
         .map_err(|e| anyhow!("session start failed: {e}"))?;
-    if pcm.is_empty() {
-        // Push at least one (empty) nothing so the buffer stays empty and
-        // stop resolves to NoAudio deterministically.
-    } else {
-        for chunk in pcm.chunks(DRIVE_FRAME) {
-            session.push_frame(chunk);
-        }
+    // Empty `pcm` yields no chunks, so no frames are pushed and `stop`
+    // resolves to `NoAudio` — no special-case needed.
+    for chunk in pcm.chunks(DRIVE_FRAME.max(1)) {
+        session.push_frame(chunk);
     }
     session
         .stop_and_transcribe(writer)
