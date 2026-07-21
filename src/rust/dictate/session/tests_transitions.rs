@@ -245,6 +245,86 @@ fn format_commands_explicit_off_is_passthrough() {
 }
 
 #[test]
+fn no_post_processor_skips_pass_and_status() {
+    // The default session has no post-processor: the transcript is
+    // injected as-is and NO `post-processing` status is emitted, so the
+    // status sequence is byte-identical to before the seam existed.
+    let transcribe = TestTranscribe::returning_text("plain transcript");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject);
+    let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["plain transcript".to_owned()],
+    );
+    assert!(
+        !state_trace(&bytes).iter().any(|s| s == "post-processing"),
+        "no post-processor must not emit a post-processing status: {:?}",
+        state_trace(&bytes),
+    );
+}
+
+#[test]
+fn post_processor_rewrites_text_and_emits_status() {
+    // With a post-processor attached, the rewritten text is what gets
+    // injected, and a `post-processing` status fires between
+    // `transcribing` and the utterance event (matching Python's
+    // WorkerStatus.PostProcessing phase).
+    let transcribe = TestTranscribe::returning_text("um raw transcript uh");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject);
+    let s = s.with_post_process(Box::new(TestPostProcess::returning("clean transcript")));
+    let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["clean transcript".to_owned()],
+        "the post-processed text must be what is injected",
+    );
+    let trace = state_trace(&bytes);
+    let tr = trace.iter().position(|s| s == "transcribing");
+    let pp = trace.iter().position(|s| s == "post-processing");
+    assert!(
+        matches!((tr, pp), (Some(t), Some(p)) if t < p),
+        "expected transcribing before post-processing, got {trace:?}"
+    );
+    // The utterance event carries the rewritten text.
+    let utterance = parse_events(&bytes)
+        .into_iter()
+        .find(|e| e.get("event").and_then(|v| v.as_str()) == Some("utterance"))
+        .expect("utterance event");
+    assert_eq!(utterance["text"], "clean transcript");
+}
+
+#[test]
+fn post_process_runs_before_format_commands() {
+    // Order fidelity: `postprocess -> format -> inject`. The
+    // post-processor emits a transcript CONTAINING a spoken format
+    // command; with format_command_set = `en` that command must then be
+    // applied to the post-processor's OUTPUT (proving postprocess ran
+    // first), yielding the final injected text.
+    let transcribe = TestTranscribe::returning_text("noisy input");
+    let inject = TestInject::new();
+    let config = SessionConfig {
+        format_command_set: Some("en".to_owned()),
+        ..SessionConfig::default()
+    };
+    let (s, _, _guard) = session_with_config(transcribe, inject, config);
+    let s = s.with_post_process(Box::new(TestPostProcess::returning("done new line here")));
+    let (_outcome, _bytes, s) = run_one_utterance(s, &one_second_pcm());
+
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["done\nhere".to_owned()],
+        "format commands must apply to the post-processor's output \
+         (proves postprocess ran before format)",
+    );
+}
+
+#[test]
 fn epoch_bumps_monotonically_per_start() {
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();

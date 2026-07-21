@@ -52,8 +52,8 @@ mod tests_support;
 mod tests_transitions;
 
 pub use types::{
-    InjectBackend, InjectError, SessionConfig, SessionError, SessionState, TranscribeBackend,
-    TranscribeError, TranscribeResult, UtteranceOutcome, SR,
+    InjectBackend, InjectError, PostProcessBackend, SessionConfig, SessionError, SessionState,
+    TranscribeBackend, TranscribeError, TranscribeResult, UtteranceOutcome, SR,
 };
 
 /// Translate the backend's free-form gate text (as `result.gate` carries
@@ -95,11 +95,20 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     config: SessionConfig,
     transcribe: T,
     inject: I,
+    /// Optional LLM post-processing pass applied to the final transcript
+    /// BEFORE the format-command layer and injection (Python's
+    /// `postprocess -> format -> inject` order). `None` -- the default --
+    /// skips the pass entirely and suppresses the `post-processing`
+    /// status, so a session built with [`Self::new`] behaves exactly as
+    /// before this seam existed. Set via [`Self::with_post_process`].
+    post_process: Option<Box<dyn PostProcessBackend + Send>>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Build a fresh session. The session starts in
-    /// [`SessionState::Idle`] with an empty buffer and `epoch == 0`.
+    /// [`SessionState::Idle`] with an empty buffer and `epoch == 0`, and
+    /// with no post-processor (use [`Self::with_post_process`] to attach
+    /// one).
     pub fn new(transcribe: T, inject: I, config: SessionConfig) -> Self {
         Self {
             state: SessionState::Idle,
@@ -108,7 +117,20 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             config,
             transcribe,
             inject,
+            post_process: None,
         }
+    }
+
+    /// Attach an LLM post-processing backend, returning the session so
+    /// callers can chain it after [`Self::new`]. When set, a successful
+    /// utterance runs `backend.post_process(text)` (emitting a
+    /// `post-processing` status) before the format-command layer and
+    /// injection. Passing this is opt-in: the production wiring only
+    /// attaches a backend when the operator configured a post-processor
+    /// (`VOICEPI_POST_PROCESSOR` != `none`).
+    pub fn with_post_process(mut self, backend: Box<dyn PostProcessBackend + Send>) -> Self {
+        self.post_process = Some(backend);
+        self
     }
 
     /// Current state-machine phase. Exposed for tests and the
@@ -354,23 +376,35 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 })
             }
             Ok(result) => {
-                // Apply the deterministic spoken formatting-command
-                // layer (`new line` -> "\n", `comma` -> ",", ...)
-                // between transcription and injection, mirroring the
-                // Python loop's `formatting.apply_format_commands` step
-                // in `vp_dictate.py`. This is a pure string transform,
-                // so it stays inside the session's pure-logic boundary;
-                // a `None` / `off` command set is a passthrough, so a
-                // default-config session injects `result.text`
-                // unchanged. The emitted `utterance` event carries this
-                // formatted text (what was actually injected), matching
-                // Python. LLM post-processing -- the other, I/O-bound
-                // half of the deferred `wave5-pr5-postprocess`
-                // follow-up -- is not wired here yet; when it lands it
-                // runs BEFORE this format pass, matching Python's
-                // `postprocess -> format` order.
+                // Text pipeline between transcription and injection,
+                // mirroring the `postprocess -> format -> inject` order in
+                // `vp_dictate.py`:
+                //
+                // 1. LLM post-processing (optional). When a
+                //    `PostProcessBackend` is attached the session emits a
+                //    `post-processing` status and runs the rewrite; the
+                //    production impl falls back to the input text on any
+                //    provider error, so the user's dictation is never
+                //    lost. `None` (the default) skips this pass AND its
+                //    status entirely, so a session without a configured
+                //    post-processor is byte-identical to before this seam
+                //    existed.
+                // 2. Deterministic spoken formatting commands
+                //    (`new line` -> "\n", `comma` -> ",", ...) -- a pure
+                //    string transform; a `None` / `off` command set is a
+                //    passthrough.
+                //
+                // The emitted `utterance` event carries the fully
+                // pipelined text (what was actually injected), matching
+                // Python.
+                let post_processed = if let Some(backend) = self.post_process.as_ref() {
+                    wire::emit_status(writer, "post-processing", &self.capture_extras())?;
+                    backend.post_process(&result.text)
+                } else {
+                    result.text.clone()
+                };
                 let text = crate::formatting::apply_format_commands(
-                    &result.text,
+                    &post_processed,
                     self.config.format_command_set.as_deref(),
                 )
                 .text;

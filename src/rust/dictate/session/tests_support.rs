@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use serde_json::Value;
 
 use super::{
-    DictateSession, InjectBackend, InjectError, SessionConfig, TranscribeBackend, TranscribeError,
-    TranscribeResult, SR,
+    DictateSession, InjectBackend, InjectError, PostProcessBackend, SessionConfig,
+    TranscribeBackend, TranscribeError, TranscribeResult, SR,
 };
 
 // ── test backends ────────────────────────────────────────────────────────────
@@ -119,6 +119,30 @@ impl InjectBackend for TestInject {
         }
         self.injected.borrow_mut().push(text.into());
         Ok(())
+    }
+}
+
+/// Post-process mock: rewrites every input to a fixed `output` so tests
+/// can assert the pass ran AND ran in the right order relative to the
+/// format-command layer (the injected text is `format(post_process(raw))`,
+/// which pins the `postprocess -> format` order without needing to peek
+/// inside the boxed backend).
+pub(super) struct TestPostProcess {
+    output: String,
+}
+
+impl TestPostProcess {
+    /// Rewrite every input to `output`.
+    pub(super) fn returning(output: &str) -> Self {
+        Self {
+            output: output.to_owned(),
+        }
+    }
+}
+
+impl PostProcessBackend for TestPostProcess {
+    fn post_process(&self, _text: &str) -> String {
+        self.output.clone()
     }
 }
 
