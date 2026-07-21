@@ -3,20 +3,26 @@
 //! Exercises the REAL [`CloudTranscribeBackend`] end-to-end against Groq's
 //! `/audio/transcriptions` endpoint using the bundled 0.5 s `hello.wav`:
 //! decode the fixture to PCM, run it through the session's cloud transcribe
-//! backend (which re-encodes to WAV and POSTs it), and assert a non-empty
-//! transcript.
+//! backend (which re-encodes to WAV and POSTs it), and assert a successful
+//! structured round trip.
 //!
 //! Runs on ubuntu AND windows via `cargo test` -- Groq performs the STT
 //! over HTTP, so no local Whisper model, GPU, or microphone is needed, and
 //! the same test binary behaves identically on both desktops.
 //!
+//! **What it asserts.** `hello.wav` is a synthetic 440 Hz amplitude-
+//! modulated sine tone (see `src/python/tests/fixtures/README.md`), NOT a
+//! spoken word, so its transcript is deliberately nondeterministic -- Groq
+//! may legitimately return empty text. The test therefore asserts the
+//! *wiring* (auth + URL + model + WAV upload + fixture decode all succeed
+//! and the backend returns a structured `Ok`), not any particular
+//! transcript text, matching the Python `groq-integration` smoke's stance.
+//!
 //! **Self-skipping.** With `GROQ_API_KEY` unset (fork PRs, local runs
 //! without a key) it prints a notice and passes, so it is harmless in the
 //! ordinary `rust` matrix. A dedicated, NON-required workflow runs it WITH
 //! the `GROQ_API_KEY` secret on both desktops -- a Groq/network hiccup must
-//! never gate a merge. It asserts wiring (auth + URL + model + WAV upload +
-//! fixture decode), not exact transcript text, matching the Python
-//! `groq-integration` smoke's stance.
+//! never gate a merge.
 
 use std::path::PathBuf;
 
@@ -59,13 +65,12 @@ fn groq_cloud_stt_transcribes_hello_wav() {
         prompt: None,
     });
 
+    // A successful `Ok` proves the full wiring worked: auth accepted, URL +
+    // model resolved, WAV upload decoded server-side. We deliberately do NOT
+    // assert on `result.text`: the fixture is a synthetic tone, so an empty
+    // transcript is a valid Groq response, not a backend failure.
     let result = backend
         .transcribe(&pcm, 16_000)
-        .expect("Groq cloud transcription should succeed for the hello.wav clip");
-    let text = result.text.trim();
-    eprintln!("[groq-cloud-stt] transcript: {text:?}");
-    assert!(
-        !text.is_empty(),
-        "Groq returned an empty transcript for a spoken 'hello' clip"
-    );
+        .expect("Groq cloud transcription round trip should succeed for the hello.wav clip");
+    eprintln!("[groq-cloud-stt] transcript: {:?}", result.text.trim());
 }
