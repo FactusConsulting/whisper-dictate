@@ -116,6 +116,53 @@ fn transcribe_empty_api_key_errors_before_network() {
     assert!(matches!(err, TranscribeError::Backend(_)));
 }
 
+// ── local-only privacy gate (Codex P1 #540) ──────────────────────────────────
+
+fn cloud_config(base_url: &str) -> CloudTranscribeConfig {
+    CloudTranscribeConfig {
+        base_url: base_url.to_owned(),
+        api_key: "test-key".to_owned(),
+        model: "whisper-large-v3-turbo".to_owned(),
+        timeout_ms: 100,
+        language: None,
+        prompt: None,
+    }
+}
+
+#[test]
+fn cloud_checked_allows_remote_when_local_only_off() {
+    // local_only disabled: a remote endpoint is fine.
+    let backend =
+        cloud_backend_local_only_checked(false, cloud_config("https://api.groq.com/openai/v1"))
+            .expect("remote allowed when local-only is off");
+    assert_eq!(backend.config().base_url, "https://api.groq.com/openai/v1");
+}
+
+#[test]
+fn cloud_checked_blocks_remote_under_local_only() {
+    // local_only on + non-loopback remote: must be refused so mic audio
+    // never leaves the machine.
+    match cloud_backend_local_only_checked(true, cloud_config("https://api.groq.com/openai/v1")) {
+        Ok(_) => panic!("remote must be blocked under local-only"),
+        Err(e) => assert!(e.contains("LOCAL_ONLY"), "{e}"),
+    }
+}
+
+#[test]
+fn cloud_checked_allows_loopback_under_local_only() {
+    // A self-hosted endpoint on loopback never leaves the box, so it stays
+    // allowed even under local-only (the documented exception).
+    for url in [
+        "http://127.0.0.1:8080/v1",
+        "http://localhost:1234/v1",
+        "http://[::1]:9000/v1",
+    ] {
+        let backend = cloud_backend_local_only_checked(true, cloud_config(url))
+            .unwrap_or_else(|e| panic!("loopback {url} must be allowed under local-only: {e}"));
+        assert_eq!(backend.config().base_url, url);
+    }
+}
+
 #[test]
 fn transcribe_empty_model_errors_before_network() {
     let backend = CloudTranscribeBackend::new(CloudTranscribeConfig {

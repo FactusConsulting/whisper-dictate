@@ -102,6 +102,39 @@ pub fn cloud_backend_requested_from_env() -> bool {
         .unwrap_or(false)
 }
 
+/// Build a [`CloudTranscribeBackend`] from `config`, enforcing the
+/// local-only privacy lock FIRST.
+///
+/// Mirrors the Python worker's `_assert_local_backend` gate in
+/// `vp_transcribe.py::load_stt_model`: under `local_only`, a remote
+/// (`openai`/Groq) STT backend is refused so microphone audio never
+/// leaves the machine -- EXCEPT when the configured `base_url` is a
+/// loopback endpoint (a self-hosted server on `localhost`/`127.0.0.1`
+/// never leaves the box), which stays allowed. The Rust in-process
+/// session previously had no such check, so `VOICEPI_LOCAL_ONLY=1` +
+/// `stt_backend=openai` would still POST audio remotely.
+///
+/// Returns the human-readable rejection message on a blocked backend so
+/// [`crate::runtime::rust_session_real_backends::make_real_session`] can
+/// surface it on the runtime event channel and fall back to the stub
+/// session (never silently dictating to a remote endpoint). `local_only`
+/// is passed in (rather than read here) so the gate is unit-testable
+/// without touching process env / `settings.json`; the production caller
+/// supplies [`crate::whisper::model_manager::is_local_only`].
+pub fn cloud_backend_local_only_checked(
+    local_only: bool,
+    config: CloudTranscribeConfig,
+) -> Result<CloudTranscribeBackend, String> {
+    crate::privacy::assert_local_backend(
+        local_only,
+        STT_BACKEND_CLOUD,
+        "STT",
+        Some(&config.base_url),
+    )
+    .map_err(|e| format!("{e:#}"))?;
+    Ok(CloudTranscribeBackend::new(config))
+}
+
 /// Encode mono `f32` PCM at `sample_rate` Hz to a 16-bit PCM WAV byte
 /// buffer -- the shape the OpenAI-compatible `/audio/transcriptions`
 /// endpoint accepts. Samples are clamped to [-1.0, 1.0] before scaling to
