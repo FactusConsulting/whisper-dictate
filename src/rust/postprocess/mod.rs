@@ -73,12 +73,15 @@ impl SessionPostProcess {
         Self { settings }
     }
 
-    /// Build from a settings snapshot, returning `None` when no
-    /// post-processor is configured (`processor == "none"`) so the caller
-    /// skips attaching a backend entirely -- zero per-utterance overhead
-    /// and no `post-processing` status for the default config.
+    /// Build from a settings snapshot, returning `None` when the pass would
+    /// be a no-op: no processor configured (`processor == "none"`) OR a
+    /// passthrough `raw` mode. Python gates the `post-processing` status on
+    /// BOTH `processor != "none"` and `mode != "raw"`; skipping the attach
+    /// here keeps the session from emitting a `post-processing` status for a
+    /// stage that never runs (and avoids per-utterance overhead for the
+    /// default config).
     pub fn from_settings(settings: PostprocessSettings) -> Option<Self> {
-        if settings.processor == "none" {
+        if settings.processor == "none" || normalize_mode(&settings.mode) == "raw" {
             None
         } else {
             Some(Self::new(settings))
@@ -169,8 +172,11 @@ mod session_backend_tests {
     use super::*;
 
     fn settings(processor: &str) -> PostprocessSettings {
+        // Default to a rewriting mode so `from_settings` attaches; the
+        // `none`/`raw` gating is covered by dedicated tests below.
         let mut s = settings_from_env_with(|_| None);
         s.processor = processor.to_owned();
+        s.mode = "clean".to_owned();
         s
     }
 
@@ -178,6 +184,15 @@ mod session_backend_tests {
     fn from_settings_returns_none_for_disabled_processor() {
         assert!(SessionPostProcess::from_settings(settings("none")).is_none());
         assert!(SessionPostProcess::from_settings(settings("ollama")).is_some());
+    }
+
+    #[test]
+    fn from_settings_returns_none_for_raw_mode() {
+        // A selected processor with `raw` mode is a passthrough -- do not
+        // attach (parity with Python's `mode != "raw"` gate).
+        let mut s = settings("ollama");
+        s.mode = "raw".to_owned();
+        assert!(SessionPostProcess::from_settings(s).is_none());
     }
 
     #[test]

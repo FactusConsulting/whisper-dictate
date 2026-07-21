@@ -89,21 +89,31 @@ pub const POST_REDACT_TERMS_ENV: &str = "VOICEPI_POST_REDACT_TERMS";
 /// Shared local-only privacy gate (`settings_schema.json` `local_only`).
 pub const LOCAL_ONLY_ENV: &str = "VOICEPI_LOCAL_ONLY";
 
-/// API-key env vars in resolution order, highest precedence first: the
-/// post-specific override, then the STT-shared key the UI mirrors into the
-/// worker env (`ui/app.rs`), then the provider-generic vars a user may
-/// already export. Matches the precedence in `ui/api_keys.rs`.
-pub const API_KEY_ENV_PRECEDENCE: &[&str] = &[
-    "VOICEPI_POST_API_KEY",
-    "VOICEPI_STT_API_KEY",
-    "OPENAI_API_KEY",
-    "GROQ_API_KEY",
-];
+/// Shared API-key env vars checked before any provider-specific key,
+/// highest precedence first: the post-specific override, then the
+/// STT-shared key the UI mirrors into the worker env (`ui/app.rs`).
+const API_KEY_SHARED_ENV: &[&str] = &["VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY"];
 
 /// Build [`PostprocessSettings`] from the process environment. Convenience
 /// wrapper around [`settings_from_env_with`] for production callers.
 pub fn settings_from_env() -> PostprocessSettings {
     settings_from_env_with(|name| std::env::var(name).ok())
+}
+
+/// Parse a numeric post setting with Python `_int_setting` parity:
+/// `max(minimum, int(float(value)))`. Accepts decimal forms (`"100.0"`),
+/// truncates toward zero, clamps up to `minimum`, and falls back to
+/// `default` on unset / blank / unparseable input. Mirrors
+/// `vp_postprocess._int_setting` so a below-minimum value (e.g.
+/// `VOICEPI_POST_MAX_INPUT_CHARS=0`) can never starve the prompt.
+fn int_setting(raw: Option<String>, default: u64, minimum: u64) -> u64 {
+    match raw {
+        None => default.max(minimum),
+        Some(v) => match v.parse::<f64>() {
+            Ok(f) if f.is_finite() => (f.trunc().max(0.0) as u64).max(minimum),
+            _ => default,
+        },
+    }
 }
 
 /// Testable core of [`settings_from_env`]: resolves every field through the
@@ -119,31 +129,64 @@ pub fn settings_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Postpr
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
     };
-    let processor = get(POST_PROCESSOR_ENV)
+
+    // Processor: lowercase + reject unknown values (fall back to `none`),
+    // mirroring `vp_postprocess.load_postprocess_settings`.
+    let mut processor = get(POST_PROCESSOR_ENV)
         .map(|v| v.to_lowercase())
         .unwrap_or_else(default_processor);
+    if !VALID_PROCESSORS.contains(&processor.as_str()) {
+        processor = default_processor();
+    }
+
+    // Mode: normalise aliases (e.g. `bullet-list` -> `bullets`) then reject
+    // unknown values, matching the Python loader.
+    let mut mode = normalize_mode(&get(POST_MODE_ENV).unwrap_or_else(default_mode));
+    if !VALID_MODES.contains(&mode.as_str()) {
+        mode = default_mode();
+    }
+
     let raw_model = get(POST_MODEL_ENV).unwrap_or_default();
-    // Unset base_url falls back to the same Ollama default the serde field
-    // uses, so `normalized_base_url` yields a real URL (the `none` / local
-    // processors keep the Ollama default; cloud processors get substituted).
-    let raw_base_url = get(POST_BASE_URL_ENV).unwrap_or_else(default_base_url_str);
-    let api_key = API_KEY_ENV_PRECEDENCE
+    // base_url defaults to the *provider's* default (not always Ollama) and
+    // has trailing slashes stripped BEFORE normalisation, matching Python's
+    // `.rstrip("/")`. Without the strip, `http://localhost:11434/` would not
+    // match the Ollama default and a groq/openai processor would send the
+    // request to the wrong host instead of substituting the cloud default.
+    let raw_base_url = get(POST_BASE_URL_ENV)
+        .unwrap_or_else(|| default_base_url(&processor).to_owned())
+        .trim_end_matches('/')
+        .to_owned();
+
+    // API key: post-specific override, then the STT-shared key, then ONLY
+    // the generic env var for the SELECTED provider -- so a groq processor
+    // never picks up an `OPENAI_API_KEY` (and vice versa). Mirrors
+    // `ui/api_keys.rs::load_post_api_key_from_env`.
+    let provider_generic: &[&str] = match processor.as_str() {
+        "groq" => &["GROQ_API_KEY"],
+        "openai" => &["OPENAI_API_KEY"],
+        _ => &[],
+    };
+    let api_key = API_KEY_SHARED_ENV
         .iter()
+        .chain(provider_generic.iter())
         .find_map(|name| get(name))
         .unwrap_or_default();
+
     PostprocessSettings {
         model: normalized_model(&processor, &raw_model),
         base_url: normalized_base_url(&processor, &raw_base_url),
-        mode: get(POST_MODE_ENV).unwrap_or_else(default_mode),
-        timeout_ms: get(POST_TIMEOUT_MS_ENV)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_else(default_timeout_ms),
-        max_input_chars: get(POST_MAX_INPUT_CHARS_ENV)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_else(default_max_chars),
-        max_output_chars: get(POST_MAX_OUTPUT_CHARS_ENV)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_else(default_max_chars),
+        mode,
+        timeout_ms: int_setting(get(POST_TIMEOUT_MS_ENV), default_timeout_ms(), 100),
+        max_input_chars: int_setting(
+            get(POST_MAX_INPUT_CHARS_ENV),
+            default_max_chars() as u64,
+            100,
+        ) as usize,
+        max_output_chars: int_setting(
+            get(POST_MAX_OUTPUT_CHARS_ENV),
+            default_max_chars() as u64,
+            100,
+        ) as usize,
         redact: crate::dictate::is_truthy(lookup(POST_REDACT_ENV).as_deref()),
         redact_terms: get(POST_REDACT_TERMS_ENV).unwrap_or_default(),
         local_only: crate::dictate::is_truthy(lookup(LOCAL_ONLY_ENV).as_deref()),
@@ -295,22 +338,65 @@ mod tests {
 
     #[test]
     fn settings_from_env_api_key_precedence() {
-        // Post-specific override wins over the STT-shared and generic vars.
+        // Post-specific override wins over the STT-shared and provider keys.
         let s = settings_from_env_with(lookup_from(&[
+            (POST_PROCESSOR_ENV, "openai"),
             ("VOICEPI_POST_API_KEY", "post-key"),
             ("VOICEPI_STT_API_KEY", "stt-key"),
             ("OPENAI_API_KEY", "openai-key"),
         ]));
         assert_eq!(s.api_key, "post-key");
 
-        // Falls through to the STT-shared key, then the provider-generic.
+        // Falls through to the STT-shared key before any provider generic.
         let s = settings_from_env_with(lookup_from(&[
+            (POST_PROCESSOR_ENV, "groq"),
             ("VOICEPI_STT_API_KEY", "stt-key"),
             ("GROQ_API_KEY", "groq-key"),
         ]));
         assert_eq!(s.api_key, "stt-key");
-        let s = settings_from_env_with(lookup_from(&[("GROQ_API_KEY", "groq-key")]));
-        assert_eq!(s.api_key, "groq-key");
+    }
+
+    #[test]
+    fn settings_from_env_generic_api_key_is_provider_aware() {
+        // With BOTH generic keys present, a groq processor must read
+        // GROQ_API_KEY (not the OpenAI key), and vice versa -- the failure
+        // Codex flagged with a single global precedence list.
+        let groq = settings_from_env_with(lookup_from(&[
+            (POST_PROCESSOR_ENV, "groq"),
+            ("OPENAI_API_KEY", "openai-key"),
+            ("GROQ_API_KEY", "groq-key"),
+        ]));
+        assert_eq!(groq.api_key, "groq-key");
+        let openai = settings_from_env_with(lookup_from(&[
+            (POST_PROCESSOR_ENV, "openai"),
+            ("OPENAI_API_KEY", "openai-key"),
+            ("GROQ_API_KEY", "groq-key"),
+        ]));
+        assert_eq!(openai.api_key, "openai-key");
+    }
+
+    #[test]
+    fn settings_from_env_strips_trailing_slash_before_normalizing() {
+        // A groq processor whose base_url still holds the Ollama default
+        // WITH a trailing slash must normalise to the groq cloud endpoint
+        // (parity with Python's `.rstrip("/")` before substitution).
+        let s = settings_from_env_with(lookup_from(&[
+            (POST_PROCESSOR_ENV, "groq"),
+            (POST_BASE_URL_ENV, "http://localhost:11434/"),
+        ]));
+        assert_eq!(s.base_url, GROQ_BASE_URL);
+    }
+
+    #[test]
+    fn settings_from_env_clamps_and_parses_numeric_settings() {
+        let s = settings_from_env_with(lookup_from(&[
+            (POST_MAX_INPUT_CHARS_ENV, "0"),       // below min -> clamp to 100
+            (POST_MAX_OUTPUT_CHARS_ENV, "100.0"),  // decimal -> int(float())
+            (POST_TIMEOUT_MS_ENV, "not-a-number"), // unparseable -> default
+        ]));
+        assert_eq!(s.max_input_chars, 100);
+        assert_eq!(s.max_output_chars, 100);
+        assert_eq!(s.timeout_ms, 4000);
     }
 
     #[test]
