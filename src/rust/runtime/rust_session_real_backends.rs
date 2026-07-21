@@ -83,9 +83,13 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use crate::dictate::audio_route::RouteConfig;
+use crate::dictate::backends::cloud_transcribe::cloud_backend_requested_from_env;
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
-use crate::dictate::{DictateSession, SessionConfig};
+use crate::dictate::{
+    CloudTranscribeBackend, CloudTranscribeConfig, DictateSession, ProductionTranscribeBackend,
+    SessionConfig,
+};
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 use crate::whisper::{
     parse_idle_timeout_from_env, resolve_model_path_from_env, IdleUnloadingModel,
@@ -117,9 +121,15 @@ pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
 
 /// The real production session type that PR 5 wires behind
-/// `VOICEPI_DICTATE_BACKEND=rust-session` when both features are on.
-pub(crate) type RealSession =
-    DictateSession<WhisperLocalTranscribeBackend, ProductionInjectBackend>;
+/// `VOICEPI_DICTATE_BACKEND=rust-session` when both features are on. The
+/// transcribe seam is a [`ProductionTranscribeBackend`] so the runtime can
+/// pick local Whisper or the cloud endpoint from `VOICEPI_STT_BACKEND`
+/// (see [`make_real_session`]); the local variant is the
+/// feature-gated [`WhisperLocalTranscribeBackend`].
+pub(crate) type RealSession = DictateSession<
+    ProductionTranscribeBackend<WhisperLocalTranscribeBackend>,
+    ProductionInjectBackend,
+>;
 
 /// Bundle handed back from [`make_real_session`].
 ///
@@ -211,15 +221,21 @@ pub(crate) fn format_command_set_from_env() -> Option<String> {
 ///
 /// Resolution rules:
 ///
-/// - Model path: [`resolve_model_path_from_env`] -- same env-var /
-///   user-cache lookup the dispatcher and long-running server use, so
-///   the contract is identical whether the user is on the
+/// - STT backend: [`cloud_backend_requested_from_env`] reads
+///   `VOICEPI_STT_BACKEND`. `openai` selects the cloud
+///   [`CloudTranscribeBackend`] (openai/Groq by base URL) built from
+///   [`CloudTranscribeConfig::from_env`]; the model-path / idle-timeout
+///   resolution below is SKIPPED on that path (cloud STT needs no local
+///   model). Any other value keeps local Whisper.
+/// - Model path (local only): [`resolve_model_path_from_env`] -- same
+///   env-var / user-cache lookup the dispatcher and long-running server
+///   use, so the contract is identical whether the user is on the
 ///   subprocess-per-utterance path, the long-running line server, or
 ///   the in-process Rust session.
-/// - Idle timeout: [`parse_idle_timeout_from_env`] -- same
+/// - Idle timeout (local only): [`parse_idle_timeout_from_env`] -- same
 ///   `VOICEPI_WHISPER_IDLE_UNLOAD_S` knob.
-/// - Whisper hints: [`whisper_backend_config_from_env`] (Codex P2
-///   finding 2).
+/// - Whisper hints (local only): [`whisper_backend_config_from_env`]
+///   (Codex P2 finding 2).
 /// - Inject mode: [`ProductionInjectBackend::from_env`] (Codex P2
 ///   finding 4).
 /// - Min-record floor: [`session_config_from_env`] (Codex P2 finding 5).
@@ -254,11 +270,27 @@ pub(crate) fn make_real_session(
     }
     #[cfg(feature = "audio-in-rust")]
     {
-        let model_path = resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
-        let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
-        let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-        let transcribe =
-            WhisperLocalTranscribeBackend::new(model, whisper_backend_config_from_env());
+        // Transcribe seam: honour `VOICEPI_STT_BACKEND` the same way the
+        // Python worker does. `openai` selects the cloud
+        // `/audio/transcriptions` endpoint (openai OR Groq, by base URL) and
+        // needs NO local model -- so skip `resolve_model_path_from_env`
+        // entirely on that path, which is the whole point of cloud STT
+        // (a user with no GGML model installed can still dictate). Any
+        // other value (incl. unset) keeps local Whisper, the default.
+        let transcribe = if cloud_backend_requested_from_env() {
+            ProductionTranscribeBackend::Cloud(CloudTranscribeBackend::new(
+                CloudTranscribeConfig::from_env(),
+            ))
+        } else {
+            let model_path =
+                resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
+            let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
+            let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
+            ProductionTranscribeBackend::Local(WhisperLocalTranscribeBackend::new(
+                model,
+                whisper_backend_config_from_env(),
+            ))
+        };
 
         // Inject backend reads VOICEPI_INJECT_MODE itself; the Print
         // variant short-circuits all OS calls. The Enigo variant

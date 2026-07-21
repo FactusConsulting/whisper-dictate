@@ -83,7 +83,7 @@ pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelErro
 pub use backends::EnigoInjectBackend;
 #[cfg(feature = "whisper-rs-local")]
 pub use backends::WhisperLocalTranscribeBackend;
-pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig};
+pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig, ProductionTranscribeBackend};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{

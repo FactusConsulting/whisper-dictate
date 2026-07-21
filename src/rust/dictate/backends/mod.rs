@@ -33,11 +33,16 @@
 pub mod cloud_transcribe;
 #[cfg(feature = "rust-injection")]
 pub mod inject;
+// Runtime local-vs-cloud transcribe selector. Stock (generic over the
+// local backend `L`) so it compiles + unit-tests on every build; the
+// feature-gated `make_real_session` binds `L = WhisperLocalTranscribeBackend`.
+pub mod production_transcribe;
 #[cfg(feature = "whisper-rs-local")]
 pub mod whisper_local;
 
 pub use cloud_transcribe::{CloudTranscribeBackend, CloudTranscribeConfig};
 #[cfg(feature = "rust-injection")]
 pub use inject::EnigoInjectBackend;
+pub use production_transcribe::ProductionTranscribeBackend;
 #[cfg(feature = "whisper-rs-local")]
 pub use whisper_local::{is_hallucination, WhisperLocalTranscribeBackend};
