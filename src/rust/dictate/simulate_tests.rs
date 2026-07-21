@@ -169,6 +169,27 @@ fn resolve_cloud_transcribe_allows_loopback_under_local_only() {
 }
 
 #[test]
+fn handle_simulate_session_errors_without_cloud_config() {
+    // Cover the CLI handler entry + error propagation deterministically: with
+    // no cloud STT env configured, it must fail fast (before any decode /
+    // network) with the actionable message.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    for key in [
+        "VOICEPI_STT_MODEL",
+        "VOICEPI_STT_API_KEY",
+        "GROQ_API_KEY",
+        "OPENAI_API_KEY",
+        "VOICEPI_STT_BASE_URL",
+    ] {
+        std::env::remove_var(key);
+    }
+    match handle_simulate_session("does-not-matter.wav", false) {
+        Ok(()) => panic!("must error without a configured cloud backend"),
+        Err(e) => assert!(e.to_string().contains("cloud STT"), "{e}"),
+    }
+}
+
+#[test]
 fn config_reads_format_commands_from_env() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     std::env::set_var(FORMAT_COMMANDS_ENV, "en");
