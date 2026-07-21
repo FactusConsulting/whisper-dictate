@@ -273,24 +273,28 @@ pub(crate) fn make_real_session(
         // Transcribe seam: honour `VOICEPI_STT_BACKEND` the same way the
         // Python worker does. `openai` selects the cloud
         // `/audio/transcriptions` endpoint (openai OR Groq, by base URL) and
-        // needs NO local model -- so skip `resolve_model_path_from_env`
-        // entirely on that path, which is the whole point of cloud STT
+        // needs NO local model -- `ProductionTranscribeBackend::select`
+        // runs the local thunk (and thus `resolve_model_path_from_env`)
+        // ONLY on the local path, which is the whole point of cloud STT
         // (a user with no GGML model installed can still dictate). Any
-        // other value (incl. unset) keeps local Whisper, the default.
-        let transcribe = if cloud_backend_requested_from_env() {
-            ProductionTranscribeBackend::Cloud(CloudTranscribeBackend::new(
-                CloudTranscribeConfig::from_env(),
-            ))
-        } else {
-            let model_path =
-                resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
-            let idle = parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
-            let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-            ProductionTranscribeBackend::Local(WhisperLocalTranscribeBackend::new(
-                model,
-                whisper_backend_config_from_env(),
-            ))
-        };
+        // other `VOICEPI_STT_BACKEND` value (incl. unset) keeps local
+        // Whisper, the default. The selection logic is unit-tested in
+        // `production_transcribe_tests.rs` (stock build).
+        let transcribe = ProductionTranscribeBackend::select(
+            cloud_backend_requested_from_env(),
+            || CloudTranscribeBackend::new(CloudTranscribeConfig::from_env()),
+            || -> Result<WhisperLocalTranscribeBackend, String> {
+                let model_path =
+                    resolve_model_path_from_env().map_err(|e| format!("model path: {e:#}"))?;
+                let idle =
+                    parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
+                let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
+                Ok(WhisperLocalTranscribeBackend::new(
+                    model,
+                    whisper_backend_config_from_env(),
+                ))
+            },
+        )?;
 
         // Inject backend reads VOICEPI_INJECT_MODE itself; the Print
         // variant short-circuits all OS calls. The Enigo variant

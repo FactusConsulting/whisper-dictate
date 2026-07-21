@@ -3,8 +3,23 @@
 //! [`CloudTranscribeBackend`] whose empty-key guard trips BEFORE any
 //! network call, so no live endpoint is contacted.
 
+use std::cell::Cell;
+
 use super::*;
 use crate::dictate::backends::CloudTranscribeConfig;
+
+/// A cloud config whose empty api_key trips the pre-network guard, so any
+/// helper that constructs one never contacts a live endpoint.
+fn cloud_config_no_key() -> CloudTranscribeConfig {
+    CloudTranscribeConfig {
+        base_url: "https://api.groq.com/openai/v1".to_owned(),
+        api_key: String::new(),
+        model: "whisper-large-v3-turbo".to_owned(),
+        timeout_ms: 100,
+        language: None,
+        prompt: None,
+    }
+}
 
 /// Canned local backend: returns a fixed transcript so a test can prove
 /// the enum routed to the `Local` arm (and passed `pcm` / `sample_rate`
@@ -45,17 +60,78 @@ fn local_variant_delegates_to_wrapped_backend() {
 fn cloud_variant_delegates_to_cloud_backend() {
     // Empty api_key trips CloudTranscribeBackend's pre-network guard, so
     // an Err proves the enum routed to the Cloud arm without a live call.
-    let cloud = CloudTranscribeBackend::new(CloudTranscribeConfig {
-        base_url: "https://api.groq.com/openai/v1".to_owned(),
-        api_key: String::new(),
-        model: "whisper-large-v3-turbo".to_owned(),
-        timeout_ms: 100,
-        language: None,
-        prompt: None,
-    });
-    let backend: ProductionTranscribeBackend<StubLocal> = ProductionTranscribeBackend::Cloud(cloud);
+    let backend: ProductionTranscribeBackend<StubLocal> =
+        ProductionTranscribeBackend::Cloud(CloudTranscribeBackend::new(cloud_config_no_key()));
     let err = backend
         .transcribe(&[0.0_f32; 1600], 16_000)
         .expect_err("empty key must error through the cloud arm");
     assert!(matches!(err, TranscribeError::Backend(_)));
+}
+
+// ── select(): the make_real_session STT-backend choice (Codex #540) ──────────
+
+/// The cloud path must build the `Cloud` variant AND must NOT invoke the
+/// local builder -- that is the "cloud STT skips local model resolution"
+/// contract (`make_real_session` puts `resolve_model_path_from_env` inside
+/// the local thunk, so "local builder not called" == "no model needed").
+#[test]
+fn select_cloud_builds_cloud_and_skips_local_builder() {
+    let local_built = Cell::new(false);
+    let backend = ProductionTranscribeBackend::<StubLocal>::select(
+        true,
+        || CloudTranscribeBackend::new(cloud_config_no_key()),
+        || {
+            local_built.set(true);
+            Ok::<_, String>(StubLocal { text: "unused" })
+        },
+    )
+    .expect("cloud arm is infallible");
+    assert!(matches!(backend, ProductionTranscribeBackend::Cloud(_)));
+    assert!(
+        !local_built.get(),
+        "cloud path must NOT run the local builder (would resolve a model)"
+    );
+}
+
+/// The local path (default / any non-`openai` value) must build the
+/// `Local` variant and must NOT construct the cloud backend.
+#[test]
+fn select_local_builds_local_and_skips_cloud_builder() {
+    let cloud_built = Cell::new(false);
+    let backend = ProductionTranscribeBackend::<StubLocal>::select(
+        false,
+        || {
+            cloud_built.set(true);
+            CloudTranscribeBackend::new(cloud_config_no_key())
+        },
+        || Ok::<_, String>(StubLocal { text: "local hi" }),
+    )
+    .expect("local built");
+    match backend {
+        ProductionTranscribeBackend::Local(b) => assert_eq!(
+            b.transcribe(&[0.0_f32; 16], 16_000).unwrap().text,
+            "local hi"
+        ),
+        ProductionTranscribeBackend::Cloud(_) => panic!("expected Local variant"),
+    }
+    assert!(
+        !cloud_built.get(),
+        "local path must not construct the cloud backend"
+    );
+}
+
+/// A local build failure (e.g. model-path resolution error) propagates out
+/// of `select` unchanged so `make_real_session` can fall back to the stub
+/// session with the human-readable message.
+#[test]
+fn select_propagates_local_build_error() {
+    let result = ProductionTranscribeBackend::<StubLocal>::select(
+        false,
+        || CloudTranscribeBackend::new(cloud_config_no_key()),
+        || Err::<StubLocal, String>("model path: missing".to_owned()),
+    );
+    match result {
+        Ok(_) => panic!("local build error must propagate, got Ok"),
+        Err(e) => assert_eq!(e, "model path: missing"),
+    }
 }
