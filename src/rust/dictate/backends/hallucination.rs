@@ -9,24 +9,32 @@
 //! ([`super::whisper_local`]) and cloud ([`super::cloud_transcribe`])
 //! backends share one implementation and it is unit-tested on every build.
 //!
-//! # Partial port
+//! # What is ported
 //!
-//! Python's `is_hallucination` checks two things:
+//! Python's whole-text `is_hallucination` gate checks two things, BOTH
+//! ported here:
 //!
 //! 1. **Exact blacklist match** — the lowercased / rstripped text is in
 //!    `HALLUCINATIONS` (data:
 //!    `whisper_dictate/data/hallucination_patterns.json::exact_blacklist`).
-//! 2. **Credit regex match** — the whole text matches one of the
-//!    subtitle-credit patterns assembled by `_build_credit_re`.
+//! 2. **Anchored credit regex** — the whole (trimmed, lowercased) text
+//!    matches `_CREDIT_RE`, assembled by `_build_credit_re` from
+//!    `credit_phrase_prefixes` + the shared `credit_phrase_year_tail` and
+//!    the `bare_company_names` branches. A phrase prefix must carry a
+//!    trailing year, so real dictation that merely starts with "tekster
+//!    af …" survives.
 //!
-//! Only (1) is ported here (as in the original local-only port). The
-//! credit-regex port is deferred to its own follow-up because porting the
-//! regex assembler + the JSON loader is a separate multi-file change. The
-//! blacklist is the most common path in practice (every observed false
-//! positive on quiet Danish input has been an exact `"tak"`-family match).
+//! Only the **year-less prefix** regex (`_looks_like_credit_prefix`)
+//! stays Python-only: it is loose (matches real dictation) and is used
+//! solely in Python's SEGMENT-level `_drop_hallucinated_segments`, which
+//! needs faster-whisper segment metadata (`no_speech_prob`, per-segment
+//! rate) the session's whole-text gate never sees. The whole-text gate
+//! this module implements is exactly what the Rust session consumes.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
+
+use regex::Regex;
 
 /// Exact-match hallucination blacklist, ported verbatim from
 /// `src/python/whisper_dictate/data/hallucination_patterns.json::exact_blacklist`.
@@ -66,21 +74,72 @@ pub(crate) const EXACT_BLACKLIST: &[&str] = &[
     "undertekstet af",
 ];
 
-/// `true` iff `text` is on the exact-match hallucination blacklist.
+/// Credit-phrase prefixes, ported verbatim from
+/// `hallucination_patterns.json::credit_phrase_prefixes`. Each is a regex
+/// fragment; the shared [`CREDIT_PHRASE_YEAR_TAIL`] is appended to the
+/// whole alternation (a prefix only counts as a credit WITH a trailing
+/// year, so "tekster af høj kvalitet" survives). MUST stay in sync with
+/// the JSON data file.
+const CREDIT_PHRASE_PREFIXES: &[&str] = &[
+    r"(?:danske |norske |svenske )?(?:under)?tekster (?:af|by|:)",
+    r"tekstet af ",
+    r"oversat af ",
+    r"subtitles? by ",
+    r"subtitled by ",
+    r"captions? by ",
+    r"translated by ",
+];
+
+/// Shared year tail appended once to the whole prefix alternation. Ported
+/// verbatim from `hallucination_patterns.json::credit_phrase_year_tail`.
+const CREDIT_PHRASE_YEAR_TAIL: &str = r".{0,60}\b(?:19|20)\d{2}";
+
+/// Bare company-name credits, each an independent branch carrying its own
+/// optional year. Ported verbatim from
+/// `hallucination_patterns.json::bare_company_names`.
+const BARE_COMPANY_NAMES: &[&str] = &[
+    r"scandinavian text service(?: (?:19|20)\d{2})?",
+    r"broadcast text international(?: (?:19|20)\d{2})?",
+    r"dansk video ?tekst(?: (?:19|20)\d{2})?",
+];
+
+/// The anchored subtitle-credit regex, built once. Mirrors Python's
+/// `_build_credit_re`: `^(?:(?:<prefixes>)<year_tail>|<company1>|…)[\s.!?]*$`,
+/// case-insensitive.
+fn credit_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        let phrase_group = CREDIT_PHRASE_PREFIXES.join("|");
+        let mut branches = vec![format!("(?:{phrase_group}){CREDIT_PHRASE_YEAR_TAIL}")];
+        branches.extend(BARE_COMPANY_NAMES.iter().map(|c| (*c).to_owned()));
+        let body = branches.join("|");
+        Regex::new(&format!(r"(?i)^(?:{body})[\s.!?]*$")).expect("credit regex is valid")
+    })
+}
+
+/// `true` when the WHOLE (trimmed, lowercased) text is a subtitle/caption
+/// credit. Mirrors Python's `_looks_like_credit`
+/// (`_CREDIT_RE.match(text.strip().lower())`).
+fn looks_like_credit(text: &str) -> bool {
+    credit_re().is_match(text.trim().to_lowercase().as_str())
+}
+
+/// `true` iff `text` is a hallucinated subtitle/caption credit: either on
+/// the exact-match blacklist OR matching the anchored credit regex.
 ///
-/// Partial port of Python's `vp_transcribe.is_hallucination` — only the
-/// `text.lower().rstrip() in HALLUCINATIONS` branch is implemented (see the
-/// module docs for the credit-regex deferral note). Lowercases with
-/// `str::to_lowercase` (Unicode-aware, matching Python) and right-trims
-/// only, so leading whitespace is preserved exactly like Python's `rstrip`;
-/// callers that need a run of segment text normalised first should do so
-/// before calling (the local backend runs `normalize_whitespace`, the cloud
-/// backend trims the endpoint's text).
+/// Full port of Python's whole-text `vp_transcribe.is_hallucination`
+/// (`text.lower().rstrip() in HALLUCINATIONS or _looks_like_credit(text)`).
+/// The blacklist check lowercases (`str::to_lowercase`, Unicode-aware like
+/// Python) and right-trims only, preserving leading whitespace exactly like
+/// Python's `rstrip`; the credit check trims both ends like Python's
+/// `strip`. Callers that hold a run of segment text should normalise it
+/// first (the local backend runs `normalize_whitespace`, the cloud backend
+/// trims the endpoint's text).
 pub fn is_hallucination(text: &str) -> bool {
     static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
     let set = SET.get_or_init(|| EXACT_BLACKLIST.iter().copied().collect());
     let lowered = text.to_lowercase();
-    set.contains(lowered.trim_end())
+    set.contains(lowered.trim_end()) || looks_like_credit(text)
 }
 
 #[cfg(test)]
