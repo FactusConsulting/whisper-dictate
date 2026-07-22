@@ -1,8 +1,10 @@
-//! Tests for [`super::WhisperLocalTranscribeBackend`] and its
-//! `normalize_whitespace` pre-step. The exact-blacklist
-//! [`is_hallucination`] filter itself is stock and tested in
-//! `hallucination_tests.rs`; the one test kept here pins the
-//! normalize-then-filter ordering the trait impl relies on.
+//! Tests for [`super::WhisperLocalTranscribeBackend`] — the trait-impl
+//! wiring (error mapping, empty-language handling, the pre-transcription
+//! speech gate). The pure text finalization it delegates to
+//! (`normalize_whitespace` + `finalize_transcript`: whitespace normalize,
+//! speech-rate blanking, exact-blacklist / credit-regex gate) is stock and
+//! tested in `hallucination_tests.rs`, so it runs on every build without the
+//! `whisper-rs-local` feature.
 //!
 //! Live in a sibling file (declared via `#[path]` in the production
 //! module) so the unit-test surface is co-located with the impl while
@@ -23,8 +25,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 
-use super::super::hallucination::is_hallucination;
-use super::{normalize_whitespace, WhisperBackendConfig, WhisperLocalTranscribeBackend};
+use super::{WhisperBackendConfig, WhisperLocalTranscribeBackend};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -43,12 +44,22 @@ fn failing_backend() -> WhisperLocalTranscribeBackend {
     WhisperLocalTranscribeBackend::new(model, WhisperBackendConfig::default())
 }
 
+/// PCM that PASSES the pre-transcription speech gate (loud, contrasty,
+/// ending loud), so `transcribe` reaches the model loader rather than
+/// being short-circuited by the gate.
+fn gate_passing_pcm() -> Vec<f32> {
+    let mut pcm = Vec::with_capacity(6 * 480);
+    for amp in [0.001_f32, 0.5, 0.001, 0.5, 0.001, 0.5] {
+        pcm.extend(std::iter::repeat_n(amp, 480));
+    }
+    pcm
+}
+
 #[test]
 fn transcribe_maps_loader_failure_to_backend_error() {
     let backend = failing_backend();
-    let pcm = vec![0.0_f32; 16_000];
     let err = backend
-        .transcribe(&pcm, 16_000)
+        .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("loader failure should propagate as TranscribeError");
     match err {
         TranscribeError::Backend(msg) => {
@@ -58,6 +69,21 @@ fn transcribe_maps_loader_failure_to_backend_error() {
             );
         }
     }
+}
+
+#[test]
+fn transcribe_gates_silence_before_the_model() {
+    // Silent input is rejected by the speech gate BEFORE the model loader
+    // runs, so even a failing loader is never reached: an Ok with the gate
+    // reason is returned, which the session maps to a too_quiet no-text
+    // event.
+    let backend = failing_backend();
+    let result = backend
+        .transcribe(&vec![0.0_f32; 6 * 480], 16_000)
+        .expect("gated silence returns Ok, not the loader error");
+    assert!(result.text.is_empty());
+    let gate = result.gate.expect("gate reason present");
+    assert!(gate.contains("too quiet"), "{gate}");
 }
 
 #[test]
@@ -103,51 +129,6 @@ fn construction_with_idle_timeout_spawns_and_joins_cleanly() {
     // process will hang and CI will time out.
 }
 
-// ── normalize_whitespace — segment-text post-processing ──────────────────────
-
-#[test]
-fn normalize_whitespace_collapses_internal_runs() {
-    // whisper.cpp segments carry leading word-boundary spaces; a naive
-    // concat produces `" hello   world  "` style strings. Match
-    // Python's `re.sub(r"\s+", " ", ...).strip()` shape.
-    // Codex P2 #417 whisper_local.rs:201.
-    assert_eq!(normalize_whitespace(" hello   world  "), "hello world");
-}
-
-#[test]
-fn normalize_whitespace_trims_both_ends() {
-    // Leading whitespace must be stripped so the exact-match
-    // hallucination blacklist catches `" tak"` after normalization.
-    assert_eq!(normalize_whitespace(" tak "), "tak");
-    assert_eq!(normalize_whitespace("\n\ttak\r\n"), "tak");
-}
-
-#[test]
-fn normalize_whitespace_preserves_internal_single_spaces() {
-    assert_eq!(normalize_whitespace("foo bar baz"), "foo bar baz");
-}
-
-#[test]
-fn normalize_whitespace_is_empty_safe() {
-    assert_eq!(normalize_whitespace(""), "");
-    assert_eq!(normalize_whitespace("   "), "");
-}
-
-#[test]
-fn is_hallucination_catches_leading_whitespace_after_normalize() {
-    // Regression guard for Codex P2 whisper_local.rs:201: the
-    // transcribe pipeline runs `normalize_whitespace` before
-    // `is_hallucination`, so a whisper.cpp output of " tak" is
-    // expected to be caught. This test pins the contract by running
-    // the two functions in the same order the trait impl does.
-    let raw = " tak";
-    let normalized = normalize_whitespace(raw);
-    assert!(
-        is_hallucination(&normalized),
-        "normalized ' tak' must be on the blacklist"
-    );
-}
-
 // ── empty-language hint normalization ────────────────────────────────────────
 
 #[test]
@@ -171,8 +152,11 @@ fn empty_language_string_is_treated_as_auto_detect() {
             initial_prompt: Some(String::new()),
         },
     );
-    let pcm = vec![0.0_f32; 16_000];
-    let err = backend.transcribe(&pcm, 16_000).expect_err("loader fails");
+    // Gate-passing audio so the speech gate doesn't short-circuit before
+    // the model loader is reached.
+    let err = backend
+        .transcribe(&gate_passing_pcm(), 16_000)
+        .expect_err("loader fails");
     match err {
         TranscribeError::Backend(msg) => {
             assert!(

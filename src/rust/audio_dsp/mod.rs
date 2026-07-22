@@ -129,11 +129,48 @@ pub fn thresholds_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Stat
 /// be transcribed. Mirrors the pre-check order in
 /// `vp_transcribe._transcribe_detail` (trim -> gate, before the model).
 pub fn speech_gate_reason(pcm: &[f32], thresholds: &StatusThresholds) -> Option<String> {
+    gate_and_trim(pcm, thresholds).reject
+}
+
+/// The trailing-silence-trimmed audio a backend should actually decode +
+/// time, paired with the speech-gate decision.
+///
+/// [`GatedAudio::trimmed`] is a sub-slice of the input with its sustained
+/// dead-air tail removed, and [`GatedAudio::reject`] is `Some(reason)` when
+/// the (trimmed) buffer is too quiet / too flat to be worth decoding, else
+/// `None`.
+#[derive(Debug)]
+pub struct GatedAudio<'a> {
+    /// The buffer to decode. Callers MUST feed this (not the original PCM)
+    /// to the model AND derive `duration_s` from its length, so a long dead
+    /// tail neither gives Whisper empty audio to hallucinate a caption over
+    /// nor inflates the chars-per-second denominator of the speech-rate
+    /// guard. This is exactly what Python's `_transcribe_detail` does:
+    /// `_trim_trailing_silence` runs FIRST, then the gate, decode, and
+    /// `dur = len(audio)/SR` all see the same trimmed buffer
+    /// (`vp_transcribe.py:1255-1267`).
+    pub trimmed: &'a [f32],
+    /// `Some(reason)` to reject before decoding (the reason string is what
+    /// `crate::dictate::session::normalize_gate_reason` maps to
+    /// `too_quiet`/`no_speech`), or `None` to proceed with transcription.
+    pub reject: Option<String>,
+}
+
+/// Trim the trailing dead-air tail ONCE, then run the [`looks_like_speech`]
+/// gate on the trimmed buffer, returning both so the caller can decode + time
+/// the same trimmed slice. Mirrors the trim-before-everything ordering in
+/// `vp_transcribe._transcribe_detail` (Python trims, gates, decodes, and
+/// measures duration all from one trimmed buffer). Prefer this over
+/// [`speech_gate_reason`] in a transcribe backend: the latter discards the
+/// trimmed slice, which would leave the untrimmed tail feeding the model and
+/// stretching the speech-rate denominator.
+pub fn gate_and_trim<'a>(pcm: &'a [f32], thresholds: &StatusThresholds) -> GatedAudio<'a> {
     let (trimmed, _trimmed_ms) = trim_trailing_silence(pcm);
-    match looks_like_speech(trimmed, thresholds) {
+    let reject = match looks_like_speech(trimmed, thresholds) {
         (true, _) => None,
         (false, reason) => Some(reason),
-    }
+    };
+    GatedAudio { trimmed, reject }
 }
 
 #[cfg(test)]

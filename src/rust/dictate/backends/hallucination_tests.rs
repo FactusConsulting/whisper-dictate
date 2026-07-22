@@ -3,7 +3,10 @@
 //! feature, no model), so these run in the required `rust` matrix on every
 //! build.
 
-use super::{is_hallucination, speech_rate_exceeded, DEFAULT_MAX_CHARS_PER_SECOND};
+use super::{
+    finalize_transcript, is_hallucination, normalize_whitespace, speech_rate_exceeded,
+    DEFAULT_MAX_CHARS_PER_SECOND,
+};
 
 #[test]
 fn matches_exact_blacklist_entry() {
@@ -113,6 +116,80 @@ fn speech_rate_clamps_tiny_durations_like_python() {
     // so a 4-char transcript over 0.001 s is 40 chars/s, not 4000.
     assert!(speech_rate_exceeded("abcd", 0.001, 30.0)); // 4 / 0.1 = 40 > 30
     assert!(!speech_rate_exceeded("abc", 0.001, 30.0)); // 3 / 0.1 = 30, not > 30
+}
+
+// ── normalize_whitespace — segment-text post-processing ──────────────────────
+
+#[test]
+fn normalize_whitespace_collapses_internal_runs() {
+    // whisper.cpp segments carry leading word-boundary spaces; a naive concat
+    // produces `" hello   world  "` strings. Match Python's
+    // `re.sub(r"\s+", " ", ...).strip()` shape.
+    assert_eq!(normalize_whitespace(" hello   world  "), "hello world");
+}
+
+#[test]
+fn normalize_whitespace_trims_both_ends() {
+    // Leading whitespace must be stripped so the exact-match blacklist catches
+    // `" tak"` after normalization.
+    assert_eq!(normalize_whitespace(" tak "), "tak");
+    assert_eq!(normalize_whitespace("\n\ttak\r\n"), "tak");
+}
+
+#[test]
+fn normalize_whitespace_preserves_internal_single_spaces() {
+    assert_eq!(normalize_whitespace("foo bar baz"), "foo bar baz");
+}
+
+#[test]
+fn normalize_whitespace_is_empty_safe() {
+    assert_eq!(normalize_whitespace(""), "");
+    assert_eq!(normalize_whitespace("   "), "");
+}
+
+// ── finalize_transcript — normalize + rate-guard + blacklist, in order ────────
+
+#[test]
+fn finalize_transcript_blanks_impossibly_fast_text() {
+    // 200 chars over 0.5 s = 400 chars/s >> 30: the speech-rate guard blanks
+    // the text so the session emits `empty`, not a hallucinated wall. A
+    // regression (removing/misordering the guard in a backend) is caught here
+    // without needing a whisper.cpp model.
+    let fast = "a".repeat(200);
+    let (text, hallucinated) = finalize_transcript(&fast, 0.5, 30.0);
+    assert!(text.is_empty(), "over-rate transcript must be blanked");
+    assert!(
+        !hallucinated,
+        "blanked text is empty, not a blacklist match"
+    );
+}
+
+#[test]
+fn finalize_transcript_keeps_normal_rate_text() {
+    // "hello world" (11 chars) over 1 s = 11 chars/s < 30: preserved verbatim
+    // (after whitespace normalization) and not flagged.
+    let (text, hallucinated) = finalize_transcript("  hello   world  ", 1.0, 30.0);
+    assert_eq!(text, "hello world");
+    assert!(!hallucinated);
+}
+
+#[test]
+fn finalize_transcript_flags_blacklisted_credit_after_normalize() {
+    // normalize_whitespace trims first, so " tak" -> "tak" is flagged even
+    // though the raw text had a leading space (the blacklist only rstrips).
+    // This pins the normalize-before-blacklist ordering both backends rely on.
+    let (text, hallucinated) = finalize_transcript(" tak", 1.0, 30.0);
+    assert_eq!(text, "tak");
+    assert!(hallucinated, "normalized ' tak' must hit the blacklist");
+}
+
+#[test]
+fn finalize_transcript_disables_rate_guard_when_max_is_zero() {
+    // max_cps <= 0 disables the guard (parity with Python): even absurd rates
+    // are preserved, letting the blacklist be the only filter.
+    let fast = "b".repeat(500);
+    let (text, _) = finalize_transcript(&fast, 0.1, 0.0);
+    assert_eq!(text.len(), 500, "rate guard off must preserve the text");
 }
 
 #[test]
