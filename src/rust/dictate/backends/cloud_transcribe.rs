@@ -17,7 +17,7 @@
 use std::io::Cursor;
 use std::time::Instant;
 
-use super::hallucination::is_hallucination;
+use super::hallucination::{is_hallucination, max_chars_per_second_from_env, speech_rate_exceeded};
 use crate::cloud_api::{cloud_transcribe, CloudTranscriptionResult};
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
@@ -185,12 +185,22 @@ fn map_cloud_result(
     pcm_len: usize,
     sample_rate: u32,
 ) -> TranscribeResult {
-    let hallucinated = is_hallucination(result.text.trim());
+    let duration_s = pcm_len as f64 / f64::from(sample_rate.max(1));
+    // Impossible-speech-rate hallucination guard (Python's
+    // `_exceeds_speech_rate` in `_transcribe_detail`): a transcript produced
+    // far faster than real speech is blanked, so it surfaces as an `empty`
+    // no-text event rather than injecting a hallucinated wall of text.
+    let text = if speech_rate_exceeded(&result.text, duration_s, max_chars_per_second_from_env()) {
+        String::new()
+    } else {
+        result.text
+    };
+    let hallucinated = is_hallucination(text.trim());
     TranscribeResult {
-        text: result.text,
+        text,
         language: result.language.unwrap_or_default(),
         latency_ms,
-        duration_s: pcm_len as f64 / f64::from(sample_rate.max(1)),
+        duration_s,
         is_hallucination: hallucinated,
         gate: None,
     }

@@ -218,6 +218,28 @@ fn map_cloud_result_keeps_normal_dictation() {
 }
 
 #[test]
+fn map_cloud_result_blanks_impossibly_fast_transcript() {
+    // 100 chars over pcm_len=160 @ 16 kHz = 0.01 s (floored to 0.1 s) =>
+    // 1000 chars/s > 30 default: the transcript is blanked so the session
+    // emits an `empty` no-text event instead of injecting a hallucination.
+    let long = "x".repeat(100);
+    let result = map_cloud_result(cloud_response(&long, None), 0, 160, 16_000);
+    assert!(
+        result.text.is_empty(),
+        "over-fast transcript must be blanked, got {:?}",
+        result.text
+    );
+    assert!(!result.is_hallucination);
+}
+
+#[test]
+fn map_cloud_result_keeps_normal_rate_transcript() {
+    // "hello world" over 1 s (16 000 samples) = 11 chars/s < 30: kept.
+    let result = map_cloud_result(cloud_response("hello world", None), 0, 16_000, 16_000);
+    assert_eq!(result.text, "hello world");
+}
+
+#[test]
 fn map_cloud_result_maps_fields_and_duration() {
     // Absent language collapses to ""; duration_s = pcm_len / sample_rate.
     let result = map_cloud_result(cloud_response("noget tekst", None), 42, 8_000, 16_000);
