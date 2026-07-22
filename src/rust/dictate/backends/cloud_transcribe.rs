@@ -219,6 +219,21 @@ impl TranscribeBackend for CloudTranscribeBackend {
         pcm: &[f32],
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError> {
+        // Pre-transcription speech gate, matching Python's
+        // `vp_transcribe._transcribe_detail`: reject too-quiet / no-contrast
+        // audio BEFORE the network call. The reason string flows onto
+        // `TranscribeResult.gate`, which the session maps to a
+        // `too_quiet`/`no_speech` no-text event via `normalize_gate_reason`.
+        if let Some(reason) =
+            crate::audio_dsp::speech_gate_reason(pcm, &crate::audio_dsp::thresholds_from_env())
+        {
+            return Ok(TranscribeResult {
+                text: String::new(),
+                gate: Some(reason),
+                duration_s: pcm.len() as f64 / f64::from(sample_rate.max(1)),
+                ..Default::default()
+            });
+        }
         let wav = encode_wav_mono_16bit(pcm, sample_rate)
             .map_err(|e| TranscribeError::Backend(format!("wav encode failed: {e}")))?;
         let started = Instant::now();

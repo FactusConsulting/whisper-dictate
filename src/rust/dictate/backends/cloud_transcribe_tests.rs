@@ -17,6 +17,19 @@ fn lookup_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     move |name: &str| map.get(name).cloned()
 }
 
+/// PCM that PASSES the pre-transcription speech gate: 6 frames of 480 samples
+/// alternating quiet/loud and ending loud (so trailing-silence trim keeps the
+/// contrast) -> healthy level + high SNR. Used by the network-guard error
+/// tests so they reach the empty-key/model checks rather than being
+/// short-circuited by the gate.
+fn gate_passing_pcm() -> Vec<f32> {
+    let mut pcm = Vec::with_capacity(6 * 480);
+    for amp in [0.001_f32, 0.5, 0.001, 0.5, 0.001, 0.5] {
+        pcm.extend(std::iter::repeat_n(amp, 480));
+    }
+    pcm
+}
+
 #[test]
 fn encode_wav_produces_readable_mono_16bit() {
     let pcm = [0.0_f32, 0.5, -0.5, 1.0, -1.0];
@@ -111,7 +124,7 @@ fn transcribe_empty_api_key_errors_before_network() {
         prompt: None,
     });
     let err = backend
-        .transcribe(&[0.0_f32; 1600], 16_000)
+        .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("empty key must error");
     assert!(matches!(err, TranscribeError::Backend(_)));
 }
@@ -229,7 +242,30 @@ fn transcribe_empty_model_errors_before_network() {
         prompt: None,
     });
     let err = backend
-        .transcribe(&[0.0_f32; 1600], 16_000)
+        .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("empty model must error");
     assert!(matches!(err, TranscribeError::Backend(_)));
+}
+
+#[test]
+fn transcribe_gates_silence_before_network() {
+    // Silent input is rejected by the speech gate BEFORE any network call,
+    // so even an empty api-key does not error — it returns an empty text
+    // carrying the gate reason, which the session maps to a too_quiet
+    // no-text event.
+    let backend = CloudTranscribeBackend::new(CloudTranscribeConfig {
+        base_url: "https://api.groq.com/openai/v1".to_owned(),
+        api_key: String::new(),
+        model: "whisper-large-v3-turbo".to_owned(),
+        timeout_ms: 100,
+        language: None,
+        prompt: None,
+    });
+    let silence = vec![0.0_f32; 6 * 480];
+    let result = backend
+        .transcribe(&silence, 16_000)
+        .expect("gated silence returns Ok, not a backend error");
+    assert!(result.text.is_empty());
+    let gate = result.gate.expect("gate reason present");
+    assert!(gate.contains("too quiet"), "{gate}");
 }
