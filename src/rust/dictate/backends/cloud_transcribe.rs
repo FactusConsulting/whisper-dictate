@@ -223,27 +223,56 @@ impl CloudTranscribeBackend {
     }
 }
 
+/// Trim the trailing dead-air tail ONCE, then gate, returning the trimmed PCM
+/// the cloud request should encode + the duration to report (both derived from
+/// the SAME trimmed slice), or the gate reason + that duration when the
+/// (trimmed) audio is too quiet / flat to send.
+///
+/// Matches Python's `_transcribe_detail` and the local backend (#550):
+/// `_trim_trailing_silence` runs first, and the gate, the audio handed to the
+/// model, and `dur = len(audio)/SR` all see the trimmed buffer
+/// (`vp_transcribe.py:1255-1267`). Sending the untrimmed tail to the endpoint
+/// gives it empty audio to hallucinate a caption over and inflates the
+/// chars-per-second denominator of the speech-rate guard.
+///
+/// Split out so the trim wiring — that both the encoded slice AND `duration_s`
+/// follow the trim — is unit-tested hermetically, without the network call
+/// [`CloudTranscribeBackend::transcribe`]'s only untestable part.
+fn gate_and_prepare<'a>(
+    pcm: &'a [f32],
+    sample_rate: u32,
+    thresholds: &crate::audio_dsp::StatusThresholds,
+) -> Result<(&'a [f32], f64), (String, f64)> {
+    let gated = crate::audio_dsp::gate_and_trim(pcm, thresholds);
+    let trimmed = gated.trimmed;
+    let duration_s = trimmed.len() as f64 / f64::from(sample_rate.max(1));
+    match gated.reject {
+        Some(reason) => Err((reason, duration_s)),
+        None => Ok((trimmed, duration_s)),
+    }
+}
+
 impl TranscribeBackend for CloudTranscribeBackend {
     fn transcribe(
         &self,
         pcm: &[f32],
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError> {
-        // Pre-transcription speech gate, matching Python's
-        // `vp_transcribe._transcribe_detail`: reject too-quiet / no-contrast
-        // audio BEFORE the network call. The reason string flows onto
+        // The gate + trim decision. The reason string flows onto
         // `TranscribeResult.gate`, which the session maps to a
-        // `too_quiet`/`no_speech` no-text event via `normalize_gate_reason`.
-        if let Some(reason) =
-            crate::audio_dsp::speech_gate_reason(pcm, &crate::audio_dsp::thresholds_from_env())
-        {
-            return Ok(TranscribeResult {
-                text: String::new(),
-                gate: Some(reason),
-                duration_s: pcm.len() as f64 / f64::from(sample_rate.max(1)),
-                ..Default::default()
-            });
-        }
+        // `too_quiet`/`no_speech` no-text event.
+        let (pcm, _duration_s) =
+            match gate_and_prepare(pcm, sample_rate, &crate::audio_dsp::thresholds_from_env()) {
+                Ok(prepared) => prepared,
+                Err((reason, duration_s)) => {
+                    return Ok(TranscribeResult {
+                        text: String::new(),
+                        gate: Some(reason),
+                        duration_s,
+                        ..Default::default()
+                    });
+                }
+            };
         let wav = encode_wav_mono_16bit(pcm, sample_rate)
             .map_err(|e| TranscribeError::Backend(format!("wav encode failed: {e}")))?;
         let started = Instant::now();

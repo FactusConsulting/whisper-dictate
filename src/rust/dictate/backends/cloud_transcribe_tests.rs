@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use super::*;
+use crate::audio_dsp::{StatusThresholds, FRAME_SAMPLES};
 
 fn lookup_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let map: HashMap<String, String> = pairs
@@ -28,6 +29,43 @@ fn gate_passing_pcm() -> Vec<f32> {
         pcm.extend(std::iter::repeat_n(amp, 480));
     }
     pcm
+}
+
+// ── gate_and_prepare — trim wiring (Codex/review P2 #552) ─────────────────────
+
+#[test]
+fn gate_and_prepare_uses_the_trimmed_slice_for_wav_and_duration() {
+    // Speech body followed by a long silent tail: the gate passes (there IS
+    // speech), and BOTH the PCM handed to the WAV encoder AND duration_s must
+    // come from the trimmed slice -- not the padded original -- so the endpoint
+    // never sees the dead tail and the speech-rate denominator isn't inflated.
+    let mut pcm = gate_passing_pcm();
+    pcm.extend(std::iter::repeat_n(0.0_f32, 40 * FRAME_SAMPLES)); // long dead tail
+    let total = pcm.len();
+
+    let (encoded, duration_s) = gate_and_prepare(&pcm, 16_000, &StatusThresholds::default())
+        .expect("a speech body must proceed past the gate");
+    assert!(
+        encoded.len() < total,
+        "the dead tail must be trimmed from the encoded slice ({} vs {total})",
+        encoded.len()
+    );
+    // duration_s tracks the trimmed slice, and is well below the padded total.
+    assert!((duration_s - encoded.len() as f64 / 16_000.0).abs() < 1e-9);
+    assert!(
+        duration_s < total as f64 / 16_000.0,
+        "duration must reflect the trimmed length, got {duration_s}"
+    );
+}
+
+#[test]
+fn gate_and_prepare_reports_gate_reason_for_silence() {
+    // Silence is rejected (too quiet) before any network work; the Err carries
+    // the reason the session maps to a too_quiet no-text event.
+    let silence = vec![0.0_f32; 6 * FRAME_SAMPLES];
+    let (reason, _duration_s) = gate_and_prepare(&silence, 16_000, &StatusThresholds::default())
+        .expect_err("silence must be gated, not sent");
+    assert!(reason.contains("too quiet"), "{reason}");
 }
 
 #[test]
