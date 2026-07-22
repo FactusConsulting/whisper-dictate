@@ -36,6 +36,9 @@ fn run() -> anyhow::Result<()> {
             model,
             json,
         } => runtime::run_terminal(simulate_ptt_args(&wav, inject, &language, &model, json)),
+        Command::SimulateSession { wav, json } => {
+            dictate::simulate::handle_simulate_session(&wav, json)
+        }
         Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
         Command::ModelCapacity { json } => model_capacity::handle_command(json),

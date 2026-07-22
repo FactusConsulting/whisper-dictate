@@ -96,6 +96,22 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Drive the in-process Rust `DictateSession` over a WAV file, offline,
+    /// via the cloud STT backend (Groq/OpenAI) — the Rust-engine counterpart
+    /// of `simulate-ptt` (which forwards to Python). Injection is
+    /// preview-only. Used to CLI-integration-test the Rust engine alongside
+    /// the Python one; hidden because it needs a cloud key and is primarily a
+    /// CI/diagnostic tool.
+    #[command(hide = true)]
+    SimulateSession {
+        /// WAV file (16 kHz mono) to feed through the session.
+        #[arg(long)]
+        wav: String,
+        /// Stream the session's worker events as JSON (one object per line)
+        /// instead of printing the final transcript.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Install or repair local runtime dependencies.
     Install,
     /// Run the Ubuntu Wayland desktop setup helper.
