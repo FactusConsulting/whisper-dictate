@@ -223,56 +223,40 @@ impl CloudTranscribeBackend {
     }
 }
 
-/// Trim the trailing dead-air tail ONCE, then gate, returning the trimmed PCM
-/// the cloud request should encode + the duration to report (both derived from
-/// the SAME trimmed slice), or the gate reason + that duration when the
-/// (trimmed) audio is too quiet / flat to send.
-///
-/// Matches Python's `_transcribe_detail` and the local backend (#550):
-/// `_trim_trailing_silence` runs first, and the gate, the audio handed to the
-/// model, and `dur = len(audio)/SR` all see the trimmed buffer
-/// (`vp_transcribe.py:1255-1267`). Sending the untrimmed tail to the endpoint
-/// gives it empty audio to hallucinate a caption over and inflates the
-/// chars-per-second denominator of the speech-rate guard.
-///
-/// Split out so the trim wiring — that both the encoded slice AND `duration_s`
-/// follow the trim — is unit-tested hermetically, without the network call
-/// [`CloudTranscribeBackend::transcribe`]'s only untestable part.
-fn gate_and_prepare<'a>(
-    pcm: &'a [f32],
-    sample_rate: u32,
-    thresholds: &crate::audio_dsp::StatusThresholds,
-) -> Result<(&'a [f32], f64), (String, f64)> {
-    let gated = crate::audio_dsp::gate_and_trim(pcm, thresholds);
-    let trimmed = gated.trimmed;
-    let duration_s = trimmed.len() as f64 / f64::from(sample_rate.max(1));
-    match gated.reject {
-        Some(reason) => Err((reason, duration_s)),
-        None => Ok((trimmed, duration_s)),
-    }
-}
-
 impl TranscribeBackend for CloudTranscribeBackend {
     fn transcribe(
         &self,
         pcm: &[f32],
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError> {
-        // The gate + trim decision. The reason string flows onto
+        // Full pre-model pipeline of Python's `vp_transcribe._transcribe_detail`
+        // (`vp_transcribe.py:1255-1267`): trim the trailing dead-air tail ONCE,
+        // gate the trimmed buffer (reject too-quiet / no-contrast audio BEFORE
+        // the network call), and boost the quiet body toward the target level.
+        // `duration_s` comes from the trimmed length; the gate reason flows onto
         // `TranscribeResult.gate`, which the session maps to a
-        // `too_quiet`/`no_speech` no-text event.
-        let (pcm, _duration_s) =
-            match gate_and_prepare(pcm, sample_rate, &crate::audio_dsp::thresholds_from_env()) {
-                Ok(prepared) => prepared,
-                Err((reason, duration_s)) => {
-                    return Ok(TranscribeResult {
-                        text: String::new(),
-                        gate: Some(reason),
-                        duration_s,
-                        ..Default::default()
-                    });
-                }
-            };
+        // `too_quiet`/`no_speech` no-text event. Sending the untrimmed tail to
+        // the endpoint would give it empty audio to hallucinate a caption over
+        // and inflate the chars-per-second denominator of the speech-rate guard.
+        let audio = match crate::audio_dsp::prepare_for_transcription(
+            pcm,
+            sample_rate,
+            &crate::audio_dsp::thresholds_from_env(),
+        ) {
+            crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                return Ok(TranscribeResult {
+                    text: String::new(),
+                    gate: Some(reason),
+                    duration_s,
+                    ..Default::default()
+                });
+            }
+            crate::audio_dsp::PreparedAudio::Decode { audio, .. } => audio,
+        };
+        // Encode + POST the prepared (trimmed + boosted) audio. `map_cloud_result`
+        // derives `duration_s` from its length -- the boost is gain-only, so the
+        // length still reflects the trimmed clip the gate measured.
+        let pcm = audio.as_slice();
         let wav = encode_wav_mono_16bit(pcm, sample_rate)
             .map_err(|e| TranscribeError::Backend(format!("wav encode failed: {e}")))?;
         let started = Instant::now();

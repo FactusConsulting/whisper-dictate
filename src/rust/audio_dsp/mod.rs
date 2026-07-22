@@ -173,6 +173,57 @@ pub fn gate_and_trim<'a>(pcm: &'a [f32], thresholds: &StatusThresholds) -> Gated
     GatedAudio { trimmed, reject }
 }
 
+/// The decode-ready audio a transcribe backend hands to the model, or the
+/// gate rejection -- the full pre-model pipeline of Python's
+/// `_transcribe_detail`.
+#[derive(Debug)]
+pub enum PreparedAudio {
+    /// The trimmed + boosted audio to decode/encode, plus its clip duration.
+    Decode { audio: Vec<f32>, duration_s: f64 },
+    /// The gate rejected the (trimmed) audio: the free-form reason (mapped to
+    /// `too_quiet`/`no_speech` by `crate::dictate::session::normalize_gate_reason`)
+    /// plus the duration to report on the resulting no-text event.
+    Reject { reason: String, duration_s: f64 },
+}
+
+/// Prepare `pcm` for transcription exactly as Python's `_transcribe_detail`
+/// does, in order (`vp_transcribe.py:1255-1267`):
+///
+/// 1. [`trim_trailing_silence`] the dead-air tail ONCE,
+/// 2. gate the trimmed buffer with [`looks_like_speech`] (reject too-quiet /
+///    no-contrast audio before any model work), and
+/// 3. on a pass, [`boost_quiet`] the trimmed audio toward the target level.
+///
+/// `duration_s` is measured from the TRIMMED length -- the boost is gain-only
+/// and does not change it -- so a long dead tail neither feeds the model empty
+/// audio to hallucinate a caption over nor inflates the chars-per-second
+/// denominator of the speech-rate guard. Shared by BOTH the local and cloud
+/// STT backends so their pre-model processing is identical and unit-tested
+/// once here.
+pub fn prepare_for_transcription(
+    pcm: &[f32],
+    sample_rate: u32,
+    thresholds: &StatusThresholds,
+) -> PreparedAudio {
+    let gated = gate_and_trim(pcm, thresholds);
+    // Guard `sample_rate == 0` (a direct backend caller could pass it) so the
+    // f64 division never reports the sample count as seconds -- an inflated
+    // duration would slip an over-rate transcript past the speech-rate guard.
+    // Mirrors the local backend's original `if sample_rate == 0 { 0.0 }`.
+    let duration_s = if sample_rate == 0 {
+        0.0
+    } else {
+        gated.trimmed.len() as f64 / f64::from(sample_rate)
+    };
+    match gated.reject {
+        Some(reason) => PreparedAudio::Reject { reason, duration_s },
+        None => {
+            let (audio, _metrics) = boost_quiet(gated.trimmed, thresholds);
+            PreparedAudio::Decode { audio, duration_s }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "gate_tests.rs"]
 mod gate_tests;

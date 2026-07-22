@@ -128,3 +128,80 @@ fn gate_and_trim_reports_reject_reason_for_silence() {
     let reason = gated.reject.expect("silence must be rejected");
     assert!(reason.contains("too quiet"), "{reason}");
 }
+
+// ── prepare_for_transcription: trim -> gate -> boost (Python _transcribe_detail) ─
+
+#[test]
+fn prepare_boosts_quiet_passing_audio_and_times_the_trimmed_slice() {
+    // Quiet-but-contrasty speech (raw well above the -55 dBFS too-quiet floor,
+    // high SNR so it passes the gate) followed by a long silent tail. prepare
+    // must (a) trim the tail so duration + decoded audio come from the body,
+    // and (b) boost the quiet body toward the -20 dBFS target (louder output).
+    let body = frames_of(&[0.0004, 0.02, 0.0004, 0.02, 0.0004, 0.02]);
+    let body_peak = body.iter().copied().fold(0.0_f32, |m, v| m.max(v.abs()));
+    let mut pcm = body;
+    pcm.extend(std::iter::repeat_n(0.0_f32, 40 * FRAME_SAMPLES)); // long dead tail
+    let total = pcm.len();
+
+    match prepare_for_transcription(&pcm, 16_000, &StatusThresholds::default()) {
+        PreparedAudio::Decode { audio, duration_s } => {
+            assert!(
+                audio.len() < total,
+                "the dead tail must be trimmed from the decoded audio ({} vs {total})",
+                audio.len()
+            );
+            assert!((duration_s - audio.len() as f64 / 16_000.0).abs() < 1e-9);
+            assert!(
+                duration_s < total as f64 / 16_000.0,
+                "duration must reflect the trimmed length, got {duration_s}"
+            );
+            let out_peak = audio.iter().copied().fold(0.0_f32, |m, v| m.max(v.abs()));
+            assert!(
+                out_peak > body_peak * 1.5,
+                "quiet audio must be boosted toward target: out_peak={out_peak} body_peak={body_peak}"
+            );
+        }
+        other => panic!("quiet contrasty speech must Decode, got {other:?}"),
+    }
+}
+
+#[test]
+fn prepare_reports_zero_duration_for_zero_sample_rate() {
+    // A zero sample rate must yield duration_s = 0.0 (not the trimmed sample
+    // count), so an inflated duration can't disable the downstream speech-rate
+    // guard. Holds on both the Decode and Reject paths.
+    let loud = frames_of(&[0.001, 0.5, 0.001, 0.5, 0.001, 0.5]);
+    match prepare_for_transcription(&loud, 0, &StatusThresholds::default()) {
+        PreparedAudio::Decode { duration_s, .. } => assert_eq!(duration_s, 0.0),
+        other => panic!("expected Decode, got {other:?}"),
+    }
+    match prepare_for_transcription(&frames_of(&[0.0; 6]), 0, &StatusThresholds::default()) {
+        PreparedAudio::Reject { duration_s, .. } => assert_eq!(duration_s, 0.0),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn prepare_rejects_silence_with_reason() {
+    match prepare_for_transcription(&frames_of(&[0.0; 6]), 16_000, &StatusThresholds::default()) {
+        PreparedAudio::Reject { reason, .. } => {
+            assert!(reason.contains("too quiet"), "{reason}");
+        }
+        other => panic!("silence must Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn prepare_does_not_attenuate_loud_audio_below_input() {
+    // A loud passing buffer (0.5 body) is already at/above target, so the boost
+    // must not amplify it into clipping nor drop it below the input — the
+    // decoded audio stays a faithful (un-clipped) rendering.
+    let loud = frames_of(&[0.001, 0.5, 0.001, 0.5, 0.001, 0.5]);
+    match prepare_for_transcription(&loud, 16_000, &StatusThresholds::default()) {
+        PreparedAudio::Decode { audio, .. } => {
+            let peak = audio.iter().copied().fold(0.0_f32, |m, v| m.max(v.abs()));
+            assert!(peak <= 1.0 + 1e-6, "boost must never clip: peak={peak}");
+        }
+        other => panic!("loud contrasty speech must Decode, got {other:?}"),
+    }
+}
