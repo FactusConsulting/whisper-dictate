@@ -43,12 +43,22 @@ fn failing_backend() -> WhisperLocalTranscribeBackend {
     WhisperLocalTranscribeBackend::new(model, WhisperBackendConfig::default())
 }
 
+/// PCM that PASSES the pre-transcription speech gate (loud, contrasty,
+/// ending loud), so `transcribe` reaches the model loader rather than
+/// being short-circuited by the gate.
+fn gate_passing_pcm() -> Vec<f32> {
+    let mut pcm = Vec::with_capacity(6 * 480);
+    for amp in [0.001_f32, 0.5, 0.001, 0.5, 0.001, 0.5] {
+        pcm.extend(std::iter::repeat_n(amp, 480));
+    }
+    pcm
+}
+
 #[test]
 fn transcribe_maps_loader_failure_to_backend_error() {
     let backend = failing_backend();
-    let pcm = vec![0.0_f32; 16_000];
     let err = backend
-        .transcribe(&pcm, 16_000)
+        .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("loader failure should propagate as TranscribeError");
     match err {
         TranscribeError::Backend(msg) => {
@@ -58,6 +68,21 @@ fn transcribe_maps_loader_failure_to_backend_error() {
             );
         }
     }
+}
+
+#[test]
+fn transcribe_gates_silence_before_the_model() {
+    // Silent input is rejected by the speech gate BEFORE the model loader
+    // runs, so even a failing loader is never reached: an Ok with the gate
+    // reason is returned, which the session maps to a too_quiet no-text
+    // event.
+    let backend = failing_backend();
+    let result = backend
+        .transcribe(&vec![0.0_f32; 6 * 480], 16_000)
+        .expect("gated silence returns Ok, not the loader error");
+    assert!(result.text.is_empty());
+    let gate = result.gate.expect("gate reason present");
+    assert!(gate.contains("too quiet"), "{gate}");
 }
 
 #[test]
@@ -171,8 +196,11 @@ fn empty_language_string_is_treated_as_auto_detect() {
             initial_prompt: Some(String::new()),
         },
     );
-    let pcm = vec![0.0_f32; 16_000];
-    let err = backend.transcribe(&pcm, 16_000).expect_err("loader fails");
+    // Gate-passing audio so the speech gate doesn't short-circuit before
+    // the model loader is reached.
+    let err = backend
+        .transcribe(&gate_passing_pcm(), 16_000)
+        .expect_err("loader fails");
     match err {
         TranscribeError::Backend(msg) => {
             assert!(

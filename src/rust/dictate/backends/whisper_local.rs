@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use regex::Regex;
 
-use super::hallucination::is_hallucination;
+use super::hallucination::{is_hallucination, max_chars_per_second_from_env, speech_rate_exceeded};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -81,12 +81,12 @@ pub struct WhisperBackendConfig {
 /// - `language` — the configured hint (or empty for auto); whisper-rs
 ///   does not currently surface a detected-language code through
 ///   [`LocalWhisper::transcribe_samples`].
-/// - `gate` — always `None`. The speech-gate lives in
-///   `vp_transcribe._looks_like_speech` and is its own Wave 5 follow-up
-///   (the gate text-to-reason mapper already exists in
-///   `crate::dictate::session::normalize_gate_reason`, ready to consume
-///   `Some(raw_gate_text)` when a future backend / pre-processing step
-///   produces one).
+/// - `gate` — `Some(reason)` when the pre-transcription speech gate
+///   (`vp_transcribe._looks_like_speech` parity, via
+///   [`crate::audio_dsp::speech_gate_reason`]) rejects too-quiet /
+///   no-contrast audio BEFORE the model loads; `None` on a normal pass.
+///   The session maps the reason to a `too_quiet`/`no_speech` no-text
+///   event via `crate::dictate::session::normalize_gate_reason`.
 pub struct WhisperLocalTranscribeBackend {
     model: IdleUnloadingModel<LocalWhisper>,
     config: WhisperBackendConfig,
@@ -142,6 +142,31 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             .as_deref()
             .filter(|s| !s.is_empty());
 
+        // `duration_s` from sample count + rate (Python computes the same
+        // way once the PCM is in hand). Guard `sample_rate = 0` so the f64
+        // division does not produce `inf`/`NaN` that JSON would reject.
+        let duration_s = if sample_rate == 0 {
+            0.0
+        } else {
+            pcm.len() as f64 / f64::from(sample_rate)
+        };
+
+        // Pre-transcription speech gate, matching Python's
+        // `vp_transcribe._transcribe_detail`: reject too-quiet /
+        // no-contrast audio BEFORE loading/decoding with whisper.cpp. The
+        // reason string flows onto `TranscribeResult.gate`, which the
+        // session maps to a `too_quiet`/`no_speech` no-text event.
+        if let Some(reason) =
+            crate::audio_dsp::speech_gate_reason(pcm, &crate::audio_dsp::thresholds_from_env())
+        {
+            return Ok(TranscribeResult {
+                text: String::new(),
+                gate: Some(reason),
+                duration_s,
+                ..Default::default()
+            });
+        }
+
         let start = Instant::now();
         let raw_text = self
             .model
@@ -159,16 +184,14 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // Codex P2 #417 whisper_local.rs:201.
         let text = normalize_whitespace(&raw_text);
 
-        // `duration_s` from sample count + rate (Python computes the
-        // same way once the PCM is in hand — see `vp_transcribe.py::
-        // _transcribe_detail`'s `dur = len(audio) / SR`). Guard against
-        // a caller passing `sample_rate = 0` so the f64 division does
-        // not produce `inf` / `NaN` that downstream JSON serialisation
-        // would reject.
-        let duration_s = if sample_rate == 0 {
-            0.0
+        // Impossible-speech-rate hallucination guard (Python's
+        // `_exceeds_speech_rate`): a transcript produced far faster than
+        // real speech is blanked, so it surfaces as an `empty` no-text
+        // event rather than injecting a hallucinated wall of caption text.
+        let text = if speech_rate_exceeded(&text, duration_s, max_chars_per_second_from_env()) {
+            String::new()
         } else {
-            pcm.len() as f64 / f64::from(sample_rate)
+            text
         };
 
         // Compute the hallucination flag against a borrow so `text` can
