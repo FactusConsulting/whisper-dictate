@@ -289,12 +289,23 @@ pub(crate) fn make_real_session(
         // `_assert_local_backend` gate. On refusal the `Err` bubbles out of
         // `make_real_session` and the sink falls back to the stub session
         // (never silently POSTing audio remotely).
+        // Dictionary support (Python parity, matching `simulate-session`):
+        // term-based prompt biasing folds into the STT prompt for BOTH
+        // backends here, and the replacement table is attached to the session
+        // below via `with_dictionary`. Loaded once from the same
+        // `VOICEPI_DICTIONARY*` env + config the `dictionary-runtime` RPC reads;
+        // disabled / empty is a no-op.
+        let dictionary = crate::dictionary::load_session_dictionary();
+
         let transcribe = ProductionTranscribeBackend::select(
             cloud_backend_requested_from_env(),
             || {
+                let mut config = CloudTranscribeConfig::from_env();
+                let base = config.prompt.take();
+                config.prompt = dictionary.initial_prompt(base.as_deref());
                 cloud_backend_local_only_checked(
                     crate::whisper::model_manager::is_local_only(),
-                    CloudTranscribeConfig::from_env(),
+                    config,
                 )
             },
             || -> Result<WhisperLocalTranscribeBackend, String> {
@@ -303,10 +314,10 @@ pub(crate) fn make_real_session(
                 let idle =
                     parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
                 let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-                Ok(WhisperLocalTranscribeBackend::new(
-                    model,
-                    whisper_backend_config_from_env(),
-                ))
+                let mut config = whisper_backend_config_from_env();
+                let base = config.initial_prompt.take();
+                config.initial_prompt = dictionary.initial_prompt(base.as_deref());
+                Ok(WhisperLocalTranscribeBackend::new(model, config))
             },
         )?;
 
@@ -325,6 +336,12 @@ pub(crate) fn make_real_session(
         // falls back to the raw transcript on any provider error, so this
         // can only improve output, never drop dictation.
         let mut dictate = DictateSession::new(transcribe, inject, session_config_from_env());
+        // Attach the dictionary replacement table (Python's `_dictionary_runtime`)
+        // when the configured dictionary has any replacements -- the session
+        // applies them to the transcript before post-process/format/inject.
+        if dictionary.has_replacements() {
+            dictate = dictate.with_dictionary(dictionary.dictionary);
+        }
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
             dictate = dictate.with_post_process(Box::new(post));
         }

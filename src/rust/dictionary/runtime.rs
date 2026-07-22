@@ -345,6 +345,61 @@ pub fn runtime_dictionary_result(
     }
 }
 
+/// The dictionary state a live in-process session needs: the loaded
+/// [`Dictionary`] (for the replacement table) plus the resolved prompt-budget
+/// knobs (for the Whisper `initial_prompt`). Built from the same
+/// `VOICEPI_DICTIONARY*` env + `config.json` the `dictionary-runtime` RPC and
+/// the Python worker read, so the in-process Rust engine biases + rewrites
+/// identically.
+#[derive(Debug, Clone)]
+pub struct SessionDictionary {
+    /// The merged dictionary (empty when disabled or nothing loaded).
+    pub dictionary: Dictionary,
+    /// Prompt term-count budget (`VOICEPI_DICTIONARY_MAX_TERMS`).
+    pub max_terms: usize,
+    /// Prompt character budget (`VOICEPI_DICTIONARY_PROMPT_CHARS`).
+    pub max_chars: usize,
+    /// Whether the dictionary is enabled (`VOICEPI_DICTIONARY_ENABLED`).
+    pub enabled: bool,
+}
+
+impl SessionDictionary {
+    /// Build the Whisper `initial_prompt` from `base_prompt` + the
+    /// budget-fitted vocabulary terms, or `None` when both are empty (the
+    /// caller then passes the empty string through). Mirrors Python's
+    /// `_dictionary_prompt_runtime`.
+    pub fn initial_prompt(&self, base_prompt: Option<&str>) -> Option<String> {
+        self.dictionary
+            .build_prompt(base_prompt, self.max_terms, self.max_chars)
+    }
+
+    /// `true` when the loaded dictionary carries any replacements, so the
+    /// session wiring can skip attaching the replacement seam otherwise.
+    pub fn has_replacements(&self) -> bool {
+        !self.dictionary.replacements.is_empty()
+    }
+}
+
+/// Load the [`SessionDictionary`] from the process env + `config.json`, the
+/// single entry the in-process session uses for BOTH halves of dictionary
+/// support: term-based prompt biasing ([`SessionDictionary::initial_prompt`])
+/// and the replacement table ([`SessionDictionary::dictionary`]). When
+/// disabled, returns an empty dictionary so both halves are no-ops.
+pub fn load_session_dictionary() -> SessionDictionary {
+    let settings = RuntimeDictionarySettings::from_env_and_config();
+    let dictionary = if settings.enabled {
+        load_runtime_dictionary(&settings.paths).0
+    } else {
+        Dictionary::default()
+    };
+    SessionDictionary {
+        dictionary,
+        max_terms: settings.max_terms,
+        max_chars: settings.max_chars,
+        enabled: settings.enabled,
+    }
+}
+
 fn load_runtime_dictionary(paths: &[PathBuf]) -> (Dictionary, Vec<PathBuf>, Option<String>) {
     let mut dictionary = Dictionary::default();
     let mut loaded_paths = Vec::new();
@@ -409,6 +464,70 @@ fn _path_marker(_: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_dictionary_builds_prompt_and_reports_replacements() {
+        // Pure: `initial_prompt` fits the base prompt + budget-limited terms,
+        // and `has_replacements` reflects the table -- no env, no I/O.
+        let sd = SessionDictionary {
+            dictionary: Dictionary {
+                terms: vec!["Codex".to_owned(), "Claude Code".to_owned()],
+                replacements: vec![Replacement {
+                    from: "code x".to_owned(),
+                    to: "Codex".to_owned(),
+                }],
+            },
+            max_terms: 80,
+            max_chars: 1200,
+            enabled: true,
+        };
+        assert!(sd.has_replacements());
+        let prompt = sd
+            .initial_prompt(Some("base hint"))
+            .expect("prompt present");
+        assert!(prompt.contains("base hint"), "{prompt}");
+        assert!(
+            prompt.contains("Vocabulary: Codex, Claude Code"),
+            "{prompt}"
+        );
+
+        let empty = SessionDictionary {
+            dictionary: Dictionary::default(),
+            max_terms: 80,
+            max_chars: 1200,
+            enabled: false,
+        };
+        assert!(!empty.has_replacements());
+        assert_eq!(empty.initial_prompt(None), None);
+    }
+
+    #[test]
+    fn load_session_dictionary_reads_env_dictionary() {
+        // Env-driven load: `VOICEPI_DICTIONARY` + `VOICEPI_DICTIONARY_ENABLED`
+        // point at a temp file; the loaded terms + replacements come back on
+        // the SessionDictionary. Serialised via the crate-wide ENV_LOCK.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dict.json");
+        std::fs::write(
+            &path,
+            r#"{"terms":["Codex"],"replacements":{"code x":"Codex"}}"#,
+        )
+        .unwrap();
+        std::env::set_var("VOICEPI_DICTIONARY", &path);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        let sd = load_session_dictionary();
+        std::env::remove_var("VOICEPI_DICTIONARY");
+        std::env::remove_var("VOICEPI_DICTIONARY_ENABLED");
+
+        assert!(sd.enabled);
+        assert!(sd.has_replacements());
+        assert_eq!(sd.dictionary.terms, vec!["Codex".to_owned()]);
+        let prompt = sd.initial_prompt(None).expect("prompt from terms");
+        assert!(prompt.contains("Vocabulary: Codex"), "{prompt}");
+    }
 
     #[test]
     fn preview_dictionary_reports_counts_and_prompt() {

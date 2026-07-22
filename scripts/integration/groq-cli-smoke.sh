@@ -11,6 +11,9 @@
 #          WAV (transcribe -> post-process -> format -> inject-preview) for two
 #          consecutive press -> release cycles, guarding session reuse (the
 #          "PTT only works the first time, then gets stuck" regression).
+#   5)   dictionary replacement end-to-end: simulate-session with a temp
+#          VOICEPI_DICTIONARY rewrites the spoken words, proving the session's
+#          replacement seam is wired through the real CLI + Groq.
 #
 # Step 4 is the Rust-engine counterpart of the Python `simulate-ptt` offline
 # drive, so BOTH engines get CLI integration coverage while Python still
@@ -105,7 +108,7 @@ echo "[groq-cli-smoke] 3/4 format-text (en command set)"
 fmt_json="$(run_cli format-text --text "$post_text" --command-set en)"
 printf '%s' "$fmt_json" | json_field text >/dev/null
 
-echo "[groq-cli-smoke] 4/4 simulate-session: drive DictateSession over '$SPEECH_WAV' x2"
+echo "[groq-cli-smoke] 4/5 simulate-session: drive DictateSession over '$SPEECH_WAV' x2"
 if [[ ! -f "$SPEECH_WAV" ]]; then
   echo "[groq-cli-smoke] FAIL: speech fixture not found: $SPEECH_WAV" >&2
   exit 1
@@ -143,4 +146,34 @@ while IFS= read -r line; do
   echo "[groq-cli-smoke]   cycle $cycle transcript: $line"
 done <<< "$session_out"
 
-echo "[groq-cli-smoke] OK: component chain + repeated DictateSession drive succeeded on real audio."
+echo "[groq-cli-smoke] 5/5 simulate-session with a dictionary replacement"
+# A temp dictionary rewrites the spoken words "hello"->"greetings" and
+# "world"->"planet". Driving the session with VOICEPI_DICTIONARY set must apply
+# the replacement table to the transcript (Python's `_dictionary_runtime`
+# parity, via the session's `with_dictionary` seam), so the output carries a
+# replaced word and NO original spoken word -- proving the whole dictionary
+# path (load -> replace) is wired through the real CLI + Groq.
+dict_dir="$(mktemp -d)"
+dict_file="$dict_dir/dictionary.json"
+printf '%s' '{"replacements":{"hello":"greetings","world":"planet"}}' > "$dict_file"
+dict_out="$(
+  VOICEPI_STT_BASE_URL="$GROQ_BASE" \
+  VOICEPI_STT_MODEL="$STT_MODEL" \
+  VOICEPI_STT_API_KEY="$GROQ_API_KEY" \
+  VOICEPI_DICTIONARY="$dict_file" \
+  VOICEPI_DICTIONARY_ENABLED=1 \
+    run_cli simulate-session --wav "$SPEECH_WAV"
+)"
+rm -rf "$dict_dir"
+dict_lc="$(printf '%s' "$dict_out" | tr '[:upper:]' '[:lower:]')"
+if [[ "$dict_lc" == *hello* || "$dict_lc" == *world* ]]; then
+  echo "[groq-cli-smoke] FAIL: dictionary replacement not applied (original word remains): $dict_out" >&2
+  exit 1
+fi
+if [[ "$dict_lc" != *greetings* && "$dict_lc" != *planet* ]]; then
+  echo "[groq-cli-smoke] FAIL: no replaced word in dictionary transcript: $dict_out" >&2
+  exit 1
+fi
+echo "[groq-cli-smoke]   dictionary-rewritten transcript: $dict_out"
+
+echo "[groq-cli-smoke] OK: component chain + repeated DictateSession drive + dictionary replacement succeeded on real audio."
