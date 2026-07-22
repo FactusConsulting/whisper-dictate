@@ -128,7 +128,39 @@ fn resolve_cloud_transcribe(
     cloud_backend_local_only_checked(local_only, config).map_err(|e| anyhow!(e))
 }
 
-pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
+/// Drive `session` over `pcm` for `repeat` consecutive press → release
+/// cycles, reusing the SAME session each time. Returns one outcome per
+/// cycle, in order. `repeat == 0` is treated as a single cycle so the CLI
+/// never silently does nothing.
+///
+/// This is the session-reuse path: a `DictateSession` that only armed once
+/// (the "PTT works the first time then gets stuck" bug the Rust flip hit
+/// before 1.21.0) would fail the 2nd `start()` with `AlreadyActive`, which
+/// `drive_session_over_pcm` surfaces as an `Err`. Driving ≥2 cycles here —
+/// and asserting each transcribes in the integration smoke test — catches
+/// that regression against the REAL backend.
+pub fn drive_session_cycles<T, I, W>(
+    session: &mut DictateSession<T, I>,
+    pcm: &[f32],
+    writer: &mut W,
+    repeat: u32,
+) -> Result<Vec<UtteranceOutcome>>
+where
+    T: TranscribeBackend,
+    I: InjectBackend,
+    W: Write,
+{
+    let cycles = repeat.max(1);
+    let mut outcomes = Vec::with_capacity(cycles as usize);
+    for cycle in 1..=cycles {
+        let outcome = drive_session_over_pcm(session, pcm, writer)
+            .map_err(|e| anyhow!("cycle {cycle}/{cycles}: {e}"))?;
+        outcomes.push(outcome);
+    }
+    Ok(outcomes)
+}
+
+pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Result<()> {
     // This verb drives the cloud path (stock, no local model needed).
     let transcribe = resolve_cloud_transcribe(
         CloudTranscribeConfig::from_env(),
@@ -144,7 +176,7 @@ pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
         session = session.with_post_process(Box::new(post));
     }
 
-    let outcome = if json {
+    let outcomes = if json {
         // The session gates its worker-event lines behind VOICEPI_WORKER_EVENTS
         // (so an ungated CLI drive never leaks them). `--json` explicitly asks
         // for that stream, so enable the gate for this process if it isn't
@@ -157,22 +189,29 @@ pub fn handle_simulate_session(wav_path: &str, json: bool) -> Result<()> {
         // Buffer, then strip the session's `[worker-event] ` line prefix so
         // stdout is valid JSONL (one JSON object per line) as `--json`
         // promises, rather than the wire-format `[worker-event] {…}` lines.
+        // All cycles stream into the same buffer, so the JSONL covers every
+        // press → release in order.
         let mut buf = Vec::new();
-        let outcome = drive_session_over_pcm(&mut session, &pcm, &mut buf)?;
+        let outcomes = drive_session_cycles(&mut session, &pcm, &mut buf, repeat)?;
         let jsonl = to_clean_jsonl(&String::from_utf8_lossy(&buf));
         if !jsonl.is_empty() {
             println!("{jsonl}");
         }
-        outcome
+        outcomes
     } else {
         let mut sink = std::io::sink();
-        drive_session_over_pcm(&mut session, &pcm, &mut sink)?
+        drive_session_cycles(&mut session, &pcm, &mut sink, repeat)?
     };
 
     if !json {
-        match &outcome {
-            UtteranceOutcome::Injected { text, .. } => println!("{text}"),
-            other => eprintln!("[simulate-session] no injection ({other:?})"),
+        for (i, outcome) in outcomes.iter().enumerate() {
+            match outcome {
+                UtteranceOutcome::Injected { text, .. } => println!("{text}"),
+                other => eprintln!(
+                    "[simulate-session] cycle {}: no injection ({other:?})",
+                    i + 1
+                ),
+            }
         }
     }
     Ok(())
