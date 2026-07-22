@@ -88,3 +88,54 @@ impl Default for StatusThresholds {
         }
     }
 }
+
+/// `VOICEPI_TARGET_DBFS` env key (boost target).
+pub const TARGET_DBFS_ENV: &str = "VOICEPI_TARGET_DBFS";
+/// `VOICEPI_MIN_INPUT_DBFS` env key (too-quiet floor).
+pub const MIN_INPUT_DBFS_ENV: &str = "VOICEPI_MIN_INPUT_DBFS";
+/// `VOICEPI_MIN_SNR_DB` env key (no-contrast floor).
+pub const MIN_SNR_DB_ENV: &str = "VOICEPI_MIN_SNR_DB";
+
+/// Read [`StatusThresholds`] from the process env, mirroring the Python
+/// module constants (`vp_audio.py`): `VOICEPI_TARGET_DBFS` /
+/// `VOICEPI_MIN_INPUT_DBFS` / `VOICEPI_MIN_SNR_DB`, each falling back to the
+/// same default when unset, blank, or unparseable.
+pub fn thresholds_from_env() -> StatusThresholds {
+    thresholds_from_env_with(|name| std::env::var(name).ok())
+}
+
+/// Testable core of [`thresholds_from_env`]: resolves each field through
+/// `lookup` so the parse is unit-tested without touching process env.
+pub fn thresholds_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> StatusThresholds {
+    let get = |name: &str, default: f64| {
+        lookup(name)
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .unwrap_or(default)
+    };
+    StatusThresholds {
+        target_dbfs: get(TARGET_DBFS_ENV, DEFAULT_TARGET_DBFS),
+        min_input_dbfs: get(MIN_INPUT_DBFS_ENV, DEFAULT_MIN_INPUT_DBFS),
+        min_input_snr_db: get(MIN_SNR_DB_ENV, DEFAULT_MIN_INPUT_SNR_DB),
+    }
+}
+
+/// The pre-transcription speech gate. Trims trailing silence (so a long dead
+/// tail doesn't drag the mean level below the too-quiet floor), then runs
+/// [`looks_like_speech`]. Returns `Some(reason)` when the buffer is too
+/// quiet or too flat to be worth decoding -- the reason string is what
+/// `crate::dictate::session::normalize_gate_reason` maps to
+/// `too_quiet`/`no_speech` -- or `None` when it looks like speech and should
+/// be transcribed. Mirrors the pre-check order in
+/// `vp_transcribe._transcribe_detail` (trim -> gate, before the model).
+pub fn speech_gate_reason(pcm: &[f32], thresholds: &StatusThresholds) -> Option<String> {
+    let (trimmed, _trimmed_ms) = trim_trailing_silence(pcm);
+    match looks_like_speech(trimmed, thresholds) {
+        (true, _) => None,
+        (false, reason) => Some(reason),
+    }
+}
+
+#[cfg(test)]
+#[path = "gate_tests.rs"]
+mod gate_tests;
