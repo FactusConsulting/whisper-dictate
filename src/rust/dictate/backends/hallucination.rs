@@ -142,6 +142,36 @@ pub fn is_hallucination(text: &str) -> bool {
     set.contains(lowered.trim_end()) || looks_like_credit(text)
 }
 
+/// `VOICEPI_MAX_CHARS_PER_SECOND` env key.
+pub const MAX_CHARS_PER_SECOND_ENV: &str = "VOICEPI_MAX_CHARS_PER_SECOND";
+/// Python default (`vp_transcribe.MAX_CHARS_PER_SECOND = 30`).
+pub const DEFAULT_MAX_CHARS_PER_SECOND: f64 = 30.0;
+
+/// Read the impossible-speech-rate ceiling from the env, mirroring Python's
+/// `VOICEPI_MAX_CHARS_PER_SECOND` module constant. `0` (or negative)
+/// disables the guard; unset / blank / unparseable falls back to the
+/// default.
+pub fn max_chars_per_second_from_env() -> f64 {
+    std::env::var(MAX_CHARS_PER_SECOND_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(DEFAULT_MAX_CHARS_PER_SECOND)
+}
+
+/// `true` when `text` was produced far too fast to be real speech -- a
+/// Whisper hallucination guard. Port of Python's `_speech_rate_exceeded`:
+/// `len(text.strip()) / max(duration_s, 0.1) > MAX_CHARS_PER_SECOND`, with
+/// `max_cps <= 0` disabling the guard. The caller blanks the transcript on a
+/// `true`, so it surfaces as an `empty` no-text event.
+pub fn speech_rate_exceeded(text: &str, duration_s: f64, max_cps: f64) -> bool {
+    if max_cps <= 0.0 {
+        return false;
+    }
+    let chars = text.trim().chars().count() as f64;
+    chars / duration_s.max(0.1) > max_cps
+}
+
 #[cfg(test)]
 #[path = "hallucination_tests.rs"]
 mod tests;

@@ -3,7 +3,7 @@
 //! feature, no model), so these run in the required `rust` matrix on every
 //! build.
 
-use super::is_hallucination;
+use super::{is_hallucination, speech_rate_exceeded, DEFAULT_MAX_CHARS_PER_SECOND};
 
 #[test]
 fn matches_exact_blacklist_entry() {
@@ -75,6 +75,44 @@ fn credit_regex_flags_bare_company_names() {
     assert!(is_hallucination("Broadcast Text International 2005"));
     assert!(is_hallucination("Dansk Videotekst"));
     assert!(is_hallucination("Dansk Video Tekst 2011"));
+}
+
+// ── speech-rate guard (parity with Python's _speech_rate_exceeded) ───────────
+
+#[test]
+fn speech_rate_exceeded_flags_impossibly_fast_transcripts() {
+    // 200 chars in 0.5 s = 400 chars/s >> 30.
+    let fast: String = "a".repeat(200);
+    assert!(speech_rate_exceeded(
+        &fast,
+        0.5,
+        DEFAULT_MAX_CHARS_PER_SECOND
+    ));
+}
+
+#[test]
+fn speech_rate_within_limit_is_not_flagged() {
+    // "hello world" (11 chars) over 1 s = 11 chars/s < 30.
+    assert!(!speech_rate_exceeded(
+        "hello world",
+        1.0,
+        DEFAULT_MAX_CHARS_PER_SECOND
+    ));
+}
+
+#[test]
+fn speech_rate_guard_disabled_when_max_is_zero_or_negative() {
+    let fast: String = "a".repeat(1000);
+    assert!(!speech_rate_exceeded(&fast, 0.1, 0.0));
+    assert!(!speech_rate_exceeded(&fast, 0.1, -1.0));
+}
+
+#[test]
+fn speech_rate_clamps_tiny_durations_like_python() {
+    // duration_s is floored at 0.1 s (matches Python's max(duration_s, 0.1)),
+    // so a 4-char transcript over 0.001 s is 40 chars/s, not 4000.
+    assert!(speech_rate_exceeded("abcd", 0.001, 30.0)); // 4 / 0.1 = 40 > 30
+    assert!(!speech_rate_exceeded("abc", 0.001, 30.0)); // 3 / 0.1 = 30, not > 30
 }
 
 #[test]
