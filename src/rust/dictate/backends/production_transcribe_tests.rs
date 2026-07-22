@@ -56,14 +56,26 @@ fn local_variant_delegates_to_wrapped_backend() {
     );
 }
 
+/// PCM that passes the cloud backend's pre-transcription speech gate (loud
+/// frames with contrast, ending loud), so the cloud arm reaches its
+/// empty-key network guard rather than being short-circuited by the gate.
+fn gate_passing_pcm() -> Vec<f32> {
+    let mut pcm = Vec::with_capacity(6 * 480);
+    for amp in [0.001_f32, 0.5, 0.001, 0.5, 0.001, 0.5] {
+        pcm.extend(std::iter::repeat_n(amp, 480));
+    }
+    pcm
+}
+
 #[test]
 fn cloud_variant_delegates_to_cloud_backend() {
     // Empty api_key trips CloudTranscribeBackend's pre-network guard, so
     // an Err proves the enum routed to the Cloud arm without a live call.
+    // Feed gate-passing audio so the speech gate doesn't short-circuit first.
     let backend: ProductionTranscribeBackend<StubLocal> =
         ProductionTranscribeBackend::Cloud(CloudTranscribeBackend::new(cloud_config_no_key()));
     let err = backend
-        .transcribe(&[0.0_f32; 1600], 16_000)
+        .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("empty key must error through the cloud arm");
     assert!(matches!(err, TranscribeError::Backend(_)));
 }
