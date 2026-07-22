@@ -63,13 +63,14 @@ pub struct WhisperBackendConfig {
 ///   (covers a lazy reload too, matching the Python `compute_s` field).
 /// - `duration_s` — `trimmed.len() / sample_rate`: the captured audio
 ///   length AFTER the trailing dead-air tail is trimmed, so it matches the
-///   buffer actually decoded (Python's `dur`).
+///   buffer actually decoded (Python's `dur`). The gain boost applied
+///   before decode is level-only and does not change it.
 /// - `language` — the configured hint (or empty for auto); whisper-rs
 ///   does not currently surface a detected-language code through
 ///   [`LocalWhisper::transcribe_samples`].
 /// - `gate` — `Some(reason)` when the pre-transcription speech gate
 ///   (`vp_transcribe._looks_like_speech` parity, via
-///   [`crate::audio_dsp::gate_and_trim`]) rejects too-quiet /
+///   [`crate::audio_dsp::prepare_for_transcription`]) rejects too-quiet /
 ///   no-contrast audio BEFORE the model loads; `None` on a normal pass.
 ///   The session maps the reason to a `too_quiet`/`no_speech` no-text
 ///   event via `crate::dictate::session::normalize_gate_reason`.
@@ -128,43 +129,33 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             .as_deref()
             .filter(|s| !s.is_empty());
 
-        // Trim the trailing dead-air tail ONCE, then gate + decode + time
-        // the SAME trimmed slice, matching Python's `_transcribe_detail`
-        // (`_trim_trailing_silence` runs first; the gate, decode and
-        // `dur = len(audio)/SR` all see the trimmed buffer,
-        // `vp_transcribe.py:1255-1267`). Decoding the untrimmed tail would
-        // give whisper.cpp empty audio to hallucinate a caption over and
-        // inflate the chars-per-second denominator of the speech-rate guard.
-        let gated = crate::audio_dsp::gate_and_trim(pcm, &crate::audio_dsp::thresholds_from_env());
-        let pcm = gated.trimmed;
-
-        // `duration_s` from the TRIMMED sample count + rate (Python computes
-        // `dur` from the trimmed buffer). Guard `sample_rate = 0` so the f64
-        // division does not produce `inf`/`NaN` that JSON would reject.
-        let duration_s = if sample_rate == 0 {
-            0.0
-        } else {
-            pcm.len() as f64 / f64::from(sample_rate)
+        // Full pre-model pipeline of Python's `vp_transcribe._transcribe_detail`
+        // (`vp_transcribe.py:1255-1267`): trim the trailing dead-air tail ONCE,
+        // gate the trimmed buffer (reject too-quiet / no-contrast audio BEFORE
+        // loading/decoding with whisper.cpp), and boost the quiet body toward
+        // the target level. `duration_s` comes from the trimmed length; the
+        // gate reason flows onto `TranscribeResult.gate`, which the session
+        // maps to a `too_quiet`/`no_speech` no-text event.
+        let (audio, duration_s) = match crate::audio_dsp::prepare_for_transcription(
+            pcm,
+            sample_rate,
+            &crate::audio_dsp::thresholds_from_env(),
+        ) {
+            crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                return Ok(TranscribeResult {
+                    text: String::new(),
+                    gate: Some(reason),
+                    duration_s,
+                    ..Default::default()
+                });
+            }
+            crate::audio_dsp::PreparedAudio::Decode { audio, duration_s } => (audio, duration_s),
         };
-
-        // Pre-transcription speech gate, matching Python's
-        // `vp_transcribe._transcribe_detail`: reject too-quiet /
-        // no-contrast audio BEFORE loading/decoding with whisper.cpp. The
-        // reason string flows onto `TranscribeResult.gate`, which the
-        // session maps to a `too_quiet`/`no_speech` no-text event.
-        if let Some(reason) = gated.reject {
-            return Ok(TranscribeResult {
-                text: String::new(),
-                gate: Some(reason),
-                duration_s,
-                ..Default::default()
-            });
-        }
 
         let start = Instant::now();
         let raw_text = self
             .model
-            .with_model(|m| m.transcribe_samples(pcm, language_hint, initial_prompt))
+            .with_model(|m| m.transcribe_samples(&audio, language_hint, initial_prompt))
             .map_err(|e| TranscribeError::Backend(format!("{e:#}")))?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
