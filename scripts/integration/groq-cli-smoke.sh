@@ -6,9 +6,11 @@
 #
 #   1-3) component chain:
 #          cloud-transcribe (Groq STT) -> postprocess (Groq clean) -> format-text
-#   4)   full in-process Rust engine end-to-end:
-#          simulate-session drives the real DictateSession over a WAV
-#          (transcribe -> post-process -> format -> inject-preview)
+#   4)   full in-process Rust engine end-to-end, driven TWICE over one session:
+#          simulate-session --repeat 2 drives the real DictateSession over a
+#          WAV (transcribe -> post-process -> format -> inject-preview) for two
+#          consecutive press -> release cycles, guarding session reuse (the
+#          "PTT only works the first time, then gets stuck" regression).
 #
 # Step 4 is the Rust-engine counterpart of the Python `simulate-ptt` offline
 # drive, so BOTH engines get CLI integration coverage while Python still
@@ -103,30 +105,42 @@ echo "[groq-cli-smoke] 3/4 format-text (en command set)"
 fmt_json="$(run_cli format-text --text "$post_text" --command-set en)"
 printf '%s' "$fmt_json" | json_field text >/dev/null
 
-echo "[groq-cli-smoke] 4/4 simulate-session: drive DictateSession over '$SPEECH_WAV'"
+echo "[groq-cli-smoke] 4/4 simulate-session: drive DictateSession over '$SPEECH_WAV' x2"
 if [[ ! -f "$SPEECH_WAV" ]]; then
   echo "[groq-cli-smoke] FAIL: speech fixture not found: $SPEECH_WAV" >&2
   exit 1
 fi
 # The in-process Rust engine reads its cloud STT backend from VOICEPI_STT_*.
-# The verb prints the final (preview-injected) transcript to stdout. With no
-# post-processor / format-commands set, that is the raw Groq transcript of the
-# spoken "hello world" clip -- assert it is non-empty and carries the words.
-session_text="$(
+# `--repeat 2` drives TWO consecutive press -> release cycles through the SAME
+# session, printing one transcript line per cycle. This is the regression
+# guard for the "PTT only worked the first time, then got stuck" bug the Rust
+# flip hit before 1.21.0: a session that armed once would produce only one
+# line (or error on the 2nd cycle). We assert BOTH cycles carry the spoken
+# words. With no post-processor / format-commands set, each line is the raw
+# Groq transcript of the spoken "hello world" clip.
+session_out="$(
   VOICEPI_STT_BASE_URL="$GROQ_BASE" \
   VOICEPI_STT_MODEL="$STT_MODEL" \
   VOICEPI_STT_API_KEY="$GROQ_API_KEY" \
-    run_cli simulate-session --wav "$SPEECH_WAV"
+    run_cli simulate-session --wav "$SPEECH_WAV" --repeat 2
 )"
-session_lc="$(printf '%s' "$session_text" | tr '[:upper:]' '[:lower:]')"
-if [[ -z "${session_text//[[:space:]]/}" ]]; then
-  echo "[groq-cli-smoke] FAIL: DictateSession produced no transcript" >&2
+# One transcript per cycle: require exactly two non-empty lines, each with the
+# spoken words. `grep -c .` counts non-empty lines portably on both runners.
+n_lines="$(printf '%s\n' "$session_out" | grep -c . || true)"
+if [[ "$n_lines" -ne 2 ]]; then
+  echo "[groq-cli-smoke] FAIL: expected 2 transcripts (one per cycle), got $n_lines: $session_out" >&2
   exit 1
 fi
-if [[ "$session_lc" != *hello* && "$session_lc" != *world* ]]; then
-  echo "[groq-cli-smoke] FAIL: session transcript missing spoken words: $session_text" >&2
-  exit 1
-fi
-echo "[groq-cli-smoke]   session transcript: $session_text"
+cycle=0
+while IFS= read -r line; do
+  [[ -z "${line//[[:space:]]/}" ]] && continue
+  cycle=$((cycle + 1))
+  line_lc="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$line_lc" != *hello* && "$line_lc" != *world* ]]; then
+    echo "[groq-cli-smoke] FAIL: cycle $cycle transcript missing spoken words: $line" >&2
+    exit 1
+  fi
+  echo "[groq-cli-smoke]   cycle $cycle transcript: $line"
+done <<< "$session_out"
 
-echo "[groq-cli-smoke] OK: component chain + full DictateSession drive succeeded on real audio."
+echo "[groq-cli-smoke] OK: component chain + repeated DictateSession drive succeeded on real audio."

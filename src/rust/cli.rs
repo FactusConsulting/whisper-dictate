@@ -111,6 +111,13 @@ pub enum Command {
         /// instead of printing the final transcript.
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Drive this many consecutive press/release cycles through the
+        /// SAME session (default 1). Exercises session reuse across
+        /// utterances -- the regression guard for the "PTT only works the
+        /// first time, then gets stuck" class of bug. A value of 0 is
+        /// treated as 1.
+        #[arg(long, default_value_t = 1)]
+        repeat: u32,
     },
     /// Install or repair local runtime dependencies.
     Install,

@@ -370,6 +370,59 @@ fn epoch_bumps_monotonically_per_start() {
         "epochs must be monotonically increasing: {a},{b},{c}"
     );
 }
+
+#[test]
+fn session_reusable_across_consecutive_ptt_cycles() {
+    // Regression guard for the "PTT only worked the first time, then got
+    // stuck" class of bug seen when the engine was first flipped to Rust
+    // (reverted in 1.21.0): a single session must serve press after press,
+    // not arm exactly once. We drive the SAME `DictateSession` through
+    // three full start → push → stop_and_transcribe cycles and assert every
+    // cycle:
+    //   * arms cleanly (`start` returns Ok — a stuck session would refuse
+    //     the 2nd press with `AlreadyActive`),
+    //   * settles back to `Idle` afterwards (so the next press can arm),
+    //   * actually injects the transcript (the user-visible "it typed
+    //     something" — the epoch counter alone can advance while the output
+    //     path is dead).
+    let transcribe = TestTranscribe::returning_text("hello world");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+
+    for cycle in 1..=3 {
+        assert!(
+            matches!(s.state(), SessionState::Idle),
+            "cycle {cycle}: session must be Idle before the press, got {:?}",
+            s.state()
+        );
+        s.start(&mut buf)
+            .unwrap_or_else(|e| panic!("cycle {cycle}: press must arm the session, got {e:?}"));
+        s.push_frame(&one_second_pcm());
+        let outcome = s
+            .stop_and_transcribe(&mut buf)
+            .unwrap_or_else(|e| panic!("cycle {cycle}: release must transcribe, got {e:?}"));
+        match outcome {
+            UtteranceOutcome::Injected { text, .. } => {
+                assert_eq!(text, "hello world", "cycle {cycle}: wrong injected text");
+            }
+            other => panic!("cycle {cycle}: expected Injected, got {other:?}"),
+        }
+        assert!(
+            matches!(s.state(), SessionState::Idle),
+            "cycle {cycle}: session must return to Idle after release, got {:?}",
+            s.state()
+        );
+    }
+
+    // Every cycle reached the injector — not just the first. This is the
+    // assertion the "stuck after one press" bug would trip on.
+    assert_eq!(
+        s.inject_backend().injected.borrow().as_slice(),
+        ["hello world", "hello world", "hello world"],
+        "each of the three presses must inject its transcript"
+    );
+}
+
 #[test]
 fn utterance_event_carries_recording_s() {
     // Codex P2 #413 wire.rs:61 (round 2). Successful utterance events

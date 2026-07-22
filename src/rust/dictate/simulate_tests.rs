@@ -75,6 +75,46 @@ fn drive_does_not_leak_events_without_the_gate() {
 }
 
 #[test]
+fn drive_session_cycles_reuses_one_session_across_presses() {
+    // Regression guard (harness side) for the "PTT only worked the first
+    // time, then got stuck" bug: driving N cycles over the SAME session must
+    // inject on EVERY cycle, not just the first. A session that failed to
+    // reset would make the 2nd `start()` return `AlreadyActive`, surfacing
+    // as an Err from `drive_session_cycles` — so reaching three Injected
+    // outcomes proves the session re-arms press after press.
+    let mut session = session_with("hello world");
+    let mut sink = std::io::sink();
+    let pcm = vec![0.1_f32; 16_000];
+    let outcomes = drive_session_cycles(&mut session, &pcm, &mut sink, 3).expect("three cycles ok");
+    assert_eq!(outcomes.len(), 3, "one outcome per cycle");
+    for (i, outcome) in outcomes.iter().enumerate() {
+        assert!(
+            matches!(outcome, UtteranceOutcome::Injected { text, .. } if text == "hello world"),
+            "cycle {} must inject the transcript, got {outcome:?}",
+            i + 1
+        );
+    }
+    // The capture backend accumulated one injection per cycle, in order.
+    assert_eq!(
+        session.inject_backend().injected(),
+        vec![
+            "hello world".to_owned(),
+            "hello world".to_owned(),
+            "hello world".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn drive_session_cycles_treats_zero_repeat_as_one() {
+    let mut session = session_with("once");
+    let mut sink = std::io::sink();
+    let outcomes = drive_session_cycles(&mut session, &vec![0.1_f32; 16_000], &mut sink, 0)
+        .expect("zero-repeat drives one cycle");
+    assert_eq!(outcomes.len(), 1, "repeat=0 collapses to a single cycle");
+}
+
+#[test]
 fn drive_empty_pcm_resolves_to_no_audio() {
     let mut session = session_with("unused");
     let mut events = Vec::new();
@@ -183,7 +223,7 @@ fn handle_simulate_session_errors_without_cloud_config() {
     ] {
         std::env::remove_var(key);
     }
-    match handle_simulate_session("does-not-matter.wav", false) {
+    match handle_simulate_session("does-not-matter.wav", false, 1) {
         Ok(()) => panic!("must error without a configured cloud backend"),
         Err(e) => assert!(e.to_string().contains("cloud STT"), "{e}"),
     }
