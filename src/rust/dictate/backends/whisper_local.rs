@@ -14,34 +14,17 @@
 //!
 //! # Hallucination filter
 //!
-//! The exact-blacklist [`is_hallucination`] filter now lives in the stock
-//! [`super::hallucination`] module so the cloud backend shares it (matching
-//! Python's backend-agnostic gate). This backend runs it after
-//! [`normalize_whitespace`], exactly as before.
+//! The whole-text finalization — whitespace normalize, impossible-speech-rate
+//! blanking, and the exact-blacklist / credit-regex hallucination gate — lives
+//! in the stock [`super::hallucination`] module (`finalize_transcript`) so the
+//! cloud backend shares it and it is unit-tested on every build (matching
+//! Python's backend-agnostic gate). This backend calls it after decoding.
 
-use std::sync::OnceLock;
 use std::time::Instant;
 
-use regex::Regex;
-
-use super::hallucination::{is_hallucination, max_chars_per_second_from_env, speech_rate_exceeded};
+use super::hallucination::{finalize_transcript, max_chars_per_second_from_env};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
-
-/// Collapse internal whitespace runs to a single space and trim both
-/// ends. Mirrors Python's
-/// `re.sub(r"\s+", " ", "".join(s.text for s in segment_list)).strip()`
-/// in `vp_transcribe.py::_transcribe_detail` — segments returned by
-/// whisper.cpp carry leading spaces on word boundaries, and a naive
-/// concatenation leaves runs of whitespace + leading/trailing slack
-/// that would (a) defeat the exact-match hallucination blacklist for
-/// strings like `" tak"` and (b) inject visible extra spaces.
-/// Codex P2 #417 whisper_local.rs:201.
-fn normalize_whitespace(text: &str) -> String {
-    static WS_RUN: OnceLock<Regex> = OnceLock::new();
-    let re = WS_RUN.get_or_init(|| Regex::new(r"\s+").expect("whitespace regex is valid"));
-    re.replace_all(text.trim(), " ").into_owned()
-}
 
 /// Per-call language + initial-prompt hints fed to whisper.cpp on every
 /// transcribe pass. Mirrors the Python wiring layer's plumbing
@@ -74,16 +57,19 @@ pub struct WhisperBackendConfig {
 /// follows on a successful pass:
 ///
 /// - `text`     — whisper.cpp's decoded text.
-/// - `is_hallucination` — [`is_hallucination`] match against the text.
+/// - `is_hallucination` — [`super::hallucination::is_hallucination`] match
+///   against the finalized text.
 /// - `latency_ms` — wall-clock time spent in [`IdleUnloadingModel::with_model`]
 ///   (covers a lazy reload too, matching the Python `compute_s` field).
-/// - `duration_s` — `pcm.len() / sample_rate`, the captured audio length.
+/// - `duration_s` — `trimmed.len() / sample_rate`: the captured audio
+///   length AFTER the trailing dead-air tail is trimmed, so it matches the
+///   buffer actually decoded (Python's `dur`).
 /// - `language` — the configured hint (or empty for auto); whisper-rs
 ///   does not currently surface a detected-language code through
 ///   [`LocalWhisper::transcribe_samples`].
 /// - `gate` — `Some(reason)` when the pre-transcription speech gate
 ///   (`vp_transcribe._looks_like_speech` parity, via
-///   [`crate::audio_dsp::speech_gate_reason`]) rejects too-quiet /
+///   [`crate::audio_dsp::gate_and_trim`]) rejects too-quiet /
 ///   no-contrast audio BEFORE the model loads; `None` on a normal pass.
 ///   The session maps the reason to a `too_quiet`/`no_speech` no-text
 ///   event via `crate::dictate::session::normalize_gate_reason`.
@@ -142,8 +128,18 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             .as_deref()
             .filter(|s| !s.is_empty());
 
-        // `duration_s` from sample count + rate (Python computes the same
-        // way once the PCM is in hand). Guard `sample_rate = 0` so the f64
+        // Trim the trailing dead-air tail ONCE, then gate + decode + time
+        // the SAME trimmed slice, matching Python's `_transcribe_detail`
+        // (`_trim_trailing_silence` runs first; the gate, decode and
+        // `dur = len(audio)/SR` all see the trimmed buffer,
+        // `vp_transcribe.py:1255-1267`). Decoding the untrimmed tail would
+        // give whisper.cpp empty audio to hallucinate a caption over and
+        // inflate the chars-per-second denominator of the speech-rate guard.
+        let gated = crate::audio_dsp::gate_and_trim(pcm, &crate::audio_dsp::thresholds_from_env());
+        let pcm = gated.trimmed;
+
+        // `duration_s` from the TRIMMED sample count + rate (Python computes
+        // `dur` from the trimmed buffer). Guard `sample_rate = 0` so the f64
         // division does not produce `inf`/`NaN` that JSON would reject.
         let duration_s = if sample_rate == 0 {
             0.0
@@ -156,9 +152,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // no-contrast audio BEFORE loading/decoding with whisper.cpp. The
         // reason string flows onto `TranscribeResult.gate`, which the
         // session maps to a `too_quiet`/`no_speech` no-text event.
-        if let Some(reason) =
-            crate::audio_dsp::speech_gate_reason(pcm, &crate::audio_dsp::thresholds_from_env())
-        {
+        if let Some(reason) = gated.reject {
             return Ok(TranscribeResult {
                 text: String::new(),
                 gate: Some(reason),
@@ -174,29 +168,12 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             .map_err(|e| TranscribeError::Backend(format!("{e:#}")))?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        // Collapse whitespace runs + trim both ends BEFORE the
-        // blacklist check and BEFORE injection, matching Python's
-        // `re.sub(r"\s+", " ", ...).strip()` in `_transcribe_detail`.
-        // Without this a quiet-audio hallucination like `" tak"` would
-        // bypass the exact-match filter (which only trims the right
-        // end), and a normal segment with the typical leading
-        // whisper.cpp word-boundary space would be injected verbatim.
-        // Codex P2 #417 whisper_local.rs:201.
-        let text = normalize_whitespace(&raw_text);
-
-        // Impossible-speech-rate hallucination guard (Python's
-        // `_exceeds_speech_rate`): a transcript produced far faster than
-        // real speech is blanked, so it surfaces as an `empty` no-text
-        // event rather than injecting a hallucinated wall of caption text.
-        let text = if speech_rate_exceeded(&text, duration_s, max_chars_per_second_from_env()) {
-            String::new()
-        } else {
-            text
-        };
-
-        // Compute the hallucination flag against a borrow so `text` can
-        // be moved into the result without a redundant clone.
-        let is_hallucination = is_hallucination(&text);
+        // Collapse whitespace, blank impossibly-fast transcripts, and flag
+        // exact-blacklist hallucinations -- the pure tail of Python's
+        // `_transcribe_detail`, factored out so it is unit-testable without a
+        // whisper.cpp model (see `finalize_transcript`).
+        let (text, is_hallucination) =
+            finalize_transcript(&raw_text, duration_s, max_chars_per_second_from_env());
         Ok(TranscribeResult {
             text,
             is_hallucination,

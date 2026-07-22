@@ -1,8 +1,10 @@
-//! Tests for [`super::WhisperLocalTranscribeBackend`] and its
-//! `normalize_whitespace` pre-step. The exact-blacklist
-//! [`is_hallucination`] filter itself is stock and tested in
-//! `hallucination_tests.rs`; the one test kept here pins the
-//! normalize-then-filter ordering the trait impl relies on.
+//! Tests for [`super::WhisperLocalTranscribeBackend`] — the trait-impl
+//! wiring (error mapping, empty-language handling, the pre-transcription
+//! speech gate). The pure text finalization it delegates to
+//! (`normalize_whitespace` + `finalize_transcript`: whitespace normalize,
+//! speech-rate blanking, exact-blacklist / credit-regex gate) is stock and
+//! tested in `hallucination_tests.rs`, so it runs on every build without the
+//! `whisper-rs-local` feature.
 //!
 //! Live in a sibling file (declared via `#[path]` in the production
 //! module) so the unit-test surface is co-located with the impl while
@@ -23,8 +25,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 
-use super::super::hallucination::is_hallucination;
-use super::{normalize_whitespace, WhisperBackendConfig, WhisperLocalTranscribeBackend};
+use super::{WhisperBackendConfig, WhisperLocalTranscribeBackend};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -126,51 +127,6 @@ fn construction_with_idle_timeout_spawns_and_joins_cleanly() {
     assert!(!backend.model().is_loaded());
     // Drop on scope exit; if the watcher thread fails to join the test
     // process will hang and CI will time out.
-}
-
-// ── normalize_whitespace — segment-text post-processing ──────────────────────
-
-#[test]
-fn normalize_whitespace_collapses_internal_runs() {
-    // whisper.cpp segments carry leading word-boundary spaces; a naive
-    // concat produces `" hello   world  "` style strings. Match
-    // Python's `re.sub(r"\s+", " ", ...).strip()` shape.
-    // Codex P2 #417 whisper_local.rs:201.
-    assert_eq!(normalize_whitespace(" hello   world  "), "hello world");
-}
-
-#[test]
-fn normalize_whitespace_trims_both_ends() {
-    // Leading whitespace must be stripped so the exact-match
-    // hallucination blacklist catches `" tak"` after normalization.
-    assert_eq!(normalize_whitespace(" tak "), "tak");
-    assert_eq!(normalize_whitespace("\n\ttak\r\n"), "tak");
-}
-
-#[test]
-fn normalize_whitespace_preserves_internal_single_spaces() {
-    assert_eq!(normalize_whitespace("foo bar baz"), "foo bar baz");
-}
-
-#[test]
-fn normalize_whitespace_is_empty_safe() {
-    assert_eq!(normalize_whitespace(""), "");
-    assert_eq!(normalize_whitespace("   "), "");
-}
-
-#[test]
-fn is_hallucination_catches_leading_whitespace_after_normalize() {
-    // Regression guard for Codex P2 whisper_local.rs:201: the
-    // transcribe pipeline runs `normalize_whitespace` before
-    // `is_hallucination`, so a whisper.cpp output of " tak" is
-    // expected to be caught. This test pins the contract by running
-    // the two functions in the same order the trait impl does.
-    let raw = " tak";
-    let normalized = normalize_whitespace(raw);
-    assert!(
-        is_hallucination(&normalized),
-        "normalized ' tak' must be on the blacklist"
-    );
 }
 
 // ── empty-language hint normalization ────────────────────────────────────────

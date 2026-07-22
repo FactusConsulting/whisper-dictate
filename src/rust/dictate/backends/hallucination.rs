@@ -172,6 +172,59 @@ pub fn speech_rate_exceeded(text: &str, duration_s: f64, max_cps: f64) -> bool {
     chars / duration_s.max(0.1) > max_cps
 }
 
+/// Collapse internal whitespace runs to a single space and trim both ends.
+/// Mirrors Python's
+/// `re.sub(r"\s+", " ", "".join(s.text for s in segment_list)).strip()` in
+/// `vp_transcribe.py::_transcribe_detail` — whisper.cpp segments carry
+/// leading word-boundary spaces, and a naive concatenation leaves runs of
+/// whitespace + leading/trailing slack that would (a) defeat the exact-match
+/// blacklist for strings like `" tak"` (which only rstrips) and (b) inject
+/// visible extra spaces.
+///
+/// Consumed by the feature-gated local Whisper backend (via
+/// [`finalize_transcript`]); gated on `test`-or-feature so the stock build
+/// without `whisper-rs-local` doesn't carry it as dead code, while its unit
+/// tests still run in the default `rust` matrix (which builds `cargo test`).
+#[cfg(any(test, feature = "whisper-rs-local"))]
+pub(crate) fn normalize_whitespace(text: &str) -> String {
+    static WS_RUN: OnceLock<Regex> = OnceLock::new();
+    let re = WS_RUN.get_or_init(|| Regex::new(r"\s+").expect("whitespace regex is valid"));
+    re.replace_all(text.trim(), " ").into_owned()
+}
+
+/// Turn a backend's raw decoded text into the `(injected_text,
+/// is_hallucination)` pair a `TranscribeResult` carries. Runs the pure tail
+/// of Python's `_transcribe_detail`, in order:
+///
+/// 1. [`normalize_whitespace`] — collapse whitespace runs + trim, so a
+///    leading-space hallucination like `" tak"` can't slip past the
+///    exact-match blacklist.
+/// 2. [`speech_rate_exceeded`] — blank a transcript produced far faster than
+///    real speech (a hallucinated caption/credit) so it surfaces as an
+///    `empty` no-text event instead of injecting a wall of text. `duration_s`
+///    should be the TRIMMED clip length, so a long dead tail can't dilute the
+///    rate.
+/// 3. [`is_hallucination`] — flag the (possibly blanked) text against the
+///    exact blacklist + credit regex.
+///
+/// Pure (no model, no env) so the rate-guard + blacklist wiring is unit-tested
+/// on every build: the local backend's happy path needs a real whisper.cpp
+/// model, but this seam does not. Gated on `test`-or-feature (its only
+/// non-test caller is the feature-gated local backend) so the stock build
+/// doesn't carry it as dead code, while the tests still run in the default
+/// `rust` matrix.
+#[cfg(any(test, feature = "whisper-rs-local"))]
+pub(crate) fn finalize_transcript(raw_text: &str, duration_s: f64, max_cps: f64) -> (String, bool) {
+    let text = normalize_whitespace(raw_text);
+    let text = if speech_rate_exceeded(&text, duration_s, max_cps) {
+        String::new()
+    } else {
+        text
+    };
+    let hallucinated = is_hallucination(&text);
+    (text, hallucinated)
+}
+
 #[cfg(test)]
 #[path = "hallucination_tests.rs"]
 mod tests;
