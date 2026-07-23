@@ -132,6 +132,60 @@ fn transcribe_empty_api_key_errors_before_network() {
     assert!(matches!(err, TranscribeError::Backend(_)));
 }
 
+#[test]
+fn effective_prompt_refolds_reloaded_dictionary_terms() {
+    // The reloading prompt keeps `config.prompt` as the BASE and re-folds the
+    // live dictionary terms into it on each call, reloading on a term edit --
+    // the backend glue for the per-utterance prompt biasing.
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let keys = [
+        "VOICEPI_DICTIONARY",
+        "VOICEPI_DICTIONARY_ENABLED",
+        "VOICEPI_DICTIONARY_MAX_TERMS",
+        "VOICEPI_DICTIONARY_PROMPT_CHARS",
+        "VOICEPI_CONFIG",
+    ];
+    let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+
+    let dir = tempfile::tempdir().unwrap();
+    let dict = dir.path().join("dict.json");
+    std::fs::write(&dict, r#"{"terms":["Codex"]}"#).unwrap();
+    std::env::set_var("VOICEPI_DICTIONARY", &dict);
+    std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+    std::env::remove_var("VOICEPI_CONFIG");
+
+    let backend = CloudTranscribeBackend::new(CloudTranscribeConfig {
+        base_url: "https://api.openai.com/v1".to_owned(),
+        api_key: "k".to_owned(),
+        model: "whisper-1".to_owned(),
+        timeout_ms: 100,
+        language: None,
+        prompt: Some("base".to_owned()),
+    })
+    .with_reloading_prompt(crate::dictionary::ReloadPrecedence::EnvFirst);
+
+    let first = backend.effective_prompt();
+    std::fs::write(&dict, r#"{"terms":["Codex","Slack"]}"#).unwrap();
+    let second = backend.effective_prompt();
+
+    // Restore env before asserting so a failure can't leak into siblings.
+    for (key, prior) in keys.iter().zip(saved) {
+        match prior {
+            Some(val) => std::env::set_var(key, val),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    assert_eq!(first.as_deref(), Some("base\nVocabulary: Codex"));
+    assert_eq!(
+        second.as_deref(),
+        Some("base\nVocabulary: Codex, Slack"),
+        "editing the dictionary terms must re-fold the STT prompt"
+    );
+}
+
 // ── local-only privacy gate (Codex P1 #540) ──────────────────────────────────
 
 fn cloud_config(base_url: &str) -> CloudTranscribeConfig {

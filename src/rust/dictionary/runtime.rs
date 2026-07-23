@@ -658,6 +658,10 @@ pub struct ReloadingDictionary {
     key: Option<DictionaryReloadKey>,
     /// The last successfully-loaded table (empty until the first success).
     dictionary: Dictionary,
+    /// Prompt budgets from the last successful load, so [`Self::initial_prompt`]
+    /// can budget-fit the vocabulary terms without re-reading settings.
+    max_terms: usize,
+    max_chars: usize,
 }
 
 impl ReloadingDictionary {
@@ -669,9 +673,24 @@ impl ReloadingDictionary {
             precedence,
             key: None,
             dictionary: Dictionary::default(),
+            max_terms: 80,
+            max_chars: 1200,
         };
         provider.current();
         provider
+    }
+
+    /// The current STT `initial_prompt`: `base` plus the budget-fitted
+    /// vocabulary terms, reloaded via the same mtime/settings cache as
+    /// [`Self::current`]. `None` when there is neither a base nor any terms (the
+    /// caller then passes the empty string through). Mirrors Python's
+    /// per-utterance `_dictionary_prompt_runtime`, so editing the dictionary's
+    /// terms (or the prompt budgets) re-biases STT on the next utterance without
+    /// an app restart.
+    pub fn initial_prompt(&mut self, base: Option<&str>) -> Option<String> {
+        self.current();
+        self.dictionary
+            .build_prompt(base, self.max_terms, self.max_chars)
     }
 }
 
@@ -684,8 +703,11 @@ impl DictionaryProvider for ReloadingDictionary {
             if self.key.as_ref() != Some(&key) {
                 match load_dictionary_checked(&settings) {
                     (dictionary, DictionaryLoad::Clean) => {
-                        // Clean load: commit the table AND advance the cache key.
+                        // Clean load: commit the table + budgets AND advance the
+                        // cache key.
                         self.dictionary = dictionary;
+                        self.max_terms = settings.max_terms;
+                        self.max_chars = settings.max_chars;
                         self.key = Some(key);
                     }
                     (dictionary, DictionaryLoad::Partial) => {
@@ -694,6 +716,8 @@ impl DictionaryProvider for ReloadingDictionary {
                         // it now, but leave the key UNADVANCED so the failed file
                         // is retried next utterance.
                         self.dictionary = dictionary;
+                        self.max_terms = settings.max_terms;
+                        self.max_chars = settings.max_chars;
                     }
                     (_, DictionaryLoad::TotalFailure) => {
                         // Nothing loaded (every existing file is momentarily
@@ -1257,6 +1281,36 @@ mod tests {
         assert_eq!(
             after, "hello world",
             "emptying the readable file must clear replacements even with a broken sibling"
+        );
+    }
+
+    #[test]
+    fn reloading_dictionary_initial_prompt_reloads_terms() {
+        // The reloading STT prompt re-folds the dictionary terms into the base
+        // prompt on each `initial_prompt`, so editing the terms re-biases STT on
+        // the next utterance (Python's `_dictionary_prompt_runtime`).
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let dict = dir.path().join("dict.json");
+        std::fs::write(&dict, r#"{"terms":["Codex"]}"#).unwrap();
+        write_dictionary_config(&dir.path().join("config.json"), &dict, true);
+
+        let mut provider = ReloadingDictionary::new(ReloadPrecedence::ConfigFirst);
+        assert_eq!(
+            provider.initial_prompt(Some("base")).as_deref(),
+            Some("base\nVocabulary: Codex")
+        );
+
+        // Add a term (different byte length) -> the prompt re-folds.
+        std::fs::write(&dict, r#"{"terms":["Codex","Slack"]}"#).unwrap();
+        assert_eq!(
+            provider.initial_prompt(Some("base")).as_deref(),
+            Some("base\nVocabulary: Codex, Slack"),
+            "editing the terms must re-bias the STT prompt without a restart"
         );
     }
 

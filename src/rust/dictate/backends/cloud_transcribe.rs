@@ -15,6 +15,7 @@
 //! separate step; this module is the reusable, testable primitive.
 
 use std::io::Cursor;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use super::hallucination::{is_hallucination, max_chars_per_second_from_env, speech_rate_exceeded};
@@ -207,14 +208,56 @@ fn map_cloud_result(
 }
 
 /// Cloud STT backend. Holds a resolved [`CloudTranscribeConfig`] snapshot
-/// (stamped at construction, like the session's other settings today).
+/// (stamped at construction, like the session's other settings today), plus an
+/// optional live-reloading STT prompt.
 pub struct CloudTranscribeBackend {
     config: CloudTranscribeConfig,
+    /// When set, the STT prompt is re-folded from `config.prompt` (treated as
+    /// the BASE prompt) + the live dictionary terms on every `transcribe`, so
+    /// dictionary term / budget edits re-bias STT without an app restart
+    /// (Python's per-utterance `_dictionary_prompt_runtime`). `None` keeps the
+    /// fixed `config.prompt`. `Mutex` because the reload cache mutates behind
+    /// `transcribe(&self)`; boxed to keep the backend (and the
+    /// `ProductionTranscribeBackend` enum) small when no reloading prompt is
+    /// attached.
+    prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
 }
 
 impl CloudTranscribeBackend {
     pub fn new(config: CloudTranscribeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            prompt_reload: None,
+        }
+    }
+
+    /// Attach a live-reloading STT prompt: `config.prompt` is treated as the
+    /// BASE prompt and the dictionary terms are re-folded into it on each
+    /// `transcribe`, under `precedence` (matching the session wiring:
+    /// `EnvFirst` for `simulate-session`, `ConfigFirst` for the live worker).
+    /// The caller must NOT pre-fold the terms into `config.prompt` -- pass the
+    /// raw `VOICEPI_INITIAL_PROMPT` base so the terms can be re-folded live.
+    pub fn with_reloading_prompt(
+        mut self,
+        precedence: crate::dictionary::ReloadPrecedence,
+    ) -> Self {
+        self.prompt_reload = Some(Box::new(Mutex::new(
+            crate::dictionary::ReloadingDictionary::new(precedence),
+        )));
+        self
+    }
+
+    /// The effective STT prompt for this utterance: the live-reloaded
+    /// base + terms when a reloading prompt is attached, else the fixed
+    /// `config.prompt`.
+    fn effective_prompt(&self) -> Option<String> {
+        match &self.prompt_reload {
+            Some(reload) => reload
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .initial_prompt(self.config.prompt.as_deref()),
+            None => self.config.prompt.clone(),
+        }
     }
 
     /// Read-only view of the resolved config (tests / diagnostics).
@@ -259,6 +302,9 @@ impl TranscribeBackend for CloudTranscribeBackend {
         let pcm = audio.as_slice();
         let wav = encode_wav_mono_16bit(pcm, sample_rate)
             .map_err(|e| TranscribeError::Backend(format!("wav encode failed: {e}")))?;
+        // Re-fold the dictionary terms into the prompt per utterance when a
+        // reloading prompt is attached (else the fixed config prompt).
+        let prompt = self.effective_prompt();
         let started = Instant::now();
         let result = cloud_transcribe(
             &self.config.base_url,
@@ -266,7 +312,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             &self.config.model,
             &wav,
             self.config.language.as_deref(),
-            self.config.prompt.as_deref(),
+            prompt.as_deref(),
             self.config.timeout_ms,
         )
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
