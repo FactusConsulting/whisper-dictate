@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::cli::DictionaryCommand;
 use crate::config;
@@ -95,10 +96,16 @@ impl RuntimeDictionarySettings {
             present("dictionary_max_terms"),
             present("dictionary_prompt_chars"),
         );
+        // Read the enable flag straight off the RAW value (JSON bool OR string)
+        // before the typed loader collapses it -- `AppSettings::from_value`'s
+        // `bool_value` only parses string booleans, so a hand-written
+        // `"dictionary_enabled": false` would otherwise fall back to the
+        // default `true` and re-enable a disabled dictionary.
+        let raw_enabled = raw_bool(&raw, "dictionary_enabled");
         let configured = config::AppSettings::from_value(raw).unwrap_or_default();
 
         let enabled = if has_enabled {
-            configured.dictionary_enabled
+            raw_enabled.unwrap_or(configured.dictionary_enabled)
         } else {
             env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled)
         };
@@ -125,14 +132,39 @@ impl RuntimeDictionarySettings {
     }
 }
 
-/// The configured dictionary path as a one-element list, or empty when the
-/// config carries no path (so the caller can fall through to env / default).
+/// The configured dictionary path(s), or empty when the config carries none (so
+/// the caller can fall through to env / default). Splits the value on the
+/// platform path separator the same way [`env_paths`] does, so a multi-file
+/// `dictionary` (e.g. `a.json;b.json` on Windows) loads every file rather than
+/// wrapping the whole list in one bogus `PathBuf`.
 fn config_dictionary_paths(configured: &config::AppSettings) -> Vec<PathBuf> {
-    let path = configured.dictionary.trim();
-    if path.is_empty() {
-        Vec::new()
-    } else {
-        vec![PathBuf::from(path)]
+    let value = configured.dictionary.trim();
+    if value.is_empty() {
+        return Vec::new();
+    }
+    std::env::split_paths(value)
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect()
+}
+
+/// Read a `dictionary_enabled`-style flag from a raw config value, accepting a
+/// JSON boolean, a JSON number (`0` = false), or a string (`"0"`/`"false"`/... =
+/// false) -- the union the env resolver honours -- so a hand-written config.json
+/// is respected regardless of how the flag is spelt. `None` when the key is
+/// absent or an unrecognised shape.
+fn raw_bool(raw: &Value, key: &str) -> Option<bool> {
+    match raw.get(key) {
+        Some(Value::Bool(value)) => Some(*value),
+        Some(Value::Number(number)) => number.as_i64().map(|n| n != 0),
+        Some(Value::String(text)) => {
+            let value = text.trim().to_ascii_lowercase();
+            if value.is_empty() {
+                None
+            } else {
+                Some(!matches!(value.as_str(), "0" | "false" | "no" | "off"))
+            }
+        }
+        _ => None,
     }
 }
 
@@ -629,13 +661,19 @@ impl DictionaryProvider for ReloadingDictionary {
             if self.key.as_ref() != Some(&key) {
                 let (dictionary, ok) = load_dictionary_checked(&settings);
                 if ok {
-                    // Only commit the table AND advance the cache key on a clean
-                    // load. On a transient dictionary-file read/parse failure we
-                    // keep the last-good table and leave the key untouched, so
-                    // the next utterance recomputes the same (still-differing)
-                    // key and retries.
+                    // Clean load: commit the table AND advance the cache key.
                     self.dictionary = dictionary;
                     self.key = Some(key);
+                } else if !dictionary.replacements.is_empty() || !dictionary.terms.is_empty() {
+                    // Partial load -- some configured files failed but others
+                    // merged into a non-empty table (`load_runtime_dictionary`
+                    // returns the readable subset alongside the error). Use that
+                    // subset now, but leave the key UNADVANCED so the failed
+                    // file is retried next utterance.
+                    self.dictionary = dictionary;
+                } else {
+                    // Total failure (e.g. the only file is momentarily
+                    // unreadable): keep the last-good table and retry.
                 }
             }
         }
@@ -1076,6 +1114,83 @@ mod tests {
             provider.current().terms,
             vec!["Codex".to_owned(), "Slack".to_owned()],
             "a file edit must reload the term list, not only replacements"
+        );
+    }
+
+    #[test]
+    fn config_dictionary_paths_splits_multi_file_lists() {
+        // A `dictionary` config value that is a platform path-separator list
+        // (e.g. `a.json;b.json` on Windows) must split into one path per file,
+        // matching `env_paths`, not wrap the whole list in one bogus PathBuf.
+        let joined =
+            std::env::join_paths([PathBuf::from("a.json"), PathBuf::from("b.json")]).unwrap();
+        let configured = config::AppSettings {
+            dictionary: joined.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config_dictionary_paths(&configured),
+            vec![PathBuf::from("a.json"), PathBuf::from("b.json")]
+        );
+    }
+
+    #[test]
+    fn config_first_honours_json_boolean_enabled() {
+        // A hand-written config.json with a JSON boolean `false` (not the string
+        // "0") must disable the dictionary -- the typed loader's `bool_value`
+        // only parses strings, so config-first reads the raw value directly.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let dict = dir.path().join("dict.json");
+        std::fs::write(&dict, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        let config = dir.path().join("config.json");
+        let raw = serde_json::json!({
+            "dictionary": dict.display().to_string(),
+            "dictionary_enabled": false,
+        });
+        std::fs::write(&config, serde_json::to_string(&raw).unwrap()).unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &config);
+
+        assert!(
+            !RuntimeDictionarySettings::from_config_and_env()
+                .expect("config readable")
+                .enabled,
+            "a JSON boolean false must disable the dictionary"
+        );
+    }
+
+    #[test]
+    fn reloading_dictionary_uses_readable_subset_on_partial_failure() {
+        // Multiple configured files with one broken: the reload must keep the
+        // readable subset's replacements rather than discarding everything, and
+        // leave the key unadvanced so the broken file is retried.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.json");
+        std::fs::write(&good, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, "{ not json").unwrap();
+        let joined = std::env::join_paths([&good, &bad]).unwrap();
+        std::env::set_var("VOICEPI_DICTIONARY", &joined);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        std::env::remove_var("VOICEPI_CONFIG");
+
+        let mut provider = ReloadingDictionary::new(ReloadPrecedence::EnvFirst);
+        let (out, _) = provider
+            .current()
+            .apply_replacements("hello world")
+            .unwrap();
+        assert_eq!(
+            out, "hi world",
+            "the readable file's replacements must apply despite a broken sibling"
         );
     }
 
