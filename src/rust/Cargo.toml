@@ -137,7 +137,7 @@ cpal = { version = "0.18", optional = true }
 # then the audio-in-rust feature stays on the v2 API in resampler.rs.
 rubato = { version = "0.16", optional = true }
 vad-rs = { version = "0.1", optional = true, default-features = false }
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 tempfile = { version = "3.14", optional = true }
 # `ort-sys` is a transitive dep of `vad-rs → ort` (vad-rs pins ort to
 # `=2.0.0-rc.9`). Without an explicit pin here, cargo resolves the
