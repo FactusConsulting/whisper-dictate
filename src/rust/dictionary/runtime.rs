@@ -49,24 +49,64 @@ impl RuntimeDictionarySettings {
         }
     }
 
+    /// Resolve the effective settings ENV-FIRST: the process env wins over
+    /// `config.json`, then the baked defaults. Used by the `dictionary-runtime`
+    /// RPC, where the Python worker has already synced its own env to config and
+    /// passes the resolved value in via env.
     fn from_env_and_config() -> Self {
-        let configured = config::load_settings().unwrap_or_default();
-        let enabled =
-            env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled);
-        let paths = env_paths("VOICEPI_DICTIONARY").unwrap_or_else(|| {
+        Self::resolve(&config::load_settings().unwrap_or_default(), false)
+    }
+
+    /// Resolve the effective settings CONFIG-FIRST: `config.json` wins over the
+    /// process env, then the baked defaults -- the same precedence
+    /// [`config::worker_env_overrides`] uses to seed the worker's env at
+    /// startup. The in-process live-reload path resolves through this so a
+    /// Settings save (which rewrites `config.json` without a worker restart)
+    /// reaches the next utterance, instead of being shadowed by the stale
+    /// startup env the worker exported once (Python's per-reload
+    /// `apply_config_to_environ` re-sync, expressed as resolution precedence
+    /// here rather than by mutating the process env).
+    fn from_config_and_env() -> Self {
+        Self::resolve(&config::load_settings().unwrap_or_default(), true)
+    }
+
+    /// Shared resolver for [`Self::from_env_and_config`] (env-first) and
+    /// [`Self::from_config_and_env`] (config-first). `config_first` only flips
+    /// which source is consulted first; the fallback chain and defaults are
+    /// identical, so the two entry points can never drift apart. The enable
+    /// flag is a plain `bool` that `config.json` always carries, so config-first
+    /// takes it verbatim (there is no "unset" env to fall through to) while
+    /// env-first lets an explicit `VOICEPI_DICTIONARY_ENABLED` override it.
+    fn resolve(configured: &config::AppSettings, config_first: bool) -> Self {
+        let config_paths = {
             let path = configured.dictionary.trim();
             if path.is_empty() {
-                Vec::new()
+                None
             } else {
-                vec![PathBuf::from(path)]
+                Some(vec![PathBuf::from(path)])
             }
-        });
-        let max_terms = env_usize("VOICEPI_DICTIONARY_MAX_TERMS")
-            .or_else(|| configured.dictionary_max_terms.parse::<usize>().ok())
-            .unwrap_or(80);
-        let max_chars = env_usize("VOICEPI_DICTIONARY_PROMPT_CHARS")
-            .or_else(|| configured.dictionary_prompt_chars.parse::<usize>().ok())
-            .unwrap_or(1200);
+        };
+        let env_dict_paths = env_paths("VOICEPI_DICTIONARY");
+        let config_terms = configured.dictionary_max_terms.parse::<usize>().ok();
+        let env_terms = env_usize("VOICEPI_DICTIONARY_MAX_TERMS");
+        let config_chars = configured.dictionary_prompt_chars.parse::<usize>().ok();
+        let env_chars = env_usize("VOICEPI_DICTIONARY_PROMPT_CHARS");
+
+        let (enabled, paths, max_terms, max_chars) = if config_first {
+            (
+                configured.dictionary_enabled,
+                config_paths.or(env_dict_paths).unwrap_or_default(),
+                config_terms.or(env_terms).unwrap_or(80),
+                config_chars.or(env_chars).unwrap_or(1200),
+            )
+        } else {
+            (
+                env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled),
+                env_dict_paths.or(config_paths).unwrap_or_default(),
+                env_terms.or(config_terms).unwrap_or(80),
+                env_chars.or(config_chars).unwrap_or(1200),
+            )
+        };
 
         Self::new(enabled, paths, max_terms, max_chars)
     }
@@ -412,11 +452,22 @@ pub fn load_session_dictionary() -> SessionDictionary {
 /// disabled. Shared by [`load_session_dictionary`] and [`ReloadingDictionary`]
 /// so both resolve the enabled/disabled + merge semantics identically.
 fn load_dictionary_for(settings: &RuntimeDictionarySettings) -> Dictionary {
-    if settings.enabled {
-        load_runtime_dictionary(&settings.paths).0
-    } else {
-        Dictionary::default()
+    load_dictionary_checked(settings).0
+}
+
+/// Like [`load_dictionary_for`] but also reports whether the load SUCCEEDED
+/// (no file read/parse error). A disabled dictionary is a successful empty
+/// table. `false` means the returned table is a fallback empty produced from a
+/// failed read/parse, so a caller that caches (see [`ReloadingDictionary`])
+/// must NOT treat it as authoritative -- otherwise a transient failure (e.g. a
+/// Windows editor briefly locking the file) would replace the last-good table
+/// with an empty one and cache it until the next mtime bump.
+fn load_dictionary_checked(settings: &RuntimeDictionarySettings) -> (Dictionary, bool) {
+    if !settings.enabled {
+        return (Dictionary::default(), true);
     }
+    let (dictionary, _loaded, error) = load_runtime_dictionary(&settings.paths);
+    (dictionary, error.is_none())
 }
 
 /// A per-utterance source of the current replacement [`Dictionary`] for a
@@ -461,9 +512,10 @@ struct DictionaryReloadKey {
 impl DictionaryReloadKey {
     /// Read the current settings and stamp each configured path, returning both
     /// the settings (so the caller can reload without re-reading env) and the
-    /// key built from them.
+    /// key built from them. Resolves CONFIG-FIRST so a Settings save reaches the
+    /// reload (see [`RuntimeDictionarySettings::from_config_and_env`]).
     fn current() -> (RuntimeDictionarySettings, Self) {
-        let settings = RuntimeDictionarySettings::from_env_and_config();
+        let settings = RuntimeDictionarySettings::from_config_and_env();
         let freshness = settings.paths.iter().map(|p| file_stamp(p)).collect();
         let key = Self {
             enabled: settings.enabled,
@@ -498,17 +550,26 @@ fn file_stamp(path: &Path) -> Option<(u128, u64)> {
 /// their dictionary file or toggling `VOICEPI_DICTIONARY_ENABLED` sees the
 /// change on the next utterance without restarting the app.
 pub struct ReloadingDictionary {
-    key: DictionaryReloadKey,
+    /// The key of the last SUCCESSFUL load, or `None` until one succeeds. Kept
+    /// as an `Option` (rather than the key of whatever was last attempted) so a
+    /// failed load never advances it -- the next utterance recomputes the key,
+    /// finds it still differs, and retries instead of caching the failure.
+    key: Option<DictionaryReloadKey>,
+    /// The last successfully-loaded table (empty until the first success).
     dictionary: Dictionary,
 }
 
 impl ReloadingDictionary {
-    /// Load the initial table from the current env + config so the first
-    /// utterance already reflects the on-disk state.
+    /// Best-effort initial load so the first utterance already reflects the
+    /// on-disk state; a failed initial load leaves `key == None` so the next
+    /// [`Self::current`] retries.
     pub fn new() -> Self {
-        let (settings, key) = DictionaryReloadKey::current();
-        let dictionary = load_dictionary_for(&settings);
-        Self { key, dictionary }
+        let mut provider = Self {
+            key: None,
+            dictionary: Dictionary::default(),
+        };
+        provider.current();
+        provider
     }
 }
 
@@ -521,9 +582,16 @@ impl Default for ReloadingDictionary {
 impl DictionaryProvider for ReloadingDictionary {
     fn current(&mut self) -> &Dictionary {
         let (settings, key) = DictionaryReloadKey::current();
-        if key != self.key {
-            self.dictionary = load_dictionary_for(&settings);
-            self.key = key;
+        if self.key.as_ref() != Some(&key) {
+            let (dictionary, ok) = load_dictionary_checked(&settings);
+            if ok {
+                // Only commit the table AND advance the cache key on a clean
+                // load. On a transient read/parse failure we keep the last-good
+                // table and leave the key untouched, so the next utterance
+                // recomputes the same (still-differing) key and retries.
+                self.dictionary = dictionary;
+                self.key = Some(key);
+            }
         }
         &self.dictionary
     }
@@ -605,11 +673,15 @@ mod tests {
 
     impl DictEnvGuard {
         fn new() -> Self {
+            // `VOICEPI_CONFIG` is included so config-first tests can point
+            // `config::load_settings` at a temp config.json and have it restored
+            // like the rest.
             let keys = [
                 "VOICEPI_DICTIONARY",
                 "VOICEPI_DICTIONARY_ENABLED",
                 "VOICEPI_DICTIONARY_MAX_TERMS",
                 "VOICEPI_DICTIONARY_PROMPT_CHARS",
+                "VOICEPI_CONFIG",
             ];
             let saved = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
             Self { saved }
@@ -625,6 +697,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Write a config.json at `config_path` whose dictionary points at
+    /// `dict_path` with the given `enabled` flag (budgets left at their
+    /// defaults), and export `VOICEPI_CONFIG` so `config::load_settings` reads
+    /// it. Lets the config-first tests drive `dictionary` / `dictionary_enabled`
+    /// through config.json -- the source of truth the live-reload now honours --
+    /// rather than through env.
+    fn write_dictionary_config(config_path: &Path, dict_path: &Path, enabled: bool) {
+        let settings = config::AppSettings {
+            dictionary: dict_path.display().to_string(),
+            dictionary_enabled: enabled,
+            ..config::AppSettings::default()
+        };
+        config::save_settings_to_path(&settings, config_path).expect("write temp config.json");
+        std::env::set_var("VOICEPI_CONFIG", config_path);
     }
 
     #[test]
@@ -741,19 +829,17 @@ mod tests {
         // Live-reload: a ReloadingDictionary re-reads the file at each `current`
         // call and reloads on a freshness/settings miss, so an edit to the
         // dictionary between utterances takes effect -- Python's per-utterance
-        // `_dictionary_runtime`.
+        // `_dictionary_runtime`. The path is config-driven (the reload resolves
+        // config-first), so no env dictionary vars are needed.
         let _guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let _env = DictEnvGuard::new();
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dict.json");
-        std::fs::write(&path, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
-        std::env::set_var("VOICEPI_DICTIONARY", &path);
-        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
-        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
-        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200");
+        let dict = dir.path().join("dict.json");
+        std::fs::write(&dict, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        write_dictionary_config(&dir.path().join("config.json"), &dict, true);
 
         let mut provider = ReloadingDictionary::new();
         let (before, _) = provider
@@ -766,7 +852,7 @@ mod tests {
         // freshness stamp flips deterministically (a same-length edit would
         // still be caught by the nanosecond mtime, but size makes the test
         // robust regardless of filesystem mtime granularity).
-        std::fs::write(&path, r#"{"replacements":{"hello":"HELLO"}}"#).unwrap();
+        std::fs::write(&dict, r#"{"replacements":{"hello":"HELLO"}}"#).unwrap();
         let (after, _) = provider
             .current()
             .apply_replacements("hello world")
@@ -776,30 +862,63 @@ mod tests {
 
     #[test]
     fn reloading_dictionary_reflects_enabled_toggle() {
-        // Toggling `VOICEPI_DICTIONARY_ENABLED` flips the cache key, so a
-        // disabled dictionary reloads to an empty (passthrough) table on the
-        // next `current` -- the `dictionary_enabled` live setting takes effect
-        // without an app restart.
+        // Disabling the dictionary in config.json (a Settings save, no restart)
+        // flips the cache key's `enabled` field, so the next `current` reloads
+        // to an empty (passthrough) table -- the `dictionary_enabled` live
+        // setting takes effect without an app restart, resolved config-first.
         let _guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let _env = DictEnvGuard::new();
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dict.json");
-        std::fs::write(&path, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
-        std::env::set_var("VOICEPI_DICTIONARY", &path);
-        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
-        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
-        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200");
+        let dict = dir.path().join("dict.json");
+        std::fs::write(&dict, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        let config = dir.path().join("config.json");
+        write_dictionary_config(&config, &dict, true);
 
         let mut provider = ReloadingDictionary::new();
         let (enabled, _) = provider.current().apply_replacements("hello").unwrap();
         assert_eq!(enabled, "hi");
 
-        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "0");
+        // Re-save config.json with the dictionary disabled.
+        write_dictionary_config(&config, &dict, false);
         let (disabled, _) = provider.current().apply_replacements("hello").unwrap();
-        assert_eq!(disabled, "hello", "disabled dictionary must passthrough");
+        assert_eq!(
+            disabled, "hello",
+            "disabling the dictionary in config must reach the reload"
+        );
+    }
+
+    #[test]
+    fn reload_resolves_config_first_over_stale_env() {
+        // P1 regression: the worker exports `VOICEPI_DICTIONARY_ENABLED` once at
+        // startup and a Settings save only rewrites config.json (no restart), so
+        // the live-reload must honour config over the stale startup env or a
+        // disable/enable in Settings never takes effect. `from_config_and_env`
+        // (used by the reload) returns the config value even when env disagrees;
+        // `from_env_and_config` (the `dictionary-runtime` RPC path) keeps env
+        // precedence.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let dict = dir.path().join("dict.json");
+        std::fs::write(&dict, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        // config.json says DISABLED; a stale startup env says ENABLED.
+        write_dictionary_config(&dir.path().join("config.json"), &dict, false);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+
+        assert!(
+            !RuntimeDictionarySettings::from_config_and_env().enabled,
+            "config-first reload must honour the saved (disabled) config over stale env"
+        );
+        assert!(
+            RuntimeDictionarySettings::from_env_and_config().enabled,
+            "the RPC path keeps env precedence"
+        );
     }
 
     #[test]

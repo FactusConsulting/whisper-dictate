@@ -165,6 +165,35 @@ pub(super) fn one_second_pcm() -> Vec<f32> {
     vec![0.0_f32; SR as usize]
 }
 
+/// RAII guard that snapshots the given env vars on construction and restores
+/// each to its prior value on drop -- which fires during a panic too, so a
+/// failed assertion can't leak `VOICEPI_*` into sibling tests sharing the
+/// process env. Hold alongside the `ENV_LOCK` guard returned by [`session`].
+pub(super) struct EnvVarSnapshot {
+    saved: Vec<(String, Option<String>)>,
+}
+
+impl EnvVarSnapshot {
+    pub(super) fn new(keys: &[&str]) -> Self {
+        let saved = keys
+            .iter()
+            .map(|k| ((*k).to_owned(), std::env::var(k).ok()))
+            .collect();
+        Self { saved }
+    }
+}
+
+impl Drop for EnvVarSnapshot {
+    fn drop(&mut self) {
+        for (key, prior) in &self.saved {
+            match prior {
+                Some(val) => std::env::set_var(key, val),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
 /// Build a session with the given backends + the default config (0.5 s
 /// min-record floor, blank capture/device labels). Returns
 /// `(session, byte_buf, env_lock_guard)`; the guard MUST be bound (e.g.
