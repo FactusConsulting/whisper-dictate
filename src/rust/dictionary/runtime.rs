@@ -503,6 +503,23 @@ pub fn load_session_dictionary() -> SessionDictionary {
     }
 }
 
+/// Outcome of a [`load_dictionary_checked`] load, deciding how the caching
+/// [`ReloadingDictionary`] treats the result.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DictionaryLoad {
+    /// Every configured file read cleanly (or the dictionary is disabled / all
+    /// paths are simply absent): the returned table is authoritative.
+    Clean,
+    /// Some file failed but at least one loaded successfully: the returned table
+    /// is the readable subset (which may be legitimately EMPTY, e.g. a cleared
+    /// file), usable now but not authoritative -- the caller should not advance
+    /// its cache key so the failed file is retried.
+    Partial,
+    /// No file loaded successfully (every existing path was unreadable): the
+    /// returned table is a fallback empty and must NOT replace a last-good one.
+    TotalFailure,
+}
+
 /// Load the merged replacement [`Dictionary`] for the given settings: the
 /// merged file contents when enabled, or an empty dictionary (no-op) when
 /// disabled. Shared by [`load_session_dictionary`] and [`ReloadingDictionary`]
@@ -511,19 +528,25 @@ fn load_dictionary_for(settings: &RuntimeDictionarySettings) -> Dictionary {
     load_dictionary_checked(settings).0
 }
 
-/// Like [`load_dictionary_for`] but also reports whether the load SUCCEEDED
-/// (no file read/parse error). A disabled dictionary is a successful empty
-/// table. `false` means the returned table is a fallback empty produced from a
-/// failed read/parse, so a caller that caches (see [`ReloadingDictionary`])
-/// must NOT treat it as authoritative -- otherwise a transient failure (e.g. a
-/// Windows editor briefly locking the file) would replace the last-good table
-/// with an empty one and cache it until the next mtime bump.
-fn load_dictionary_checked(settings: &RuntimeDictionarySettings) -> (Dictionary, bool) {
+/// Like [`load_dictionary_for`] but also reports the [`DictionaryLoad`] outcome
+/// so a caching caller can tell a clean load, a partial one (keep the readable
+/// subset, retry the rest), and a total failure (keep last-good) apart. The
+/// signal is which files LOADED (`loaded_paths`), not whether the merged table
+/// is non-empty, so clearing the last readable dictionary still takes effect
+/// even while a configured sibling is unreadable.
+fn load_dictionary_checked(settings: &RuntimeDictionarySettings) -> (Dictionary, DictionaryLoad) {
     if !settings.enabled {
-        return (Dictionary::default(), true);
+        return (Dictionary::default(), DictionaryLoad::Clean);
     }
-    let (dictionary, _loaded, error) = load_runtime_dictionary(&settings.paths);
-    (dictionary, error.is_none())
+    let (dictionary, loaded_paths, error) = load_runtime_dictionary(&settings.paths);
+    let outcome = if error.is_none() {
+        DictionaryLoad::Clean
+    } else if loaded_paths.is_empty() {
+        DictionaryLoad::TotalFailure
+    } else {
+        DictionaryLoad::Partial
+    };
+    (dictionary, outcome)
 }
 
 /// A per-utterance source of the current replacement [`Dictionary`] for a
@@ -659,21 +682,23 @@ impl DictionaryProvider for ReloadingDictionary {
         // last-good table and retry next utterance.
         if let Some((settings, key)) = DictionaryReloadKey::resolve(self.precedence) {
             if self.key.as_ref() != Some(&key) {
-                let (dictionary, ok) = load_dictionary_checked(&settings);
-                if ok {
-                    // Clean load: commit the table AND advance the cache key.
-                    self.dictionary = dictionary;
-                    self.key = Some(key);
-                } else if !dictionary.replacements.is_empty() || !dictionary.terms.is_empty() {
-                    // Partial load -- some configured files failed but others
-                    // merged into a non-empty table (`load_runtime_dictionary`
-                    // returns the readable subset alongside the error). Use that
-                    // subset now, but leave the key UNADVANCED so the failed
-                    // file is retried next utterance.
-                    self.dictionary = dictionary;
-                } else {
-                    // Total failure (e.g. the only file is momentarily
-                    // unreadable): keep the last-good table and retry.
+                match load_dictionary_checked(&settings) {
+                    (dictionary, DictionaryLoad::Clean) => {
+                        // Clean load: commit the table AND advance the cache key.
+                        self.dictionary = dictionary;
+                        self.key = Some(key);
+                    }
+                    (dictionary, DictionaryLoad::Partial) => {
+                        // Some files failed but at least one loaded (its subset
+                        // may be legitimately empty, e.g. a cleared file). Use
+                        // it now, but leave the key UNADVANCED so the failed file
+                        // is retried next utterance.
+                        self.dictionary = dictionary;
+                    }
+                    (_, DictionaryLoad::TotalFailure) => {
+                        // Nothing loaded (every existing file is momentarily
+                        // unreadable): keep the last-good table and retry.
+                    }
                 }
             }
         }
@@ -1191,6 +1216,47 @@ mod tests {
         assert_eq!(
             out, "hi world",
             "the readable file's replacements must apply despite a broken sibling"
+        );
+    }
+
+    #[test]
+    fn reloading_dictionary_clears_an_emptied_file_despite_broken_sibling() {
+        // Regression for the content-based partial check: emptying the last
+        // readable dictionary while a sibling is broken must clear its
+        // replacements (a valid EMPTY subset is a successful load), not keep the
+        // stale table because the merged result is now empty.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.json");
+        std::fs::write(&a, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        let b = dir.path().join("b.json");
+        std::fs::write(&b, r#"{"replacements":{}}"#).unwrap();
+        let joined = std::env::join_paths([&a, &b]).unwrap();
+        std::env::set_var("VOICEPI_DICTIONARY", &joined);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        std::env::remove_var("VOICEPI_CONFIG");
+
+        let mut provider = ReloadingDictionary::new(ReloadPrecedence::EnvFirst);
+        let (before, _) = provider
+            .current()
+            .apply_replacements("hello world")
+            .unwrap();
+        assert_eq!(before, "hi world");
+
+        // Empty the readable file AND break the sibling.
+        std::fs::write(&a, r#"{"replacements":{}}"#).unwrap();
+        std::fs::write(&b, "{ not json").unwrap();
+        let (after, _) = provider
+            .current()
+            .apply_replacements("hello world")
+            .unwrap();
+        assert_eq!(
+            after, "hello world",
+            "emptying the readable file must clear replacements even with a broken sibling"
         );
     }
 
