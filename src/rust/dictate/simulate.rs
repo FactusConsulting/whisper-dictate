@@ -180,8 +180,14 @@ pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Resul
         .map_err(|e| anyhow!("decode {wav_path}: {e:#}"))?;
 
     let inject = CaptureInject::default();
+    // The replacement table live-reloads at each utterance boundary (Python's
+    // per-utterance `_dictionary_runtime`); the term-based prompt biasing above
+    // is folded once from `dictionary`. `dictionary` is therefore only used for
+    // the prompt here -- the session reloads its own table. This verb is
+    // env-driven (every setting comes from the `VOICEPI_*` env the worker
+    // exports), so the reload is EnvFirst to match.
     let mut session = DictateSession::new(transcribe, inject, simulate_session_config())
-        .with_optional_dictionary(dictionary);
+        .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
     if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
         session = session.with_post_process(Box::new(post));
     }
