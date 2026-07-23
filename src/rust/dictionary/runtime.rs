@@ -378,6 +378,17 @@ impl SessionDictionary {
     pub fn has_replacements(&self) -> bool {
         !self.dictionary.replacements.is_empty()
     }
+
+    /// Fold the dictionary terms into an existing prompt `slot` in place: take
+    /// the current base prompt out, rebuild it through [`Self::initial_prompt`],
+    /// and write the (possibly `None`) result back. Collapses the identical
+    /// "take → initial_prompt → store" dance each backend-config call site
+    /// (cloud `prompt`, local `initial_prompt`) would otherwise repeat, so the
+    /// prompt-biasing wiring lives in exactly one place.
+    pub fn fold_into_prompt(&self, slot: &mut Option<String>) {
+        let base = slot.take();
+        *slot = self.initial_prompt(base.as_deref());
+    }
 }
 
 /// Load the [`SessionDictionary`] from the process env + `config.json`, the
@@ -499,6 +510,43 @@ mod tests {
         };
         assert!(!empty.has_replacements());
         assert_eq!(empty.initial_prompt(None), None);
+    }
+
+    #[test]
+    fn fold_into_prompt_folds_terms_and_clears_when_empty() {
+        // With terms: the slot's base prompt is rebuilt to base + vocabulary.
+        let sd = SessionDictionary {
+            dictionary: Dictionary {
+                terms: vec!["Codex".to_owned()],
+                replacements: Vec::new(),
+            },
+            max_terms: 80,
+            max_chars: 1200,
+            enabled: true,
+        };
+        let mut slot = Some("base hint".to_owned());
+        sd.fold_into_prompt(&mut slot);
+        let folded = slot.expect("prompt present");
+        assert!(folded.contains("base hint"), "{folded}");
+        assert!(folded.contains("Vocabulary: Codex"), "{folded}");
+
+        // A term-less base still folds through initial_prompt: the base
+        // prompt survives on its own (no vocabulary line to append).
+        let bare = SessionDictionary {
+            dictionary: Dictionary::default(),
+            max_terms: 80,
+            max_chars: 1200,
+            enabled: true,
+        };
+        let mut only_base = Some("keep me".to_owned());
+        bare.fold_into_prompt(&mut only_base);
+        assert_eq!(only_base.as_deref(), Some("keep me"));
+
+        // Empty base + no terms collapses the slot to None (the caller then
+        // passes the empty string through to the endpoint).
+        let mut empty = None;
+        bare.fold_into_prompt(&mut empty);
+        assert_eq!(empty, None);
     }
 
     #[test]

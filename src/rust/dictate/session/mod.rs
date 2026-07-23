@@ -158,6 +158,26 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self
     }
 
+    /// Attach a [`crate::dictionary::SessionDictionary`]'s replacement table
+    /// only when it actually carries replacements, mirroring the guard every
+    /// production call site (`simulate-session`, `make_real_session`) would
+    /// otherwise repeat inline. An empty / disabled dictionary is a no-op, so
+    /// the session stays byte-identical to one built without a dictionary. The
+    /// term-based prompt biasing (the other half of dictionary support) is
+    /// folded into the backend config beforehand via
+    /// [`crate::dictionary::SessionDictionary::fold_into_prompt`]; this seam
+    /// owns only the replacement table.
+    pub fn with_optional_dictionary(
+        self,
+        dictionary: crate::dictionary::SessionDictionary,
+    ) -> Self {
+        if dictionary.has_replacements() {
+            self.with_dictionary(dictionary.dictionary)
+        } else {
+            self
+        }
+    }
+
     /// Apply the attached dictionary's replacement table to `text`, returning
     /// the rewritten string and the per-replacement change records (for the
     /// utterance event's `dictionary_replacements` field). A `None` dictionary,

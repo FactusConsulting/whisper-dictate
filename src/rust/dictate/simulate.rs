@@ -172,8 +172,7 @@ pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Resul
     // This verb drives the cloud path (stock, no local model needed). Fold the
     // dictionary terms into the endpoint's initial prompt.
     let mut cloud_config = CloudTranscribeConfig::from_env();
-    let base_prompt = cloud_config.prompt.take();
-    cloud_config.prompt = dictionary.initial_prompt(base_prompt.as_deref());
+    dictionary.fold_into_prompt(&mut cloud_config.prompt);
     let transcribe =
         resolve_cloud_transcribe(cloud_config, crate::whisper::model_manager::is_local_only())?;
 
@@ -181,10 +180,8 @@ pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Resul
         .map_err(|e| anyhow!("decode {wav_path}: {e:#}"))?;
 
     let inject = CaptureInject::default();
-    let mut session = DictateSession::new(transcribe, inject, simulate_session_config());
-    if dictionary.has_replacements() {
-        session = session.with_dictionary(dictionary.dictionary);
-    }
+    let mut session = DictateSession::new(transcribe, inject, simulate_session_config())
+        .with_optional_dictionary(dictionary);
     if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
         session = session.with_post_process(Box::new(post));
     }

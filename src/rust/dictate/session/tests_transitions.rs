@@ -513,6 +513,66 @@ fn utterance_event_carries_dictionary_replacements() {
 }
 
 #[test]
+fn with_optional_dictionary_attaches_only_when_replacements_exist() {
+    // The production seam `with_optional_dictionary` mirrors the inline guard
+    // every real call site (simulate-session, make_real_session) used to
+    // repeat: a SessionDictionary carrying replacements is attached and
+    // rewrites the transcript; an empty one is a no-op (byte-identical to a
+    // session built without a dictionary).
+    use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
+
+    // Each case scopes its own `session()` (and thus its `ENV_LOCK` guard) so
+    // the guard drops before the next `session()` call -- `ENV_LOCK` is a plain
+    // non-reentrant mutex, so holding both guards at once would deadlock.
+
+    // Replacements present -> attached -> transcript rewritten.
+    {
+        let with = SessionDictionary {
+            dictionary: Dictionary {
+                terms: Vec::new(),
+                replacements: vec![Replacement {
+                    from: "hello".to_owned(),
+                    to: "hi".to_owned(),
+                }],
+            },
+            max_terms: 80,
+            max_chars: 1200,
+            enabled: true,
+        };
+        let (s, _, _guard) = session(
+            TestTranscribe::returning_text("hello world"),
+            TestInject::new(),
+        );
+        let s = s.with_optional_dictionary(with);
+        let (_outcome, _bytes, s) = run_one_utterance(s, &one_second_pcm());
+        assert_eq!(
+            s.inject_backend().injected.borrow().as_slice(),
+            ["hi world".to_owned()]
+        );
+    }
+
+    // No replacements -> not attached -> raw transcript passes through.
+    {
+        let without = SessionDictionary {
+            dictionary: Dictionary::default(),
+            max_terms: 80,
+            max_chars: 1200,
+            enabled: false,
+        };
+        let (s2, _, _guard2) = session(
+            TestTranscribe::returning_text("hello world"),
+            TestInject::new(),
+        );
+        let s2 = s2.with_optional_dictionary(without);
+        let (_outcome2, _bytes2, s2) = run_one_utterance(s2, &one_second_pcm());
+        assert_eq!(
+            s2.inject_backend().injected.borrow().as_slice(),
+            ["hello world".to_owned()]
+        );
+    }
+}
+
+#[test]
 fn epoch_bumps_monotonically_per_start() {
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();
