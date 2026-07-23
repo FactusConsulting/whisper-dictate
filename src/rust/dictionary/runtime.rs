@@ -51,64 +51,88 @@ impl RuntimeDictionarySettings {
 
     /// Resolve the effective settings ENV-FIRST: the process env wins over
     /// `config.json`, then the baked defaults. Used by the `dictionary-runtime`
-    /// RPC, where the Python worker has already synced its own env to config and
-    /// passes the resolved value in via env.
+    /// RPC and the env-driven `simulate-session` verb, where the caller passes
+    /// the resolved value in via env.
     fn from_env_and_config() -> Self {
-        Self::resolve(&config::load_settings().unwrap_or_default(), false)
+        let configured = config::load_settings().unwrap_or_default();
+        Self::new(
+            env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled),
+            env_paths("VOICEPI_DICTIONARY").unwrap_or_else(|| config_dictionary_paths(&configured)),
+            env_usize("VOICEPI_DICTIONARY_MAX_TERMS")
+                .or_else(|| configured.dictionary_max_terms.parse().ok())
+                .unwrap_or(80),
+            env_usize("VOICEPI_DICTIONARY_PROMPT_CHARS")
+                .or_else(|| configured.dictionary_prompt_chars.parse().ok())
+                .unwrap_or(1200),
+        )
     }
 
-    /// Resolve the effective settings CONFIG-FIRST: `config.json` wins over the
-    /// process env, then the baked defaults -- the same precedence
-    /// [`config::worker_env_overrides`] uses to seed the worker's env at
-    /// startup. The in-process live-reload path resolves through this so a
-    /// Settings save (which rewrites `config.json` without a worker restart)
-    /// reaches the next utterance, instead of being shadowed by the stale
-    /// startup env the worker exported once (Python's per-reload
-    /// `apply_config_to_environ` re-sync, expressed as resolution precedence
-    /// here rather than by mutating the process env).
-    fn from_config_and_env() -> Self {
-        Self::resolve(&config::load_settings().unwrap_or_default(), true)
-    }
-
-    /// Shared resolver for [`Self::from_env_and_config`] (env-first) and
-    /// [`Self::from_config_and_env`] (config-first). `config_first` only flips
-    /// which source is consulted first; the fallback chain and defaults are
-    /// identical, so the two entry points can never drift apart. The enable
-    /// flag is a plain `bool` that `config.json` always carries, so config-first
-    /// takes it verbatim (there is no "unset" env to fall through to) while
-    /// env-first lets an explicit `VOICEPI_DICTIONARY_ENABLED` override it.
-    fn resolve(configured: &config::AppSettings, config_first: bool) -> Self {
-        let config_paths = {
-            let path = configured.dictionary.trim();
-            if path.is_empty() {
-                None
-            } else {
-                Some(vec![PathBuf::from(path)])
-            }
+    /// Resolve the effective settings CONFIG-FIRST for the live-reload path:
+    /// for each dictionary key actually PRESENT in the raw `config.json`, config
+    /// wins; for a key the file omits, the process env is the fallback (then the
+    /// default). This keeps a saved Settings value authoritative over the stale
+    /// startup env (the worker exports these once) -- the #555 P1 fix and the
+    /// resolution-side equivalent of Python's `apply_config_to_environ` -- while
+    /// still honouring an explicit env override for a key the config omits, so a
+    /// partial/legacy config.json does not make the non-empty DEFAULT dictionary
+    /// path shadow an env-supplied one.
+    ///
+    /// Returns `None` when the config file EXISTS but cannot be read/parsed -- a
+    /// transient failure (e.g. a non-atomic Settings save caught mid-rewrite),
+    /// so the caller keeps its last-good state and retries -- versus a MISSING
+    /// file, which `load_raw_config` reports as `{}` (all keys absent -> env
+    /// fallback), not an error.
+    fn from_config_and_env() -> Option<Self> {
+        let raw = config::load_raw_config().ok()?;
+        let present = |key: &str| {
+            raw.as_object()
+                .map(|obj| obj.contains_key(key))
+                .unwrap_or(false)
         };
-        let env_dict_paths = env_paths("VOICEPI_DICTIONARY");
-        let config_terms = configured.dictionary_max_terms.parse::<usize>().ok();
-        let env_terms = env_usize("VOICEPI_DICTIONARY_MAX_TERMS");
-        let config_chars = configured.dictionary_prompt_chars.parse::<usize>().ok();
-        let env_chars = env_usize("VOICEPI_DICTIONARY_PROMPT_CHARS");
+        let (has_enabled, has_path, has_terms, has_chars) = (
+            present("dictionary_enabled"),
+            present("dictionary"),
+            present("dictionary_max_terms"),
+            present("dictionary_prompt_chars"),
+        );
+        let configured = config::AppSettings::from_value(raw).unwrap_or_default();
 
-        let (enabled, paths, max_terms, max_chars) = if config_first {
-            (
-                configured.dictionary_enabled,
-                config_paths.or(env_dict_paths).unwrap_or_default(),
-                config_terms.or(env_terms).unwrap_or(80),
-                config_chars.or(env_chars).unwrap_or(1200),
-            )
+        let enabled = if has_enabled {
+            configured.dictionary_enabled
         } else {
-            (
-                env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled),
-                env_dict_paths.or(config_paths).unwrap_or_default(),
-                env_terms.or(config_terms).unwrap_or(80),
-                env_chars.or(config_chars).unwrap_or(1200),
-            )
+            env_bool("VOICEPI_DICTIONARY_ENABLED").unwrap_or(configured.dictionary_enabled)
         };
+        let paths = if has_path {
+            config_dictionary_paths(&configured)
+        } else {
+            env_paths("VOICEPI_DICTIONARY").unwrap_or_else(|| config_dictionary_paths(&configured))
+        };
+        let max_terms = if has_terms {
+            configured.dictionary_max_terms.parse().unwrap_or(80)
+        } else {
+            env_usize("VOICEPI_DICTIONARY_MAX_TERMS")
+                .or_else(|| configured.dictionary_max_terms.parse().ok())
+                .unwrap_or(80)
+        };
+        let max_chars = if has_chars {
+            configured.dictionary_prompt_chars.parse().unwrap_or(1200)
+        } else {
+            env_usize("VOICEPI_DICTIONARY_PROMPT_CHARS")
+                .or_else(|| configured.dictionary_prompt_chars.parse().ok())
+                .unwrap_or(1200)
+        };
+        Some(Self::new(enabled, paths, max_terms, max_chars))
+    }
+}
 
-        Self::new(enabled, paths, max_terms, max_chars)
+/// The configured dictionary path as a one-element list, or empty when the
+/// config carries no path (so the caller can fall through to env / default).
+fn config_dictionary_paths(configured: &config::AppSettings) -> Vec<PathBuf> {
+    let path = configured.dictionary.trim();
+    if path.is_empty() {
+        Vec::new()
+    } else {
+        vec![PathBuf::from(path)]
     }
 }
 
@@ -528,10 +552,12 @@ struct DictionaryReloadKey {
 impl DictionaryReloadKey {
     /// Read the current settings under the given `precedence` and stamp each
     /// configured path, returning both the settings (so the caller can reload
-    /// without re-reading env) and the key built from them.
-    fn current(precedence: ReloadPrecedence) -> (RuntimeDictionarySettings, Self) {
+    /// without re-reading env) and the key built from them. `None` only when a
+    /// ConfigFirst resolve hits a present-but-unreadable config.json (a
+    /// transient failure -- the caller keeps its last-good state and retries).
+    fn resolve(precedence: ReloadPrecedence) -> Option<(RuntimeDictionarySettings, Self)> {
         let settings = match precedence {
-            ReloadPrecedence::ConfigFirst => RuntimeDictionarySettings::from_config_and_env(),
+            ReloadPrecedence::ConfigFirst => RuntimeDictionarySettings::from_config_and_env()?,
             ReloadPrecedence::EnvFirst => RuntimeDictionarySettings::from_env_and_config(),
         };
         let freshness = settings.paths.iter().map(|p| file_stamp(p)).collect();
@@ -542,7 +568,7 @@ impl DictionaryReloadKey {
             max_chars: settings.max_chars,
             freshness,
         };
-        (settings, key)
+        Some((settings, key))
     }
 }
 
@@ -596,16 +622,21 @@ impl ReloadingDictionary {
 
 impl DictionaryProvider for ReloadingDictionary {
     fn current(&mut self) -> &Dictionary {
-        let (settings, key) = DictionaryReloadKey::current(self.precedence);
-        if self.key.as_ref() != Some(&key) {
-            let (dictionary, ok) = load_dictionary_checked(&settings);
-            if ok {
-                // Only commit the table AND advance the cache key on a clean
-                // load. On a transient read/parse failure we keep the last-good
-                // table and leave the key untouched, so the next utterance
-                // recomputes the same (still-differing) key and retries.
-                self.dictionary = dictionary;
-                self.key = Some(key);
+        // A `None` resolve means the config file is present but unreadable (a
+        // transient failure, e.g. a Settings save caught mid-rewrite): keep the
+        // last-good table and retry next utterance.
+        if let Some((settings, key)) = DictionaryReloadKey::resolve(self.precedence) {
+            if self.key.as_ref() != Some(&key) {
+                let (dictionary, ok) = load_dictionary_checked(&settings);
+                if ok {
+                    // Only commit the table AND advance the cache key on a clean
+                    // load. On a transient dictionary-file read/parse failure we
+                    // keep the last-good table and leave the key untouched, so
+                    // the next utterance recomputes the same (still-differing)
+                    // key and retries.
+                    self.dictionary = dictionary;
+                    self.key = Some(key);
+                }
             }
         }
         &self.dictionary
@@ -954,12 +985,97 @@ mod tests {
         std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
 
         assert!(
-            !RuntimeDictionarySettings::from_config_and_env().enabled,
+            !RuntimeDictionarySettings::from_config_and_env()
+                .expect("config readable")
+                .enabled,
             "config-first reload must honour the saved (disabled) config over stale env"
         );
         assert!(
             RuntimeDictionarySettings::from_env_and_config().enabled,
             "the RPC path keeps env precedence"
+        );
+    }
+
+    #[test]
+    fn config_first_falls_back_to_env_for_absent_keys() {
+        // A partial/legacy config.json that OMITS the dictionary keys must not
+        // let the non-empty DEFAULT dictionary path shadow an env-supplied one:
+        // absent keys fall back to the process env (then default).
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let dict = dir.path().join("dict.json");
+        std::fs::write(&dict, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, "{}").unwrap(); // no dictionary keys at all
+        std::env::set_var("VOICEPI_CONFIG", &config);
+        std::env::set_var("VOICEPI_DICTIONARY", &dict);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+
+        let settings = RuntimeDictionarySettings::from_config_and_env().expect("config readable");
+        assert_eq!(
+            settings.paths,
+            vec![dict],
+            "an absent config path must fall back to the env path"
+        );
+        assert!(settings.enabled, "absent enabled must fall back to env");
+    }
+
+    #[test]
+    fn config_first_returns_none_when_config_is_unreadable() {
+        // A present-but-unparseable config.json (e.g. caught mid Settings save)
+        // must resolve to None so the reload keeps its last-good table, rather
+        // than `unwrap_or_default()` masking the failure as valid defaults.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, "{ this is not json").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &config);
+
+        assert!(
+            RuntimeDictionarySettings::from_config_and_env().is_none(),
+            "an unreadable config must yield None (keep last-good), not defaults"
+        );
+    }
+
+    #[test]
+    fn reloading_dictionary_reloads_terms_not_just_replacements() {
+        // Term coverage: the reloaded table carries the file's `terms` too, and
+        // a file edit updates them (not only the replacement map).
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let dict = dir.path().join("dict.json");
+        std::fs::write(
+            &dict,
+            r#"{"terms":["Codex"],"replacements":{"cloud code":"Claude Code"}}"#,
+        )
+        .unwrap();
+        write_dictionary_config(&dir.path().join("config.json"), &dict, true);
+
+        let mut provider = ReloadingDictionary::new(ReloadPrecedence::ConfigFirst);
+        assert_eq!(provider.current().terms, vec!["Codex".to_owned()]);
+
+        // Edit the file (different byte length) -> the reloaded terms update.
+        std::fs::write(
+            &dict,
+            r#"{"terms":["Codex","Slack"],"replacements":{"cloud code":"Claude Code"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            provider.current().terms,
+            vec!["Codex".to_owned(), "Slack".to_owned()],
+            "a file edit must reload the term list, not only replacements"
         );
     }
 
