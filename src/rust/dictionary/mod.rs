@@ -36,8 +36,9 @@ pub use prompt::{
 };
 pub use runtime::{
     handle_command, handle_runtime, load_session_dictionary, preview_dictionary,
-    runtime_dictionary_result, DictionaryPreview, DictionaryProvider, ReloadingDictionary,
-    RuntimeDictionaryResult, RuntimeDictionarySettings, SessionDictionary, StaticDictionary,
+    runtime_dictionary_result, DictionaryPreview, DictionaryProvider, ReloadPrecedence,
+    ReloadingDictionary, RuntimeDictionaryResult, RuntimeDictionarySettings, SessionDictionary,
+    StaticDictionary,
 };
 pub use store::{
     add_replacement, add_term, default_dictionary_path, ensure_json_dictionary, load_dictionary,

@@ -597,7 +597,7 @@ fn session_live_reloads_the_dictionary_between_utterances() {
     crate::config::save_settings_to_path(&cfg, dir.path().join("config.json")).unwrap();
     std::env::set_var("VOICEPI_CONFIG", dir.path().join("config.json"));
 
-    let s = s.with_reloading_dictionary();
+    let s = s.with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
 
     // Utterance 1 rewrites hello -> hi.
     let (_o1, _b1, s) = run_one_utterance(s, &one_second_pcm());

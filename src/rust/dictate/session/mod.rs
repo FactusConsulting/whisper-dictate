@@ -163,18 +163,26 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     }
 
     /// Attach a live-reloading dictionary: the replacement table is re-read
-    /// from the `VOICEPI_DICTIONARY*` env + `config.json` + the dictionary
-    /// file(s) at each utterance boundary (cheap when unchanged, via an
-    /// mtime+settings cache key), so a user editing their dictionary or
-    /// toggling `VOICEPI_DICTIONARY_ENABLED` sees the change on the next
-    /// utterance without restarting the app -- matching Python's per-utterance
-    /// `_dictionary_runtime` and the config layer's `live` flag for the
-    /// `dictionary*` keys. The initial table is loaded now, so the first
+    /// from `config.json` + the process env + the dictionary file(s) at each
+    /// utterance boundary (cheap when unchanged, via an mtime+settings cache
+    /// key), so a user editing their dictionary or changing the `dictionary*`
+    /// live settings sees the change on the next utterance without restarting
+    /// the app -- matching Python's per-utterance `_dictionary_runtime` and the
+    /// config layer's `live` flag for those keys. `precedence` selects which
+    /// source wins: [`crate::dictionary::ReloadPrecedence::ConfigFirst`] for the
+    /// live worker session (config.json is the source of truth) or
+    /// [`crate::dictionary::ReloadPrecedence::EnvFirst`] for the env-driven
+    /// `simulate-session` CLI. The initial table is loaded now, so the first
     /// utterance already reflects the on-disk state. (Term-based prompt biasing
     /// -- the other half of dictionary support -- is still folded into the
     /// backend config at construction; its live-reload is a separate follow-up.)
-    pub fn with_reloading_dictionary(mut self) -> Self {
-        self.dictionary = Some(Box::new(crate::dictionary::ReloadingDictionary::new()));
+    pub fn with_reloading_dictionary(
+        mut self,
+        precedence: crate::dictionary::ReloadPrecedence,
+    ) -> Self {
+        self.dictionary = Some(Box::new(crate::dictionary::ReloadingDictionary::new(
+            precedence,
+        )));
         self
     }
 

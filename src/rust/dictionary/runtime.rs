@@ -494,6 +494,22 @@ impl DictionaryProvider for StaticDictionary {
     }
 }
 
+/// Which source wins when a [`ReloadingDictionary`] re-resolves its settings.
+/// The two live callers differ deliberately:
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReloadPrecedence {
+    /// `config.json` wins over the process env -- the live worker session
+    /// (`make_real_session`), where a Settings save is the source of truth and
+    /// the startup env is a now-stale mirror. Matches
+    /// [`config::worker_env_overrides`] and Python's `apply_config_to_environ`.
+    ConfigFirst,
+    /// The process env wins over `config.json` -- the env-driven
+    /// `simulate-session` CLI verb (which reads every setting from the same
+    /// `VOICEPI_*` env the worker command exports) and the `dictionary-runtime`
+    /// RPC (where the caller passes the resolved value in via env).
+    EnvFirst,
+}
+
 /// Cache key deciding whether the on-disk / env dictionary state changed since
 /// the last utterance -- a Rust port of Python's `_dictionary_cache_key`: the
 /// enable flag + resolved paths + prompt budgets, plus each configured file's
@@ -510,12 +526,14 @@ struct DictionaryReloadKey {
 }
 
 impl DictionaryReloadKey {
-    /// Read the current settings and stamp each configured path, returning both
-    /// the settings (so the caller can reload without re-reading env) and the
-    /// key built from them. Resolves CONFIG-FIRST so a Settings save reaches the
-    /// reload (see [`RuntimeDictionarySettings::from_config_and_env`]).
-    fn current() -> (RuntimeDictionarySettings, Self) {
-        let settings = RuntimeDictionarySettings::from_config_and_env();
+    /// Read the current settings under the given `precedence` and stamp each
+    /// configured path, returning both the settings (so the caller can reload
+    /// without re-reading env) and the key built from them.
+    fn current(precedence: ReloadPrecedence) -> (RuntimeDictionarySettings, Self) {
+        let settings = match precedence {
+            ReloadPrecedence::ConfigFirst => RuntimeDictionarySettings::from_config_and_env(),
+            ReloadPrecedence::EnvFirst => RuntimeDictionarySettings::from_env_and_config(),
+        };
         let freshness = settings.paths.iter().map(|p| file_stamp(p)).collect();
         let key = Self {
             enabled: settings.enabled,
@@ -550,6 +568,8 @@ fn file_stamp(path: &Path) -> Option<(u128, u64)> {
 /// their dictionary file or toggling `VOICEPI_DICTIONARY_ENABLED` sees the
 /// change on the next utterance without restarting the app.
 pub struct ReloadingDictionary {
+    /// Which source wins when re-resolving the settings each utterance.
+    precedence: ReloadPrecedence,
     /// The key of the last SUCCESSFUL load, or `None` until one succeeds. Kept
     /// as an `Option` (rather than the key of whatever was last attempted) so a
     /// failed load never advances it -- the next utterance recomputes the key,
@@ -560,11 +580,12 @@ pub struct ReloadingDictionary {
 }
 
 impl ReloadingDictionary {
-    /// Best-effort initial load so the first utterance already reflects the
-    /// on-disk state; a failed initial load leaves `key == None` so the next
-    /// [`Self::current`] retries.
-    pub fn new() -> Self {
+    /// Best-effort initial load under `precedence` so the first utterance
+    /// already reflects the on-disk state; a failed initial load leaves
+    /// `key == None` so the next [`Self::current`] retries.
+    pub fn new(precedence: ReloadPrecedence) -> Self {
         let mut provider = Self {
+            precedence,
             key: None,
             dictionary: Dictionary::default(),
         };
@@ -573,15 +594,9 @@ impl ReloadingDictionary {
     }
 }
 
-impl Default for ReloadingDictionary {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DictionaryProvider for ReloadingDictionary {
     fn current(&mut self) -> &Dictionary {
-        let (settings, key) = DictionaryReloadKey::current();
+        let (settings, key) = DictionaryReloadKey::current(self.precedence);
         if self.key.as_ref() != Some(&key) {
             let (dictionary, ok) = load_dictionary_checked(&settings);
             if ok {
@@ -841,7 +856,7 @@ mod tests {
         std::fs::write(&dict, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
         write_dictionary_config(&dir.path().join("config.json"), &dict, true);
 
-        let mut provider = ReloadingDictionary::new();
+        let mut provider = ReloadingDictionary::new(ReloadPrecedence::ConfigFirst);
         let (before, _) = provider
             .current()
             .apply_replacements("hello world")
@@ -877,7 +892,7 @@ mod tests {
         let config = dir.path().join("config.json");
         write_dictionary_config(&config, &dict, true);
 
-        let mut provider = ReloadingDictionary::new();
+        let mut provider = ReloadingDictionary::new(ReloadPrecedence::ConfigFirst);
         let (enabled, _) = provider.current().apply_replacements("hello").unwrap();
         assert_eq!(enabled, "hi");
 
@@ -888,6 +903,33 @@ mod tests {
             disabled, "hello",
             "disabling the dictionary in config must reach the reload"
         );
+    }
+
+    #[test]
+    fn reloading_dictionary_env_first_honours_env_path() {
+        // The EnvFirst provider (used by the env-driven `simulate-session` verb
+        // + the groq-cli smoke) resolves the dictionary from the
+        // `VOICEPI_DICTIONARY*` env the worker exports, so an env-set dictionary
+        // applies its replacements regardless of config.json.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let dict = dir.path().join("dict.json");
+        std::fs::write(&dict, r#"{"replacements":{"hello":"hey"}}"#).unwrap();
+        std::env::set_var("VOICEPI_DICTIONARY", &dict);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        // A config pointing elsewhere must NOT win under EnvFirst.
+        std::env::remove_var("VOICEPI_CONFIG");
+
+        let mut provider = ReloadingDictionary::new(ReloadPrecedence::EnvFirst);
+        let (out, _) = provider
+            .current()
+            .apply_replacements("hello world")
+            .unwrap();
+        assert_eq!(out, "hey world");
     }
 
     #[test]

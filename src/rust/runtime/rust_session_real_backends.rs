@@ -335,14 +335,15 @@ pub(crate) fn make_real_session(
         // falls back to the raw transcript on any provider error, so this
         // can only improve output, never drop dictation.
         // Attach the LIVE-RELOADING dictionary replacement table (Python's
-        // per-utterance `_dictionary_runtime`): the session re-reads the
-        // `VOICEPI_DICTIONARY*` env + config + file(s) at each utterance
-        // boundary, so edits to the dictionary or the `dictionary*` live
-        // settings take effect on the next utterance without an app restart.
-        // (The `dictionary` loaded above is used only for the one-shot prompt
-        // fold; the session reloads its own replacement table.)
+        // per-utterance `_dictionary_runtime`): the session re-reads config +
+        // env + file(s) at each utterance boundary, so edits to the dictionary
+        // or the `dictionary*` live settings take effect on the next utterance
+        // without an app restart. ConfigFirst because in the live worker a
+        // Settings save is the source of truth and the startup env is a stale
+        // mirror. (The `dictionary` loaded above is used only for the one-shot
+        // prompt fold; the session reloads its own replacement table.)
         let mut dictate = DictateSession::new(transcribe, inject, session_config_from_env())
-            .with_reloading_dictionary();
+            .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
             dictate = dictate.with_post_process(Box::new(post));
         }
