@@ -103,6 +103,15 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// status, so a session built with [`Self::new`] behaves exactly as
     /// before this seam existed. Set via [`Self::with_post_process`].
     post_process: Option<Box<dyn PostProcessBackend + Send>>,
+    /// Optional dictionary whose deterministic replacement table rewrites the
+    /// transcript FIRST -- before post-processing, formatting and injection --
+    /// mirroring Python's `_dictionary_runtime(raw_text)` step in
+    /// `vp_transcribe._transcribe_detail` (replacements are applied to the
+    /// decoded text before it leaves the transcribe path). `None` -- the
+    /// default -- applies no replacements, so a session built with
+    /// [`Self::new`] behaves exactly as before this seam existed. Set via
+    /// [`Self::with_dictionary`].
+    dictionary: Option<crate::dictionary::Dictionary>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -119,6 +128,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             transcribe,
             inject,
             post_process: None,
+            dictionary: None,
         }
     }
 
@@ -132,6 +142,56 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     pub fn with_post_process(mut self, backend: Box<dyn PostProcessBackend + Send>) -> Self {
         self.post_process = Some(backend);
         self
+    }
+
+    /// Attach a dictionary whose replacement table rewrites the transcript
+    /// BEFORE post-processing, formatting and injection -- mirroring Python's
+    /// `_dictionary_runtime(raw_text)` step in `vp_transcribe._transcribe_detail`
+    /// (replacements are applied to the decoded text before it leaves the
+    /// transcribe path). Passing this is opt-in: the production wiring only
+    /// attaches a dictionary when the configured one actually has replacements,
+    /// so a session without one is byte-identical to before this seam existed.
+    /// (Term-based prompt biasing -- the other half of dictionary support -- is
+    /// applied at backend-config construction, not here.)
+    pub fn with_dictionary(mut self, dictionary: crate::dictionary::Dictionary) -> Self {
+        self.dictionary = Some(dictionary);
+        self
+    }
+
+    /// Attach a [`crate::dictionary::SessionDictionary`]'s replacement table
+    /// only when it actually carries replacements, mirroring the guard every
+    /// production call site (`simulate-session`, `make_real_session`) would
+    /// otherwise repeat inline. An empty / disabled dictionary is a no-op, so
+    /// the session stays byte-identical to one built without a dictionary. The
+    /// term-based prompt biasing (the other half of dictionary support) is
+    /// folded into the backend config beforehand via
+    /// [`crate::dictionary::SessionDictionary::fold_into_prompt`]; this seam
+    /// owns only the replacement table.
+    pub fn with_optional_dictionary(
+        self,
+        dictionary: crate::dictionary::SessionDictionary,
+    ) -> Self {
+        if dictionary.has_replacements() {
+            self.with_dictionary(dictionary.dictionary)
+        } else {
+            self
+        }
+    }
+
+    /// Apply the attached dictionary's replacement table to `text`, returning
+    /// the rewritten string and the per-replacement change records (for the
+    /// utterance event's `dictionary_replacements` field). A `None` dictionary,
+    /// an empty replacement table, or empty text is a passthrough (no changes);
+    /// a replacement regex error keeps the original text (a replacement failure
+    /// must never drop a dictation). Pure so the wiring is unit-testable
+    /// without a real transcribe backend.
+    fn apply_dictionary(&self, text: &str) -> (String, Vec<crate::dictionary::ReplacementChange>) {
+        match &self.dictionary {
+            Some(dict) if !text.is_empty() => dict
+                .apply_replacements(text)
+                .unwrap_or_else(|_| (text.to_owned(), Vec::new())),
+            _ => (text.to_owned(), Vec::new()),
+        }
     }
 
     /// Current state-machine phase. Exposed for tests and the
@@ -324,7 +384,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             return Ok(UtteranceOutcome::Skipped { reason });
         }
 
-        match self.transcribe.transcribe(buf, SR) {
+        // Transcribe, then run the dictionary replacement table FIRST --
+        // BEFORE the empty / hallucination classification -- matching Python,
+        // where `_dictionary_runtime(raw_text)` in `_transcribe_detail`
+        // rewrites the text before `_transcribe_pcm` performs its
+        // empty/hallucination checks. A replacement whose SOURCE is a blacklist
+        // phrase (e.g. mapping "tak" -> "tak.") is therefore applied and the
+        // CORRECTED text is (re)classified.
+        let mut result = match self.transcribe.transcribe(buf, SR) {
             Err(err) => {
                 // Python wraps the error and treats it as no_speech.
                 wire::emit_status(
@@ -336,114 +403,116 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                         ("recording_s", recording_s.clone()),
                     ],
                 )?;
-                Ok(UtteranceOutcome::NoText {
+                return Ok(UtteranceOutcome::NoText {
                     reason: "no_speech",
-                })
+                });
             }
-            Ok(result) if result.text.is_empty() => {
-                // Python distinguishes `too_quiet`, `no_speech`, `empty`
-                // from `result.gate` so the matching UI card fires. The
-                // production gate returns free-form text (e.g. "input
-                // too quiet: -42 dBFS"), so route it through
-                // `normalize_gate_reason` to land on one of the three
-                // reason tokens. Codex P2 #413 mod.rs:263 (round 1) +
-                // mod.rs:284 (round 2 follow-up: gate text normalisation).
-                let reason = result
-                    .gate
-                    .as_deref()
-                    .map(normalize_gate_reason)
-                    .unwrap_or("empty");
-                wire::emit_status(
-                    writer,
-                    "no_text",
-                    &[
-                        ("reason", Value::from(reason)),
-                        ("recording_s", recording_s.clone()),
-                    ],
-                )?;
-                Ok(UtteranceOutcome::NoText { reason })
-            }
-            Ok(result) if result.is_hallucination => {
-                wire::emit_status(
-                    writer,
-                    "no_text",
-                    &[
-                        ("reason", Value::from("no_speech")),
-                        ("recording_s", recording_s.clone()),
-                    ],
-                )?;
-                Ok(UtteranceOutcome::NoText {
-                    reason: "no_speech",
-                })
-            }
-            Ok(result) => {
-                // Text pipeline between transcription and injection,
-                // mirroring the `postprocess -> format -> inject` order in
-                // `vp_dictate.py`:
-                //
-                // 1. LLM post-processing (optional). When a
-                //    `PostProcessBackend` is attached the session emits a
-                //    `post-processing` status and runs the rewrite; the
-                //    production impl falls back to the input text on any
-                //    provider error, so the user's dictation is never
-                //    lost. `None` (the default) skips this pass AND its
-                //    status entirely, so a session without a configured
-                //    post-processor is byte-identical to before this seam
-                //    existed.
-                // 2. Deterministic spoken formatting commands
-                //    (`new line` -> "\n", `comma` -> ",", ...) -- a pure
-                //    string transform; a `None` / `off` command set is a
-                //    passthrough.
-                //
-                // The emitted `utterance` event carries the fully
-                // pipelined text (what was actually injected), matching
-                // Python.
-                // The `post` outcome (when a backend ran) carries the
-                // metadata mirrored onto the utterance event as the
-                // `post_*` fields, so `ui/log_render.rs` and telemetry see
-                // the pass ran / its provider / latency / fallback --
-                // matching Python (`vp_dictate.py:469-475`).
-                let post = if let Some(backend) = self.post_process.as_ref() {
-                    wire::emit_status(writer, "post-processing", &self.capture_extras())?;
-                    Some(backend.post_process(&result.text))
-                } else {
-                    None
-                };
-                let post_processed = post
-                    .as_ref()
-                    .map(|o| o.text.clone())
-                    .unwrap_or_else(|| result.text.clone());
-                let text = crate::formatting::apply_format_commands(
-                    &post_processed,
-                    self.config.format_command_set.as_deref(),
-                )
-                .text;
-                if let Err(err) = self.inject.inject(&text) {
-                    // Python logs and continues — the utterance event
-                    // still fires with the text we attempted to inject.
-                    // Surface the failure on the utterance event so the
-                    // supervisor can decide whether to retry / show UI.
-                    wire::emit_utterance(
-                        writer,
-                        &text,
-                        &result,
-                        recording_s.clone(),
-                        Some(err.to_string()),
-                        post.as_ref(),
-                    )?;
-                    return Ok(UtteranceOutcome::Injected { text, result });
-                }
-                wire::emit_utterance(
-                    writer,
-                    &text,
-                    &result,
-                    recording_s.clone(),
-                    None,
-                    post.as_ref(),
-                )?;
-                Ok(UtteranceOutcome::Injected { text, result })
-            }
+            Ok(result) => result,
+        };
+
+        let (dictated, replacements) = self.apply_dictionary(&result.text);
+        if dictated != result.text {
+            // The dictionary rewrote the text; re-classify the corrected text
+            // so a replacement can turn a blacklist phrase into normal
+            // dictation (or vice versa). When nothing changed we keep the
+            // backend's own `is_hallucination` verdict untouched.
+            result.is_hallucination = crate::dictate::backends::is_hallucination(dictated.trim());
         }
+        result.text = dictated;
+
+        if result.text.is_empty() {
+            // Python distinguishes `too_quiet`, `no_speech`, `empty` from
+            // `result.gate` so the matching UI card fires. The production gate
+            // returns free-form text (e.g. "input too quiet: -42 dBFS"), so
+            // route it through `normalize_gate_reason` to land on one of the
+            // three reason tokens. Codex P2 #413 mod.rs:263 + mod.rs:284.
+            let reason = result
+                .gate
+                .as_deref()
+                .map(normalize_gate_reason)
+                .unwrap_or("empty");
+            wire::emit_status(
+                writer,
+                "no_text",
+                &[
+                    ("reason", Value::from(reason)),
+                    ("recording_s", recording_s.clone()),
+                ],
+            )?;
+            return Ok(UtteranceOutcome::NoText { reason });
+        }
+
+        if result.is_hallucination {
+            wire::emit_status(
+                writer,
+                "no_text",
+                &[
+                    ("reason", Value::from("no_speech")),
+                    ("recording_s", recording_s.clone()),
+                ],
+            )?;
+            return Ok(UtteranceOutcome::NoText {
+                reason: "no_speech",
+            });
+        }
+
+        // Text pipeline between transcription and injection, mirroring the
+        // `dictionary -> postprocess -> format -> inject` order in
+        // `vp_dictate.py` / `vp_transcribe.py` (the dictionary step ran above):
+        //
+        // 1. LLM post-processing (optional). When a `PostProcessBackend` is
+        //    attached the session emits a `post-processing` status and runs the
+        //    rewrite; the production impl falls back to the input text on any
+        //    provider error, so the user's dictation is never lost. `None` (the
+        //    default) skips this pass AND its status entirely.
+        // 2. Deterministic spoken formatting commands (`new line` -> "\n",
+        //    `comma` -> ",", ...) -- a pure string transform; a `None` / `off`
+        //    command set is a passthrough.
+        //
+        // The emitted `utterance` event carries the fully pipelined text (what
+        // was actually injected) plus the `post_*` and `dictionary_replacements`
+        // metadata, matching Python (`vp_dictate.py:469-475`) so
+        // `ui/log_render.rs` + telemetry see what the pipeline did.
+        let post = if let Some(backend) = self.post_process.as_ref() {
+            wire::emit_status(writer, "post-processing", &self.capture_extras())?;
+            Some(backend.post_process(&result.text))
+        } else {
+            None
+        };
+        let post_processed = post
+            .as_ref()
+            .map(|o| o.text.clone())
+            .unwrap_or_else(|| result.text.clone());
+        let text = crate::formatting::apply_format_commands(
+            &post_processed,
+            self.config.format_command_set.as_deref(),
+        )
+        .text;
+        if let Err(err) = self.inject.inject(&text) {
+            // Python logs and continues — the utterance event still fires with
+            // the text we attempted to inject. Surface the failure on the
+            // utterance event so the supervisor can decide whether to retry.
+            wire::emit_utterance(
+                writer,
+                &text,
+                &result,
+                recording_s.clone(),
+                Some(err.to_string()),
+                post.as_ref(),
+                &replacements,
+            )?;
+            return Ok(UtteranceOutcome::Injected { text, result });
+        }
+        wire::emit_utterance(
+            writer,
+            &text,
+            &result,
+            recording_s.clone(),
+            None,
+            post.as_ref(),
+            &replacements,
+        )?;
+        Ok(UtteranceOutcome::Injected { text, result })
     }
 
     /// Discard the in-flight recording if `requested_epoch` matches the

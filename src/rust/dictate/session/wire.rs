@@ -52,6 +52,7 @@ pub(super) fn emit_utterance<W: Write>(
     recording_s: Value,
     inject_error: Option<String>,
     post: Option<&super::PostProcessOutcome>,
+    replacements: &[crate::dictionary::ReplacementChange],
 ) -> Result<(), SessionError> {
     let mut payload: Map<String, Value> = Map::new();
     payload.insert("event".into(), Value::from("utterance"));
@@ -119,6 +120,23 @@ pub(super) fn emit_utterance<W: Write>(
             })
             .collect();
         payload.insert("post_redactions".into(), Value::from(redactions));
+    }
+    // Dictionary replacements that fired (Python's `dictionary_replacements`),
+    // as an array of {from, to, count}. Emitted only when non-empty so a
+    // no-replacement utterance stays clean; `ui/log_render.rs` counts the array
+    // to show `replacements=N` and telemetry/history keep the records.
+    if !replacements.is_empty() {
+        let entries: Vec<Value> = replacements
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "from": c.from,
+                    "to": c.to,
+                    "count": c.count,
+                })
+            })
+            .collect();
+        payload.insert("dictionary_replacements".into(), Value::from(entries));
     }
     write_line(writer, &Value::Object(payload))
 }

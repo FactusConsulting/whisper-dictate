@@ -161,17 +161,27 @@ where
 }
 
 pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Result<()> {
-    // This verb drives the cloud path (stock, no local model needed).
-    let transcribe = resolve_cloud_transcribe(
-        CloudTranscribeConfig::from_env(),
-        crate::whisper::model_manager::is_local_only(),
-    )?;
+    // Dictionary support, mirroring the Python worker + the in-process session:
+    // term-based prompt biasing folds into the cloud STT prompt, and the
+    // replacement table is attached to the session (applied to the transcript
+    // before post-process/format/inject). Loaded from the same
+    // `VOICEPI_DICTIONARY*` env + config the `dictionary-runtime` RPC reads;
+    // disabled / empty is a no-op.
+    let dictionary = crate::dictionary::load_session_dictionary();
+
+    // This verb drives the cloud path (stock, no local model needed). Fold the
+    // dictionary terms into the endpoint's initial prompt.
+    let mut cloud_config = CloudTranscribeConfig::from_env();
+    dictionary.fold_into_prompt(&mut cloud_config.prompt);
+    let transcribe =
+        resolve_cloud_transcribe(cloud_config, crate::whisper::model_manager::is_local_only())?;
 
     let pcm = decode_wav_16k_mono(Path::new(wav_path))
         .map_err(|e| anyhow!("decode {wav_path}: {e:#}"))?;
 
     let inject = CaptureInject::default();
-    let mut session = DictateSession::new(transcribe, inject, simulate_session_config());
+    let mut session = DictateSession::new(transcribe, inject, simulate_session_config())
+        .with_optional_dictionary(dictionary);
     if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
         session = session.with_post_process(Box::new(post));
     }

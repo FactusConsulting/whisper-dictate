@@ -35,8 +35,9 @@ pub use prompt::{
     BuiltPrompt, ListJson, PromptJson, PromptSettings,
 };
 pub use runtime::{
-    handle_command, handle_runtime, preview_dictionary, runtime_dictionary_result,
-    DictionaryPreview, RuntimeDictionaryResult, RuntimeDictionarySettings,
+    handle_command, handle_runtime, load_session_dictionary, preview_dictionary,
+    runtime_dictionary_result, DictionaryPreview, RuntimeDictionaryResult,
+    RuntimeDictionarySettings, SessionDictionary,
 };
 pub use store::{
     add_replacement, add_term, default_dictionary_path, ensure_json_dictionary, load_dictionary,
