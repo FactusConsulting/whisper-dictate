@@ -282,7 +282,7 @@ fn check_injection_backends() -> Check {
 
 fn check_audio_input() -> Check {
     let name = "audio-input";
-    #[cfg(feature = "audio-in-rust")]
+    #[cfg(feature = "audio-capture")]
     {
         match crate::devices::default_input_device() {
             Some(dev) => Check::ok(name, format!("default: {}", dev.name)),
@@ -292,11 +292,11 @@ fn check_audio_input() -> Check {
             ),
         }
     }
-    #[cfg(not(feature = "audio-in-rust"))]
+    #[cfg(not(feature = "audio-capture"))]
     {
         Check::warn(
             name,
-            "audio device enumeration requires a build with the `audio-in-rust` feature",
+            "audio device enumeration requires a build with the `audio-capture` feature",
         )
     }
 }

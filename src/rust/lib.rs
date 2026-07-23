@@ -1,8 +1,9 @@
-// The cpal capture + rubato resample + Silero VAD pipeline. Compiled in only
-// when the `audio-in-rust` feature is on, so the default build still has
-// nothing to do with the ONNX runtime / cpal's native backends. See
-// src/rust/audio/mod.rs for the wiring + the PR description for the rollout.
-#[cfg(feature = "audio-in-rust")]
+// The cpal capture + rubato resample (+ optional Silero VAD) pipeline.
+// Compiled in when the `audio-capture` feature is on (cpal + rubato, no ONNX);
+// the Silero VAD parts inside additionally require `audio-in-rust`. The
+// default build still has nothing to do with cpal's native backends / the ONNX
+// runtime. See src/rust/audio/mod.rs for the wiring + the PR description.
+#[cfg(feature = "audio-capture")]
 pub mod audio;
 // Pure noise-floor / SNR / gain / silence-trim DSP — Wave 4-C port of
 // `src/python/whisper_dictate/vp_audio.py` (#348). Lives at the crate
@@ -44,11 +45,11 @@ pub mod corpus_record;
 // `dictionary build-from-corpus` subcommand to mirror the Python flags.
 pub mod corpus_profile;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
-// Python-removal roadmap #348). Gated behind `audio-in-rust` so the default
-// build does not pull cpal — the audio capture feature already requires the
-// same native deps (libasound on Linux), so sharing the gate keeps the dep
-// graph clean. See `src/rust/devices.rs` for the API + JSON envelope.
-#[cfg(feature = "audio-in-rust")]
+// Python-removal roadmap #348). Gated behind `audio-capture` so the default
+// build does not pull cpal — this is a cpal-only enumeration (no ONNX), so it
+// shares the lighter capture gate rather than the full `audio-in-rust` VAD
+// gate. See `src/rust/devices.rs` for the API + JSON envelope.
+#[cfg(feature = "audio-capture")]
 pub mod devices;
 pub mod dictionary;
 // Platform-readiness diagnostic CLI (`whisper-dictate doctor`). Runs a

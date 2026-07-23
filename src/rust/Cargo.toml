@@ -41,15 +41,25 @@ whisper-rs-local = ["dep:whisper-rs"]
 # false, so users that set `VOICEPI_WHISPER_GPU=vulkan` on a stock binary
 # silently fall back to CPU rather than refusing to run.
 whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
+# VAD-free capture building block: cpal microphone capture + rubato resample,
+# emitting raw 16 kHz frames. Pulls in ONLY the native cpal + rubato deps — NO
+# ONNX runtime (vad-rs/ort). This is the push-to-talk capture path: PTT bounds
+# the recording by key press/release, so the Silero VAD endpointing (needed
+# only for hands-free / voice-activated mode) is not required, and dropping it
+# means this feature builds without the network-fetched `ort` binary. The
+# device enumeration (`devices`) and the cpal capture self-test share this
+# gate. `audio-in-rust` builds on top by adding the VAD.
+audio-capture = ["dep:cpal", "dep:rubato"]
 # Experimental Rust-side audio pipeline (cpal capture → rubato resample →
-# Silero v4 VAD via vad-rs/ort). OFF by default so a stock build doesn't
+# Silero v4 VAD via vad-rs/ort) — the full hands-free pipeline. Adds the Silero
+# ONNX VAD on top of `audio-capture`. OFF by default so a stock build doesn't
 # pull in the ONNX runtime or the native cpal backends. When the supervisor
 # is launched with VOICEPI_AUDIO_BACKEND=rust AND this feature was compiled
 # in, the Rust controller spawns the pipeline in a worker thread and pipes
 # encoded frames into the Python worker via stdin (--audio-source=rust-stdin).
 # See src/rust/audio/ for the implementation and the PR description for the
 # rollout plan.
-audio-in-rust = ["dep:cpal", "dep:rubato", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
+audio-in-rust = ["audio-capture", "dep:vad-rs", "dep:base64", "dep:tempfile", "dep:ort-sys"]
 # Experimental Rust-side PTT hotkey coordinator (issue #318). Owns the global
 # key-event loop in Rust via `rdev` and serialises lifecycle events through a
 # stage state machine so press/release races (#254, #274) become unrepresentable.
