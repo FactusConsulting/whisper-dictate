@@ -557,6 +557,21 @@ mod tests {
         let _guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
+
+        // Rust tests share one process environment and run in arbitrary order,
+        // so snapshot EVERY dictionary var this test touches -- including the
+        // two prompt budgets -- and restore them afterwards. Pin the budgets
+        // explicitly rather than inheriting them: an external
+        // `VOICEPI_DICTIONARY_MAX_TERMS=0` (or a tiny `_PROMPT_CHARS`) would
+        // otherwise drop the vocabulary line and break the prompt assertion.
+        let keys = [
+            "VOICEPI_DICTIONARY",
+            "VOICEPI_DICTIONARY_ENABLED",
+            "VOICEPI_DICTIONARY_MAX_TERMS",
+            "VOICEPI_DICTIONARY_PROMPT_CHARS",
+        ];
+        let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dict.json");
         std::fs::write(
@@ -566,9 +581,20 @@ mod tests {
         .unwrap();
         std::env::set_var("VOICEPI_DICTIONARY", &path);
         std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
+        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200");
+
         let sd = load_session_dictionary();
-        std::env::remove_var("VOICEPI_DICTIONARY");
-        std::env::remove_var("VOICEPI_DICTIONARY_ENABLED");
+
+        // Restore each var to its pre-test value BEFORE asserting, so a failed
+        // assertion still leaves the environment exactly as we found it (set it
+        // back if it was present, remove it if it wasn't).
+        for (k, prior) in keys.iter().zip(saved) {
+            match prior {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
 
         assert!(sd.enabled);
         assert!(sd.has_replacements());
