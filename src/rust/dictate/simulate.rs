@@ -161,31 +161,24 @@ where
 }
 
 pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Result<()> {
-    // Dictionary support, mirroring the Python worker + the in-process session:
-    // term-based prompt biasing folds into the cloud STT prompt, and the
-    // replacement table is attached to the session (applied to the transcript
-    // before post-process/format/inject). Loaded from the same
-    // `VOICEPI_DICTIONARY*` env + config the `dictionary-runtime` RPC reads;
-    // disabled / empty is a no-op.
-    let dictionary = crate::dictionary::load_session_dictionary();
-
-    // This verb drives the cloud path (stock, no local model needed). Fold the
-    // dictionary terms into the endpoint's initial prompt.
-    let mut cloud_config = CloudTranscribeConfig::from_env();
-    dictionary.fold_into_prompt(&mut cloud_config.prompt);
+    // Dictionary support, mirroring the Python worker + the in-process session,
+    // both halves LIVE-reloaded per utterance (Python's `_dictionary_runtime` /
+    // `_dictionary_prompt_runtime`): the term-based prompt biasing is re-folded
+    // into the cloud STT prompt by the backend, and the replacement table is
+    // re-read by the session. This verb is env-driven (every setting comes from
+    // the `VOICEPI_*` env the worker exports), so both use `EnvFirst`.
+    //
+    // The cloud config's `prompt` stays the raw base (`VOICEPI_INITIAL_PROMPT`);
+    // `with_reloading_prompt` re-folds the dictionary terms into it each call.
+    let cloud_config = CloudTranscribeConfig::from_env();
     let transcribe =
-        resolve_cloud_transcribe(cloud_config, crate::whisper::model_manager::is_local_only())?;
+        resolve_cloud_transcribe(cloud_config, crate::whisper::model_manager::is_local_only())?
+            .with_reloading_prompt(crate::dictionary::ReloadPrecedence::EnvFirst);
 
     let pcm = decode_wav_16k_mono(Path::new(wav_path))
         .map_err(|e| anyhow!("decode {wav_path}: {e:#}"))?;
 
     let inject = CaptureInject::default();
-    // The replacement table live-reloads at each utterance boundary (Python's
-    // per-utterance `_dictionary_runtime`); the term-based prompt biasing above
-    // is folded once from `dictionary`. `dictionary` is therefore only used for
-    // the prompt here -- the session reloads its own table. This verb is
-    // env-driven (every setting comes from the `VOICEPI_*` env the worker
-    // exports), so the reload is EnvFirst to match.
     let mut session = DictateSession::new(transcribe, inject, simulate_session_config())
         .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
     if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {

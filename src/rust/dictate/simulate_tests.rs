@@ -126,6 +126,76 @@ fn drive_empty_pcm_resolves_to_no_audio() {
 }
 
 #[test]
+fn session_wiring_applies_reloading_replacements_to_the_injected_text() {
+    // Codex P2 (#559): the standalone `ReloadingDictionary` check doesn't prove
+    // the SESSION half of the split wiring. Drive one utterance through the real
+    // `DictateSession` built exactly as `handle_simulate_session` does --
+    // `.with_reloading_dictionary(EnvFirst)` over the live env dictionary -- and
+    // assert the replacement table rewrites the injected transcript. A session
+    // that dropped `.with_reloading_dictionary`, used a mismatched precedence,
+    // or read a different table would inject the raw transcript and fail here.
+    // (The term-prompt half is a backend-internal concern, covered on the real
+    // `CloudTranscribeBackend` by `effective_prompt_refolds_reloaded_dictionary_terms`;
+    // both halves are proven to read the SAME file by
+    // `prompt_and_replacements_reload_from_the_same_dictionary`. Driving BOTH
+    // through one HTTP utterance would need a live/mock STT server, which the
+    // `groq-cli-smoke.sh` integration covers.)
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let keys = [
+        "VOICEPI_DICTIONARY",
+        "VOICEPI_DICTIONARY_ENABLED",
+        "VOICEPI_CONFIG",
+    ];
+    let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+
+    let dir = tempfile::tempdir().unwrap();
+    let dict = dir.path().join("dict.json");
+    std::fs::write(
+        &dict,
+        r#"{"terms":["Codex"],"replacements":{"cloud code":"Claude Code"}}"#,
+    )
+    .unwrap();
+    std::env::set_var("VOICEPI_DICTIONARY", &dict);
+    std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+    std::env::remove_var("VOICEPI_CONFIG");
+
+    // Session built the same way `handle_simulate_session` does: stub the cloud
+    // transcript, attach the reloading replacement table (EnvFirst).
+    let mut session = DictateSession::new(
+        StubTranscribe {
+            text: "open cloud code",
+        },
+        CaptureInject::default(),
+        SessionConfig::default(),
+    )
+    .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
+    let mut sink = std::io::sink();
+    let outcome = drive_session_over_pcm(&mut session, &vec![0.1_f32; 16_000], &mut sink);
+    let injected = session.inject_backend().injected();
+
+    // Restore env before asserting so a failure can't leak into siblings.
+    for (key, prior) in keys.iter().zip(saved) {
+        match prior {
+            Some(val) => std::env::set_var(key, val),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    match outcome.expect("drive ok") {
+        UtteranceOutcome::Injected { text, .. } => assert_eq!(
+            text, "open Claude Code",
+            "the session's reloading replacement table must rewrite the transcript"
+        ),
+        other => panic!("expected Injected, got {other:?}"),
+    }
+    assert_eq!(
+        injected,
+        vec!["open Claude Code".to_owned()],
+        "the injected text is the rewritten transcript"
+    );
+}
+
+#[test]
 fn capture_inject_records_texts_in_order() {
     let capture = CaptureInject::default();
     capture.inject("first").expect("inject");

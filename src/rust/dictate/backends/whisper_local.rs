@@ -20,6 +20,7 @@
 //! cloud backend shares it and it is unit-tested on every build (matching
 //! Python's backend-agnostic gate). This backend calls it after decoding.
 
+use std::sync::Mutex;
 use std::time::Instant;
 
 use super::hallucination::{finalize_transcript, max_chars_per_second_from_env};
@@ -77,6 +78,15 @@ pub struct WhisperBackendConfig {
 pub struct WhisperLocalTranscribeBackend {
     model: IdleUnloadingModel<LocalWhisper>,
     config: WhisperBackendConfig,
+    /// When set, the STT prompt is re-folded from `config.initial_prompt`
+    /// (treated as the BASE prompt) + the live dictionary terms on every
+    /// `transcribe`, so dictionary term / budget edits re-bias whisper.cpp
+    /// without an app restart (Python's per-utterance
+    /// `_dictionary_prompt_runtime`). `None` keeps the fixed
+    /// `config.initial_prompt`. `Mutex` because the reload cache mutates behind
+    /// `transcribe(&self)`; boxed to keep the backend small when no reloading
+    /// prompt is attached.
+    prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
 }
 
 impl WhisperLocalTranscribeBackend {
@@ -91,7 +101,39 @@ impl WhisperLocalTranscribeBackend {
     /// `VOICEPI_WHISPER_IDLE_UNLOAD_S` via
     /// [`crate::whisper::parse_idle_timeout_from_env`]).
     pub fn new(model: IdleUnloadingModel<LocalWhisper>, config: WhisperBackendConfig) -> Self {
-        Self { model, config }
+        Self {
+            model,
+            config,
+            prompt_reload: None,
+        }
+    }
+
+    /// Attach a live-reloading STT prompt: `config.initial_prompt` is treated as
+    /// the BASE prompt and the dictionary terms are re-folded into it on each
+    /// `transcribe`, under `precedence` (`ConfigFirst` for the live worker). The
+    /// caller must NOT pre-fold the terms into `config.initial_prompt` -- pass
+    /// the raw `VOICEPI_INITIAL_PROMPT` base so the terms can be re-folded live.
+    pub fn with_reloading_prompt(
+        mut self,
+        precedence: crate::dictionary::ReloadPrecedence,
+    ) -> Self {
+        self.prompt_reload = Some(Box::new(Mutex::new(
+            crate::dictionary::ReloadingDictionary::new(precedence),
+        )));
+        self
+    }
+
+    /// The effective STT prompt for this utterance: the live-reloaded
+    /// base + terms when a reloading prompt is attached, else the fixed
+    /// `config.initial_prompt`.
+    fn effective_prompt(&self) -> Option<String> {
+        match &self.prompt_reload {
+            Some(reload) => reload
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .initial_prompt(self.config.initial_prompt.as_deref()),
+            None => self.config.initial_prompt.clone(),
+        }
     }
 
     /// Read-only access to the wrapped idle-unloading model. Exposed so
@@ -123,11 +165,10 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // the contract documented on `WhisperBackendConfig` actually
         // holds. Codex P2 #417 whisper_local.rs:183.
         let language_hint = self.config.language.as_deref().filter(|s| !s.is_empty());
-        let initial_prompt = self
-            .config
-            .initial_prompt
-            .as_deref()
-            .filter(|s| !s.is_empty());
+        // Re-fold the dictionary terms into the prompt per utterance when a
+        // reloading prompt is attached (else the fixed config prompt).
+        let folded_prompt = self.effective_prompt();
+        let initial_prompt = folded_prompt.as_deref().filter(|s| !s.is_empty());
 
         // Full pre-model pipeline of Python's `vp_transcribe._transcribe_detail`
         // (`vp_transcribe.py:1255-1267`): trim the trailing dead-air tail ONCE,

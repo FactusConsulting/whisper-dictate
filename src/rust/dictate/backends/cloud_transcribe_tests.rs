@@ -132,6 +132,133 @@ fn transcribe_empty_api_key_errors_before_network() {
     assert!(matches!(err, TranscribeError::Backend(_)));
 }
 
+/// RAII scaffold for the prompt-reload tests: takes the crate-wide
+/// [`crate::test_env_lock::ENV_LOCK`], snapshots the dictionary env keys, then
+/// points them at `dict` with pinned budgets (so an ambient `=0` / tiny value
+/// can't drop the vocabulary) and a cleared `VOICEPI_CONFIG` (so only the env
+/// dictionary is in play). Restores every key on drop -- even on a panicking
+/// assertion -- so a failure can't leak into sibling tests. Rust has no
+/// test-fixture support, so both tests share this instead of open-coding the
+/// same lock + save/set/restore window.
+struct DictEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    saved: Vec<(&'static str, Option<String>)>,
+}
+
+impl DictEnvGuard {
+    const KEYS: [&'static str; 5] = [
+        "VOICEPI_DICTIONARY",
+        "VOICEPI_DICTIONARY_ENABLED",
+        "VOICEPI_DICTIONARY_MAX_TERMS",
+        "VOICEPI_DICTIONARY_PROMPT_CHARS",
+        "VOICEPI_CONFIG",
+    ];
+
+    fn with_dict(dict: &std::path::Path) -> Self {
+        let lock = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let saved = Self::KEYS
+            .iter()
+            .map(|k| (*k, std::env::var(k).ok()))
+            .collect();
+        std::env::set_var("VOICEPI_DICTIONARY", dict);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
+        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200");
+        std::env::remove_var("VOICEPI_CONFIG");
+        Self { _lock: lock, saved }
+    }
+}
+
+impl Drop for DictEnvGuard {
+    fn drop(&mut self) {
+        for (key, prior) in &self.saved {
+            match prior {
+                Some(val) => std::env::set_var(key, val),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
+/// A cloud backend whose BASE STT prompt is `"base"` and whose effective
+/// prompt live-reloads the env dictionary terms (`EnvFirst`) -- the shared
+/// subject of the prompt-reload tests.
+fn reloading_prompt_backend() -> CloudTranscribeBackend {
+    CloudTranscribeBackend::new(CloudTranscribeConfig {
+        base_url: "https://api.openai.com/v1".to_owned(),
+        api_key: "k".to_owned(),
+        model: "whisper-1".to_owned(),
+        timeout_ms: 100,
+        language: None,
+        prompt: Some("base".to_owned()),
+    })
+    .with_reloading_prompt(crate::dictionary::ReloadPrecedence::EnvFirst)
+}
+
+#[test]
+fn effective_prompt_refolds_reloaded_dictionary_terms() {
+    // The reloading prompt keeps `config.prompt` as the BASE and re-folds the
+    // live dictionary terms into it on each call, reloading on a term edit --
+    // the backend glue for the per-utterance prompt biasing.
+    let dir = tempfile::tempdir().unwrap();
+    let dict = dir.path().join("dict.json");
+    std::fs::write(&dict, r#"{"terms":["Codex"]}"#).unwrap();
+    let _env = DictEnvGuard::with_dict(&dict);
+
+    let backend = reloading_prompt_backend();
+    let first = backend.effective_prompt();
+    std::fs::write(&dict, r#"{"terms":["Codex","Slack"]}"#).unwrap();
+    let second = backend.effective_prompt();
+
+    assert_eq!(first.as_deref(), Some("base\nVocabulary: Codex"));
+    assert_eq!(
+        second.as_deref(),
+        Some("base\nVocabulary: Codex, Slack"),
+        "editing the dictionary terms must re-fold the STT prompt"
+    );
+}
+
+#[test]
+fn prompt_and_replacements_reload_from_the_same_dictionary() {
+    // The split wiring -- prompt biasing on the backend, replacement table on
+    // the session provider -- must read the SAME live dictionary: one file with
+    // both `terms` and `replacements` biases the STT prompt AND rewrites the
+    // transcript.
+    use crate::dictionary::DictionaryProvider;
+
+    let dir = tempfile::tempdir().unwrap();
+    let dict = dir.path().join("dict.json");
+    std::fs::write(
+        &dict,
+        r#"{"terms":["Codex"],"replacements":{"cloud code":"Claude Code"}}"#,
+    )
+    .unwrap();
+    let _env = DictEnvGuard::with_dict(&dict);
+
+    // Prompt half (backend) and replacement half (session provider), both from
+    // the same env dictionary.
+    let prompt = reloading_prompt_backend().effective_prompt();
+
+    let mut replacements =
+        crate::dictionary::ReloadingDictionary::new(crate::dictionary::ReloadPrecedence::EnvFirst);
+    let (rewritten, _) = replacements
+        .current()
+        .apply_replacements("open cloud code")
+        .unwrap();
+
+    assert_eq!(
+        prompt.as_deref(),
+        Some("base\nVocabulary: Codex"),
+        "the term biases the STT prompt"
+    );
+    assert_eq!(
+        rewritten, "open Claude Code",
+        "the replacement rewrites the transcript from the same dictionary"
+    );
+}
+
 // ── local-only privacy gate (Codex P1 #540) ──────────────────────────────────
 
 fn cloud_config(base_url: &str) -> CloudTranscribeConfig {

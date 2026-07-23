@@ -289,24 +289,26 @@ pub(crate) fn make_real_session(
         // `_assert_local_backend` gate. On refusal the `Err` bubbles out of
         // `make_real_session` and the sink falls back to the stub session
         // (never silently POSTing audio remotely).
-        // Dictionary support (Python parity, matching `simulate-session`):
-        // term-based prompt biasing folds into the STT prompt for BOTH
-        // backends here (`fold_into_prompt`), and the replacement table is
-        // attached to the session below via `with_optional_dictionary`. Loaded
-        // once from the same
-        // `VOICEPI_DICTIONARY*` env + config the `dictionary-runtime` RPC reads;
-        // disabled / empty is a no-op.
-        let dictionary = crate::dictionary::load_session_dictionary();
-
+        // Dictionary support (Python parity, matching `simulate-session`), both
+        // halves LIVE-reloaded per utterance: the term-based prompt biasing is
+        // re-folded into the STT prompt by the backend (`with_reloading_prompt`)
+        // and the replacement table is re-read by the session
+        // (`with_reloading_dictionary`, below). `ConfigFirst` because in the
+        // live worker a Settings save (config.json, no restart) is the source of
+        // truth and the startup env is a stale mirror. Each backend keeps its
+        // config's prompt field as the raw base (`VOICEPI_INITIAL_PROMPT`); the
+        // reloading prompt folds the current dictionary terms into it each call.
         let transcribe = ProductionTranscribeBackend::select(
             cloud_backend_requested_from_env(),
             || {
-                let mut config = CloudTranscribeConfig::from_env();
-                dictionary.fold_into_prompt(&mut config.prompt);
+                let config = CloudTranscribeConfig::from_env();
                 cloud_backend_local_only_checked(
                     crate::whisper::model_manager::is_local_only(),
                     config,
                 )
+                .map(|backend| {
+                    backend.with_reloading_prompt(crate::dictionary::ReloadPrecedence::ConfigFirst)
+                })
             },
             || -> Result<WhisperLocalTranscribeBackend, String> {
                 let model_path =
@@ -314,9 +316,9 @@ pub(crate) fn make_real_session(
                 let idle =
                     parse_idle_timeout_from_env().map_err(|e| format!("idle timeout: {e:#}"))?;
                 let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
-                let mut config = whisper_backend_config_from_env();
-                dictionary.fold_into_prompt(&mut config.initial_prompt);
-                Ok(WhisperLocalTranscribeBackend::new(model, config))
+                let config = whisper_backend_config_from_env();
+                Ok(WhisperLocalTranscribeBackend::new(model, config)
+                    .with_reloading_prompt(crate::dictionary::ReloadPrecedence::ConfigFirst))
             },
         )?;
 
@@ -338,10 +340,8 @@ pub(crate) fn make_real_session(
         // per-utterance `_dictionary_runtime`): the session re-reads config +
         // env + file(s) at each utterance boundary, so edits to the dictionary
         // or the `dictionary*` live settings take effect on the next utterance
-        // without an app restart. ConfigFirst because in the live worker a
-        // Settings save is the source of truth and the startup env is a stale
-        // mirror. (The `dictionary` loaded above is used only for the one-shot
-        // prompt fold; the session reloads its own replacement table.)
+        // without an app restart. ConfigFirst, matching the reloading prompt on
+        // the backend above.
         let mut dictate = DictateSession::new(transcribe, inject, session_config_from_env())
             .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
