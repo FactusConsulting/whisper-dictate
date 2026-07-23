@@ -573,6 +573,62 @@ fn with_optional_dictionary_attaches_only_when_replacements_exist() {
 }
 
 #[test]
+fn session_live_reloads_the_dictionary_between_utterances() {
+    // End-to-end live reload: a session built with `with_reloading_dictionary`
+    // re-reads the dictionary file at each utterance boundary, so editing the
+    // replacement table between two utterances changes the injected text with
+    // no app restart -- Python's per-utterance `_dictionary_runtime`.
+    let transcribe = TestTranscribe::returning_text("hello world");
+    let inject = TestInject::new();
+    let (s, _, _guard) = session(transcribe, inject); // holds ENV_LOCK
+
+    // Point the dictionary at a temp file (hello -> hi), enabled, budgets pinned.
+    // Snapshot the prior env values and restore them before asserting so this
+    // test does not leak `VOICEPI_DICTIONARY*` into siblings.
+    let keys = [
+        "VOICEPI_DICTIONARY",
+        "VOICEPI_DICTIONARY_ENABLED",
+        "VOICEPI_DICTIONARY_MAX_TERMS",
+        "VOICEPI_DICTIONARY_PROMPT_CHARS",
+    ];
+    let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dict.json");
+    std::fs::write(&path, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+    std::env::set_var("VOICEPI_DICTIONARY", &path);
+    std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+    std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
+    std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200");
+
+    let s = s.with_reloading_dictionary();
+
+    // Utterance 1 rewrites hello -> hi.
+    let (_o1, _b1, s) = run_one_utterance(s, &one_second_pcm());
+    // Edit the file to a different byte length (hello -> HELLO) so the size
+    // component of the freshness stamp flips the cache key deterministically.
+    std::fs::write(&path, r#"{"replacements":{"hello":"HELLO"}}"#).unwrap();
+    // Utterance 2 must pick up the edit and rewrite hello -> HELLO.
+    let (_o2, _b2, s) = run_one_utterance(s, &one_second_pcm());
+
+    let injected = s.inject_backend().injected.borrow().clone();
+
+    // Restore env before asserting so a failure still leaves the environment
+    // as we found it.
+    for (k, prior) in keys.iter().zip(saved) {
+        match prior {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+
+    assert_eq!(
+        injected,
+        vec!["hi world".to_owned(), "HELLO world".to_owned()],
+        "the second utterance must reflect the live-edited dictionary"
+    );
+}
+
+#[test]
 fn epoch_bumps_monotonically_per_start() {
     let transcribe = TestTranscribe::returning_text("noop");
     let inject = TestInject::new();

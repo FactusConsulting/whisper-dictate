@@ -103,15 +103,19 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// status, so a session built with [`Self::new`] behaves exactly as
     /// before this seam existed. Set via [`Self::with_post_process`].
     post_process: Option<Box<dyn PostProcessBackend + Send>>,
-    /// Optional dictionary whose deterministic replacement table rewrites the
-    /// transcript FIRST -- before post-processing, formatting and injection --
-    /// mirroring Python's `_dictionary_runtime(raw_text)` step in
+    /// Optional provider of the replacement table that rewrites the transcript
+    /// FIRST -- before post-processing, formatting and injection -- mirroring
+    /// Python's `_dictionary_runtime(raw_text)` step in
     /// `vp_transcribe._transcribe_detail` (replacements are applied to the
-    /// decoded text before it leaves the transcribe path). `None` -- the
+    /// decoded text before it leaves the transcribe path). Resolved once per
+    /// utterance via [`crate::dictionary::DictionaryProvider::current`], so a
+    /// [`crate::dictionary::ReloadingDictionary`] (set via
+    /// [`Self::with_reloading_dictionary`]) live-reloads file/settings edits
+    /// between utterances while a [`crate::dictionary::StaticDictionary`] (set
+    /// via [`Self::with_dictionary`]) keeps a fixed table. `None` -- the
     /// default -- applies no replacements, so a session built with
-    /// [`Self::new`] behaves exactly as before this seam existed. Set via
-    /// [`Self::with_dictionary`].
-    dictionary: Option<crate::dictionary::Dictionary>,
+    /// [`Self::new`] behaves exactly as before this seam existed.
+    dictionary: Option<Box<dyn crate::dictionary::DictionaryProvider + Send>>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -154,7 +158,23 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// (Term-based prompt biasing -- the other half of dictionary support -- is
     /// applied at backend-config construction, not here.)
     pub fn with_dictionary(mut self, dictionary: crate::dictionary::Dictionary) -> Self {
-        self.dictionary = Some(dictionary);
+        self.dictionary = Some(Box::new(crate::dictionary::StaticDictionary(dictionary)));
+        self
+    }
+
+    /// Attach a live-reloading dictionary: the replacement table is re-read
+    /// from the `VOICEPI_DICTIONARY*` env + `config.json` + the dictionary
+    /// file(s) at each utterance boundary (cheap when unchanged, via an
+    /// mtime+settings cache key), so a user editing their dictionary or
+    /// toggling `VOICEPI_DICTIONARY_ENABLED` sees the change on the next
+    /// utterance without restarting the app -- matching Python's per-utterance
+    /// `_dictionary_runtime` and the config layer's `live` flag for the
+    /// `dictionary*` keys. The initial table is loaded now, so the first
+    /// utterance already reflects the on-disk state. (Term-based prompt biasing
+    /// -- the other half of dictionary support -- is still folded into the
+    /// backend config at construction; its live-reload is a separate follow-up.)
+    pub fn with_reloading_dictionary(mut self) -> Self {
+        self.dictionary = Some(Box::new(crate::dictionary::ReloadingDictionary::new()));
         self
     }
 
@@ -180,14 +200,20 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
     /// Apply the attached dictionary's replacement table to `text`, returning
     /// the rewritten string and the per-replacement change records (for the
-    /// utterance event's `dictionary_replacements` field). A `None` dictionary,
-    /// an empty replacement table, or empty text is a passthrough (no changes);
-    /// a replacement regex error keeps the original text (a replacement failure
-    /// must never drop a dictation). Pure so the wiring is unit-testable
-    /// without a real transcribe backend.
-    fn apply_dictionary(&self, text: &str) -> (String, Vec<crate::dictionary::ReplacementChange>) {
-        match &self.dictionary {
-            Some(dict) if !text.is_empty() => dict
+    /// utterance event's `dictionary_replacements` field). The table is
+    /// resolved through the provider ([`crate::dictionary::DictionaryProvider::current`]),
+    /// so a reloading provider re-reads it here at the utterance boundary. A
+    /// `None` provider, an empty replacement table, or empty text is a
+    /// passthrough (no changes); a replacement regex error keeps the original
+    /// text (a replacement failure must never drop a dictation). Takes `&mut
+    /// self` because the provider may mutate its reload cache.
+    fn apply_dictionary(
+        &mut self,
+        text: &str,
+    ) -> (String, Vec<crate::dictionary::ReplacementChange>) {
+        match &mut self.dictionary {
+            Some(provider) if !text.is_empty() => provider
+                .current()
                 .apply_replacements(text)
                 .unwrap_or_else(|_| (text.to_owned(), Vec::new())),
             _ => (text.to_owned(), Vec::new()),

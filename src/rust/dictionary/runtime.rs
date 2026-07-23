@@ -398,16 +398,134 @@ impl SessionDictionary {
 /// disabled, returns an empty dictionary so both halves are no-ops.
 pub fn load_session_dictionary() -> SessionDictionary {
     let settings = RuntimeDictionarySettings::from_env_and_config();
-    let dictionary = if settings.enabled {
-        load_runtime_dictionary(&settings.paths).0
-    } else {
-        Dictionary::default()
-    };
+    let dictionary = load_dictionary_for(&settings);
     SessionDictionary {
         dictionary,
         max_terms: settings.max_terms,
         max_chars: settings.max_chars,
         enabled: settings.enabled,
+    }
+}
+
+/// Load the merged replacement [`Dictionary`] for the given settings: the
+/// merged file contents when enabled, or an empty dictionary (no-op) when
+/// disabled. Shared by [`load_session_dictionary`] and [`ReloadingDictionary`]
+/// so both resolve the enabled/disabled + merge semantics identically.
+fn load_dictionary_for(settings: &RuntimeDictionarySettings) -> Dictionary {
+    if settings.enabled {
+        load_runtime_dictionary(&settings.paths).0
+    } else {
+        Dictionary::default()
+    }
+}
+
+/// A per-utterance source of the current replacement [`Dictionary`] for a
+/// running [`crate::dictate::DictateSession`]. Mirrors Python's per-utterance
+/// `_dictionary_runtime`: [`StaticDictionary`] returns a table fixed at
+/// construction, while [`ReloadingDictionary`] re-reads the
+/// `VOICEPI_DICTIONARY*` env + `config.json` + the dictionary file(s) each
+/// utterance (cheap when unchanged, via an mtime+settings cache key) so live
+/// edits take effect without an app restart.
+pub trait DictionaryProvider {
+    /// The replacement table to apply to THIS utterance's transcript. May
+    /// reload from disk/env; a static impl just returns its fixed table.
+    fn current(&mut self) -> &Dictionary;
+}
+
+/// A fixed replacement table (no reload). Backs
+/// [`crate::dictate::DictateSession::with_dictionary`] and the session tests
+/// so a caller with an already-loaded table keeps the pre-reload behaviour.
+pub struct StaticDictionary(pub Dictionary);
+
+impl DictionaryProvider for StaticDictionary {
+    fn current(&mut self) -> &Dictionary {
+        &self.0
+    }
+}
+
+/// Cache key deciding whether the on-disk / env dictionary state changed since
+/// the last utterance -- a Rust port of Python's `_dictionary_cache_key`: the
+/// enable flag + resolved paths + prompt budgets, plus each configured file's
+/// `(mtime_ns, size)` freshness stamp (`None` when the path does not exist).
+/// Equality means "nothing that affects the table changed", so the reload can
+/// be skipped.
+#[derive(Clone, PartialEq, Eq)]
+struct DictionaryReloadKey {
+    enabled: bool,
+    paths: Vec<PathBuf>,
+    max_terms: usize,
+    max_chars: usize,
+    freshness: Vec<Option<(u128, u64)>>,
+}
+
+impl DictionaryReloadKey {
+    /// Read the current settings and stamp each configured path, returning both
+    /// the settings (so the caller can reload without re-reading env) and the
+    /// key built from them.
+    fn current() -> (RuntimeDictionarySettings, Self) {
+        let settings = RuntimeDictionarySettings::from_env_and_config();
+        let freshness = settings.paths.iter().map(|p| file_stamp(p)).collect();
+        let key = Self {
+            enabled: settings.enabled,
+            paths: settings.paths.clone(),
+            max_terms: settings.max_terms,
+            max_chars: settings.max_chars,
+            freshness,
+        };
+        (settings, key)
+    }
+}
+
+/// `(mtime_ns, size)` for `path`, or `None` when it does not exist / cannot be
+/// stat-ed. A changed modification time OR size flips the cache key, so a live
+/// edit (even one that keeps the byte length) is caught by the nanosecond
+/// mtime.
+fn file_stamp(path: &Path) -> Option<(u128, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Some((mtime, meta.len()))
+}
+
+/// A [`DictionaryProvider`] that live-reloads the replacement table: each
+/// [`Self::current`] recomputes the [`DictionaryReloadKey`] and reloads from
+/// disk only on a miss. Mirrors Python's `_dictionary_runtime`, which re-reads
+/// per utterance behind the same mtime+settings cache -- so a user editing
+/// their dictionary file or toggling `VOICEPI_DICTIONARY_ENABLED` sees the
+/// change on the next utterance without restarting the app.
+pub struct ReloadingDictionary {
+    key: DictionaryReloadKey,
+    dictionary: Dictionary,
+}
+
+impl ReloadingDictionary {
+    /// Load the initial table from the current env + config so the first
+    /// utterance already reflects the on-disk state.
+    pub fn new() -> Self {
+        let (settings, key) = DictionaryReloadKey::current();
+        let dictionary = load_dictionary_for(&settings);
+        Self { key, dictionary }
+    }
+}
+
+impl Default for ReloadingDictionary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DictionaryProvider for ReloadingDictionary {
+    fn current(&mut self) -> &Dictionary {
+        let (settings, key) = DictionaryReloadKey::current();
+        if key != self.key {
+            self.dictionary = load_dictionary_for(&settings);
+            self.key = key;
+        }
+        &self.dictionary
     }
 }
 
@@ -475,6 +593,39 @@ fn _path_marker(_: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Snapshot every dictionary env var on construction and restore each to
+    /// its prior value on drop -- Rust tests share one process env and run in
+    /// arbitrary order, so a test that sets `VOICEPI_DICTIONARY*` must leave the
+    /// environment exactly as it found it (restore-on-drop also fires during a
+    /// panic, so a failed assertion can't leak). Hold alongside `ENV_LOCK`.
+    struct DictEnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl DictEnvGuard {
+        fn new() -> Self {
+            let keys = [
+                "VOICEPI_DICTIONARY",
+                "VOICEPI_DICTIONARY_ENABLED",
+                "VOICEPI_DICTIONARY_MAX_TERMS",
+                "VOICEPI_DICTIONARY_PROMPT_CHARS",
+            ];
+            let saved = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+            Self { saved }
+        }
+    }
+
+    impl Drop for DictEnvGuard {
+        fn drop(&mut self) {
+            for (key, prior) in &self.saved {
+                match prior {
+                    Some(val) => std::env::set_var(key, val),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn session_dictionary_builds_prompt_and_reports_replacements() {
@@ -558,19 +709,11 @@ mod tests {
             .lock()
             .unwrap_or_else(|p| p.into_inner());
 
-        // Rust tests share one process environment and run in arbitrary order,
-        // so snapshot EVERY dictionary var this test touches -- including the
-        // two prompt budgets -- and restore them afterwards. Pin the budgets
-        // explicitly rather than inheriting them: an external
+        // Snapshot/restore every dictionary var (restore fires on drop), and
+        // pin the budgets explicitly rather than inheriting them: an external
         // `VOICEPI_DICTIONARY_MAX_TERMS=0` (or a tiny `_PROMPT_CHARS`) would
         // otherwise drop the vocabulary line and break the prompt assertion.
-        let keys = [
-            "VOICEPI_DICTIONARY",
-            "VOICEPI_DICTIONARY_ENABLED",
-            "VOICEPI_DICTIONARY_MAX_TERMS",
-            "VOICEPI_DICTIONARY_PROMPT_CHARS",
-        ];
-        let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+        let _env = DictEnvGuard::new();
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dict.json");
@@ -586,21 +729,77 @@ mod tests {
 
         let sd = load_session_dictionary();
 
-        // Restore each var to its pre-test value BEFORE asserting, so a failed
-        // assertion still leaves the environment exactly as we found it (set it
-        // back if it was present, remove it if it wasn't).
-        for (k, prior) in keys.iter().zip(saved) {
-            match prior {
-                Some(val) => std::env::set_var(k, val),
-                None => std::env::remove_var(k),
-            }
-        }
-
         assert!(sd.enabled);
         assert!(sd.has_replacements());
         assert_eq!(sd.dictionary.terms, vec!["Codex".to_owned()]);
         let prompt = sd.initial_prompt(None).expect("prompt from terms");
         assert!(prompt.contains("Vocabulary: Codex"), "{prompt}");
+    }
+
+    #[test]
+    fn reloading_dictionary_picks_up_file_edits() {
+        // Live-reload: a ReloadingDictionary re-reads the file at each `current`
+        // call and reloads on a freshness/settings miss, so an edit to the
+        // dictionary between utterances takes effect -- Python's per-utterance
+        // `_dictionary_runtime`.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dict.json");
+        std::fs::write(&path, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        std::env::set_var("VOICEPI_DICTIONARY", &path);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
+        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200");
+
+        let mut provider = ReloadingDictionary::new();
+        let (before, _) = provider
+            .current()
+            .apply_replacements("hello world")
+            .unwrap();
+        assert_eq!(before, "hi world");
+
+        // Edit the file to a DIFFERENT byte length so the size component of the
+        // freshness stamp flips deterministically (a same-length edit would
+        // still be caught by the nanosecond mtime, but size makes the test
+        // robust regardless of filesystem mtime granularity).
+        std::fs::write(&path, r#"{"replacements":{"hello":"HELLO"}}"#).unwrap();
+        let (after, _) = provider
+            .current()
+            .apply_replacements("hello world")
+            .unwrap();
+        assert_eq!(after, "HELLO world");
+    }
+
+    #[test]
+    fn reloading_dictionary_reflects_enabled_toggle() {
+        // Toggling `VOICEPI_DICTIONARY_ENABLED` flips the cache key, so a
+        // disabled dictionary reloads to an empty (passthrough) table on the
+        // next `current` -- the `dictionary_enabled` live setting takes effect
+        // without an app restart.
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let _env = DictEnvGuard::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dict.json");
+        std::fs::write(&path, r#"{"replacements":{"hello":"hi"}}"#).unwrap();
+        std::env::set_var("VOICEPI_DICTIONARY", &path);
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "1");
+        std::env::set_var("VOICEPI_DICTIONARY_MAX_TERMS", "80");
+        std::env::set_var("VOICEPI_DICTIONARY_PROMPT_CHARS", "1200");
+
+        let mut provider = ReloadingDictionary::new();
+        let (enabled, _) = provider.current().apply_replacements("hello").unwrap();
+        assert_eq!(enabled, "hi");
+
+        std::env::set_var("VOICEPI_DICTIONARY_ENABLED", "0");
+        let (disabled, _) = provider.current().apply_replacements("hello").unwrap();
+        assert_eq!(disabled, "hello", "disabled dictionary must passthrough");
     }
 
     #[test]

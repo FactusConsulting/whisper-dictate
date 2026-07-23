@@ -334,11 +334,15 @@ pub(crate) fn make_real_session(
         // `postprocess -> format -> inject` order); `SessionPostProcess`
         // falls back to the raw transcript on any provider error, so this
         // can only improve output, never drop dictation.
-        // Attach the dictionary replacement table (Python's `_dictionary_runtime`)
-        // when the configured dictionary has any replacements -- the session
-        // applies them to the transcript before post-process/format/inject.
+        // Attach the LIVE-RELOADING dictionary replacement table (Python's
+        // per-utterance `_dictionary_runtime`): the session re-reads the
+        // `VOICEPI_DICTIONARY*` env + config + file(s) at each utterance
+        // boundary, so edits to the dictionary or the `dictionary*` live
+        // settings take effect on the next utterance without an app restart.
+        // (The `dictionary` loaded above is used only for the one-shot prompt
+        // fold; the session reloads its own replacement table.)
         let mut dictate = DictateSession::new(transcribe, inject, session_config_from_env())
-            .with_optional_dictionary(dictionary);
+            .with_reloading_dictionary();
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
             dictate = dictate.with_post_process(Box::new(post));
         }
