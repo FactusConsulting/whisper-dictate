@@ -441,19 +441,16 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
         return None
     if not isinstance(obj, dict):
         return None
-    # The Rust helper returns a graceful ``fallback=true`` envelope (exit 0)
-    # when it could NOT clean the text — a TLS handshake failure (e.g. an
-    # enterprise/private-CA endpoint), a provider/HTTP error, or a timeout.
-    # Treat that exactly like a hard failure: return None so the caller runs the
-    # in-process Python pipeline, which may succeed where Rust degraded (Python
-    # validates TLS through the platform trust store and honours sub-second
-    # timeouts). Without this the default flip would silently ship raw text for
-    # those cases instead of falling back to the working Python path.
-    if bool(obj.get("fallback", False)):
-        err = str(obj.get("error", "") or "").strip()
-        if err:
-            print(f"[rust:postprocess] rust fell back ({err})", file=sys.stderr, flush=True)
-        return None
+    # A ``fallback=true`` envelope is RETURNED as-is (not retried). It means the
+    # Rust helper reached the provider but could not clean the text — a
+    # deterministic provider outcome (HTTP 401/429/500, a timeout). Python would
+    # hit the identical result, so re-running it would only double the latency
+    # and the charge. The one previously-Rust-specific failure that Python could
+    # recover — TLS validation against an enterprise/private CA — is now handled
+    # at the source: `cloud_api::http::platform_tls_agent` uses the OS trust
+    # store, so that case no longer degrades to fallback here. Retries stay
+    # reserved for genuine helper-level failures (crash / non-zero exit / bad
+    # JSON / a killed subprocess), which are handled above by returning None.
     return PostprocessResult(
         text=str(obj.get("text", text)),
         raw_text=str(obj.get("raw_text", text)),

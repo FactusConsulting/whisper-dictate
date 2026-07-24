@@ -193,19 +193,19 @@ class PostprocessRustBackendTests(unittest.TestCase):
         self.assertEqual(result.latency_ms, 42)
         self.assertEqual(result.provider, "openai")
 
-    def test_rust_fallback_envelope_falls_through_to_python(self):
-        # A `fallback=true` envelope (exit 0) means the Rust helper COULD NOT
-        # clean the text — a TLS failure, provider error, or timeout. The
-        # shell-out must return None so the caller runs the in-process Python
-        # pipeline (which may succeed where Rust degraded), NOT accept the Rust
-        # raw-text envelope. Without this, the default flip would silently ship
-        # unprocessed text for e.g. enterprise-CA endpoints.
+    def test_rust_fallback_envelope_is_returned_not_retried(self):
+        # A `fallback=true` envelope (exit 0) is a DETERMINISTIC provider outcome
+        # (HTTP 401/429/500, timeout): Python would hit the same result, so we do
+        # NOT re-run it (that would double the latency + charge). The helper
+        # returns the envelope as-is. The one Rust-specific failure Python could
+        # recover — enterprise/private-CA TLS — is fixed at the source by the
+        # platform-verifier agent, so it no longer arrives here as a fallback.
         os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
         os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
         from whisper_dictate import vp_postprocess
 
         rust_payload = {
-            "text": "RUST-DEGRADED-OUTPUT",
+            "text": "input text",
             "raw_text": "input text",
             "changed": False,
             "provider": "openai",
@@ -213,7 +213,7 @@ class PostprocessRustBackendTests(unittest.TestCase):
             "model": "gpt-4o-mini",
             "latency_ms": 3,
             "fallback": True,
-            "error": "tls handshake failed",
+            "error": "HTTP 429 Too Many Requests",
             "redacted": False,
             "redactions": [],
         }
@@ -230,10 +230,14 @@ class PostprocessRustBackendTests(unittest.TestCase):
         )
         with mock.patch(
             "whisper_dictate.vp_postprocess.subprocess.run", return_value=completed
-        ):
+        ) as run:
             result = vp_postprocess._rust_postprocess_text("input text", settings)
 
-        self.assertIsNone(result)
+        # Returned as-is (NOT None → no Python re-run of the same request).
+        self.assertIsNotNone(result)
+        self.assertTrue(result.fallback)
+        self.assertEqual(result.text, "input text")
+        run.assert_called_once()
 
     def test_rust_helper_non_zero_exit_falls_back_to_python(self):
         os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
