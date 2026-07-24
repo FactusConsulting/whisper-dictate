@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_rust import _rust_helper
+from whisper_dictate.vp_rust import no_console_window_kwargs
 
 
 def _truthy(value: str | None) -> bool:
@@ -67,6 +68,7 @@ def apply_format_commands(text: str, command_set: str | None = None) -> FormatCo
             timeout=5,
             text=True,
             encoding="utf-8",
+            **no_console_window_kwargs(),
         )
     except Exception as e:
         raise RuntimeError(f"Rust format-text helper error: {e}") from e

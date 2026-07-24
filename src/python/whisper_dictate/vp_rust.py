@@ -11,6 +11,24 @@ def helper_path() -> str | None:
     return os.environ.get("VOICEPI_RUST_INJECTOR") or None
 
 
+def no_console_window_kwargs() -> dict[str, object]:
+    """Return subprocess kwargs that suppress a Windows cmd flash.
+
+    The Rust CLI helper (`whisper-dictate.exe`) is a console-subsystem binary
+    since the two-binary split (PR #564) — spawning it with a plain
+    ``subprocess.run([...])`` from the tray-launched worker allocates a fresh
+    console window, which flashes on screen every time. On non-Windows the
+    concept is a no-op; return an empty dict so ``**no_console_window_kwargs()``
+    is safe to unpack unconditionally at any call site.
+    """
+    if os.name != "nt":
+        return {}
+    # subprocess.CREATE_NO_WINDOW exists on the Windows ``subprocess`` module
+    # only; guard via getattr so the import doesn't ImportError on Linux CI.
+    flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return {"creationflags": flag}
+
+
 def run_json_helper(
     command: str,
     payload: dict[str, object],
@@ -30,6 +48,7 @@ def run_json_helper(
             capture_output=True,
             timeout=timeout,
             shell=False,
+            **no_console_window_kwargs(),
         )
         if result.returncode != 0:
             return None
@@ -59,6 +78,7 @@ def _rust_json(command: str, payload: dict, *args: str, timeout: float = 5.0) ->
             capture_output=True,
             timeout=timeout,
             shell=False,
+            **no_console_window_kwargs(),
         )
         if r.returncode != 0:
             err = (r.stderr or "").strip()

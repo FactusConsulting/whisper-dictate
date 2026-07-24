@@ -34,7 +34,12 @@ class ExternalApiTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_external_stt_maps_local_whisper_default_to_openai_model(self):
-        with _env(VOICEPI_MODEL="large-v3-turbo", VOICEPI_STT_API_KEY="test-key"):
+        # VOICEPI_STT_MODEL=None: the test asserts the default-mapping behaviour
+        # when NO STT model is configured, so we have to clear any real user env
+        # (a dev running the suite with `VOICEPI_STT_MODEL=whisper-large-v3-turbo`
+        # set for daily use would otherwise see the assertion fail on their box
+        # even though the code is correct).
+        with _env(VOICEPI_MODEL="large-v3-turbo", VOICEPI_STT_MODEL=None, VOICEPI_STT_API_KEY="test-key"):
             sys.modules.pop("vp_external_api", None)
             from whisper_dictate import vp_external_api
 
@@ -165,6 +170,11 @@ class ExternalApiTests(unittest.TestCase):
         with _env(
             VOICEPI_STT_API_KEY="test-key",
             VOICEPI_STT_BASE_URL=f"http://127.0.0.1:{server.server_port}/v1",
+            # Clear any real-user override so the ExternalTranscriptionModel
+            # constructor argument wins — otherwise a dev with
+            # VOICEPI_STT_MODEL set globally would post a different model name
+            # in the multipart body and the assertIn below would fail.
+            VOICEPI_STT_MODEL=None,
         ):
             from whisper_dictate import vp_external_api
 

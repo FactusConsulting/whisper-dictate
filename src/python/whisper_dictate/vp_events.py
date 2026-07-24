@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 
-from whisper_dictate.vp_rust import _rust_helper, _rust_json
+from whisper_dictate.vp_rust import _rust_helper, _rust_json, no_console_window_kwargs
 # Input-device selection (host-API preference) lives in vp_devices and is shared
 # by the picker (here, via print_audio_devices) and capture
 # (vp_capture._resolve_sounddevice_device). Re-exported so existing
@@ -283,7 +283,15 @@ def _print_model_capacity(as_json: bool) -> bool:
     if as_json:
         args.append("--json")
     try:
-        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        r = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            **no_console_window_kwargs(),
+        )
     except Exception as e:  # noqa: BLE001
         print(f"[model-capacity] {e}", file=sys.stderr, flush=True)
         return False

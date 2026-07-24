@@ -101,9 +101,18 @@ pub fn worker_command_with_args(
     )];
     env.extend(config::worker_env_overrides());
     normalise_hotkey_aliases_for_python(&mut env);
-    if let Ok(exe) = env::current_exe() {
-        env.push((RUST_INJECTOR_ENV.to_owned(), exe.display().to_string()));
-    }
+    // Export the CLI binary path — NOT the running exe. When the tray was
+    // launched from `whisper-dictate-gui.exe`, `current_exe()` points at the
+    // GUI binary, which has no CLI surface (it ignores args and just opens
+    // the tray). The Python worker uses this env var to shell out for
+    // Rust-side helpers (cloud-transcribe, etc.); shelling out to the GUI
+    // binary would silently launch a second tray window instead of running
+    // the intended verb. `cli_exe_path()` resolves the sibling CLI binary
+    // when we are running as the GUI, and is a no-op otherwise.
+    env.push((
+        RUST_INJECTOR_ENV.to_owned(),
+        cli_exe_path().display().to_string(),
+    ));
     // NB: the Rust-hotkey "park Python listener" flag (VOICEPI_PYTHON_HOTKEY=0)
     // used to be added here automatically based on env-var + feature gates,
     // but that's unsound — the gates only say what the user *requested*,
@@ -270,10 +279,58 @@ pub fn resource_app_root() -> PathBuf {
 }
 
 pub fn install_command() -> WorkerCommand {
-    install_command_from_exe(
-        env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate")),
-        app_root(),
-    )
+    // MUST be the CLI binary. `install_command()` invokes `<exe> install`,
+    // which is a CLI verb — the GUI binary (`whisper-dictate-gui.exe`) has
+    // no CLI surface, so a naive `current_exe()` here would open a second
+    // tray window when the Settings UI's Install/repair button is pressed.
+    // `cli_exe_path()` resolves the sibling CLI binary in that case.
+    install_command_from_exe(cli_exe_path(), app_root())
+}
+
+/// Path to the CLI binary (`whisper-dictate[.exe]`) — the one every internal
+/// spawn (worker `VOICEPI_RUST_INJECTOR`, Settings UI "Install / repair", the
+/// Python-to-Rust helper shell-outs) actually wants.
+///
+/// When the running process IS the CLI binary — the normal case for every
+/// spawn path (the CLI shells out to the worker; the tray sends the worker
+/// events but doesn't spawn CLI verbs from within itself very often), this is
+/// just `current_exe()`.
+///
+/// When the running process is the sibling GUI binary
+/// (`whisper-dictate-gui[.exe]`) — the tray/settings UI entry from the
+/// windows-subsystem split — this looks up the CLI binary next to it in the
+/// same install directory. Both the Inno installer and the portable ZIP ship
+/// the two binaries side by side so the lookup is stable in shipping layouts.
+///
+/// Falls back to `current_exe()` unchanged when the running exe name is
+/// unexpected (e.g. a renamed dev build). The failure mode there is a clear
+/// "unknown CLI verb" error from the launched binary — not a silent tray
+/// re-launch, which is what makes this bug hard to spot.
+pub fn cli_exe_path() -> PathBuf {
+    let current = env::current_exe().unwrap_or_else(|_| PathBuf::from("whisper-dictate"));
+    cli_exe_from(&current)
+}
+
+/// Pure variant of [`cli_exe_path`] — takes the running exe path so unit
+/// tests can exercise the resolution rule on any platform without spawning.
+pub(crate) fn cli_exe_from(current: &Path) -> PathBuf {
+    let Some(file_name) = current.file_name().and_then(|f| f.to_str()) else {
+        return current.to_path_buf();
+    };
+    let lower = file_name.to_ascii_lowercase();
+    let (stem, has_exe) = match lower.strip_suffix(".exe") {
+        Some(rest) => (rest, true),
+        None => (lower.as_str(), false),
+    };
+    if stem != "whisper-dictate-gui" {
+        return current.to_path_buf();
+    }
+    let sibling = if has_exe {
+        "whisper-dictate.exe"
+    } else {
+        "whisper-dictate"
+    };
+    current.with_file_name(sibling)
 }
 
 pub fn install_command_from_exe(
@@ -355,10 +412,21 @@ pub(crate) fn default_python_name() -> &'static str {
     }
 }
 
-fn source_root() -> PathBuf {
+/// Source-checkout fallback for [`app_root`] when the running exe is not in
+/// an installed layout (typical case: `cargo run` / `cargo build && ./target/release/...`).
+///
+/// `CARGO_MANIFEST_DIR` points at this crate — `<repo>/src/rust`. The repo
+/// root is two levels up (`ancestors().nth(2)`): index 0 = `src/rust`,
+/// index 1 = `src`, index 2 = repo root. The previous `.nth(3)` walked one
+/// level too far and produced the parent of the repo (e.g. `D:\source`
+/// rather than `D:\source\whisper-dictate`), which made every worker spawn
+/// from `target/release/` fail with `ModuleNotFoundError` because the
+/// resulting PYTHONPATH (`<parent>/src/python`) did not exist. Installed
+/// builds are unaffected because `app_root_from_exe_path` succeeds there.
+pub(crate) fn source_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf()
 }

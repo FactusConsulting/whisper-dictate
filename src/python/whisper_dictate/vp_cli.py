@@ -13,6 +13,7 @@ from pathlib import Path
 
 from whisper_dictate.vp_config import apply_config_to_environ, get_value
 from whisper_dictate.vp_postprocess import load_postprocess_settings
+from whisper_dictate.vp_rust import no_console_window_kwargs
 
 apply_config_to_environ()
 
@@ -41,6 +42,7 @@ def _apply_local_only_network_lock() -> bool:
                 capture_output=True,
                 timeout=5,
                 shell=False,
+                **no_console_window_kwargs(),
             )
             if r.returncode == 0:
                 payload = json.loads(r.stdout or "{}")
@@ -147,6 +149,7 @@ def _run_rust_dictionary_command(parser: argparse.ArgumentParser, *args: str) ->
             errors="replace",
             timeout=10,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as e:  # noqa: BLE001 - argparse should report cleanly
         parser.error(str(e))

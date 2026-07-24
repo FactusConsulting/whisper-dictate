@@ -32,6 +32,8 @@ import json
 import os
 import shutil
 import subprocess
+
+from whisper_dictate.vp_rust import no_console_window_kwargs
 import sys
 from typing import Callable, Optional
 
@@ -132,6 +134,7 @@ def _default_spawn(args: list) -> subprocess.Popen:
         encoding="utf-8",
         errors="replace",
         bufsize=1,  # line-buffered so ready-signal arrives promptly
+        **no_console_window_kwargs(),
     )
 
 

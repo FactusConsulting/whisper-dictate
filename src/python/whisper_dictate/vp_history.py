@@ -14,6 +14,7 @@ from pathlib import Path
 
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_rust import _rust_helper, _rust_json
+from whisper_dictate.vp_rust import no_console_window_kwargs
 
 _APPEND_RECORD_SINKS_SUPPORTED: bool | None = None
 
@@ -172,6 +173,7 @@ def _run_rust_history_command(*args: str) -> bool:
             encoding="utf-8",
             errors="replace",
             timeout=5,
+            **no_console_window_kwargs(),
         )
     except Exception as e:
         print(f"[history] {e}", file=sys.stderr, flush=True)

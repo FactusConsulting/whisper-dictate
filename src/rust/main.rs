@@ -1,19 +1,24 @@
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+//! CLI entry point (`whisper-dictate.exe`). Console subsystem on every
+//! platform — every CLI verb prints to stdout/stderr as expected when invoked
+//! from PowerShell/cmd/a script. The tray UI lives in the sibling
+//! `whisper-dictate-gui.exe` binary (windows-subsystem on Windows) so a
+//! double-click from Explorer never flashes a cmd window. Both binaries
+//! delegate to the shared library crate (`whisper_dictate_app`) — this file
+//! is dispatch-only.
+
+use std::process::ExitCode;
 
 use clap::Parser;
 
 use whisper_dictate_app::cli::{Cli, Command, DevicesCommand, SelfTestCommand};
 use whisper_dictate_app::{
     benchmark, cloud_api, command_hook, config, corpus_record, dictate, dictionary, doctor,
-    formatting, health, history, hotkey, injection, model_capacity, postprocess, privacy, profiles,
-    redaction, runtime, telemetry, ui, whisper,
+    entrypoint, formatting, health, history, hotkey, injection, model_capacity, postprocess,
+    privacy, profiles, redaction, runtime, telemetry, ui, whisper,
 };
 
-fn main() {
-    if let Err(err) = run() {
-        eprintln!("error: {err}");
-        std::process::exit(1);
-    }
+fn main() -> ExitCode {
+    entrypoint::error_exit_shell("error", std::io::stderr(), run)
 }
 
 fn run() -> anyhow::Result<()> {

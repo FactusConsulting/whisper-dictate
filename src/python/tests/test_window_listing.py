@@ -285,6 +285,16 @@ class SelfWindowFilterTests(unittest.TestCase):
         from whisper_dictate.vp_windows import _is_self_window
         self.assertTrue(_is_self_window("Some Title", "whisper-dictate.exe"))
 
+    def test_own_gui_binary_process_name(self):
+        # PR #564: the tray UI now runs as `whisper-dictate-gui.exe` (the
+        # windows-subsystem sibling from the two-binary split). The
+        # self-inject guard must recognise it too or dictation could target
+        # its own window — with and without the `.exe` suffix, since the
+        # Windows process API sometimes reports the basename either way.
+        from whisper_dictate.vp_windows import _is_self_window
+        self.assertTrue(_is_self_window("Some Title", "whisper-dictate-gui.exe"))
+        self.assertTrue(_is_self_window("Some Title", "whisper-dictate-gui"))
+
     def test_unrelated_window_not_filtered(self):
         from whisper_dictate.vp_windows import _is_self_window
         self.assertFalse(_is_self_window("Notepad", "notepad.exe"))

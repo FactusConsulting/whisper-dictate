@@ -110,7 +110,7 @@ from whisper_dictate.vp_doctor import (  # noqa: E402,F401
 from whisper_dictate.vp_audio_ducking import (  # noqa: E402,F401
     AudioDucker, register_active_ducker, restore_all_duckers,
 )
-from whisper_dictate.vp_rust import _rust_helper, _rust_json  # noqa: E402,F401
+from whisper_dictate.vp_rust import _rust_helper, _rust_json, no_console_window_kwargs  # noqa: E402,F401
 from whisper_dictate.vp_history import (  # noqa: E402,F401
     _append_jsonl, _append_history, append_history, default_history_path,
     history_path, history_enabled, _history_event, read_history, last_history,
@@ -446,6 +446,7 @@ def _rust_dictionary_subcommand(args: list[str]) -> int | None:
             encoding="utf-8",
             errors="replace",
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001 - launch failure surfaces via caller
         print(f"[rust:dictionary] {exc}", file=sys.stderr, flush=True)

@@ -17,6 +17,7 @@ import urllib.request
 
 from whisper_dictate.vp_config import get_value
 from whisper_dictate.vp_rust import helper_path
+from whisper_dictate.vp_rust import no_console_window_kwargs
 
 SR = 16000
 
@@ -281,7 +282,14 @@ class ExternalTranscriptionModel:
                     str(prompt),
                     base_url=self.settings.base_url,
                 )])
-            r = subprocess.run(args, capture_output=True, timeout=self.settings.timeout_ms / 1000.0 + 2, text=True, encoding="utf-8")
+            r = subprocess.run(
+                args,
+                capture_output=True,
+                timeout=self.settings.timeout_ms / 1000.0 + 2,
+                text=True,
+                encoding="utf-8",
+                **no_console_window_kwargs(),
+            )
             if r.returncode != 0:
                 err = (r.stderr or "").strip()
                 if err:
@@ -403,6 +411,7 @@ def _rust_openai_chat_completion(
             capture_output=True,
             timeout=max(2.0, timeout_ms / 1000.0 + 5.0),
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001 - helper failures must not break post-processing
         print(f"[rust:external-api] {exc}", flush=True)
