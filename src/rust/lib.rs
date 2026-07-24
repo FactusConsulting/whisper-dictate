@@ -60,6 +60,11 @@ pub mod dictionary;
 // when the venv is broken. Audit item 2 chunk E — see
 // `docs/architecture-audit-2026-07-16.md`.
 pub mod doctor;
+// Shared binary-entrypoint shell: both shipping binaries
+// (`whisper-dictate.exe`, `whisper-dictate-gui.exe`) delegate their exit-code
+// + stderr-on-error handling into `error_exit_shell` so the pattern is
+// unit-tested once here instead of duplicated (and untested) in each `main`.
+pub mod entrypoint;
 pub mod formatting;
 pub mod health;
 // Public `history` CLI verbs (list, last, copy-last, reinject-last,
