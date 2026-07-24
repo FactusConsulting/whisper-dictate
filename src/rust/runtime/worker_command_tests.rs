@@ -846,3 +846,83 @@ fn worker_command_normalises_right_alt_in_voicepi_key() {
         "VOICEPI_KEY=right_alt must be rewritten to alt_gr in the worker env"
     );
 }
+
+// ----- cli_exe_from: two-binary split resolution (PR #564 Codex P1) ---------
+//
+// After splitting into `whisper-dictate.exe` (console CLI) +
+// `whisper-dictate-gui.exe` (windows-subsystem tray), every internal spawn
+// path that used to be `env::current_exe()` had to be routed through
+// `cli_exe_path()` — otherwise the Settings UI's Install/repair action and
+// the worker's `VOICEPI_RUST_INJECTOR` env var would silently re-launch the
+// tray instead of running the intended CLI verb. These tests exercise the
+// pure resolution helper.
+
+#[test]
+fn cli_exe_from_gui_binary_resolves_unix_sibling() {
+    // POSIX-style paths — this is what the container/Linux CI exercises.
+    // No .exe suffix; the sibling name follows the same convention.
+    let gui = PathBuf::from("/opt/whisper-dictate/whisper-dictate-gui");
+    let cli = cli_exe_from(&gui);
+    assert_eq!(cli, PathBuf::from("/opt/whisper-dictate/whisper-dictate"));
+}
+
+#[test]
+fn cli_exe_from_cli_binary_unix_is_identity() {
+    let cli_unix = PathBuf::from("/usr/local/bin/whisper-dictate");
+    assert_eq!(cli_exe_from(&cli_unix), cli_unix);
+}
+
+#[test]
+fn cli_exe_from_unknown_binary_name_is_identity() {
+    // A dev renamed the binary (or the release toolchain produced an odd
+    // name). The helper must not silently rewrite unfamiliar names — the
+    // failure mode we want is "unknown CLI verb" from whatever the user
+    // actually launched, not a mysterious tray re-launch. Bare filenames
+    // parse identically on Windows and Unix, so we cover the "no
+    // directory" case here without a cfg gate.
+    let bare = PathBuf::from("whisper-dictate-experimental");
+    assert_eq!(cli_exe_from(&bare), bare);
+}
+
+// Windows-path assertions require the OS-native `\` separator to parse
+// correctly (POSIX PathBuf treats `\` as a filename character, not a
+// separator, so `with_file_name` on a Windows-style literal loses the
+// directory prefix and the assertion falsely fails on Linux CI). Both
+// cases still exercise the SAME pure resolver `cli_exe_from`.
+#[cfg(windows)]
+#[test]
+fn cli_exe_from_gui_binary_resolves_windows_sibling() {
+    let gui = PathBuf::from(
+        r"C:\Users\lars\AppData\Local\Programs\WhisperDictate\whisper-dictate-gui.exe",
+    );
+    let cli = cli_exe_from(&gui);
+    assert_eq!(
+        cli,
+        PathBuf::from(
+            r"C:\Users\lars\AppData\Local\Programs\WhisperDictate\whisper-dictate.exe",
+        ),
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn cli_exe_from_cli_binary_windows_is_identity() {
+    let cli_win = PathBuf::from(r"C:\Program Files\WhisperDictate\whisper-dictate.exe");
+    assert_eq!(cli_exe_from(&cli_win), cli_win);
+}
+
+#[cfg(windows)]
+#[test]
+fn cli_exe_from_gui_binary_case_insensitive_on_windows_names() {
+    // Windows paths from PATH/registry sometimes come back case-shifted
+    // (WHISPER-DICTATE-GUI.EXE); the resolution must still recognise them.
+    let gui = PathBuf::from(r"C:\PROGRAMS\WHISPERDICTATE\WHISPER-DICTATE-GUI.EXE");
+    let cli = cli_exe_from(&gui);
+    // The sibling name we emit is the canonical lowercase one — this is
+    // what the installer + portable ZIP actually place on disk, and cargo
+    // produces `whisper-dictate.exe` (lowercase) too.
+    assert_eq!(
+        cli,
+        PathBuf::from(r"C:\PROGRAMS\WHISPERDICTATE\whisper-dictate.exe"),
+    );
+}

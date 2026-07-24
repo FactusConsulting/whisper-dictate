@@ -181,8 +181,8 @@ pub use process::{
 pub use supervisor::{RepaintNotifier, RuntimeEvent, RuntimeState, RuntimeSupervisor, WorkerEvent};
 pub use worker_command::{
     audio_devices_command, audio_pipeline_available, audio_pipeline_requested, benchmark_command,
-    default_worker_command, default_worker_command_with_args, doctor_command, install_command,
-    install_command_from_exe, record_corpus_item_command, resource_app_root,
+    cli_exe_path, default_worker_command, default_worker_command_with_args, doctor_command,
+    install_command, install_command_from_exe, record_corpus_item_command, resource_app_root,
     test_audio_device_command, windows_command, worker_command, worker_command_with_args,
     PlannedCommand, WorkerCommand, AUDIO_BACKEND_ENV,
 };
@@ -203,8 +203,9 @@ pub(crate) use process::{
 };
 #[allow(unused_imports)]
 pub(crate) use worker_command::{
-    app_root_from_exe_path, default_python_name, default_venv_dir, propagate_rust_devices_backend,
-    venv_python_path, windows_venv_dir, Platform, APP_ROOT_ENV, PYTHONPATH_ENV, PYTHON_ENV,
+    app_root_from_exe_path, cli_exe_from, default_python_name, default_venv_dir,
+    propagate_rust_devices_backend, venv_python_path, windows_venv_dir, Platform, APP_ROOT_ENV,
+    PYTHONPATH_ENV, PYTHON_ENV,
 };
 
 // ---------------------------------------------------------------------------

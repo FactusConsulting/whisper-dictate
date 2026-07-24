@@ -65,8 +65,14 @@ Download the Windows zip from GitHub Releases, unzip it, then run:
 
 ```powershell
 whisper-dictate.exe install
-whisper-dictate.exe ui
+whisper-dictate-gui.exe
 ```
+
+`whisper-dictate.exe` is the console CLI (every verb prints normally to
+PowerShell). `whisper-dictate-gui.exe` is the sibling tray/settings binary —
+launch this one to start the UI without leaving a console window open
+underneath it. The Inno installer's Start-menu / desktop shortcuts point at
+`-gui.exe` for the same reason.
 
 The `.exe` installer is still the recommended Windows path.
 
