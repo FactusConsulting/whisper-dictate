@@ -1,4 +1,10 @@
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+//! CLI entry point (`whisper-dictate.exe`). Console subsystem on every
+//! platform — every CLI verb prints to stdout/stderr as expected when invoked
+//! from PowerShell/cmd/a script. The tray UI lives in the sibling
+//! `whisper-dictate-gui.exe` binary (windows-subsystem on Windows) so a
+//! double-click from Explorer never flashes a cmd window. Both binaries
+//! delegate to the shared library crate (`whisper_dictate_app`) — this file
+//! is dispatch-only.
 
 use clap::Parser;
 

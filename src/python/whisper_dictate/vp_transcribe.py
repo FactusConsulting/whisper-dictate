@@ -10,6 +10,8 @@ import json
 import re
 import subprocess
 import tempfile
+
+from whisper_dictate.vp_rust import no_console_window_kwargs
 import threading
 import time
 import wave
@@ -184,6 +186,7 @@ def _rust_privacy_ok(helper: str, backend: str, feature: str,
             capture_output=True,
             timeout=5,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception:  # noqa: BLE001 - fall back to the Python check
         return False
@@ -286,6 +289,7 @@ def _rust_helper_supports_transcribe(helper: str, *, timeout_s: float = 10.0) ->
             errors="replace",
             timeout=timeout_s,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -440,6 +444,7 @@ class RustWhisperServerModel:
             errors="replace",
             bufsize=1,  # line-buffered stdout so readline() doesn't block forever
             shell=False,
+            **no_console_window_kwargs(),
         )
 
     # Bounded handshake deadline so a wedged helper at startup (model load
@@ -704,6 +709,7 @@ def _run_rust_transcribe(
             capture_output=True,
             timeout=timeout_s,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(
@@ -868,6 +874,7 @@ def _run_dictionary_helper_payload(text: str, base_prompt: str | None) -> dict |
             capture_output=True,
             timeout=5,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as e:  # noqa: BLE001 - dictation must survive helper trouble
         if STT_DEBUG:

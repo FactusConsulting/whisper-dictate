@@ -24,6 +24,11 @@ import re
 SELF_INJECTION_PROCESSES: frozenset[str] = frozenset({
     "whisper-dictate",
     "whisper-dictate.exe",
+    # Two-binary split: the tray UI now runs as `whisper-dictate-gui.exe`
+    # (windows-subsystem sibling), so the self-inject guard has to recognise
+    # it too or dictation could target its own window.
+    "whisper-dictate-gui",
+    "whisper-dictate-gui.exe",
     "whisper_dictate",
     "whisper_dictate.exe",
 })

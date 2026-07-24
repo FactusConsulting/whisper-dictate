@@ -164,6 +164,10 @@ jobs:
           New-Item -ItemType Directory -Force (Join-Path $bundle "assets") | Out-Null
           Copy-Item assets\whisper-dictate.ico (Join-Path $bundle "assets")
           Copy-Item target\release\whisper-dictate.exe $bundle
+          # Sibling windows-subsystem binary — shipped alongside the CLI so
+          # portable-zip users get the tray-launch UX (no cmd-window flash)
+          # that the Inno installer's shortcuts already provide.
+          Copy-Item target\release\whisper-dictate-gui.exe $bundle
           # Ship ONNX Runtime next to the .exe (Wave 8 / rc.2): the
           # `audio-in-rust` feature pulls in vad-rs -> ort, which
           # dynamically loads onnxruntime.dll at startup. ort's

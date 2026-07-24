@@ -4,6 +4,12 @@ version = "1.22.0-rc.3"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
+# Two binaries ship from this crate; `cargo run` without `--bin` needs a
+# tiebreaker. Point it at the CLI so scripts / dev-loops keep working the way
+# they did before the split (running the GUI binary from the shell is niche —
+# it takes no args and just opens the tray window, which the tray shortcut
+# already does).
+default-run = "whisper-dictate"
 
 [lib]
 path = "lib.rs"
@@ -11,6 +17,15 @@ path = "lib.rs"
 [[bin]]
 name = "whisper-dictate"
 path = "main.rs"
+
+# Sibling GUI-only binary. Windows-subsystem on Windows (see the file's own
+# cfg_attr) so a tray shortcut / autostart / Explorer double-click never
+# flashes a cmd window. The CLI binary above stays console-subsystem so every
+# verb prints to PowerShell/cmd normally. Both delegate to the shared library
+# — the split is thin dispatch on top of the same backend.
+[[bin]]
+name = "whisper-dictate-gui"
+path = "whisper-dictate-gui.rs"
 
 # Renderer selection. These features gate the eframe renderer backend; `default`
 # selects glow (our shipping renderer). Enabling both is allowed — ui.rs prefers
