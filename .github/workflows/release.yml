@@ -668,13 +668,15 @@ jobs:
           Write-Host "============================"
           if ($survived) {
             Write-Host "  ok  whisper-dictate-gui.exe survived startup"
-          } elseif ($p.ExitCode -eq 0) {
-            # A clean self-exit inside 10 s is unexpected for a tray app but
-            # NOT a crash. Log it as INFO — future work: an explicit
-            # --render-once flag would let us assert positive lifecycle here.
-            Write-Host "INFO: whisper-dictate-gui.exe exited cleanly (code 0) within 10 s"
           } else {
-            throw "whisper-dictate-gui.exe exited early with code $($p.ExitCode) — startup regression"
+            # ANY early exit — crash OR clean self-exit — is a lifecycle
+            # regression. The tray binary's only mode is a persistent tray
+            # UI; if `ui::run()` returns `Ok(())` before the user closes
+            # the window, an installed shortcut appears successful but
+            # leaves NO tray process and no UI. Treat clean exit as a
+            # failure too, so a broken lifecycle can't ship green.
+            $exit = $p.ExitCode
+            throw "whisper-dictate-gui.exe exited early (code $exit) — the tray must stay alive for the launch smoke; a clean exit is a lifecycle regression"
           }
 
       - uses: actions/setup-python@v7
