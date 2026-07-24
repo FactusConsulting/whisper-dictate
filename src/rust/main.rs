@@ -304,7 +304,7 @@ fn handle_dictate_mic(device: &str, seconds: f64, json: bool) -> anyhow::Result<
 #[cfg(not(feature = "audio-capture"))]
 fn handle_dictate_mic(_device: &str, _seconds: f64, _json: bool) -> anyhow::Result<()> {
     Err(anyhow::anyhow!(
-        "dictate-mic requires the `audio-capture` cargo feature — \
+        "dictate-mic requires the `audio-capture` cargo feature; \
          rebuild with `cargo build --features audio-capture`"
     ))
 }

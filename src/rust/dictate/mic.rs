@@ -21,9 +21,20 @@ use anyhow::{anyhow, Result};
 use crate::audio::raw::RawCapturePipeline;
 use crate::audio::PipelineEvent;
 use crate::dictate::simulate::{
-    build_cloud_preview_session, drive_session_over_pcm, to_clean_jsonl,
+    build_cloud_preview_session, drive_session_over_pcm, simulate_session_config, to_clean_jsonl,
 };
 use crate::dictate::UtteranceOutcome;
+
+/// Upper bound on `--seconds`. A dictation window is a handful of seconds; an
+/// hour is already absurd. The cap also keeps the value well inside what
+/// `Duration::from_secs_f64` accepts, so a huge/`inf` input surfaces as the
+/// clean `anyhow!` error below instead of panicking the conversion.
+const MAX_SECONDS: f64 = 3600.0;
+
+/// The `capture_backend` label stamped into the worker events for the live-mic
+/// verb, mirroring `VOICEPI_AUDIO_BACKEND=rust` (the Python metadata uses the
+/// mechanism name, e.g. `sounddevice` / `arecord`).
+const CAPTURE_BACKEND: &str = "rust";
 
 /// Fold a batch of captured pipeline events into a flat 16 kHz PCM buffer.
 ///
@@ -75,19 +86,45 @@ fn drain_events_for(rx: &Receiver<PipelineEvent>, window: Duration) -> Vec<Pipel
     events
 }
 
+/// Collect every event still queued after the pipeline has been stopped, until
+/// the pump drops the sender (channel disconnect) or a terminal `DeviceError`.
+/// [`RawCapturePipeline::stop`] joins the pump thread, which flushes the
+/// resampler's buffered tail frames onto the channel before exiting — so this
+/// post-stop drain recovers the trailing audio that would otherwise be clipped
+/// off the end of the recording. `recv` cannot block indefinitely here: the
+/// sender is already dropped by the time `stop` returns.
+fn drain_remaining(rx: &Receiver<PipelineEvent>) -> Vec<PipelineEvent> {
+    let mut events = Vec::new();
+    while let Ok(event) = rx.recv() {
+        let terminal = matches!(event, PipelineEvent::DeviceError(_));
+        events.push(event);
+        if terminal {
+            break;
+        }
+    }
+    events
+}
+
 /// Open `device` via the VAD-free capture pipeline, record for `seconds`, and
-/// return the captured 16 kHz mono PCM. Errors if the device cannot be opened
-/// or the capture thread reports a `DeviceError`.
+/// return the captured 16 kHz mono PCM. Errors if `seconds` is out of range,
+/// the device cannot be opened, or the capture thread reports a `DeviceError`.
 fn capture_pcm_for(device: &str, seconds: f64) -> Result<Vec<f32>> {
-    if seconds <= 0.0 || seconds.is_nan() {
-        return Err(anyhow!("--seconds must be greater than 0 (got {seconds})"));
+    // Reject non-finite / non-positive / absurd values BEFORE
+    // `Duration::from_secs_f64`, which *panics* (not `Err`) on infinite or
+    // overflowing input. `is_finite()` also rejects NaN.
+    if !seconds.is_finite() || seconds <= 0.0 || seconds > MAX_SECONDS {
+        return Err(anyhow!(
+            "--seconds must be between 0 and {MAX_SECONDS} (got {seconds})"
+        ));
     }
     let (mut pipeline, rx) = RawCapturePipeline::start(device)
         .map_err(|e| anyhow!("open capture device {device:?}: {e:#}"))?;
-    let events = drain_events_for(&rx, Duration::from_secs_f64(seconds));
-    // Stop the stream + join the pump before we transcribe so the mic is
-    // released promptly and no late frames race the teardown.
+    let mut events = drain_events_for(&rx, Duration::from_secs_f64(seconds));
+    // Stop the stream + join the pump so the mic is released promptly, THEN
+    // drain the tail frames the resampler flush emitted during teardown (they
+    // land on the channel only after `stop` triggers EndOfStream).
     pipeline.stop();
+    events.extend(drain_remaining(&rx));
     frames_to_pcm(&events)
 }
 
@@ -96,9 +133,19 @@ fn capture_pcm_for(device: &str, seconds: f64) -> Result<Vec<f32>> {
 /// events are streamed as JSONL; otherwise the injected transcript (or a
 /// no-text diagnostic) is printed.
 pub fn handle_dictate_mic(device: &str, seconds: f64, json: bool) -> Result<()> {
+    // Start from the shared env-sourced config, then stamp in the live-capture
+    // metadata so `--json` worker events name the Rust backend + selected mic
+    // (an empty `--device` selects the host default input).
+    let mut config = simulate_session_config();
+    config.capture_backend = CAPTURE_BACKEND.to_owned();
+    config.audio_device = if device.is_empty() {
+        "default".to_owned()
+    } else {
+        device.to_owned()
+    };
     // Build the session FIRST so a missing cloud key fails fast, before we
     // open the mic / spend the recording window.
-    let mut session = build_cloud_preview_session()?;
+    let mut session = build_cloud_preview_session(config)?;
     let pcm = capture_pcm_for(device, seconds)?;
 
     let outcome = if json {
@@ -159,12 +206,57 @@ mod tests {
     }
 
     #[test]
-    fn capture_pcm_for_rejects_nonpositive_seconds() {
-        // Guard trips before any device is opened, so this is hermetic.
-        for bad in [0.0, -1.0, f64::NAN] {
+    fn capture_pcm_for_rejects_out_of_range_seconds() {
+        // Guard trips before any device is opened, so this is hermetic. Covers
+        // non-positive, NaN, and — the panic-avoidance cases — infinite and
+        // finite-but-overflowing values that `Duration::from_secs_f64` would
+        // otherwise panic on rather than returning `Err`.
+        for bad in [
+            0.0,
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1e300,
+            MAX_SECONDS + 1.0,
+        ] {
             let err = capture_pcm_for("", bad).unwrap_err().to_string();
-            assert!(err.contains("--seconds"), "got: {err}");
+            assert!(err.contains("--seconds"), "got: {err} for {bad}");
         }
+    }
+
+    #[test]
+    fn drain_remaining_collects_tail_until_disconnect() {
+        // Simulates the resampler-flush tail frames that land on the channel
+        // after `stop`: pre-load them, drop the sender, and confirm the drain
+        // recovers all of them (so trailing audio isn't clipped).
+        let (tx, rx) = std::sync::mpsc::channel::<PipelineEvent>();
+        tx.send(PipelineEvent::Frame(vec![0.1])).unwrap();
+        tx.send(PipelineEvent::Frame(vec![0.2])).unwrap();
+        drop(tx);
+        assert_eq!(
+            drain_remaining(&rx),
+            vec![
+                PipelineEvent::Frame(vec![0.1]),
+                PipelineEvent::Frame(vec![0.2]),
+            ],
+        );
+    }
+
+    #[test]
+    fn drain_remaining_stops_at_device_error() {
+        let (tx, rx) = std::sync::mpsc::channel::<PipelineEvent>();
+        tx.send(PipelineEvent::Frame(vec![0.1])).unwrap();
+        tx.send(PipelineEvent::DeviceError("late boom".to_owned()))
+            .unwrap();
+        tx.send(PipelineEvent::Frame(vec![0.2])).unwrap();
+        assert_eq!(
+            drain_remaining(&rx),
+            vec![
+                PipelineEvent::Frame(vec![0.1]),
+                PipelineEvent::DeviceError("late boom".to_owned()),
+            ],
+        );
     }
 
     #[test]
