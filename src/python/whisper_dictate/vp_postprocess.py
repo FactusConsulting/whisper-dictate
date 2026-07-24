@@ -356,7 +356,15 @@ def _extract_final_text(output: str, source_text: str) -> str:
 
 
 def _rust_postprocess_enabled() -> bool:
-    backend = (get_value("VOICEPI_POSTPROCESS_BACKEND") or "").strip().lower()
+    # Default flipped to Rust (Python-removal roadmap #348): post-processing now
+    # runs through the Rust `postprocess` verb unless the operator explicitly
+    # opts back into the in-process Python path with
+    # VOICEPI_POSTPROCESS_BACKEND=python (or any non-"rust" value). The Rust
+    # helper is resolvable in every real run because the supervisor exports
+    # VOICEPI_RUST_INJECTOR for the worker; on a build/env where it is NOT
+    # resolvable, `_rust_postprocess_text` returns None and the caller falls
+    # back to Python, so the flip is safe by construction.
+    backend = (get_value("VOICEPI_POSTPROCESS_BACKEND") or "rust").strip().lower()
     return backend == "rust"
 
 
@@ -364,10 +372,11 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
     """Shell out to ``whisper-dictate postprocess`` for the full pipeline.
 
     Returns the parsed :class:`PostprocessResult` on success, ``None`` on any
-    failure so the caller falls back to the in-process Python path. Active
-    only when ``VOICEPI_POSTPROCESS_BACKEND=rust`` is set AND the helper is
-    resolvable from ``VOICEPI_RUST_INJECTOR`` — the same opt-in pattern every
-    other Rust shell-out uses (Wave 4-B of #348).
+    failure so the caller falls back to the in-process Python path. Active by
+    default (VOICEPI_POSTPROCESS_BACKEND unset or ``=rust``) as long as the
+    helper is resolvable from ``VOICEPI_RUST_INJECTOR``; set
+    ``VOICEPI_POSTPROCESS_BACKEND=python`` to force the in-process path
+    (Wave 4-B of #348, default flipped to Rust in the Python-removal roadmap).
     """
     if not _rust_postprocess_enabled():
         return None

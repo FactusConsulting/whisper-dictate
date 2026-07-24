@@ -65,22 +65,65 @@ class PostprocessRustBackendTests(unittest.TestCase):
 
     # --- env-var gating ------------------------------------------------------
 
-    def test_unset_env_takes_python_path(self):
+    def test_unset_env_defaults_to_rust_when_helper_present(self):
+        # Default flipped to Rust (#348): with the backend UNSET and the helper
+        # resolvable, post-processing must shell out to the Rust `postprocess`
+        # verb rather than running the in-process Python pipeline.
+        os.environ.pop("VOICEPI_POSTPROCESS_BACKEND", None)
+        os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
         from whisper_dictate import vp_postprocess
 
-        settings = vp_postprocess.PostprocessSettings(
-            processor="ollama",
-            mode="clean",
-            model="qwen2.5:3b",
-            base_url="http://127.0.0.1:1",
-            timeout_ms=100,
+        rust_payload = {
+            "text": "Cleaned text.",
+            "raw_text": "cleaned text",
+            "changed": True,
+            "provider": "openai",
+            "mode": "clean",
+            "model": "gpt-4o-mini",
+            "latency_ms": 7,
+            "fallback": False,
+            "error": "",
+            "redacted": False,
+            "redactions": [],
+        }
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"], 0, stdout=json.dumps(rust_payload), stderr=""
         )
-        # No env var: helper must never be consulted.
-        with mock.patch("whisper_dictate.vp_postprocess.subprocess.run") as run:
-            result = vp_postprocess.postprocess_text("fallback text", settings)
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            model="gpt-4o-mini",
+            base_url="https://api.openai.com/v1",
+            timeout_ms=4000,
+            api_key="test-key",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_postprocess.subprocess.run", return_value=completed
+        ) as run:
+            result = vp_postprocess.postprocess_text("cleaned text", settings)
 
-        run.assert_not_called()
-        self.assertTrue(result.fallback)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][:2], ["whisper-dictate", "postprocess"])
+        self.assertEqual(result.text, "Cleaned text.")
+        self.assertFalse(result.fallback)
+
+    def test_backend_gating_reflects_flipped_default(self):
+        # Pin the flipped default (#348) at the gating boundary directly, so the
+        # semantics are unambiguous regardless of the rest of the pipeline:
+        from whisper_dictate import vp_postprocess
+
+        # Unset → Rust (the flip).
+        os.environ.pop("VOICEPI_POSTPROCESS_BACKEND", None)
+        self.assertTrue(vp_postprocess._rust_postprocess_enabled())
+        # Explicit rust → Rust.
+        os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
+        self.assertTrue(vp_postprocess._rust_postprocess_enabled())
+        # Explicit python (the opt-out) → Python.
+        os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "python"
+        self.assertFalse(vp_postprocess._rust_postprocess_enabled())
+        # Any other / unknown value → Python (safe: unknown never means rust).
+        os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "something-else"
+        self.assertFalse(vp_postprocess._rust_postprocess_enabled())
 
     def test_backend_set_but_no_helper_falls_through(self):
         os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
