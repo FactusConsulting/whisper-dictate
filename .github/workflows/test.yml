@@ -408,6 +408,15 @@ jobs:
             throw "release CLI produced NO stdout for 'self-test audio-capture --json' — console-subsystem regression (see PR #564)"
           }
           Write-Host "audio-capture self-test stdout OK"
+          # `self-test audio-capture` exits non-zero on a headless runner
+          # with no audio device — expected environmental outcome, NOT a
+          # code bug (the console-subsystem check above already passed).
+          # GitHub's `pwsh` shell propagates `$LASTEXITCODE` from the last
+          # native call, so without this explicit reset the step's success
+          # exit code would be shadowed by the audio verb's environmental
+          # exit and fail the check even though both content assertions
+          # passed. Discard it deliberately.
+          exit 0
       - name: Rust CLI smoke
         if: env.RUN_RUST == 'true'
         run: |

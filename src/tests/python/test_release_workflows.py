@@ -507,6 +507,16 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # give a false positive for the class of bug we actually care about.
         self.assertIn("IsNullOrWhiteSpace", workflow)
         self.assertNotIn("$LASTEXITCODE -ne 0 -and", workflow)
+        # The step MUST end with an explicit `exit 0` — GitHub's pwsh shell
+        # propagates $LASTEXITCODE from the last native call, and without
+        # this the audio verb's environmental non-zero exit (no mic on the
+        # CI runner) shadows the step's success and false-fails the check
+        # even after both content assertions pass. Learned the hard way in
+        # the first CI run of this exact guard.
+        smoke_step = workflow.split("Windows release CLI-output smoke", 1)[1].split(
+            "Rust CLI smoke", 1
+        )[0]
+        self.assertIn("exit 0", smoke_step)
 
     def test_release_linux_deps_cover_audio_in_rust_alsa_chain(self):
         # The `audio-in-rust` feature pulls in cpal -> alsa-sys, which needs
