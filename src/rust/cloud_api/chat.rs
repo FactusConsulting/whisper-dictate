@@ -200,16 +200,12 @@ mod tests {
     }
 
     #[test]
-    fn connection_refused_classifies_as_transport() {
-        // Port 1 refuses immediately (not a timeout), so the request never
-        // reached the provider — a transport failure the Python path may retry.
-        let err =
-            openai_chat_completion("http://127.0.0.1:1/v1", "key", "gpt", "x", 1000).unwrap_err();
-        assert!(err.is_transport(), "expected transport error, got: {err}");
-    }
-
-    #[test]
     fn empty_key_and_model_classify_as_terminal() {
+        // A pre-network rejection is deterministic and terminal. (The
+        // transport-vs-terminal classification of live send errors is covered
+        // by robust, network-free unit tests in `cloud_api::http`, since a
+        // refused-port connect behaves differently across platforms — Windows
+        // times out where Linux refuses immediately.)
         let err =
             openai_chat_completion("https://api.openai.com/v1", " ", "gpt", "x", 1000).unwrap_err();
         assert!(!err.is_transport());

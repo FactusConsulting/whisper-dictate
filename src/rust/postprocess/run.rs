@@ -444,9 +444,14 @@ mod tests {
         assert!(result.fallback);
         assert!(!result.error.is_empty());
         assert_eq!(result.provider, "ollama");
-        // A refused connection never reached the provider, so it is a
-        // transport fallback the Python path may safely retry.
-        assert_eq!(result.fallback_kind, "transport");
+        // The fallback_kind here depends on whether the unreachable port
+        // refuses (Linux → "transport") or times out (Windows → "terminal"),
+        // so it is asserted only via the network-free unit tests in
+        // `cloud_api::http`; both are valid classifications of a real failure.
+        assert!(matches!(
+            result.fallback_kind.as_str(),
+            "transport" | "terminal"
+        ));
     }
 
     #[test]

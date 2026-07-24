@@ -194,4 +194,36 @@ mod tests {
         assert_eq!(parse_timeout_ms("50", 1234), 1234);
         assert_eq!(parse_timeout_ms("  300  ", 1234), 300);
     }
+
+    #[test]
+    fn timeout_is_terminal_not_transport() {
+        // A global (or any) timeout can fire after the provider received the
+        // request, so it must NOT be a Python retry candidate — matching only
+        // the always-present `Timeout` variant is what keeps the rule robust.
+        assert!(!is_transport_error(&ureq::Error::Timeout(
+            ureq::Timeout::Global
+        )));
+        assert!(!is_transport_error(&ureq::Error::Timeout(
+            ureq::Timeout::Connect
+        )));
+    }
+
+    #[test]
+    fn connect_and_dns_failures_are_transport() {
+        // The request never reached the provider — safe for the Python path to
+        // retry against the OS trust store / registry proxy.
+        assert!(is_transport_error(&ureq::Error::HostNotFound));
+        assert!(is_transport_error(&ureq::Error::ConnectionFailed));
+    }
+
+    #[test]
+    fn from_send_classifies_and_prefixes_context() {
+        let timeout = CloudCallError::from_send("ctx", ureq::Error::Timeout(ureq::Timeout::Global));
+        assert!(!timeout.is_transport());
+        assert!(timeout.message().starts_with("ctx: "));
+
+        let connect = CloudCallError::from_send("ctx", ureq::Error::ConnectionFailed);
+        assert!(connect.is_transport());
+        assert!(connect.message().starts_with("ctx: "));
+    }
 }
