@@ -305,6 +305,14 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         # Rust controller headless smoke: a non-UI entrypoint, exit-code checked.
         self.assertIn("whisper-dictate.exe --version", workflow)
 
+        # GUI-binary launch smoke (Codex PR #564 P2 #1): actually launch
+        # whisper-dictate-gui.exe post-install and assert it doesn't crash
+        # during startup / renderer init. The prior gate only asserted the
+        # file EXISTED, which meant a broken ui::run() could ship unnoticed.
+        self.assertIn("GUI binary launch smoke (whisper-dictate-gui.exe)", workflow)
+        self.assertIn("whisper-dictate-gui.exe", workflow)
+        self.assertIn("startup regression", workflow)
+
         # Worker no-model audio query modes, minimal deps only (no heavy ML).
         self.assertIn("--test-audio-device", workflow)
         self.assertIn("--list-audio-devices", workflow)

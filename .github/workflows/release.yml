@@ -624,6 +624,59 @@ jobs:
           if ($p2.ExitCode -ne 0) { throw "whisper-dictate.exe config path exited $($p2.ExitCode)" }
           Write-Host "  ok  config path exit 0"
 
+      - name: GUI binary launch smoke (whisper-dictate-gui.exe)
+        # Codex PR #564 P2: install-smoke used to only check that the GUI
+        # binary EXISTED after install — it never launched it. That meant the
+        # installer could pass while the tray shortcut pointed at a binary
+        # that crashed inside `ui::run()` on first frame. Actually launch the
+        # binary here so a startup crash / renderer-init regression /
+        # missing-runtime-DLL failure trips the gate before the release
+        # publishes. windows-2025 runners have a real desktop session, so
+        # eframe can open a window; we give it 10 s to reach the run loop,
+        # then kill it. Any earlier non-zero exit fails the probe.
+        if: steps.download.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:APP_ROOT 'whisper-dictate-gui.exe'
+          if (-not (Test-Path $exe)) { throw "GUI binary missing at $exe" }
+          $errLog = "gui-smoke.err"
+          $outLog = "gui-smoke.out"
+          Write-Host "Launching $exe (no args) for ~10 s..."
+          $p = Start-Process -FilePath $exe `
+                 -RedirectStandardError $errLog -RedirectStandardOutput $outLog `
+                 -PassThru -WindowStyle Hidden
+          $procId = $p.Id
+          $survived = $false
+          for ($i = 1; $i -le 10; $i++) {
+            Start-Sleep -Seconds 1
+            if ($p.HasExited) {
+              Write-Host "GUI binary exited early after ${i}s with code $($p.ExitCode)"
+              break
+            }
+            if ($i -eq 10) {
+              Write-Host "GUI binary still running after 10 s — startup OK; killing."
+              $survived = $true
+              Stop-Process -Id $procId -Force
+              $p.WaitForExit(5000) | Out-Null
+            }
+          }
+          Write-Host "===== gui-smoke stderr ====="
+          if (Test-Path $errLog) { Get-Content $errLog } else { Write-Host "(no stderr)" }
+          Write-Host "===== gui-smoke stdout ====="
+          if (Test-Path $outLog) { Get-Content $outLog } else { Write-Host "(no stdout)" }
+          Write-Host "============================"
+          if ($survived) {
+            Write-Host "  ok  whisper-dictate-gui.exe survived startup"
+          } elseif ($p.ExitCode -eq 0) {
+            # A clean self-exit inside 10 s is unexpected for a tray app but
+            # NOT a crash. Log it as INFO — future work: an explicit
+            # --render-once flag would let us assert positive lifecycle here.
+            Write-Host "INFO: whisper-dictate-gui.exe exited cleanly (code 0) within 10 s"
+          } else {
+            throw "whisper-dictate-gui.exe exited early with code $($p.ExitCode) — startup regression"
+          }
+
       - uses: actions/setup-python@v7
         if: steps.download.outputs.found == 'true'
         with:
