@@ -521,16 +521,41 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # them to the wrong bytes and turn the guard into a no-op.
         self.assertIn("0x3C", workflow)  # e_lfanew in DOS header
         self.assertIn("0x5C", workflow)  # Subsystem offset from PE signature
-        # The step MUST end with an explicit `exit 0` — GitHub's pwsh shell
-        # propagates $LASTEXITCODE from the last native call, and without
-        # this the audio verb's environmental non-zero exit (no mic on the
-        # CI runner) shadows the step's success and false-fails the check
-        # even after both content assertions pass. Learned the hard way in
-        # the first CI run of this exact guard.
+        # The audio JSON envelope check must PARSE the JSON and assert the
+        # stable `kind` field (Codex #565 P2) — a bare `IsNullOrWhiteSpace`
+        # on the raw stdout passes for truncated JSON or a stray diagnostic
+        # line, masking real envelope regressions.
+        self.assertIn("ConvertFrom-Json", workflow)
+        self.assertIn("audio_capture_self_test", workflow)
+        # The step MUST end with an executable `exit 0` — GitHub's pwsh
+        # shell propagates $LASTEXITCODE from the last native call, and
+        # without this the audio verb's environmental non-zero exit (no mic
+        # on the CI runner) shadows the step's success and false-fails the
+        # check even after both content assertions pass. Learned the hard
+        # way in the first CI run of this exact guard.
+        #
+        # Strip PowerShell comment lines before asserting so a regression
+        # that removes the executable `exit 0` (leaving only its narrative
+        # comment) actually trips this test — Codex #565 P2 caught the
+        # original `assertIn("exit 0", smoke_step)` shape false-passing
+        # against comment prose that also said "exit 0".
         smoke_step = workflow.split("Windows release CLI-output smoke", 1)[1].split(
             "Rust CLI smoke", 1
         )[0]
-        self.assertIn("exit 0", smoke_step)
+        smoke_code_lines = [
+            line for line in smoke_step.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        smoke_code = "\n".join(smoke_code_lines)
+        # An executable `exit 0` line has no preceding `#`; the split above
+        # already dropped every `# …` comment line entirely.
+        self.assertRegex(
+            smoke_code,
+            r"(?m)^\s*exit 0\s*$",
+            msg="Windows release CLI-output smoke MUST end with an executable"
+            " `exit 0` line (not just a comment mentioning it) so the audio"
+            " verb's environmental non-zero exit does not shadow the step",
+        )
 
     def test_release_linux_deps_cover_audio_in_rust_alsa_chain(self):
         # The `audio-in-rust` feature pulls in cpal -> alsa-sys, which needs

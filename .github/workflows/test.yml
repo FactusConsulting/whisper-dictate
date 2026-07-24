@@ -436,7 +436,21 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($st)) {
             throw "release CLI produced NO stdout for 'self-test audio-capture --json' — audio verb dispatch is broken"
           }
-          Write-Host "audio-capture self-test stdout OK"
+          # Assert the STABLE `kind` field on the JSON envelope, not just
+          # non-empty output — a truncated JSON or a stray diagnostic line
+          # would pass a bare IsNullOrWhiteSpace check and mask a real
+          # output regression (Codex #565 P2). `kind` is present regardless
+          # of whether the capture itself succeeded, so this survives the
+          # headless "no mic" runner exit-non-zero case too.
+          try {
+            $doc = $st | ConvertFrom-Json -ErrorAction Stop
+          } catch {
+            throw "release CLI 'self-test audio-capture --json' emitted non-JSON stdout — audio verb JSON envelope regression: $_ / raw stdout: $st"
+          }
+          if ($doc.kind -ne 'audio_capture_self_test') {
+            throw "release CLI 'self-test audio-capture --json' returned kind='$($doc.kind)' (expected 'audio_capture_self_test') — envelope contract regression"
+          }
+          Write-Host "audio-capture self-test JSON envelope OK (kind=audio_capture_self_test, succeeded=$($doc.succeeded))"
 
           # Discard the audio verb's environmental non-zero exit (no mic on
           # the runner) — the real outcome is what we asserted above.
