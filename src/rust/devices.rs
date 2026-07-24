@@ -410,10 +410,7 @@ struct FindResponse {
 ///   (documented shorthand for the Python shell-out).
 /// * `stdin_is_tty = false` + non-empty body → parse as JSON, propagate the
 ///   parse error.
-pub(crate) fn resolve_devices_request(
-    stdin_is_tty: bool,
-    stdin_body: Option<&str>,
-) -> Result<DevicesRequest> {
+fn resolve_devices_request(stdin_is_tty: bool, stdin_body: Option<&str>) -> Result<DevicesRequest> {
     if stdin_is_tty {
         return Ok(DevicesRequest::List);
     }
