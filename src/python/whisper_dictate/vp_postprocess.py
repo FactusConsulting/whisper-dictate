@@ -400,10 +400,20 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
             "local_only": _local_only_enabled(),
         },
     }
-    # The Rust pipeline applies the same length-scaled timeout the Python path
-    # does, so give the child enough wall-clock budget to surface its own
-    # timeout error instead of the Python subprocess killing it first.
-    helper_timeout = max(2.0, effective_timeout_ms(settings.timeout_ms, len(text)) / 1000.0 + 5.0)
+    # Size the subprocess budget so the parent never kills a still-working
+    # child mid-request (which would waste the provider call and double-charge
+    # on the Python retry below). Normally the child's HTTP timeout is
+    # length-scaled from the input, so we mirror that. But when cloud redaction
+    # is enabled the child sizes its timeout from the redaction-EXPANDED prompt
+    # (each short term becomes a `[[WD_TERM_n]]` placeholder), which can be much
+    # longer than `text` and can push the child up to CEILING_MS; a budget
+    # derived from `len(text)` alone could then kill it early. Cover the child's
+    # worst case in that case.
+    if settings.redact:
+        budget_ms = max(int(settings.timeout_ms), CEILING_MS)
+    else:
+        budget_ms = effective_timeout_ms(settings.timeout_ms, len(text))
+    helper_timeout = max(2.0, budget_ms / 1000.0 + 5.0)
     try:
         result = subprocess.run(
             [helper, "postprocess"],
@@ -430,6 +440,19 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
         print(f"[rust:postprocess] invalid JSON: {exc}", file=sys.stderr, flush=True)
         return None
     if not isinstance(obj, dict):
+        return None
+    # The Rust helper returns a graceful ``fallback=true`` envelope (exit 0)
+    # when it could NOT clean the text — a TLS handshake failure (e.g. an
+    # enterprise/private-CA endpoint), a provider/HTTP error, or a timeout.
+    # Treat that exactly like a hard failure: return None so the caller runs the
+    # in-process Python pipeline, which may succeed where Rust degraded (Python
+    # validates TLS through the platform trust store and honours sub-second
+    # timeouts). Without this the default flip would silently ship raw text for
+    # those cases instead of falling back to the working Python path.
+    if bool(obj.get("fallback", False)):
+        err = str(obj.get("error", "") or "").strip()
+        if err:
+            print(f"[rust:postprocess] rust fell back ({err})", file=sys.stderr, flush=True)
         return None
     return PostprocessResult(
         text=str(obj.get("text", text)),

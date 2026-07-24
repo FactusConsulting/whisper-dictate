@@ -7,6 +7,41 @@
 pub(crate) const USER_AGENT: &str =
     "whisper-dictate/0.3 (+https://github.com/FactusConsulting/whisper-dictate)";
 
+/// A shared ureq [`ureq::Agent`] whose TLS validates certificates against the
+/// **operating-system trust store** (`rustls-platform-verifier`, via ureq's
+/// `platform-verifier` feature) rather than ureq's bundled `webpki-roots`.
+///
+/// Every cloud call (transcribe / chat / check / postprocess) routes through
+/// this agent. The reason is behavioural parity with the Python path being
+/// retired: Python's `urllib` validates TLS through the platform store, so a
+/// cloud endpoint served behind a private/enterprise CA that is trusted only
+/// via the OS store succeeds under Python. A Rust client on bundled roots
+/// would fail that TLS handshake and silently degrade (e.g. post-processing
+/// falling back to raw text). Using the platform verifier keeps enterprise-CA
+/// setups working when the Rust backends become the default.
+///
+/// The agent is built once and cloned (cheap — `Agent` is `Arc`-backed) so the
+/// platform-verifier setup cost is paid a single time per process. Per-request
+/// knobs (timeout, `http_status_as_error`) are still applied on the individual
+/// request builder; only the root-cert source is agent-scoped here.
+pub(crate) fn platform_tls_agent() -> ureq::Agent {
+    use std::sync::OnceLock;
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            use ureq::tls::{RootCerts, TlsConfig};
+            ureq::Agent::config_builder()
+                .tls_config(
+                    TlsConfig::builder()
+                        .root_certs(RootCerts::PlatformVerifier)
+                        .build(),
+                )
+                .build()
+                .into()
+        })
+        .clone()
+}
+
 /// Turn a non-2xx response into a descriptive error string, mirroring the
 /// previous `ureq::Error::Status` handling. Requests are issued with
 /// `http_status_as_error(false)`, so 4xx/5xx responses arrive here as `Ok`

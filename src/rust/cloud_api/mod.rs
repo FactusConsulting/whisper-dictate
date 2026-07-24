@@ -9,7 +9,7 @@
 
 mod chat;
 mod check;
-mod http;
+pub(crate) mod http;
 mod transcribe;
 
 pub use chat::{

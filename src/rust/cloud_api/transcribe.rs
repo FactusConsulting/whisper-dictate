@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cloud_api::http::{check_status, http_error, USER_AGENT};
+use crate::cloud_api::http::{check_status, http_error, platform_tls_agent, USER_AGENT};
 
 pub const GROQ_TRANSCRIPTION_PROMPT_LIMIT: usize = 896;
 
@@ -68,7 +68,8 @@ pub fn cloud_transcribe(
     }
     let (body, boundary) = multipart_audio_body(&fields, audio_wav);
     let url = format!("{base_url}/audio/transcriptions");
-    let mut response = ureq::post(&url)
+    let mut response = platform_tls_agent()
+        .post(&url)
         .header("Authorization", &format!("Bearer {api_key}"))
         .header(
             "Content-Type",

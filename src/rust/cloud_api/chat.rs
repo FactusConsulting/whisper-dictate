@@ -14,7 +14,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cloud_api::http::{check_status, http_error, USER_AGENT};
+use crate::cloud_api::http::{check_status, http_error, platform_tls_agent, USER_AGENT};
 use crate::cloud_api::transcribe::{cap_transcription_prompt, GROQ_TRANSCRIPTION_PROMPT_LIMIT};
 
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -118,7 +118,8 @@ pub fn openai_chat_completion(
         "temperature": 0,
     });
     let started = Instant::now();
-    let mut response = ureq::post(&url)
+    let mut response = platform_tls_agent()
+        .post(&url)
         .header("Authorization", &format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .header("User-Agent", USER_AGENT)

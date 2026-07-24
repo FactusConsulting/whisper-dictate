@@ -193,6 +193,48 @@ class PostprocessRustBackendTests(unittest.TestCase):
         self.assertEqual(result.latency_ms, 42)
         self.assertEqual(result.provider, "openai")
 
+    def test_rust_fallback_envelope_falls_through_to_python(self):
+        # A `fallback=true` envelope (exit 0) means the Rust helper COULD NOT
+        # clean the text — a TLS failure, provider error, or timeout. The
+        # shell-out must return None so the caller runs the in-process Python
+        # pipeline (which may succeed where Rust degraded), NOT accept the Rust
+        # raw-text envelope. Without this, the default flip would silently ship
+        # unprocessed text for e.g. enterprise-CA endpoints.
+        os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
+        from whisper_dictate import vp_postprocess
+
+        rust_payload = {
+            "text": "RUST-DEGRADED-OUTPUT",
+            "raw_text": "input text",
+            "changed": False,
+            "provider": "openai",
+            "mode": "clean",
+            "model": "gpt-4o-mini",
+            "latency_ms": 3,
+            "fallback": True,
+            "error": "tls handshake failed",
+            "redacted": False,
+            "redactions": [],
+        }
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"], 0, stdout=json.dumps(rust_payload), stderr=""
+        )
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            model="gpt-4o-mini",
+            base_url="https://api.openai.com/v1",
+            timeout_ms=4000,
+            api_key="test-key",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_postprocess.subprocess.run", return_value=completed
+        ):
+            result = vp_postprocess._rust_postprocess_text("input text", settings)
+
+        self.assertIsNone(result)
+
     def test_rust_helper_non_zero_exit_falls_back_to_python(self):
         os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
         os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"

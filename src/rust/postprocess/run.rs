@@ -10,6 +10,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::cloud_api::http::platform_tls_agent;
 use crate::cloud_api::openai_chat_completion;
 use crate::postprocess::prompt::{build_prompt, extract_final_text, normalize_mode};
 use crate::postprocess::settings::{validate, PostprocessSettings};
@@ -220,7 +221,8 @@ fn ollama_generate(settings: &PostprocessSettings, text: &str, mode: &str) -> Re
         },
     });
     let timeout = effective_timeout_ms(settings.timeout_ms, text.chars().count() as i64);
-    let mut response = ureq::post(&url)
+    let mut response = platform_tls_agent()
+        .post(&url)
         .header("Content-Type", "application/json")
         .header(
             "User-Agent",
