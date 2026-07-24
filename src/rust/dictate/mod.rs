@@ -75,6 +75,12 @@ pub mod session;
 // testing of the Rust engine (the `simulate-session` verb). Stock: cloud
 // backend + preview inject, no feature gate.
 pub mod simulate;
+// Live-microphone drive of a `DictateSession` (the `dictate-mic` verb): the
+// fully-Rust, no-Python counterpart of `simulate`. Gated on `audio-capture`
+// because it opens the cpal capture pipeline; the stock-build stub lives in
+// `main.rs`.
+#[cfg(feature = "audio-capture")]
+pub mod mic;
 pub mod skip;
 
 pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelError};

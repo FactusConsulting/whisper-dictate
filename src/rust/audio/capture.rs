@@ -174,20 +174,40 @@ pub(crate) enum DeviceLookup {
 /// [`DeviceLookup::IndexOutOfRange`] when a parseable index is past the
 /// end of the list, and [`DeviceLookup::NotFound`] otherwise.
 pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> DeviceLookup {
-    let needle = selector.to_lowercase();
-    let mut substring_match: Option<usize> = None;
+    let needle = selector.trim().to_lowercase();
+    // 1. Exact case-insensitive match wins.
     for (idx, name) in device_names.iter().enumerate() {
-        let lower = name.to_lowercase();
-        if lower == needle {
+        if name.to_lowercase() == needle {
             return DeviceLookup::Matched(idx);
         }
-        if substring_match.is_none() && lower.contains(&needle) {
-            substring_match = Some(idx);
+    }
+    // 2. Bidirectional substring match, keeping the LONGEST device name — the
+    //    same precedence as `crate::devices::find_in` (and Python's
+    //    `vp_devices._best_match`), so a truncated / generic `--device` value
+    //    (e.g. a Windows MME-truncated endpoint name, or a bare "Microphone")
+    //    binds to its fullest sibling rather than to whichever shorter match
+    //    happens to enumerate first. Either side may be the prefix. An empty
+    //    needle never reaches here in production (`pick_device` maps "" to the
+    //    default device first); guard it so it can't spuriously match every
+    //    device via the empty-substring rule.
+    if !needle.is_empty() {
+        let mut best: Option<usize> = None;
+        for (idx, name) in device_names.iter().enumerate() {
+            let lower = name.to_lowercase();
+            if lower.is_empty() || !(lower.contains(&needle) || needle.contains(&lower)) {
+                continue;
+            }
+            match best {
+                None => best = Some(idx),
+                Some(prev) if name.len() > device_names[prev].len() => best = Some(idx),
+                _ => {}
+            }
+        }
+        if let Some(idx) = best {
+            return DeviceLookup::Matched(idx);
         }
     }
-    if let Some(idx) = substring_match {
-        return DeviceLookup::Matched(idx);
-    }
+    // 3. Numeric index fallback (capture-specific; `devices::find_in` has none).
     if let Ok(idx) = selector.trim().parse::<usize>() {
         if idx < device_names.len() {
             return DeviceLookup::Matched(idx);
@@ -398,6 +418,27 @@ mod tests {
         let devs = names(&["Realtek HD Audio Mic", "Webcam Mic"]);
         assert_eq!(
             resolve_device_index(&devs, "webcam"),
+            DeviceLookup::Matched(1)
+        );
+    }
+
+    #[test]
+    fn resolve_device_index_prefers_longest_bidirectional_substring() {
+        // Two generic endpoints both substring-match "usb mic"; the resolver
+        // must bind to the LONGEST name (index 1), not the first enumeration
+        // hit — matching `devices::find_in` and the Python `_best_match`.
+        let devs = names(&["USB Mic (Front)", "USB Mic (Rear Panel Connector)"]);
+        assert_eq!(
+            resolve_device_index(&devs, "usb mic"),
+            DeviceLookup::Matched(1)
+        );
+        // Truncated saved value (Windows MME caps names at 31 chars): the
+        // selector is a prefix of the fuller device name AND a superstring of
+        // the bare "Microphone" — the bidirectional match must still bind to
+        // the fullest sibling (index 1), not the shorter generic one.
+        let devs = names(&["Microphone", "Microphone (High Definition Audio)"]);
+        assert_eq!(
+            resolve_device_index(&devs, "Microphone (High Definition"),
             DeviceLookup::Matched(1)
         );
     }

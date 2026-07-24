@@ -64,8 +64,10 @@ const DRIVE_FRAME: usize = 1_600;
 
 /// Build the [`SessionConfig`] for the simulate drive from the process env.
 /// Only the format-command set is env-sourced here; the min-record floor
-/// keeps its default (the fixtures are comfortably above it).
-fn simulate_session_config() -> SessionConfig {
+/// keeps its default (the fixtures are comfortably above it). `pub(crate)` so
+/// the `dictate-mic` verb can start from the same env-sourced base and then
+/// stamp in its live-capture metadata (`capture_backend` / `audio_device`).
+pub(crate) fn simulate_session_config() -> SessionConfig {
     let format_command_set = std::env::var(FORMAT_COMMANDS_ENV)
         .ok()
         .map(|v| v.trim().to_owned())
@@ -160,30 +162,43 @@ where
     Ok(outcomes)
 }
 
-pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Result<()> {
-    // Dictionary support, mirroring the Python worker + the in-process session,
-    // both halves LIVE-reloaded per utterance (Python's `_dictionary_runtime` /
-    // `_dictionary_prompt_runtime`): the term-based prompt biasing is re-folded
-    // into the cloud STT prompt by the backend, and the replacement table is
-    // re-read by the session. This verb is env-driven (every setting comes from
-    // the `VOICEPI_*` env the worker exports), so both use `EnvFirst`.
-    //
-    // The cloud config's `prompt` stays the raw base (`VOICEPI_INITIAL_PROMPT`);
-    // `with_reloading_prompt` re-folds the dictionary terms into it each call.
+/// Build the cloud-backed, preview-inject [`DictateSession`] the offline
+/// `simulate-session` and the live-mic `dictate-mic` verbs drive: cloud STT
+/// with an `EnvFirst` reloading prompt, a capture-only inject backend (nothing
+/// reaches the OS), the env-sourced session config, the reloading replacement
+/// dictionary, and the env post-process chain. Shared so both verbs build a
+/// byte-identical session and differ ONLY in the audio source (WAV vs mic).
+///
+/// The cloud config's `prompt` stays the raw base (`VOICEPI_INITIAL_PROMPT`);
+/// `with_reloading_prompt` re-folds the dictionary terms into it each call.
+/// Both dictionary halves live-reload per utterance (`EnvFirst`), mirroring the
+/// Python worker (`_dictionary_runtime` / `_dictionary_prompt_runtime`).
+///
+/// `config` is passed in so each verb can carry the metadata that identifies
+/// its audio source: `simulate-session` passes [`simulate_session_config`]
+/// (WAV, no live device), while `dictate-mic` sets `capture_backend` /
+/// `audio_device` so its worker events name the Rust capture backend + mic.
+pub(crate) fn build_cloud_preview_session(
+    config: SessionConfig,
+) -> Result<DictateSession<crate::dictate::CloudTranscribeBackend, CaptureInject>> {
     let cloud_config = CloudTranscribeConfig::from_env();
     let transcribe =
         resolve_cloud_transcribe(cloud_config, crate::whisper::model_manager::is_local_only())?
             .with_reloading_prompt(crate::dictionary::ReloadPrecedence::EnvFirst);
-
-    let pcm = decode_wav_16k_mono(Path::new(wav_path))
-        .map_err(|e| anyhow!("decode {wav_path}: {e:#}"))?;
-
     let inject = CaptureInject::default();
-    let mut session = DictateSession::new(transcribe, inject, simulate_session_config())
+    let mut session = DictateSession::new(transcribe, inject, config)
         .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
     if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
         session = session.with_post_process(Box::new(post));
     }
+    Ok(session)
+}
+
+pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Result<()> {
+    let mut session = build_cloud_preview_session(simulate_session_config())?;
+
+    let pcm = decode_wav_16k_mono(Path::new(wav_path))
+        .map_err(|e| anyhow!("decode {wav_path}: {e:#}"))?;
 
     let outcomes = if json {
         // The session gates its worker-event lines behind VOICEPI_WORKER_EVENTS
@@ -231,7 +246,7 @@ pub fn handle_simulate_session(wav_path: &str, json: bool, repeat: u32) -> Resul
 /// [`crate::dictate::events::WORKER_EVENT_PREFIX`]) and skip blank lines, so
 /// `--json` output is one valid JSON object per line. Lines without the
 /// prefix pass through unchanged.
-fn to_clean_jsonl(raw: &str) -> String {
+pub(crate) fn to_clean_jsonl(raw: &str) -> String {
     raw.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
