@@ -311,7 +311,12 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         # file EXISTED, which meant a broken ui::run() could ship unnoticed.
         self.assertIn("GUI binary launch smoke (whisper-dictate-gui.exe)", workflow)
         self.assertIn("whisper-dictate-gui.exe", workflow)
-        self.assertIn("startup regression", workflow)
+        # Any early exit (crash OR clean exit inside the 10 s window) fails
+        # the probe — the tray is expected to stay alive. Guard the error
+        # message text so a regression that re-adds the "clean exit is OK"
+        # branch trips here too.
+        self.assertIn("lifecycle regression", workflow)
+        self.assertIn("tray must stay alive", workflow)
 
         # Worker no-model audio query modes, minimal deps only (no heavy ML).
         self.assertIn("--test-audio-device", workflow)
