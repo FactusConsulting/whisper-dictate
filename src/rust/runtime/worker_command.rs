@@ -109,7 +109,10 @@ pub fn worker_command_with_args(
     // binary would silently launch a second tray window instead of running
     // the intended verb. `cli_exe_path()` resolves the sibling CLI binary
     // when we are running as the GUI, and is a no-op otherwise.
-    env.push((RUST_INJECTOR_ENV.to_owned(), cli_exe_path().display().to_string()));
+    env.push((
+        RUST_INJECTOR_ENV.to_owned(),
+        cli_exe_path().display().to_string(),
+    ));
     // NB: the Rust-hotkey "park Python listener" flag (VOICEPI_PYTHON_HOTKEY=0)
     // used to be added here automatically based on env-var + feature gates,
     // but that's unsound — the gates only say what the user *requested*,

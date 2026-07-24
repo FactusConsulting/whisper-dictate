@@ -898,9 +898,7 @@ fn cli_exe_from_gui_binary_resolves_windows_sibling() {
     let cli = cli_exe_from(&gui);
     assert_eq!(
         cli,
-        PathBuf::from(
-            r"C:\Users\lars\AppData\Local\Programs\WhisperDictate\whisper-dictate.exe",
-        ),
+        PathBuf::from(r"C:\Users\lars\AppData\Local\Programs\WhisperDictate\whisper-dictate.exe",),
     );
 }
 
