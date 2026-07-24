@@ -119,6 +119,32 @@ pub enum Command {
         #[arg(long, default_value_t = 1)]
         repeat: u32,
     },
+    /// Capture live microphone audio through the Rust audio pipeline and drive
+    /// the in-process Rust `DictateSession` over it — the fully-Rust,
+    /// no-Python live-capture counterpart of `simulate-session` (which reads a
+    /// WAV). Records for `--seconds`, resamples via the VAD-free capture pump
+    /// (`audio::raw`), transcribes over the cloud STT backend (Groq/OpenAI),
+    /// and previews the injected text (nothing is typed into the OS).
+    ///
+    /// Feature-gated behind `audio-capture` (cpal + rubato). On a stock build
+    /// the CLI surface still parses but the handler exits non-zero with an
+    /// actionable "rebuild with --features audio-capture" message. Hidden
+    /// because it needs a cloud key + a real mic and is primarily a diagnostic
+    /// tool for the Rust capture path.
+    #[command(hide = true)]
+    DictateMic {
+        /// Input device name (exact or longest-substring match, same
+        /// precedence as `devices`). Empty selects the host default input.
+        #[arg(long, default_value = "")]
+        device: String,
+        /// How long to record before transcribing, in seconds.
+        #[arg(long, default_value_t = 3.0)]
+        seconds: f64,
+        /// Stream the session's worker events as JSON (one object per line)
+        /// instead of printing the final transcript.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Install or repair local runtime dependencies.
     Install,
     /// Run the Ubuntu Wayland desktop setup helper.

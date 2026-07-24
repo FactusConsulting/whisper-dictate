@@ -39,6 +39,11 @@ fn run() -> anyhow::Result<()> {
         Command::SimulateSession { wav, json, repeat } => {
             dictate::simulate::handle_simulate_session(&wav, json, repeat)
         }
+        Command::DictateMic {
+            device,
+            seconds,
+            json,
+        } => handle_dictate_mic(&device, seconds, json),
         Command::Install => runtime::install(),
         Command::SetupUbuntu => runtime::setup_ubuntu(),
         Command::ModelCapacity { json } => model_capacity::handle_command(json),
@@ -284,6 +289,24 @@ fn handle_audio_capture_self_test(
             "self-test audio-capture failed (see report above for the specific error)"
         ))
     }
+}
+
+/// Feature-on path for `dictate-mic` — captures live mic audio through the
+/// Rust VAD-free pipeline and drives the in-process `DictateSession`.
+#[cfg(feature = "audio-capture")]
+fn handle_dictate_mic(device: &str, seconds: f64, json: bool) -> anyhow::Result<()> {
+    whisper_dictate_app::dictate::mic::handle_dictate_mic(device, seconds, json)
+}
+
+/// Stock-build stub: `dictate-mic` needs the cpal capture pipeline, which is
+/// only compiled under `audio-capture`. Emit the same actionable rebuild
+/// message shape as the sibling audio verbs and exit non-zero.
+#[cfg(not(feature = "audio-capture"))]
+fn handle_dictate_mic(_device: &str, _seconds: f64, _json: bool) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "dictate-mic requires the `audio-capture` cargo feature — \
+         rebuild with `cargo build --features audio-capture`"
+    ))
 }
 
 /// Stock-build stub: the audio module isn't compiled in without the
