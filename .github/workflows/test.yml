@@ -367,8 +367,47 @@ jobs:
         # release pipeline (which builds `--features ...,whisper-rs-local`)
         # would be the first place a whisper-rs API break surfaces, and
         # that's too late.
+        #
+        # `audio-capture` is included alongside so the release binary
+        # produced here carries the `self-test audio-capture` / `dictate-mic`
+        # verbs the next step's smoke asserts on. Same release-profile
+        # target-dir, so no extra compile — the feature just brings in
+        # cpal + rubato to the same artifact.
         if: env.RUN_RUST == 'true'
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local --release
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local,audio-capture --release
+      - name: Windows release CLI-output smoke
+        # Regression guard for the `windows_subsystem = "windows"` bug class
+        # (PR #564): a GUI-subsystem release binary has no console attached,
+        # so every CLI verb silently discarded its stdout when run from
+        # PowerShell. Debug builds hide this — the attribute is gated on
+        # `not(debug_assertions)` — so only a RELEASE binary with a
+        # stdout-content assertion catches it. Reuses the release exe built
+        # by the step above (no extra compile). Windows-only because the
+        # bug is a Windows subsystem attribute.
+        #
+        # Both checks assert on captured STDOUT CONTENT, not exit code:
+        #   * `config path` is a headless-safe verb (exits 0, prints a path).
+        #   * `self-test audio-capture` may exit non-zero on a headless
+        #     runner with no audio device, but the JSON envelope is still
+        #     printed BEFORE the failure decision — so a "no stdout" result
+        #     is uniquely the console-subsystem regression.
+        # PowerShell's `& $exe` does not throw on a native non-zero exit;
+        # we deliberately do NOT read $LASTEXITCODE so the audio verb's
+        # environmental exit code is not mistaken for a code bug.
+        if: env.RUN_RUST == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "target/release/whisper-dictate.exe"
+          $out = & $exe config path
+          if ([string]::IsNullOrWhiteSpace($out)) {
+            throw "release CLI produced NO stdout for 'config path' — console-subsystem regression (see PR #564)"
+          }
+          Write-Host "release CLI stdout OK: $out"
+          $st = & $exe self-test audio-capture --json --duration-ms 200
+          if ([string]::IsNullOrWhiteSpace($st)) {
+            throw "release CLI produced NO stdout for 'self-test audio-capture --json' — console-subsystem regression (see PR #564)"
+          }
+          Write-Host "audio-capture self-test stdout OK"
       - name: Rust CLI smoke
         if: env.RUN_RUST == 'true'
         run: |

@@ -467,11 +467,46 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "Rust build (whisper-rs-local feature)", workflow,
             "test.yml rust matrix must include a whisper-rs-local smoke step",
         )
-        self.assertIn(
-            "--features whisper-rs-local --release", workflow,
-            "whisper-rs-local smoke must build the release profile so it"
-            " exercises the same code path the shipping installer takes",
+        # The release-profile smoke must include BOTH the whisper-rs-local
+        # feature (link surface) AND audio-capture (so the release binary
+        # carries the CLI verbs the Windows CLI-output smoke asserts on).
+        # Order-agnostic: cargo accepts features in either order.
+        self.assertRegex(
+            workflow,
+            r"--features whisper-rs-local,audio-capture --release"
+            r"|--features audio-capture,whisper-rs-local --release",
+            msg="whisper-rs-local smoke must build the release profile with"
+            " audio-capture too so the Windows CLI-output smoke has the audio"
+            " verbs available",
         )
+
+    def test_test_workflow_asserts_release_cli_prints_on_windows(self):
+        # Regression guard for the `windows_subsystem = "windows"` bug class
+        # (PR #564): a release binary compiled with the GUI subsystem attribute
+        # printed NOTHING for any CLI verb when run from PowerShell, because
+        # no console was attached. Debug builds hide this — the attribute is
+        # gated on `not(debug_assertions)` — so the guard MUST be on a
+        # release build with a stdout-content assertion. Pin the step so it
+        # cannot silently regress or lose its content check.
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        self.assertIn("Windows release CLI-output smoke", workflow)
+        self.assertIn("runner.os == 'Windows'", workflow)
+        self.assertIn("target/release/whisper-dictate.exe", workflow)
+        # Both content-asserting verbs must be exercised — a stub that only
+        # ran the exe with `--version` would pass even for a GUI-subsystem
+        # binary if the release-code path went through a different init.
+        self.assertIn("config path", workflow)
+        self.assertIn("self-test audio-capture --json", workflow)
+        # The failure message must say what class of bug this catches so a
+        # future maintainer opening a red build knows it's the subsystem
+        # attribute, not a functional regression.
+        self.assertIn("console-subsystem regression", workflow)
+        # And the check MUST be on stdout content (IsNullOrWhiteSpace), not
+        # on $LASTEXITCODE — self-test audio-capture exits non-zero on a
+        # headless CI runner without a mic, and gating on exit code would
+        # give a false positive for the class of bug we actually care about.
+        self.assertIn("IsNullOrWhiteSpace", workflow)
+        self.assertNotIn("$LASTEXITCODE -ne 0 -and", workflow)
 
     def test_release_linux_deps_cover_audio_in_rust_alsa_chain(self):
         # The `audio-in-rust` feature pulls in cpal -> alsa-sys, which needs
