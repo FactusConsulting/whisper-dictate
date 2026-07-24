@@ -467,10 +467,94 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "Rust build (whisper-rs-local feature)", workflow,
             "test.yml rust matrix must include a whisper-rs-local smoke step",
         )
-        self.assertIn(
-            "--features whisper-rs-local --release", workflow,
-            "whisper-rs-local smoke must build the release profile so it"
-            " exercises the same code path the shipping installer takes",
+        # The release-profile smoke must include BOTH the whisper-rs-local
+        # feature (link surface) AND audio-capture (so the release binary
+        # carries the CLI verbs the Windows CLI-output smoke asserts on).
+        # Order-agnostic: cargo accepts features in either order.
+        self.assertRegex(
+            workflow,
+            r"--features whisper-rs-local,audio-capture --release"
+            r"|--features audio-capture,whisper-rs-local --release",
+            msg="whisper-rs-local smoke must build the release profile with"
+            " audio-capture too so the Windows CLI-output smoke has the audio"
+            " verbs available",
+        )
+
+    def test_test_workflow_asserts_release_cli_prints_on_windows(self):
+        # Regression guard for the `windows_subsystem = "windows"` bug class
+        # (PR #564): a release binary compiled with the GUI subsystem attribute
+        # printed NOTHING for any CLI verb when run from PowerShell, because
+        # no console was attached. Debug builds hide this — the attribute is
+        # gated on `not(debug_assertions)` — so the guard MUST be on a
+        # release build with a stdout-content assertion. Pin the step so it
+        # cannot silently regress or lose its content check.
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        self.assertIn("Windows release CLI-output smoke", workflow)
+        self.assertIn("runner.os == 'Windows'", workflow)
+        self.assertIn("target/release/whisper-dictate.exe", workflow)
+        # Both content-asserting verbs must be exercised — a stub that only
+        # ran the exe with `--version` would pass even for a GUI-subsystem
+        # binary if the release-code path went through a different init.
+        self.assertIn("config path", workflow)
+        self.assertIn("self-test audio-capture --json", workflow)
+        # The failure messages must name the two bug classes this smoke
+        # separates: the definitive PE-subsystem check (the class this
+        # guard specifically exists for), and the content checks (missing
+        # verb dispatch / init panic — orthogonal, but same guard).
+        self.assertIn("windows_subsystem = 'windows'", workflow)
+        self.assertIn("CLI dispatch is broken", workflow)
+        # And the check MUST be on stdout content (IsNullOrWhiteSpace), not
+        # on $LASTEXITCODE — self-test audio-capture exits non-zero on a
+        # headless CI runner without a mic, and gating on exit code would
+        # give a false positive for the class of bug we actually care about.
+        self.assertIn("IsNullOrWhiteSpace", workflow)
+        self.assertNotIn("$LASTEXITCODE -ne 0 -and", workflow)
+        # The DEFINITIVE guard is the PE Optional Header Subsystem check
+        # (Codex #565 P1): a `& $exe` capture in PowerShell gives even a
+        # GUI-subsystem process an explicit stdout pipe handle, so a
+        # content-only check is tautological against the exact binary
+        # this smoke exists to reject. Bit-exact PE inspection cannot be
+        # gamed by shell redirection.
+        self.assertIn("PE Optional Header Subsystem", workflow)
+        self.assertIn("IMAGE_SUBSYSTEM_WINDOWS_CUI", workflow)
+        # Pin the two offsets so a future refactor cannot silently move
+        # them to the wrong bytes and turn the guard into a no-op.
+        self.assertIn("0x3C", workflow)  # e_lfanew in DOS header
+        self.assertIn("0x5C", workflow)  # Subsystem offset from PE signature
+        # The audio JSON envelope check must PARSE the JSON and assert the
+        # stable `kind` field (Codex #565 P2) — a bare `IsNullOrWhiteSpace`
+        # on the raw stdout passes for truncated JSON or a stray diagnostic
+        # line, masking real envelope regressions.
+        self.assertIn("ConvertFrom-Json", workflow)
+        self.assertIn("audio_capture_self_test", workflow)
+        # The step MUST end with an executable `exit 0` — GitHub's pwsh
+        # shell propagates $LASTEXITCODE from the last native call, and
+        # without this the audio verb's environmental non-zero exit (no mic
+        # on the CI runner) shadows the step's success and false-fails the
+        # check even after both content assertions pass. Learned the hard
+        # way in the first CI run of this exact guard.
+        #
+        # Strip PowerShell comment lines before asserting so a regression
+        # that removes the executable `exit 0` (leaving only its narrative
+        # comment) actually trips this test — Codex #565 P2 caught the
+        # original `assertIn("exit 0", smoke_step)` shape false-passing
+        # against comment prose that also said "exit 0".
+        smoke_step = workflow.split("Windows release CLI-output smoke", 1)[1].split(
+            "Rust CLI smoke", 1
+        )[0]
+        smoke_code_lines = [
+            line for line in smoke_step.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        smoke_code = "\n".join(smoke_code_lines)
+        # An executable `exit 0` line has no preceding `#`; the split above
+        # already dropped every `# …` comment line entirely.
+        self.assertRegex(
+            smoke_code,
+            r"(?m)^\s*exit 0\s*$",
+            msg="Windows release CLI-output smoke MUST end with an executable"
+            " `exit 0` line (not just a comment mentioning it) so the audio"
+            " verb's environmental non-zero exit does not shadow the step",
         )
 
     def test_release_linux_deps_cover_audio_in_rust_alsa_chain(self):

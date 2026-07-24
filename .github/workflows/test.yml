@@ -367,8 +367,94 @@ jobs:
         # release pipeline (which builds `--features ...,whisper-rs-local`)
         # would be the first place a whisper-rs API break surfaces, and
         # that's too late.
+        #
+        # `audio-capture` is included alongside so the release binary
+        # produced here carries the `self-test audio-capture` / `dictate-mic`
+        # verbs the next step's smoke asserts on. Same release-profile
+        # target-dir, so no extra compile — the feature just brings in
+        # cpal + rubato to the same artifact.
         if: env.RUN_RUST == 'true'
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local --release
+        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local,audio-capture --release
+      - name: Windows release CLI-output smoke
+        # Regression guard for the `windows_subsystem = "windows"` bug class
+        # (PR #564): a GUI-subsystem release binary has no console attached,
+        # so every CLI verb silently discarded its stdout when a user ran
+        # it from PowerShell. Debug builds hide this — the attribute is
+        # gated on `not(debug_assertions)` — so only a RELEASE binary check
+        # catches it. Reuses the release exe built by the step above (no
+        # extra compile). Windows-only because the bug is a Windows PE
+        # subsystem attribute.
+        #
+        # Two orthogonal checks:
+        #
+        #  1) PE Optional Header Subsystem field (the definitive guard).
+        #     GUI subsystem = 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI); console = 3
+        #     (IMAGE_SUBSYSTEM_WINDOWS_CUI). Read directly from the binary
+        #     because a redirected `& $exe` in PowerShell gives GUI-subsystem
+        #     processes an explicit stdout pipe handle — so a content-only
+        #     check tautologically passes for the exact binary this guard
+        #     is meant to reject (Codex #565 P1). Inspecting the PE header
+        #     is bit-exact — it cannot be gamed by shell redirection.
+        #     Layout: DOS header e_lfanew (UInt32 at 0x3C) → PE signature →
+        #     COFF header (24 bytes) → Optional Header; Subsystem is a
+        #     UInt16 at offset 68 (0x44) within the Optional Header, i.e.
+        #     e_lfanew + 24 + 68 = e_lfanew + 0x5C in the file.
+        #
+        #  2) Content smokes on top: `config path` (headless-safe, exit 0,
+        #     prints a path) + `self-test audio-capture --json` (audio verb
+        #     reaches cpal and prints its JSON envelope BEFORE the exit
+        #     decision — so a healthy binary still produces JSON on a
+        #     mic-less CI runner). Catches missing verbs, panics on
+        #     first-frame init, and other "the binary is broken in a way
+        #     other than the subsystem attr" regressions.
+        #
+        # `pwsh` propagates $LASTEXITCODE from the last native call, and
+        # `self-test audio-capture` exits non-zero without a mic on the
+        # runner. Force `exit 0` after both content checks pass so the
+        # environmental exit code does not shadow the smoke's real result.
+        if: env.RUN_RUST == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "target/release/whisper-dictate.exe"
+
+          # (1) PE subsystem — the definitive check.
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          $peOffset = [System.BitConverter]::ToUInt32($bytes, 0x3C)
+          $subsystem = [System.BitConverter]::ToUInt16($bytes, $peOffset + 0x5C)
+          if ($subsystem -ne 3) {
+            throw "release CLI PE Optional Header Subsystem is $subsystem (expected 3 = IMAGE_SUBSYSTEM_WINDOWS_CUI, i.e. console). A value of 2 means the binary shipped with `windows_subsystem = 'windows'` — every CLI verb would print nothing when run from a user's PowerShell (see PR #564). Only the sibling `whisper-dictate-gui.exe` may carry subsystem = 2."
+          }
+          Write-Host "release CLI PE subsystem = 3 (console) OK"
+
+          # (2) Content smokes — catch missing verbs / init panics.
+          $out = & $exe config path
+          if ([string]::IsNullOrWhiteSpace($out)) {
+            throw "release CLI produced NO stdout for 'config path' — CLI dispatch is broken (see PR #564)"
+          }
+          Write-Host "release CLI stdout OK: $out"
+          $st = & $exe self-test audio-capture --json --duration-ms 200
+          if ([string]::IsNullOrWhiteSpace($st)) {
+            throw "release CLI produced NO stdout for 'self-test audio-capture --json' — audio verb dispatch is broken"
+          }
+          # Assert the STABLE `kind` field on the JSON envelope, not just
+          # non-empty output — a truncated JSON or a stray diagnostic line
+          # would pass a bare IsNullOrWhiteSpace check and mask a real
+          # output regression (Codex #565 P2). `kind` is present regardless
+          # of whether the capture itself succeeded, so this survives the
+          # headless "no mic" runner exit-non-zero case too.
+          try {
+            $doc = $st | ConvertFrom-Json -ErrorAction Stop
+          } catch {
+            throw "release CLI 'self-test audio-capture --json' emitted non-JSON stdout — audio verb JSON envelope regression: $_ / raw stdout: $st"
+          }
+          if ($doc.kind -ne 'audio_capture_self_test') {
+            throw "release CLI 'self-test audio-capture --json' returned kind='$($doc.kind)' (expected 'audio_capture_self_test') — envelope contract regression"
+          }
+          Write-Host "audio-capture self-test JSON envelope OK (kind=audio_capture_self_test, succeeded=$($doc.succeeded))"
+
+          # Discard the audio verb's environmental non-zero exit (no mic on
+          # the runner) — the real outcome is what we asserted above.
+          exit 0
       - name: Rust CLI smoke
         if: env.RUN_RUST == 'true'
         run: |
