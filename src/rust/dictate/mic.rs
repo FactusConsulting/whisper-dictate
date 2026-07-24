@@ -125,7 +125,25 @@ fn capture_pcm_for(device: &str, seconds: f64) -> Result<Vec<f32>> {
     // land on the channel only after `stop` triggers EndOfStream).
     pipeline.stop();
     events.extend(drain_remaining(&rx));
-    frames_to_pcm(&events)
+    nonempty_pcm(&events, device, seconds)
+}
+
+/// Fold the captured events into PCM and reject a zero-sample capture. A stream
+/// that opens but whose callback never fires yields an empty buffer, which the
+/// session would treat as `NoAudio` and the CLI would then exit 0 on — masking
+/// a real capture failure. Like `audio::self_test`, treat "no frames delivered"
+/// as an error so `dictate-mic` exits non-zero. Split out (pure) so it is
+/// unit-tested without opening a device.
+fn nonempty_pcm(events: &[PipelineEvent], device: &str, seconds: f64) -> Result<Vec<f32>> {
+    let pcm = frames_to_pcm(events)?;
+    if pcm.is_empty() {
+        return Err(anyhow!(
+            "no audio captured from device {device:?} in {seconds}s: the input \
+             stream opened but delivered no samples (check the mic is unmuted \
+             and not held by another app)"
+        ));
+    }
+    Ok(pcm)
 }
 
 /// CLI entry: capture live mic audio for `seconds` and drive one utterance
@@ -241,6 +259,23 @@ mod tests {
                 PipelineEvent::Frame(vec![0.2]),
             ],
         );
+    }
+
+    #[test]
+    fn nonempty_pcm_rejects_zero_sample_capture() {
+        // Stream opened but delivered nothing → error (not a silent exit 0).
+        let err = nonempty_pcm(&[], "USB Mic", 3.0).unwrap_err().to_string();
+        assert!(err.contains("no audio captured"), "got: {err}");
+        assert!(err.contains("USB Mic"), "should name the device: {err}");
+    }
+
+    #[test]
+    fn nonempty_pcm_passes_through_captured_samples() {
+        let events = [
+            PipelineEvent::Frame(vec![0.1, 0.2]),
+            PipelineEvent::Frame(vec![0.3]),
+        ];
+        assert_eq!(nonempty_pcm(&events, "", 1.0).unwrap(), vec![0.1, 0.2, 0.3]);
     }
 
     #[test]

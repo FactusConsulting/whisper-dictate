@@ -120,7 +120,7 @@ pub enum Command {
         repeat: u32,
     },
     /// Capture live microphone audio through the Rust audio pipeline and drive
-    /// the in-process Rust `DictateSession` over it — the fully-Rust,
+    /// the in-process Rust `DictateSession` over it: the fully-Rust,
     /// no-Python live-capture counterpart of `simulate-session` (which reads a
     /// WAV). Records for `--seconds`, resamples via the VAD-free capture pump
     /// (`audio::raw`), transcribes over the cloud STT backend (Groq/OpenAI),
