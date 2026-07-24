@@ -497,16 +497,30 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # binary if the release-code path went through a different init.
         self.assertIn("config path", workflow)
         self.assertIn("self-test audio-capture --json", workflow)
-        # The failure message must say what class of bug this catches so a
-        # future maintainer opening a red build knows it's the subsystem
-        # attribute, not a functional regression.
-        self.assertIn("console-subsystem regression", workflow)
+        # The failure messages must name the two bug classes this smoke
+        # separates: the definitive PE-subsystem check (the class this
+        # guard specifically exists for), and the content checks (missing
+        # verb dispatch / init panic — orthogonal, but same guard).
+        self.assertIn("windows_subsystem = 'windows'", workflow)
+        self.assertIn("CLI dispatch is broken", workflow)
         # And the check MUST be on stdout content (IsNullOrWhiteSpace), not
         # on $LASTEXITCODE — self-test audio-capture exits non-zero on a
         # headless CI runner without a mic, and gating on exit code would
         # give a false positive for the class of bug we actually care about.
         self.assertIn("IsNullOrWhiteSpace", workflow)
         self.assertNotIn("$LASTEXITCODE -ne 0 -and", workflow)
+        # The DEFINITIVE guard is the PE Optional Header Subsystem check
+        # (Codex #565 P1): a `& $exe` capture in PowerShell gives even a
+        # GUI-subsystem process an explicit stdout pipe handle, so a
+        # content-only check is tautological against the exact binary
+        # this smoke exists to reject. Bit-exact PE inspection cannot be
+        # gamed by shell redirection.
+        self.assertIn("PE Optional Header Subsystem", workflow)
+        self.assertIn("IMAGE_SUBSYSTEM_WINDOWS_CUI", workflow)
+        # Pin the two offsets so a future refactor cannot silently move
+        # them to the wrong bytes and turn the guard into a no-op.
+        self.assertIn("0x3C", workflow)  # e_lfanew in DOS header
+        self.assertIn("0x5C", workflow)  # Subsystem offset from PE signature
         # The step MUST end with an explicit `exit 0` — GitHub's pwsh shell
         # propagates $LASTEXITCODE from the last native call, and without
         # this the audio verb's environmental non-zero exit (no mic on the
