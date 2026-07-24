@@ -105,18 +105,45 @@ fn drain_remaining(rx: &Receiver<PipelineEvent>) -> Vec<PipelineEvent> {
     events
 }
 
-/// Open `device` via the VAD-free capture pipeline, record for `seconds`, and
-/// return the captured 16 kHz mono PCM. Errors if `seconds` is out of range,
-/// the device cannot be opened, or the capture thread reports a `DeviceError`.
-fn capture_pcm_for(device: &str, seconds: f64) -> Result<Vec<f32>> {
-    // Reject non-finite / non-positive / absurd values BEFORE
-    // `Duration::from_secs_f64`, which *panics* (not `Err`) on infinite or
-    // overflowing input. `is_finite()` also rejects NaN.
+/// Validate the requested `--seconds` window against both the hard
+/// `Duration::from_secs_f64` limits and the session's effective minimum.
+///
+/// - Non-finite / non-positive / `> MAX_SECONDS` are rejected BEFORE
+///   `Duration::from_secs_f64`, which *panics* (not `Err`) on infinite or
+///   overflowing input. `is_finite()` also rejects `NaN`.
+/// - A window below the session's effective minimum (`min_record_s` clamped up
+///   to [`crate::dictate::skip::MIN_RECORD_FLOOR_S`]) is rejected too: the skip
+///   gate would otherwise drop the clip as `too_short` and the verb would exit
+///   0 having transcribed nothing. Pure, so it is unit-tested without a device.
+fn validate_capture_seconds(seconds: f64, min_record_s: f64) -> Result<()> {
     if !seconds.is_finite() || seconds <= 0.0 || seconds > MAX_SECONDS {
         return Err(anyhow!(
             "--seconds must be between 0 and {MAX_SECONDS} (got {seconds})"
         ));
     }
+    let floor = min_record_s.max(crate::dictate::skip::MIN_RECORD_FLOOR_S);
+    if seconds < floor {
+        return Err(anyhow!(
+            "--seconds {seconds} is below the session minimum of {floor}s; the \
+             capture would be dropped as too short (raise --seconds or lower \
+             min_record_seconds)"
+        ));
+    }
+    Ok(())
+}
+
+/// Open `device` via the VAD-free capture pipeline, record for `seconds`, and
+/// return the captured 16 kHz mono PCM. Errors if `seconds` is out of range /
+/// below the session floor, the device cannot be opened, or the capture thread
+/// reports a `DeviceError`.
+fn capture_pcm_for(device: &str, seconds: f64, min_record_s: f64) -> Result<Vec<f32>> {
+    validate_capture_seconds(seconds, min_record_s)?;
+    // Apply the PipeWire quantum mitigation (v1.20.6) BEFORE opening cpal, just
+    // as `audio::self_test` does: on affected DMIC/PipeWire Linux systems a
+    // negotiated 4096-sample quantum starves the cpal callback and the mic
+    // never delivers frames. No-op off Linux / when the operator set
+    // `PIPEWIRE_QUANTUM` explicitly.
+    let _ = crate::audio::pipewire::configure_pipewire_env();
     let (mut pipeline, rx) = RawCapturePipeline::start(device)
         .map_err(|e| anyhow!("open capture device {device:?}: {e:#}"))?;
     let mut events = drain_events_for(&rx, Duration::from_secs_f64(seconds));
@@ -146,6 +173,24 @@ fn nonempty_pcm(events: &[PipelineEvent], device: &str, seconds: f64) -> Result<
     Ok(pcm)
 }
 
+/// Print a live `recording` status line (clean JSONL, matching the session's
+/// `status` event shape) and flush stdout, so a `--json` supervisor observes
+/// `state=recording` at the START of the capture window rather than only after
+/// transcription finishes. Emitted in addition to the session's own buffered
+/// `opening`/`recording` events (which describe the later transcription phase).
+fn emit_live_recording_status(audio_device: &str, seconds: f64) {
+    let line = serde_json::json!({
+        "event": "status",
+        "state": "recording",
+        "capture_backend": CAPTURE_BACKEND,
+        "audio_device": audio_device,
+        "requested_seconds": seconds,
+    });
+    println!("{line}");
+    // Flush so the supervisor sees it before we block in the capture window.
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
 /// CLI entry: capture live mic audio for `seconds` and drive one utterance
 /// through the cloud-STT preview session. With `json`, the session's worker
 /// events are streamed as JSONL; otherwise the injected transcript (or a
@@ -156,15 +201,26 @@ pub fn handle_dictate_mic(device: &str, seconds: f64, json: bool) -> Result<()> 
     // (an empty `--device` selects the host default input).
     let mut config = simulate_session_config();
     config.capture_backend = CAPTURE_BACKEND.to_owned();
-    config.audio_device = if device.is_empty() {
+    let audio_device = if device.is_empty() {
         "default".to_owned()
     } else {
         device.to_owned()
     };
+    config.audio_device = audio_device.clone();
+    let min_record_s = config.min_record_seconds;
     // Build the session FIRST so a missing cloud key fails fast, before we
     // open the mic / spend the recording window.
     let mut session = build_cloud_preview_session(config)?;
-    let pcm = capture_pcm_for(device, seconds)?;
+
+    // Under `--json`, the session's own events are buffered until AFTER the
+    // capture completes (the drive transcribes a finished PCM buffer), so a
+    // supervisor watching for `state=recording` would otherwise never see it
+    // during the actual recording window. Emit a live `recording` status now,
+    // before we open the mic, so the consumer can prompt the user in time.
+    if json {
+        emit_live_recording_status(&audio_device, seconds);
+    }
+    let pcm = capture_pcm_for(device, seconds, min_record_s)?;
 
     let outcome = if json {
         if !crate::dictate::env_gates::is_truthy(
@@ -224,11 +280,10 @@ mod tests {
     }
 
     #[test]
-    fn capture_pcm_for_rejects_out_of_range_seconds() {
-        // Guard trips before any device is opened, so this is hermetic. Covers
-        // non-positive, NaN, and — the panic-avoidance cases — infinite and
-        // finite-but-overflowing values that `Duration::from_secs_f64` would
-        // otherwise panic on rather than returning `Err`.
+    fn validate_capture_seconds_rejects_out_of_range() {
+        // Covers non-positive, NaN, and — the panic-avoidance cases — infinite
+        // and finite-but-overflowing values that `Duration::from_secs_f64`
+        // would otherwise panic on rather than returning `Err`.
         for bad in [
             0.0,
             -1.0,
@@ -238,9 +293,22 @@ mod tests {
             1e300,
             MAX_SECONDS + 1.0,
         ] {
-            let err = capture_pcm_for("", bad).unwrap_err().to_string();
-            assert!(err.contains("--seconds"), "got: {err} for {bad}");
+            let err = validate_capture_seconds(bad, 0.5).unwrap_err().to_string();
+            assert!(err.contains("between 0"), "got: {err} for {bad}");
         }
+    }
+
+    #[test]
+    fn validate_capture_seconds_rejects_below_session_floor() {
+        // Default 0.5s min-record → a 0.1s window is a guaranteed too_short skip.
+        let err = validate_capture_seconds(0.1, 0.5).unwrap_err().to_string();
+        assert!(err.contains("below the session minimum"), "got: {err}");
+        // Even with min_record=0 the absolute 0.3s skip floor applies.
+        let err = validate_capture_seconds(0.2, 0.0).unwrap_err().to_string();
+        assert!(err.contains("below the session minimum"), "got: {err}");
+        // At/above the effective floor is accepted.
+        assert!(validate_capture_seconds(0.5, 0.5).is_ok());
+        assert!(validate_capture_seconds(0.3, 0.0).is_ok());
     }
 
     #[test]
