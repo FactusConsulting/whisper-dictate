@@ -4,6 +4,12 @@ version = "1.22.0-rc.3"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/FactusConsulting/whisper-dictate"
+# Two binaries ship from this crate; `cargo run` without `--bin` needs a
+# tiebreaker. Point it at the CLI so scripts / dev-loops keep working the way
+# they did before the split (running the GUI binary from the shell is niche —
+# it takes no args and just opens the tray window, which the tray shortcut
+# already does).
+default-run = "whisper-dictate"
 
 [lib]
 path = "lib.rs"
