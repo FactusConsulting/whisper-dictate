@@ -204,8 +204,8 @@ pub(crate) use process::{
 #[allow(unused_imports)]
 pub(crate) use worker_command::{
     app_root_from_exe_path, cli_exe_from, default_python_name, default_venv_dir,
-    propagate_rust_devices_backend, venv_python_path, windows_venv_dir, Platform, APP_ROOT_ENV,
-    PYTHONPATH_ENV, PYTHON_ENV,
+    propagate_rust_devices_backend, source_root, venv_python_path, windows_venv_dir, Platform,
+    APP_ROOT_ENV, PYTHONPATH_ENV, PYTHON_ENV,
 };
 
 // ---------------------------------------------------------------------------

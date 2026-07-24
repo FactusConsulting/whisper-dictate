@@ -363,6 +363,41 @@ fn install_rust_hotkey_from_command_reads_toggle_mode_from_env() {
 // P2 #373 finding 2: parse_toggle_value accepts all truthy variants.
 // -----------------------------------------------------------------------
 
+// ----- source_root off-by-one guard (PR #564 regression fix) -------------
+//
+// `source_root` is the checkout-fallback for `app_root` when the running exe
+// isn't in an installed layout. It reads `CARGO_MANIFEST_DIR` and walks up.
+// `CARGO_MANIFEST_DIR` = `<repo>/src/rust`, so the repo root is TWO levels
+// up. A regression to `.nth(3)` (or higher) walks past the repo root and
+// PYTHONPATH lands in the parent directory, which breaks every worker spawn
+// from `cargo run` / `./target/release/whisper-dictate-gui.exe`
+// (`ModuleNotFoundError: No module named 'whisper_dictate'`).
+
+#[test]
+fn source_root_lands_at_the_repo_root_not_its_parent() {
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Sanity: this crate lives at <repo>/src/rust — a rename would need a
+    // matching change to `source_root`'s ancestor index.
+    assert_eq!(
+        manifest.file_name().and_then(|s| s.to_str()),
+        Some("rust"),
+        "CARGO_MANIFEST_DIR is not `<repo>/src/rust`; source_root's nth() index would need updating"
+    );
+    let root = source_root();
+    // The repo root MUST contain `src/python/whisper_dictate/runtime.py`
+    // — that's exactly the file `python_source_root(app_root)` puts on
+    // PYTHONPATH so the `python -m whisper_dictate.runtime` spawn resolves.
+    assert!(
+        root.join("src")
+            .join("python")
+            .join("whisper_dictate")
+            .join("runtime.py")
+            .exists(),
+        "source_root() = {root:?} does not contain src/python/whisper_dictate/runtime.py — \
+         nth() index likely walked past the repo root"
+    );
+}
+
 #[test]
 fn parse_toggle_value_accepts_all_truthy_variants() {
     // P2 #373 finding 2: the Rust-side toggle parser must honour the same

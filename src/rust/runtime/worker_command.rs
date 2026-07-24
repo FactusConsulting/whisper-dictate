@@ -412,10 +412,21 @@ pub(crate) fn default_python_name() -> &'static str {
     }
 }
 
-fn source_root() -> PathBuf {
+/// Source-checkout fallback for [`app_root`] when the running exe is not in
+/// an installed layout (typical case: `cargo run` / `cargo build && ./target/release/...`).
+///
+/// `CARGO_MANIFEST_DIR` points at this crate — `<repo>/src/rust`. The repo
+/// root is two levels up (`ancestors().nth(2)`): index 0 = `src/rust`,
+/// index 1 = `src`, index 2 = repo root. The previous `.nth(3)` walked one
+/// level too far and produced the parent of the repo (e.g. `D:\source`
+/// rather than `D:\source\whisper-dictate`), which made every worker spawn
+/// from `target/release/` fail with `ModuleNotFoundError` because the
+/// resulting PYTHONPATH (`<parent>/src/python`) did not exist. Installed
+/// builds are unaffected because `app_root_from_exe_path` succeeds there.
+pub(crate) fn source_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf()
 }
