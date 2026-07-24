@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+
+from whisper_dictate.vp_rust import no_console_window_kwargs
 import sys
 
 
@@ -482,6 +484,7 @@ def _rust_list_input_devices() -> list[dict] | None:
             capture_output=True,
             timeout=5.0,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001 - helper failures must not break the picker
         print(f"[rust:devices] {exc}", file=sys.stderr, flush=True)

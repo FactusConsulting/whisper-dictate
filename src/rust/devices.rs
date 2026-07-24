@@ -398,6 +398,32 @@ struct FindResponse {
     device: Option<DeviceInfo>,
 }
 
+/// Pure resolver for [`handle_devices`]. Given whether stdin is a TTY and,
+/// when it isn't, the raw stdin body, decide which [`DevicesRequest`] to
+/// serve. Split out so the TTY / pipe / bad-JSON branches are unit-testable
+/// without a real console or a piped subprocess.
+///
+/// Contract:
+/// * `stdin_is_tty = true` → always [`DevicesRequest::List`] (the interactive
+///   convenience — see [`handle_devices`] doc for why).
+/// * `stdin_is_tty = false` + empty body → [`DevicesRequest::List`]
+///   (documented shorthand for the Python shell-out).
+/// * `stdin_is_tty = false` + non-empty body → parse as JSON, propagate the
+///   parse error.
+pub(crate) fn resolve_devices_request(
+    stdin_is_tty: bool,
+    stdin_body: Option<&str>,
+) -> Result<DevicesRequest> {
+    if stdin_is_tty {
+        return Ok(DevicesRequest::List);
+    }
+    let trimmed = stdin_body.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        return Ok(DevicesRequest::List);
+    }
+    Ok(serde_json::from_str(trimmed)?)
+}
+
 /// Handler for the hidden `devices` sub-command. Reads a JSON request from
 /// stdin and writes a JSON response on stdout.
 ///
@@ -412,18 +438,15 @@ struct FindResponse {
 /// their stdin is not a TTY.
 pub fn handle_devices() -> Result<()> {
     let stdin = io::stdin();
-    let request: DevicesRequest = if stdin.is_terminal() {
-        DevicesRequest::List
+    let stdin_is_tty = stdin.is_terminal();
+    let raw = if stdin_is_tty {
+        None
     } else {
-        let mut raw = String::new();
-        stdin.lock().read_to_string(&mut raw)?;
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            DevicesRequest::List
-        } else {
-            serde_json::from_str(trimmed)?
-        }
+        let mut buf = String::new();
+        stdin.lock().read_to_string(&mut buf)?;
+        Some(buf)
     };
+    let request = resolve_devices_request(stdin_is_tty, raw.as_deref())?;
     match request {
         DevicesRequest::List => {
             let resp = ListResponse {
@@ -563,6 +586,73 @@ mod tests {
             DevicesRequest::Find { query } => assert_eq!(query, "jabra"),
             other => panic!("expected Find, got {other:?}"),
         }
+    }
+
+    // ----- resolve_devices_request: TTY vs pipe dispatch (Codex PR #564 P2) --
+
+    #[test]
+    fn resolve_defaults_to_list_when_stdin_is_a_tty() {
+        // An interactive `whisper-dictate devices` in PowerShell has no
+        // piped body — we skip the blocking read and default to the list so
+        // the user sees output instead of the process hanging on stdin.
+        let request = resolve_devices_request(true, None).unwrap();
+        assert!(matches!(request, DevicesRequest::List));
+    }
+
+    #[test]
+    fn resolve_defaults_to_list_when_stdin_is_a_tty_even_with_body() {
+        // Defensive: if a caller ever passes a body while claiming TTY,
+        // the TTY branch still wins (matches the doc contract — TTY means
+        // interactive convenience regardless of the body).
+        let request =
+            resolve_devices_request(true, Some(r#"{"action":"find","query":"x"}"#)).unwrap();
+        assert!(matches!(request, DevicesRequest::List));
+    }
+
+    #[test]
+    fn resolve_defaults_to_list_when_piped_stdin_is_empty() {
+        // The Python shell-out sometimes pipes nothing and expects a list —
+        // this is the documented shorthand for `{"action":"list"}`.
+        assert!(matches!(
+            resolve_devices_request(false, Some("")).unwrap(),
+            DevicesRequest::List
+        ));
+        assert!(matches!(
+            resolve_devices_request(false, Some("   \n  ")).unwrap(),
+            DevicesRequest::List
+        ));
+        assert!(matches!(
+            resolve_devices_request(false, None).unwrap(),
+            DevicesRequest::List
+        ));
+    }
+
+    #[test]
+    fn resolve_parses_piped_json_body() {
+        // The Python shell-out for a name lookup passes a `find` envelope.
+        let body = r#"{"action":"find","query":"jabra"}"#;
+        let request = resolve_devices_request(false, Some(body)).unwrap();
+        match request {
+            DevicesRequest::Find { query } => assert_eq!(query, "jabra"),
+            other => panic!("expected Find, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_returns_error_on_invalid_piped_json() {
+        // A malformed body from a broken caller must surface an error, not
+        // be silently swallowed as `List` (that would mask a broken
+        // integration where the Python side thought it was asking for
+        // something specific and got the wrong answer).
+        let err = resolve_devices_request(false, Some("{not-json")).unwrap_err();
+        // The exact wording is serde_json's business (it varies with the
+        // input); just assert we surfaced SOMETHING with position info.
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "empty error message");
+        assert!(
+            msg.contains("line") || msg.contains("column"),
+            "expected serde parse position info, got: {msg}"
+        );
     }
 
     // ----- finding #3: synthetic index based on max reported index -----------

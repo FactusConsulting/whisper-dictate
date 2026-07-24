@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from whisper_dictate.vp_rust import no_console_window_kwargs
 import threading
 from typing import Callable, Optional
 
@@ -82,6 +83,7 @@ def inject_via_rust(
             input=json.dumps(request).encode("utf-8"),
             capture_output=True,
             timeout=timeout,
+            **no_console_window_kwargs(),
         )
     except Exception as exc:
         print(f"[inject] rust injector launch failed: {exc}", flush=True)

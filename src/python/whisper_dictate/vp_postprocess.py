@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from whisper_dictate.vp_config import apply_config_to_environ, config_snapshot, get_value
 from whisper_dictate.vp_external_api import DEFAULT_OPENAI_BASE_URL, GROQ_BASE_URL, openai_chat_completion
 from whisper_dictate.vp_rust import helper_path, run_json_helper
+from whisper_dictate.vp_rust import no_console_window_kwargs
 
 apply_config_to_environ()
 
@@ -404,6 +405,7 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
             capture_output=True,
             timeout=helper_timeout,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001 - helper failures must not break post-processing
         print(f"[rust:postprocess] {exc}", file=sys.stderr, flush=True)

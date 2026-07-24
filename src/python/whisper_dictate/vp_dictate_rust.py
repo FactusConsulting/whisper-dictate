@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from whisper_dictate.vp_rust import no_console_window_kwargs
 import sys
 from typing import Any
 
@@ -75,6 +76,7 @@ def call_op(op: str, params: dict[str, Any], *, timeout_s: float = _DEFAULT_TIME
             capture_output=True,
             timeout=timeout_s,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001 — never crash the worker on a helper hiccup
         print(f"[rust:dictate-ops] {exc}", file=sys.stderr, flush=True)
@@ -118,6 +120,7 @@ def rust_validate_backend(backend: str) -> tuple[str, str] | None:
             capture_output=True,
             timeout=_DEFAULT_TIMEOUT_S,
             shell=False,
+            **no_console_window_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001 — helper hiccup, fall back
         print(f"[rust:dictate-ops] {exc}", file=sys.stderr, flush=True)
