@@ -25,11 +25,15 @@ use crate::dictate::simulate::{
 };
 use crate::dictate::UtteranceOutcome;
 
-/// Upper bound on `--seconds`. A dictation window is a handful of seconds; an
-/// hour is already absurd. The cap also keeps the value well inside what
-/// `Duration::from_secs_f64` accepts, so a huge/`inf` input surfaces as the
-/// clean `anyhow!` error below instead of panicking the conversion.
-const MAX_SECONDS: f64 = 3600.0;
+/// Upper bound on `--seconds`. A dictation window is a handful of seconds, so
+/// 5 minutes is already very generous. Kept deliberately small because the
+/// captured audio is held in memory three times over (per-frame event vecs →
+/// flat PCM in `frames_to_pcm` → the session's own copy): at 16 kHz `f32` that
+/// is ~1.9 MB/s per copy, so this cap bounds peak capture memory to a few tens
+/// of MB rather than the ~440 MB a full hour would reach. It also keeps the
+/// value well inside what `Duration::from_secs_f64` accepts, so a huge / `inf`
+/// input surfaces as the clean `anyhow!` error below instead of panicking.
+const MAX_SECONDS: f64 = 300.0;
 
 /// The `capture_backend` label stamped into the worker events for the live-mic
 /// verb, mirroring `VOICEPI_AUDIO_BACKEND=rust` (the Python metadata uses the
@@ -173,22 +177,35 @@ fn nonempty_pcm(events: &[PipelineEvent], device: &str, seconds: f64) -> Result<
     Ok(pcm)
 }
 
-/// Print a live `recording` status line (clean JSONL, matching the session's
-/// `status` event shape) and flush stdout, so a `--json` supervisor observes
-/// `state=recording` at the START of the capture window rather than only after
-/// transcription finishes. Emitted in addition to the session's own buffered
-/// `opening`/`recording` events (which describe the later transcription phase).
+/// Print a live `recording` status line (clean JSONL) and flush stdout, so a
+/// `--json` supervisor observes `state=recording` at the START of the capture
+/// window rather than only after transcription finishes. Emitted in addition to
+/// the session's own buffered `opening`/`recording` events (which describe the
+/// later transcription phase).
+///
+/// Routed through [`crate::dictate::events::emit_status`] (the same ASCII-safe
+/// `AsciiFormatter` the session's worker events use) rather than a raw
+/// `serde_json` write, so a localized `audio_device` with non-ASCII characters
+/// is `\uXXXX`-escaped and survives legacy Windows code pages / captured
+/// subprocess pipes. `emit_status` honours the `VOICEPI_WORKER_EVENTS` gate, so
+/// the caller must enable it first; the `[worker-event] ` prefix is stripped to
+/// keep `--json` output valid JSONL.
 fn emit_live_recording_status(audio_device: &str, seconds: f64) {
-    let line = serde_json::json!({
-        "event": "status",
-        "state": "recording",
-        "capture_backend": CAPTURE_BACKEND,
-        "audio_device": audio_device,
-        "requested_seconds": seconds,
-    });
-    println!("{line}");
-    // Flush so the supervisor sees it before we block in the capture window.
-    let _ = std::io::Write::flush(&mut std::io::stdout());
+    use crate::dictate::events::{emit_status, StatusEvent, WorkerStatus};
+    let mut event = StatusEvent::new(WorkerStatus::Recording);
+    event.capture_backend = Some(CAPTURE_BACKEND.to_owned());
+    event.audio_device = Some(audio_device.to_owned());
+    event
+        .extras
+        .insert("requested_seconds".into(), serde_json::json!(seconds));
+    let mut buf = Vec::new();
+    let _ = emit_status(&mut buf, &event);
+    let jsonl = to_clean_jsonl(&String::from_utf8_lossy(&buf));
+    if !jsonl.is_empty() {
+        println!("{jsonl}");
+        // Flush so the supervisor sees it before we block in the capture window.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
 }
 
 /// CLI entry: capture live mic audio for `seconds` and drive one utterance
@@ -215,19 +232,21 @@ pub fn handle_dictate_mic(device: &str, seconds: f64, json: bool) -> Result<()> 
     // Under `--json`, the session's own events are buffered until AFTER the
     // capture completes (the drive transcribes a finished PCM buffer), so a
     // supervisor watching for `state=recording` would otherwise never see it
-    // during the actual recording window. Emit a live `recording` status now,
-    // before we open the mic, so the consumer can prompt the user in time.
+    // during the actual recording window. Enable the worker-event gate and emit
+    // a live `recording` status NOW, before we open the mic, so the consumer
+    // can prompt the user in time. The gate must be set before the emit because
+    // `events::emit_status` honours it (and the session drive below reuses it).
     if json {
-        emit_live_recording_status(&audio_device, seconds);
-    }
-    let pcm = capture_pcm_for(device, seconds, min_record_s)?;
-
-    let outcome = if json {
         if !crate::dictate::env_gates::is_truthy(
             std::env::var("VOICEPI_WORKER_EVENTS").ok().as_deref(),
         ) {
             std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
         }
+        emit_live_recording_status(&audio_device, seconds);
+    }
+    let pcm = capture_pcm_for(device, seconds, min_record_s)?;
+
+    let outcome = if json {
         let mut buf = Vec::new();
         let outcome = drive_session_over_pcm(&mut session, &pcm, &mut buf)?;
         let jsonl = to_clean_jsonl(&String::from_utf8_lossy(&buf));
