@@ -132,10 +132,16 @@ pub fn openai_chat_completion(
         .build()
         .send_json(payload)
         .map_err(|err| {
-            CloudCallError::from_send(&format!("{} chat completion failed", provider_name(&url)), err)
+            CloudCallError::from_send(
+                &format!("{} chat completion failed", provider_name(&url)),
+                err,
+            )
         })?;
     check_status(&mut response).map_err(|detail| {
-        CloudCallError::Terminal(format!("{} chat completion failed: {detail}", provider_name(&url)))
+        CloudCallError::Terminal(format!(
+            "{} chat completion failed: {detail}",
+            provider_name(&url)
+        ))
     })?;
     let body: Value = response.body_mut().read_json().map_err(|err| {
         CloudCallError::Terminal(format!(
@@ -197,15 +203,15 @@ mod tests {
     fn connection_refused_classifies_as_transport() {
         // Port 1 refuses immediately (not a timeout), so the request never
         // reached the provider — a transport failure the Python path may retry.
-        let err = openai_chat_completion("http://127.0.0.1:1/v1", "key", "gpt", "x", 1000)
-            .unwrap_err();
+        let err =
+            openai_chat_completion("http://127.0.0.1:1/v1", "key", "gpt", "x", 1000).unwrap_err();
         assert!(err.is_transport(), "expected transport error, got: {err}");
     }
 
     #[test]
     fn empty_key_and_model_classify_as_terminal() {
-        let err = openai_chat_completion("https://api.openai.com/v1", " ", "gpt", "x", 1000)
-            .unwrap_err();
+        let err =
+            openai_chat_completion("https://api.openai.com/v1", " ", "gpt", "x", 1000).unwrap_err();
         assert!(!err.is_transport());
     }
 

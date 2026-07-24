@@ -89,7 +89,16 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
             // A validation failure (bad processor/mode/URL, or a local-only
             // block) is deterministic — the Python path would reject it the
             // same way — so it is terminal, not a transport retry candidate.
-            return fallback_result(text, settings, mode_short, 0, "terminal", err, false, Vec::new());
+            return fallback_result(
+                text,
+                settings,
+                mode_short,
+                0,
+                "terminal",
+                err,
+                false,
+                Vec::new(),
+            );
         }
     };
 
