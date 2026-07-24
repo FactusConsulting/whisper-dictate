@@ -441,16 +441,35 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
         return None
     if not isinstance(obj, dict):
         return None
-    # A ``fallback=true`` envelope is RETURNED as-is (not retried). It means the
-    # Rust helper reached the provider but could not clean the text — a
-    # deterministic provider outcome (HTTP 401/429/500, a timeout). Python would
-    # hit the identical result, so re-running it would only double the latency
-    # and the charge. The one previously-Rust-specific failure that Python could
-    # recover — TLS validation against an enterprise/private CA — is now handled
-    # at the source: `cloud_api::http::platform_tls_agent` uses the OS trust
-    # store, so that case no longer degrades to fallback here. Retries stay
-    # reserved for genuine helper-level failures (crash / non-zero exit / bad
-    # JSON / a killed subprocess), which are handled above by returning None.
+    # A ``fallback=true`` envelope means the Rust helper could not clean the
+    # text. WHY it fell back decides whether a Python retry is safe, via the
+    # ``fallback_kind`` field the helper stamps on the envelope:
+    #
+    #   * ``"transport"`` — the request never reached the provider (DNS /
+    #     connect / TLS handshake against an enterprise CA / Windows registry
+    #     proxy). Python's ``urllib`` validates TLS through the OS trust store
+    #     and honours the registry proxy, so it may succeed where ureq cannot,
+    #     and — because the provider was never billed — a retry cannot
+    #     double-charge. Fall through to the in-process Python path by returning
+    #     None. This is the general safety net for enterprise-Windows
+    #     ureq/urllib parity gaps (trust store, proxy, and any future
+    #     connect-phase difference), not a per-gap patch.
+    #   * anything else (``"terminal"``: HTTP 401/429/500, invalid response
+    #     JSON, an ambiguous client timeout, or a config/local-only rejection)
+    #     — the provider was reached or the outcome is ambiguous, so Python
+    #     would hit the identical result or risk a duplicate charge. Return the
+    #     envelope as-is; do not retry.
+    #
+    # Genuine helper-level failures (crash / non-zero exit / bad JSON / a killed
+    # subprocess) already returned None above.
+    if bool(obj.get("fallback", False)) and str(obj.get("fallback_kind", "")) == "transport":
+        detail = str(obj.get("error", "") or "")
+        print(
+            f"[rust:postprocess] transport fallback, retrying via Python path: {detail}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
     return PostprocessResult(
         text=str(obj.get("text", text)),
         raw_text=str(obj.get("raw_text", text)),

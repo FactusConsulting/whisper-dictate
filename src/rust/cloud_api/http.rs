@@ -76,6 +76,76 @@ pub(crate) fn http_error(err: ureq::Error) -> String {
     err.to_string()
 }
 
+/// Classify a *send-stage* `ureq::Error` as a **transport** failure — one
+/// where a Python `urllib` retry is safe (cannot double-charge) and may
+/// succeed where ureq cannot.
+///
+/// Every request is issued with `http_status_as_error(false)`, so a non-2xx
+/// response never surfaces here as `StatusCode` (it flows through
+/// [`check_status`]), and a response body that arrives but fails to parse is
+/// handled at its own call site. An error at the send stage therefore means
+/// either the request never reached the provider (DNS / connect / TLS
+/// handshake against an enterprise CA / registry proxy / socket IO) or the
+/// response never completed — the provider was not billed, so Python may
+/// retry. The sole exception is a **timeout**: a global timeout can fire
+/// *after* the provider received the request, so retrying risks a duplicate
+/// charge. Treating only timeouts as terminal keeps the rule robust across
+/// ureq versions (it matches just the always-present `Timeout` variant rather
+/// than enumerating the feature-gated TLS variants).
+pub(crate) fn is_transport_error(err: &ureq::Error) -> bool {
+    !matches!(err, ureq::Error::Timeout(_))
+}
+
+/// A cloud call failure split by whether a Python fallback retry is safe.
+///
+/// * [`CloudCallError::Transport`] — the request never reached the provider
+///   (see [`is_transport_error`]). The Python path validates TLS through the
+///   OS trust store and honours the Windows registry proxy, so it may succeed;
+///   because the provider was never billed, a retry cannot double-charge.
+/// * [`CloudCallError::Terminal`] — the provider was reached (non-2xx, bad
+///   response body) or the outcome is ambiguous (timeout), or the request was
+///   rejected before the network (empty key/model). Python would hit the same
+///   result or risk a duplicate charge, so the fallback envelope is returned
+///   as-is and NOT retried.
+#[derive(Debug)]
+pub enum CloudCallError {
+    Transport(String),
+    Terminal(String),
+}
+
+impl CloudCallError {
+    /// Build from a send-stage `ureq::Error`, classifying transport vs terminal
+    /// and prefixing the human-readable `context` (e.g. "Groq chat completion
+    /// failed").
+    pub(crate) fn from_send(context: &str, err: ureq::Error) -> Self {
+        let transport = is_transport_error(&err);
+        let message = format!("{context}: {}", http_error(err));
+        if transport {
+            CloudCallError::Transport(message)
+        } else {
+            CloudCallError::Terminal(message)
+        }
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            CloudCallError::Transport(m) | CloudCallError::Terminal(m) => m,
+        }
+    }
+
+    pub(crate) fn is_transport(&self) -> bool {
+        matches!(self, CloudCallError::Transport(_))
+    }
+}
+
+impl std::fmt::Display for CloudCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for CloudCallError {}
+
 pub(crate) fn rate_limit_message(retry_after: Option<&str>, detail: &str) -> String {
     let mut message = "HTTP 429 Too Many Requests: rate limited by provider".to_owned();
     if let Some(seconds) = retry_after.filter(|value| !value.trim().is_empty()) {

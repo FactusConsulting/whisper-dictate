@@ -193,13 +193,12 @@ class PostprocessRustBackendTests(unittest.TestCase):
         self.assertEqual(result.latency_ms, 42)
         self.assertEqual(result.provider, "openai")
 
-    def test_rust_fallback_envelope_is_returned_not_retried(self):
-        # A `fallback=true` envelope (exit 0) is a DETERMINISTIC provider outcome
-        # (HTTP 401/429/500, timeout): Python would hit the same result, so we do
-        # NOT re-run it (that would double the latency + charge). The helper
-        # returns the envelope as-is. The one Rust-specific failure Python could
-        # recover — enterprise/private-CA TLS — is fixed at the source by the
-        # platform-verifier agent, so it no longer arrives here as a fallback.
+    def test_terminal_fallback_envelope_is_returned_not_retried(self):
+        # A `fallback=true` envelope with `fallback_kind="terminal"` is a
+        # DETERMINISTIC provider outcome (HTTP 401/429/500, an ambiguous
+        # timeout, a config rejection): Python would hit the same result — or,
+        # for a timeout, risk a duplicate charge — so we do NOT re-run it. The
+        # helper returns the envelope as-is.
         os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
         os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
         from whisper_dictate import vp_postprocess
@@ -213,6 +212,7 @@ class PostprocessRustBackendTests(unittest.TestCase):
             "model": "gpt-4o-mini",
             "latency_ms": 3,
             "fallback": True,
+            "fallback_kind": "terminal",
             "error": "HTTP 429 Too Many Requests",
             "redacted": False,
             "redactions": [],
@@ -237,6 +237,52 @@ class PostprocessRustBackendTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result.fallback)
         self.assertEqual(result.text, "input text")
+        run.assert_called_once()
+
+    def test_transport_fallback_envelope_falls_through_to_python(self):
+        # A `fallback=true` envelope with `fallback_kind="transport"` means the
+        # Rust helper never reached the provider (DNS / connect / enterprise-CA
+        # TLS / Windows registry proxy). Python's urllib validates TLS through
+        # the OS trust store and honours the registry proxy, so it may succeed
+        # where ureq could not — and because the provider was never billed, a
+        # retry cannot double-charge. `_rust_postprocess_text` must therefore
+        # return None so the caller runs the in-process Python path.
+        os.environ["VOICEPI_POSTPROCESS_BACKEND"] = "rust"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
+        from whisper_dictate import vp_postprocess
+
+        rust_payload = {
+            "text": "input text",
+            "raw_text": "input text",
+            "changed": False,
+            "provider": "openai",
+            "mode": "clean",
+            "model": "gpt-4o-mini",
+            "latency_ms": 3,
+            "fallback": True,
+            "fallback_kind": "transport",
+            "error": "OpenAI chat completion failed: tls handshake failed",
+            "redacted": False,
+            "redactions": [],
+        }
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"], 0, stdout=json.dumps(rust_payload), stderr=""
+        )
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            model="gpt-4o-mini",
+            base_url="https://api.openai.com/v1",
+            timeout_ms=4000,
+            api_key="test-key",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_postprocess.subprocess.run", return_value=completed
+        ) as run:
+            result = vp_postprocess._rust_postprocess_text("input text", settings)
+
+        # Fell through: None → the caller re-runs the in-process Python path.
+        self.assertIsNone(result)
         run.assert_called_once()
 
     def test_rust_helper_non_zero_exit_falls_back_to_python(self):

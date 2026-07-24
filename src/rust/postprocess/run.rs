@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cloud_api::http::platform_tls_agent;
+use crate::cloud_api::http::{platform_tls_agent, CloudCallError};
 use crate::cloud_api::openai_chat_completion;
 use crate::postprocess::prompt::{build_prompt, extract_final_text, normalize_mode};
 use crate::postprocess::settings::{validate, PostprocessSettings};
@@ -52,6 +52,13 @@ pub struct PostprocessResult {
     pub model: String,
     pub latency_ms: u64,
     pub fallback: bool,
+    /// Why the call fell back, when `fallback` is true: `"transport"` (request
+    /// never reached the provider — the Python path may retry safely) or
+    /// `"terminal"` (provider reached / ambiguous timeout / config rejection —
+    /// do not retry). Empty when `fallback` is false. Consumed by the Python
+    /// shell-out (`vp_postprocess._rust_postprocess_text`) to decide whether to
+    /// fall through to `urllib`.
+    pub fallback_kind: String,
     pub error: String,
     pub redacted: bool,
     /// Public-safe redaction summary (placeholder/kind/chars) — matches the
@@ -79,7 +86,10 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
     let mode = match validate(settings) {
         Ok(mode) => mode,
         Err(err) => {
-            return fallback_result(text, settings, mode_short, 0, err, false, Vec::new());
+            // A validation failure (bad processor/mode/URL, or a local-only
+            // block) is deterministic — the Python path would reject it the
+            // same way — so it is terminal, not a transport retry candidate.
+            return fallback_result(text, settings, mode_short, 0, "terminal", err, false, Vec::new());
         }
     };
 
@@ -97,7 +107,9 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
             effective_timeout_ms(settings.timeout_ms, prompt_text.chars().count() as i64),
         )
         .map(|res| res.text),
-        other => Err(anyhow::anyhow!("unsupported post processor: {other}")),
+        other => Err(CloudCallError::Terminal(format!(
+            "unsupported post processor: {other}"
+        ))),
     };
 
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -123,20 +135,29 @@ pub fn postprocess_text(text: &str, settings: &PostprocessSettings) -> Postproce
                 model: settings.model.clone(),
                 latency_ms,
                 fallback: false,
+                fallback_kind: String::new(),
                 error: String::new(),
                 redacted: !redactions.is_empty(),
                 redactions: redactions_summary(&redactions),
             }
         }
-        Err(err) => fallback_result(
-            text,
-            settings,
-            mode,
-            latency_ms,
-            err.to_string(),
-            !redactions.is_empty(),
-            redactions_summary(&redactions),
-        ),
+        Err(err) => {
+            let kind = if err.is_transport() {
+                "transport"
+            } else {
+                "terminal"
+            };
+            fallback_result(
+                text,
+                settings,
+                mode,
+                latency_ms,
+                kind,
+                err.message().to_owned(),
+                !redactions.is_empty(),
+                redactions_summary(&redactions),
+            )
+        }
     }
 }
 
@@ -150,17 +171,20 @@ fn raw_passthrough(text: &str, settings: &PostprocessSettings, mode: String) -> 
         model: settings.model.clone(),
         latency_ms: 0,
         fallback: false,
+        fallback_kind: String::new(),
         error: String::new(),
         redacted: false,
         redactions: Vec::new(),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fallback_result(
     text: &str,
     settings: &PostprocessSettings,
     mode: String,
     latency_ms: u64,
+    fallback_kind: &str,
     error: String,
     redacted: bool,
     redactions: Vec<RedactionSummary>,
@@ -174,6 +198,7 @@ fn fallback_result(
         model: settings.model.clone(),
         latency_ms,
         fallback: true,
+        fallback_kind: fallback_kind.to_owned(),
         error,
         redacted,
         redactions,
@@ -208,7 +233,11 @@ fn redactions_summary(redactions: &[redaction::Redaction]) -> Vec<RedactionSumma
         .collect()
 }
 
-fn ollama_generate(settings: &PostprocessSettings, text: &str, mode: &str) -> Result<String> {
+fn ollama_generate(
+    settings: &PostprocessSettings,
+    text: &str,
+    mode: &str,
+) -> Result<String, CloudCallError> {
     let url = format!("{}/api/generate", settings.base_url.trim_end_matches('/'));
     let num_predict = (settings.max_output_chars / 4).max(1);
     let payload = serde_json::json!({
@@ -233,20 +262,21 @@ fn ollama_generate(settings: &PostprocessSettings, text: &str, mode: &str) -> Re
         .http_status_as_error(false)
         .build()
         .send_json(payload)
-        .map_err(|err| anyhow::anyhow!("ollama post-processing failed: {err}"))?;
+        .map_err(|err| CloudCallError::from_send("ollama post-processing failed", err))?;
 
     let code = response.status().as_u16();
     if !(200..300).contains(&code) {
         let body = response.body_mut().read_to_string().unwrap_or_default();
-        return Err(anyhow::anyhow!(
+        return Err(CloudCallError::Terminal(format!(
             "ollama post-processing failed: HTTP {code}: {}",
             body.trim()
-        ));
+        )));
     }
-    let body: Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|err| anyhow::anyhow!("ollama post-processing returned invalid JSON: {err}"))?;
+    let body: Value = response.body_mut().read_json().map_err(|err| {
+        CloudCallError::Terminal(format!(
+            "ollama post-processing returned invalid JSON: {err}"
+        ))
+    })?;
     let response_text = body
         .get("response")
         .and_then(Value::as_str)
@@ -405,6 +435,9 @@ mod tests {
         assert!(result.fallback);
         assert!(!result.error.is_empty());
         assert_eq!(result.provider, "ollama");
+        // A refused connection never reached the provider, so it is a
+        // transport fallback the Python path may safely retry.
+        assert_eq!(result.fallback_kind, "transport");
     }
 
     #[test]
@@ -414,6 +447,28 @@ mod tests {
 
         assert!(result.fallback);
         assert!(result.error.contains("invalid post processor"));
+        // A deterministic config rejection is terminal, not retryable.
+        assert_eq!(result.fallback_kind, "terminal");
+    }
+
+    #[test]
+    fn local_only_block_is_terminal_not_transport() {
+        let mut settings = sample("openai", "clean", "https://api.openai.com/v1");
+        settings.api_key = "test-key".to_owned();
+        settings.local_only = true;
+        let result = postprocess_text("hello", &settings);
+
+        assert!(result.fallback);
+        assert_eq!(result.fallback_kind, "terminal");
+    }
+
+    #[test]
+    fn successful_passthrough_has_empty_fallback_kind() {
+        let settings = sample("none", "raw", DEFAULT_OLLAMA_BASE_URL);
+        let result = postprocess_text("keep this", &settings);
+
+        assert!(!result.fallback);
+        assert!(result.fallback_kind.is_empty());
     }
 
     #[test]
