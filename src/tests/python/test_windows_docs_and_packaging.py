@@ -199,20 +199,27 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         with open("packaging/windows/inno/whisper-dictate.iss", encoding="utf-8") as f:
             script = f.read()
 
+        # Since the two-binary split, the desktop shortcut launches the
+        # windows-subsystem GUI binary directly — no `ui` arg, and NOT the
+        # CLI binary (that would flash a cmd window on double-click).
         self.assertIn(r'Name: "{userdesktop}\whisper-dictate"', script)
-        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"', script)
-        self.assertIn(r'Parameters: "ui"', script)
+        self.assertIn(r'Filename: "{app}\whisper-dictate-gui.exe"', script)
 
     def test_installer_packages_rust_ui_as_primary_desktop_entry(self):
         with open("packaging/windows/inno/whisper-dictate.iss", encoding="utf-8") as f:
             script = f.read()
 
+        # Both binaries must be shipped. The CLI binary carries every verb;
+        # the GUI binary is the tray/settings entry that shortcuts point at.
         self.assertIn(r'Source: "..\..\..\target\release\whisper-dictate.exe"', script)
+        self.assertIn(r'Source: "..\..\..\target\release\whisper-dictate-gui.exe"', script)
+        # Start-menu + [Run] entries launch the GUI binary — no `ui` arg,
+        # no cmd flash.
         self.assertIn(
-            r'Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"',
+            r'Name: "{userprograms}\whisper-dictate\whisper-dictate";    Filename: "{app}\whisper-dictate-gui.exe"',
             script,
         )
-        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"; Description: "Launch whisper-dictate now"', script)
+        self.assertIn(r'Filename: "{app}\whisper-dictate-gui.exe"; Description: "Launch whisper-dictate now"', script)
 
     def test_installer_and_nix_ship_data_subpackage(self):
         # The anti-hallucination pattern JSON lives in the data/ subpackage and is
@@ -369,6 +376,9 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("whisper-dictate-windows-$version.zip", workflow)
         self.assertIn("whisper-dictate-windows-setup-$version.exe", workflow)
         self.assertIn("Copy-Item target\\release\\whisper-dictate.exe", workflow)
+        # Both binaries ship in the portable ZIP too, so tray users of the
+        # zip bundle get the same no-cmd-flash launch UX as installer users.
+        self.assertIn("Copy-Item target\\release\\whisper-dictate-gui.exe", workflow)
         self.assertIn("Copy-Item assets\\whisper-dictate.ico", workflow)
         self.assertNotIn('Copy-Item requirements-cpu.txt (Join-Path $bundle "requirements.txt")', workflow)
         self.assertNotIn('"requirements.txt"', workflow)

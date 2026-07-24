@@ -12,6 +12,15 @@ path = "lib.rs"
 name = "whisper-dictate"
 path = "main.rs"
 
+# Sibling GUI-only binary. Windows-subsystem on Windows (see the file's own
+# cfg_attr) so a tray shortcut / autostart / Explorer double-click never
+# flashes a cmd window. The CLI binary above stays console-subsystem so every
+# verb prints to PowerShell/cmd normally. Both delegate to the shared library
+# — the split is thin dispatch on top of the same backend.
+[[bin]]
+name = "whisper-dictate-gui"
+path = "whisper-dictate-gui.rs"
+
 # Renderer selection. These features gate the eframe renderer backend; `default`
 # selects glow (our shipping renderer). Enabling both is allowed — ui.rs prefers
 # wgpu when `ui-egui-wgpu` is on — but a normal build is glow. Build wgpu with

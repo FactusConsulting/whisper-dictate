@@ -25,7 +25,7 @@
 //! as a JSON envelope so `vp_devices.py` can shell out to it when
 //! `VOICEPI_DEVICES_BACKEND=rust` is set.
 
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait};
@@ -403,14 +403,26 @@ struct FindResponse {
 ///
 /// Accepts an empty / missing stdin body as a shorthand for
 /// `{"action":"list"}` so callers that just want the list can pipe nothing in.
+///
+/// When stdin is an interactive TTY (nothing piped in) we skip the blocking
+/// read entirely and default to `List` — otherwise a user typing
+/// `whisper-dictate devices` from PowerShell would see the process hang
+/// waiting for keyboard input until they hit Ctrl+Z. The Python shell-out and
+/// `... | whisper-dictate devices` pipelines still hit the read path because
+/// their stdin is not a TTY.
 pub fn handle_devices() -> Result<()> {
-    let mut raw = String::new();
-    io::stdin().read_to_string(&mut raw)?;
-    let trimmed = raw.trim();
-    let request: DevicesRequest = if trimmed.is_empty() {
+    let stdin = io::stdin();
+    let request: DevicesRequest = if stdin.is_terminal() {
         DevicesRequest::List
     } else {
-        serde_json::from_str(trimmed)?
+        let mut raw = String::new();
+        stdin.lock().read_to_string(&mut raw)?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            DevicesRequest::List
+        } else {
+            serde_json::from_str(trimmed)?
+        }
     };
     match request {
         DevicesRequest::List => {

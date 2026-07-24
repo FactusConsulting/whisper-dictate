@@ -45,8 +45,17 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy, script)
         self.assertIn(r'Source: "..\..\..\target\release\whisper-dictate.exe"', script)
+        # Since the two-binary split, the installer also ships the sibling
+        # windows-subsystem GUI binary so tray shortcuts / autostart don't
+        # flash a cmd window on launch.
+        self.assertIn(r'Source: "..\..\..\target\release\whisper-dictate-gui.exe"', script)
         self.assertIn(r'Source: "..\..\..\src\python\whisper_dictate\*.py"', script)
-        self.assertIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"', script)
+        # Shortcuts now launch the GUI binary directly (no `ui` arg — it has
+        # no CLI surface, it goes straight into ui::run).
+        self.assertIn(r'Filename: "{app}\whisper-dictate-gui.exe"', script)
+        # And the old "ui-parameter on the CLI exe" shortcut must NOT come back
+        # (that was the shape that flashed a console on tray launch).
+        self.assertNotIn(r'Filename: "{app}\whisper-dictate.exe"; Parameters: "ui"', script)
 
     def test_installer_closes_running_windows_app_before_upgrade(self):
         script = Path("packaging/windows/inno/whisper-dictate.iss").read_text(encoding="utf-8")
@@ -77,7 +86,10 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         # A silent install (winget/Chocolatey) must not hang on the auto-answered
         # retry prompt — it fails fast with the reason instead.
         self.assertIn("WizardSilent()", prepare)
-        self.assertIn("$_.ExecutablePath -eq $appExe", script)
+        # Process-detection filter matches BOTH installed executables (CLI +
+        # GUI) via a $appExes -contains check, since the two-binary split
+        # means either or both may be running when the installer starts.
+        self.assertIn("$appExes -contains $_.ExecutablePath", script)
         self.assertIn("CloseMainWindow()", script)
         self.assertIn("Stop-Process -Id $_.ProcessId -Force", script)
         self.assertIn("$deadline = (Get-Date).AddSeconds(10)", script)
@@ -87,12 +99,28 @@ class WindowsLauncherRegressionTests(unittest.TestCase):
         self.assertIn("Close whisper-dictate and run the installer again.", script)
 
     def test_rust_windows_ui_uses_gui_subsystem(self):
-        script = Path("src/rust/main.rs").read_text(encoding="utf-8")
+        # Two-binary split: the CLI (`main.rs`) is console-subsystem so verbs
+        # print to PowerShell/cmd; the sibling `whisper-dictate-gui.rs` is
+        # the windows-subsystem entry that tray shortcuts / autostart launch
+        # (never flashes a cmd window). Guard both:
+        #  * The GUI file has the subsystem attribute, AND
+        #  * The CLI file does NOT (a regression here would silently break
+        #    every CLI verb's output on Windows again).
+        gui = Path("src/rust/whisper-dictate-gui.rs").read_text(encoding="utf-8")
+        cli = Path("src/rust/main.rs").read_text(encoding="utf-8")
 
         self.assertIn(
             '#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]',
-            script,
+            gui,
         )
+        self.assertNotIn("windows_subsystem", cli)
+        # Both binaries must be wired into Cargo.toml as [[bin]] entries so
+        # the workflow's `cargo build -p whisper-dictate-app` produces both.
+        cargo = Path("src/rust/Cargo.toml").read_text(encoding="utf-8")
+        self.assertIn('name = "whisper-dictate"', cargo)
+        self.assertIn('path = "main.rs"', cargo)
+        self.assertIn('name = "whisper-dictate-gui"', cargo)
+        self.assertIn('path = "whisper-dictate-gui.rs"', cargo)
 
     def test_rust_background_processes_hide_windows_console(self):
         script = rust_runtime_source()

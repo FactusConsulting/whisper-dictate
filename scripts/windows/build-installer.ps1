@@ -139,6 +139,10 @@ try {
   New-Item -ItemType Directory -Force $assetDir | Out-Null
   Copy-Item -LiteralPath (Join-Path $root 'assets\whisper-dictate.ico') -Destination $assetDir
   Copy-Item -LiteralPath (Join-Path $root 'target\release\whisper-dictate.exe') -Destination $bundle
+  # Sibling windows-subsystem binary — shipped alongside the CLI so portable-zip
+  # users get the tray-launch UX (no cmd-window flash) that the Inno installer's
+  # shortcuts already provide.
+  Copy-Item -LiteralPath (Join-Path $root 'target\release\whisper-dictate-gui.exe') -Destination $bundle
   # Ship the golden-benchmark manifest (corpus.json only — NOT the user-local,
   # gitignored audio) so "Run benchmark" resolves a corpus out of the box.
   $benchmarkDir = Join-Path $bundle 'benchmark'

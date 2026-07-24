@@ -572,6 +572,7 @@ jobs:
           # whose absence was the #226 packaging bug (silent ImportError at start).
           $required = @(
             'whisper-dictate.exe',
+            'whisper-dictate-gui.exe',
             'src\python\whisper_dictate\runtime.py',
             'benchmark\corpus.json',
             'src\python\whisper_dictate\data\hallucination_patterns.json'
@@ -600,13 +601,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:APP_ROOT 'whisper-dictate.exe'
-          # The release binary is a Windows GUI-subsystem app
-          # (windows_subsystem = "windows"), so when launched from a redirected
-          # shell its println! stdout is NOT attached to this console — we can
-          # only rely on the PROCESS EXIT CODE, not captured text. The
-          # load-bearing assertion is therefore: a headless-safe entrypoint
-          # (--version: parse args, print version, return Ok) launches and exits
-          # 0 WITHOUT opening the egui window. (A UI subcommand would block.)
+          # Since the two-binary split the CLI binary is console-subsystem, so
+          # stdout IS attached when launched from PowerShell — but we still
+          # gate on the PROCESS EXIT CODE only because it's the sturdier
+          # signal (works identically for Start-Process / redirected shells /
+          # future output-format changes). The load-bearing assertion is: a
+          # headless-safe entrypoint (--version: parse args, print version,
+          # return Ok) launches and exits 0 WITHOUT opening the egui window.
+          # (A UI subcommand would block.) The sibling GUI binary
+          # `whisper-dictate-gui.exe` intentionally has NO CLI surface — it
+          # goes straight into the tray/settings UI — so we cannot --version
+          # it here; its presence is asserted by the layout check above.
           Write-Host "Running: whisper-dictate.exe --version"
           $p = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
           if ($p.ExitCode -ne 0) { throw "whisper-dictate.exe --version exited $($p.ExitCode)" }
