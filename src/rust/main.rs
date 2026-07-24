@@ -241,7 +241,7 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
 /// stream via [`whisper_dictate_app::audio::self_test::run_audio_capture_test`]
 /// and prints either a JSON envelope or a plain summary. Returns Err (and
 /// exits non-zero) when the report says the capture failed so CI trips.
-#[cfg(feature = "audio-in-rust")]
+#[cfg(feature = "audio-capture")]
 fn handle_audio_capture_self_test(
     duration_ms: u64,
     device: String,
@@ -287,11 +287,11 @@ fn handle_audio_capture_self_test(
 }
 
 /// Stock-build stub: the audio module isn't compiled in without the
-/// `audio-in-rust` feature, so we can't open a cpal stream. Emit an
+/// `audio-capture` feature, so we can't open a cpal stream. Emit an
 /// actionable rebuild message (matching the pattern the `ptt-wedge` and
 /// `injection-idempotency` verbs use for their own feature gates) and
 /// exit non-zero so CI / the smoke script pin-check trips.
-#[cfg(not(feature = "audio-in-rust"))]
+#[cfg(not(feature = "audio-capture"))]
 fn handle_audio_capture_self_test(
     _duration_ms: u64,
     _device: String,
@@ -299,8 +299,8 @@ fn handle_audio_capture_self_test(
     _fail_on_silence: bool,
 ) -> anyhow::Result<()> {
     Err(anyhow::anyhow!(
-        "self-test audio-capture requires the `audio-in-rust` cargo feature — \
-         rebuild with `cargo build --features audio-in-rust`"
+        "self-test audio-capture requires the `audio-capture` cargo feature — \
+         rebuild with `cargo build --features audio-capture`"
     ))
 }
 
@@ -511,18 +511,18 @@ fn devices_test_args(name: &str) -> Vec<String> {
     vec!["--test-audio-device".to_owned(), name.to_owned()]
 }
 
-#[cfg(feature = "audio-in-rust")]
+#[cfg(feature = "audio-capture")]
 fn handle_devices_command() -> anyhow::Result<()> {
     whisper_dictate_app::devices::handle_devices()
 }
 
-#[cfg(not(feature = "audio-in-rust"))]
+#[cfg(not(feature = "audio-capture"))]
 fn handle_devices_command() -> anyhow::Result<()> {
     // Stable, machine-readable refusal so the Python shell-out can detect
     // "not built with cpal" and fall back to its own enumeration without
     // parsing a free-form error message. Exits non-zero so subprocess.run's
     // returncode check trips the fallback path in vp_devices.
-    println!("{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-in-rust feature\"}}");
+    println!("{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-capture feature\"}}");
     std::process::exit(2);
 }
 

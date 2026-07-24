@@ -1,53 +1,82 @@
-//! Rust-side audio capture pipeline (cpal → resampler → Silero VAD).
+//! Rust-side audio capture pipeline (cpal → resampler → optional Silero VAD).
 //!
-//! Gated end-to-end behind the `audio-in-rust` cargo feature (off by
-//! default). When the feature is off, the resampler / mix-to-mono / VAD
-//! state-machine code still compiles + unit-tests so the rest of the app
-//! is unaffected; only the cpal stream + Silero ONNX model are gated out.
+//! Two feature tiers:
+//! * **`audio-capture`** (cpal + rubato, no ONNX) — the microphone capture +
+//!   resample building blocks: [`capture`], [`resampler`], [`pipewire`],
+//!   [`self_test`], the [`PipelineEvent`] vocabulary, and the VAD-free
+//!   push-to-talk [`raw::RawCapturePipeline`]. PTT bounds the utterance by the
+//!   key, so no VAD endpointing is needed and no ONNX runtime is pulled in.
+//! * **`audio-in-rust`** — adds the Silero ONNX VAD ([`vad`]) and the
+//!   full [`AudioPipeline`] (cpal → resampler → VAD) plus the base64 stdin
+//!   wire ([`pipe`], [`stdin_bridge`]) that feeds the Python worker. Implies
+//!   `audio-capture`.
+//!
+//! The default build has neither, so it never touches cpal's native backends
+//! or the ONNX runtime.
 //!
 //! Layered design:
 //! 1. [`capture`] runs cpal in a worker thread and emits raw `f32` mono
 //!    samples at the device's native rate via an `mpsc::channel`.
 //! 2. [`resampler`] consumes those bursts and emits fixed 30 ms / 480-
 //!    sample frames at 16 kHz.
-//! 3. [`vad`] consumes the 16 kHz frames and emits `SpeechStart` /
+//! 3. [`raw::run_raw_pump`] (capture tier) forwards each 16 kHz frame as
+//!    [`PipelineEvent::Frame`] with no endpointing — the push-to-talk path.
+//! 4. [`vad`] (VAD tier) consumes the 16 kHz frames and emits `SpeechStart` /
 //!    `SpeechFrame` / `SpeechEnd` events with prefill + onset debounce +
 //!    hangover smoothing.
 //!
-//! [`AudioPipeline`] wires the three together on a single consumer
+//! [`AudioPipeline`] wires capture → resampler → VAD on a single consumer
 //! thread (the cpal callback stays minimal) and re-emits the events on a
 //! single `mpsc::Receiver<PipelineEvent>` that the supervisor pipes to
-//! the Python worker's stdin.
+//! the Python worker's stdin; [`raw::RawCapturePipeline`] is the VAD-free
+//! sibling for the in-process PTT session.
 
+// Only the VAD `AudioPipeline` / `run_pump` below use the channel + thread
+// primitives directly; the VAD-free `raw` module has its own imports.
+#[cfg(feature = "audio-in-rust")]
 use std::sync::mpsc::{self, Receiver, Sender};
+#[cfg(feature = "audio-in-rust")]
 use std::thread::{self, JoinHandle};
 
 pub mod capture;
-pub(crate) mod model_cache;
-pub mod pipe;
 pub mod pipewire;
+pub mod raw;
 pub mod resampler;
 pub mod self_test;
+// VAD-dependent submodules — additionally gated on `audio-in-rust` because they
+// pull in the Silero ONNX VAD (vad-rs/ort) or the base64 stdin wire it feeds.
+#[cfg(feature = "audio-in-rust")]
+pub(crate) mod model_cache;
+#[cfg(feature = "audio-in-rust")]
+pub mod pipe;
+#[cfg(feature = "audio-in-rust")]
 pub mod stdin_bridge;
+#[cfg(feature = "audio-in-rust")]
 pub mod vad;
 
 pub use capture::{AudioChunk, CaptureHandle};
+#[cfg(feature = "audio-in-rust")]
 pub use pipe::{event_to_json_line, write_events};
+pub use raw::{run_raw_pump, RawCapturePipeline};
 pub use resampler::{FrameResampler, FRAME_SIZE, OUTPUT_RATE};
+#[cfg(feature = "audio-in-rust")]
 pub use stdin_bridge::{
     spawn_bridge, spawn_bridge_pending_ready, BridgeError, BridgeHandle, PendingBridge,
 };
+#[cfg(feature = "audio-in-rust")]
 pub use vad::{SileroVad, SmoothedVad, VadEvent};
 
 /// Bundled Silero v4 ONNX bytes used by [`AudioPipeline::start`] when the
 /// supervisor (or another caller) wants the default model loader. Re-exported
 /// here so callers don't need to know the asset path; see `assets/silero_vad.onnx`.
+#[cfg(feature = "audio-in-rust")]
 pub const EMBEDDED_SILERO_BYTES: &[u8] = include_bytes!("../../../assets/silero_vad.onnx");
 
 /// Convenience for the supervisor / integration tests: construct the
 /// default Silero VAD from the embedded ONNX bytes. Returned as a
 /// closure so callers can pass it straight to [`AudioPipeline::start`]
 /// without re-implementing the loader.
+#[cfg(feature = "audio-in-rust")]
 pub fn default_silero_loader() -> impl FnOnce() -> Result<SileroVad, anyhow::Error> {
     || SileroVad::from_embedded_bytes(EMBEDDED_SILERO_BYTES)
 }
@@ -85,12 +114,16 @@ pub enum PipelineEvent {
     Cancelled,
 }
 
-/// Running pipeline. Drop or call [`AudioPipeline::stop`] to tear down.
+/// Running VAD pipeline (cpal → resampler → Silero). Drop or call
+/// [`AudioPipeline::stop`] to tear down. For the VAD-free push-to-talk path
+/// see [`RawCapturePipeline`].
+#[cfg(feature = "audio-in-rust")]
 pub struct AudioPipeline {
     capture: Option<CaptureHandle>,
     pump: Option<JoinHandle<()>>,
 }
 
+#[cfg(feature = "audio-in-rust")]
 impl AudioPipeline {
     /// Spin up the full pipeline. Errors from the capture thread are
     /// reported on the `Receiver` as [`PipelineEvent::DeviceError`].
@@ -144,6 +177,7 @@ impl AudioPipeline {
     }
 }
 
+#[cfg(feature = "audio-in-rust")]
 impl Drop for AudioPipeline {
     fn drop(&mut self) {
         self.stop();
@@ -154,6 +188,7 @@ impl Drop for AudioPipeline {
 /// resampler + VAD, and forwards [`PipelineEvent`]s. `pub(crate)` so the
 /// regression test for the DeviceError terminal-event contract can
 /// drive it directly without spinning up a real cpal stream.
+#[cfg(feature = "audio-in-rust")]
 pub(crate) fn run_pump(
     sample_rate: usize,
     silero: SileroVad,
@@ -247,7 +282,7 @@ pub(crate) fn run_pump(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "audio-in-rust"))]
 mod tests {
     use super::*;
     use crate::audio::capture::AudioChunk;
