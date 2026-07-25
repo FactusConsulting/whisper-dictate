@@ -10,11 +10,14 @@
 //! in the curated catalog).
 //!
 //! Scope is intentionally minimal:
-//! - **Catalog**: nine curated entries covering the CPU-friendly English-only
-//!   trio (`tiny.en` / `base.en` / `small.en`), the matching multilingual
-//!   siblings (`tiny` / `base` / `small`), and the larger multilingual models
-//!   (`medium`, `large-v3-turbo`, `large-v3`). Anything not in the catalog is
-//!   still reachable via `VOICEPI_WHISPER_MODEL_PATH`.
+//! - **Catalog**: two user-facing multilingual entries — `large-v3-turbo`
+//!   (fast) and `large-v3` (most accurate). The English-only and mid-size
+//!   variants are still present but `hidden`: this is a multilingual app, so
+//!   `*.en` was never the right NEW choice and `base`/`small`/`medium` only
+//!   added choice paralysis next to turbo — but they stay resolvable so an
+//!   upgrade never strands a user whose cached model is one of them, and so
+//!   CI can keep using the ~78 MB `tiny` fixture. Anything not in the catalog
+//!   is still reachable via `VOICEPI_WHISPER_MODEL_PATH`.
 //! - **Format**: GGML only. whisper.cpp does not yet read GGUF (see the
 //!   `reject_gguf_model` guard in `whisper::local`), so a GGUF entry in the
 //!   catalog would only mislead.
@@ -73,93 +76,92 @@ pub struct ModelEntry {
     /// One-line human-readable summary for the UI label
     /// (accuracy / speed / file size tradeoff).
     pub description: &'static str,
+    /// When true the entry is not offered as a NEW choice: [`visible_catalog`]
+    /// filters it out of the Settings list, `models list`, and the
+    /// "available:" suggestion in the unknown-model error.
+    ///
+    /// Hidden does NOT mean unusable. The entry stays resolvable by
+    /// [`find`] and still counts for cache resolution, because:
+    ///   * a user who downloaded it under an older version has a valid file on
+    ///     disk and must not be stranded by an upgrade, and
+    ///   * CI / the `whisper-load` self-test download `tiny` by name.
+    ///
+    /// Hidden entries are ordered LAST in [`CATALOG`] so a cached user-facing
+    /// model always takes priority over a legacy one.
+    pub hidden: bool,
 }
 
-/// Curated catalog of whisper.cpp GGML models. Order matches the UI
-/// presentation: English-only trio first (smallest → largest), then the
-/// matching multilingual siblings, then the larger multilingual models.
+/// Build a [`ModelEntry`] from the fields that actually differ between models.
+///
+/// Every catalog URL is the same HuggingFace path plus the filename, so the
+/// macro derives it — that removes ~8 lines of identical boilerplate per entry
+/// AND makes a filename/URL mismatch structurally impossible, which a
+/// hand-copied block invites.
+macro_rules! model_entry {
+    ($name:literal, $file:literal, $sha:literal, $size:literal, $hidden:literal, $desc:literal) => {
+        ModelEntry {
+            name: $name,
+            filename: $file,
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/",
+                $file
+            ),
+            sha256: $sha,
+            size_bytes: $size,
+            description: $desc,
+            hidden: $hidden,
+        }
+    };
+}
+
+/// Curated catalog of whisper.cpp GGML models.
+///
+/// Deliberately small: whisper-dictate is a MULTILINGUAL app, so the
+/// English-only (`*.en`) variants were never the right answer for a user, and
+/// the mid-range sizes (`base` / `small` / `medium`) only added choice
+/// paralysis next to `large-v3-turbo`. What remains is the real decision —
+/// turbo (fast) vs large-v3 (most accurate) — plus hidden test fixtures.
+///
 /// SHA-256 values are pinned to the current `ggerganov/whisper.cpp`
 /// HuggingFace `main` branch — re-verify when bumping.
+// `rustfmt::skip` keeps each entry on ONE line. This is a DATA TABLE, and
+// one row per model is both easier to scan and materially less repetitive:
+// let rustfmt explode these into eight-line blocks and nine structurally
+// identical stanzas appear, which is duplication by any measure (SonarCloud
+// flagged exactly that at 13.2% on new code).
+#[rustfmt::skip]
 pub const CATALOG: &[ModelEntry] = &[
-    // English-only ------------------------------------------------------
-    ModelEntry {
-        name: "tiny.en",
-        filename: "ggml-tiny.en.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
-        sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
-        size_bytes: 77_700_000,
-        description: "English, fastest, lowest accuracy (~78 MB)",
-    },
-    ModelEntry {
-        name: "base.en",
-        filename: "ggml-base.en.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
-        sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
-        size_bytes: 147_900_000,
-        description: "English, fast, low accuracy (~148 MB)",
-    },
-    ModelEntry {
-        name: "small.en",
-        filename: "ggml-small.en.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
-        sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-        size_bytes: 487_600_000,
-        description: "English, balanced accuracy & speed (~488 MB)",
-    },
-    // Multilingual ------------------------------------------------------
-    ModelEntry {
-        name: "tiny",
-        filename: "ggml-tiny.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-        size_bytes: 77_700_000,
-        description: "Multilingual, fastest, lowest accuracy (~78 MB)",
-    },
-    ModelEntry {
-        name: "base",
-        filename: "ggml-base.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-        size_bytes: 147_900_000,
-        description: "Multilingual, fast, low accuracy (~148 MB)",
-    },
-    ModelEntry {
-        name: "small",
-        filename: "ggml-small.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
-        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-        size_bytes: 487_600_000,
-        description: "Multilingual, balanced accuracy & speed (~488 MB)",
-    },
-    ModelEntry {
-        name: "medium",
-        filename: "ggml-medium.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
-        sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
-        size_bytes: 1_500_000_000,
-        description: "Multilingual, good accuracy, ~1.5GB",
-    },
-    ModelEntry {
-        name: "large-v3-turbo",
-        filename: "ggml-large-v3-turbo.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
-        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-        size_bytes: 1_600_000_000,
-        description: "Multilingual, high accuracy, ~1.6GB",
-    },
-    ModelEntry {
-        name: "large-v3",
-        filename: "ggml-large-v3.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-        sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
-        size_bytes: 3_100_000_000,
-        description: "Multilingual, best accuracy, ~3.1GB",
-    },
+    // User-facing models FIRST — PRIORITY ORDER: `resolve_model_path_from_env`
+    // takes the first cached+verified entry, so these must precede the legacy ones.
+    model_entry!("large-v3-turbo", "ggml-large-v3-turbo.bin", "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69", 1_600_000_000, false, "Multilingual, high accuracy, fastest of the large models (~1.6GB)"),
+    model_entry!("large-v3", "ggml-large-v3.bin", "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2", 3_100_000_000, false, "Multilingual, best accuracy (~3.1GB)"),
+    // Hidden: not offered as NEW choices, but still resolvable and selectable
+    // from cache so an upgrade never strands a user whose only downloaded model
+    // is one of these; CI uses `tiny` as its ~78 MB fixture. Last, so a cached
+    // large model always wins.
+    model_entry!("tiny", "ggml-tiny.bin", "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21", 77_700_000, true, "Multilingual, fastest, lowest accuracy (~78 MB)"),
+    model_entry!("base", "ggml-base.bin", "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", 147_900_000, true, "Multilingual, fast, low accuracy (~148 MB)"),
+    model_entry!("small", "ggml-small.bin", "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", 487_600_000, true, "Multilingual, balanced accuracy & speed (~488 MB)"),
+    model_entry!("medium", "ggml-medium.bin", "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208", 1_500_000_000, true, "Multilingual, good accuracy, ~1.5GB"),
+    model_entry!("tiny.en", "ggml-tiny.en.bin", "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f", 77_700_000, true, "English-only, fastest, lowest accuracy (~78 MB)"),
+    model_entry!("base.en", "ggml-base.en.bin", "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002", 147_900_000, true, "English-only, fast, low accuracy (~148 MB)"),
+    model_entry!("small.en", "ggml-small.en.bin", "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d", 487_600_000, true, "English-only, balanced accuracy & speed (~488 MB)"),
 ];
 
 /// Look up a catalog entry by its short name.
+///
+/// Resolves hidden entries too, so `models download tiny.en` and the
+/// `whisper-load` self-test keep working even though the UI never lists it.
 pub fn find(name: &str) -> Option<&'static ModelEntry> {
     CATALOG.iter().find(|entry| entry.name == name)
+}
+
+/// The user-facing subset of [`CATALOG`] — every entry except test fixtures.
+///
+/// Use this anywhere a human picks a model (the Settings tab). Use [`CATALOG`]
+/// directly only for by-name resolution and integrity checks.
+pub fn visible_catalog() -> impl Iterator<Item = &'static ModelEntry> {
+    CATALOG.iter().filter(|entry| !entry.hidden)
 }
 
 /// Resolve the OS-conventional user-cache subdirectory we store Whisper
@@ -279,17 +281,34 @@ impl DownloadProgress for () {
 /// TCP connect timeout for model downloads.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// End-to-end timeout for model downloads (default 60 minutes).
+/// End-to-end timeout for model downloads (default 6 hours).
 ///
-/// At 0.5 Mbit/s the models require roughly:
-///   tiny.en  (~78 MB)  → ~21 min
-///   base.en (~148 MB)  → ~39 min
-///   small.en (~488 MB) → ~130 min
+/// Sized for the CURRENT catalog. The previous 60-minute cap was chosen when
+/// the smallest entries were 78–148 MB; after the catalog trim the smallest
+/// *user-facing* model is 1.6 GB, which needs ~3.6 Mbit/s just to finish inside
+/// an hour. Anyone slower would hit the timeout, have the partial file deleted,
+/// and restart from zero on every retry — i.e. be unable to install the app at
+/// all without discovering an undocumented env override.
 ///
-/// The default 60-minute cap covers tiny.en and base.en on very slow
-/// connections. Users on slower links or downloading small.en can override
-/// via `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`.
-const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 3_600;
+/// Rough wall-clock for the visible models:
+///   large-v3-turbo (~1.6 GB) → ~3.6 h @ 1 Mbit/s, ~1.8 h @ 2 Mbit/s
+///   large-v3       (~3.1 GB) → ~6.9 h @ 1 Mbit/s, ~3.4 h @ 2 Mbit/s
+///
+/// The 6-hour default therefore covers turbo down to ~0.6 Mbit/s and large-v3
+/// down to ~1.2 Mbit/s. Slower links can still raise it via
+/// `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`.
+///
+/// KNOWN LIMITATION: this is a total-transfer cap, not an idle timeout.
+/// [`CONNECT_TIMEOUT`] only covers establishing the connection — if the server
+/// accepts and then goes silent mid-body, the transfer blocks until this whole
+/// budget elapses. ureq 3.x cannot express an idle timeout (every
+/// `timeout_*` knob is a per-stage TOTAL), and any `timeout_recv_body` short
+/// enough to catch a stall would abort a legitimately slow multi-GB download.
+/// Fixing it properly means detecting stalls in the streaming loop itself
+/// (reads on a worker thread with a per-chunk deadline) plus a cancel
+/// affordance in the UI — tracked as follow-up work, deliberately not bolted
+/// onto the catalog trim.
+const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 21_600;
 
 fn download_timeout() -> std::time::Duration {
     let secs = std::env::var("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS")

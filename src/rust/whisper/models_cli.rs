@@ -40,7 +40,9 @@ pub(crate) fn print_list<W: std::io::Write, F: Fn(&ModelEntry) -> bool>(
         writeln!(out)?;
     }
     writeln!(out, "Available Whisper models:")?;
-    for entry in model_manager::CATALOG {
+    // Visible-only: hidden test fixtures are downloadable by name but are not
+    // user-facing choices (see `ModelEntry::hidden`).
+    for entry in model_manager::visible_catalog() {
         let status = if is_downloaded(entry) { "[ok]" } else { "[--]" };
         writeln!(
             out,
@@ -55,7 +57,7 @@ pub(crate) fn print_list<W: std::io::Write, F: Fn(&ModelEntry) -> bool>(
 
 fn download(name: &str) -> Result<()> {
     let entry = model_manager::find(name).ok_or_else(|| {
-        let names: Vec<&str> = model_manager::CATALOG.iter().map(|e| e.name).collect();
+        let names: Vec<&str> = model_manager::visible_catalog().map(|e| e.name).collect();
         anyhow::anyhow!("unknown model '{name}'; available: {}", names.join(", "))
     })?;
     // Idempotent: if the model is already cached and verified, succeed
@@ -204,12 +206,16 @@ mod tests {
         // the rest are not. The output must mark them accordingly and
         // include each entry's name.
         //
-        // Substring matching on `entry.name` alone would collide: the
-        // catalog contains both `tiny` and `tiny.en`, so a naive
-        // `line.contains("tiny")` picks up the `tiny.en` row. Match the
-        // second column of each rendered row instead — `<status> <name>` —
-        // so lookup is exact.
-        let first = model_manager::CATALOG[0].name;
+        // Substring matching on `entry.name` alone would collide (e.g.
+        // `large-v3` is a prefix of `large-v3-turbo`), so match the second
+        // whitespace-separated column of each rendered row instead —
+        // `<status> <name>` — which makes lookup exact.
+        //
+        // Uses the VISIBLE catalog: `print_list` filters hidden test fixtures,
+        // so asserting on `CATALOG[0]` (the hidden `tiny.en`) would look for a
+        // row that is deliberately absent.
+        let visible: Vec<&str> = model_manager::visible_catalog().map(|e| e.name).collect();
+        let first = visible[0];
         let mut buf: Vec<u8> = Vec::new();
         print_list(&mut buf, |entry| entry.name == first).unwrap();
         let out = String::from_utf8(buf).unwrap();
@@ -228,9 +234,9 @@ mod tests {
             first_line.contains("[ok]"),
             "downloaded entry must be marked [ok]: {first_line}",
         );
-        // Every other catalog entry must be marked missing.
-        for entry in &model_manager::CATALOG[1..] {
-            let line = row_for(entry.name).expect("entry must appear in list output");
+        // Every other VISIBLE entry must be marked missing.
+        for name in &visible[1..] {
+            let line = row_for(name).expect("entry must appear in list output");
             assert!(
                 line.contains("[--]"),
                 "missing entry must be marked [--]: {line}",

@@ -34,7 +34,9 @@ impl WhisperDictateApp {
         );
         ui.add_space(4.0);
         let any_running = self.whisper_model_downloads.any_in_progress();
-        for entry in model_manager::CATALOG {
+        // `visible_catalog()` (not `CATALOG`) so hidden test fixtures — the
+        // tiny.en model CI downloads — never show up as a user choice.
+        for entry in model_manager::visible_catalog() {
             self.render_whisper_model_row(ui, entry, any_running);
             ui.add_space(2.0);
         }

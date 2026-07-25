@@ -171,11 +171,30 @@ if [ "$CMD_MODE" = "python" ]; then
     warn "models list is a Rust subcommand — not exposed by the Python fallback"
 else
     if out="$(run_cli "models list" 2>&1)"; then
-        if printf '%s' "$out" | grep -q "tiny.en" && \
-           printf '%s' "$out" | grep -q "large-v3"; then
-            ok "catalog lists tiny.en and large-v3"
+        # `models list` shows the USER-FACING catalog only; hidden entries
+        # (legacy sizes + the tiny fixture CI downloads) are deliberately
+        # absent. Parse the exact NAME column of each rendered row rather than
+        # substring-matching the whole output: "large-v3" is a substring of
+        # "large-v3-turbo", so a naive grep passes even when large-v3 is gone.
+        # Every check below runs independently — an earlier success must not
+        # short-circuit the hidden-leak check.
+        listed="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\[[^]]*\][[:space:]]*\([^[:space:]]*\).*/\1/p')"
+        catalog_ok=1
+        for want in large-v3-turbo large-v3; do
+            if ! printf '%s\n' "$listed" | grep -qx "$want"; then
+                bad "catalog missing user-facing model: $want"
+                catalog_ok=0
+            fi
+        done
+        for leak in tiny tiny.en base base.en small small.en medium; do
+            if printf '%s\n' "$listed" | grep -qx "$leak"; then
+                bad "catalog leaks hidden entry into the user-facing list: $leak"
+                catalog_ok=0
+            fi
+        done
+        if [ "$catalog_ok" -eq 1 ]; then
+            ok "catalog lists exactly the user-facing models (large-v3-turbo, large-v3)"
         else
-            bad "catalog missing tiny.en and/or large-v3 entries"
             info "$out"
         fi
     else
@@ -215,6 +234,36 @@ else
         fi
     fi
 fi
+
+# --------------------------------------------------------------------------
+# GGML tiny-fixture resolution — for `self-test whisper-load` ONLY.
+#
+# Which GGML fixture is on the box depends on how it was prepared:
+# .github/workflows/test.yml still downloads `tiny.en`, while newer setups
+# fetch the multilingual `tiny`. Hardcoding one silently takes a "not in cache"
+# skip branch on the other kind of box, letting the smoke stay green without
+# exercising the loader at all. Both names stay resolvable via the hidden
+# catalog entries.
+#
+# Deliberately NOT used by simulate-ptt: even in Rust command mode that verb
+# fronts the PYTHON worker, which builds `faster_whisper.WhisperModel` against
+# a separate HuggingFace/CTranslate2 cache and never reads a GGML file. Probing
+# `models path` says nothing about what faster-whisper has cached, so that
+# section keeps a fixed fixture instead.
+# --------------------------------------------------------------------------
+TINY_FIXTURE="tiny"
+if [ "$CMD_MODE" = "rust" ]; then
+    # Probe the CACHE DIRECTORY, never `models download` — this script must not
+    # pull 78 MB behind the operator's back just to decide which name to use.
+    if tiny_cache="$(whisper-dictate models path 2>/dev/null)" && [ -n "$tiny_cache" ]; then
+        if [ -f "$tiny_cache/ggml-tiny.bin" ]; then
+            TINY_FIXTURE="tiny"
+        elif [ -f "$tiny_cache/ggml-tiny.en.bin" ]; then
+            TINY_FIXTURE="tiny.en"
+        fi
+    fi
+fi
+info "tiny fixture in use: $TINY_FIXTURE"
 
 # --------------------------------------------------------------------------
 # SECTION: simulate-ptt (headless dictation pipeline)
@@ -564,7 +613,7 @@ fi
 # --------------------------------------------------------------------------
 # SECTION: self-test whisper-load (regression — Whisper cold-load latency + OOM)
 #
-# Item 5 prereq 5: load the tiny.en GGML model through the same background
+# Item 5 prereq 5: load the tiny GGML model through the same background
 # preloader the supervisor will use in Phase C step 2. Regression coverage for
 # the v1.20.7 silent-PTT scenario (whisper.cpp load hanging the main thread)
 # + the OOM path (whisper.cpp panics on a memory-starved host, caught by
@@ -578,15 +627,24 @@ section "self-test whisper-load (Whisper cold-load latency + OOM)"
 if [ "$CMD_MODE" = "python" ]; then
     warn "self-test whisper-load is a Rust subcommand — not exposed by the Python fallback"
 else
-    wl_out="$(whisper-dictate self-test whisper-load --model tiny.en --json 2>&1)"
+    # Try the multilingual fixture first, then fall back to the English-only
+    # one. Which of the two is present depends on the preparation step: the
+    # workflow at .github/workflows/test.yml still downloads `tiny.en`, while
+    # newer setups fetch `tiny`. Hardcoding either would silently take the
+    # "not in cache" warn/skip branch on the other kind of box, letting this
+    # smoke stay green WITHOUT ever exercising the cold-load/OOM path this
+    # section exists to cover. Both names stay resolvable via the hidden
+    # catalog entries, so probing is safe.
+    wl_model="$TINY_FIXTURE"
+    wl_out="$(whisper-dictate self-test whisper-load --model "$wl_model" --json 2>&1)"
     wl_rc=$?
     if [ "$wl_rc" -eq 0 ] && printf '%s' "$wl_out" | grep -q '"ok":true'; then
         elapsed=$(printf '%s' "$wl_out" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
-        ok "whisper-load: tiny.en loaded in ${elapsed:-?}ms (status=ready)"
+        ok "whisper-load: $wl_model loaded in ${elapsed:-?}ms (status=ready)"
     elif printf '%s' "$wl_out" | grep -qi "whisper-rs-local\|rebuild with"; then
         warn "self-test whisper-load requires whisper-rs-local feature (skipped on this build)"
     elif printf '%s' "$wl_out" | grep -qi "not in the cache\|models download"; then
-        warn "self-test whisper-load: tiny.en not in cache — run 'whisper-dictate models download tiny.en' first"
+        warn "self-test whisper-load: no tiny fixture cached — run 'whisper-dictate models download tiny' first"
     else
         bad "whisper-load FAILED — Phase B whisper backend is broken: $(printf '%s\n' "$wl_out" | tail -n 3)"
     fi

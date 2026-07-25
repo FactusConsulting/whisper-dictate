@@ -15,3 +15,24 @@ fn every_whisper_model_has_a_nonempty_hint() {
 fn unknown_model_has_empty_hint() {
     assert_eq!(whisper_model_hint("nonexistent"), ("", 0));
 }
+
+#[test]
+fn picker_offers_only_the_two_real_choices() {
+    // The offer list is deliberately minimal (see WHISPER_MODELS): a machine
+    // that cannot run these should use a cloud STT backend rather than a tiny
+    // local model. Keep it in sync with the GGML download catalog so Settings
+    // never offers a model the downloader won't fetch.
+    assert_eq!(WHISPER_MODELS, &["large-v3-turbo", "large-v3"]);
+}
+
+#[test]
+fn retired_models_keep_their_hints_for_saved_settings() {
+    // Removing a model from the OFFER list must not blank out the picker for
+    // someone who already had it selected — nothing resets `settings.model`,
+    // so the hint lookup has to keep resolving the retired names.
+    for retired in ["medium", "small", "base", "tiny"] {
+        let (note, mb) = whisper_model_hint(retired);
+        assert!(!note.is_empty(), "retired model {retired} lost its label");
+        assert!(mb > 0, "retired model {retired} lost its VRAM estimate");
+    }
+}

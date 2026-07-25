@@ -78,26 +78,42 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[test]
 fn catalog_contains_expected_models() {
-    // Encodes the curated scope decision (Tier 1 expansion, 2026-07):
-    // English-only trio first (smallest → largest), then the multilingual
-    // siblings, then the larger multilingual models. A future PR that drops
-    // one of these or accidentally re-orders them will trip this — at which
-    // point the UI labels should be re-audited alongside.
+    // Encodes the curated scope decision (catalog trim, 2026-07): the app is
+    // MULTILINGUAL, so the English-only variants and the mid-size models are no
+    // longer offered as NEW choices — what a user picks between is turbo (fast)
+    // vs large-v3 (most accurate). They remain in the catalog as `hidden` so an
+    // upgrade never strands a user whose cached model is one of them, and so CI
+    // can keep using the ~78 MB `tiny` fixture.
+    //
+    // ORDER IS PRIORITY ORDER: `resolve_model_path_from_env` takes the first
+    // cached+verified entry, so user-facing models must precede the hidden
+    // legacy ones — otherwise a cached `tiny` would beat a cached `large-v3`.
     let names: Vec<&str> = CATALOG.iter().map(|e| e.name).collect();
     assert_eq!(
         names,
         vec![
-            "tiny.en",
-            "base.en",
-            "small.en",
+            "large-v3-turbo",
+            "large-v3",
             "tiny",
             "base",
             "small",
             "medium",
-            "large-v3-turbo",
-            "large-v3",
+            "tiny.en",
+            "base.en",
+            "small.en",
         ]
     );
+    // Everything after the two visible entries must be hidden, and the two
+    // visible ones must not be — that invariant is what makes the ordering
+    // above meaningful.
+    for entry in CATALOG {
+        let expect_visible = matches!(entry.name, "large-v3-turbo" | "large-v3");
+        assert_eq!(
+            !entry.hidden, expect_visible,
+            "visibility mismatch for {}",
+            entry.name
+        );
+    }
 }
 
 #[test]
@@ -152,8 +168,8 @@ fn catalog_names_are_unique() {
 
 #[test]
 fn find_returns_entry_by_name() {
-    let tiny = find("tiny.en").expect("tiny.en in catalog");
-    assert_eq!(tiny.filename, "ggml-tiny.en.bin");
+    let tiny = find("tiny").expect("tiny in catalog");
+    assert_eq!(tiny.filename, "ggml-tiny.bin");
     assert_eq!(find("nonsense"), None);
 }
 
@@ -540,6 +556,7 @@ fn is_downloaded_true_when_cached_file_matches_hash() {
         sha256: hash_static,
         size_bytes: payload.len() as u64,
         description: "synthetic test entry",
+        hidden: true,
     };
     let path = model_path(&entry).expect("override must resolve");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -644,4 +661,63 @@ fn stream_download_to_errors_when_partial_parent_missing() {
     );
     assert!(!partial.exists(), "no partial must be left behind");
     assert!(!target.exists(), "no target must be created");
+}
+
+#[test]
+fn visible_catalog_hides_test_fixtures_but_find_still_resolves_them() {
+    // The UI must never offer an English-only model in a multilingual app,
+    // but CI (`models download tiny.en`, `self-test whisper-load`) resolves it
+    // by name — so `find` must keep seeing what `visible_catalog` hides.
+    let visible: Vec<&str> = visible_catalog().map(|e| e.name).collect();
+    assert_eq!(visible, vec!["large-v3-turbo", "large-v3"]);
+    assert!(
+        !visible.iter().any(|n| n.ends_with(".en")),
+        "no English-only model may be user-facing in a multilingual app"
+    );
+    assert!(
+        find("tiny.en").is_some(),
+        "hidden fixture must stay resolvable"
+    );
+    assert!(find("tiny.en").unwrap().hidden);
+}
+
+#[test]
+fn legacy_cached_model_still_resolves_after_upgrade() {
+    // Regression: an upgraded user whose ONLY downloaded model is a formerly
+    // user-facing entry (`base`/`small`/`medium`, or an English-only variant)
+    // must keep working. `find` has to resolve the name and `model_path` has to
+    // point at the same cache location as before, otherwise the app reports
+    // "no model found" while a perfectly good file sits on disk.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let _cache = EnvVarGuard::set(CACHE_ENV_VAR, tmp.path());
+
+    for legacy in ["base", "small", "medium", "base.en", "small.en"] {
+        let entry = find(legacy).unwrap_or_else(|| panic!("{legacy} must resolve after the trim"));
+        let path = model_path(entry).expect("legacy entry must have a cache path");
+        assert!(
+            path.ends_with(entry.filename),
+            "{legacy} must map to its original ggml filename so an already-\
+             downloaded file is found: {path:?}"
+        );
+    }
+}
+
+#[test]
+fn catalog_urls_are_derived_from_filenames() {
+    // The `model_entry!` macro builds `url` as BASE + filename, which removes
+    // ~8 lines of copy-paste per entry and makes a filename/URL mismatch
+    // impossible. Pin that contract: if someone hand-writes an entry again, or
+    // upstream moves the mirror, this fails loudly rather than silently
+    // downloading the wrong weights (the SHA check would catch it, but only
+    // after a multi-GB transfer).
+    const BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
+    for entry in CATALOG {
+        assert_eq!(
+            entry.url,
+            format!("{BASE}{}", entry.filename),
+            "url must be BASE + filename for {}",
+            entry.name
+        );
+    }
 }
