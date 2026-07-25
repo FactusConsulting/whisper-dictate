@@ -53,7 +53,7 @@ impl SkipDecision {
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::Keep => None,
-            Self::TooShort => Some("too short — hold the key while you speak"),
+            Self::TooShort => Some("too short - hold the key while you speak"),
         }
     }
 }

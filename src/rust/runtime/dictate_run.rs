@@ -64,7 +64,7 @@ pub struct DictateRunArgs {
 pub fn handle_dictate_run(args: DictateRunArgs) -> Result<()> {
     if !features_available() {
         return Err(anyhow!(
-            "dictate-run requires the `rust-hotkeys` and `rust-injection` cargo features — \
+            "dictate-run requires the `rust-hotkeys` and `rust-injection` cargo features - \
              rebuild with `cargo build --features rust-hotkeys,rust-injection` (Phase A step 1 \
              of audit item 5; see docs/design/item5-wire-dictate-session.md)"
         ));
@@ -90,7 +90,7 @@ fn run(_args: DictateRunArgs) -> Result<()> {
     // the gate can't turn this into a silent no-op.
     Err(anyhow!(
         "dictate-run stub reached on a build without rust-hotkeys+rust-injection \
-         — this is a bug in the CLI dispatcher"
+         - this is a bug in the CLI dispatcher"
     ))
 }
 
@@ -183,7 +183,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         Err(InstallError::Unsupported) => {
             return Err(anyhow!(
                 "hotkey install returned Unsupported despite the `rust-hotkeys` feature \
-                 being on — this is a build-configuration bug"
+                 being on - this is a build-configuration bug"
             ));
         }
         Err(err @ InstallError::EmptyConfig) => return Err(err.into()),
@@ -191,7 +191,7 @@ fn run(args: DictateRunArgs) -> Result<()> {
         Err(InstallError::ListenerStartup(msg)) => {
             return Err(anyhow!(
                 "hotkey listener failed to start ({msg}); on Linux without an X display \
-                 this is expected — retry from a real user session, or use the evdev \
+                 this is expected - retry from a real user session, or use the evdev \
                  backend if you have `/dev/input/*` permissions"
             ));
         }

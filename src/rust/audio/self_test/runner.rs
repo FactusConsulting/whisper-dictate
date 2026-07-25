@@ -157,7 +157,7 @@ pub fn run_audio_capture_test(opts: AudioCaptureOptions) -> AudioCaptureReport {
             peak: 0.0,
             sample_rate,
             error: format!(
-                "no audio device delivered samples within {} ms — check permissions, mic mute state, or PIPEWIRE_QUANTUM",
+                "no audio device delivered samples within {} ms - check permissions, mic mute state, or PIPEWIRE_QUANTUM",
                 opts.duration.as_millis(),
             ),
             succeeded: false,

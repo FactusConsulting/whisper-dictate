@@ -99,7 +99,7 @@ pub(super) fn report_build(report: &BuildReport<'_>) {
             report.dict_path.display()
         );
     } else if !report.preview.added.is_empty() {
-        println!("  PREVIEW only — re-run with --apply to write these terms.");
+        println!("  PREVIEW only - re-run with --apply to write these terms.");
     }
 }
 
@@ -172,7 +172,7 @@ pub(super) fn report_suggestions(report: &SuggestReport<'_>) {
         );
     } else if !report.new_terms.is_empty() {
         println!(
-            "  PREVIEW only — re-run with --apply to add the {} NEW term(s).",
+            "  PREVIEW only - re-run with --apply to add the {} NEW term(s).",
             report.new_terms.len()
         );
     }

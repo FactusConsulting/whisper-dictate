@@ -274,7 +274,7 @@ pub(super) fn run_iteration(
             index,
             failed_at: Some(FailureStage::GuardStillActiveAfterEnd),
             detail: format!(
-                "active_brackets={} after bracket drop (expected 0) — unbalanced arm_end",
+                "active_brackets={} after bracket drop (expected 0) - unbalanced arm_end",
                 guard.active_brackets()
             ),
         };
@@ -289,7 +289,7 @@ pub(super) fn run_iteration(
         return IterationResult {
             index,
             failed_at: Some(FailureStage::GuardStillActiveAfterEnd),
-            detail: "guard.is_active_at(after POST_GRACE + slack) returned true — bracket counter \
+            detail: "guard.is_active_at(after POST_GRACE + slack) returned true - bracket counter \
                  leaked or the horizon extended past the expected window"
                 .to_owned(),
         };

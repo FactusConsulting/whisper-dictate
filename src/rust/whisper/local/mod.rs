@@ -345,7 +345,7 @@ fn reject_gguf_model(model_path: &Path) -> Result<()> {
     if f.read(&mut head).unwrap_or(0) == 4 && &head == b"GGUF" {
         return Err(anyhow!(
             "{} is a GGUF model; whisper.cpp (via whisper-rs) only loads GGML \
-             models — download a `ggml-*.bin` from https://huggingface.co/ggerganov/whisper.cpp",
+             models - download a `ggml-*.bin` from https://huggingface.co/ggerganov/whisper.cpp",
             model_path.display()
         ));
     }
@@ -368,7 +368,7 @@ fn panic_payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> String {
         (*s).to_owned()
     } else {
         "whisper.cpp panic with non-string payload (likely an OOM inside \
-         whisper.cpp's tensor allocator — install more RAM or pick a smaller \
+         whisper.cpp's tensor allocator - install more RAM or pick a smaller \
          model)"
             .to_owned()
     }

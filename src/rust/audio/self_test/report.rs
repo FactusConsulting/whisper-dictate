@@ -113,7 +113,7 @@ impl AudioCaptureReport {
                 self.frames_captured, self.samples_captured, self.sample_rate, self.rms, self.peak,
             ));
         } else {
-            out.push_str(&format!("  RESULT: FAIL — {}\n", self.error));
+            out.push_str(&format!("  RESULT: FAIL - {}\n", self.error));
         }
         out
     }

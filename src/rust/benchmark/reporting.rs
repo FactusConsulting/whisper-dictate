@@ -117,7 +117,7 @@ pub fn format_summary_line(summary: &BenchmarkSummary, audio_hint_path: Option<&
     let mut line = format!("[benchmark] {}", parts.join(", "));
     if let Some(path) = audio_hint_path {
         if summary.total > 0 && summary.skipped_no_audio == summary.total {
-            line.push_str(&format!(" — record corpus audio to {}", path.display()));
+            line.push_str(&format!(" - record corpus audio to {}", path.display()));
         }
     }
     line

@@ -140,7 +140,7 @@ impl SelfTestReport {
                 })
                 .collect();
             out.push_str(&format!(
-                "[self-test injection-idempotency] FAILED — {}\n",
+                "[self-test injection-idempotency] FAILED - {}\n",
                 failed.join(", "),
             ));
         }

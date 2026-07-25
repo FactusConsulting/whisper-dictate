@@ -235,7 +235,7 @@ impl Injector {
                 // so the paste-only helper picker filters it out.
                 let helper = select_paste_helper(session, locate_on_path).ok_or_else(|| {
                     anyhow!(
-                        "no Linux paste helper found on PATH (tried: {:?}, dotool excluded — no paste chord)",
+                        "no Linux paste helper found on PATH (tried: {:?}, dotool excluded - no paste chord)",
                         super::fallback::fallback_chain(session)
                     )
                 })?;
