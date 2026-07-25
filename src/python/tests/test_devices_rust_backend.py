@@ -57,9 +57,36 @@ class RustBackendShellOutTests(unittest.TestCase):
 
     # --- env-var gating ------------------------------------------------------
 
-    def test_unset_env_falls_through_to_python(self):
+    def test_unset_env_defaults_to_rust_when_helper_present(self):
+        # Default flipped to Rust (#348): backend UNSET + helper resolvable →
+        # the picker enumerates via the Rust `devices` verb.
         os.environ.pop("VOICEPI_DEVICES_BACKEND", None)
-        os.environ["VOICEPI_RUST_INJECTOR"] = "/nonexistent/helper"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
+        sd = types.SimpleNamespace(
+            query_devices=mock.Mock(side_effect=AssertionError("sd should not be touched")),
+            query_hostapis=mock.Mock(side_effect=AssertionError("sd should not be touched")),
+            default=types.SimpleNamespace(device=None),
+        )
+        completed = types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {"devices": [{"index": 0, "name": "Rust Mic",
+                              "max_input_channels": 1, "default": True}]}
+            ),
+            stderr="",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_devices.subprocess.run", return_value=completed
+        ) as run:
+            result = vp_devices.list_input_devices(sd)
+        run.assert_called_once()
+        self.assertEqual(result[0]["name"], "Rust Mic")
+
+    def test_explicit_python_opts_out_of_rust(self):
+        # The opt-out (VOICEPI_DEVICES_BACKEND=python) forces sounddevice even
+        # when the helper is resolvable — the Rust verb is never run.
+        os.environ["VOICEPI_DEVICES_BACKEND"] = "python"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
         sd = _fake_sd(
             devices=[{"name": "Mic", "max_input_channels": 1, "hostapi": 0}],
             default_device=0,
@@ -69,6 +96,26 @@ class RustBackendShellOutTests(unittest.TestCase):
             result = vp_devices.list_input_devices(sd)
         run.assert_not_called()
         self.assertEqual(result[0]["name"], "Mic")
+
+    def test_rust_empty_list_is_returned_not_a_failure(self):
+        # With DirectSound parity (#568) a successful empty enumeration means
+        # the machine has no input device — return the empty list rather than
+        # falling back and importing sounddevice.
+        os.environ.pop("VOICEPI_DEVICES_BACKEND", None)
+        os.environ["VOICEPI_RUST_INJECTOR"] = "/fake/whisper-dictate"
+        sd = types.SimpleNamespace(
+            query_devices=mock.Mock(side_effect=AssertionError("sd should not be touched")),
+            query_hostapis=mock.Mock(side_effect=AssertionError("sd should not be touched")),
+            default=types.SimpleNamespace(device=None),
+        )
+        completed = types.SimpleNamespace(
+            returncode=0, stdout=json.dumps({"devices": []}), stderr="",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_devices.subprocess.run", return_value=completed
+        ):
+            result = vp_devices.list_input_devices(sd)
+        self.assertEqual(result, [])
 
     def test_env_set_without_helper_falls_through(self):
         os.environ["VOICEPI_DEVICES_BACKEND"] = "rust"
@@ -252,8 +299,10 @@ class RustBackendShellOutTests(unittest.TestCase):
         self.assertEqual(result[0]["name"], "Mic")
 
     def test_no_rust_lazy_import_raises_import_error_when_sd_missing(self):
-        """When Rust is unavailable, missing sounddevice raises ImportError."""
-        os.environ.pop("VOICEPI_DEVICES_BACKEND", None)
+        """When Rust is disabled, missing sounddevice raises ImportError."""
+        # Explicit opt-out so the flipped default doesn't take the Rust path.
+        os.environ["VOICEPI_DEVICES_BACKEND"] = "python"
+        os.environ.pop("VOICEPI_RUST_INJECTOR", None)
         import sys
         sys.modules.pop("sounddevice", None)
         sys.modules["sounddevice"] = None  # blocked
