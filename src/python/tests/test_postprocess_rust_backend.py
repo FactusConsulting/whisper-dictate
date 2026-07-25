@@ -494,6 +494,73 @@ class ExternalApiRustBackendTests(unittest.TestCase):
 
         run.assert_not_called()
 
+    def test_rust_terminal_envelope_raises_without_python_retry(self):
+        # A classified terminal envelope (provider reached: 401/429/500, bad
+        # JSON, ambiguous timeout) must be surfaced as a RuntimeError WITHOUT a
+        # second provider call — otherwise the retiring Python path would
+        # double-charge on a deterministic outcome.
+        os.environ["VOICEPI_EXTERNAL_API_BACKEND"] = "rust"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
+        from whisper_dictate import vp_external_api
+
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"],
+            0,
+            stdout=json.dumps(
+                {"ok": False, "kind": "terminal", "error": "HTTP 401 Unauthorized"}
+            ),
+            stderr="",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_external_api.subprocess.run", return_value=completed
+        ), mock.patch.object(vp_external_api, "_request_json") as req, self.assertRaisesRegex(
+            RuntimeError, "401"
+        ):
+            vp_external_api.openai_chat_completion(
+                base_url="https://api.openai.com/v1",
+                api_key="test-key",
+                model="gpt-4o-mini",
+                prompt="clean this",
+                timeout_ms=1000,
+            )
+
+        # No urllib retry → no duplicate charge.
+        req.assert_not_called()
+
+    def test_rust_transport_envelope_falls_through_to_python(self):
+        # A classified transport envelope (provider never reached) falls through
+        # to the Python urllib path, which can succeed via the OS trust store /
+        # registry proxy; the provider was never billed, so no double-charge.
+        os.environ["VOICEPI_EXTERNAL_API_BACKEND"] = "rust"
+        os.environ["VOICEPI_RUST_INJECTOR"] = "whisper-dictate"
+        from whisper_dictate import vp_external_api
+
+        completed = subprocess.CompletedProcess(
+            ["whisper-dictate"],
+            0,
+            stdout=json.dumps(
+                {"ok": False, "kind": "transport", "error": "tls handshake failed"}
+            ),
+            stderr="",
+        )
+        with mock.patch(
+            "whisper_dictate.vp_external_api.subprocess.run", return_value=completed
+        ), mock.patch.object(
+            vp_external_api,
+            "_request_json",
+            return_value={"choices": [{"message": {"content": "recovered"}}]},
+        ) as req:
+            text, _ = vp_external_api.openai_chat_completion(
+                base_url="https://api.openai.com/v1",
+                api_key="test-key",
+                model="gpt-4o-mini",
+                prompt="clean this",
+                timeout_ms=1000,
+            )
+
+        self.assertEqual(text, "recovered")
+        req.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

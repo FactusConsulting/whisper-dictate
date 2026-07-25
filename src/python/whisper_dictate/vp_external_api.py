@@ -319,9 +319,14 @@ def openai_chat_completion(
 
     When ``VOICEPI_EXTERNAL_API_BACKEND=rust`` is set AND the bundled Rust
     helper is resolvable from ``VOICEPI_RUST_INJECTOR``, shell out to the
-    Rust ``external-api`` subcommand (Wave 4-B of #348). Any helper failure
-    falls back to the Python implementation below so default installs and
-    error paths stay byte-identical.
+    Rust ``external-api`` subcommand (Wave 4-B of #348). The Rust helper emits
+    a classified result envelope: a **transport** failure (provider never
+    reached) falls through to the Python implementation below, while a
+    **terminal** failure (provider reached / bad body / timeout) is surfaced
+    as a :class:`RuntimeError` WITHOUT a second provider call — so the retiring
+    Python path is exercised only when a retry is actually safe, never
+    double-charging on a deterministic provider outcome. The default backend
+    is still Python; this path is opt-in.
     """
     rust = _rust_openai_chat_completion(
         base_url=base_url,
@@ -428,6 +433,27 @@ def _rust_openai_chat_completion(
         return None
     if not isinstance(obj, dict):
         return None
+    # A classified failure envelope (``ok=false``) mirrors the postprocess
+    # verb: the ``kind`` decides whether a Python ``urllib`` retry is safe.
+    #   * ``"transport"`` — the request never reached the provider (DNS /
+    #     connect / enterprise-CA TLS / registry proxy). Fall through to the
+    #     Python path, which validates TLS via the OS trust store and honours
+    #     the registry proxy; because the provider was never billed, the retry
+    #     cannot double-charge.
+    #   * anything else (``"terminal"``: HTTP 4xx/5xx, invalid response JSON, an
+    #     ambiguous client timeout) — the provider was reached or the outcome
+    #     is ambiguous, so retrying would double-charge or hit the same result.
+    #     Raise the same ``RuntimeError`` shape the Python path raises, WITHOUT
+    #     a second provider call.
+    if obj.get("ok") is False:
+        detail = str(obj.get("error") or "external API call failed")
+        if str(obj.get("kind") or "") == "transport":
+            print(
+                f"[rust:external-api] transport failure, retrying via Python path: {detail}",
+                flush=True,
+            )
+            return None
+        raise RuntimeError(detail)
     text = str(obj.get("text") or "").strip()
     try:
         latency_ms = int(obj.get("latency_ms") or 0)

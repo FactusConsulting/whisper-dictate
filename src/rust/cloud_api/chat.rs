@@ -52,6 +52,53 @@ struct CapTranscriptionPromptResponse {
     limit: Option<usize>,
 }
 
+/// Classified result envelope for the `chat_completion` action.
+///
+/// The chat call no longer aborts the process on failure; instead it emits
+/// this envelope on stdout (exit 0) so the Python shell-out
+/// (`vp_external_api._rust_openai_chat_completion`) can decide what to do —
+/// exactly like the `postprocess` verb. `kind` splits failures the same way
+/// [`CloudCallError`] does: `"transport"` (provider never reached → Python may
+/// safely retry via `urllib`) vs `"terminal"` (provider reached / bad body /
+/// ambiguous timeout → Python must NOT retry, to avoid a duplicate charge).
+/// On success `kind`/`error` are empty. The legacy `text`/`latency_ms` fields
+/// are preserved so an older caller still reads them on the success path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ChatCompletionResponse {
+    ok: bool,
+    text: String,
+    latency_ms: u64,
+    kind: String,
+    error: String,
+}
+
+impl ChatCompletionResponse {
+    fn success(result: ChatCompletionResult) -> Self {
+        Self {
+            ok: true,
+            text: result.text,
+            latency_ms: result.latency_ms,
+            kind: String::new(),
+            error: String::new(),
+        }
+    }
+
+    fn failure(err: &CloudCallError) -> Self {
+        Self {
+            ok: false,
+            text: String::new(),
+            latency_ms: 0,
+            kind: if err.is_transport() {
+                "transport"
+            } else {
+                "terminal"
+            }
+            .to_owned(),
+            error: err.message().to_owned(),
+        }
+    }
+}
+
 pub fn handle_external_api() -> Result<()> {
     let mut raw = String::new();
     io::stdin().read_to_string(&mut raw)?;
@@ -64,8 +111,15 @@ pub fn handle_external_api() -> Result<()> {
             prompt,
             timeout_ms,
         } => {
-            let result = openai_chat_completion(&base_url, &api_key, &model, &prompt, timeout_ms)?;
-            println!("{}", serde_json::to_string(&result)?);
+            // Do NOT abort on a chat failure — classify it and emit the
+            // envelope so the Python caller can fall through (transport) or
+            // surface the error (terminal) without a duplicate provider call.
+            let response =
+                match openai_chat_completion(&base_url, &api_key, &model, &prompt, timeout_ms) {
+                    Ok(result) => ChatCompletionResponse::success(result),
+                    Err(err) => ChatCompletionResponse::failure(&err),
+                };
+            println!("{}", serde_json::to_string(&response)?);
         }
         ExternalApiRequest::CapTranscriptionPrompt { prompt, base_url } => {
             let capped = cap_transcription_prompt(&prompt, &base_url).to_owned();
@@ -209,6 +263,26 @@ mod tests {
         let err =
             openai_chat_completion("https://api.openai.com/v1", " ", "gpt", "x", 1000).unwrap_err();
         assert!(!err.is_transport());
+    }
+
+    #[test]
+    fn chat_response_maps_success_and_failure_kinds() {
+        let ok = ChatCompletionResponse::success(ChatCompletionResult {
+            text: "hi".to_owned(),
+            latency_ms: 5,
+        });
+        assert!(ok.ok);
+        assert_eq!(ok.text, "hi");
+        assert!(ok.kind.is_empty());
+
+        let transport = ChatCompletionResponse::failure(&CloudCallError::Transport("x".to_owned()));
+        assert!(!transport.ok);
+        assert_eq!(transport.kind, "transport");
+        assert_eq!(transport.error, "x");
+
+        let terminal = ChatCompletionResponse::failure(&CloudCallError::Terminal("y".to_owned()));
+        assert!(!terminal.ok);
+        assert_eq!(terminal.kind, "terminal");
     }
 
     #[test]
