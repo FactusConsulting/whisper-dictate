@@ -204,6 +204,72 @@ fn reader_errors_still_surface_as_read_failures_not_stalls() {
 }
 
 #[test]
+fn a_transport_timeout_is_not_misreported_as_a_stall() {
+    // Regression for a real bug caught in review (#574): the first cut keyed
+    // off `ErrorKind::TimedOut`, but ureq's body reader returns exactly that
+    // when the GLOBAL transfer budget expires on a healthy, continuously
+    // progressing slow download. That user's problem is
+    // VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS being too low — telling them to raise
+    // the idle timeout would send them chasing the wrong knob entirely.
+    struct GlobalBudgetExpired;
+    impl io::Read for GlobalBudgetExpired {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::TimedOut, "timed out"))
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let partial = tmp.path().join("model.bin.partial");
+    let target = tmp.path().join("model.bin");
+
+    let err = stream_download_with_idle_timeout(
+        GlobalBudgetExpired,
+        // Idle window far larger than the test needs: the error must come from
+        // the reader, not from our own deadline.
+        Duration::from_secs(600),
+        None,
+        &partial,
+        &target,
+        &"00".repeat(32),
+        &(),
+    )
+    .expect_err("a transport timeout must still fail the download");
+
+    let msg = err.to_string();
+    assert!(
+        !msg.contains("stalled"),
+        "a transport timeout is not a stall: {msg}",
+    );
+    assert!(
+        !msg.contains(IDLE_TIMEOUT_ENV),
+        "must not point the user at the idle timeout for a global-budget \
+         expiry: {msg}",
+    );
+    assert!(
+        msg.contains("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS"),
+        "must name the var that actually governs this failure: {msg}",
+    );
+    assert!(!partial.exists(), "partial must be cleaned up either way");
+}
+
+#[test]
+fn is_stall_only_matches_our_own_marker() {
+    // Unit-level guard on the discriminator itself, so the distinction survives
+    // even if the wording in `stream_download_to` is reworded later.
+    let ours = io::Error::new(
+        io::ErrorKind::TimedOut,
+        StalledTransfer {
+            idle: Duration::from_secs(30),
+        },
+    );
+    assert!(is_stall(&ours), "our own marker must be recognised");
+    assert!(
+        !is_stall(&io::Error::new(io::ErrorKind::TimedOut, "timed out")),
+        "a same-kind transport timeout must NOT be treated as a stall",
+    );
+    assert!(!is_stall(&io::Error::other("broken pipe")));
+}
+
+#[test]
 fn chunk_reader_serves_a_chunk_across_several_short_reads() {
     // `stream_download_to` reads into a 64 KiB buffer, the same size the worker
     // produces, so the split-chunk path would otherwise never run in practice.

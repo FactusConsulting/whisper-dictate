@@ -71,6 +71,43 @@ pub(crate) fn idle_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// The error [`ChunkReader`] synthesizes when its idle window expires.
+///
+/// Exists as a concrete type purely so the caller can tell it apart from other
+/// timeouts. `ErrorKind::TimedOut` is NOT a sufficient discriminator: ureq's
+/// body reader returns that same kind when the *global* transfer budget expires
+/// on a healthy but slow download, and reporting that as a stall would point
+/// the user at the wrong env var entirely.
+///
+/// The message is the tail of the caller's — which prefixes "download stalled:"
+/// — so it deliberately avoids repeating the word "stalled".
+#[derive(Debug)]
+struct StalledTransfer {
+    idle: Duration,
+}
+
+impl std::fmt::Display for StalledTransfer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "no data received for {}s (the server accepted the connection then \
+             went silent); retry, or raise {IDLE_TIMEOUT_ENV}",
+            self.idle.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for StalledTransfer {}
+
+/// True only for a stall this module synthesized — see [`StalledTransfer`].
+///
+/// Callers must use this rather than checking `ErrorKind::TimedOut`, which a
+/// transport-level timeout also carries.
+pub(crate) fn is_stall(err: &std::io::Error) -> bool {
+    err.get_ref()
+        .is_some_and(|inner| inner.is::<StalledTransfer>())
+}
+
 /// [`stream_download_to`] with a stall detector wrapped around `reader`.
 ///
 /// A socket that goes silent fails after `idle` rather than after the whole
@@ -161,16 +198,9 @@ impl ChunkReader {
             }
             Err(RecvTimeoutError::Timeout) => {
                 self.finished = true;
-                // Wording is the tail of the caller's message, which prefixes
-                // "download stalled: " — see `stream_download_to`. Keeping the
-                // word "stalled" out of here avoids "stalled: ... stalled".
                 Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    format!(
-                        "no data received for {}s (server accepted the \
-                         connection then went silent); retry, or raise {IDLE_TIMEOUT_ENV}",
-                        self.idle.as_secs()
-                    ),
+                    StalledTransfer { idle: self.idle },
                 ))
             }
             // Sender dropped without an error: clean end of stream.

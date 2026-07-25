@@ -398,11 +398,26 @@ pub(crate) fn stream_download_to<R: Read>(
             Err(err) => {
                 drop(file);
                 let _ = fs::remove_file(partial);
-                // A stall is reported distinctly from a transport error: the
-                // remedy differs (retry / check the mirror vs. check the link),
-                // and the UI wants to say "stalled", not "failed".
-                if err.kind() == std::io::ErrorKind::TimedOut {
+                // A stall is reported distinctly from a transport error,
+                // because the remedy differs — and each message names the env
+                // var that actually governs it.
+                //
+                // Matching on `ErrorKind::TimedOut` would be WRONG here: ureq's
+                // body reader returns that same kind when the global transfer
+                // budget expires on a perfectly healthy slow download, so a
+                // kind check would tell such a user to raise the idle timeout,
+                // which has nothing to do with their problem. Only the concrete
+                // marker type `download_stall` synthesizes counts as a stall.
+                if super::download_stall::is_stall(&err) {
                     return Err(anyhow!("download stalled: {err}"));
+                }
+                if err.kind() == std::io::ErrorKind::TimedOut {
+                    return Err(anyhow!(
+                        "download read failed: {err} — the transfer did not \
+                         finish within VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS \
+                         ({}s); raise it if your connection is simply slow",
+                        download_timeout().as_secs(),
+                    ));
                 }
                 return Err(anyhow!("download read failed: {err}"));
             }
