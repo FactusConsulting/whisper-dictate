@@ -702,3 +702,22 @@ fn legacy_cached_model_still_resolves_after_upgrade() {
         );
     }
 }
+
+#[test]
+fn catalog_urls_are_derived_from_filenames() {
+    // The `model_entry!` macro builds `url` as BASE + filename, which removes
+    // ~8 lines of copy-paste per entry and makes a filename/URL mismatch
+    // impossible. Pin that contract: if someone hand-writes an entry again, or
+    // upstream moves the mirror, this fails loudly rather than silently
+    // downloading the wrong weights (the SHA check would catch it, but only
+    // after a multi-GB transfer).
+    const BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
+    for entry in CATALOG {
+        assert_eq!(
+            entry.url,
+            format!("{BASE}{}", entry.filename),
+            "url must be BASE + filename for {}",
+            entry.name
+        );
+    }
+}
