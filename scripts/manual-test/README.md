@@ -9,18 +9,18 @@ candidate on a real Windows machine.
 Automated CLI-level smoke for the Rust-default flips of the Python-removal
 roadmap (#348): the mic picker (`devices`), post-processing (`postprocess`), and
 the external-api chat shell-out. It builds the console CLI with `audio-capture`
-and asserts each contract, printing `PASS`/`FAIL` per check.
+and asserts each contract, printing `PASS`/`FAIL` per check. Run it from
+anywhere in the repo — it locates the crate root from its own path:
 
 ```powershell
-cd src\rust
-..\..\scripts\manual-test\windows-rust-flip-smoke.ps1
+.\scripts\manual-test\windows-rust-flip-smoke.ps1
 ```
 
 Optional — also exercise a real cloud post-process call (otherwise skipped):
 
 ```powershell
 $env:VOICEPI_POST_API_KEY = "gsk_..."   # Groq (or an OpenAI key)
-..\..\scripts\manual-test\windows-rust-flip-smoke.ps1
+.\scripts\manual-test\windows-rust-flip-smoke.ps1
 ```
 
 What it covers:

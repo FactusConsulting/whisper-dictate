@@ -6,10 +6,10 @@
 # default paths rely on — the pieces CI cannot cover because the runners have no
 # real audio device and no interactive GUI.
 #
-# Run from the crate root (src/rust) in a PowerShell session:
+# Run from anywhere in the repo (or double-click it) — it locates the crate
+# root itself from its own script path:
 #
-#     cd src\rust
-#     ..\..\scripts\manual-test\windows-rust-flip-smoke.ps1
+#     .\scripts\manual-test\windows-rust-flip-smoke.ps1
 #
 # Optional: export a cloud key first to also exercise a real post-process call:
 #     $env:VOICEPI_POST_API_KEY = "gsk_..."   # Groq
@@ -23,6 +23,13 @@ function Check($name, $cond, $detail = "") {
   if ($cond) { Write-Host "PASS  $name" -ForegroundColor Green; $script:pass++ }
   else       { Write-Host "FAIL  $name  $detail" -ForegroundColor Red;  $script:fail++ }
 }
+
+# Resolve the crate root from this script's own location (scripts/manual-test/..
+# /../src/rust) so the script works regardless of the caller's working directory.
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$rustDir = Join-Path $repoRoot "src\rust"
+Push-Location $rustDir
+try {
 
 Write-Host "`n== building CLI (audio-capture) ==" -ForegroundColor Cyan
 cargo build --bin whisper-dictate --features audio-capture --release
@@ -72,3 +79,8 @@ if ($env:VOICEPI_POST_API_KEY) {
 
 Write-Host "`n== $pass passed, $fail failed ==" -ForegroundColor Cyan
 if ($fail -gt 0) { exit 1 }
+
+}
+finally {
+  Pop-Location
+}
