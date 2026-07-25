@@ -102,6 +102,19 @@ mod tests {
     }
 
     #[test]
+    fn too_short_hint_is_ascii_and_actionable() {
+        // The hint is printed to stdout, so it must survive a legacy code
+        // page (AGENTS.md console rule) -- it used to carry an em dash.
+        let hint = SkipDecision::TooShort.hint().expect("TooShort has a hint");
+        assert!(hint.is_ascii(), "console hint must be ASCII: {hint}");
+        assert!(hint.contains("too short"), "{hint}");
+        assert!(
+            hint.contains("hold the key"),
+            "hint must say what to do differently: {hint}"
+        );
+    }
+
+    #[test]
     fn long_enough_whisper_capture_is_kept() {
         assert_eq!(should_skip(16_000, 0.5), SkipDecision::Keep);
     }

@@ -139,6 +139,22 @@ mod tests {
     }
 
     #[test]
+    fn failed_report_plain_text_is_ascii_and_names_the_error() {
+        // `to_plain` goes straight to the console, and the FAIL branch was
+        // the only one still carrying an em dash.
+        let mut report = ok_report();
+        report.succeeded = false;
+        report.error = "no device delivered samples".to_owned();
+        let text = report.to_plain();
+        assert!(text.is_ascii(), "console output must be ASCII: {text}");
+        assert!(text.contains("RESULT: FAIL"), "{text}");
+        assert!(
+            text.contains("no device delivered samples"),
+            "the underlying error must survive into the report: {text}"
+        );
+    }
+
+    #[test]
     fn report_json_has_stable_keys() {
         let json = ok_report().to_json();
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
