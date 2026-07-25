@@ -279,37 +279,63 @@ info "tiny fixture in use: $TINY_FIXTURE"
 # false failure: the section exists to prove the LOCAL capture → transcribe →
 # inject plumbing still works, which is exactly what a cloud-configured box
 # never got to exercise.
+#
+# BOTH command modes need the isolation. The Python fallback is not flag-only:
+# `vp_simulate_ptt._load_model_for_cli()` imports `vp_cli`, whose module init
+# runs `apply_config_to_environ()`, after which `vp_transcribe.STT_BACKEND`
+# resolves `get_value("VOICEPI_STT_BACKEND", "whisper")` from the same real
+# config.json. `--model` / `--device` do not override it.
 # --------------------------------------------------------------------------
 section "simulate-ptt (fixture WAV, dry-run, tiny.en, CPU)"
 if [ ! -f "$FIXTURE_WAV" ]; then
     warn "fixture WAV missing: $FIXTURE_WAV"
 else
+    # Resolve the operator's effective local-only setting BEFORE the scratch
+    # config hides it, and carry it into the run below. `local_only` is a
+    # PRIVACY lock: it forces the model libraries offline, so silently
+    # dropping it could let a missing tiny.en be fetched from the network by
+    # an operator who explicitly opted out of that. An unresolvable value
+    # yields the empty string, which every consumer treats as "off" —
+    # the same as the pre-existing behaviour.
+    if [ "$CMD_MODE" = "rust" ]; then
+        simptt_local_only="$(whisper-dictate config get local_only 2>/dev/null)"
+    else
+        simptt_local_only="$(PYTHONPATH="${REPO_ROOT}/src/python" python3 -c \
+            "from whisper_dictate.vp_config import get_value
+print((get_value('VOICEPI_LOCAL_ONLY') or '').strip())" 2>/dev/null)"
+    fi
+    : "${simptt_local_only:=}"
+
+    # Reserve the scratch path with mktemp rather than composing one from
+    # $$: a pre-existing/PID-reused `wd-simptt-smoke-<pid>.json` would be
+    # read as real configuration (config values outrank env, so a stale
+    # `stt_backend=openai` in it would defeat the pin below) and the
+    # cleanup would delete a file this script never created. Deleting the
+    # reserved file is deliberate — the loader's missing-file branch is
+    # what yields built-in defaults, the same fresh-user path the config
+    # section relies on.
+    simptt_config="$(mktemp -t wd-simptt-smoke.XXXXXX.json)"
+    rm -f "$simptt_config"
+
     if [ "$CMD_MODE" = "rust" ]; then
         # Rust subcommand: --language, --model, --wav; no --device switch,
         # so pin CPU via env so the check never depends on a GPU being
         # present. --dry-run is the default (no --inject).
-        #
-        # The scratch config is a path that deliberately does NOT exist:
-        # the config loader falls back to built-in defaults for a missing
-        # file (same fresh-user branch the config section relies on), so no
-        # file needs creating and nothing is left behind. VOICEPI_STT_BACKEND
-        # is set on top because it outranks the config value — that also
-        # pins the backend when the operator has it exported in their shell.
-        simptt_config="${TMPDIR:-/tmp}/wd-simptt-smoke-$$.json"
         out="$(VOICEPI_CONFIG="$simptt_config" \
                VOICEPI_STT_BACKEND=whisper \
+               VOICEPI_LOCAL_ONLY="$simptt_local_only" \
                VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
                     --wav "$FIXTURE_WAV" \
                     --model tiny.en \
                     --language en \
                     --json 2>&1)"
         rc=$?
-        # Belt-and-braces: the run should never create the file, but a
-        # future write-through would otherwise litter $TMPDIR.
-        rm -f "$simptt_config"
     else
         # Python fallback: --wav, --dry-run, --model, --device, --lang, --json
-        out="$(PYTHONPATH="${REPO_ROOT}/src/python" python3 -m \
+        out="$(VOICEPI_CONFIG="$simptt_config" \
+               VOICEPI_STT_BACKEND=whisper \
+               VOICEPI_LOCAL_ONLY="$simptt_local_only" \
+               PYTHONPATH="${REPO_ROOT}/src/python" python3 -m \
                     whisper_dictate.vp_simulate_ptt \
                     --wav "$FIXTURE_WAV" \
                     --dry-run \
@@ -319,6 +345,9 @@ else
                     --json 2>&1)"
         rc=$?
     fi
+    # Belt-and-braces: the run should never create the file, but a future
+    # write-through would otherwise litter $TMPDIR.
+    rm -f "$simptt_config"
 
     if [ "$rc" -eq 0 ]; then
         if printf '%s' "$out" | grep -q "simulate_ptt\|simulate-ptt"; then
