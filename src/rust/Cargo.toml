@@ -222,6 +222,15 @@ apple-native-keyring-store = { version = "1.0", features = ["keychain"] }
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
 windows-native-keyring-store = "1.1"
+# DirectSound capture enumeration for the mic picker (devices.rs). cpal on
+# Windows is WASAPI-only, but the sounddevice picker deliberately surfaces
+# DirectSound-only inputs (freshly docked/hot-plugged USB mics visible on
+# DirectSound before WASAPI). We enumerate those via DirectSoundCaptureEnumerateW
+# and merge them into the Rust device list so the Rust picker reaches parity
+# with sounddevice before the default flip. `windows` is already in the tree
+# (cpal uses it for WASAPI); this only adds the DirectSound + Foundation
+# features.
+windows = { version = "0.62", features = ["Win32_Media_Audio_DirectSound", "Win32_Foundation"] }
 
 [build-dependencies]
 winresource = "0.1"
