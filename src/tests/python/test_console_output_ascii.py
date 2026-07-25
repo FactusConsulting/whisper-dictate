@@ -47,13 +47,32 @@ TYPOGRAPHIC = {
     "•": "-",  # bullet
 }
 
-# Files exempt from the rule, each with the reason it does not apply.
+# Exemptions, scoped to a SPECIFIC literal rather than a whole file: keyed by
+# path, each entry is (substring identifying the literal, reason). Exempting a
+# whole file would silently cover every string added to it later.
 ALLOWLIST = {
-    # A regex that MATCHES a user typing "->" or an arrow in a dictionary
-    # prompt. This is input parsing, not console output -- dropping the arrow
-    # would silently stop recognising prompts people already write.
-    "src/rust/postprocess/prompt.rs": "regex matches user-typed arrows (input, not output)",
+    "src/rust/postprocess/prompt.rs": [
+        (
+            "becomes|bliver til",
+            "regex that MATCHES a user typing an arrow in a dictionary prompt "
+            "-- input parsing, not console output; dropping it would silently "
+            "stop recognising prompts people already write",
+        ),
+    ],
 }
+
+# Only a TRAILING `#[cfg(test)] mod ...` marks the rest of a file test-only.
+#
+# A bare `#[cfg(test)]` on a single mid-file item must NOT truncate the scan.
+# `hotkey/manager/evdev_driver.rs` has exactly that shape -- a test-only
+# `spawn` helper at line 91 with production code, including `eprintln!`
+# console output, resuming below it. Truncating at the first attribute made
+# this guard skip those lines entirely, which review caught: the check was
+# passing on two real violations it was written to find.
+TRAILING_TEST_MOD = re.compile(r"^#\[cfg\(test\)\]\s*\n\s*(?:pub\s+)?mod\s+\w+", re.M)
+
+# `'x'`, `'\n'`, `'\''`, `'"'`, `'\u{263a}'` -- but NOT the lifetime `'static`.
+CHAR_LITERAL = re.compile(r"'(?:\\u\{[^}]*\}|\\.|[^'\\])'")
 
 
 def _is_test_source(rel: str, src: str) -> bool:
@@ -79,6 +98,19 @@ def _string_literals(src: str):
         ch = src[i]
         if ch == "\n":
             line += 1
+            i += 1
+            continue
+        # Character literals must be consumed BEFORE the `"` branch below.
+        # `let q = '"';` is real code here (keymap.rs, runtime/mod.rs), and
+        # treating its embedded quote as a string opener desynchronises the
+        # parser for the rest of the file -- every later console string would
+        # be silently skipped. A lifetime (`'static`) is not a char literal,
+        # so it falls through and is stepped over one char at a time.
+        if ch == "'":
+            char_lit = CHAR_LITERAL.match(src, i)
+            if char_lit:
+                i = char_lit.end()
+                continue
             i += 1
             continue
         raw = re.match(r'r(#*)"', src[i:])
@@ -123,12 +155,11 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
         violations = []
         for path in sorted(Path("src/rust").rglob("*.rs")):
             rel = path.as_posix()
-            if rel in ALLOWLIST:
-                continue
             # `src/rust/ui/**` renders through egui, which draws UTF-8
             # correctly from a font atlas and never touches a code page.
             if "/ui/" in rel:
                 continue
+            exempt = [needle for needle, _reason in ALLOWLIST.get(rel, [])]
             src = path.read_text(encoding="utf-8")
             # Cheap pre-filter: the literal parser is char-by-char Python, and
             # the overwhelming majority of files contain none of these
@@ -138,12 +169,12 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
                 continue
             if _is_test_source(rel, src):
                 continue
-            # Inline `#[cfg(test)] mod tests` is conventionally last in the
-            # file; everything from there down is test-only.
-            inline_tests = re.search(r"^#\[cfg\(test\)\]", src, re.M)
-            if inline_tests:
-                src = src[: inline_tests.start()]
+            trailing_tests = TRAILING_TEST_MOD.search(src)
+            if trailing_tests:
+                src = src[: trailing_tests.start()]
             for line, literal in _string_literals(src):
+                if any(needle in literal for needle in exempt):
+                    continue
                 for bad in sorted({c for c in literal if c in TYPOGRAPHIC}):
                     violations.append(
                         f"{rel}:{line}: {bad!r} (use {TYPOGRAPHIC[bad]!r}) in {' '.join(literal.split())[:70]}"
@@ -187,11 +218,79 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
             "comments never reach a console and must not be flagged",
         )
 
-    def test_allowlist_entries_still_exist_and_are_justified(self):
-        """A stale allowlist silently widens the exemption."""
-        for rel, reason in ALLOWLIST.items():
+    def test_allowlist_entries_still_match_a_real_literal(self):
+        """A stale allowlist silently widens the exemption.
+
+        Each entry must still identify a literal that actually exists AND
+        still contains blocked punctuation -- otherwise the exemption has
+        outlived the string it was written for and should be deleted.
+        """
+        for rel, entries in ALLOWLIST.items():
             self.assertTrue(
                 Path(rel).is_file(),
                 f"allowlisted file no longer exists, drop the entry: {rel}",
             )
-            self.assertTrue(reason.strip(), f"allowlist entry needs a reason: {rel}")
+            src = Path(rel).read_text(encoding="utf-8")
+            for needle, reason in entries:
+                self.assertTrue(reason.strip(), f"allowlist entry needs a reason: {rel}")
+                matched = [
+                    lit
+                    for _line, lit in _string_literals(src)
+                    if needle in lit and any(c in lit for c in TYPOGRAPHIC)
+                ]
+                self.assertTrue(
+                    matched,
+                    f"allowlist entry {needle!r} in {rel} no longer matches a "
+                    "literal with blocked punctuation -- delete the entry",
+                )
+
+    def test_a_bare_cfg_test_item_does_not_hide_later_production_code(self):
+        """Regression: #576 review.
+
+        A bare `#[cfg(test)]` on ONE mid-file item used to truncate the whole
+        scan, so production console output below it was never checked. Real
+        occurrence: `evdev_driver.rs` had a test-only `spawn` at line 91 and
+        live `eprintln!` output below -- the guard passed on two genuine
+        violations.
+        """
+        src = (
+            "#[cfg(test)]\n"
+            "fn helper() {}\n"
+            'fn production() { eprintln!("a — b"); }\n'
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            '    const X: &str = "in — tests";\n'
+            "}\n"
+        )
+        trailing = TRAILING_TEST_MOD.search(src)
+        self.assertIsNotNone(trailing, "trailing `mod tests` must still be found")
+        scanned = src[: trailing.start()]
+        self.assertIn("production", scanned, "production code must survive the cut")
+        self.assertNotIn("in — tests", scanned, "the test module must still be cut")
+
+    def test_char_literal_does_not_desync_the_parser(self):
+        """Regression: #576 review.
+
+        `let q = '"';` is real code here. Treating that embedded quote as a
+        string opener consumed everything up to the next quote, silently
+        skipping every console string after it in the file.
+        """
+        src = "fn f() {\n" "    let q = '\"';\n" '    println!("bad — output");\n' "}\n"
+        found = [
+            c for _line, lit in _string_literals(src) for c in lit if c in TYPOGRAPHIC
+        ]
+        self.assertEqual(
+            found, ["—"], "a string after a `'\"'` char literal must still be scanned"
+        )
+        # A lifetime is not a char literal and must not swallow anything.
+        lifetime = "struct S<'a> { s: &'a str }\n" 'fn g() { println!("x — y"); }\n'
+        self.assertEqual(
+            [
+                c
+                for _line, lit in _string_literals(lifetime)
+                for c in lit
+                if c in TYPOGRAPHIC
+            ],
+            ["—"],
+            "lifetimes must not be mistaken for char literals",
+        )
