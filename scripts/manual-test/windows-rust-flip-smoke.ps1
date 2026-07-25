@@ -48,10 +48,19 @@ Check "no 'Primary Sound Capture Driver' alias" (-not ($ds.devices.name -contain
 $plain = ('{"action":"list"}' | & $exe devices 2>$null) | ConvertFrom-Json
 Check "devices (plain) returns >=1 mic" ($plain.devices.Count -ge 1) "count=$($plain.devices.Count)"
 
-# 3) DirectSound enumeration actually returns devices (diagnostic on stderr)
+# 3) DirectSound enumeration actually returns devices (diagnostic on stderr).
+# Capture stderr to a FILE. The obvious-looking `2>&1 1>$null` does not work:
+# PowerShell merges stderr INTO stdout first, then discards the merged stream,
+# so the diagnostic is swallowed and the check sees an empty string.
 $env:VOICEPI_DEBUG_DIRECTSOUND = "1"
-$dsErr = '{"action":"list","include_directsound":true}' | & $exe devices 2>&1 1>$null
-$env:VOICEPI_DEBUG_DIRECTSOUND = ""
+$errFile = [System.IO.Path]::GetTempFileName()
+try {
+  $null = '{"action":"list","include_directsound":true}' | & $exe devices 2>$errFile
+  $dsErr = (Get-Content $errFile -Raw)
+} finally {
+  $env:VOICEPI_DEBUG_DIRECTSOUND = ""
+  Remove-Item $errFile -ErrorAction SilentlyContinue
+}
 Check "DirectSound enumerated device(s)" ($dsErr -match "\[devices:directsound\] enumerated [1-9]") "stderr: $dsErr"
 
 # 4) postprocess: raw passthrough (no network) returns text unchanged
