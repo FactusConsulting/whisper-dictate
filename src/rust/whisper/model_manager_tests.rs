@@ -438,6 +438,51 @@ fn download_timeout_env_override_is_respected() {
 }
 
 #[test]
+fn idle_timeout_uses_default_when_env_absent() {
+    use crate::whisper::download_stall::{idle_timeout, IDLE_TIMEOUT_ENV, IDLE_TIMEOUT_SECS};
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g = EnvVarGuard::remove(IDLE_TIMEOUT_ENV);
+    assert_eq!(
+        idle_timeout(),
+        std::time::Duration::from_secs(IDLE_TIMEOUT_SECS),
+        "stall detection must be on by default"
+    );
+}
+
+#[test]
+fn idle_timeout_env_override_and_disable() {
+    // Lives here rather than in `download_stall_tests.rs` because this module
+    // already owns the process-wide env lock and its guard; a second copy would
+    // be duplicated machinery guarding the same global.
+    use crate::whisper::download_stall::{idle_timeout, IDLE_TIMEOUT_ENV, IDLE_TIMEOUT_SECS};
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _g = EnvVarGuard::set(IDLE_TIMEOUT_ENV, "45");
+    assert_eq!(idle_timeout(), std::time::Duration::from_secs(45));
+    drop(_g);
+
+    // 0 = opt out of stall detection. It must NOT mean "wait forever": the
+    // window falls back to the global transfer budget, so the wait stays
+    // bounded by something the user already configured.
+    let _g_off = EnvVarGuard::set(IDLE_TIMEOUT_ENV, "0");
+    let _g_total = EnvVarGuard::set("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS", "900");
+    assert_eq!(
+        idle_timeout(),
+        std::time::Duration::from_secs(900),
+        "disabling stall detection must fall back to the global budget"
+    );
+    drop(_g_total);
+    drop(_g_off);
+
+    // Garbage falls back to the default, matching `download_timeout`.
+    let _g_bad = EnvVarGuard::set(IDLE_TIMEOUT_ENV, "soon-ish");
+    assert_eq!(
+        idle_timeout(),
+        std::time::Duration::from_secs(IDLE_TIMEOUT_SECS),
+        "an unparseable override must fall back to the default"
+    );
+}
+
+#[test]
 fn hex_lower_is_zero_padded() {
     // Smoke check: a single \x01 byte must render as `01`, not `1`.
     assert_eq!(hex_lower(&[0x01, 0xab, 0x00]), "01ab00");

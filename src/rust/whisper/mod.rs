@@ -6,6 +6,10 @@
 //!   **unconditionally** so the `models` CLI subcommand and the Settings tab
 //!   download UI work on every binary, including stock builds that do not
 //!   include the whisper.cpp inference path.
+//! - [`download_stall`] — idle-timeout stall detection wrapped around the
+//!   `model_manager` streaming loop (#573). Separate module because ureq's
+//!   timeouts are all per-stage totals and cannot express "no bytes for N
+//!   seconds"; also keeps `model_manager` under the 500-line ceiling.
 //! - [`dispatch`] — wiring layer for the hidden `transcribe-wav` (single-shot)
 //!   and `transcribe-server` (long-running, Wave 8-A) sub-commands. Pulls in
 //!   whisper.cpp, so it is gated behind `whisper-rs-local`.
@@ -30,6 +34,7 @@
 //! whisper.cpp dep, so a stock `cargo build` still ships the UI and CLI
 //! affordances even without CMake / a C++ toolchain on the build host.
 
+pub mod download_stall;
 pub mod gpu;
 pub mod idle;
 pub mod model_manager;
