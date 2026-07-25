@@ -347,9 +347,18 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 ///
 /// The 6-hour default therefore covers turbo down to ~0.6 Mbit/s and large-v3
 /// down to ~1.2 Mbit/s. Slower links can still raise it via
-/// `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`. Note this is a total-transfer cap,
-/// not an idle timeout: a genuinely dead connection is caught by
-/// [`CONNECT_TIMEOUT`] rather than by waiting out this whole budget.
+/// `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`.
+///
+/// KNOWN LIMITATION: this is a total-transfer cap, not an idle timeout.
+/// [`CONNECT_TIMEOUT`] only covers establishing the connection — if the server
+/// accepts and then goes silent mid-body, the transfer blocks until this whole
+/// budget elapses. ureq 3.x cannot express an idle timeout (every
+/// `timeout_*` knob is a per-stage TOTAL), and any `timeout_recv_body` short
+/// enough to catch a stall would abort a legitimately slow multi-GB download.
+/// Fixing it properly means detecting stalls in the streaming loop itself
+/// (reads on a worker thread with a per-chunk deadline) plus a cancel
+/// affordance in the UI — tracked as follow-up work, deliberately not bolted
+/// onto the catalog trim.
 const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 21_600;
 
 fn download_timeout() -> std::time::Duration {
