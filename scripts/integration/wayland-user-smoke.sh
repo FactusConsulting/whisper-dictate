@@ -267,16 +267,83 @@ info "tiny fixture in use: $TINY_FIXTURE"
 
 # --------------------------------------------------------------------------
 # SECTION: simulate-ptt (headless dictation pipeline)
+#
+# Runs against a SCRATCH config (VOICEPI_CONFIG override) plus an explicit
+# `VOICEPI_STT_BACKEND=whisper`. Without both, the section is not hermetic:
+# `--model tiny.en` only names the local model, while the BACKEND still comes
+# from the operator's real config.json. On the maintainer's own Wayland box
+# (`stt_backend=openai`, Groq base URL) the run therefore took the cloud path
+# and died with "openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
+# VOICEPI_STT_API_KEY" — the key lives in the OS credential store and is only
+# exported into the worker by the UI, never by a bare CLI verb. That is a
+# false failure: the section exists to prove the LOCAL capture → transcribe →
+# inject plumbing still works, which is exactly what a cloud-configured box
+# never got to exercise.
+#
+# BOTH command modes need the isolation. The Python fallback is not flag-only:
+# `vp_simulate_ptt._load_model_for_cli()` imports `vp_cli`, whose module init
+# runs `apply_config_to_environ()`, after which `vp_transcribe.STT_BACKEND`
+# resolves `get_value("VOICEPI_STT_BACKEND", "whisper")` from the same real
+# config.json. `--model` / `--device` do not override it.
 # --------------------------------------------------------------------------
 section "simulate-ptt (fixture WAV, dry-run, tiny.en, CPU)"
 if [ ! -f "$FIXTURE_WAV" ]; then
     warn "fixture WAV missing: $FIXTURE_WAV"
 else
+    # Resolve the operator's effective local-only setting BEFORE the scratch
+    # config hides it, and carry it into the run below. `local_only` is a
+    # PRIVACY lock: it forces the model libraries offline, so silently
+    # dropping it could let a missing tiny.en be fetched from the network by
+    # an operator who explicitly opted out of that.
+    #
+    # ENV FIRST, and passed through VERBATIM. Both engines give the ambient
+    # env var precedence over the config file (`model_manager::is_local_only`
+    # returns early on a truthy VOICEPI_LOCAL_ONLY; the Python side resolves
+    # it through `get_value`), but `whisper-dictate config get local_only`
+    # does NOT — it reports the persisted setting and its defaults, returning
+    # `0` even with VOICEPI_LOCAL_ONLY=1 exported (verified). So consulting
+    # the config unconditionally would overwrite an inherited `1` with `0`
+    # and turn the lock OFF for this run — strictly worse than the untouched
+    # inheritance this section had before.
+    #
+    # Verbatim rather than normalised on purpose: the two engines' truthiness
+    # tables are not identical (Rust accepts 1/true/True/TRUE; Python treats
+    # anything outside ""/0/false/no/off as on), so re-interpreting the value
+    # here could only introduce a third reading. Passing the operator's own
+    # string through lets each engine apply its own rule, exactly as it would
+    # without this section's involvement.
+    if [ -n "${VOICEPI_LOCAL_ONLY+set}" ]; then
+        simptt_local_only="$VOICEPI_LOCAL_ONLY"
+    elif [ "$CMD_MODE" = "rust" ]; then
+        simptt_local_only="$(whisper-dictate config get local_only 2>/dev/null)"
+    else
+        simptt_local_only="$(PYTHONPATH="${REPO_ROOT}/src/python" python3 -c \
+            "from whisper_dictate.vp_config import get_value
+print((get_value('VOICEPI_LOCAL_ONLY') or '').strip())" 2>/dev/null)"
+    fi
+    # An unresolvable lookup yields the empty string, which every consumer
+    # treats as "off" — the same as the pre-existing behaviour.
+    : "${simptt_local_only:=}"
+
+    # Reserve the scratch path with mktemp rather than composing one from
+    # $$: a pre-existing/PID-reused `wd-simptt-smoke-<pid>.json` would be
+    # read as real configuration (config values outrank env, so a stale
+    # `stt_backend=openai` in it would defeat the pin below) and the
+    # cleanup would delete a file this script never created. Deleting the
+    # reserved file is deliberate — the loader's missing-file branch is
+    # what yields built-in defaults, the same fresh-user path the config
+    # section relies on.
+    simptt_config="$(mktemp -t wd-simptt-smoke.XXXXXX.json)"
+    rm -f "$simptt_config"
+
     if [ "$CMD_MODE" = "rust" ]; then
         # Rust subcommand: --language, --model, --wav; no --device switch,
         # so pin CPU via env so the check never depends on a GPU being
         # present. --dry-run is the default (no --inject).
-        out="$(VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
+        out="$(VOICEPI_CONFIG="$simptt_config" \
+               VOICEPI_STT_BACKEND=whisper \
+               VOICEPI_LOCAL_ONLY="$simptt_local_only" \
+               VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
                     --wav "$FIXTURE_WAV" \
                     --model tiny.en \
                     --language en \
@@ -284,7 +351,10 @@ else
         rc=$?
     else
         # Python fallback: --wav, --dry-run, --model, --device, --lang, --json
-        out="$(PYTHONPATH="${REPO_ROOT}/src/python" python3 -m \
+        out="$(VOICEPI_CONFIG="$simptt_config" \
+               VOICEPI_STT_BACKEND=whisper \
+               VOICEPI_LOCAL_ONLY="$simptt_local_only" \
+               PYTHONPATH="${REPO_ROOT}/src/python" python3 -m \
                     whisper_dictate.vp_simulate_ptt \
                     --wav "$FIXTURE_WAV" \
                     --dry-run \
@@ -294,6 +364,9 @@ else
                     --json 2>&1)"
         rc=$?
     fi
+    # Belt-and-braces: the run should never create the file, but a future
+    # write-through would otherwise litter $TMPDIR.
+    rm -f "$simptt_config"
 
     if [ "$rc" -eq 0 ]; then
         if printf '%s' "$out" | grep -q "simulate_ptt\|simulate-ptt"; then
