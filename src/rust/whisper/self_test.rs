@@ -197,10 +197,17 @@ pub(crate) fn resolve_model(model_name: &str) -> Result<(String, PathBuf)> {
 
     // Catalog lookup.
     let entry = find(trimmed).ok_or_else(|| {
+        // Derive the suggestion list from the live catalog: a hardcoded list
+        // silently rots when the catalog changes, sending users to retry with
+        // names that no longer resolve.
+        let names: Vec<&str> = crate::whisper::model_manager::CATALOG
+            .iter()
+            .map(|entry| entry.name)
+            .collect();
         anyhow!(
-            "--model {trimmed} does not match any catalog entry; try one of: tiny.en, \
-             base.en, small.en, tiny, base, small, medium, large-v3-turbo, large-v3 \
-             (or pass a path to a custom GGML file)"
+            "--model {trimmed} does not match any catalog entry; try one of: {} \
+             (or pass a path to a custom GGML file)",
+            names.join(", ")
         )
     })?;
     if !is_downloaded(entry) {

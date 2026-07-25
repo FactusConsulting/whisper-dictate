@@ -284,17 +284,25 @@ impl DownloadProgress for () {
 /// TCP connect timeout for model downloads.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// End-to-end timeout for model downloads (default 60 minutes).
+/// End-to-end timeout for model downloads (default 6 hours).
 ///
-/// At 0.5 Mbit/s the models require roughly:
-///   tiny.en  (~78 MB)  → ~21 min
-///   base.en (~148 MB)  → ~39 min
-///   small.en (~488 MB) → ~130 min
+/// Sized for the CURRENT catalog. The previous 60-minute cap was chosen when
+/// the smallest entries were 78–148 MB; after the catalog trim the smallest
+/// *user-facing* model is 1.6 GB, which needs ~3.6 Mbit/s just to finish inside
+/// an hour. Anyone slower would hit the timeout, have the partial file deleted,
+/// and restart from zero on every retry — i.e. be unable to install the app at
+/// all without discovering an undocumented env override.
 ///
-/// The default 60-minute cap covers tiny.en and base.en on very slow
-/// connections. Users on slower links or downloading small.en can override
-/// via `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`.
-const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 3_600;
+/// Rough wall-clock for the visible models:
+///   large-v3-turbo (~1.6 GB) → ~3.6 h @ 1 Mbit/s, ~1.8 h @ 2 Mbit/s
+///   large-v3       (~3.1 GB) → ~6.9 h @ 1 Mbit/s, ~3.4 h @ 2 Mbit/s
+///
+/// The 6-hour default therefore covers turbo down to ~0.6 Mbit/s and large-v3
+/// down to ~1.2 Mbit/s. Slower links can still raise it via
+/// `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`. Note this is a total-transfer cap,
+/// not an idle timeout: a genuinely dead connection is caught by
+/// [`CONNECT_TIMEOUT`] rather than by waiting out this whole budget.
+const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 21_600;
 
 fn download_timeout() -> std::time::Duration {
     let secs = std::env::var("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS")

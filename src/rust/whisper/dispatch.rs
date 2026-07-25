@@ -163,10 +163,13 @@ pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
             }
         }
     }
+    // Recommend a VISIBLE model: this loop skips hidden test fixtures, so
+    // suggesting one would send the user in a circle — they would download it
+    // and land on this identical error next launch.
     Err(anyhow!(
         "{MODEL_PATH_ENV} is not set and no model was found in the \
          whisper-models cache directory; download a model via \
-         `whisper-dictate models download tiny.en` or set \
+         `whisper-dictate models download large-v3-turbo` or set \
          {MODEL_PATH_ENV} to point at a GGML whisper.cpp model file"
     ))
 }
@@ -281,7 +284,13 @@ mod tests {
         };
         std::fs::create_dir_all(&cache_subdir).unwrap();
         // Plant a file with wrong content — SHA-256 won't match the catalog.
-        let corrupt_model = cache_subdir.join("ggml-tiny.en.bin");
+        //
+        // MUST be a VISIBLE catalog entry. The fallback loop iterates
+        // `visible_catalog()`, so planting a hidden fixture (e.g.
+        // `ggml-tiny.en.bin`) would be filtered out *before* `is_downloaded`
+        // runs — the test would still pass, but for the wrong reason, leaving
+        // the corrupt-skip branch this test exists to cover untested.
+        let corrupt_model = cache_subdir.join("ggml-large-v3-turbo.bin");
         std::fs::write(&corrupt_model, b"corrupt-contents").unwrap();
 
         // Must fail: corrupt file is skipped, no valid model found.
