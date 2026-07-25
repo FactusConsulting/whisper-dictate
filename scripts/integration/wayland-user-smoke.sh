@@ -820,7 +820,15 @@ section "in-process Rust runtime installs (dictate-run --json-events)"
 if [ "$CMD_MODE" != "rust" ]; then
     warn "dictate-run is a Rust subcommand — not exposed by the Python fallback"
 else
-    dictaterun_log="$(mktemp)"
+    # stdout and stderr are captured SEPARATELY. The first-line ready
+    # envelope is a stdout contract, and stderr carries pre-ready chatter
+    # that would otherwise win the `head -n 1` race: `load_settings()` prints
+    # the parakeet migration warnings (config/load.rs) before the envelope,
+    # and a failed Ctrl-C handler install warns from dictate_run.rs too.
+    # Folding them together with `2>&1` would fail a perfectly healthy
+    # runtime on any box that trips one of those paths.
+    dictaterun_out="$(mktemp)"
+    dictaterun_err="$(mktemp)"
     # 3 s is ample: the ready envelope is printed once the listener + sink
     # are installed, well under a second on this class of box. The verb runs
     # until Ctrl-C by design, so the SIGTERM is the expected end — gate on
@@ -831,30 +839,81 @@ else
     # Nothing is injected: dictate-run only acts on a real PTT chord press,
     # and no keys are synthesised here.
     timeout --preserve-status --kill-after=1s 3s \
-        whisper-dictate dictate-run --json-events >"$dictaterun_log" 2>&1
+        whisper-dictate dictate-run --json-events \
+        >"$dictaterun_out" 2>"$dictaterun_err"
     dictaterun_rc=$?
-    dictaterun_first="$(head -n 1 "$dictaterun_log")"
+    dictaterun_first="$(head -n 1 "$dictaterun_out")"
+    # Classify startup diagnostics across both streams.
+    dictaterun_diag="$(cat "$dictaterun_out" "$dictaterun_err")"
     if printf '%s' "$dictaterun_first" | grep -q '"kind":"ready"' \
        && printf '%s' "$dictaterun_first" | grep -q '"engine":"rust"'; then
-        # Surface the resolved driver + chord: on Wayland the driver MUST be
-        # evdev (rdev's XRecord path is deaf there), so a silent flip back to
-        # rdev is exactly the regression worth seeing in the smoke output.
-        dr_driver="$(printf '%s' "$dictaterun_first" | grep -oE '"driver":"[^"]+"' | cut -d: -f2 | tr -d '"')"
-        dr_chord="$(printf '%s' "$dictaterun_first" | grep -oE '"chord":"[^"]+"' | cut -d: -f2 | tr -d '"')"
-        ok "in-process Rust runtime ready (driver=${dr_driver:-?} chord=${dr_chord:-?})"
-        if [ "$SESSION" = "wayland" ] && [ -n "$dr_driver" ] && [ "$dr_driver" != "evdev" ]; then
-            bad "Wayland session resolved driver=$dr_driver — only evdev can observe keys under Wayland"
+        # `dictate-run` builds its sink with the LENIENT
+        # `rust_session_sink::build_production_sink`, which silently drops to
+        # the PR 4 stub backends when real-backend construction fails (no
+        # cached model, VOICEPI_WHISPER_MODEL_PATH unset, …) and still
+        # reports ready. Reporting a green "runtime ready" there would claim
+        # a transcribing binary that cannot transcribe. The degrade is
+        # observable: the sink emits a RuntimeEvent::Stderr that
+        # `--json-events` re-emits on stdout as
+        # `{"kind":"stderr","line":"[rust-session] real backend init failed …"}`.
+        #
+        # Warn rather than fail, matching how the neighbouring sections
+        # already classify the two things that trigger it — a missing model
+        # (`self-test whisper-load`) and a missing feature (`self-test
+        # audio-capture`) are warn-skips there too. What matters is that this
+        # section stops claiming readiness it did not verify.
+        #
+        # Known residual gap, stated rather than papered over: when
+        # `whisper-rs-local` is not compiled in at all, the real-backend block
+        # in `build_production_sink` is `#[cfg]`-ed out entirely, so the stubs
+        # are installed with NO runtime event to observe. That build is caught
+        # by the `self-test whisper-load` section above, which warn-skips on
+        # its "requires whisper-rs-local feature" message.
+        if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
+            stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
+            warn "runtime installed but degraded to stub backends — cannot transcribe (${stub_reason:-reason not reported})"
+        else
+            # Surface the resolved driver + chord: on Wayland the driver MUST
+            # be evdev (rdev's XRecord path is deaf there), so a silent flip
+            # back to rdev is exactly the regression worth seeing here.
+            dr_driver="$(printf '%s' "$dictaterun_first" | grep -oE '"driver":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+            dr_chord="$(printf '%s' "$dictaterun_first" | grep -oE '"chord":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+            ok "in-process Rust runtime ready (driver=${dr_driver:-?} chord=${dr_chord:-?})"
+            if [ "$SESSION" = "wayland" ] && [ -n "$dr_driver" ] && [ "$dr_driver" != "evdev" ]; then
+                bad "Wayland session resolved driver=$dr_driver — only evdev can observe keys under Wayland"
+            fi
         fi
-    elif grep -qi "rust-hotkeys\|rust-injection\|rebuild with" "$dictaterun_log"; then
+    elif printf '%s' "$dictaterun_diag" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
         warn "dictate-run requires rust-hotkeys,rust-injection features (skipped on this build)"
-    elif grep -qi "permission\|input group\|no readable\|usermod" "$dictaterun_log"; then
+    # Keep the permission skip narrow, and match on the phrases UNIQUE to the
+    # evdev permission refusal ("no readable keyboard found under /dev/input
+    # … sudo usermod -aG input $USER"). A bare `permission` match would also
+    # swallow "Permission denied (os error 13)" from an unreadable CONFIG
+    # file — a broken install this release-verification script must not exit 0
+    # on. A bare `/dev/input` match is wrong for a subtler reason: the
+    # NO-DISPLAY error's own hint text mentions `/dev/input/*` permissions, so
+    # it mislabels a headless box as a permissions problem and sends the
+    # operator off to run usermod for nothing. (Observed: that is exactly what
+    # the first version of this section did.)
+    elif printf '%s' "$dictaterun_diag" | grep -qi "no readable keyboard\|usermod -aG input"; then
         warn "dictate-run: user lacks /dev/input access (add user to the 'input' group)"
+    # This script is documented to run on WSL / headless Linux / X11 too.
+    # There, driver auto-selection picks rdev, whose listener legitimately
+    # refuses without a display — the same environment the removed probe and
+    # the `hotkey capture` section above both warn-skip.
+    elif printf '%s' "$dictaterun_diag" | grep -qi "X display\|no display"; then
+        warn "dictate-run: hotkey listener unavailable without a display (expected on headless / WSL)"
+    # Any other listener refusal: still a skip (matching how `hotkey capture`
+    # classifies the same class), but say plainly that the cause was not
+    # recognised so an unfamiliar failure is not silently normalised.
+    elif printf '%s' "$dictaterun_diag" | grep -qi "listener failed to start"; then
+        warn "dictate-run: hotkey listener refused for an unclassified reason: $(printf '%s' "$dictaterun_diag" | grep -i 'listener failed to start' | head -c 200)"
     elif [ "$dictaterun_rc" -eq 101 ]; then
-        bad "dictate-run panicked: $(tail -n 3 "$dictaterun_log")"
+        bad "dictate-run panicked: $(tail -n 3 "$dictaterun_err")"
     else
-        bad "in-process Rust runtime did not report ready (exit $dictaterun_rc): $(head -c 300 "$dictaterun_log")"
+        bad "in-process Rust runtime did not report ready (exit $dictaterun_rc): $(printf '%s' "$dictaterun_diag" | head -c 300)"
     fi
-    rm -f "$dictaterun_log"
+    rm -f "$dictaterun_out" "$dictaterun_err"
 fi
 
 # --------------------------------------------------------------------------
