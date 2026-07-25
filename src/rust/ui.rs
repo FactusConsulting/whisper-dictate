@@ -89,20 +89,26 @@ pub(in crate::ui) use self::upgrade_hint::*;
 pub(in crate::ui) use self::widgets::*;
 pub(in crate::ui) use self::worker_event::*;
 
-// Ordered most → least accurate. Larger models are more accurate but slower
-// and need more VRAM; see `whisper_model_hint` for per-model annotations.
-const WHISPER_MODELS: &[&str] = &[
-    "large-v3",
-    "large-v3-turbo",
-    "medium",
-    "small",
-    "base",
-    "tiny",
-];
+// Models OFFERED in the picker. Deliberately just the two real choices —
+// turbo (fast, recommended) and large-v3 (most accurate) — matching the GGML
+// download catalog in `whisper::model_manager`. The mid-size and English-only
+// variants were removed: this is a multilingual app, and a machine that cannot
+// run these should use a cloud STT backend (Groq/OpenAI) rather than a tiny
+// local model, which is both the default path and the better experience there.
+//
+// This is an OFFER list, not a validity list: `whisper_model_hint` still knows
+// the retired names, so a user whose saved setting is `medium` keeps a properly
+// labelled picker (nothing resets it), and `VOICEPI_MODEL` can still name any
+// model the engine understands.
+const WHISPER_MODELS: &[&str] = &["large-v3-turbo", "large-v3"];
 
 /// Accuracy/speed note + approximate VRAM (MB, at the GPU `int8_float16`
 /// default) for a Whisper model value. Drives the model picker's labels and
 /// the "does it fit my GPU" grey-out.
+/// Covers RETIRED models too (`medium` / `small` / `base` / `tiny`): they are
+/// no longer offered by [`WHISPER_MODELS`], but a user upgrading with one of
+/// them saved must still see a properly labelled picker rather than a bare
+/// name, and `VOICEPI_MODEL` can still select them.
 fn whisper_model_hint(model: &str) -> (&'static str, u32) {
     match model {
         "large-v3" => ("most accurate, slowest", 3200),
