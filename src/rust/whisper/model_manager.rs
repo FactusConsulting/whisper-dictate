@@ -11,9 +11,10 @@
 //!
 //! Scope is intentionally minimal:
 //! - **Catalog**: two user-facing multilingual entries — `large-v3-turbo`
-//!   (fast) and `large-v3` (most accurate) — plus one hidden `tiny.en` test
-//!   fixture that CI and the `whisper-load` self-test download instead of a
-//!   multi-GB model. The English-only and mid-size variants were removed: this
+//!   (fast) and `large-v3` (most accurate) — plus a hidden multilingual `tiny`
+//!   test fixture that CI and the `whisper-load` self-test download instead of
+//!   a multi-GB model (and a transitional hidden `tiny.en` the workflow still
+//!   names). The English-only and mid-size variants were removed: this
 //!   is a multilingual app, so `*.en` was never the right user choice, and
 //!   `base`/`small`/`medium` only added choice paralysis next to turbo.
 //!   Anything not in the catalog is still reachable via
@@ -94,23 +95,39 @@ pub struct ModelEntry {
 /// English-only (`*.en`) variants were never the right answer for a user, and
 /// the mid-range sizes (`base` / `small` / `medium`) only added choice
 /// paralysis next to `large-v3-turbo`. What remains is the real decision —
-/// turbo (fast) vs large-v3 (most accurate) — plus one hidden test fixture.
+/// turbo (fast) vs large-v3 (most accurate) — plus hidden test fixtures.
 ///
 /// SHA-256 values are pinned to the current `ggerganov/whisper.cpp`
 /// HuggingFace `main` branch — re-verify when bumping.
 pub const CATALOG: &[ModelEntry] = &[
-    // Test fixture (hidden from the UI) ----------------------------------
+    // Test fixtures (hidden from the UI) ---------------------------------
     // The smallest model that exists, kept ONLY so CI and the `whisper-load`
-    // self-test have a ~78 MB download instead of a multi-GB one. Not offered
-    // to users: whisper-dictate is multilingual, so an English-only model is
-    // never the right user-facing choice. See `ModelEntry::hidden`.
+    // self-test download ~78 MB instead of multiple GB. MULTILINGUAL on
+    // purpose: this app transcribes any language, so an English-only fixture
+    // would be testing the wrong thing (and is exactly the mistake the
+    // user-facing trim removes). See `ModelEntry::hidden`.
+    ModelEntry {
+        name: "tiny",
+        filename: "ggml-tiny.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+        size_bytes: 77_700_000,
+        description: "Test fixture (multilingual, fastest, lowest accuracy)",
+        hidden: true,
+    },
+    // TRANSITIONAL: `.github/workflows/test.yml` still names `tiny.en` in the
+    // integration job, and workflow files cannot be changed from every
+    // environment. Keeping this hidden entry means CI keeps resolving that
+    // name while `tiny` becomes the real fixture everywhere else. Delete this
+    // entry once the workflow's two `tiny.en` references are switched to
+    // `tiny` — nothing else refers to it.
     ModelEntry {
         name: "tiny.en",
         filename: "ggml-tiny.en.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
         sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
         size_bytes: 77_700_000,
-        description: "Test fixture (English-only, fastest, lowest accuracy)",
+        description: "Legacy CI fixture (English-only) — pending workflow switch to `tiny`",
         hidden: true,
     },
     // User-facing multilingual models -------------------------------------

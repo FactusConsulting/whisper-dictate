@@ -171,11 +171,16 @@ if [ "$CMD_MODE" = "python" ]; then
     warn "models list is a Rust subcommand — not exposed by the Python fallback"
 else
     if out="$(run_cli "models list" 2>&1)"; then
-        if printf '%s' "$out" | grep -q "tiny.en" && \
+        # `models list` shows the USER-FACING catalog only; hidden test
+        # fixtures (the tiny model CI downloads) are deliberately absent.
+        if printf '%s' "$out" | grep -q "large-v3-turbo" && \
            printf '%s' "$out" | grep -q "large-v3"; then
-            ok "catalog lists tiny.en and large-v3"
+            ok "catalog lists large-v3-turbo and large-v3"
+        elif printf '%s' "$out" | grep -qE "^\s+\[.*\](\s+)tiny(\s|$)"; then
+            bad "catalog leaks a hidden test fixture into the user-facing list"
+            info "$out"
         else
-            bad "catalog missing tiny.en and/or large-v3 entries"
+            bad "catalog missing large-v3-turbo and/or large-v3 entries"
             info "$out"
         fi
     else
@@ -219,7 +224,7 @@ fi
 # --------------------------------------------------------------------------
 # SECTION: simulate-ptt (headless dictation pipeline)
 # --------------------------------------------------------------------------
-section "simulate-ptt (fixture WAV, dry-run, tiny.en, CPU)"
+section "simulate-ptt (fixture WAV, dry-run, tiny, CPU)"
 if [ ! -f "$FIXTURE_WAV" ]; then
     warn "fixture WAV missing: $FIXTURE_WAV"
 else
@@ -229,7 +234,7 @@ else
         # present. --dry-run is the default (no --inject).
         out="$(VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
                     --wav "$FIXTURE_WAV" \
-                    --model tiny.en \
+                    --model tiny \
                     --language en \
                     --json 2>&1)"
         rc=$?
@@ -239,7 +244,7 @@ else
                     whisper_dictate.vp_simulate_ptt \
                     --wav "$FIXTURE_WAV" \
                     --dry-run \
-                    --model tiny.en \
+                    --model tiny \
                     --device cpu \
                     --lang en \
                     --json 2>&1)"
@@ -564,7 +569,7 @@ fi
 # --------------------------------------------------------------------------
 # SECTION: self-test whisper-load (regression — Whisper cold-load latency + OOM)
 #
-# Item 5 prereq 5: load the tiny.en GGML model through the same background
+# Item 5 prereq 5: load the tiny GGML model through the same background
 # preloader the supervisor will use in Phase C step 2. Regression coverage for
 # the v1.20.7 silent-PTT scenario (whisper.cpp load hanging the main thread)
 # + the OOM path (whisper.cpp panics on a memory-starved host, caught by
@@ -578,15 +583,15 @@ section "self-test whisper-load (Whisper cold-load latency + OOM)"
 if [ "$CMD_MODE" = "python" ]; then
     warn "self-test whisper-load is a Rust subcommand — not exposed by the Python fallback"
 else
-    wl_out="$(whisper-dictate self-test whisper-load --model tiny.en --json 2>&1)"
+    wl_out="$(whisper-dictate self-test whisper-load --model tiny --json 2>&1)"
     wl_rc=$?
     if [ "$wl_rc" -eq 0 ] && printf '%s' "$wl_out" | grep -q '"ok":true'; then
         elapsed=$(printf '%s' "$wl_out" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
-        ok "whisper-load: tiny.en loaded in ${elapsed:-?}ms (status=ready)"
+        ok "whisper-load: tiny loaded in ${elapsed:-?}ms (status=ready)"
     elif printf '%s' "$wl_out" | grep -qi "whisper-rs-local\|rebuild with"; then
         warn "self-test whisper-load requires whisper-rs-local feature (skipped on this build)"
     elif printf '%s' "$wl_out" | grep -qi "not in the cache\|models download"; then
-        warn "self-test whisper-load: tiny.en not in cache — run 'whisper-dictate models download tiny.en' first"
+        warn "self-test whisper-load: tiny not in cache — run 'whisper-dictate models download tiny' first"
     else
         bad "whisper-load FAILED — Phase B whisper backend is broken: $(printf '%s\n' "$wl_out" | tail -n 3)"
     fi

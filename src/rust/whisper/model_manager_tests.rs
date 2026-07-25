@@ -85,7 +85,7 @@ fn catalog_contains_expected_models() {
     // the load test downloads ~78 MB instead of multiple GB. A future PR that
     // drops or re-orders these will trip this — re-audit the UI labels then.
     let names: Vec<&str> = CATALOG.iter().map(|e| e.name).collect();
-    assert_eq!(names, vec!["tiny.en", "large-v3-turbo", "large-v3"]);
+    assert_eq!(names, vec!["tiny", "tiny.en", "large-v3-turbo", "large-v3"]);
 }
 
 #[test]
@@ -140,8 +140,8 @@ fn catalog_names_are_unique() {
 
 #[test]
 fn find_returns_entry_by_name() {
-    let tiny = find("tiny.en").expect("tiny.en in catalog");
-    assert_eq!(tiny.filename, "ggml-tiny.en.bin");
+    let tiny = find("tiny").expect("tiny in catalog");
+    assert_eq!(tiny.filename, "ggml-tiny.bin");
     assert_eq!(find("nonsense"), None);
 }
 

@@ -1000,7 +1000,7 @@ pub enum SelfTestCommand {
         /// resolve via [`crate::whisper::model_manager::find`]; anything
         /// containing `/` or `\`, or ending in `.bin` / `.gguf`, is
         /// treated as a literal path.
-        #[arg(long, default_value = "tiny.en")]
+        #[arg(long, default_value = "tiny")]
         model: String,
         /// Emit the [`crate::whisper::self_test::WhisperLoadReport`] as
         /// one JSON object with a stable field shape (`kind`, `model`,
