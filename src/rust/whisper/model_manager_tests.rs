@@ -78,26 +78,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[test]
 fn catalog_contains_expected_models() {
-    // Encodes the curated scope decision (Tier 1 expansion, 2026-07):
-    // English-only trio first (smallest → largest), then the multilingual
-    // siblings, then the larger multilingual models. A future PR that drops
-    // one of these or accidentally re-orders them will trip this — at which
-    // point the UI labels should be re-audited alongside.
+    // Encodes the curated scope decision (catalog trim, 2026-07): the app is
+    // MULTILINGUAL, so the English-only variants and the mid-size models were
+    // dropped — what a user picks between is turbo (fast) vs large-v3 (most
+    // accurate). `tiny.en` survives ONLY as a hidden CI/self-test fixture so
+    // the load test downloads ~78 MB instead of multiple GB. A future PR that
+    // drops or re-orders these will trip this — re-audit the UI labels then.
     let names: Vec<&str> = CATALOG.iter().map(|e| e.name).collect();
-    assert_eq!(
-        names,
-        vec![
-            "tiny.en",
-            "base.en",
-            "small.en",
-            "tiny",
-            "base",
-            "small",
-            "medium",
-            "large-v3-turbo",
-            "large-v3",
-        ]
-    );
+    assert_eq!(names, vec!["tiny.en", "large-v3-turbo", "large-v3"]);
 }
 
 #[test]
@@ -540,6 +528,7 @@ fn is_downloaded_true_when_cached_file_matches_hash() {
         sha256: hash_static,
         size_bytes: payload.len() as u64,
         description: "synthetic test entry",
+        hidden: true,
     };
     let path = model_path(&entry).expect("override must resolve");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -644,4 +633,22 @@ fn stream_download_to_errors_when_partial_parent_missing() {
     );
     assert!(!partial.exists(), "no partial must be left behind");
     assert!(!target.exists(), "no target must be created");
+}
+
+#[test]
+fn visible_catalog_hides_test_fixtures_but_find_still_resolves_them() {
+    // The UI must never offer an English-only model in a multilingual app,
+    // but CI (`models download tiny.en`, `self-test whisper-load`) resolves it
+    // by name — so `find` must keep seeing what `visible_catalog` hides.
+    let visible: Vec<&str> = visible_catalog().map(|e| e.name).collect();
+    assert_eq!(visible, vec!["large-v3-turbo", "large-v3"]);
+    assert!(
+        !visible.iter().any(|n| n.ends_with(".en")),
+        "no English-only model may be user-facing in a multilingual app"
+    );
+    assert!(
+        find("tiny.en").is_some(),
+        "hidden fixture must stay resolvable"
+    );
+    assert!(find("tiny.en").unwrap().hidden);
 }

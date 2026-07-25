@@ -10,11 +10,14 @@
 //! in the curated catalog).
 //!
 //! Scope is intentionally minimal:
-//! - **Catalog**: nine curated entries covering the CPU-friendly English-only
-//!   trio (`tiny.en` / `base.en` / `small.en`), the matching multilingual
-//!   siblings (`tiny` / `base` / `small`), and the larger multilingual models
-//!   (`medium`, `large-v3-turbo`, `large-v3`). Anything not in the catalog is
-//!   still reachable via `VOICEPI_WHISPER_MODEL_PATH`.
+//! - **Catalog**: two user-facing multilingual entries — `large-v3-turbo`
+//!   (fast) and `large-v3` (most accurate) — plus one hidden `tiny.en` test
+//!   fixture that CI and the `whisper-load` self-test download instead of a
+//!   multi-GB model. The English-only and mid-size variants were removed: this
+//!   is a multilingual app, so `*.en` was never the right user choice, and
+//!   `base`/`small`/`medium` only added choice paralysis next to turbo.
+//!   Anything not in the catalog is still reachable via
+//!   `VOICEPI_WHISPER_MODEL_PATH`.
 //! - **Format**: GGML only. whisper.cpp does not yet read GGUF (see the
 //!   `reject_gguf_model` guard in `whisper::local`), so a GGUF entry in the
 //!   catalog would only mislead.
@@ -73,79 +76,52 @@ pub struct ModelEntry {
     /// One-line human-readable summary for the UI label
     /// (accuracy / speed / file size tradeoff).
     pub description: &'static str,
+    /// When true the entry is a TEST FIXTURE, not a user-facing choice: it is
+    /// still downloadable by name (`models download <name>`) and resolvable by
+    /// `find`, but [`visible_catalog`] filters it out so it never appears in
+    /// the Settings model list.
+    ///
+    /// This exists so CI and the self-tests can use a tiny (~78 MB) model
+    /// without offering it as a real option — whisper-dictate is a
+    /// multilingual app, so an English-only model is never the right answer
+    /// for a user, but it is the cheapest possible fixture for a load test.
+    pub hidden: bool,
 }
 
-/// Curated catalog of whisper.cpp GGML models. Order matches the UI
-/// presentation: English-only trio first (smallest → largest), then the
-/// matching multilingual siblings, then the larger multilingual models.
+/// Curated catalog of whisper.cpp GGML models.
+///
+/// Deliberately small: whisper-dictate is a MULTILINGUAL app, so the
+/// English-only (`*.en`) variants were never the right answer for a user, and
+/// the mid-range sizes (`base` / `small` / `medium`) only added choice
+/// paralysis next to `large-v3-turbo`. What remains is the real decision —
+/// turbo (fast) vs large-v3 (most accurate) — plus one hidden test fixture.
+///
 /// SHA-256 values are pinned to the current `ggerganov/whisper.cpp`
 /// HuggingFace `main` branch — re-verify when bumping.
 pub const CATALOG: &[ModelEntry] = &[
-    // English-only ------------------------------------------------------
+    // Test fixture (hidden from the UI) ----------------------------------
+    // The smallest model that exists, kept ONLY so CI and the `whisper-load`
+    // self-test have a ~78 MB download instead of a multi-GB one. Not offered
+    // to users: whisper-dictate is multilingual, so an English-only model is
+    // never the right user-facing choice. See `ModelEntry::hidden`.
     ModelEntry {
         name: "tiny.en",
         filename: "ggml-tiny.en.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
         sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
         size_bytes: 77_700_000,
-        description: "English, fastest, lowest accuracy (~78 MB)",
+        description: "Test fixture (English-only, fastest, lowest accuracy)",
+        hidden: true,
     },
-    ModelEntry {
-        name: "base.en",
-        filename: "ggml-base.en.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
-        sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
-        size_bytes: 147_900_000,
-        description: "English, fast, low accuracy (~148 MB)",
-    },
-    ModelEntry {
-        name: "small.en",
-        filename: "ggml-small.en.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
-        sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-        size_bytes: 487_600_000,
-        description: "English, balanced accuracy & speed (~488 MB)",
-    },
-    // Multilingual ------------------------------------------------------
-    ModelEntry {
-        name: "tiny",
-        filename: "ggml-tiny.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-        size_bytes: 77_700_000,
-        description: "Multilingual, fastest, lowest accuracy (~78 MB)",
-    },
-    ModelEntry {
-        name: "base",
-        filename: "ggml-base.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-        size_bytes: 147_900_000,
-        description: "Multilingual, fast, low accuracy (~148 MB)",
-    },
-    ModelEntry {
-        name: "small",
-        filename: "ggml-small.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
-        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-        size_bytes: 487_600_000,
-        description: "Multilingual, balanced accuracy & speed (~488 MB)",
-    },
-    ModelEntry {
-        name: "medium",
-        filename: "ggml-medium.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
-        sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
-        size_bytes: 1_500_000_000,
-        description: "Multilingual, good accuracy, ~1.5GB",
-    },
+    // User-facing multilingual models -------------------------------------
     ModelEntry {
         name: "large-v3-turbo",
         filename: "ggml-large-v3-turbo.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
         sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
         size_bytes: 1_600_000_000,
-        description: "Multilingual, high accuracy, ~1.6GB",
+        description: "Multilingual, high accuracy, fastest of the large models (~1.6GB)",
+        hidden: false,
     },
     ModelEntry {
         name: "large-v3",
@@ -153,13 +129,25 @@ pub const CATALOG: &[ModelEntry] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
         size_bytes: 3_100_000_000,
-        description: "Multilingual, best accuracy, ~3.1GB",
+        description: "Multilingual, best accuracy (~3.1GB)",
+        hidden: false,
     },
 ];
 
 /// Look up a catalog entry by its short name.
+///
+/// Resolves hidden entries too, so `models download tiny.en` and the
+/// `whisper-load` self-test keep working even though the UI never lists it.
 pub fn find(name: &str) -> Option<&'static ModelEntry> {
     CATALOG.iter().find(|entry| entry.name == name)
+}
+
+/// The user-facing subset of [`CATALOG`] — every entry except test fixtures.
+///
+/// Use this anywhere a human picks a model (the Settings tab). Use [`CATALOG`]
+/// directly only for by-name resolution and integrity checks.
+pub fn visible_catalog() -> impl Iterator<Item = &'static ModelEntry> {
+    CATALOG.iter().filter(|entry| !entry.hidden)
 }
 
 /// Resolve the OS-conventional user-cache subdirectory we store Whisper

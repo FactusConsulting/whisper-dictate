@@ -149,7 +149,14 @@ pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
     // rather than being passed to whisper-rs where it produces a confusing
     // load error.  The OS page cache makes repeated reads of the same file
     // fast; this check runs once per process launch, not once per transcription.
-    for entry in crate::whisper::model_manager::CATALOG {
+    // Visible entries only, in catalog order (turbo before large-v3). A hidden
+    // test fixture must NEVER be auto-selected: `tiny.en` is English-only and
+    // lowest-accuracy, so silently transcribing a user's speech with it in a
+    // multilingual app would be worse than reporting "no model found" and
+    // letting them download a real one. (Before the catalog trim this loop hit
+    // `tiny.en` first, so a user with both it and `large-v3` cached silently
+    // got the worst model.)
+    for entry in crate::whisper::model_manager::visible_catalog() {
         if crate::whisper::model_manager::is_downloaded(entry) {
             if let Ok(path) = crate::whisper::model_manager::model_path(entry) {
                 return Ok(path);
