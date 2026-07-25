@@ -294,16 +294,35 @@ else
     # config hides it, and carry it into the run below. `local_only` is a
     # PRIVACY lock: it forces the model libraries offline, so silently
     # dropping it could let a missing tiny.en be fetched from the network by
-    # an operator who explicitly opted out of that. An unresolvable value
-    # yields the empty string, which every consumer treats as "off" —
-    # the same as the pre-existing behaviour.
-    if [ "$CMD_MODE" = "rust" ]; then
+    # an operator who explicitly opted out of that.
+    #
+    # ENV FIRST, and passed through VERBATIM. Both engines give the ambient
+    # env var precedence over the config file (`model_manager::is_local_only`
+    # returns early on a truthy VOICEPI_LOCAL_ONLY; the Python side resolves
+    # it through `get_value`), but `whisper-dictate config get local_only`
+    # does NOT — it reports the persisted setting and its defaults, returning
+    # `0` even with VOICEPI_LOCAL_ONLY=1 exported (verified). So consulting
+    # the config unconditionally would overwrite an inherited `1` with `0`
+    # and turn the lock OFF for this run — strictly worse than the untouched
+    # inheritance this section had before.
+    #
+    # Verbatim rather than normalised on purpose: the two engines' truthiness
+    # tables are not identical (Rust accepts 1/true/True/TRUE; Python treats
+    # anything outside ""/0/false/no/off as on), so re-interpreting the value
+    # here could only introduce a third reading. Passing the operator's own
+    # string through lets each engine apply its own rule, exactly as it would
+    # without this section's involvement.
+    if [ -n "${VOICEPI_LOCAL_ONLY+set}" ]; then
+        simptt_local_only="$VOICEPI_LOCAL_ONLY"
+    elif [ "$CMD_MODE" = "rust" ]; then
         simptt_local_only="$(whisper-dictate config get local_only 2>/dev/null)"
     else
         simptt_local_only="$(PYTHONPATH="${REPO_ROOT}/src/python" python3 -c \
             "from whisper_dictate.vp_config import get_value
 print((get_value('VOICEPI_LOCAL_ONLY') or '').strip())" 2>/dev/null)"
     fi
+    # An unresolvable lookup yields the empty string, which every consumer
+    # treats as "off" — the same as the pre-existing behaviour.
     : "${simptt_local_only:=}"
 
     # Reserve the scratch path with mktemp rather than composing one from
