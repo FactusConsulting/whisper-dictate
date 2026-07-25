@@ -885,11 +885,18 @@ else
         # `unknown` deliberately does NOT trigger this: a whisper-load skip
         # for a missing model fixture says nothing about the feature, and
         # treating silence as absence would fire on every un-cached box.
+        #
+        # A known-absent feature is a hard FAIL, not a skip. This script is the
+        # release-verification step, and a binary that installs its runtime but
+        # can never transcribe is exactly the thing a release must not ship —
+        # letting the run exit 0 there would make the whole smoke a rubber
+        # stamp. Building without the features is still fine as a dev
+        # configuration; it just is not something this script can bless.
         if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
             stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
             warn "runtime installed but degraded to stub backends — cannot transcribe (${stub_reason:-reason not reported})"
         elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ] || [ "$FEATURE_AUDIO_IN_RUST" = "no" ]; then
-            warn "runtime installs, but this build lacks whisper-rs-local=$FEATURE_WHISPER_RS_LOCAL / audio-in-rust=$FEATURE_AUDIO_IN_RUST — the session runs on stub backends and cannot transcribe"
+            bad "runtime installs, but this build lacks whisper-rs-local=$FEATURE_WHISPER_RS_LOCAL / audio-in-rust=$FEATURE_AUDIO_IN_RUST — the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
         # A terminal audio failure during the window (mic disconnect, capture
         # callback error, resampler/VAD failure) stops the pump permanently
         # and re-emits `[rust-session-audio] device error` on stdout AFTER the
