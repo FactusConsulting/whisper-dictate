@@ -23,6 +23,15 @@ pass=0
 fail=0
 skip=0
 
+# Cargo features observed at run time from the self-test sections below, so a
+# later section can tell a genuinely-capable binary from one that merely
+# starts. Tri-state on purpose: "unknown" means the probing section did not
+# get far enough to say (e.g. whisper-load skipped for a missing model
+# fixture, which reveals nothing about the feature), and must not be read as
+# either present or absent.
+FEATURE_WHISPER_RS_LOCAL=unknown
+FEATURE_AUDIO_IN_RUST=unknown
+
 # --- colour helpers (auto-disable when stdout isn't a TTY) ---
 if [ -t 1 ]; then
     C_BOLD_CYAN='\033[1;36m'
@@ -600,8 +609,10 @@ else
         rms="$(printf '%s' "$ac_out" | grep -oE '"rms":[^,}]+' | head -n1 | cut -d: -f2)"
         peak="$(printf '%s' "$ac_out" | grep -oE '"peak":[^,}]+' | head -n1 | cut -d: -f2)"
         quantum_branch="$(printf '%s' "$ac_out" | grep -oE '"pipewire_quantum_branch":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+        FEATURE_AUDIO_IN_RUST=yes
         ok "audio-capture: 1 s captured (rms=$rms peak=$peak quantum=$quantum_branch)"
     elif printf '%s' "$ac_out" | grep -qi "requires the .audio-in-rust. cargo feature\|rebuild with"; then
+        FEATURE_AUDIO_IN_RUST=no
         warn "self-test audio-capture requires audio-in-rust feature (skipped on this build)"
     elif printf '%s' "$ac_out" | grep -qi "no default input device\|input device not found\|no audio device delivered"; then
         warn "no audio device available (expected on headless / muted setups)"
@@ -640,8 +651,10 @@ else
     wl_rc=$?
     if [ "$wl_rc" -eq 0 ] && printf '%s' "$wl_out" | grep -q '"ok":true'; then
         elapsed=$(printf '%s' "$wl_out" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
+        FEATURE_WHISPER_RS_LOCAL=yes
         ok "whisper-load: $wl_model loaded in ${elapsed:-?}ms (status=ready)"
     elif printf '%s' "$wl_out" | grep -qi "whisper-rs-local\|rebuild with"; then
+        FEATURE_WHISPER_RS_LOCAL=no
         warn "self-test whisper-load requires whisper-rs-local feature (skipped on this build)"
     elif printf '%s' "$wl_out" | grep -qi "not in the cache\|models download"; then
         warn "self-test whisper-load: no tiny fixture cached — run 'whisper-dictate models download tiny' first"
@@ -863,15 +876,26 @@ else
         # audio-capture`) are warn-skips there too. What matters is that this
         # section stops claiming readiness it did not verify.
         #
-        # Known residual gap, stated rather than papered over: when
-        # `whisper-rs-local` is not compiled in at all, the real-backend block
-        # in `build_production_sink` is `#[cfg]`-ed out entirely, so the stubs
-        # are installed with NO runtime event to observe. That build is caught
-        # by the `self-test whisper-load` section above, which warn-skips on
-        # its "requires whisper-rs-local feature" message.
+        # The event only exists when the real-backend block was COMPILED IN.
+        # Without `whisper-rs-local` the block is `#[cfg]`-ed out entirely and
+        # the stubs are installed silently, leaving nothing to observe — so
+        # the event check alone would fall straight through to `ok` on a
+        # binary that cannot transcribe. Cover that build from the other side,
+        # using the feature verdicts the self-test sections above recorded.
+        # `unknown` deliberately does NOT trigger this: a whisper-load skip
+        # for a missing model fixture says nothing about the feature, and
+        # treating silence as absence would fire on every un-cached box.
         if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
             stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
             warn "runtime installed but degraded to stub backends — cannot transcribe (${stub_reason:-reason not reported})"
+        elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ] || [ "$FEATURE_AUDIO_IN_RUST" = "no" ]; then
+            warn "runtime installs, but this build lacks whisper-rs-local=$FEATURE_WHISPER_RS_LOCAL / audio-in-rust=$FEATURE_AUDIO_IN_RUST — the session runs on stub backends and cannot transcribe"
+        # A terminal audio failure during the window (mic disconnect, capture
+        # callback error, resampler/VAD failure) stops the pump permanently
+        # and re-emits `[rust-session-audio] device error` on stdout AFTER the
+        # ready line. Ready-then-dead is not ready.
+        elif grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then
+            bad "audio pump died after install — no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
         else
             # Surface the resolved driver + chord: on Wayland the driver MUST
             # be evdev (rdev's XRecord path is deaf there), so a silent flip
@@ -885,29 +909,35 @@ else
         fi
     elif printf '%s' "$dictaterun_diag" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
         warn "dictate-run requires rust-hotkeys,rust-injection features (skipped on this build)"
-    # Keep the permission skip narrow, and match on the phrases UNIQUE to the
-    # evdev permission refusal ("no readable keyboard found under /dev/input
-    # … sudo usermod -aG input $USER"). A bare `permission` match would also
-    # swallow "Permission denied (os error 13)" from an unreadable CONFIG
-    # file — a broken install this release-verification script must not exit 0
-    # on. A bare `/dev/input` match is wrong for a subtler reason: the
-    # NO-DISPLAY error's own hint text mentions `/dev/input/*` permissions, so
-    # it mislabels a headless box as a permissions problem and sends the
-    # operator off to run usermod for nothing. (Observed: that is exactly what
-    # the first version of this section did.)
+    # Listener refusals: the WRAPPER TEXT CANNOT CLASSIFY THEM. Every
+    # `InstallError::ListenerStartup` is rendered by dictate_run.rs:192 as
+    #
+    #   hotkey listener failed to start ({msg}); on Linux without an X display
+    #   this is expected — … or use the evdev backend if you have
+    #   `/dev/input/*` permissions
+    #
+    # so the string ALWAYS mentions both "X display" and "/dev/input",
+    # whatever the real cause. Matching on either turns the branch into a
+    # catch-all that silently downgrades genuine breakage — "manager thread
+    # spawn failed", "evdev reader thread spawn failed", "listener thread did
+    # not report readiness" — to a skip, letting a release-verification run
+    # exit 0 on a runtime that cannot arm at all. (An earlier revision of this
+    # section did exactly that in the other direction: it reported a headless
+    # box as a permissions problem, because the hint mentions /dev/input.)
+    #
+    # So classify on things that are NOT the wrapper:
+    #   - the inner message, for the one cause with distinctive wording
+    #     (evdev's "no readable keyboard found under /dev/input … usermod -aG
+    #     input $USER"), and
+    #   - the ENVIRONMENT, for the headless case — if there is no display at
+    #     all, an rdev refusal is expected here exactly as it is in the
+    #     `hotkey capture` section above.
+    # Anything else is a hard failure.
     elif printf '%s' "$dictaterun_diag" | grep -qi "no readable keyboard\|usermod -aG input"; then
         warn "dictate-run: user lacks /dev/input access (add user to the 'input' group)"
-    # This script is documented to run on WSL / headless Linux / X11 too.
-    # There, driver auto-selection picks rdev, whose listener legitimately
-    # refuses without a display — the same environment the removed probe and
-    # the `hotkey capture` section above both warn-skip.
-    elif printf '%s' "$dictaterun_diag" | grep -qi "X display\|no display"; then
+    elif [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
+         && printf '%s' "$dictaterun_diag" | grep -qi "listener failed to start"; then
         warn "dictate-run: hotkey listener unavailable without a display (expected on headless / WSL)"
-    # Any other listener refusal: still a skip (matching how `hotkey capture`
-    # classifies the same class), but say plainly that the cause was not
-    # recognised so an unfamiliar failure is not silently normalised.
-    elif printf '%s' "$dictaterun_diag" | grep -qi "listener failed to start"; then
-        warn "dictate-run: hotkey listener refused for an unclassified reason: $(printf '%s' "$dictaterun_diag" | grep -i 'listener failed to start' | head -c 200)"
     elif [ "$dictaterun_rc" -eq 101 ]; then
         bad "dictate-run panicked: $(tail -n 3 "$dictaterun_err")"
     else
