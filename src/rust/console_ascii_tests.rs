@@ -58,6 +58,18 @@ const TYPOGRAPHIC: &[(char, &str)] = &[
     ('\u{2260}', "!="),  //
     ('\u{00D7}', "x"),   // multiplication sign
     ('\u{2022}', "-"),   // bullet
+    // Status glyphs. These are what people actually reach for when dressing
+    // up CLI output, and they garble in exactly the legacy-code-page consoles
+    // this guard exists for -- a check mark that renders as `Γ£ô` is worse
+    // than the word it replaced.
+    ('\u{2713}', "OK"),   // check mark
+    ('\u{2714}', "OK"),   // heavy check mark
+    ('\u{2717}', "FAIL"), // ballot X
+    ('\u{2718}', "FAIL"), // heavy ballot X
+    ('\u{26A0}', "WARN"), // warning sign
+    ('\u{2139}', "INFO"), // information source
+    ('\u{25CF}', "*"),    // black circle
+    ('\u{25CB}', "o"),    // white circle
 ];
 
 fn ascii_equivalent(c: char) -> Option<&'static str> {
@@ -113,9 +125,24 @@ fn literal_runtime_text(token: &proc_macro2::Literal) -> Option<String> {
     match litrs::Literal::parse(raw.clone()) {
         Ok(litrs::Literal::String(s)) => Some(s.value().to_owned()),
         Ok(litrs::Literal::Char(c)) => Some(c.value().to_string()),
-        // Byte / byte-string literals cannot hold non-ASCII at all, and
-        // numeric literals are irrelevant. Skipping them is not a hole.
-        _ => None,
+        // C strings hold UTF-8 and reach a console via `to_string_lossy()`,
+        // so they are checked like any other text literal. Lossy on purpose:
+        // a literal that is not valid UTF-8 cannot contain the blocked
+        // characters anyway, and this must never panic on odd input.
+        Ok(litrs::Literal::CString(c)) => {
+            Some(String::from_utf8_lossy(c.value().to_bytes()).into_owned())
+        }
+        // Byte and byte-string literals are `u8`-only: the Rust grammar
+        // forbids non-ASCII in them outright, so there is nothing to check.
+        // Numeric and bool literals carry no text.
+        Ok(litrs::Literal::Byte(_) | litrs::Literal::ByteString(_)) => None,
+        Ok(litrs::Literal::Bool(_) | litrs::Literal::Integer(_) | litrs::Literal::Float(_)) => None,
+        // `litrs::Literal` is `#[non_exhaustive]`, so a future Rust literal
+        // kind lands here. Fail rather than skip: silently returning None is
+        // exactly how a new syntax would become an invisible hole -- the
+        // failure mode this guard was rewritten to eliminate.
+        Ok(_) => panic!("unhandled literal kind {raw:?} -- teach literal_runtime_text about it"),
+        Err(err) => panic!("unparseable literal {raw:?}: {err}"),
     }
 }
 
@@ -131,9 +158,16 @@ fn scan_tokens(
     out: &mut Vec<Violation>,
 ) {
     let mut pending_macro: Option<String> = None;
+    // True immediately after a `#` (or `#` `!`), i.e. the next bracket group
+    // is an ATTRIBUTE body rather than an array literal. Without this, every
+    // bracket group with no pending identifier looked like an attribute, so
+    // `eprintln!("{:?}", ["bad — output"])` was skipped -- real console output
+    // hidden by the array's own brackets (caught in review of #576).
+    let mut after_pound = false;
     for tree in stream {
         match tree {
             TokenTree::Ident(ident) => {
+                after_pound = false;
                 let name = ident.to_string();
                 // `#[cfg(test)] mod x { .. }` is skipped wholesale -- but by
                 // its GROUP, not by truncating the file. A bare `#[cfg(test)]`
@@ -150,6 +184,13 @@ fn scan_tokens(
                 pending_macro = Some(name);
             }
             TokenTree::Punct(punct) => {
+                match punct.as_char() {
+                    // `#` opens an attribute; `#!` is the inner form, so `!`
+                    // must not clear the flag.
+                    '#' => after_pound = true,
+                    '!' => {}
+                    _ => after_pound = false,
+                }
                 if punct.as_char() != '!' {
                     pending_macro = None;
                 }
@@ -159,15 +200,21 @@ fn scan_tokens(
                     .as_deref()
                     .is_some_and(|m| CONSOLE_MACROS.contains(&m));
                 let nested_in_console = in_console || is_console_call;
-                if group.delimiter() == Delimiter::Bracket && pending_macro.is_none() {
-                    // Attribute body: `#[...]`. Its literals are compile-time
-                    // metadata (doc text, paths), never console output.
+                if group.delimiter() == Delimiter::Bracket && after_pound {
+                    // Attribute body: `#[..]` / `#![..]`. Skipped because
+                    // rustc lowers `///` doc comments into `#[doc = "..."]`,
+                    // and this codebase's doc comments are full of em dashes
+                    // that never reach a console. An ARRAY literal reaches
+                    // this arm with `after_pound == false` and is scanned.
+                    after_pound = false;
                     continue;
                 }
+                after_pound = false;
                 scan_tokens(group.stream(), file, console_only, nested_in_console, out);
                 pending_macro = None;
             }
             TokenTree::Literal(lit) => {
+                after_pound = false;
                 if console_only && !in_console {
                     pending_macro = None;
                     continue;
@@ -410,6 +457,53 @@ mod guard_behaviour {
         // outer comment's text being parsed as code.
         let src = "fn f() { /* outer /* inner */ \" note */ println!(\"bad — output\"); }";
         assert_eq!(scan(src, "x.rs").len(), 1);
+    }
+
+    #[test]
+    fn array_literal_is_scanned_but_attribute_body_is_not() {
+        // The bracket-group skip exists because rustc lowers `///` doc
+        // comments into `#[doc = "..."]`, and this codebase's doc comments are
+        // full of em dashes that never reach a console. But an ARRAY literal
+        // has the same delimiter, so keying the skip on "bracket group with no
+        // pending identifier" hid real console output inside one.
+        assert_eq!(
+            scan(r#"fn f() { eprintln!("{:?}", ["bad — output"]); }"#, "x.rs").len(),
+            1,
+            "an array literal inside a console macro must be scanned"
+        );
+        assert!(
+            scan("#[doc = \"a — dash\"]\nfn f() {}", "x.rs").is_empty(),
+            "attribute bodies (including lowered doc comments) stay exempt"
+        );
+    }
+
+    #[test]
+    fn c_string_literal_value_is_checked() {
+        // `c"..."` holds UTF-8 and reaches a console via `to_string_lossy()`.
+        // It tokenizes atomically, but was falling through the decode match
+        // unchecked.
+        assert_eq!(
+            scan(
+                r#"fn f() { eprintln!("{}", c"bad — output".to_string_lossy()); }"#,
+                "x.rs"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn status_glyphs_are_rejected() {
+        // A check mark that renders as `Γ£ô` on a legacy code page is worse
+        // than the word it replaced.
+        for glyph in ["\u{2713}", "\u{2717}", "\u{26A0}", "\u{25CF}"] {
+            let src = format!("fn f() {{ println!(\"{glyph} status\"); }}");
+            assert_eq!(
+                scan(&src, "x.rs").len(),
+                1,
+                "glyph {glyph:?} must be caught"
+            );
+        }
     }
 
     #[test]
