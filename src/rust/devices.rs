@@ -76,7 +76,20 @@ pub struct DeviceInfo {
 /// still shows up in the picker. Devices with zero usable input configs or
 /// blank names are filtered out so a caller can show the list verbatim.
 pub fn list_input_devices() -> Vec<DeviceInfo> {
-    enumerate_all_hosts()
+    enumerate_all_hosts(false)
+}
+
+/// Like [`list_input_devices`] but ALSO merges Windows DirectSound-only capture
+/// devices (see [`append_extra_named_devices`]).
+///
+/// Reserved for the **sounddevice picker** — PortAudio can open DirectSound
+/// inputs, so advertising them there is correct. cpal-based callers
+/// (`dictate-mic`, the Rust audio self-test, the standalone `devices` CLI) must
+/// use [`list_input_devices`] instead: cpal is WASAPI-only and a
+/// DirectSound-exclusive device would fail to open, so a user must never be
+/// offered one for a cpal capture path.
+fn list_input_devices_with_directsound() -> Vec<DeviceInfo> {
+    enumerate_all_hosts(true)
 }
 
 /// The host's default input device, if any. Returns the same `DeviceInfo`
@@ -154,7 +167,7 @@ pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceI
 /// `cpal::default_host()` and cannot open devices from other hosts. In that
 /// configuration only the default host's devices are returned so the picker
 /// never advertises a mic that capture would fail to open.
-fn enumerate_all_hosts() -> Vec<DeviceInfo> {
+fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
     let default_host = cpal::default_host();
     let default_host_id = default_host.id();
     let default_input_index = default_input_index(&default_host);
@@ -207,9 +220,12 @@ fn enumerate_all_hosts() -> Vec<DeviceInfo> {
     // Windows: WASAPI (cpal's only Windows host) misses DirectSound-only
     // inputs the sounddevice picker surfaces. Merge them by name so the Rust
     // picker reaches parity with sounddevice — the prerequisite for defaulting
-    // the picker to this helper. No-op on non-Windows and when the
-    // enumeration finds nothing.
-    append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
+    // the picker to this helper. Only when the caller explicitly asked (the
+    // sounddevice picker), so cpal-based callers never see a device cpal can't
+    // open. No-op on non-Windows and when the enumeration finds nothing.
+    if include_directsound {
+        append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
+    }
 
     out
 }
@@ -309,12 +325,17 @@ mod directsound {
     /// Driver" alias for the default device); we keep it too, since the picker
     /// de-duplicates by name against the WASAPI list anyway.
     unsafe extern "system" fn enum_callback(
-        _guid: *mut GUID,
+        guid: *mut GUID,
         description: PCWSTR,
         _module: PCWSTR,
         context: *mut c_void,
     ) -> BOOL {
-        if !context.is_null() && !description.is_null() {
+        // The first callback carries a NULL GUID: the "Primary Sound Capture
+        // Driver" alias for the system default. It has no stable physical-device
+        // name and, since it can't match a real WASAPI entry, would surface as a
+        // redundant picker option that merely re-selects the default. Skip it —
+        // the Python DirectSound path filters this alias too.
+        if !guid.is_null() && !context.is_null() && !description.is_null() {
             // SAFETY: `context` is the `&mut Vec<String>` we passed to
             // DirectSoundCaptureEnumerateW; the enumeration is synchronous so
             // the borrow is valid for the duration of every callback.
@@ -511,8 +532,14 @@ fn probe_device_config(device: &cpal::Device) -> (u16, (u32, u32)) {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum DevicesRequest {
-    /// List every input device.
-    List,
+    /// List every input device. `include_directsound` (default false) asks for
+    /// the Windows DirectSound-only inputs to be merged in — set ONLY by the
+    /// sounddevice picker, which can open them; the standalone CLI / TTY / empty
+    /// callers leave it false so every listed device is cpal-openable.
+    List {
+        #[serde(default)]
+        include_directsound: bool,
+    },
     /// Return the host's default input device (or `null`).
     Default,
     /// Resolve a saved name against the live device list.
@@ -548,11 +575,15 @@ struct FindResponse {
 ///   parse error.
 fn resolve_devices_request(stdin_is_tty: bool, stdin_body: Option<&str>) -> Result<DevicesRequest> {
     if stdin_is_tty {
-        return Ok(DevicesRequest::List);
+        return Ok(DevicesRequest::List {
+            include_directsound: false,
+        });
     }
     let trimmed = stdin_body.unwrap_or("").trim();
     if trimmed.is_empty() {
-        return Ok(DevicesRequest::List);
+        return Ok(DevicesRequest::List {
+            include_directsound: false,
+        });
     }
     Ok(serde_json::from_str(trimmed)?)
 }
@@ -581,10 +612,15 @@ pub fn handle_devices() -> Result<()> {
     };
     let request = resolve_devices_request(stdin_is_tty, raw.as_deref())?;
     match request {
-        DevicesRequest::List => {
-            let resp = ListResponse {
-                devices: list_input_devices(),
+        DevicesRequest::List {
+            include_directsound,
+        } => {
+            let devices = if include_directsound {
+                list_input_devices_with_directsound()
+            } else {
+                list_input_devices()
             };
+            let resp = ListResponse { devices };
             println!("{}", serde_json::to_string(&resp)?);
         }
         DevicesRequest::Default => {
@@ -708,7 +744,26 @@ mod tests {
     #[test]
     fn devices_request_parses_list_action() {
         let parsed: DevicesRequest = serde_json::from_str("{\"action\":\"list\"}").unwrap();
-        assert!(matches!(parsed, DevicesRequest::List));
+        // Absent flag defaults to false → no DirectSound merge for plain callers.
+        assert!(matches!(
+            parsed,
+            DevicesRequest::List {
+                include_directsound: false
+            }
+        ));
+    }
+
+    #[test]
+    fn devices_request_parses_list_with_directsound_flag() {
+        // The sounddevice picker opts into the DirectSound merge explicitly.
+        let parsed: DevicesRequest =
+            serde_json::from_str("{\"action\":\"list\",\"include_directsound\":true}").unwrap();
+        assert!(matches!(
+            parsed,
+            DevicesRequest::List {
+                include_directsound: true
+            }
+        ));
     }
 
     #[test]
@@ -729,7 +784,7 @@ mod tests {
         // piped body — we skip the blocking read and default to the list so
         // the user sees output instead of the process hanging on stdin.
         let request = resolve_devices_request(true, None).unwrap();
-        assert!(matches!(request, DevicesRequest::List));
+        assert!(matches!(request, DevicesRequest::List { .. }));
     }
 
     #[test]
@@ -739,7 +794,7 @@ mod tests {
         // interactive convenience regardless of the body).
         let request =
             resolve_devices_request(true, Some(r#"{"action":"find","query":"x"}"#)).unwrap();
-        assert!(matches!(request, DevicesRequest::List));
+        assert!(matches!(request, DevicesRequest::List { .. }));
     }
 
     #[test]
@@ -748,15 +803,15 @@ mod tests {
         // this is the documented shorthand for `{"action":"list"}`.
         assert!(matches!(
             resolve_devices_request(false, Some("")).unwrap(),
-            DevicesRequest::List
+            DevicesRequest::List { .. }
         ));
         assert!(matches!(
             resolve_devices_request(false, Some("   \n  ")).unwrap(),
-            DevicesRequest::List
+            DevicesRequest::List { .. }
         ));
         assert!(matches!(
             resolve_devices_request(false, None).unwrap(),
-            DevicesRequest::List
+            DevicesRequest::List { .. }
         ));
     }
 

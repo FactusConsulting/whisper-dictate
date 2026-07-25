@@ -477,7 +477,13 @@ def _rust_list_input_devices() -> list[dict] | None:
     try:
         result = subprocess.run(
             [helper, "devices"],
-            input=json.dumps({"action": "list"}, ensure_ascii=False),
+            # This IS the sounddevice picker path (PortAudio can open DirectSound
+            # inputs), so opt into the Rust helper's DirectSound merge — the
+            # WASAPI-only cpal enumeration would otherwise drop a freshly
+            # docked/hot-plugged mic that is visible only on DirectSound.
+            input=json.dumps(
+                {"action": "list", "include_directsound": True}, ensure_ascii=False
+            ),
             text=True,
             encoding="utf-8",
             errors="replace",

@@ -64,7 +64,9 @@ whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
 # means this feature builds without the network-fetched `ort` binary. The
 # device enumeration (`devices`) and the cpal capture self-test share this
 # gate. `audio-in-rust` builds on top by adding the VAD.
-audio-capture = ["dep:cpal", "dep:rubato"]
+# `dep:windows` is a cfg(windows)-only optional dep (DirectSound capture
+# enumeration in devices.rs); on non-Windows targets enabling it is a no-op.
+audio-capture = ["dep:cpal", "dep:rubato", "dep:windows"]
 # Experimental Rust-side audio pipeline (cpal capture → rubato resample →
 # Silero v4 VAD via vad-rs/ort) — the full hands-free pipeline. Adds the Silero
 # ONNX VAD on top of `audio-capture`. OFF by default so a stock build doesn't
@@ -229,8 +231,10 @@ windows-native-keyring-store = "1.1"
 # and merge them into the Rust device list so the Rust picker reaches parity
 # with sounddevice before the default flip. `windows` is already in the tree
 # (cpal uses it for WASAPI); this only adds the DirectSound + Foundation
-# features.
-windows = { version = "0.62", features = ["Win32_Media_Audio_DirectSound", "Win32_Foundation"] }
+# features. OPTIONAL + pulled in by `audio-capture` (the only feature that
+# compiles devices.rs) so a stock build without audio does not activate these
+# features — same feature-boundary discipline as the other optional audio deps.
+windows = { version = "0.62", features = ["Win32_Media_Audio_DirectSound", "Win32_Foundation"], optional = true }
 
 [build-dependencies]
 winresource = "0.1"

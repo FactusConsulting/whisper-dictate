@@ -125,8 +125,13 @@ class RustBackendShellOutTests(unittest.TestCase):
         run.assert_called_once()
         args, kwargs = run.call_args
         self.assertEqual(args[0], ["/fake/whisper-dictate", "devices"])
-        # Always pipes a JSON request body so the binary can pick the action.
-        self.assertEqual(json.loads(kwargs["input"]), {"action": "list"})
+        # Always pipes a JSON request body so the binary can pick the action;
+        # the picker opts into the DirectSound merge (WASAPI-only cpal would
+        # otherwise drop DirectSound-only mics).
+        self.assertEqual(
+            json.loads(kwargs["input"]),
+            {"action": "list", "include_directsound": True},
+        )
         self.assertFalse(kwargs.get("shell"))
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["name"], "Headset Microphone (Jabra Evolve 65 TE)")
