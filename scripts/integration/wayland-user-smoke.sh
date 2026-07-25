@@ -267,6 +267,18 @@ info "tiny fixture in use: $TINY_FIXTURE"
 
 # --------------------------------------------------------------------------
 # SECTION: simulate-ptt (headless dictation pipeline)
+#
+# Runs against a SCRATCH config (VOICEPI_CONFIG override) plus an explicit
+# `VOICEPI_STT_BACKEND=whisper`. Without both, the section is not hermetic:
+# `--model tiny.en` only names the local model, while the BACKEND still comes
+# from the operator's real config.json. On the maintainer's own Wayland box
+# (`stt_backend=openai`, Groq base URL) the run therefore took the cloud path
+# and died with "openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
+# VOICEPI_STT_API_KEY" — the key lives in the OS credential store and is only
+# exported into the worker by the UI, never by a bare CLI verb. That is a
+# false failure: the section exists to prove the LOCAL capture → transcribe →
+# inject plumbing still works, which is exactly what a cloud-configured box
+# never got to exercise.
 # --------------------------------------------------------------------------
 section "simulate-ptt (fixture WAV, dry-run, tiny.en, CPU)"
 if [ ! -f "$FIXTURE_WAV" ]; then
@@ -276,12 +288,25 @@ else
         # Rust subcommand: --language, --model, --wav; no --device switch,
         # so pin CPU via env so the check never depends on a GPU being
         # present. --dry-run is the default (no --inject).
-        out="$(VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
+        #
+        # The scratch config is a path that deliberately does NOT exist:
+        # the config loader falls back to built-in defaults for a missing
+        # file (same fresh-user branch the config section relies on), so no
+        # file needs creating and nothing is left behind. VOICEPI_STT_BACKEND
+        # is set on top because it outranks the config value — that also
+        # pins the backend when the operator has it exported in their shell.
+        simptt_config="${TMPDIR:-/tmp}/wd-simptt-smoke-$$.json"
+        out="$(VOICEPI_CONFIG="$simptt_config" \
+               VOICEPI_STT_BACKEND=whisper \
+               VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
                     --wav "$FIXTURE_WAV" \
                     --model tiny.en \
                     --language en \
                     --json 2>&1)"
         rc=$?
+        # Belt-and-braces: the run should never create the file, but a
+        # future write-through would otherwise litter $TMPDIR.
+        rm -f "$simptt_config"
     else
         # Python fallback: --wav, --dry-run, --model, --device, --lang, --json
         out="$(PYTHONPATH="${REPO_ROOT}/src/python" python3 -m \
