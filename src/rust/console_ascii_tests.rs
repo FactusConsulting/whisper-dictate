@@ -337,8 +337,28 @@ fn rust_sources(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Normalise CRLF before lexing, exactly as rustc does when it reads a source
+/// file.
+///
+/// Git checks these out with CRLF on Windows, and a string continuation (a
+/// trailing `\` before the newline) then reads as `\` + CR, which is not a
+/// valid escape -- so the literal fails to parse on Windows and parses fine
+/// everywhere else. CI found this the moment an unparseable literal started
+/// FAILING instead of being skipped: before that, every literal using a line
+/// continuation was silently unchecked on Windows only.
+fn normalize_line_endings(src: &str) -> String {
+    src.replace("\r\n", "\n")
+}
+
 fn scan_file(path: &Path) -> Vec<Violation> {
-    let src = std::fs::read_to_string(path).expect("readable source");
+    // Normalise CRLF before lexing, exactly as rustc does when it reads a
+    // source file. Git checks these out with CRLF on Windows, and a string
+    // continuation (`\` at end of line) then reads as `\` + CR, which is not
+    // a valid escape -- so the literal fails to parse on Windows and parses
+    // fine everywhere else. Found by CI the moment an unparseable literal
+    // started failing instead of being skipped: before that, every literal
+    // using a line continuation was silently unchecked on Windows only.
+    let src = normalize_line_endings(&std::fs::read_to_string(path).expect("readable source"));
     let Ok(stream) = src.parse::<TokenStream>() else {
         // A file the lexer rejects would silently contribute nothing, so fail
         // loudly rather than pass vacuously.
@@ -384,7 +404,9 @@ mod guard_behaviour {
     use super::*;
 
     fn scan(src: &str, rel: &str) -> Vec<String> {
-        let stream = src.parse::<TokenStream>().expect("tokenizes");
+        let stream = normalize_line_endings(src)
+            .parse::<TokenStream>()
+            .expect("tokenizes");
         let mut out = Vec::new();
         scan_tokens(
             strip_cfg_test(stream),
@@ -504,6 +526,22 @@ mod guard_behaviour {
                 "glyph {glyph:?} must be caught"
             );
         }
+    }
+
+    #[test]
+    fn crlf_line_continuation_still_parses() {
+        // Windows-only regression: `\` at end of line followed by CRLF is not
+        // a valid escape to a lexer that has not normalised line endings, so
+        // the literal failed to parse there and parsed fine on Linux. This is
+        // real code shape -- long messages wrapped with a continuation are all
+        // over this codebase.
+        let crlf =
+            "fn f() {\r\n    println!(\"wrapped \\\r\n        message \u{2014} here\");\r\n}\r\n";
+        assert_eq!(
+            scan(crlf, "x.rs").len(),
+            1,
+            "a CRLF source with a line continuation must parse AND be checked"
+        );
     }
 
     #[test]
