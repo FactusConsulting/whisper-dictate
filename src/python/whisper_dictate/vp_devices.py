@@ -26,7 +26,7 @@ import json
 import os
 import subprocess
 
-from whisper_dictate.vp_rust import no_console_window_kwargs
+from whisper_dictate.vp_rust import helper_path, no_console_window_kwargs
 import sys
 
 
@@ -454,24 +454,44 @@ def select_input_devices(devices, hostapis, *, is_windows: bool, default_index: 
     return result
 
 
+def _rust_devices_enabled() -> bool:
+    """Whether the picker should enumerate via the Rust ``devices`` verb.
+
+    Default flipped to Rust (Python-removal roadmap #348): mic enumeration now
+    runs through the Rust helper unless the operator opts back into the
+    sounddevice path with ``VOICEPI_DEVICES_BACKEND=python`` (or any non-"rust"
+    value). Safe by construction — where the helper is not resolvable
+    (``VOICEPI_RUST_INJECTOR`` unset, e.g. a non-worker process) or it fails,
+    :func:`_rust_list_input_devices` returns ``None`` and the caller falls back
+    to sounddevice. The Windows WASAPI/DirectSound parity gap that made this
+    unsafe is closed by the Rust ``devices`` verb's DirectSound merge (#568), so
+    the flipped Rust list is as complete as the sounddevice picker.
+    """
+    backend = (os.environ.get("VOICEPI_DEVICES_BACKEND") or "rust").strip().lower()
+    return backend == "rust"
+
+
 def _rust_list_input_devices() -> list[dict] | None:
     """Shell out to ``whisper-dictate devices`` for the picker list.
 
-    Active only when ``VOICEPI_DEVICES_BACKEND=rust`` AND the binary path is
-    resolvable from ``VOICEPI_RUST_INJECTOR`` (the same env var every other
-    Rust shell-out uses). Returns the parsed device list on success, or
-    ``None`` on ANY failure (binary missing, helper exited non-zero, JSON
-    invalid, key missing) — the caller then falls back to the Python
+    Active by default (Python-removal roadmap #348); set
+    ``VOICEPI_DEVICES_BACKEND=python`` to force the sounddevice path. Runs only
+    when the binary is resolvable from ``VOICEPI_RUST_INJECTOR`` (the same env
+    var every other Rust shell-out uses). Returns the parsed device list on
+    success, or ``None`` on ANY failure (backend opt-out, binary missing, helper
+    exited non-zero, JSON invalid) — the caller then falls back to the Python
     sounddevice path so behaviour never regresses.
 
-    Phase 2.2.z of the Python-removal roadmap (#348). Default behaviour is
-    unchanged; the shell-out is opt-in via the env var so we can flip
-    individual machines onto Rust enumeration without touching Python.
+    A successful-but-EMPTY list is returned as-is (an empty picker), NOT treated
+    as a failure: with the DirectSound merge (#568) the Rust enumeration is as
+    complete as sounddevice on Windows, so an empty result means the machine has
+    no input device — the sounddevice path would report the same. (This keeps
+    ``print_audio_devices`` working without importing sounddevice on a mic-less
+    machine, per its documented contract.)
     """
-    backend = (os.environ.get("VOICEPI_DEVICES_BACKEND") or "").strip().lower()
-    if backend != "rust":
+    if not _rust_devices_enabled():
         return None
-    helper = os.environ.get("VOICEPI_RUST_INJECTOR") or ""
+    helper = helper_path()
     if not helper:
         return None
     try:
@@ -546,9 +566,11 @@ def list_input_devices(sd=None) -> list[dict]:
     leave it as ``None`` in production — sounddevice is imported lazily and
     only when the Rust device-listing shortcut is unavailable.
 
-    When ``VOICEPI_DEVICES_BACKEND=rust`` is set AND the Rust helper succeeds,
-    its enumeration is returned without ever importing sounddevice.
-    Any helper failure silently falls back to the sounddevice path.
+    By default the Rust ``devices`` helper enumerates the picker list (when it
+    is resolvable), without ever importing sounddevice; set
+    ``VOICEPI_DEVICES_BACKEND=python`` to force the sounddevice path. Any helper
+    failure silently falls back to the sounddevice path (Python-removal roadmap
+    #348; the Windows parity gap is closed by the DirectSound merge in #568).
     """
     rust_devices = _rust_list_input_devices()
     if rust_devices is not None:
