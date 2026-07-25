@@ -786,55 +786,75 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust
-# reaches the Rust supervisor without spawning a Python worker child)
+# SECTION: in-process Rust runtime installs (VOICEPI_DICTATE_ENGINE=rust)
 #
-# Audit item 5 Phase B step 1. Drives the UI briefly under
-# `VOICEPI_DICTATE_ENGINE=rust` so that `RuntimeSupervisor::start`
-# actually runs the Phase B branch (`--version` returns from
-# `main::run` before the supervisor is reached, so it cannot detect a
-# regression at that branch -- Codex P2 PR #519 wayland-user-smoke.sh:646).
+# Replaces the previous `whisper-dictate ui` probe, which could NEVER pass —
+# it was structurally incapable of producing the evidence it grepped for, so
+# it warn-skipped on every run regardless of whether the code was healthy:
 #
-# On this smoke leg the required Whisper model + audio-in-rust runtime
-# are typically not present, so the strict `try_build_production_sink`
-# returns Err, `try_install` maps it to
-# `InProcessInstallError::MissingBackend`, and the supervisor emits
-# the "Phase B in-process dispatch refused" stderr line and falls
-# back to the Python worker. Grepping for that string is enough to
-# prove the branch was reached; a regression that avoided the
-# supervisor (missing import, panic before install, broken feature
-# gate, missing fallback wiring) would leave the string absent.
+#   1. `RuntimeSupervisor::start` is only reached from `start_runtime()`,
+#      whose sole callers are user interactions (ui/tabs/compact.rs and
+#      ui/tabs/shell.rs button handlers, plus restart-on-settings-save).
+#      Nothing starts the runtime on launch, so a UI that is spawned and
+#      SIGTERMed 3 s later without a single click never runs the branch.
+#   2. Even when the branch does run, its message goes to
+#      `RuntimeEvent::Stderr`, an in-process event channel that the UI
+#      renders into its own log pane via `append_runtime_log`. It never
+#      reaches process stdout/stderr, so grepping captured output cannot
+#      observe it. Confirmed empirically: the UI writes 0 bytes.
+#
+# The supervisor's Phase B branch is already covered where it can actually be
+# observed — at the event-channel level, by four dedicated Rust tests in
+# `src/rust/tests/runtime_supervisor.rs` (`supervisor_phase_b_*`), which
+# assert on the exact "Phase B in-process dispatch refused" string. The smoke
+# script should cover what those tests cannot: that the shipped binary really
+# installs the in-process runtime on this box, with this session's hotkey
+# driver and permissions.
+#
+# `dictate-run --json-events` does exactly that, and its documented first-line
+# contract is a stable `{"kind":"ready","ready":true,"engine":"rust",...}`
+# envelope on real stdout — which is what the old grep pattern was reaching
+# for. Run it bounded and gate on that envelope.
 # --------------------------------------------------------------------------
-section "Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust reaches Rust supervisor)"
-if [ "$CMD_MODE" = "rust" ]; then
-    if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-        warn "phase B verify skipped: no DISPLAY / WAYLAND_DISPLAY (headless environment cannot drive the UI)"
-    else
-        phaseB_log="$(mktemp)"
-        # 3s is enough for the supervisor to reach `attempt_in_process_start`
-        # and emit either the success ready event or the fallback stderr line.
-        # `timeout` returns 124 on the SIGTERM; a real crash would return
-        # 101 (Rust panic) or similar. We treat 124 as "expected" — the UI
-        # was supposed to be killed.
-        VOICEPI_DICTATE_ENGINE=rust timeout --preserve-status --kill-after=1s 3s \
-            whisper-dictate ui >"$phaseB_log" 2>&1
-        phaseB_rc=$?
-        # Look for evidence the Phase B branch was actually taken.
-        # Either the ready event (successful in-process install) OR the
-        # refused-stderr line (fallback path) proves the supervisor
-        # reached `attempt_in_process_start`. Either is a pass.
-        if grep -qE '(Phase B in-process dispatch refused|"engine":"rust"|engine=rust \(in-process\))' "$phaseB_log"; then
-            evidence="$(grep -E '(Phase B in-process dispatch refused|"engine":"rust"|engine=rust \(in-process\))' "$phaseB_log" | head -1)"
-            ok "Phase B branch reached RuntimeSupervisor::start: ${evidence:0:200}"
-        elif [ "$phaseB_rc" -eq 101 ]; then
-            bad "UI panicked under VOICEPI_DICTATE_ENGINE=rust: $(tail -3 "$phaseB_log")"
-        else
-            warn "Phase B branch evidence not found in ${phaseB_rc}-exit UI log (may indicate the supervisor branch was not reached): $(head -c 300 "$phaseB_log")"
-        fi
-        rm -f "$phaseB_log"
-    fi
+section "in-process Rust runtime installs (dictate-run --json-events)"
+if [ "$CMD_MODE" != "rust" ]; then
+    warn "dictate-run is a Rust subcommand — not exposed by the Python fallback"
 else
-    warn "phase B verification requires the Rust binary on PATH (Python-only build)"
+    dictaterun_log="$(mktemp)"
+    # 3 s is ample: the ready envelope is printed once the listener + sink
+    # are installed, well under a second on this class of box. The verb runs
+    # until Ctrl-C by design, so the SIGTERM is the expected end — gate on
+    # the envelope, not on the exit status (`--preserve-status` surfaces the
+    # signal as 143/15, which is success here, while a genuine startup
+    # refusal exits non-zero on its own before the timeout fires).
+    #
+    # Nothing is injected: dictate-run only acts on a real PTT chord press,
+    # and no keys are synthesised here.
+    timeout --preserve-status --kill-after=1s 3s \
+        whisper-dictate dictate-run --json-events >"$dictaterun_log" 2>&1
+    dictaterun_rc=$?
+    dictaterun_first="$(head -n 1 "$dictaterun_log")"
+    if printf '%s' "$dictaterun_first" | grep -q '"kind":"ready"' \
+       && printf '%s' "$dictaterun_first" | grep -q '"engine":"rust"'; then
+        # Surface the resolved driver + chord: on Wayland the driver MUST be
+        # evdev (rdev's XRecord path is deaf there), so a silent flip back to
+        # rdev is exactly the regression worth seeing in the smoke output.
+        dr_driver="$(printf '%s' "$dictaterun_first" | grep -oE '"driver":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+        dr_chord="$(printf '%s' "$dictaterun_first" | grep -oE '"chord":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+        ok "in-process Rust runtime ready (driver=${dr_driver:-?} chord=${dr_chord:-?})"
+        if [ "$SESSION" = "wayland" ] && [ -n "$dr_driver" ] && [ "$dr_driver" != "evdev" ]; then
+            bad "Wayland session resolved driver=$dr_driver — only evdev can observe keys under Wayland"
+        fi
+    elif grep -qi "rust-hotkeys\|rust-injection\|rebuild with" "$dictaterun_log"; then
+        warn "dictate-run requires rust-hotkeys,rust-injection features (skipped on this build)"
+    elif grep -qi "permission\|input group\|no readable\|usermod" "$dictaterun_log"; then
+        warn "dictate-run: user lacks /dev/input access (add user to the 'input' group)"
+    elif [ "$dictaterun_rc" -eq 101 ]; then
+        bad "dictate-run panicked: $(tail -n 3 "$dictaterun_log")"
+    else
+        bad "in-process Rust runtime did not report ready (exit $dictaterun_rc): $(head -c 300 "$dictaterun_log")"
+    fi
+    rm -f "$dictaterun_log"
 fi
 
 # --------------------------------------------------------------------------
