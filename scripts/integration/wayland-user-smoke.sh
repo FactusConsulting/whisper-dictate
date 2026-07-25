@@ -236,14 +236,20 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# Shared tiny-fixture resolution.
+# GGML tiny-fixture resolution — for `self-test whisper-load` ONLY.
 #
-# Which small model is on the box depends on how it was prepared:
+# Which GGML fixture is on the box depends on how it was prepared:
 # .github/workflows/test.yml still downloads `tiny.en`, while newer setups
-# fetch the multilingual `tiny`. Sections below must use whichever is actually
-# cached — hardcoding one silently takes a "not in cache" skip branch on the
-# other kind of box, letting the smoke stay green without exercising anything.
-# Both names remain resolvable via the hidden catalog entries.
+# fetch the multilingual `tiny`. Hardcoding one silently takes a "not in cache"
+# skip branch on the other kind of box, letting the smoke stay green without
+# exercising the loader at all. Both names stay resolvable via the hidden
+# catalog entries.
+#
+# Deliberately NOT used by simulate-ptt: even in Rust command mode that verb
+# fronts the PYTHON worker, which builds `faster_whisper.WhisperModel` against
+# a separate HuggingFace/CTranslate2 cache and never reads a GGML file. Probing
+# `models path` says nothing about what faster-whisper has cached, so that
+# section keeps a fixed fixture instead.
 # --------------------------------------------------------------------------
 TINY_FIXTURE="tiny"
 if [ "$CMD_MODE" = "rust" ]; then
@@ -262,7 +268,7 @@ info "tiny fixture in use: $TINY_FIXTURE"
 # --------------------------------------------------------------------------
 # SECTION: simulate-ptt (headless dictation pipeline)
 # --------------------------------------------------------------------------
-section "simulate-ptt (fixture WAV, dry-run, $TINY_FIXTURE, CPU)"
+section "simulate-ptt (fixture WAV, dry-run, tiny.en, CPU)"
 if [ ! -f "$FIXTURE_WAV" ]; then
     warn "fixture WAV missing: $FIXTURE_WAV"
 else
@@ -272,7 +278,7 @@ else
         # present. --dry-run is the default (no --inject).
         out="$(VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
                     --wav "$FIXTURE_WAV" \
-                    --model "$TINY_FIXTURE" \
+                    --model tiny.en \
                     --language en \
                     --json 2>&1)"
         rc=$?
@@ -282,7 +288,7 @@ else
                     whisper_dictate.vp_simulate_ptt \
                     --wav "$FIXTURE_WAV" \
                     --dry-run \
-                    --model "$TINY_FIXTURE" \
+                    --model tiny.en \
                     --device cpu \
                     --lang en \
                     --json 2>&1)"

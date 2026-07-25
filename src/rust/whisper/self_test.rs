@@ -174,13 +174,38 @@ pub fn run_whisper_load_test(model_name: &str) -> Result<WhisperLoadReport> {
     })
 }
 
+/// The tiny fixture to use when `--model` is omitted: the first of
+/// (`tiny`, `tiny.en`) that is actually cached, falling back to `tiny` so the
+/// "not in the cache" error names the model we would prefer.
+///
+/// Pure lookup over the catalog + cache; performs no download.
+pub(crate) fn default_tiny_fixture() -> &'static str {
+    for candidate in ["tiny", "tiny.en"] {
+        if find(candidate).is_some_and(is_downloaded) {
+            return candidate;
+        }
+    }
+    "tiny"
+}
+
 /// Resolve `--model` to a `(label, path)` tuple. Split out so the
 /// unit tests can drive the resolution rules without a real load.
 pub(crate) fn resolve_model(model_name: &str) -> Result<(String, PathBuf)> {
     let trimmed = model_name.trim();
+    // No `--model` given: pick whichever tiny fixture is actually cached rather
+    // than hardcoding one. Which is present depends on how the box was
+    // prepared — .github/workflows/test.yml still downloads `tiny.en`, newer
+    // setups fetch the multilingual `tiny`. A fixed default fails on the other
+    // kind of box BEFORE the loader is ever exercised, which is exactly the
+    // silent no-op this self-test exists to prevent.
+    let trimmed = if trimmed.is_empty() {
+        default_tiny_fixture()
+    } else {
+        trimmed
+    };
     if trimmed.is_empty() {
         return Err(anyhow!(
-            "--model must be a catalog name (e.g. tiny.en) or a path to a GGML file"
+            "--model must be a catalog name (e.g. tiny) or a path to a GGML file"
         ));
     }
 
@@ -251,9 +276,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_model_rejects_empty() {
-        let err = resolve_model("   ").expect_err("empty must fail");
-        assert!(err.to_string().contains("catalog name"), "{err}");
+    fn resolve_model_empty_falls_back_to_the_default_fixture() {
+        // Empty `--model` no longer errors outright: it resolves to whichever
+        // tiny fixture is cached (see `default_tiny_fixture`). On a machine
+        // with neither cached that still fails — but with the actionable
+        // "not in the cache" message naming a real model, rather than
+        // complaining that the flag was blank.
+        match resolve_model("   ") {
+            Ok((label, _)) => assert!(
+                label == "tiny" || label == "tiny.en",
+                "unexpected default fixture: {label}"
+            ),
+            Err(err) => assert!(
+                err.to_string().contains("not in the cache"),
+                "expected a cache-miss message, got: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn default_tiny_fixture_prefers_multilingual_and_never_errors() {
+        // Must be a name `find` resolves, so the caller's error message can
+        // name a real model. Multilingual `tiny` is preferred over `tiny.en`
+        // because this is an any-language app.
+        let picked = default_tiny_fixture();
+        assert!(
+            picked == "tiny" || picked == "tiny.en",
+            "unexpected fixture: {picked}"
+        );
+        assert!(find(picked).is_some(), "{picked} must be a catalog entry");
     }
 
     #[test]

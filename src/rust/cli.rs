@@ -1000,7 +1000,13 @@ pub enum SelfTestCommand {
         /// resolve via [`crate::whisper::model_manager::find`]; anything
         /// containing `/` or `\`, or ending in `.bin` / `.gguf`, is
         /// treated as a literal path.
-        #[arg(long, default_value = "tiny")]
+        ///
+        /// Empty (the default) resolves to whichever tiny fixture is CACHED —
+        /// see `whisper::self_test::default_tiny_fixture`. A hardcoded default
+        /// fails before the loader runs on a box prepared with the other
+        /// variant, which would silently skip the very regression this
+        /// self-test exists to catch.
+        #[arg(long, default_value = "")]
         model: String,
         /// Emit the [`crate::whisper::self_test::WhisperLoadReport`] as
         /// one JSON object with a stable field shape (`kind`, `model`,
