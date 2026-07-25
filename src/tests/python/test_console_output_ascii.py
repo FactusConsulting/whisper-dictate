@@ -74,6 +74,9 @@ TRAILING_TEST_MOD = re.compile(r"^#\[cfg\(test\)\]\s*\n\s*(?:pub\s+)?mod\s+\w+",
 # `'x'`, `'\n'`, `'\''`, `'"'`, `'\u{263a}'` -- but NOT the lifetime `'static`.
 CHAR_LITERAL = re.compile(r"'(?:\\u\{[^}]*\}|\\.|[^'\\])'")
 
+# `r"`, `r#"`, `r##"`, and the byte-prefixed `br"` / `br#"` forms.
+RAW_STRING_OPEN = re.compile(r'b?r(?P<hashes>#*)"')
+
 
 def _is_test_source(rel: str, src: str) -> bool:
     """True for files whose strings never reach a real console."""
@@ -113,16 +116,28 @@ def _string_literals(src: str):
                 continue
             i += 1
             continue
-        raw = re.match(r'r(#*)"', src[i:])
-        if raw and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_")):
-            closing = '"' + raw.group(1)
-            end = src.find(closing, i + len(raw.group(0)))
+        # Raw strings, with an optional `b` byte prefix. The hash count is
+        # captured because `r##"..."##` only ends at a quote followed by the
+        # SAME number of hashes -- `r##"has "# inside"##` is one literal, and
+        # matching the first `"#` would truncate it and desync everything
+        # after. The `b` prefix matters too: `br"..."` is 5 occurrences here,
+        # and without it the parser fell through to the escaped-string branch
+        # and mis-handled backslashes.
+        raw = RAW_STRING_OPEN.match(src, i)
+        if raw and not (i > 0 and (src[i - 1].isalnum() or src[i - 1] == "_")):
+            closing = '"' + raw.group("hashes")
+            end = src.find(closing, raw.end())
             end = n if end < 0 else end + len(closing)
             literal = src[i:end]
             yield line, literal
             line += literal.count("\n")
             i = end
             continue
+        if ch == "b" and i + 1 < n and src[i + 1] == '"':
+            # Byte string `b"..."`: same escape rules as a normal string, so
+            # fall into the branch below with the quote as the start.
+            i += 1
+            ch = '"'
         if ch == '"':
             j = i + 1
             while j < n:
@@ -150,6 +165,28 @@ def _string_literals(src: str):
         i += 1
 
 
+def scan_source(src: str, rel: str = "<memory>", exempt=()):
+    """Return violation strings for one Rust source.
+
+    Shared by the repo sweep and the generator test on purpose: a generator
+    that exercised a COPY of this logic would prove nothing about the code
+    that actually runs.
+    """
+    found = []
+    trailing_tests = TRAILING_TEST_MOD.search(src)
+    if trailing_tests:
+        src = src[: trailing_tests.start()]
+    for line, literal in _string_literals(src):
+        if any(needle in literal for needle in exempt):
+            continue
+        for bad in sorted({c for c in literal if c in TYPOGRAPHIC}):
+            found.append(
+                f"{rel}:{line}: {bad!r} (use {TYPOGRAPHIC[bad]!r}) "
+                f"in {' '.join(literal.split())[:70]}"
+            )
+    return found
+
+
 class ConsoleOutputAsciiTests(unittest.TestCase):
     def test_no_typographic_punctuation_in_console_strings(self):
         violations = []
@@ -159,7 +196,6 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
             # correctly from a font atlas and never touches a code page.
             if "/ui/" in rel:
                 continue
-            exempt = [needle for needle, _reason in ALLOWLIST.get(rel, [])]
             src = path.read_text(encoding="utf-8")
             # Cheap pre-filter: the literal parser is char-by-char Python, and
             # the overwhelming majority of files contain none of these
@@ -169,16 +205,8 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
                 continue
             if _is_test_source(rel, src):
                 continue
-            trailing_tests = TRAILING_TEST_MOD.search(src)
-            if trailing_tests:
-                src = src[: trailing_tests.start()]
-            for line, literal in _string_literals(src):
-                if any(needle in literal for needle in exempt):
-                    continue
-                for bad in sorted({c for c in literal if c in TYPOGRAPHIC}):
-                    violations.append(
-                        f"{rel}:{line}: {bad!r} (use {TYPOGRAPHIC[bad]!r}) in {' '.join(literal.split())[:70]}"
-                    )
+            exempt = [needle for needle, _reason in ALLOWLIST.get(rel, [])]
+            violations.extend(scan_source(src, rel, exempt))
         self.assertEqual(
             violations,
             [],
@@ -294,3 +322,143 @@ class ConsoleOutputAsciiTests(unittest.TestCase):
             ["—"],
             "lifetimes must not be mistaken for char literals",
         )
+
+    # ------------------------------------------------------------------
+    # Class-level guard on the parser itself.
+    #
+    # Every bug found in review of this PR lived in a construct I had not
+    # thought to write a case for -- and the response of adding one more
+    # hand-picked case per bug leaves the parser validated against exactly
+    # the shapes I imagined, which is the pattern that just failed.
+    #
+    # So: synthesise sources from random COMBINATIONS of the constructs that
+    # make Rust literal parsing hard, plant violations at known positions,
+    # and require exact recovery. This explores shapes nobody enumerated.
+    # Seeded and bounded, so it is deterministic -- a failure reproduces from
+    # the seed printed in the assertion message.
+    # ------------------------------------------------------------------
+
+    def _synthesize(self, rng):
+        """Build a random Rust-ish source; return (src, expected markers).
+
+        Each violating literal carries a unique `Vnn` marker, so the
+        assertion compares SETS of markers rather than counts -- that catches
+        a scanner that finds the right number of violations in the wrong
+        places.
+        """
+        lines, expected = [], set()
+        counter = [0]
+
+        def marker():
+            counter[0] += 1
+            return f"V{counter[0]:02d}"
+
+        def dash():
+            return rng.choice(list(TYPOGRAPHIC))
+
+        emitters = []
+
+        def plain(violating):
+            m = marker()
+            body = f"{m} plain{dash() if violating else ''} tail"
+            if violating:
+                expected.add(m)
+            lines.append(f'    println!("{body}");')
+
+        def with_escaped_quote(violating):
+            m = marker()
+            body = f'{m} say \\"hi\\"{dash() if violating else ""}'
+            if violating:
+                expected.add(m)
+            lines.append(f'    println!("{body}");')
+
+        def raw(violating):
+            m = marker()
+            hashes = "#" * rng.randint(0, 2)
+            # A quote-plus-fewer-hashes sequence INSIDE the literal must not
+            # end it -- the classic raw-string truncation bug.
+            inner = '"' + "#" * max(0, len(hashes) - 1) + " embedded" if hashes else ""
+            body = f"{m} raw{inner}{dash() if violating else ''}"
+            if violating:
+                expected.add(m)
+            prefix = rng.choice(["r", "br"])
+            lines.append(f'    let _ = {prefix}{hashes}"{body}"{hashes};')
+
+        def byte_string(violating):
+            m = marker()
+            # Byte strings cannot hold non-ASCII, so a "violating" one plants
+            # its dash in a NORMAL string on the same line -- the point is
+            # that the byte string must not swallow it.
+            lines.append(f'    let _ = b"{m} bytes\\\\";')
+            if violating:
+                expected.add(m + "x")
+                lines.append(f'    println!("{m}x after{dash()}");')
+
+        def char_literal(violating):
+            lit = rng.choice(["'\"'", "'\\''", "'\\\\'", "'x'", "'\\n'"])
+            lines.append(f"    let _c = {lit};")
+            if violating:
+                m = marker()
+                expected.add(m)
+                lines.append(f'    println!("{m} after char{dash()}");')
+
+        def lifetime(violating):
+            lines.append("    fn g<'a>(s: &'a str) -> &'a str { s }")
+            if violating:
+                m = marker()
+                expected.add(m)
+                lines.append(f'    println!("{m} after lifetime{dash()}");')
+
+        def comment(violating):
+            # Comments never reach a console: a dash in one is NEVER expected,
+            # even when `violating` is true. Quotes inside must not open a
+            # string, and `//` or `/*` inside a STRING must not open a comment.
+            kind = rng.choice(["line", "block"])
+            if kind == "line":
+                lines.append(f'    // a {dash()} and a " quote in a comment')
+            else:
+                lines.append(f'    /* {dash()} and " here\n       and more */')
+            if violating:
+                m = marker()
+                expected.add(m)
+                lines.append(f'    println!("{m} url http://x /* not a comment {dash()}");')
+
+        emitters = [plain, with_escaped_quote, raw, byte_string, char_literal, lifetime, comment]
+
+        lines.append("fn production() {")
+        for _ in range(rng.randint(3, 12)):
+            rng.choice(emitters)(rng.random() < 0.5)
+        lines.append("}")
+
+        # A bare `#[cfg(test)]` on one item must NOT hide production code
+        # below it (the evdev_driver.rs shape).
+        if rng.random() < 0.5:
+            lines.append("#[cfg(test)]")
+            lines.append("fn only_for_tests() {}")
+            m = marker()
+            expected.add(m)
+            lines.append(f'fn still_production() {{ eprintln!("{m} below{dash()}"); }}')
+
+        # A trailing test module MUST be cut: its violations are not expected.
+        if rng.random() < 0.5:
+            lines.append("#[cfg(test)]")
+            lines.append("mod tests {")
+            lines.append(f'    const NEVER: &str = "NEVER reported{dash()}";')
+            lines.append("}")
+
+        return "\n".join(lines) + "\n", expected
+
+    def test_generated_sources_are_scanned_exactly(self):
+        import random
+
+        for seed in range(300):
+            rng = random.Random(seed)
+            src, expected = self._synthesize(rng)
+            reported = scan_source(src)
+            found = {m for m in expected | {"NEVER"} if any(m in r for r in reported)}
+            self.assertEqual(
+                found,
+                expected,
+                f"seed={seed}\nexpected markers {sorted(expected)}\n"
+                f"reported:\n" + "\n".join(reported) + f"\n--- source ---\n{src}",
+            )
