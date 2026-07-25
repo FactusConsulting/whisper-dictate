@@ -9,7 +9,9 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-use crate::cloud_api::http::{check_status, http_error, parse_timeout_ms, USER_AGENT};
+use crate::cloud_api::http::{
+    check_status, http_error, parse_timeout_ms, platform_tls_agent, USER_AGENT,
+};
 use crate::config::AppSettings;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,7 +140,8 @@ impl PostApiCheck {
 
 pub fn check_cloud_api(check: &CloudApiCheck) -> Result<CloudApiCheckResult> {
     let url = format!("{}/models", check.base_url.trim_end_matches('/'));
-    let mut response = ureq::get(&url)
+    let mut response = platform_tls_agent()
+        .get(&url)
         .header("Authorization", &format!("Bearer {}", check.api_key))
         .header("User-Agent", USER_AGENT)
         .config()
@@ -176,7 +179,8 @@ pub fn check_post_api(check: &PostApiCheck) -> Result<PostApiCheckResult> {
         ],
         "temperature": 0,
     });
-    let mut response = ureq::post(&url)
+    let mut response = platform_tls_agent()
+        .post(&url)
         .header("Authorization", &format!("Bearer {}", check.api_key))
         .header("Content-Type", "application/json")
         .header("User-Agent", USER_AGENT)

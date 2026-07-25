@@ -356,7 +356,15 @@ def _extract_final_text(output: str, source_text: str) -> str:
 
 
 def _rust_postprocess_enabled() -> bool:
-    backend = (get_value("VOICEPI_POSTPROCESS_BACKEND") or "").strip().lower()
+    # Default flipped to Rust (Python-removal roadmap #348): post-processing now
+    # runs through the Rust `postprocess` verb unless the operator explicitly
+    # opts back into the in-process Python path with
+    # VOICEPI_POSTPROCESS_BACKEND=python (or any non-"rust" value). The Rust
+    # helper is resolvable in every real run because the supervisor exports
+    # VOICEPI_RUST_INJECTOR for the worker; on a build/env where it is NOT
+    # resolvable, `_rust_postprocess_text` returns None and the caller falls
+    # back to Python, so the flip is safe by construction.
+    backend = (get_value("VOICEPI_POSTPROCESS_BACKEND") or "rust").strip().lower()
     return backend == "rust"
 
 
@@ -364,10 +372,11 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
     """Shell out to ``whisper-dictate postprocess`` for the full pipeline.
 
     Returns the parsed :class:`PostprocessResult` on success, ``None`` on any
-    failure so the caller falls back to the in-process Python path. Active
-    only when ``VOICEPI_POSTPROCESS_BACKEND=rust`` is set AND the helper is
-    resolvable from ``VOICEPI_RUST_INJECTOR`` — the same opt-in pattern every
-    other Rust shell-out uses (Wave 4-B of #348).
+    failure so the caller falls back to the in-process Python path. Active by
+    default (VOICEPI_POSTPROCESS_BACKEND unset or ``=rust``) as long as the
+    helper is resolvable from ``VOICEPI_RUST_INJECTOR``; set
+    ``VOICEPI_POSTPROCESS_BACKEND=python`` to force the in-process path
+    (Wave 4-B of #348, default flipped to Rust in the Python-removal roadmap).
     """
     if not _rust_postprocess_enabled():
         return None
@@ -391,10 +400,20 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
             "local_only": _local_only_enabled(),
         },
     }
-    # The Rust pipeline applies the same length-scaled timeout the Python path
-    # does, so give the child enough wall-clock budget to surface its own
-    # timeout error instead of the Python subprocess killing it first.
-    helper_timeout = max(2.0, effective_timeout_ms(settings.timeout_ms, len(text)) / 1000.0 + 5.0)
+    # Size the subprocess budget so the parent never kills a still-working
+    # child mid-request (which would waste the provider call and double-charge
+    # on the Python retry below). Normally the child's HTTP timeout is
+    # length-scaled from the input, so we mirror that. But when cloud redaction
+    # is enabled the child sizes its timeout from the redaction-EXPANDED prompt
+    # (each short term becomes a `[[WD_TERM_n]]` placeholder), which can be much
+    # longer than `text` and can push the child up to CEILING_MS; a budget
+    # derived from `len(text)` alone could then kill it early. Cover the child's
+    # worst case in that case.
+    if settings.redact:
+        budget_ms = max(int(settings.timeout_ms), CEILING_MS)
+    else:
+        budget_ms = effective_timeout_ms(settings.timeout_ms, len(text))
+    helper_timeout = max(2.0, budget_ms / 1000.0 + 5.0)
     try:
         result = subprocess.run(
             [helper, "postprocess"],
@@ -421,6 +440,35 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
         print(f"[rust:postprocess] invalid JSON: {exc}", file=sys.stderr, flush=True)
         return None
     if not isinstance(obj, dict):
+        return None
+    # A ``fallback=true`` envelope means the Rust helper could not clean the
+    # text. WHY it fell back decides whether a Python retry is safe, via the
+    # ``fallback_kind`` field the helper stamps on the envelope:
+    #
+    #   * ``"transport"`` — the request never reached the provider (DNS /
+    #     connect / TLS handshake against an enterprise CA / Windows registry
+    #     proxy). Python's ``urllib`` validates TLS through the OS trust store
+    #     and honours the registry proxy, so it may succeed where ureq cannot,
+    #     and — because the provider was never billed — a retry cannot
+    #     double-charge. Fall through to the in-process Python path by returning
+    #     None. This is the general safety net for enterprise-Windows
+    #     ureq/urllib parity gaps (trust store, proxy, and any future
+    #     connect-phase difference), not a per-gap patch.
+    #   * anything else (``"terminal"``: HTTP 401/429/500, invalid response
+    #     JSON, an ambiguous client timeout, or a config/local-only rejection)
+    #     — the provider was reached or the outcome is ambiguous, so Python
+    #     would hit the identical result or risk a duplicate charge. Return the
+    #     envelope as-is; do not retry.
+    #
+    # Genuine helper-level failures (crash / non-zero exit / bad JSON / a killed
+    # subprocess) already returned None above.
+    if bool(obj.get("fallback", False)) and str(obj.get("fallback_kind", "")) == "transport":
+        detail = str(obj.get("error", "") or "")
+        print(
+            f"[rust:postprocess] transport fallback, retrying via Python path: {detail}",
+            file=sys.stderr,
+            flush=True,
+        )
         return None
     return PostprocessResult(
         text=str(obj.get("text", text)),

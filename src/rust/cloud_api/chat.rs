@@ -10,11 +10,11 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cloud_api::http::{check_status, http_error, USER_AGENT};
+use crate::cloud_api::http::{check_status, platform_tls_agent, CloudCallError, USER_AGENT};
 use crate::cloud_api::transcribe::{cap_transcription_prompt, GROQ_TRANSCRIPTION_PROMPT_LIMIT};
 
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -97,15 +97,18 @@ pub fn openai_chat_completion(
     model: &str,
     prompt: &str,
     timeout_ms: u64,
-) -> Result<ChatCompletionResult> {
+) -> Result<ChatCompletionResult, CloudCallError> {
     if api_key.trim().is_empty() {
-        return Err(anyhow!(
+        return Err(CloudCallError::Terminal(
             "openai chat completion requires a non-empty API key (set VOICEPI_POST_API_KEY, \
              VOICEPI_STT_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY)"
+                .to_owned(),
         ));
     }
     if model.trim().is_empty() {
-        return Err(anyhow!("openai chat completion requires a non-empty model"));
+        return Err(CloudCallError::Terminal(
+            "openai chat completion requires a non-empty model".to_owned(),
+        ));
     }
     let base_url = base_url.trim_end_matches('/');
     let url = format!("{base_url}/chat/completions");
@@ -118,7 +121,8 @@ pub fn openai_chat_completion(
         "temperature": 0,
     });
     let started = Instant::now();
-    let mut response = ureq::post(&url)
+    let mut response = platform_tls_agent()
+        .post(&url)
         .header("Authorization", &format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .header("User-Agent", USER_AGENT)
@@ -128,19 +132,22 @@ pub fn openai_chat_completion(
         .build()
         .send_json(payload)
         .map_err(|err| {
-            anyhow!(
-                "{} chat completion failed: {}",
-                provider_name(&url),
-                http_error(err)
+            CloudCallError::from_send(
+                &format!("{} chat completion failed", provider_name(&url)),
+                err,
             )
         })?;
-    check_status(&mut response)
-        .map_err(|detail| anyhow!("{} chat completion failed: {detail}", provider_name(&url)))?;
+    check_status(&mut response).map_err(|detail| {
+        CloudCallError::Terminal(format!(
+            "{} chat completion failed: {detail}",
+            provider_name(&url)
+        ))
+    })?;
     let body: Value = response.body_mut().read_json().map_err(|err| {
-        anyhow!(
+        CloudCallError::Terminal(format!(
             "{} chat completion returned invalid JSON: {err}",
             provider_name(&url)
-        )
+        ))
     })?;
     let text = body
         .get("choices")
@@ -190,6 +197,18 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("non-empty model"));
+    }
+
+    #[test]
+    fn empty_key_and_model_classify_as_terminal() {
+        // A pre-network rejection is deterministic and terminal. (The
+        // transport-vs-terminal classification of live send errors is covered
+        // by robust, network-free unit tests in `cloud_api::http`, since a
+        // refused-port connect behaves differently across platforms — Windows
+        // times out where Linux refuses immediately.)
+        let err =
+            openai_chat_completion("https://api.openai.com/v1", " ", "gpt", "x", 1000).unwrap_err();
+        assert!(!err.is_transport());
     }
 
     #[test]
