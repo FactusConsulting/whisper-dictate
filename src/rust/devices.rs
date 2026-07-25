@@ -359,6 +359,22 @@ mod directsound {
         unsafe {
             let _ = DirectSoundCaptureEnumerateW(Some(enum_callback), Some(context));
         }
+        // Opt-in diagnostic (`VOICEPI_DEBUG_DIRECTSOUND=1`): report the raw
+        // DirectSound capture names on stderr BEFORE the picker de-duplicates
+        // them against the WASAPI list. In steady state these mirror the cpal
+        // devices (so they dedupe away); this makes it possible to confirm the
+        // enumeration actually returned devices rather than silently finding
+        // nothing. stderr keeps the JSON stdout envelope clean.
+        if std::env::var("VOICEPI_DEBUG_DIRECTSOUND")
+            .map(|v| !matches!(v.trim(), "" | "0" | "false" | "no" | "off"))
+            .unwrap_or(false)
+        {
+            eprintln!(
+                "[devices:directsound] enumerated {} capture device(s): {:?}",
+                names.len(),
+                names
+            );
+        }
         names
     }
 }
