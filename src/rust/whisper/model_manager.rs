@@ -298,19 +298,15 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// down to ~1.2 Mbit/s. Slower links can still raise it via
 /// `VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS`.
 ///
-/// KNOWN LIMITATION: this is a total-transfer cap, not an idle timeout.
-/// [`CONNECT_TIMEOUT`] only covers establishing the connection — if the server
-/// accepts and then goes silent mid-body, the transfer blocks until this whole
-/// budget elapses. ureq 3.x cannot express an idle timeout (every
-/// `timeout_*` knob is a per-stage TOTAL), and any `timeout_recv_body` short
-/// enough to catch a stall would abort a legitimately slow multi-GB download.
-/// Fixing it properly means detecting stalls in the streaming loop itself
-/// (reads on a worker thread with a per-chunk deadline) plus a cancel
-/// affordance in the UI — tracked as follow-up work, deliberately not bolted
-/// onto the catalog trim.
+/// This is a total-transfer cap, not a stall detector — a server that accepts
+/// the connection and then goes silent is caught by [`IDLE_TIMEOUT_SECS`]
+/// instead, which is why this value can be generous without leaving a hung
+/// download sitting for hours.
 const DEFAULT_DOWNLOAD_TIMEOUT_SECS: u64 = 21_600;
 
-fn download_timeout() -> std::time::Duration {
+/// Stall detection — the thing this total-transfer cap cannot do — lives in
+/// [`super::download_stall`].
+pub(crate) fn download_timeout() -> std::time::Duration {
     let secs = std::env::var("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
@@ -363,9 +359,9 @@ pub fn download_model(entry: &ModelEntry, cb: &dyn DownloadProgress) -> Result<P
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok());
     let (_, body) = response.into_parts();
-    let mut reader = body.into_reader();
-    stream_download_to(
-        &mut reader,
+    super::download_stall::stream_download_with_idle_timeout(
+        body.into_reader(),
+        super::download_stall::idle_timeout(),
         content_length,
         &partial,
         &target,
@@ -402,6 +398,12 @@ pub(crate) fn stream_download_to<R: Read>(
             Err(err) => {
                 drop(file);
                 let _ = fs::remove_file(partial);
+                // A stall is reported distinctly from a transport error: the
+                // remedy differs (retry / check the mirror vs. check the link),
+                // and the UI wants to say "stalled", not "failed".
+                if err.kind() == std::io::ErrorKind::TimedOut {
+                    return Err(anyhow!("download stalled: {err}"));
+                }
                 return Err(anyhow!("download read failed: {err}"));
             }
         };
