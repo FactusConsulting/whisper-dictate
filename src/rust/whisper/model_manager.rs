@@ -124,86 +124,28 @@ macro_rules! model_entry {
 ///
 /// SHA-256 values are pinned to the current `ggerganov/whisper.cpp`
 /// HuggingFace `main` branch — re-verify when bumping.
+// `rustfmt::skip` keeps each entry on ONE line. This is a DATA TABLE, and
+// one row per model is both easier to scan and materially less repetitive:
+// let rustfmt explode these into eight-line blocks and nine structurally
+// identical stanzas appear, which is duplication by any measure (SonarCloud
+// flagged exactly that at 13.2% on new code).
+#[rustfmt::skip]
 pub const CATALOG: &[ModelEntry] = &[
-    // User-facing models FIRST — this is PRIORITY ORDER:
-    // `resolve_model_path_from_env` takes the first cached+verified entry, so
-    // the models a user should be using must precede the legacy ones.
-    model_entry!(
-        "large-v3-turbo",
-        "ggml-large-v3-turbo.bin",
-        "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-        1_600_000_000,
-        false,
-        "Multilingual, high accuracy, fastest of the large models (~1.6GB)"
-    ),
-    model_entry!(
-        "large-v3",
-        "ggml-large-v3.bin",
-        "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
-        3_100_000_000,
-        false,
-        "Multilingual, best accuracy (~3.1GB)"
-    ),
-    // Hidden entries: not offered as NEW choices, but still resolvable and
-    // still selectable from cache — an upgrade must not strand a user whose
-    // only downloaded model is one of these, and CI uses `tiny` as its
-    // ~78 MB fixture. Last, so a cached large model always wins.
-    model_entry!(
-        "tiny",
-        "ggml-tiny.bin",
-        "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-        77_700_000,
-        true,
-        "Multilingual, fastest, lowest accuracy (~78 MB)"
-    ),
-    model_entry!(
-        "base",
-        "ggml-base.bin",
-        "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-        147_900_000,
-        true,
-        "Multilingual, fast, low accuracy (~148 MB)"
-    ),
-    model_entry!(
-        "small",
-        "ggml-small.bin",
-        "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-        487_600_000,
-        true,
-        "Multilingual, balanced accuracy & speed (~488 MB)"
-    ),
-    model_entry!(
-        "medium",
-        "ggml-medium.bin",
-        "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
-        1_500_000_000,
-        true,
-        "Multilingual, good accuracy, ~1.5GB"
-    ),
-    model_entry!(
-        "tiny.en",
-        "ggml-tiny.en.bin",
-        "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
-        77_700_000,
-        true,
-        "English-only, fastest, lowest accuracy (~78 MB)"
-    ),
-    model_entry!(
-        "base.en",
-        "ggml-base.en.bin",
-        "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
-        147_900_000,
-        true,
-        "English-only, fast, low accuracy (~148 MB)"
-    ),
-    model_entry!(
-        "small.en",
-        "ggml-small.en.bin",
-        "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-        487_600_000,
-        true,
-        "English-only, balanced accuracy & speed (~488 MB)"
-    ),
+    // User-facing models FIRST — PRIORITY ORDER: `resolve_model_path_from_env`
+    // takes the first cached+verified entry, so these must precede the legacy ones.
+    model_entry!("large-v3-turbo", "ggml-large-v3-turbo.bin", "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69", 1_600_000_000, false, "Multilingual, high accuracy, fastest of the large models (~1.6GB)"),
+    model_entry!("large-v3", "ggml-large-v3.bin", "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2", 3_100_000_000, false, "Multilingual, best accuracy (~3.1GB)"),
+    // Hidden: not offered as NEW choices, but still resolvable and selectable
+    // from cache so an upgrade never strands a user whose only downloaded model
+    // is one of these; CI uses `tiny` as its ~78 MB fixture. Last, so a cached
+    // large model always wins.
+    model_entry!("tiny", "ggml-tiny.bin", "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21", 77_700_000, true, "Multilingual, fastest, lowest accuracy (~78 MB)"),
+    model_entry!("base", "ggml-base.bin", "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", 147_900_000, true, "Multilingual, fast, low accuracy (~148 MB)"),
+    model_entry!("small", "ggml-small.bin", "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", 487_600_000, true, "Multilingual, balanced accuracy & speed (~488 MB)"),
+    model_entry!("medium", "ggml-medium.bin", "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208", 1_500_000_000, true, "Multilingual, good accuracy, ~1.5GB"),
+    model_entry!("tiny.en", "ggml-tiny.en.bin", "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f", 77_700_000, true, "English-only, fastest, lowest accuracy (~78 MB)"),
+    model_entry!("base.en", "ggml-base.en.bin", "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002", 147_900_000, true, "English-only, fast, low accuracy (~148 MB)"),
+    model_entry!("small.en", "ggml-small.en.bin", "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d", 487_600_000, true, "English-only, balanced accuracy & speed (~488 MB)"),
 ];
 
 /// Look up a catalog entry by its short name.
