@@ -412,10 +412,13 @@ pub(crate) fn stream_download_to<R: Read>(
                     return Err(anyhow!("download stalled: {err}"));
                 }
                 if err.kind() == std::io::ErrorKind::TimedOut {
+                    // ASCII only: this reaches stderr via `models_cli`, which
+                    // runs under cmd.exe and hidden launchers on legacy code
+                    // pages (AGENTS.md console-output rule). No em dash.
                     return Err(anyhow!(
-                        "download read failed: {err} — the transfer did not \
+                        "download read failed: {err} (the transfer did not \
                          finish within VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS \
-                         ({}s); raise it if your connection is simply slow",
+                         ({}s); raise it if your connection is simply slow)",
                         download_timeout().as_secs(),
                     ));
                 }

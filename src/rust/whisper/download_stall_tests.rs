@@ -248,7 +248,23 @@ fn a_transport_timeout_is_not_misreported_as_a_stall() {
         msg.contains("VOICEPI_MODEL_DOWNLOAD_TIMEOUT_SECS"),
         "must name the var that actually governs this failure: {msg}",
     );
+    assert!(msg.is_ascii(), "see the ASCII guard below: {msg}");
     assert!(!partial.exists(), "partial must be cleaned up either way");
+}
+
+#[test]
+fn download_failure_messages_are_ascii() {
+    // AGENTS.md: stdout/stderr must survive cmd.exe, PowerShell on a legacy
+    // code page, and hidden launchers. These strings reach stderr through
+    // `models_cli::run_download`, so a stray em dash or curly quote is a real
+    // defect, not a style nit — and one already slipped in once (#574 review).
+    let stalled = StalledTransfer {
+        idle: Duration::from_secs(120),
+    }
+    .to_string();
+    assert!(stalled.is_ascii(), "stall message must be ASCII: {stalled}");
+    // The transport-timeout and generic wordings are asserted at their own
+    // call sites, where the full formatted string is available.
 }
 
 #[test]
