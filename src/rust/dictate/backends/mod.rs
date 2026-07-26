@@ -50,4 +50,4 @@ pub use hallucination::is_hallucination;
 pub use inject::EnigoInjectBackend;
 pub use production_transcribe::ProductionTranscribeBackend;
 #[cfg(feature = "whisper-rs-local")]
-pub use whisper_local::WhisperLocalTranscribeBackend;
+pub use whisper_local::{WhisperLocalPreviewBackend, WhisperLocalTranscribeBackend};

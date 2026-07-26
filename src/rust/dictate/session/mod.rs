@@ -47,6 +47,7 @@ use std::io::Write;
 use serde_json::{json, Value};
 
 pub mod history_sink;
+pub mod preview;
 pub mod types;
 mod wire;
 
@@ -66,6 +67,11 @@ mod tests_transitions;
 
 pub use history_sink::{
     history_sink_from_settings, HistorySink, JsonlHistorySink, NoopHistorySink,
+};
+pub use preview::{
+    build_preview_status, stderr_preview_sink, PreviewBackend, PreviewEmission, PreviewEngine,
+    PreviewEngineConfig, PreviewError, PreviewSink, MIN_NEW_AUDIO_S, PREVIEW_MAX_AUDIO_S,
+    PREVIEW_TEXT_CHARS,
 };
 pub use types::{
     InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome, PostRedaction,
@@ -236,6 +242,14 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// directly. `None` after construction and after any utterance where
     /// nothing matched.
     active_profile: Option<AppliedProfile>,
+    /// Optional live-preview engine that emits `state="preview"` worker events
+    /// during recording. Ported from `src/python/whisper_dictate/vp_preview.py`
+    /// -- see [`preview`] for the full contract. `None` (the default) means
+    /// no preview thread is spawned and `push_frame` pays zero extra cost,
+    /// matching the pre-preview session behaviour. Production wires this
+    /// ONLY on the local Whisper backend (Python's `PREVIEW_BACKENDS` gate);
+    /// the cloud backend leaves it unset so previews never hit a paid API.
+    preview: Option<PreviewEngine>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -261,7 +275,30 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 crate::platform::foreground_window::FixedForegroundWindow::default(),
             ),
             active_profile: None,
+            preview: None,
         }
+    }
+
+    /// Attach a live-preview engine that will emit `state="preview"` worker
+    /// events during recording (see [`preview`] for the cadence + suppression
+    /// contract, and [`PreviewEngineConfig::from_seconds`] for the disabled
+    /// gate). Passing this is opt-in: the production wiring only attaches an
+    /// engine on the LOCAL Whisper backend, matching Python's
+    /// `PREVIEW_BACKENDS = ("whisper",)` cloud-cost guard.
+    pub fn with_preview_engine(mut self, engine: PreviewEngine) -> Self {
+        self.preview = Some(engine);
+        self
+    }
+
+    /// Attach a preview engine only when one was actually constructed
+    /// (i.e. `preview_seconds > 0` AND the backend is preview-eligible).
+    /// Convenience wrapper so the runtime factory can call
+    /// `.with_optional_preview_engine(...)` without pre-checking the Option.
+    pub fn with_optional_preview_engine(mut self, engine: Option<PreviewEngine>) -> Self {
+        if let Some(engine) = engine {
+            self.preview = Some(engine);
+        }
+        self
     }
 
     /// Attach an audible-cue sink played at PTT press (start) and PTT
@@ -602,6 +639,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // gates on `VOICEPI_FEEDBACK_SOUNDS`. Non-blocking + never
         // fails, so no error path is threaded here.
         self.cue_sink.play(crate::dictate::feedback::CueKind::Start);
+        // Arm the live-preview worker for this recording (Python parity:
+        // `vp_dictate._start_preview` at the tail of `_start`). A `None`
+        // preview is a no-op, so a session built without one is byte-for-byte
+        // identical to the pre-preview implementation.
+        if let Some(engine) = self.preview.as_ref() {
+            engine.notify_start();
+        }
         Ok(id)
     }
 
@@ -616,6 +660,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     pub fn push_frame(&mut self, frame: &[f32]) {
         if matches!(self.state, SessionState::Recording { .. }) {
             self.frame_buf.extend_from_slice(frame);
+            // Forward a copy to the preview worker so it can accumulate its
+            // own sliding-window buffer without locking on the session's
+            // hot-path Vec. `push_frame` on the engine is a channel send;
+            // if the receiver is missing (shouldn't happen while the engine
+            // is alive) the message is silently dropped.
+            if let Some(engine) = self.preview.as_ref() {
+                engine.push_frame(frame);
+            }
         }
     }
 
@@ -661,6 +713,15 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // reaches this line, matching Python's `if not self.recording:
         // return` short-circuit that also skips the cue.
         self.cue_sink.play(crate::dictate::feedback::CueKind::Stop);
+
+        // Signal the live-preview worker to stop BEFORE the final pass runs
+        // so no stale `state="preview"` events land on the wire while the
+        // authoritative transcribe result is being computed. Mirrors
+        // `vp_dictate._stop_and_transcribe`: `if self._preview is not None:
+        // self._preview.stop()` just before the final transcribe pass.
+        if let Some(engine) = self.preview.as_ref() {
+            engine.notify_stop();
+        }
 
         // Drain the buffer up-front so any early-return path leaves the
         // session ready for the next press.
@@ -916,6 +977,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // keep the audible "recording ended" signal even when the
         // clip is dropped.
         self.cue_sink.play(crate::dictate::feedback::CueKind::Stop);
+        // Chord-cancel path: the preview worker must ALSO stop so a
+        // stale in-flight tick cannot emit onto the wire after the UI has
+        // switched to the cancelled state (matching the Python
+        // `_cancel_and_discard -> _stop_and_transcribe` chain, which
+        // stops the preview thread before dropping the audio buffer).
+        if let Some(engine) = self.preview.as_ref() {
+            engine.notify_stop();
+        }
         wire::emit_status(writer, "cancelled", &[("reason", Value::from("chord"))])?;
         wire::emit_status(writer, "ready", &self.capture_extras())?;
         Ok(())

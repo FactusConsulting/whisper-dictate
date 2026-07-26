@@ -89,7 +89,8 @@ use crate::dictate::backends::cloud_transcribe::{
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
 use crate::dictate::{
-    CloudTranscribeConfig, DictateSession, ProductionTranscribeBackend, SessionConfig,
+    CloudTranscribeConfig, DictateSession, PreviewBackend, PreviewEngine, PreviewEngineConfig,
+    ProductionTranscribeBackend, SessionConfig,
 };
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 use crate::whisper::{
@@ -120,6 +121,15 @@ pub(crate) const INITIAL_PROMPT_ENV: &str = "VOICEPI_INITIAL_PROMPT";
 /// resolves to `None`, which
 /// [`crate::formatting::apply_format_commands`] treats as `off`.
 pub(crate) const FORMAT_COMMANDS_ENV: &str = "VOICEPI_FORMAT_COMMANDS";
+
+/// Env var that controls the live partial-transcription preview interval
+/// (`vp_preview.py`'s `preview_seconds`). `0` disables the preview
+/// entirely. Mirrors `settings_schema.json`'s `preview_seconds` key so the
+/// in-process rust-session path honours the same saved setting the Python
+/// worker reads. Only meaningful on the LOCAL Whisper backend -- the cloud
+/// backend never wires a preview regardless (matching Python's
+/// `PREVIEW_BACKENDS = ("whisper",)` cloud-cost guard).
+pub(crate) const PREVIEW_SECONDS_ENV: &str = "VOICEPI_PREVIEW_SECONDS";
 
 /// The real production session type that PR 5 wires behind
 /// `VOICEPI_DICTATE_BACKEND=rust-session` when both features are on. The
@@ -211,6 +221,19 @@ pub(crate) fn format_command_set_from_env() -> Option<String> {
         .ok()
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty())
+}
+
+/// Resolve the live-preview interval from [`PREVIEW_SECONDS_ENV`]. `0` or
+/// negative disables the preview; unset defaults to `3` seconds, matching
+/// `settings_schema.json`'s `preview_seconds` default. Whitespace-only /
+/// unparseable values are treated as "unset" (default `3`), matching Python's
+/// `float(effective_config.get("preview_seconds", "3"))` behaviour when the
+/// key is missing.
+pub(crate) fn preview_seconds_from_env() -> f64 {
+    match std::env::var(PREVIEW_SECONDS_ENV) {
+        Ok(raw) => raw.trim().parse::<f64>().unwrap_or(3.0),
+        Err(_) => 3.0,
+    }
 }
 
 /// Build the real-backend session, wrapped in `Arc<Mutex<...>>` so the
@@ -328,6 +351,30 @@ pub(crate) fn make_real_session(
         // the modifier-release pre-step (Codex P2 #417 inject.rs:110).
         let inject = ProductionInjectBackend::from_env();
 
+        // Live partial-transcription preview: only wired on the LOCAL
+        // Whisper backend (Python parity: `PREVIEW_BACKENDS = ("whisper",)`),
+        // and only when the operator has not disabled it via
+        // `VOICEPI_PREVIEW_SECONDS=0`. The preview shares this backend's
+        // resident model instance through `share_for_preview()` so no
+        // second copy of the GGML weights loads into RAM; the wrapper's
+        // internal `Mutex<Option<M>>` serialises preview / final passes
+        // exactly like Python's `TRANSCRIBE_LOCK`. The cloud arm always
+        // yields `None` -- previews there would spam a paid API.
+        //
+        // Closes parity blocker #4 (engine-assessment list). See
+        // `crate::dictate::session::preview` for the cadence, fresh-audio
+        // gate, sliding-window cap, and stop-suppression contract.
+        let preview_engine = match &transcribe {
+            ProductionTranscribeBackend::Local(local) => {
+                PreviewEngineConfig::from_seconds(preview_seconds_from_env(), crate::dictate::SR)
+                    .map(|config| {
+                        let backend: Arc<dyn PreviewBackend> = Arc::new(local.share_for_preview());
+                        PreviewEngine::spawn(backend, config, crate::dictate::stderr_preview_sink())
+                    })
+            }
+            ProductionTranscribeBackend::Cloud(_) => None,
+        };
+
         // Attach the LLM post-processing pass when the operator configured
         // one (`VOICEPI_POST_PROCESSOR` != `none`). `from_env` returns None
         // for the default `none` processor, so a stock config installs no
@@ -356,7 +403,12 @@ pub(crate) fn make_real_session(
             // `vp_history` writes to today. `history_sink_from_settings`
             // returns `None` when `history_enabled=false`, so this pays
             // zero per-utterance cost on that path. Closes parity blocker #1.
-            .with_optional_history_sink(crate::dictate::history_sink_from_settings());
+            .with_optional_history_sink(crate::dictate::history_sink_from_settings())
+            // Live partial-transcription preview (parity blocker #4). `None`
+            // on non-local backends OR when the operator disabled it via
+            // `VOICEPI_PREVIEW_SECONDS=0`; a `None` engine is a no-op and the
+            // session behaves byte-identical to a pre-preview session.
+            .with_optional_preview_engine(preview_engine);
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
             dictate = dictate.with_post_process(Box::new(post));
         }
