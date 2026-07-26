@@ -155,27 +155,23 @@ UI (egui)      CLI (clap)
   - Runtime installer lives in `src/rust/runtime.rs` (lines 495-555,
     `install_rust_hotkey_from_command`, `restart_hotkey_decision`).
 - **CLI adapter:**
-  - Python capture wizard: `whisper-dictate run --capture-hotkey`
-    (vp_cli.py:286-294) + `vp_keys_capture_cli.py` — the "press-to-capture"
-    onboarding flow.
-  - Rust hotkey listener has **no** stand-alone CLI verb; it's only wired
-    into the `RuntimeSupervisor.start()` path (runtime.rs:443-555) via env-var
-    opt-in `VOICEPI_HOTKEY_BACKEND=rust`.
+  - Rust press-to-capture wizard: `whisper-dictate hotkey capture`
+    (`src/rust/hotkey/capture.rs`) — the sole user-facing "press-to-capture"
+    onboarding flow. The former Python `--capture-hotkey` flag +
+    `vp_keys_capture_cli.py` were retired once the Rust verb landed.
+  - Rust hotkey listener runtime install is wired into the
+    `RuntimeSupervisor.start()` path (runtime.rs:443-555) via env-var opt-in
+    `VOICEPI_HOTKEY_BACKEND=rust`.
 - **Headless testable:** **Partial.**
   - Rust: `hotkey/coordinator/tests.rs`, `hotkey/manager/tracker.rs`
     tests, `hotkey/modifier_match.rs` tests — all pure state-machine
     invariants covered.
   - `runtime/hotkey_supervisor_tests.rs` covers the install/park/resume
     plumbing.
-  - Python: `test_keys.py`, `test_keys_capture.py` cover chord matching +
-    the capture flow.
+  - Python: `test_keys.py` covers chord matching.
+  - Rust: `src/rust/tests/hotkey_cli.rs` covers the `hotkey capture` verb.
   - Real key events cannot be tested headless — inherent (need OS input).
 - **Gap:**
-  - No `whisper-dictate hotkey capture` / `whisper-dictate hotkey listen`
-    public verb — the Python `--capture-hotkey` flag is the only user-facing
-    way to run the flow, and it goes through the full Python worker
-    bootstrap. Would benefit from a small Rust-native verb that shells to
-    the coordinator directly.
   - Python is still shipping default; Rust hotkey path is Wave-5-experimental.
 - **Effort estimate:** **small** to add a `hotkey {capture,listen,test-chord}`
   CLI (thin adapter over the coordinator); **large** to flip Rust default and
@@ -687,7 +683,7 @@ effort:
 |---|---|---|---|
 | Transcription | `whisper/dispatch.rs`, `whisper/local/mod.rs`, `cloud_api/transcribe.rs`, `dictate/backend.rs` | `vp_transcribe.py`, `vp_external_api.py` | `cloud-transcribe`, `transcribe-wav`, `transcribe-server` (hidden) |
 | Injection | `injection/mod.rs`, `dictate/backends/inject.rs` | `vp_inject.py`, `vp_inject_rust.py` | `inject-text`, `inject` (hidden) |
-| Hotkey/PTT | `hotkey/mod.rs`, `hotkey/coordinator/`, `hotkey/manager/` | `vp_keys.py`, `vp_keys_solo.py`, `vp_keys_capture*.py` | run `--capture-hotkey` (Python) |
+| Hotkey/PTT | `hotkey/mod.rs`, `hotkey/coordinator/`, `hotkey/manager/`, `hotkey/capture.rs` | `vp_keys.py`, `vp_keys_solo.py` | `hotkey capture` (Rust) |
 | Dictionary | `dictionary/mod.rs` + submodules | `vp_dictionary_store.py` (adapter) | `dictionary {status,open,add,replace,build-from-corpus,suggest-terms}` |
 | Model mgmt | `whisper/model_manager.rs`, `whisper/models_cli.rs` | — | `models {list,download,path}` |
 | Config | `config/mod.rs` + submodules | `vp_config.py` (compat) | `config {path,show}` |
