@@ -233,15 +233,6 @@ pub fn windows_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--list-windows".to_owned()])
 }
 
-/// Worker command that dry-run opens the named microphone (resolve + try the
-/// same WASAPI/DirectSound/MME open matrix as capture, recording NO audio),
-/// prints a single JSON usability result and exits without loading a model.
-/// Drives the Speech tab's microphone "Test" action. An empty `name` tests the
-/// system default input.
-pub fn test_audio_device_command(name: &str) -> WorkerCommand {
-    default_worker_command_with_args(vec!["--test-audio-device".to_owned(), name.to_owned()])
-}
-
 /// Worker command that runs the golden benchmark corpus
 /// (`benchmark/corpus.json`) through the configured backend and prints per-item
 /// JSONL plus a final `[benchmark]` summary line, then exits. Drives the System

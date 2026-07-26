@@ -514,9 +514,6 @@ def _run_utility_subcommands(a, ap) -> None:
         raise SystemExit(run_doctor())
     if a.list_audio_devices:
         raise SystemExit(print_audio_devices())
-    if a.test_audio_device is not None:
-        from whisper_dictate.vp_device_test import test_audio_device
-        raise SystemExit(test_audio_device(a.test_audio_device))
     if getattr(a, "record_corpus_item", None) is not None:
         from whisper_dictate.vp_corpus_record import record_corpus_item
         # Same corpus resolution as --run-benchmark (--app-root → appdata) and the

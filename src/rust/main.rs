@@ -523,29 +523,6 @@ fn simulate_ptt_args(
     args
 }
 
-/// Build the Python argv for `devices test <NAME>`.
-///
-/// The Rust `devices test` subcommand is a thin front for the Python worker's
-/// `--test-audio-device` query mode (`vp_device_test.test_audio_device`),
-/// which reuses the SAME WASAPI/DirectSound/MME open matrix as live capture
-/// (see `vp_capture._start_sounddevice`). Loads no ML model — the query mode
-/// short-circuits before the model-load path in `runtime.py`.
-///
-/// Kept as a pure function so the argv shape is unit-testable without
-/// spawning Python. Empty `name` is preserved verbatim: the Python side treats
-/// `""` as "test the system default input", which is a documented use case
-/// (e.g. headless CI containers where no named device is available).
-///
-/// Only consumed by the `#[cfg(not(feature = "audio-capture"))]` fallback in
-/// [`handle_devices_test`] and by the tests below. The shipping binary is
-/// built with `audio-capture` and runs the native probe instead — but the
-/// argv is still worth pinning as a regression guard for the stock-build
-/// fallback path.
-#[cfg_attr(feature = "audio-capture", allow(dead_code))]
-fn devices_test_args(name: &str) -> Vec<String> {
-    vec!["--test-audio-device".to_owned(), name.to_owned()]
-}
-
 #[cfg(feature = "audio-capture")]
 fn handle_devices_command() -> anyhow::Result<()> {
     whisper_dictate_app::devices::handle_devices()
@@ -566,17 +543,16 @@ fn handle_devices_command() -> anyhow::Result<()> {
 /// Handle `whisper-dictate devices test <NAME>`.
 ///
 /// On `audio-capture` builds (the shipping binary) this dispatches to the
-/// native cpal probe in [`audio::device_probe`] and prints the same
-/// single-line JSON envelope the Python `--test-audio-device` query mode
-/// emitted, so the UI parser in `ui::device_test` keeps working unchanged.
-/// Step 1 of the `vp_device_test.py` retirement (issue #348): the Python
-/// module and its `--test-audio-device` argparse flag stay in place for now
-/// and get deleted in the follow-up PR once no shipping path depends on
-/// them.
+/// native cpal probe in [`audio::device_probe`] and prints the single-line
+/// JSON envelope the UI parser in `ui::device_test` expects. Step 2 of the
+/// `vp_device_test.py` retirement (issue #348) removed the Python fallback
+/// altogether — the retired Python module and its `--test-audio-device`
+/// argparse flag are gone.
 ///
-/// On stock builds (no `audio-capture`) we fall back to shelling out to the
-/// Python worker's `--test-audio-device` — dev builds still work and the
-/// UI's Test button doesn't need a rebuild message on those.
+/// On stock builds (no `audio-capture`) the subcommand is unavailable: the
+/// binary emits a clear "rebuild with --features audio-capture" refusal on
+/// stderr and exits non-zero. The shipping binary always ships with
+/// `audio-capture`; only dev builds hit this path.
 #[cfg(feature = "audio-capture")]
 fn handle_devices_test(name: &str) -> anyhow::Result<()> {
     let result = whisper_dictate_app::audio::device_probe::probe_device(name);
@@ -585,45 +561,21 @@ fn handle_devices_test(name: &str) -> anyhow::Result<()> {
 }
 
 #[cfg(not(feature = "audio-capture"))]
-fn handle_devices_test(name: &str) -> anyhow::Result<()> {
-    runtime::run_terminal(devices_test_args(name))
+fn handle_devices_test(_name: &str) -> anyhow::Result<()> {
+    // Non-audio-capture dev-build regression documented in the step-2 PR:
+    // there is no Python fallback to shell out to. Emit a machine-readable
+    // refusal on stderr and exit non-zero so the caller can distinguish
+    // "not built with the native probe" from an actual probe failure.
+    eprintln!(
+        "devices test is unavailable: this binary was built without the \
+         `audio-capture` feature. Rebuild with `cargo build --features audio-capture`."
+    );
+    std::process::exit(2);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{devices_test_args, simulate_ptt_args};
-
-    #[test]
-    fn devices_test_args_forwards_name_verbatim() {
-        let args = devices_test_args("Microphone (Yeti Classic)");
-        assert_eq!(
-            args,
-            vec![
-                "--test-audio-device".to_owned(),
-                "Microphone (Yeti Classic)".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn devices_test_args_preserves_empty_string_for_system_default() {
-        // Empty string is the documented way to test the system default input;
-        // it MUST survive the CLI hop unchanged so the Python query mode sees
-        // "" and picks device=None.
-        let args = devices_test_args("");
-        assert_eq!(args, vec!["--test-audio-device".to_owned(), String::new()]);
-    }
-
-    #[test]
-    fn devices_test_args_does_not_forward_extra_flags() {
-        // Only --test-audio-device NAME is forwarded. No stray flags that could
-        // accidentally load a model or open a hotkey listener — the Python
-        // query mode short-circuits before those code paths.
-        let args = devices_test_args("mic");
-        assert!(!args.iter().any(|a| a == "--simulate-ptt"));
-        assert!(!args.iter().any(|a| a == "--capture-hotkey"));
-        assert!(!args.iter().any(|a| a == "--run-benchmark"));
-    }
+    use super::simulate_ptt_args;
 
     #[test]
     fn simulate_ptt_args_dry_run_default() {

@@ -420,8 +420,8 @@ Notes:
   the global quit chord (`quit_key`/`quit_count`) is available on X11/Windows but
   not Wayland.
 - **What a headless server needs:** a working microphone (`whisper-dictate run
-  --list-audio-devices` and `--test-audio-device "<name>"` to verify without
-  loading a model), the injection backend above, and — since there is no console —
+  --list-audio-devices` and `whisper-dictate devices test "<name>"` to verify
+  without loading a model), the injection backend above, and — since there is no console —
   `feedback_sounds`/`feedback_notify` for record/error cues. There is no separate
   "server mode"; it is the normal `whisper-dictate run` launched without a
   terminal (`Terminal=false` in the `.desktop` entry).

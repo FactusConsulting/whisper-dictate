@@ -449,13 +449,15 @@ pub enum Command {
     /// a structured error and exit non-zero so the Python caller can fall
     /// back to its own path.
     ///
-    /// The `test <NAME>` subcommand shells out to the Python worker's
-    /// `--test-audio-device` query mode (which reuses the same live-capture
-    /// WASAPI/DirectSound/MME open matrix), prints a single JSON usability
-    /// result to stdout and exits - no ML model is loaded. Pass an empty
-    /// string to test the system default input. Enables headless mic
-    /// verification in the CI container (audit item 3 -
-    /// `docs/architecture-audit-2026-07-16.md`).
+    /// The `test <NAME>` subcommand runs the native cpal probe in
+    /// `src/rust/audio/device_probe.rs` (which reuses the same live-capture
+    /// open matrix), prints a single JSON usability result to stdout and
+    /// exits - no ML model is loaded. Pass an empty string to test the
+    /// system default input. Requires the `audio-capture` feature (the
+    /// shipping binary always ships with it); non-`audio-capture` dev
+    /// builds emit a "rebuild with --features audio-capture" refusal and
+    /// exit non-zero. Enables headless mic verification in the CI container
+    /// (audit item 3 - `docs/architecture-audit-2026-07-16.md`).
     Devices {
         #[command(subcommand)]
         command: Option<DevicesCommand>,
