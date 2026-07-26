@@ -21,6 +21,6 @@ pub use check::{
     PostApiCheckResult,
 };
 pub use transcribe::{
-    cloud_transcribe, handle_cloud_transcribe, CloudTranscriptionResult,
+    cloud_transcribe, handle_cloud_transcribe, resolve_api_key, CloudTranscriptionResult,
     GROQ_TRANSCRIPTION_PROMPT_LIMIT,
 };
