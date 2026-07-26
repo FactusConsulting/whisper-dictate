@@ -84,6 +84,18 @@ categories below; skip stylistic preferences not encoded here.
   without a corresponding ignore entry.
 - **PR scope discipline.** Flag PRs that bundle unrelated changes (a bug
   fix + a drive-by refactor + new dependencies) — they should be split.
+- **Many small PRs beat one big one.** Default to the smallest change that
+  stands on its own and ship it; open a follow-up for the rest. A large PR
+  costs more than it looks: it sits in review, collects automated-review
+  rounds on unrelated hunks, drifts against `main`, and is harder to revert
+  when one part of it turns out wrong. Splitting is the norm, not the
+  exception — reach for it before the PR is written, not after a reviewer
+  asks. Two rules of thumb: if the description needs the word "and" to say
+  what the PR does, it is probably two PRs; and if half the change is
+  independently mergeable and useful, merge that half now.
+  The exception is a fix that would leave the tree in a worse or
+  half-broken state if only part of it landed — a security fix that spans
+  two components, say. Keep those together and say why in the description.
 
 When suggesting fixes, prefer the smallest change that addresses the
 finding; do not propose refactors beyond what the PR's stated scope
