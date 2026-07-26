@@ -236,7 +236,7 @@ impl KeyTracker {
     }
 
     fn is_target(&self, name: &str) -> bool {
-        self.targets.iter().any(|t| modifier_matches(name, t))
+        is_chord_key(&self.targets, name)
     }
 
     fn chord_complete(&self) -> bool {
@@ -247,6 +247,19 @@ impl KeyTracker {
     fn foreign_key_held(&self) -> bool {
         self.pressed.keys().any(|k| !self.is_target(k))
     }
+}
+
+/// True when `name` belongs to the PTT chord `targets`, under the SAME rule
+/// the tracker applies internally (`modifier_matches`, so a generic `ctrl`
+/// target matches a concrete `ctrl_l` event).
+///
+/// Exposed rather than left private because callers outside the tracker need
+/// the identical target/foreign split — `hotkey capture`'s foreign-key
+/// counter, for one. Re-deriving it there with plain string equality would
+/// silently disagree for generic-modifier bindings, which is exactly the kind
+/// of drift that makes a diagnostic lie about what the runtime saw.
+pub fn is_chord_key(targets: &[String], name: &str) -> bool {
+    targets.iter().any(|t| modifier_matches(name, t))
 }
 
 fn is_generic_modifier_name(name: &str) -> bool {

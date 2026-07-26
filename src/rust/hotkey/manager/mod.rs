@@ -50,7 +50,9 @@ pub mod evdev_driver;
 // Re-export the always-compiled tracker types at the manager level so call
 // sites can keep using `manager::KeyTracker` / `manager::RawKeyEvent` etc.
 // without caring about the sub-module split.
-pub use tracker::{KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput, FOREIGN_KEY_EXPIRY};
+pub use tracker::{
+    is_chord_key, KeyTracker, RawKeyEvent, RawKeyKind, TrackerOutput, FOREIGN_KEY_EXPIRY,
+};
 
 // Manager plumbing (`ManagerHandle` / `ManagerThread` / `SpawnError` and the
 // driver-agnostic `RawTap` value type) comes from `driver_common` so both
