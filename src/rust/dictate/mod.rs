@@ -113,8 +113,9 @@ pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
-    build_preview_status, history_sink_from_settings, stderr_preview_sink, DictateSession,
-    HistorySink, InjectBackend, InjectError, JsonlHistorySink, NoopHistorySink, PostProcessBackend,
+    build_preview_status, history_sink_from_settings, metrics_sink_from_settings,
+    stderr_preview_sink, DictateSession, HistorySink, InjectBackend, InjectError, JsonlHistorySink,
+    JsonlMetricsSink, MetricsSink, NoopHistorySink, NoopMetricsSink, PostProcessBackend,
     PostProcessOutcome, PostRedaction, PreviewBackend, PreviewEmission, PreviewEngine,
     PreviewEngineConfig, PreviewError, PreviewSink, SessionConfig, SessionError, SessionState,
     TranscribeBackend, TranscribeError, TranscribeResult, UtteranceOutcome, SR,
