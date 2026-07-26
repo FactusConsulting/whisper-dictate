@@ -53,6 +53,13 @@
 // `vp_capture_rust_stdin.py`.
 #[cfg(feature = "audio-in-rust")]
 pub mod audio_route;
+// Windows audio ducking -- Rust port of `vp_audio_ducking.py`. Lowers
+// other apps' volume while dictating and restores on release; closes
+// engine parity blocker #2. Always compiled; the WASAPI backend is
+// runtime-gated inside the module (Windows + `audio-capture` feature),
+// non-Windows / non-capture builds fall through to a warn-once no-op
+// that matches Python's own "only implemented on Windows" behaviour.
+pub mod audio_ducking;
 pub mod backend;
 // Wave 5 PR 5-prep (#348): production `TranscribeBackend` / `InjectBackend`
 // trait impls (`WhisperLocalTranscribeBackend`, `EnigoInjectBackend`).
@@ -103,6 +110,7 @@ pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelErro
 // have to reach into the `backends` submodule. Each re-export is gated
 // on the same cargo feature as the source module.
 // Cloud STT backend is stock (no cargo-feature gate).
+pub use audio_ducking::{AudioDucker, NoOpAudioDucker, SystemAudioDucker};
 #[cfg(feature = "rust-injection")]
 pub use backends::EnigoInjectBackend;
 pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig, ProductionTranscribeBackend};

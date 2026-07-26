@@ -966,3 +966,145 @@ fn default_session_uses_the_silent_cue_sink() {
     let (outcome, _bytes, _s) = run_one_utterance(s, &one_second_pcm());
     assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
 }
+
+// -- audio-ducking lifecycle wiring (parity with `vp_audio_ducking`) -------
+
+#[test]
+fn start_calls_ducker_enter_and_stop_calls_ducker_exit() {
+    // Parity with `vp_dictate.py::_start` line 546 (`self.audio_ducker.enter()`)
+    // + `_stop_and_transcribe` line 706 (`finally: self.audio_ducker.exit()`).
+    // A full utterance must produce exactly one enter followed by one
+    // exit, in that order. Any other ordering leaves background media
+    // dampened after PTT release (or ducks nothing at all).
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (ducker, events) = RecordingDucker::new();
+    s = s.with_ducker(Box::new(ducker));
+
+    s.start(&mut buf).expect("start");
+    s.push_frame(&one_second_pcm());
+    s.stop_and_transcribe(&mut buf).expect("stop");
+
+    // The ducker is still owned by the session so the RAII "drop"
+    // marker hasn't fired yet -- exactly enter/exit and nothing else.
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["enter", "exit"],
+        "full utterance must call enter() then exit(), no extras"
+    );
+}
+
+#[test]
+fn cancel_calls_ducker_exit() {
+    // Parity with the Python chord-cancel path: `_cancel_and_discard`
+    // routes through `_stop_and_transcribe`, whose `finally` restores
+    // the ducker. The Rust `cancel()` shortcuts around
+    // `stop_and_transcribe`, so it MUST call `exit()` explicitly or a
+    // chord-cancel would leave background media dampened forever.
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (ducker, events) = RecordingDucker::new();
+    s = s.with_ducker(Box::new(ducker));
+
+    let epoch = s.start(&mut buf).expect("start");
+    s.cancel(epoch, &mut buf).expect("cancel");
+
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["enter", "exit"],
+        "chord-cancel must call exit() just like a full utterance"
+    );
+}
+
+#[test]
+fn refused_start_does_not_call_ducker_enter_again() {
+    // A second `start()` while already Recording is refused with
+    // `AlreadyActive`; the ducker's `enter()` must NOT fire again or
+    // production ducker (SystemAudioDucker) would attempt a second
+    // enumeration on top of the still-active state. Idempotence is
+    // also enforced inside SystemAudioDucker, but honouring the
+    // "no second enter on refused start" invariant at the session
+    // layer keeps the two lines of defence.
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (ducker, events) = RecordingDucker::new();
+    s = s.with_ducker(Box::new(ducker));
+
+    s.start(&mut buf).expect("start#1");
+    let err = s.start(&mut buf).expect_err("nested start must error");
+    assert!(matches!(err, SessionError::AlreadyActive { .. }));
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["enter"],
+        "refused second start must NOT call enter() again",
+    );
+}
+
+#[test]
+fn stop_while_idle_does_not_call_ducker_exit() {
+    // The `if not self.recording: return` early-return in Python
+    // fires BEFORE the ducker exit runs, so a double-release must
+    // NOT drop the ducker down again -- otherwise a background music
+    // app that JUST started playing (post release) would be
+    // needlessly dampened for a moment.
+    let transcribe = TestTranscribe::returning_text("never");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (ducker, events) = RecordingDucker::new();
+    s = s.with_ducker(Box::new(ducker));
+
+    let outcome = s.stop_and_transcribe(&mut buf).expect("stop");
+    assert_eq!(outcome, UtteranceOutcome::NotRecording);
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "stop-when-idle must not touch the ducker",
+    );
+}
+
+#[test]
+fn session_drop_mid_utterance_still_runs_ducker_exit_via_raii() {
+    // Drop-safety: if the session is dropped while a recording is in
+    // flight (a supervisor panic, a hard-cancelled routine, a test
+    // that leaves the session mid-recording), the ducker's own Drop
+    // must still fire. `SystemAudioDucker::drop()` calls `self.exit()`;
+    // this test pins the same invariant on the trait shape by using
+    // a mock whose `Drop` records "drop" so we can observe the RAII
+    // ordering. Order: enter (on start) then drop (from Box drop when
+    // session goes out of scope), with NO explicit exit in between.
+    let events = {
+        let transcribe = TestTranscribe::returning_text("hi");
+        let inject = TestInject::new();
+        let (mut s, mut buf, _guard) = session(transcribe, inject);
+        let (ducker, events) = RecordingDucker::new();
+        s = s.with_ducker(Box::new(ducker));
+        s.start(&mut buf).expect("start");
+        s.push_frame(&one_second_pcm());
+        // `s` is dropped at the end of this scope with the recording
+        // still open; the ducker inside its box is dropped too.
+        // ENV_LOCK guard `_guard` is dropped after `s`.
+        events
+    };
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["enter", "drop"],
+        "session drop mid-recording must invoke the ducker's Drop (RAII)",
+    );
+}
+
+#[test]
+fn default_session_uses_the_no_op_ducker() {
+    // Regression guard: without `.with_ducker(...)` the session must
+    // NOT read env vars or touch WASAPI -- the default `NoOpAudioDucker`
+    // has to be silent so the huge existing test surface stays
+    // dependency-free. The strongest signal available without
+    // introspection into the default ducker is that a full utterance
+    // completes without panicking.
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (s, _buf, _guard) = session(transcribe, inject);
+    let (outcome, _bytes, _s) = run_one_utterance(s, &one_second_pcm());
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+}
