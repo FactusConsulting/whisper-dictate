@@ -154,7 +154,7 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
             if !ptt_features_available() {
                 return Err(anyhow::anyhow!(
                     "self-test ptt-wedge requires the `rust-hotkeys` and `rust-injection` \
-                     cargo features — rebuild with \
+                     cargo features - rebuild with \
                      `cargo build --features rust-hotkeys,rust-injection`"
                 ));
             }
@@ -192,7 +192,7 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
             if !inj_features_available() {
                 return Err(anyhow::anyhow!(
                     "self-test injection-idempotency requires the `rust-hotkeys` and \
-                     `rust-injection` cargo features — rebuild with \
+                     `rust-injection` cargo features - rebuild with \
                      `cargo build --features rust-hotkeys,rust-injection`"
                 ));
             }
@@ -273,7 +273,7 @@ fn handle_audio_capture_self_test(
     if duration_ms < 100 {
         eprintln!(
             "warning: --duration-ms {duration_ms} is below the recommended 100ms floor \
-             — cpal may not deliver even one callback in that window"
+             - cpal may not deliver even one callback in that window"
         );
     }
     let opts = AudioCaptureOptions {
@@ -327,7 +327,7 @@ fn handle_audio_capture_self_test(
     _fail_on_silence: bool,
 ) -> anyhow::Result<()> {
     Err(anyhow::anyhow!(
-        "self-test audio-capture requires the `audio-capture` cargo feature — \
+        "self-test audio-capture requires the `audio-capture` cargo feature - \
          rebuild with `cargo build --features audio-capture`"
     ))
 }
@@ -360,7 +360,7 @@ fn handle_whisper_load(model: &str, json: bool) -> anyhow::Result<()> {
 #[cfg(not(feature = "whisper-rs-local"))]
 fn handle_whisper_load(_model: &str, _json: bool) -> anyhow::Result<()> {
     Err(anyhow::anyhow!(
-        "self-test whisper-load requires the `whisper-rs-local` cargo feature — \
+        "self-test whisper-load requires the `whisper-rs-local` cargo feature - \
          rebuild with `cargo build --features whisper-rs-local` (needs cmake + a \
          C/C++ toolchain on the build host)"
     ))

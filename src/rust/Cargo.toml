@@ -241,6 +241,13 @@ winresource = "0.1"
 
 [dev-dependencies]
 tempfile = "3.14"
+# Console-output ASCII guard (see console_ascii_tests.rs). Uses the REAL Rust
+# lexer rather than a hand-rolled one: raw strings with any hash count, byte
+# and C strings, nested block comments and unicode escapes are all handled by
+# construction. Both crates are already in the lock file transitively, so this
+# adds no new download. `span-locations` gives line numbers for the report.
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+litrs = "1.0"
 
 # Windows intermittently denies rustc access while finalizing incremental cache
 # directories, which turns clean builds/tests into noisy warnings. Full rebuilds

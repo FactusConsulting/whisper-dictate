@@ -53,7 +53,7 @@ impl SkipDecision {
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::Keep => None,
-            Self::TooShort => Some("too short — hold the key while you speak"),
+            Self::TooShort => Some("too short - hold the key while you speak"),
         }
     }
 }
@@ -99,6 +99,19 @@ mod tests {
         let d = should_skip(1000, 0.5);
         assert_eq!(d, SkipDecision::TooShort);
         assert_eq!(d.reason(), Some("too_short"));
+    }
+
+    #[test]
+    fn too_short_hint_is_ascii_and_actionable() {
+        // The hint is printed to stdout, so it must survive a legacy code
+        // page (AGENTS.md console rule) -- it used to carry an em dash.
+        let hint = SkipDecision::TooShort.hint().expect("TooShort has a hint");
+        assert!(hint.is_ascii(), "console hint must be ASCII: {hint}");
+        assert!(hint.contains("too short"), "{hint}");
+        assert!(
+            hint.contains("hold the key"),
+            "hint must say what to do differently: {hint}"
+        );
     }
 
     #[test]

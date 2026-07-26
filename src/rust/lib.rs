@@ -101,6 +101,11 @@ pub mod telemetry;
 // Shared crate-wide lock for tests that mutate process env vars. Lives at the
 // crate root so every module's `test_support` can re-export the same lock —
 // see the module's docs for why a single lock is the only sound design.
+// Console-output ASCII guard. Tokenizes every source file with the real Rust
+// lexer -- see the module docs for why this is not a script.
+#[cfg(test)]
+#[path = "console_ascii_tests.rs"]
+mod console_ascii_tests;
 #[cfg(test)]
 pub(crate) mod test_env_lock;
 pub mod ui;

@@ -140,7 +140,7 @@ impl SelfTestReport {
                 })
                 .collect();
             out.push_str(&format!(
-                "[self-test injection-idempotency] FAILED — {}\n",
+                "[self-test injection-idempotency] FAILED - {}\n",
                 failed.join(", "),
             ));
         }
@@ -151,6 +151,37 @@ impl SelfTestReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_report_plain_text_is_ascii_and_lists_the_failures() {
+        // Same console-output rule as the audio self-test: the FAILED line
+        // is what a user actually sees, and it carried an em dash.
+        let report = SelfTestReport {
+            iterations: 2,
+            backend: "dry-run".to_owned(),
+            live: false,
+            results: vec![
+                IterationResult {
+                    index: 1,
+                    failed_at: None,
+                    detail: String::new(),
+                },
+                IterationResult {
+                    index: 2,
+                    failed_at: Some(FailureStage::PlanDrift),
+                    detail: "plan changed".to_owned(),
+                },
+            ],
+        };
+        assert!(!report.all_passed());
+        let text = report.to_plain();
+        assert!(text.is_ascii(), "console output must be ASCII: {text}");
+        assert!(text.contains("FAILED"), "{text}");
+        assert!(
+            text.contains("iter 2 @ plan_drift"),
+            "the failing iteration and stage must both be named: {text}"
+        );
+    }
 
     #[test]
     fn failure_stage_tokens_are_stable() {

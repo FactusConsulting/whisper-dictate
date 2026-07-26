@@ -188,7 +188,7 @@ fn check_python() -> Check {
     for cand in python_candidates() {
         if let Some(version) = probe_python(&cand) {
             let (major, minor) = version;
-            let detail = format!("{} → {}.{}", cand.describe(), major, minor);
+            let detail = format!("{} -> {}.{}", cand.describe(), major, minor);
             if (major, minor) >= (3, 12) {
                 return Check::ok(name, detail);
             }
@@ -272,7 +272,7 @@ fn check_injection_backends() -> Check {
         return Check::warn(
             name,
             format!(
-                "no injection helper on PATH (looked for: {}) — install wtype/ydotool/xdotool",
+                "no injection helper on PATH (looked for: {}) - install wtype/ydotool/xdotool",
                 chain.join(", ")
             ),
         );
@@ -460,7 +460,7 @@ fn parse_python_version(text: &str) -> Option<(u32, u32)> {
 
 fn render_text(checks: &[Check], summary: &Summary) {
     for c in checks {
-        println!("[{}] {} — {}", c.status.glyph(), c.name, c.detail);
+        println!("[{}] {} - {}", c.status.glyph(), c.name, c.detail);
     }
     println!(
         "\nsummary: {} ok, {} warn, {} fail",

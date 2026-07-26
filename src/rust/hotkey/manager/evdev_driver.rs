@@ -121,7 +121,7 @@ where
     if debug_enabled() {
         eprintln!("[hotkey] evdev matched {} input device(s):", devices.len());
         for (path, dev) in &devices {
-            eprintln!("[hotkey]   {} — {:?}", path.display(), dev.name());
+            eprintln!("[hotkey]   {} - {:?}", path.display(), dev.name());
         }
         if !excluded.is_empty() {
             eprintln!(
@@ -130,7 +130,7 @@ where
             );
             for (path, name) in &excluded {
                 eprintln!(
-                    "[hotkey]   {} — {name:?} (injection self-feedback)",
+                    "[hotkey]   {} - {name:?} (injection self-feedback)",
                     path.display()
                 );
             }

@@ -212,7 +212,7 @@ impl SelfTestReport {
                 })
                 .collect();
             out.push_str(&format!(
-                "[self-test ptt-wedge] FAILED — {}\n",
+                "[self-test ptt-wedge] FAILED - {}\n",
                 failed.join(", ")
             ));
         }
@@ -383,7 +383,7 @@ mod imp {
                 failed_at: Some(WedgeStage::SecondChordPress),
                 detail:
                     "second ctrl_l press unexpectedly produced tracker output before chord completed \
-                     — indicates stale tracker state from unfiltered injection burst"
+                     - indicates stale tracker state from unfiltered injection burst"
                         .to_owned(),
             };
         }
@@ -399,7 +399,7 @@ mod imp {
                 failed_at: Some(WedgeStage::SecondChordPress),
                 detail: format!(
                     "expected ChordPress on second chord after injection, got {other:?} \
-                     — this is the v1.20.7 Windows PTT wedge signal"
+                     - this is the v1.20.7 Windows PTT wedge signal"
                 ),
             },
         }

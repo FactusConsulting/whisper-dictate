@@ -421,7 +421,7 @@ fn run_capture(
         Err(InstallError::ListenerStartup(msg)) => {
             return Err(anyhow!(
                 "hotkey listener failed to start ({msg}); on Linux without an X \
-                 display this is expected — retry from a user session, or \
+                 display this is expected - retry from a user session, or \
                  use the evdev backend if you have `/dev/input/*` permissions"
             ));
         }
