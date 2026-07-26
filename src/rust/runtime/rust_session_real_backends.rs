@@ -343,7 +343,14 @@ pub(crate) fn make_real_session(
         // without an app restart. ConfigFirst, matching the reloading prompt on
         // the backend above.
         let mut dictate = DictateSession::new(transcribe, inject, session_config_from_env())
-            .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst);
+            .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::ConfigFirst)
+            // Audible PTT press/release cues -- parity with the Python
+            // engine's `vp_feedback.play_cue`. The sink itself reads
+            // `VOICEPI_FEEDBACK_SOUNDS` live on every call, so the
+            // operator's `VOICEPI_FEEDBACK_SOUNDS=1` opt-in works the
+            // same way it does on the Python engine (env / config.json
+            // overlay, live reload). Closes parity blocker #3.
+            .with_cue_sink(Box::new(crate::dictate::feedback::SystemCueSink));
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
             dictate = dictate.with_post_process(Box::new(post));
         }
