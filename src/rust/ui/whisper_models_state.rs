@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::whisper::model_manager::{self, DownloadProgress};
 
@@ -32,6 +33,43 @@ pub enum DownloadStatus {
     Failed(String),
 }
 
+/// How long without a single byte before the UI calls a download slow.
+///
+/// Deliberately far below the engine's 120 s abort window (#574). The point is
+/// to tell the user something is wrong while there is still time for it to
+/// recover -- a multi-GB download that goes quiet for 20 seconds and then
+/// resumes is normal, but looking identical to a healthy one for two full
+/// minutes is not. Duplicating the abort threshold here would mean the UI only
+/// ever said anything at the instant the download died.
+pub const SLOW_AFTER: Duration = Duration::from_secs(15);
+
+/// Whether bytes are still arriving, distinct from whether the download has
+/// failed.
+///
+/// #574 gave the engine a stalled/alive distinction in the time domain; this
+/// is the same distinction made visible. Without it, `InProgress` covers both
+/// "downloading at 40 MB/s" and "silent for 90 seconds and about to be
+/// killed", and the user cannot tell which they are looking at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    /// A byte arrived within [`SLOW_AFTER`].
+    Moving,
+    /// Nothing has arrived for this long. Not yet a failure -- the engine
+    /// will keep waiting until its own window elapses.
+    Slow(Duration),
+}
+
+/// True when a failure came from #574's idle-window detector rather than from
+/// a transport error.
+///
+/// The two point at different remedies -- a stall is "the server went quiet,
+/// try again or raise the window", a transport error is "the connection
+/// broke" -- so they should not render identically. Matches on the wording
+/// `download_stall` deliberately made distinct from `download read failed`.
+pub fn is_stall_failure(message: &str) -> bool {
+    message.contains("download stalled")
+}
+
 /// Live state for one model download. The `downloaded` / `total` fields are
 /// owned by the worker thread (via `on_progress`); the UI reads them each
 /// frame without acquiring exclusive ownership beyond the shared mutex.
@@ -40,12 +78,37 @@ pub struct DownloadJob {
     pub status: DownloadStatus,
     pub downloaded: u64,
     pub total: Option<u64>,
+    /// When `downloaded` last actually ADVANCED.
+    ///
+    /// Not "when on_progress last fired": a callback that reports the same
+    /// byte count is not progress, and treating it as such would make a
+    /// stalled transfer look alive for as long as the reader kept polling.
+    pub last_advance: Instant,
 }
 
 impl DownloadJob {
     /// Compute a 0.0..=1.0 progress fraction, or `None` when the total
     /// isn't known yet (server didn't send `Content-Length`). The UI shows
     /// an indeterminate spinner in that case.
+    /// Liveness at an explicit instant.
+    ///
+    /// Takes `now` rather than reading the clock so the thresholds are
+    /// testable without sleeping -- the same seam `resolve_api_key_with` uses
+    /// for env lookups.
+    pub fn liveness_at(&self, now: Instant) -> Liveness {
+        let idle = now.saturating_duration_since(self.last_advance);
+        if idle >= SLOW_AFTER {
+            Liveness::Slow(idle)
+        } else {
+            Liveness::Moving
+        }
+    }
+
+    /// Liveness now. See [`DownloadJob::liveness_at`].
+    pub fn liveness(&self) -> Liveness {
+        self.liveness_at(Instant::now())
+    }
+
     pub fn fraction(&self) -> Option<f32> {
         let total = self.total?;
         if total == 0 {
@@ -131,6 +194,7 @@ impl WhisperModelDownloads {
                 status: DownloadStatus::InProgress,
                 downloaded: 0,
                 total: None,
+                last_advance: Instant::now(),
             },
         );
         true
@@ -159,6 +223,7 @@ impl WhisperModelDownloads {
                     status: DownloadStatus::Done(path),
                     downloaded: 0,
                     total: None,
+                    last_advance: Instant::now(),
                 },
             );
         }
@@ -173,6 +238,7 @@ impl WhisperModelDownloads {
                     status: DownloadStatus::Failed(msg),
                     downloaded: 0,
                     total: None,
+                    last_advance: Instant::now(),
                 },
             );
         }
@@ -307,8 +373,16 @@ impl DownloadProgress for ProgressBinding {
     fn on_progress(&self, downloaded: u64, total: Option<u64>) {
         if let Ok(mut state) = self.inner.lock() {
             if let Some(job) = state.jobs.get_mut(self.name) {
-                // Only mutate the moving fields — the status stays
+                // Only mutate the moving fields -- the status stays
                 // `InProgress` until `finish_ok` / `finish_err` flips it.
+                //
+                // The timestamp moves only on a REAL advance. A callback that
+                // fires with an unchanged byte count is not progress, and
+                // resetting the clock for it would make a stalled transfer
+                // look alive for as long as anything kept polling.
+                if downloaded > job.downloaded {
+                    job.last_advance = Instant::now();
+                }
                 job.downloaded = downloaded;
                 job.total = total;
             }
@@ -358,6 +432,7 @@ mod tests {
             status: DownloadStatus::InProgress,
             downloaded: 1000,
             total: None,
+            last_advance: Instant::now(),
         };
         assert_eq!(job.fraction(), None);
     }
@@ -368,12 +443,14 @@ mod tests {
             status: DownloadStatus::InProgress,
             downloaded: 0,
             total: Some(100),
+            last_advance: Instant::now(),
         };
         assert_eq!(job.fraction(), Some(0.0));
         let job = DownloadJob {
             status: DownloadStatus::InProgress,
             downloaded: 50,
             total: Some(100),
+            last_advance: Instant::now(),
         };
         assert_eq!(job.fraction(), Some(0.5));
         // Over-shoot (server lied about Content-Length) clamps to 1.0
@@ -382,8 +459,32 @@ mod tests {
             status: DownloadStatus::InProgress,
             downloaded: 200,
             total: Some(100),
+            last_advance: Instant::now(),
         };
         assert_eq!(job.fraction(), Some(1.0));
+    }
+
+    #[test]
+    fn a_repeated_byte_count_is_not_progress() {
+        // The distinction the whole feature rests on. A reader that keeps
+        // calling back with the same total is not making progress, and
+        // resetting the clock for it would make a stalled transfer look alive
+        // for as long as anything kept polling -- which is precisely the case
+        // #574 exists to catch.
+        let downloads = WhisperModelDownloads::default();
+        downloads.start("tiny.en");
+        let cb = downloads.progress_callback("tiny.en");
+
+        cb.on_progress(1024, Some(4096));
+        let after_real = downloads.job("tiny.en").expect("job").last_advance;
+
+        cb.on_progress(1024, Some(4096)); // same count: not an advance
+        let after_repeat = downloads.job("tiny.en").expect("job").last_advance;
+        assert_eq!(after_real, after_repeat, "a repeated count moved the clock");
+
+        cb.on_progress(2048, Some(4096)); // a real advance
+        let after_advance = downloads.job("tiny.en").expect("job").last_advance;
+        assert!(after_advance > after_real, "a real advance must move it");
     }
 
     #[test]
@@ -394,6 +495,7 @@ mod tests {
             status: DownloadStatus::InProgress,
             downloaded: 0,
             total: Some(0),
+            last_advance: Instant::now(),
         };
         assert_eq!(job.fraction(), None);
     }

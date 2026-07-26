@@ -141,6 +141,21 @@ impl WhisperDictateApp {
                             ui.label(format!("{} downloaded", human_bytes(job.downloaded)));
                         }
                     });
+                    // A transfer that has gone quiet looks identical to a
+                    // healthy one until the engine kills it two minutes later
+                    // (#574). Say so while there is still time for it to
+                    // recover, and say for how long -- "no data" on its own
+                    // reads as broken, which it is not yet.
+                    if let crate::ui::whisper_models_state::Liveness::Slow(idle) = job.liveness() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "no data for {}s - still waiting",
+                                idle.as_secs()
+                            ))
+                            .small()
+                            .color(ui.visuals().warn_fg_color),
+                        );
+                    }
                 }
                 // P2: show the cached path so users can copy it or confirm
                 // which file the transcription backend will pick up.
@@ -152,7 +167,22 @@ impl WhisperDictateApp {
                             .monospace(),
                     );
                 }
-                crate::ui::whisper_models_state::DownloadStatus::Failed(_) => {}
+                // A stalled download and a broken connection point at
+                // different remedies, so they must not render identically.
+                // The hover text carries the full message either way; this is
+                // the line the user reads WITHOUT hovering.
+                crate::ui::whisper_models_state::DownloadStatus::Failed(msg) => {
+                    if crate::ui::whisper_models_state::is_stall_failure(msg) {
+                        ui.label(
+                            egui::RichText::new(
+                                "the server stopped sending data - press Retry, or raise \
+                                 VOICEPI_MODEL_DOWNLOAD_IDLE_TIMEOUT_SECS on a slow link",
+                            )
+                            .small()
+                            .color(ui.visuals().warn_fg_color),
+                        );
+                    }
+                }
             }
         }
     }
@@ -204,7 +234,47 @@ mod tests {
             status,
             downloaded: 0,
             total: None,
+            last_advance: std::time::Instant::now(),
         }
+    }
+
+    #[test]
+    fn a_transfer_that_has_gone_quiet_is_reported_slow() {
+        use crate::ui::whisper_models_state::{Liveness, SLOW_AFTER};
+        let mut j = job(DownloadStatus::InProgress);
+
+        // Just advanced: healthy, even though nothing is arriving right now.
+        assert_eq!(j.liveness_at(j.last_advance), Liveness::Moving);
+
+        // One tick short of the threshold is still healthy -- a multi-GB
+        // download pausing briefly must not be reported as a problem.
+        let almost = j.last_advance + SLOW_AFTER - std::time::Duration::from_millis(1);
+        assert_eq!(j.liveness_at(almost), Liveness::Moving);
+
+        let past = j.last_advance + SLOW_AFTER + std::time::Duration::from_secs(5);
+        match j.liveness_at(past) {
+            Liveness::Slow(idle) => assert!(idle >= SLOW_AFTER, "{idle:?}"),
+            other => panic!("expected Slow, got {other:?}"),
+        }
+
+        // And the threshold is well under the engine's abort window, so the
+        // user is told while the download can still recover rather than at
+        // the instant it dies (#574 aborts at 120s).
+        assert!(SLOW_AFTER < std::time::Duration::from_secs(120));
+        j.downloaded = 1;
+    }
+
+    #[test]
+    fn a_stall_is_distinguished_from_a_transport_error() {
+        use crate::ui::whisper_models_state::is_stall_failure;
+        // The exact wording download_stall.rs emits.
+        assert!(is_stall_failure(
+            "download stalled: no data received for 120s (VOICEPI_MODEL_DOWNLOAD_IDLE_TIMEOUT_SECS)"
+        ));
+        // The wording a real transport error keeps -- deliberately different,
+        // because the two point at different remedies.
+        assert!(!is_stall_failure("download read failed: connection reset"));
+        assert!(!is_stall_failure("sha256 mismatch"));
     }
 
     #[test]
