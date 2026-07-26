@@ -54,6 +54,11 @@ mod wire;
 mod tests_history_sink;
 #[cfg(test)]
 mod tests_ported;
+// Wave 5 follow-up (rust-target-profile-matching branch): tests for the
+// per-utterance target-profile matcher wire-up (Python parity for
+// `_profiled_config` in `vp_dictate._start`).
+#[cfg(test)]
+mod tests_profile;
 #[cfg(test)]
 mod tests_support;
 #[cfg(test)]
@@ -68,6 +73,9 @@ pub use types::{
     TranscribeResult, UtteranceOutcome, SR,
 };
 
+use crate::dictate::profile::{AppliedProfile, ProfileMatcher};
+use crate::platform::foreground_window::{ForegroundWindowProbe, WindowInfo};
+
 /// Translate the backend's free-form gate text (as `result.gate` carries
 /// it -- e.g. `"input too quiet: -42 dBFS"`, `"no speech contrast: 0.02"`)
 /// into one of the three reason tokens the worker-event consumers / UI
@@ -75,6 +83,50 @@ pub use types::{
 /// Python mapper in `vp_transcribe.py` (substring-based, ASCII-cased).
 /// Codex P2 #413 mod.rs:284 (round 2 follow-up to the `gate` field
 /// landed in round 1).
+/// Emit one `[worker-event] event=status state=profile` line describing
+/// the profile match resolved at the top of [`DictateSession::start`].
+/// Mirrors the Python worker's `[profile] active: NAME` print in
+/// `vp_dictate._profiled_config` -- the JSON form so consumers (egui log
+/// card, telemetry, tests) key off the same wire shape they already read
+/// for `recording` / `transcribing`.
+///
+/// Emitted for every utterance where a profile matcher is attached
+/// (whether or not a profile actually fired) so the observer sees the
+/// negative case too (`active_profile=""`), matching Python's
+/// `f"[profile] active: {profile_name or 'default'}"`. The line is
+/// suppressed entirely when no matcher is attached so tests that
+/// pre-date this seam keep their exact event traces.
+fn emit_profile_status<W: Write>(
+    writer: &mut W,
+    window: &WindowInfo,
+    applied: Option<&AppliedProfile>,
+) -> Result<(), SessionError> {
+    let profile_name = applied
+        .and_then(|p| p.name.as_deref())
+        .unwrap_or_default()
+        .to_owned();
+    // Only emit when there is something worth reporting -- either a
+    // resolved profile OR at least one probe field. This suppresses noise
+    // in test sessions that don't opt into the matcher (there the probe
+    // stays a FixedForegroundWindow::default() and the applied slot is
+    // None).
+    if profile_name.is_empty() && window.is_empty() {
+        return Ok(());
+    }
+    let extras: [(&'static str, Value); 3] = [
+        ("active_profile", Value::from(profile_name)),
+        (
+            "target_title",
+            Value::from(window.title.clone().unwrap_or_default()),
+        ),
+        (
+            "target_process",
+            Value::from(window.process.clone().unwrap_or_default()),
+        ),
+    ];
+    wire::emit_status(writer, "profile", &extras)
+}
+
 pub(crate) fn normalize_gate_reason(gate: &str) -> &'static str {
     let lowered = gate.to_ascii_lowercase();
     if lowered.contains("too quiet") {
@@ -148,6 +200,42 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// `try / except OSError` around `append_record_sinks` in
     /// `vp_dictate.py::_record_utterance_event`.
     history_sink: Option<Box<dyn HistorySink + Send>>,
+    /// Optional per-utterance target-profile matcher (parity port of
+    /// Python's `_profiled_config`). `None` -- the default -- disables
+    /// profile matching entirely so a session built with [`Self::new`]
+    /// behaves exactly as before this seam existed. Attach via
+    /// [`Self::with_profile_matcher`]; production wiring pairs it with
+    /// [`ReloadingProfileMatcher`] so a Settings save picks up on the
+    /// next PTT press without an app restart, matching Python's
+    /// `_reload_live_config_if_changed` -> `_profiled_config` sequence in
+    /// `vp_dictate._start`.
+    profile_matcher: Option<Box<dyn ProfileMatcher>>,
+    /// Foreground-window probe consulted at [`Self::start`] to feed the
+    /// [`Self::profile_matcher`]. Always present so the hot path never has
+    /// to `if let Some(...)` on it; the default is a no-op probe that
+    /// always returns an empty [`WindowInfo`], so a session without a
+    /// matcher pays zero cost. Attached via [`Self::with_profile_matcher`]
+    /// together with the matcher itself (they only make sense as a pair
+    /// -- a matcher without a probe would see empty windows and only
+    /// fire wildcard profiles, while a probe without a matcher is
+    /// wasted work).
+    foreground_probe: Box<dyn ForegroundWindowProbe>,
+    /// Immutable base copy of [`Self::config`] taken at construction. Held
+    /// so the per-utterance profile overlay (see [`Self::start`]) can be
+    /// wiped from the effective [`Self::config`] at the start of each
+    /// utterance before the next match applies -- otherwise a profile that
+    /// fired for one utterance would leak its overrides into the next.
+    /// Mutations that are meant to be sticky (e.g.
+    /// [`Self::update_min_record_seconds`]) go to BOTH `config` and
+    /// `base_config`.
+    base_config: SessionConfig,
+    /// The profile the matcher resolved for the current / most-recent
+    /// utterance. Exposed via [`Self::active_profile`] so downstream
+    /// consumers (backend factories, post-processor, UI logging) can read
+    /// the remaining setting keys the session itself does not honour
+    /// directly. `None` after construction and after any utterance where
+    /// nothing matched.
+    active_profile: Option<AppliedProfile>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -160,6 +248,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             state: SessionState::Idle,
             frame_buf: Vec::new(),
             epoch: 0,
+            base_config: config.clone(),
             config,
             transcribe,
             inject,
@@ -167,6 +256,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             dictionary: None,
             cue_sink: Box::new(crate::dictate::feedback::NoOpCueSink),
             history_sink: None,
+            profile_matcher: None,
+            foreground_probe: Box::new(
+                crate::platform::foreground_window::FixedForegroundWindow::default(),
+            ),
+            active_profile: None,
         }
     }
 
@@ -282,6 +376,104 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         }
     }
 
+    /// Attach a per-utterance target-profile matcher + foreground-window
+    /// probe. Parity with the Python worker's
+    /// `_capture_target_window` + `_profiled_config` pair (called from
+    /// `_start` on every PTT press): each utterance the session probes
+    /// the focused window, hands the resulting title / process pair to
+    /// the matcher, and applies the returned setting overrides to the
+    /// effective [`SessionConfig`] for THIS utterance only.
+    ///
+    /// Passing this is opt-in: production wiring pairs
+    /// [`crate::dictate::profile::ReloadingProfileMatcher`] (re-reads
+    /// `config.json` each utterance -- matches Python's
+    /// `_reload_live_config_if_changed`) with
+    /// [`crate::platform::foreground_window::SystemForegroundWindow`] (the
+    /// per-OS probe). Tests plug the
+    /// [`crate::dictate::profile::StaticProfileMatcher`] and
+    /// [`crate::platform::foreground_window::FixedForegroundWindow`]
+    /// deterministic implementations. A session without a matcher stays
+    /// byte-identical to one built before this seam existed.
+    ///
+    /// The effective set of session-owned settings the profile may
+    /// override today is limited to what [`SessionConfig`] itself carries
+    /// (`format_command_set`, `min_record_seconds`). Other keys the
+    /// profile may contain (`lang`, `initial_prompt`, `inject_mode`,
+    /// `post_*`, …) are stashed on [`Self::active_profile`] so the
+    /// production wiring can consume them once each backend grows a
+    /// per-utterance re-read hook. See parity blocker #5 on the engine
+    /// assessment for the roll-out plan.
+    pub fn with_profile_matcher(
+        mut self,
+        matcher: Box<dyn ProfileMatcher>,
+        probe: Box<dyn ForegroundWindowProbe>,
+    ) -> Self {
+        self.profile_matcher = Some(matcher);
+        self.foreground_probe = probe;
+        self
+    }
+
+    /// The profile the matcher resolved for the current / most-recent
+    /// utterance. `None` when no matcher is attached, or when the matcher
+    /// resolved to no match on the last [`Self::start`] call. Exposed for
+    /// telemetry + follow-up backend wiring; the session itself only
+    /// consumes the session-config subset.
+    pub fn active_profile(&self) -> Option<&AppliedProfile> {
+        self.active_profile.as_ref()
+    }
+
+    /// Apply the resolved [`AppliedProfile`] to the effective
+    /// [`SessionConfig`] for this utterance. Called from [`Self::start`]
+    /// after probing + matching. Split out so the mapping between
+    /// profile-setting keys and `SessionConfig` fields is easy to unit
+    /// test and to extend.
+    ///
+    /// Reset semantics: `self.config` is refreshed from `self.base_config`
+    /// first so a profile that fired for a PREVIOUS utterance cannot leak
+    /// its overrides into the current one. Then each supported key from
+    /// the profile settings map overwrites the matching field.
+    ///
+    /// Unsupported / unparseable values (e.g. `min_record_seconds="foo"`)
+    /// are silently ignored -- matching Python's `_apply_effective_config`
+    /// path where the caller trusts the settings validator upstream to
+    /// have rejected bad data. Log noise on the PTT hot path is worse
+    /// than a silent fall-through to the default.
+    fn apply_active_profile(&mut self) {
+        self.config = self.base_config.clone();
+        let Some(profile) = self.active_profile.as_ref() else {
+            return;
+        };
+        if let Some(value) = profile.settings.get("format_commands") {
+            let trimmed = value.trim();
+            self.config.format_command_set = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            };
+        }
+        if let Some(value) = profile.settings.get("min_record_seconds") {
+            if let Ok(parsed) = value.trim().parse::<f64>() {
+                self.config.min_record_seconds = parsed;
+            }
+        }
+    }
+
+    /// Probe the foreground window + resolve the matched profile. Split
+    /// out so tests can drive the resolve path without going through
+    /// `start()` (which owns the event-emission side effects).
+    fn resolve_profile(&self) -> (WindowInfo, Option<AppliedProfile>) {
+        let Some(matcher) = self.profile_matcher.as_ref() else {
+            return (WindowInfo::default(), None);
+        };
+        let window = self.foreground_probe.probe();
+        let applied = matcher.resolve(&window);
+        if applied.is_none() {
+            (window, None)
+        } else {
+            (window, Some(applied))
+        }
+    }
+
     /// Apply the attached dictionary's replacement table to `text`, returning
     /// the rewritten string and the per-replacement change records (for the
     /// utterance event's `dictionary_replacements` field). The table is
@@ -330,6 +522,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Codex P2 #415 audio_route.rs:250 (round 7-D).
     pub fn update_min_record_seconds(&mut self, seconds: f64) {
         self.config.min_record_seconds = seconds;
+        // Also update the base so a subsequent utterance whose profile
+        // does NOT override `min_record_seconds` still sees the live-
+        // reloaded value (rather than snapping back to the stale
+        // construction-time floor when `apply_active_profile` resets
+        // `self.config = self.base_config.clone()`). Codex-anticipated
+        // guard on the profile seam introduced by
+        // `rust-target-profile-matching`.
+        self.base_config.min_record_seconds = seconds;
     }
 
     /// Read-only access to the transcribe backend. Tests use this to
@@ -367,6 +567,18 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.frame_buf.clear();
         self.epoch = self.epoch.wrapping_add(1);
         let id = self.epoch;
+        // Per-utterance target-profile resolution -- Python parity:
+        // `_capture_target_window` + `_profiled_config(effective_config())`
+        // called from `_start` BEFORE the "opening" event fires. Kept
+        // ahead of the state flip so the emitted `[worker-event]
+        // event=profile` line lands adjacent to the utterance it
+        // applies to, and so the `apply_active_profile` reset happens
+        // before `stop_and_transcribe` reads `self.config`. A None
+        // matcher is a zero-cost no-op (see `resolve_profile`).
+        let (window, applied) = self.resolve_profile();
+        self.active_profile = applied;
+        self.apply_active_profile();
+        emit_profile_status(writer, &window, self.active_profile.as_ref())?;
         self.state = SessionState::Opening { id };
         // If either emit fails, the caller never receives `id` and a
         // subsequent `start()` would refuse with `AlreadyActive` -- the

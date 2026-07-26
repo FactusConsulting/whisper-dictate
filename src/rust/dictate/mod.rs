@@ -71,6 +71,14 @@ pub mod events;
 // when `VOICEPI_FEEDBACK_SOUNDS=1`.
 pub mod feedback;
 pub mod ops;
+// Per-utterance target-profile resolver: consulted by DictateSession at
+// each PTT press to swap settings for the currently-focused window
+// (parity port of `vp_events._apply_profile_settings` + the per-utterance
+// `_profiled_config` hook in `vp_dictate._start`). See
+// `src/rust/platform/foreground_window.rs` for the title/process probe
+// this feeds and `src/rust/dictate/session/mod.rs::with_profile_matcher`
+// for the wire-up. Parity blocker #5 on the engine assessment.
+pub mod profile;
 pub mod restart;
 // Wave 5 PR 2 (#348): pure-logic per-utterance state machine that
 // mirrors `vp_dictate.py::Dictate`'s lifecycle. No production caller in
@@ -102,6 +110,7 @@ pub use backends::WhisperLocalTranscribeBackend;
 pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig, ProductionTranscribeBackend};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
+pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
     history_sink_from_settings, DictateSession, HistorySink, InjectBackend, InjectError,
