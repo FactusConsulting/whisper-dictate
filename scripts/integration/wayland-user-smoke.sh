@@ -29,8 +29,16 @@ skip=0
 # get far enough to say (e.g. whisper-load skipped for a missing model
 # fixture, which reveals nothing about the feature), and must not be read as
 # either present or absent.
+#
+# Only `whisper-rs-local` is tracked this way, because `self-test whisper-load`
+# is gated on exactly that feature. There is deliberately NO audio flag here:
+# `self-test audio-capture` is gated on `audio-capture` (main.rs:322,330), and
+# Cargo.toml:79 makes `audio-in-rust` imply `audio-capture` and not the
+# converse — so that verb succeeding proves nothing about `audio-in-rust`.
+# A missing `audio-in-rust` is detected where it is actually observable: the
+# in-process runtime section reads it off the stub-fallback event, which names
+# the missing feature in its own message.
 FEATURE_WHISPER_RS_LOCAL=unknown
-FEATURE_AUDIO_IN_RUST=unknown
 
 # --- colour helpers (auto-disable when stdout isn't a TTY) ---
 if [ -t 1 ]; then
@@ -65,6 +73,93 @@ detect_session() {
         echo "wsl"
     else
         echo "unknown"
+    fi
+}
+
+# --------------------------------------------------------------------------
+# Which hotkey driver the Rust binary will select — a shell mirror of
+# `hotkey::manager::resolve_driver` + `is_wayland_session`
+# (src/rust/hotkey/manager/mod.rs:220-250). Used to decide whether a listener
+# refusal is the EXPECTED no-display rdev failure or a real defect.
+#
+# Kept faithful to the Rust in three details that a looser reading gets wrong:
+#   1. An explicit `VOICEPI_HOTKEY_DRIVER` wins outright — session detection
+#      never overrides it (that is the documented escape hatch).
+#   2. `DriverKind::parse` trims, lower-cases, and accepts ALIASES: `x11` is a
+#      synonym for rdev and `wayland` for evdev. Recognising only the
+#      canonical spellings makes the mirror disagree with the binary in both
+#      directions — `=wayland` on a headless box selects evdev in Rust, and
+#      reading it as rdev here would warn-skip a genuine evdev failure.
+#      An unrecognised value (or `auto`/empty) falls back to Auto, i.e. to
+#      session detection, which is what the fall-through below does.
+#   3. `is_wayland_session()` is an OR of XDG_SESSION_TYPE=wayland (matched
+#      case-insensitively) and a non-empty WAYLAND_DISPLAY. Either alone
+#      selects evdev, so a Wayland box that exports only the session type
+#      still gets evdev.
+#
+# See `resolve_hotkey_driver_selftest` below for the regression cases.
+# --------------------------------------------------------------------------
+resolve_hotkey_driver() {
+    # Mirror of `DriverKind::parse`: trim surrounding whitespace, fold case.
+    _drv="$(printf '%s' "${VOICEPI_HOTKEY_DRIVER:-}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$_drv" in
+        rdev|x11)     echo "rdev";  return ;;
+        evdev|wayland) echo "evdev"; return ;;
+    esac
+    # `auto`, empty, or unrecognised — session detection, Linux only. On any
+    # other OS the Rust falls through to rdev unconditionally.
+    if [ "$(uname -s 2>/dev/null)" != "Linux" ]; then
+        echo "rdev"; return
+    fi
+    _xdg="$(printf '%s' "${XDG_SESSION_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+    if [ "$_xdg" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        echo "evdev"
+    else
+        echo "rdev"
+    fi
+}
+
+# Regression cases for the mirror above. Pure function, no I/O — runs on every
+# invocation so a drift between this helper and `DriverKind::parse` /
+# `resolve_driver` is caught on the operator's own box rather than silently
+# mis-classifying a listener failure later in the run. Reports through the
+# normal ok/bad counters.
+resolve_hotkey_driver_selftest() {
+    _drv_fails=""
+    _drv_case() {  # <expected> <driver-env> <xdg> <wayland-display>
+        _got="$(VOICEPI_HOTKEY_DRIVER="$2" XDG_SESSION_TYPE="$3" \
+                WAYLAND_DISPLAY="$4" resolve_hotkey_driver)"
+        [ "$_got" = "$1" ] || _drv_fails="${_drv_fails}
+      driver=$(printf '%q' "$2") xdg=$(printf '%q' "$3") wl=$(printf '%q' "$4") -> $_got, expected $1"
+    }
+    #         expect  DRIVER      XDG        WAYLAND_DISPLAY
+    _drv_case rdev    ""          ""         ""
+    _drv_case evdev   ""          "wayland"  ""
+    _drv_case evdev   ""          "Wayland"  ""
+    _drv_case evdev   ""          ""         "wayland-0"
+    _drv_case rdev    ""          "x11"      ""
+    _drv_case rdev    "auto"      ""         ""
+    _drv_case evdev   "auto"      "wayland"  ""
+    # Explicit override outranks session detection, in both directions.
+    _drv_case evdev   "evdev"     ""         ""
+    _drv_case rdev    "rdev"      "wayland"  "wayland-0"
+    # Aliases (DriverKind::parse) — the case this self-test exists for.
+    _drv_case evdev   "wayland"   ""         ""
+    _drv_case rdev    "x11"       "wayland"  "wayland-0"
+    # Whitespace + case folding.
+    _drv_case evdev   "  evdev  " ""         ""
+    _drv_case rdev    "  X11 "    "wayland"  ""
+    _drv_case evdev   "EVDEV"     ""         ""
+    # Unrecognised values fall back to Auto, i.e. session detection.
+    _drv_case evdev   "nonsense"  "wayland"  ""
+    _drv_case rdev    "nonsense"  ""         ""
+
+    if [ -z "$_drv_fails" ]; then
+        ok "hotkey-driver resolution mirrors DriverKind::parse + resolve_driver"
+    else
+        bad "hotkey-driver mirror has drifted from the Rust:$_drv_fails"
     fi
 }
 
@@ -158,6 +253,9 @@ fi
 if [ "$SESSION" != "wayland" ]; then
     info "note: not a Wayland session — running headless-compatible checks anyway"
 fi
+
+info "hotkey driver      : $(resolve_hotkey_driver) (as the Rust binary would resolve it)"
+resolve_hotkey_driver_selftest
 
 # --------------------------------------------------------------------------
 # SECTION: --version
@@ -682,11 +780,12 @@ else
         rms="$(printf '%s' "$ac_out" | grep -oE '"rms":[^,}]+' | head -n1 | cut -d: -f2)"
         peak="$(printf '%s' "$ac_out" | grep -oE '"peak":[^,}]+' | head -n1 | cut -d: -f2)"
         quantum_branch="$(printf '%s' "$ac_out" | grep -oE '"pipewire_quantum_branch":"[^"]+"' | cut -d: -f2 | tr -d '"')"
-        FEATURE_AUDIO_IN_RUST=yes
         ok "audio-capture: 1 s captured (rms=$rms peak=$peak quantum=$quantum_branch)"
-    elif printf '%s' "$ac_out" | grep -qi "requires the .audio-in-rust. cargo feature\|rebuild with"; then
-        FEATURE_AUDIO_IN_RUST=no
-        warn "self-test audio-capture requires audio-in-rust feature (skipped on this build)"
+    elif printf '%s' "$ac_out" | grep -qi "requires the .audio-capture. cargo feature\|requires the .audio-in-rust. cargo feature\|rebuild with"; then
+        # Note: this verb is gated on `audio-capture`, so its refusal says
+        # nothing about `audio-in-rust` either. No feature flag is recorded
+        # here — see the comment at the top of the script.
+        warn "self-test audio-capture requires the audio-capture feature (skipped on this build)"
     elif printf '%s' "$ac_out" | grep -qi "no default input device\|input device not found\|no audio device delivered"; then
         warn "no audio device available (expected on headless / muted setups)"
     else
@@ -954,22 +1053,33 @@ else
         # the stubs are installed silently, leaving nothing to observe — so
         # the event check alone would fall straight through to `ok` on a
         # binary that cannot transcribe. Cover that build from the other side,
-        # using the feature verdicts the self-test sections above recorded.
+        # using the whisper-rs-local verdict `self-test whisper-load` recorded.
         # `unknown` deliberately does NOT trigger this: a whisper-load skip
         # for a missing model fixture says nothing about the feature, and
         # treating silence as absence would fire on every un-cached box.
         #
-        # A known-absent feature is a hard FAIL, not a skip. This script is the
-        # release-verification step, and a binary that installs its runtime but
-        # can never transcribe is exactly the thing a release must not ship —
-        # letting the run exit 0 there would make the whole smoke a rubber
-        # stamp. Building without the features is still fine as a dev
-        # configuration; it just is not something this script can bless.
+        # A build that cannot transcribe is a hard FAIL, not a skip. This
+        # script is the release-verification step, and a binary that installs
+        # its runtime but can never transcribe is exactly the thing a release
+        # must not ship — letting the run exit 0 there would make the whole
+        # smoke a rubber stamp. Building without the features is still fine as
+        # a dev configuration; it just is not something this script can bless.
+        #
+        # The stub-fallback event covers the OTHER half, and its reason text
+        # decides the verdict. `make_real_session()` rejects a build without
+        # `audio-in-rust` with a message naming that feature — a build defect,
+        # so fail. Every other reason (no cached model, an unresolvable model
+        # path) is an environment condition the sibling sections already
+        # warn-skip, so warn and print the reason.
         if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
             stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
-            warn "runtime installed but degraded to stub backends — cannot transcribe (${stub_reason:-reason not reported})"
-        elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ] || [ "$FEATURE_AUDIO_IN_RUST" = "no" ]; then
-            bad "runtime installs, but this build lacks whisper-rs-local=$FEATURE_WHISPER_RS_LOCAL / audio-in-rust=$FEATURE_AUDIO_IN_RUST — the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+            if grep -q "audio-in-rust feature not compiled in" "$dictaterun_out"; then
+                bad "runtime installs, but this build lacks audio-in-rust — the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+            else
+                warn "runtime installed but degraded to stub backends — cannot transcribe (${stub_reason:-reason not reported})"
+            fi
+        elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
+            bad "runtime installs, but this build lacks whisper-rs-local — the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
         # A terminal audio failure during the window (mic disconnect, capture
         # callback error, resampler/VAD failure) stops the pump permanently
         # and re-emits `[rust-session-audio] device error` on stdout AFTER the
@@ -1009,15 +1119,22 @@ else
     #   - the inner message, for the one cause with distinctive wording
     #     (evdev's "no readable keyboard found under /dev/input … usermod -aG
     #     input $USER"), and
-    #   - the ENVIRONMENT, for the headless case — if there is no display at
-    #     all, an rdev refusal is expected here exactly as it is in the
-    #     `hotkey capture` section above.
+    #   - the SELECTED DRIVER for the headless case. "No display" is only an
+    #     expected failure for rdev; evdev reads /dev/input and does not care
+    #     about a display, so an evdev refusal on a headless box is a real
+    #     failure. Empty DISPLAY/WAYLAND_DISPLAY does NOT prove rdev was
+    #     picked: `resolve_driver` honours an explicit VOICEPI_HOTKEY_DRIVER
+    #     override, and its `is_wayland_session()` returns true on
+    #     XDG_SESSION_TYPE=wayland alone (hotkey/manager/mod.rs:220-250) —
+    #     so a Wayland box with no WAYLAND_DISPLAY exported still selects
+    #     evdev. Mirror that resolution here instead of guessing from the
+    #     display variables.
     # Anything else is a hard failure.
     elif printf '%s' "$dictaterun_diag" | grep -qi "no readable keyboard\|usermod -aG input"; then
         warn "dictate-run: user lacks /dev/input access (add user to the 'input' group)"
-    elif [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
+    elif [ "$(resolve_hotkey_driver)" = "rdev" ] && [ -z "${DISPLAY:-}" ] \
          && printf '%s' "$dictaterun_diag" | grep -qi "listener failed to start"; then
-        warn "dictate-run: hotkey listener unavailable without a display (expected on headless / WSL)"
+        warn "dictate-run: rdev hotkey listener unavailable without a display (expected on headless / WSL)"
     elif [ "$dictaterun_rc" -eq 101 ]; then
         bad "dictate-run panicked: $(tail -n 3 "$dictaterun_err")"
     else
