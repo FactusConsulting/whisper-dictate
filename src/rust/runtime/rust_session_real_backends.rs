@@ -350,7 +350,13 @@ pub(crate) fn make_real_session(
             // operator's `VOICEPI_FEEDBACK_SOUNDS=1` opt-in works the
             // same way it does on the Python engine (env / config.json
             // overlay, live reload). Closes parity blocker #3.
-            .with_cue_sink(Box::new(crate::dictate::feedback::SystemCueSink));
+            .with_cue_sink(Box::new(crate::dictate::feedback::SystemCueSink))
+            // JSONL history sink parity with the Python engine — every
+            // successful utterance lands in the same local history file
+            // `vp_history` writes to today. `history_sink_from_settings`
+            // returns `None` when `history_enabled=false`, so this pays
+            // zero per-utterance cost on that path. Closes parity blocker #1.
+            .with_optional_history_sink(crate::dictate::history_sink_from_settings());
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
             dictate = dictate.with_post_process(Box::new(post));
         }
