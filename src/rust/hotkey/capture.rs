@@ -246,6 +246,52 @@ pub(crate) fn split_key_names(chord: &str) -> Vec<String> {
         .collect()
 }
 
+/// Resolve the PTT chord names to install the listener against, honouring
+/// the `--chord` override.
+///
+/// Precedence is `--chord` > `--config` > default config resolution
+/// (`VOICEPI_CONFIG` env / platform user config). `--chord` deliberately
+/// short-circuits the config read entirely -- the whole point of the flag
+/// is to test a chord WITHOUT touching (or being blocked by) whatever the
+/// user has saved. An empty `settings.key` is a hard error in the config
+/// path, and that must not stop someone from verifying a fresh chord.
+///
+/// Factored out of [`run_capture`] so unit tests can pin this precedence
+/// directly (Codex P2 review of #611: "the `--chord` field is new public
+/// input; add regression coverage that the override actually reaches the
+/// coordinator"). The chord returned here is exactly what
+/// [`run_capture`] feeds into [`HotkeyConfig::hold_to_talk`] -- so
+/// asserting on the return value asserts on the coordinator's active
+/// chord without needing to spin up a real listener thread.
+pub(crate) fn resolve_chord_key_names(
+    chord_override: Option<&str>,
+    config_override: Option<&Path>,
+) -> Result<Vec<String>> {
+    let chord_str = match chord_override {
+        Some(raw) => raw.trim().to_owned(),
+        None => {
+            let settings = match config_override {
+                Some(p) => load_settings_from_path(p)?,
+                None => load_settings()?,
+            };
+            settings.key.trim().to_owned()
+        }
+    };
+    let key_names = split_key_names(&chord_str);
+    if key_names.is_empty() {
+        return Err(match chord_override {
+            Some(raw) => anyhow!(
+                "--chord {raw:?} contains no key names; expected `+`-separated \
+                 names like `ctrl_l` or `shift_r+f9`"
+            ),
+            None => {
+                anyhow!("no PTT chord configured (settings.key is empty in the resolved config)")
+            }
+        });
+    }
+    Ok(key_names)
+}
+
 /// Whether an early-exit condition was requested; the [`CaptureEvent::ExitOnChord`]
 /// terminal event should be emitted on the first chord match if so.
 ///
@@ -290,6 +336,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
             exit_on_chord,
             config,
             driver,
+            chord,
         } => {
             let duration = parse_duration_secs(&for_secs)?;
             // Route the driver preference through the same env var the
@@ -304,6 +351,7 @@ pub fn handle_hotkey_command(cmd: HotkeyCommand) -> Result<()> {
                 json,
                 exit_on_chord,
                 config.as_deref().map(Path::new),
+                chord.as_deref(),
             )
         }
     }
@@ -359,18 +407,9 @@ fn run_capture(
     json: bool,
     exit_on_chord: bool,
     config_override: Option<&Path>,
+    chord_override: Option<&str>,
 ) -> Result<()> {
-    let settings = match config_override {
-        Some(p) => load_settings_from_path(p)?,
-        None => load_settings()?,
-    };
-    let chord_str = settings.key.trim().to_owned();
-    let key_names = split_key_names(&chord_str);
-    if key_names.is_empty() {
-        return Err(anyhow!(
-            "no PTT chord configured (settings.key is empty in the resolved config)"
-        ));
-    }
+    let key_names = resolve_chord_key_names(chord_override, config_override)?;
     let display_chord = key_names.join("+");
     let cfg = HotkeyConfig::hold_to_talk(key_names.clone());
 
@@ -687,6 +726,102 @@ mod tests {
         assert!(split_key_names("").is_empty());
         assert!(split_key_names("   ").is_empty());
         assert!(split_key_names("+ + +").is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_chord_key_names — `--chord` override precedence
+    //
+    // The Codex P2 review of #611 flagged that the new `--chord` public
+    // input had no regression coverage that it actually reaches the
+    // coordinator. `run_capture` forwards this fn's return value straight
+    // to `HotkeyConfig::hold_to_talk`, so asserting on the return value
+    // asserts on the coordinator's active chord.
+    // -----------------------------------------------------------------------
+    mod chord_override {
+        use super::super::resolve_chord_key_names;
+        use std::io::Write;
+
+        /// Materialise a `settings.json` on disk with the given `key`
+        /// value. Returned handle keeps the tempdir alive for the caller's
+        /// scope. Kept private because every test in this module needs it.
+        fn config_with_key(key: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("settings.json");
+            let contents = format!(r#"{{"key":"{key}","provider":"groq","toggle_mode":false}}"#);
+            let mut f = std::fs::File::create(&path).expect("create");
+            f.write_all(contents.as_bytes()).expect("write");
+            (dir, path)
+        }
+
+        #[test]
+        fn override_reaches_coordinator_bypassing_config() {
+            // Precondition: config on disk points to a DIFFERENT chord.
+            // With the override supplied, the coordinator must see the
+            // override, not the config's chord.
+            let (_dir, cfg_path) = config_with_key("ctrl_l+shift_l");
+            let names = resolve_chord_key_names(Some("ctrl_l+alt_l+f9"), Some(cfg_path.as_path()))
+                .expect("override + config resolves");
+            assert_eq!(
+                names,
+                vec!["ctrl_l".to_owned(), "alt_l".to_owned(), "f9".to_owned(),],
+                "the override, not the config's chord, must reach the coordinator",
+            );
+        }
+
+        #[test]
+        fn override_without_config_short_circuits_config_read() {
+            // The whole point of `--chord`: verifying a chord without
+            // touching the user's settings. A missing config path must
+            // NOT surface as an error when the override is provided.
+            let names = resolve_chord_key_names(Some("shift_r+f9"), None)
+                .expect("override alone resolves without touching config");
+            assert_eq!(names, vec!["shift_r".to_owned(), "f9".to_owned()]);
+        }
+
+        #[test]
+        fn override_wins_even_when_config_has_empty_key() {
+            // An empty `settings.key` is a hard error in the fallback
+            // config path. The override MUST short-circuit that: someone
+            // whose config has drifted to empty needs `--chord` to still
+            // work so they can test candidate chords before saving one.
+            let (_dir, cfg_path) = config_with_key("");
+            let names = resolve_chord_key_names(Some("ctrl_l"), Some(cfg_path.as_path()))
+                .expect("override wins over empty config key");
+            assert_eq!(names, vec!["ctrl_l".to_owned()]);
+        }
+
+        #[test]
+        fn empty_override_names_the_flag_in_the_error_message() {
+            // The two error paths (empty --chord vs empty config key)
+            // must surface distinctly so the operator knows WHICH input
+            // was empty.
+            let err = resolve_chord_key_names(Some("   "), None)
+                .expect_err("whitespace override is rejected")
+                .to_string();
+            assert!(err.contains("--chord"), "error must name the flag: {err}");
+            assert!(
+                err.contains("+"),
+                "error should hint at the `+`-separated format: {err}",
+            );
+        }
+
+        #[test]
+        fn config_error_wording_names_settings_key_when_override_is_none() {
+            // Complement of the previous test: when there is no override,
+            // the error must talk about `settings.key`, not `--chord`.
+            let (_dir, cfg_path) = config_with_key("");
+            let err = resolve_chord_key_names(None, Some(cfg_path.as_path()))
+                .expect_err("empty config key without override is rejected")
+                .to_string();
+            assert!(
+                err.contains("settings.key"),
+                "error must name the config field, not the flag: {err}",
+            );
+            assert!(
+                !err.contains("--chord"),
+                "config-side error must not mention the CLI flag: {err}",
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
