@@ -818,6 +818,54 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "needs.changes.outputs.python == 'true'", ci.group("body"),
         )
 
+    def test_claude_review_never_gets_paths_ignore_filter(self):
+        # Codex P1 #587 (confirmed by user Larswa in the same review):
+        # `claude-review.yml` subscribes to `pull_request: types: [opened]`
+        # ONLY, so it fires exactly once per PR. A `paths-ignore` on that
+        # sole trigger means a PR opened with just a prose file gets no
+        # review, and later code pushes fire `synchronize` events with
+        # NO subscriber — so the PR silently reaches merge unreviewed.
+        # Sonar can afford the filter because it re-runs on every push;
+        # this workflow cannot. Lock: paths-ignore must NEVER appear
+        # under claude-review.yml's pull_request block.
+        workflow = Path(".github/workflows/claude-review.yml").read_text(encoding="utf-8")
+        # The workflow subscribes to `opened`-only — that's the invariant
+        # that makes paths-ignore dangerous. If a future refactor moves
+        # to `synchronize` too, revisit whether paths-ignore is safe.
+        self.assertIn(
+            "types: [opened]", workflow,
+            "claude-review is `opened`-only by design; the no-paths-ignore"
+            " rule below depends on this invariant",
+        )
+        self.assertNotIn(
+            "paths-ignore:", workflow,
+            "claude-review must NOT have paths-ignore — see Codex P1 #587."
+            " Filtering an `opened`-only trigger means a prose-first PR"
+            " gets zero automatic reviews for its whole lifetime",
+        )
+
+    def test_sonar_keeps_paths_ignore_for_prose_only_prs(self):
+        # Complement to test_claude_review_never_gets_paths_ignore_filter:
+        # sonar re-runs on every push (`synchronize` implicit), so
+        # skipping a prose-only opened event is safe — the first code
+        # push recovers analysis. The ~4 min per prose PR IS worth
+        # skipping. Lock: sonar's paths-ignore stays in place.
+        workflow = Path(".github/workflows/sonar.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "paths-ignore:", workflow,
+            "sonar.yml should keep paths-ignore for prose-only PRs —"
+            " it re-runs on every subsequent push so skipping is safe,"
+            " and the ~4 min saving is worth banking",
+        )
+        # The exclusion list must cover the same top-level prose set
+        # test.yml's `changes` filter uses, so the two skip in lockstep.
+        for pattern in ("'*.md'", "'LICENSE'", "'.gitignore'"):
+            self.assertIn(
+                pattern, workflow,
+                f"sonar.yml paths-ignore must include {pattern} to match"
+                " test.yml's changes filter",
+            )
+
     def test_rust_ci_uses_apt_pkgs_cache_on_linux_legs(self):
         # 2026-07-26 follow-up PR to #581 — the ONE clean wall-clock
         # win that survived Codex P2 review: cache the 12 apt packages
