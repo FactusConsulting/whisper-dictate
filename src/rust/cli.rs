@@ -325,8 +325,13 @@ pub enum Command {
         /// OpenAI-compatible API base URL.
         #[arg(long)]
         base_url: String,
-        /// API key.
-        #[arg(long)]
+        /// API key. OPTIONAL and discouraged: a process command line is
+        /// readable by other local users (`ps aux`, `/proc/<pid>/cmdline`),
+        /// so passing a secret here leaks it for the lifetime of the call.
+        /// Prefer the environment — `VOICEPI_STT_API_KEY`, or `GROQ_API_KEY`
+        /// / `OPENAI_API_KEY` matching `--base-url`. Kept for backwards
+        /// compatibility with older callers.
+        #[arg(long, default_value = "")]
         api_key: String,
         /// Transcription model.
         #[arg(long)]

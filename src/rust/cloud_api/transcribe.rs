@@ -11,6 +11,53 @@ use crate::cloud_api::http::{check_status, http_error, platform_tls_agent, USER_
 
 pub const GROQ_TRANSCRIPTION_PROMPT_LIMIT: usize = 896;
 
+/// Resolve the STT API key without requiring it on the command line.
+///
+/// `--api-key` used to be mandatory, which meant every caller had to put the
+/// secret in `argv` — and a process's command line is readable by other local
+/// users (`ps aux`, `/proc/<pid>/cmdline`; Linux only restricts it when
+/// `hidepid` is mounted, which is not the default). The environment block is
+/// not: `/proc/<pid>/environ` is owner-only. So callers pass the key in the
+/// child's env instead, and an explicit `--api-key` stays supported for
+/// backwards compatibility.
+///
+/// Precedence mirrors `dictate::backends::cloud_transcribe::from_env_with`
+/// and `ui/api_keys.rs::load_stt_api_key_from_env`: the explicit flag first,
+/// then the STT-specific var, then ONLY the generic var for the provider
+/// implied by `base_url` (so a stray `OPENAI_API_KEY` is never sent to Groq,
+/// or vice versa).
+///
+/// Takes `lookup` rather than reading process env directly so the precedence
+/// is unit-testable without mutating global state.
+pub fn resolve_api_key_with(
+    flag: &str,
+    base_url: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> String {
+    let flag = flag.trim();
+    if !flag.is_empty() {
+        return flag.to_owned();
+    }
+    let get = |name: &str| {
+        lookup(name)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
+    let generic = if base_url.to_ascii_lowercase().contains("groq.com") {
+        "GROQ_API_KEY"
+    } else {
+        "OPENAI_API_KEY"
+    };
+    get("VOICEPI_STT_API_KEY")
+        .or_else(|| get(generic))
+        .unwrap_or_default()
+}
+
+/// Process-env wrapper around [`resolve_api_key_with`].
+pub fn resolve_api_key(flag: &str, base_url: &str) -> String {
+    resolve_api_key_with(flag, base_url, |name| std::env::var(name).ok())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CloudTranscriptionResult {
     pub text: String,
@@ -167,6 +214,116 @@ mod tests {
         assert!(body.contains("name=\"language\""));
         assert!(body.contains("filename=\"audio.wav\""));
         assert!(body.contains("Content-Type: audio/wav"));
+    }
+
+    /// Build a `lookup` over a fixed table so the precedence is exercised
+    /// without mutating process env (which would race other tests).
+    fn lookup_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let owned: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |name: &str| {
+            owned
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    const OPENAI: &str = "https://api.openai.com/v1";
+    const GROQ: &str = "https://api.groq.com/openai/v1";
+
+    #[test]
+    fn explicit_flag_wins_over_env() {
+        let key = resolve_api_key_with(
+            "flag-key",
+            OPENAI,
+            lookup_from(&[("VOICEPI_STT_API_KEY", "env-key")]),
+        );
+        assert_eq!(key, "flag-key");
+    }
+
+    #[test]
+    fn falls_back_to_stt_specific_env_when_flag_absent() {
+        let key = resolve_api_key_with(
+            "",
+            OPENAI,
+            lookup_from(&[("VOICEPI_STT_API_KEY", "env-key")]),
+        );
+        assert_eq!(key, "env-key");
+    }
+
+    #[test]
+    fn blank_flag_is_treated_as_absent() {
+        // A caller that passes `--api-key ""` (or whitespace) must not end up
+        // sending an empty Authorization header when the env has a real key.
+        let key = resolve_api_key_with("   ", GROQ, lookup_from(&[("GROQ_API_KEY", "groq-key")]));
+        assert_eq!(key, "groq-key");
+    }
+
+    #[test]
+    fn generic_env_is_provider_scoped_by_base_url() {
+        // Groq base URL -> GROQ_API_KEY, and an OpenAI key present in the
+        // environment is NOT sent to Groq (and vice versa). This is the same
+        // rule `cloud_transcribe::from_env_with` applies; a leak here would
+        // hand one provider's secret to another.
+        let groq = resolve_api_key_with(
+            "",
+            GROQ,
+            lookup_from(&[
+                ("GROQ_API_KEY", "groq-key"),
+                ("OPENAI_API_KEY", "openai-key"),
+            ]),
+        );
+        assert_eq!(groq, "groq-key");
+
+        let openai = resolve_api_key_with(
+            "",
+            OPENAI,
+            lookup_from(&[
+                ("GROQ_API_KEY", "groq-key"),
+                ("OPENAI_API_KEY", "openai-key"),
+            ]),
+        );
+        assert_eq!(openai, "openai-key");
+
+        // Only the wrong-provider key is set: resolve to empty rather than
+        // sending it. `cloud_transcribe` then fails with a clear message.
+        let mismatched =
+            resolve_api_key_with("", GROQ, lookup_from(&[("OPENAI_API_KEY", "openai-key")]));
+        assert_eq!(mismatched, "");
+    }
+
+    #[test]
+    fn stt_specific_env_outranks_the_generic_one() {
+        let key = resolve_api_key_with(
+            "",
+            GROQ,
+            lookup_from(&[
+                ("VOICEPI_STT_API_KEY", "stt-key"),
+                ("GROQ_API_KEY", "groq-key"),
+            ]),
+        );
+        assert_eq!(key, "stt-key");
+    }
+
+    #[test]
+    fn empty_when_nothing_is_set() {
+        assert_eq!(resolve_api_key_with("", OPENAI, lookup_from(&[])), "");
+    }
+
+    #[test]
+    fn whitespace_only_env_values_are_ignored() {
+        let key = resolve_api_key_with(
+            "",
+            OPENAI,
+            lookup_from(&[
+                ("VOICEPI_STT_API_KEY", "  "),
+                ("OPENAI_API_KEY", "openai-key"),
+            ]),
+        );
+        assert_eq!(key, "openai-key");
     }
 
     #[test]

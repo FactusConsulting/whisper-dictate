@@ -222,6 +222,27 @@ class ExternalApiTests(unittest.TestCase):
         self.assertEqual(segments[0].text.strip(), "Hello from Rust")
         self.assertEqual(info.language, "en")
 
+        # The API key must reach the helper through the ENVIRONMENT, never
+        # argv: a command line is readable by other local users (`ps aux`,
+        # `/proc/<pid>/cmdline`), so an argv-passed secret leaked on every
+        # utterance. Assert on the secret VALUE, not just the flag name, so a
+        # future refactor that reintroduces it under a different flag still
+        # trips this test.
+        self.assertNotIn("--api-key", args)
+        self.assertFalse(
+            any("test-key" in str(arg) for arg in args),
+            f"API key must not appear in argv: {args}",
+        )
+        child_env = run.call_args.kwargs.get("env")
+        self.assertIsNotNone(child_env, "helper must be given an explicit env")
+        self.assertEqual(child_env.get("VOICEPI_STT_API_KEY"), "test-key")
+        # The rest of the parent environment must survive - the helper needs
+        # PATH, HOME, proxy settings, and on Windows SystemRoot to run at all.
+        self.assertTrue(
+            set(os.environ).issubset(set(child_env)),
+            "child env must extend the parent environment, not replace it",
+        )
+
     def test_external_transcription_falls_back_when_rust_helper_fails(self):
         sys.modules.pop("vp_external_api", None)
         try:

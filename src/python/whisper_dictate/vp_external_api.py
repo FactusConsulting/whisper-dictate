@@ -261,13 +261,18 @@ class ExternalTranscriptionModel:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 tmp.write(wav)
                 temp_name = tmp.name
+            # The API key goes in the CHILD'S ENVIRONMENT, never in argv. A
+            # process command line is readable by other local users on a
+            # stock box (`ps aux`, `/proc/<pid>/cmdline`; Linux only hides it
+            # when /proc is mounted with `hidepid`, which is not the default),
+            # so passing the secret as an argument exposed it on every
+            # utterance. `/proc/<pid>/environ` is owner-only, and the helper
+            # reads `VOICEPI_STT_API_KEY` when `--api-key` is absent.
             args = [
                 helper,
                 "cloud-transcribe",
                 "--base-url",
                 self.settings.base_url,
-                "--api-key",
-                self.settings.api_key,
                 "--model",
                 self.settings.model,
                 "--audio-wav-path",
@@ -275,6 +280,8 @@ class ExternalTranscriptionModel:
                 "--timeout-ms",
                 str(self.settings.timeout_ms),
             ]
+            child_env = dict(os.environ)
+            child_env["VOICEPI_STT_API_KEY"] = self.settings.api_key
             if language:
                 args.extend(["--language", str(language)])
             if prompt:
@@ -288,6 +295,7 @@ class ExternalTranscriptionModel:
                 timeout=self.settings.timeout_ms / 1000.0 + 2,
                 text=True,
                 encoding="utf-8",
+                env=child_env,
                 **no_console_window_kwargs(),
             )
             if r.returncode != 0:
