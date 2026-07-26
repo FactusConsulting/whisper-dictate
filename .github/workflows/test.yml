@@ -10,9 +10,12 @@ name: tests
 #   - lint-workflows            (jobs.lint-workflows)
 #   - smoke (ubuntu-latest)     (jobs.smoke matrix)
 #   - smoke (windows-2025)      (jobs.smoke matrix)
-#   - rust  (ubuntu-latest)     (jobs.rust  matrix)
-#   - rust  (windows-2025)      (jobs.rust  matrix)
-# The groq-integration job is NOT required (live API; skips without secret).
+#   - rust  (ubuntu-latest)     (jobs.rust  matrix — aggregator over rust-features)
+#   - rust  (windows-2025)      (jobs.rust  matrix — aggregator over rust-features)
+# The groq-integration and rust-features / rust-release jobs are NOT required
+# themselves — rust-features is what the required `rust` aggregator gates on;
+# rust-release runs on push-to-main and workflow_call (release) only and
+# never in PR CI (release-profile compile is ~10 min extra per push).
 
 on:
   push:
@@ -272,31 +275,54 @@ jobs:
             exit 1
           fi
 
-  rust:
-    # See the `smoke` job above for why the matrix gate lives on each
-    # step (not on the job-level `if:`): branch protection's required
-    # contexts `rust (ubuntu-latest)` / `rust (windows-2025)` only get
-    # created when the matrix expands, which a job-level skip prevents.
-    # `if: !cancelled()` (P1 #398 follow-up) keeps these legs running
-    # even when `changes` failed so the first step can fail explicitly
-    # instead of silently skipping required checks.
+  # ---------------------------------------------------------------------------
+  # rust-features: parallelises the previously sequential fmt / clippy / test
+  # legs. Each cargo invocation runs in its own matrix cell so Cargo's
+  # per-feature fingerprint no longer discards artifacts between successive
+  # steps sharing one job. Split designed after wall-clock analysis: the old
+  # single-job rust leg hit ~18 min on Windows because every feature flip
+  # recompiled the crate + affected deps; per-leg cells push that toward the
+  # slowest single build (~6-8 min).
+  #
+  # NOT required by branch protection itself — the `rust` aggregator below
+  # keeps the `rust (ubuntu-latest)` / `rust (windows-2025)` context names.
+  # Change here freely; only touch the aggregator when renaming contexts.
+  # ---------------------------------------------------------------------------
+  rust-features:
     needs: changes
     if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
+        # Each profile owns ONE cargo invocation. `feature_arg` is the
+        # verbatim cargo flag (empty for the default feature set); `role`
+        # selects test vs clippy in the step gates below. Adding a profile
+        # here is the one-line way to extend PR-CI coverage.
+        profile:
+          - id: base
+            feature_arg: ""
+            role: test
+          - id: hotkeys
+            feature_arg: "--features rust-hotkeys"
+            role: test
+          - id: audio
+            feature_arg: "--features audio-in-rust"
+            role: test
+          - id: clippy-glow
+            feature_arg: "--features ui-egui-glow"
+            role: clippy
     runs-on: ${{ matrix.os }}
     env:
       RUN_RUST: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
     steps:
-      - name: Fail required check if change detection broke
+      - name: Fail matrix leg if change detection broke
         if: needs.changes.result != 'success'
         run: |
-          echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`rust\` matrix leg to avoid silently skipping tests on a code PR"
+          echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing rust-features leg so the required \`rust\` aggregator fails too"
           exit 1
       - if: env.RUN_RUST != 'true'
-        run: echo "::notice::Skipping rust matrix leg — no code changes detected"
+        run: echo "::notice::Skipping rust-features leg (${{ matrix.profile.id }}) — no code changes detected"
       - uses: actions/checkout@v6
         if: env.RUN_RUST == 'true'
         with:
@@ -320,43 +346,142 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RUST == 'true'
         with:
+          # Every leg installs clippy; only the clippy-role cell runs it.
+          # The extra component costs a few seconds and keeps
+          # test_sonar_uses_supported_python_version's literal check happy.
           components: clippy
       - uses: Swatinem/rust-cache@v2
         if: env.RUN_RUST == 'true'
         with:
+          # Same cache dir as before ("src/rust -> ../target"); the extra
+          # key material below just partitions the cache per profile so
+          # parallel cells don't overwrite each other's saved target/ on
+          # the same OS. Retrieval prefix stays shared, so a fresh profile
+          # still falls back to the closest match instead of a cold cache.
           workspaces: "src/rust -> ../target"
+          key: ${{ matrix.profile.id }}
       - name: Rust format
-        if: env.RUN_RUST == 'true'
+        # fmt is OS- and feature-independent, so run it exactly once (in
+        # the ubuntu `base` cell) instead of on every matrix leg.
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'base' && runner.os == 'Linux'
         run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
       - name: Rust Clippy
         # Everyday CI is glow-only (our shipping renderer) so it stays fast and
         # off the wgpu/DX12 stack. The wgpu exit route is build-validated
-        # separately by the periodic renderer-matrix workflow. (Was --all-features,
-        # which now also pulls eframe/wgpu via the ui-egui-wgpu feature.)
-        if: env.RUN_RUST == 'true'
+        # separately by the periodic renderer-matrix workflow. Hardcoded
+        # feature set so the release-workflow test's literal string check
+        # keeps working — the `clippy-glow` profile is the only clippy cell,
+        # so no template needed.
+        if: env.RUN_RUST == 'true' && matrix.profile.role == 'clippy'
         run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings
       - name: Rust tests
-        if: env.RUN_RUST == 'true'
-        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app
-      - name: Rust tests (rust-hotkeys feature)
-        # Issue #318: the Rust PTT coordinator is gated behind the
-        # `rust-hotkeys` cargo feature. Build & test it on Linux only — rdev's
-        # Linux backend needs libxi-dev / libxtst-dev (installed above);
-        # Windows already has every dep in the SDK.
-        if: env.RUN_RUST == 'true'
-        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys
-      - name: Rust tests (audio-in-rust feature)
-        # Issue #316 / Wave 4-C: the Rust audio pipeline (cpal capture ->
-        # rubato resample -> Silero VAD via vad-rs/ort) is gated behind
-        # the `audio-in-rust` cargo feature. Build & test on BOTH
-        # platforms because cpal's WASAPI (Windows) and ALSA (Linux)
-        # backends are different code paths. ort-sys is pinned in
-        # Cargo.toml to a vad-rs-compatible version; this step
-        # verifies the pinned combination still links cleanly on both
-        # runners. Prep step for flipping the feature into the shipping
-        # installer (Wave 8 follow-up).
-        if: env.RUN_RUST == 'true'
-        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features audio-in-rust
+        # Runs against the profile's specific feature set. Empty
+        # `feature_arg` → default features. The rust-hotkeys and
+        # audio-in-rust cells cover their respective backends
+        # (rdev/enigo, cpal/rubato/vad-rs); base covers the default
+        # feature intersection.
+        if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
+        run: cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app ${{ matrix.profile.feature_arg }}
+      - name: Rust CLI smoke
+        # Sanity-check the debug binary the base cell just compiled — its
+        # target/ dir is warm from the previous step, so this reuses those
+        # artifacts and takes ~1s.
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'base'
+        run: |
+          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help
+          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- config path
+
+  # ---------------------------------------------------------------------------
+  # rust: required-status aggregator. Retains the `rust (ubuntu-latest)` and
+  # `rust (windows-2025)` context names that the protected-branch ruleset
+  # requires. After the 2026-07-26 split this job no longer runs cargo — it
+  # aggregates the `rust-features` matrix into the two required contexts so
+  # branch protection sees one green check per OS regardless of how many
+  # feature cells the matrix expands to. Do NOT rename these matrix legs;
+  # branch protection reads the context names verbatim.
+  # ---------------------------------------------------------------------------
+  rust:
+    needs: [changes, rust-features]
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail required check if change detection broke
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`rust (${{ matrix.os }})\` check"
+          exit 1
+      - name: Fail required check if rust-features matrix did not succeed
+        # `skipped` is fine — that's the docs-only-PR path where every leg
+        # short-circuited. Anything else (failure, cancelled) MUST bubble
+        # up to the required aggregator.
+        if: needs.rust-features.result != 'success' && needs.rust-features.result != 'skipped'
+        run: |
+          echo "::error::rust-features matrix did not succeed (result=${{ needs.rust-features.result }}); failing required \`rust (${{ matrix.os }})\` check"
+          exit 1
+      - run: echo "rust aggregator OK for ${{ matrix.os }} — rust-features matrix passed"
+
+  # ---------------------------------------------------------------------------
+  # rust-release: release-profile builds + release-mode regression smokes.
+  # Runs on push-to-main and workflow_call (release gate) only — PR CI skips
+  # it because the release-profile compile shares nothing with the debug
+  # builds above and would add another ~10 min to every push. Post-merge
+  # coverage is preserved: main runs it on push, and the release pipeline
+  # gates on it via workflow_call (see `release.yml`). PR-time coverage of
+  # the injection-idempotency bug class is still enforced through the
+  # `integration-ubuntu-2604` container job below, which runs the same
+  # self-test verb on every PR.
+  # ---------------------------------------------------------------------------
+  rust-release:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUN_RELEASE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+    steps:
+      - name: Fail check if change detection broke
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing rust-release leg"
+          exit 1
+      - if: env.RUN_RELEASE != 'true'
+        run: echo "::notice::Skipping rust-release leg — no code changes detected"
+      - uses: actions/checkout@v6
+        if: env.RUN_RELEASE == 'true'
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Linux Rust UI build deps
+        if: env.RUN_RELEASE == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            pkg-config \
+            libdbus-1-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libxi-dev \
+            libxtst-dev \
+            libasound2-dev
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        if: env.RUN_RELEASE == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: env.RUN_RELEASE == 'true'
+        with:
+          workspaces: "src/rust -> ../target"
+          # Release profile compiles into its own target sub-tree; keep
+          # its cache separate from the PR-CI debug caches above.
+          key: release
       - name: Rust build (whisper-rs-local feature)
         # rc.2 of Wave 8 (#348): the `whisper-rs-local` feature compiles
         # whisper.cpp from source via whisper-rs and is now shipping in
@@ -373,7 +498,7 @@ jobs:
         # verbs the next step's smoke asserts on. Same release-profile
         # target-dir, so no extra compile — the feature just brings in
         # cpal + rubato to the same artifact.
-        if: env.RUN_RUST == 'true'
+        if: env.RUN_RELEASE == 'true'
         run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features whisper-rs-local,audio-capture --release
       - name: Windows release CLI-output smoke
         # Regression guard for the `windows_subsystem = "windows"` bug class
@@ -412,7 +537,7 @@ jobs:
         # `self-test audio-capture` exits non-zero without a mic on the
         # runner. Force `exit 0` after both content checks pass so the
         # environmental exit code does not shadow the smoke's real result.
-        if: env.RUN_RUST == 'true' && runner.os == 'Windows'
+        if: env.RUN_RELEASE == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
           $exe = "target/release/whisper-dictate.exe"
@@ -455,11 +580,6 @@ jobs:
           # Discard the audio verb's environmental non-zero exit (no mic on
           # the runner) — the real outcome is what we asserted above.
           exit 0
-      - name: Rust CLI smoke
-        if: env.RUN_RUST == 'true'
-        run: |
-          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- --help
-          cargo run -q --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- config path
       - name: injection-idempotency regression test (self-test)
         # Codex #518 F6: the ubuntu 26.04 integration job runs this same
         # verb on Linux (see `integration-ubuntu-2604` below), but the
@@ -472,7 +592,10 @@ jobs:
         # Default dry-run: no OS side effects on either matrix leg, so
         # this is safe under `-D warnings` alongside every other rust
         # step. NO `|| true` — a real regression here MUST fail CI.
-        if: env.RUN_RUST == 'true'
+        # PR CI does NOT run this (release-profile compile is expensive);
+        # PR-time coverage lives in `integration-ubuntu-2604` which runs
+        # the same self-test verb on the ubuntu 26.04 container leg.
+        if: env.RUN_RELEASE == 'true'
         run: cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --features rust-hotkeys,rust-injection -- self-test injection-idempotency --iterations 10 --json
 
   integration-ubuntu-2604:
