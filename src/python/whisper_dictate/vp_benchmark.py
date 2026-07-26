@@ -486,7 +486,7 @@ def run_corpus_benchmark(
     if manifest is None:
         looked = ", ".join(str(p) for p in corpus_search_paths(root, appdata))
         print(
-            f"[benchmark] no corpus manifest found (looked: {looked}) — "
+            f"[benchmark] no corpus manifest found (looked: {looked}) - "
             "see docs/CONFIGURATION.md (Benchmark corpus)",
             flush=True,
         )

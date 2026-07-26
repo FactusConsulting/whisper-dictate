@@ -536,11 +536,11 @@ class InjectMixin:
         refocused = on_wayland and self._restore_target_focus()
         target = self._inject_target_title
         if refocused:
-            print(f'[inject] → "{preview}"  (refocused: {target})', flush=True)
+            print(f'[inject] -> "{preview}"  (refocused: {target})', flush=True)
         elif target:
-            print(f'[inject] → "{preview}"  (target: {target})', flush=True)
+            print(f'[inject] -> "{preview}"  (target: {target})', flush=True)
         else:
-            print(f'[inject] → "{preview}"', flush=True)
+            print(f'[inject] -> "{preview}"', flush=True)
 
     def _inject_wayland(self, text: str) -> None:
         mode = self.mode
@@ -554,14 +554,14 @@ class InjectMixin:
             self._last_inject_strategy = "paste"
             if self._paste(text):
                 return
-            print("[inject] paste fejlede — fallback ydotool", flush=True)
+            print("[inject] paste fejlede - fallback ydotool", flush=True)
 
         # ASCII via ydotool type. Explicit type also keeps direct key injection
         # available for users who do not want clipboard-based insertion.
         print("[inject] ydotool (direkte)", flush=True)
         self._last_inject_strategy = "ydotool"
         if not self._wayland_type(text):
-            print("[inject] ydotool fejlede — fallback pynput", flush=True)
+            print("[inject] ydotool fejlede - fallback pynput", flush=True)
             self._last_inject_strategy = "type-fallback"
             self._release_stale_modifiers()
             self._kb.type(text)

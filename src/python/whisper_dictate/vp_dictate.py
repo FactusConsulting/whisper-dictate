@@ -326,7 +326,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                   file=sys.stderr, flush=True)
             return
         self._audio_input_device = audio_device
-        print(f"[cap] audio device changed live → {audio_device!r}", flush=True)
+        print(f"[cap] audio device changed live -> {audio_device!r}", flush=True)
         _emit_worker_event(
             "status",
             state="ready",
@@ -346,7 +346,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         # it (a user setting 0 still gets the 0.3 s protection via max()).
         min_seconds = max(0.3, getattr(self, "min_record_seconds", 0.5))
         if len(pcm) < SR * min_seconds:  # too short — almost certainly a misfire
-            print("  (too short — hold the key while you speak)", flush=True)
+            print("  (too short - hold the key while you speak)", flush=True)
             return "too_short"
         # Wave 8 of #348: the Parakeet-specific
         # `recording_s < self.parakeet_min_seconds` branch was removed
@@ -364,7 +364,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
         try:
             result = _transcribe_detail(self.model, pcm, self.lang)
         except Exception as e:  # noqa: BLE001 — surface any failure
-            print(f"  ✗ transcribe error: {e}", flush=True)
+            print(f"  x transcribe error: {e}", flush=True)
             return None, "no_speech"
         if not result.text:
             gate = getattr(result, "gate", "") or ""
@@ -374,7 +374,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
                 reason = "no_speech"
             else:
                 reason = "empty"
-            print("  (heard nothing — speak a touch louder / mic closer)", flush=True)
+            print("  (heard nothing - speak a touch louder / mic closer)", flush=True)
             return None, reason
         if is_hallucination(result.text):
             print(f"  (hallucination filtered: {result.text!r})", flush=True)
@@ -585,7 +585,7 @@ class Dictate(InjectMixin, KeyBackendMixin, CaptureMixin):
             f"capture_channels={self._capture_channels}",
             flush=True,
         )
-        print("● listening…", flush=True)
+        print("* listening...", flush=True)
         play_cue("start")
         self._start_preview()
 

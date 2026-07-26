@@ -205,7 +205,7 @@ class _PynputListener:
         # release like any other chord break.
         self._recording = False
         print(f"[keys] chord detected ({_chord_desc(self._held_keys, k)}) "
-              f"— dictation cancelled", flush=True)
+              f"- dictation cancelled", flush=True)
         # Capture the recording generation NOW so a delayed cancel cannot discard
         # a later recording (release + re-press before this thread runs).
         epoch = getattr(self._owner, "_record_epoch", None)
@@ -360,7 +360,7 @@ class KeyBackendMixin:
         if (solo is not None and recording and newly_held
                 and ev.code not in target_codes):
             print(f"[keys] chord detected ({_chord_desc(target_codes, ev.code)}) "
-                  f"— dictation cancelled", flush=True)
+                  f"- dictation cancelled", flush=True)
             # Capture the recording generation NOW so a delayed cancel cannot
             # discard a later recording (release + re-press before this runs).
             epoch = getattr(self, "_record_epoch", None)
@@ -512,7 +512,7 @@ class KeyBackendMixin:
             try:
                 return state.on_press(k)
             except Exception:
-                print("[hotkey] on_press raised — listener will stop:",
+                print("[hotkey] on_press raised - listener will stop:",
                       flush=True)
                 traceback.print_exc()
                 raise
@@ -520,7 +520,7 @@ class KeyBackendMixin:
             try:
                 return state.on_release(k)
             except Exception:
-                print("[hotkey] on_release raised — listener will stop:",
+                print("[hotkey] on_release raised - listener will stop:",
                       flush=True)
                 traceback.print_exc()
                 raise

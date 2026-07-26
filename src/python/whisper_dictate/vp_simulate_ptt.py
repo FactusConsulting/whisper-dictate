@@ -111,7 +111,7 @@ def simulate_ptt(
         injected = True
     else:
         preview = final_text if len(final_text) < 200 else final_text[:197] + "..."
-        print(f"[simulate-ptt] dry-run — would inject: {preview!r}", flush=True)
+        print(f"[simulate-ptt] dry-run - would inject: {preview!r}", flush=True)
 
     return SimulatePttResult(
         text=final_text,

@@ -212,7 +212,7 @@ def _handle_event(mixin, event: RustAudioEvent, np) -> bool:
                 if not getattr(mixin, "_cap_warned", False):
                     mixin._cap_warned = True
                     print(
-                        f"[cap] max recording reached ({cap:.0f}s) — release the key",
+                        f"[cap] max recording reached ({cap:.0f}s) - release the key",
                         flush=True,
                     )
                     _emit_worker_event(
