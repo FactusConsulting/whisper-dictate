@@ -98,7 +98,7 @@ fn run() -> anyhow::Result<()> {
         Command::Inject => injection::handle_inject(),
         Command::Devices { command } => match command {
             None => handle_devices_command(),
-            Some(DevicesCommand::Test { name }) => runtime::run_terminal(devices_test_args(&name)),
+            Some(DevicesCommand::Test { name }) => handle_devices_test(&name),
         },
         Command::Models { command } => whisper::models_cli::handle(command),
         Command::Hotkey { command } => hotkey::capture::handle_hotkey_command(command),
@@ -535,6 +535,13 @@ fn simulate_ptt_args(
 /// spawning Python. Empty `name` is preserved verbatim: the Python side treats
 /// `""` as "test the system default input", which is a documented use case
 /// (e.g. headless CI containers where no named device is available).
+///
+/// Only consumed by the `#[cfg(not(feature = "audio-capture"))]` fallback in
+/// [`handle_devices_test`] and by the tests below. The shipping binary is
+/// built with `audio-capture` and runs the native probe instead — but the
+/// argv is still worth pinning as a regression guard for the stock-build
+/// fallback path.
+#[cfg_attr(feature = "audio-capture", allow(dead_code))]
 fn devices_test_args(name: &str) -> Vec<String> {
     vec!["--test-audio-device".to_owned(), name.to_owned()]
 }
@@ -550,8 +557,36 @@ fn handle_devices_command() -> anyhow::Result<()> {
     // "not built with cpal" and fall back to its own enumeration without
     // parsing a free-form error message. Exits non-zero so subprocess.run's
     // returncode check trips the fallback path in vp_devices.
-    println!("{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-capture feature\"}}");
+    println!(
+        "{{\"error\":\"devices_unavailable\",\"reason\":\"binary built without audio-capture feature\"}}"
+    );
     std::process::exit(2);
+}
+
+/// Handle `whisper-dictate devices test <NAME>`.
+///
+/// On `audio-capture` builds (the shipping binary) this dispatches to the
+/// native cpal probe in [`audio::device_probe`] and prints the same
+/// single-line JSON envelope the Python `--test-audio-device` query mode
+/// emitted, so the UI parser in `ui::device_test` keeps working unchanged.
+/// Step 1 of the `vp_device_test.py` retirement (issue #348): the Python
+/// module and its `--test-audio-device` argparse flag stay in place for now
+/// and get deleted in the follow-up PR once no shipping path depends on
+/// them.
+///
+/// On stock builds (no `audio-capture`) we fall back to shelling out to the
+/// Python worker's `--test-audio-device` — dev builds still work and the
+/// UI's Test button doesn't need a rebuild message on those.
+#[cfg(feature = "audio-capture")]
+fn handle_devices_test(name: &str) -> anyhow::Result<()> {
+    let result = whisper_dictate_app::audio::device_probe::probe_device(name);
+    println!("{}", result.to_json_line());
+    Ok(())
+}
+
+#[cfg(not(feature = "audio-capture"))]
+fn handle_devices_test(name: &str) -> anyhow::Result<()> {
+    runtime::run_terminal(devices_test_args(name))
 }
 
 #[cfg(test)]

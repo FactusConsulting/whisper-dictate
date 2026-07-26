@@ -39,6 +39,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
 pub mod capture;
+// Dry-run device probe for the `devices test <NAME>` CLI verb + the UI's
+// "Test Device" button (step 1 of `vp_device_test.py` retirement, issue #348).
+// Lives here (not in `devices.rs`) because it needs the cpal open matrix from
+// `capture`, and `devices.rs` is enumeration-only.
+pub mod device_probe;
 pub mod pipewire;
 pub mod raw;
 pub mod resampler;

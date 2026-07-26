@@ -5,9 +5,14 @@
 use super::*;
 use crate::cloud_api::{check_cloud_api, check_post_api, CloudApiCheck, PostApiCheck};
 use crate::runtime::{
-    audio_devices_command, doctor_command, install_command, run_capture, test_audio_device_command,
-    windows_command, WorkerCommand,
+    audio_devices_command, doctor_command, install_command, run_capture, windows_command,
+    WorkerCommand,
 };
+// The Python shell-out constructor is only referenced on stock builds — the
+// native probe replaces it when `audio-capture` is on. Importing conditionally
+// keeps the unused-import lint happy without a per-branch allow attribute.
+#[cfg(not(feature = "audio-capture"))]
+use crate::runtime::test_audio_device_command;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 
@@ -64,16 +69,64 @@ impl WhisperDictateApp {
         self.run_background_command(LIST_WINDOWS_LABEL, windows_command());
     }
 
-    /// Dry-run test the currently-saved microphone by running the worker with
-    /// `--test-audio-device "<name>"` off-thread (async, like Refresh devices, so
-    /// the UI never blocks). The captured stdout is parsed into the inline ✓/⚠/✗
-    /// result in `poll_background_task` once the run completes.
+    /// Dry-run test the currently-saved microphone off-thread (async, like
+    /// Refresh devices, so the UI never blocks). The captured stdout is parsed
+    /// into the inline ✓/⚠/✗ result in `poll_background_task` once the run
+    /// completes.
+    ///
+    /// On `audio-capture` builds (the shipping binary) this runs the native
+    /// cpal probe in a background thread and synthesises a
+    /// [`BackgroundTaskResult`] with the same single-line JSON envelope the
+    /// Python `--test-audio-device` query mode used to print — no subprocess,
+    /// no Python. Stock builds keep the Python shell-out fallback so a dev
+    /// build without cpal (rare) still shows the ✓/⚠/✗ pill.
     pub(in crate::ui) fn run_test_audio_device(&mut self) {
         // Clear any previous result so the user sees the in-flight "Testing…"
         // state and never a stale outcome from the last device.
         self.device_test_result = None;
         let name = self.settings.audio_device.trim().to_owned();
-        self.run_background_command(TEST_AUDIO_DEVICE_LABEL, test_audio_device_command(&name));
+        #[cfg(feature = "audio-capture")]
+        {
+            self.run_native_device_test(name);
+        }
+        #[cfg(not(feature = "audio-capture"))]
+        {
+            self.run_background_command(TEST_AUDIO_DEVICE_LABEL, test_audio_device_command(&name));
+        }
+    }
+
+    /// Native cpal probe on a background thread. Synthesises a
+    /// [`BackgroundTaskResult`] with the JSON envelope as stdout so the
+    /// generic `poll_background_task` → `apply_device_test` path parses it
+    /// exactly like the Python worker's output — the parser stays authoritative.
+    #[cfg(feature = "audio-capture")]
+    fn run_native_device_test(&mut self, name: String) {
+        if self.background_task.is_some() {
+            self.append_runtime_log(format!(
+                "[ui] {TEST_AUDIO_DEVICE_LABEL} skipped: another task is running"
+            ));
+            return;
+        }
+        // Log the equivalent of `command.display()` so the runtime log line
+        // reads the same shape as every other background task (label +
+        // command) — makes native-vs-shellout indistinguishable in the log.
+        let display = format!("devices test {name:?} (native)");
+        self.append_runtime_log(format!("[ui] {TEST_AUDIO_DEVICE_LABEL}: {display}"));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = crate::audio::device_probe::probe_device(&name);
+            let _ = tx.send(BackgroundTaskResult {
+                label: TEST_AUDIO_DEVICE_LABEL,
+                command: display,
+                stdout: result.to_json_line(),
+                stderr: String::new(),
+                success: true,
+                code: Some(0),
+                error: None,
+            });
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some(TEST_AUDIO_DEVICE_LABEL);
     }
 
     pub(in crate::ui) fn run_cloud_api_check(&mut self) {
