@@ -104,8 +104,9 @@ pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
-    DictateSession, InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome,
-    PostRedaction, SessionConfig, SessionError, SessionState, TranscribeBackend, TranscribeError,
+    history_sink_from_settings, DictateSession, HistorySink, InjectBackend, InjectError,
+    JsonlHistorySink, NoopHistorySink, PostProcessBackend, PostProcessOutcome, PostRedaction,
+    SessionConfig, SessionError, SessionState, TranscribeBackend, TranscribeError,
     TranscribeResult, UtteranceOutcome,
 };
 pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};

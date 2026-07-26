@@ -9,6 +9,7 @@
 //! once both PRs are in `main`.
 
 use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
@@ -41,10 +42,14 @@ pub(super) fn emit_status<W: Write>(
     write_line(writer, &Value::Object(payload))
 }
 
-/// Emit one `[worker-event] {…,"event":"utterance",…}` line. Carries
-/// the subset of fields `vp_dictate.py::_utterance_event` exposes from
-/// the trait surface, plus the `post_*` post-processing metadata when a
-/// pass ran (`post` is `Some`), matching `vp_dictate.py:469-475`.
+/// Emit one `[worker-event] {…,"event":"utterance",…}` line and return the
+/// serialised payload so the session can also hand it to the history sink
+/// (parity with Python's `vp_dictate._record_utterance_event`, which calls
+/// `_emit_worker_event` and `append_record_sinks` from the same event dict).
+///
+/// Carries the subset of fields `vp_dictate.py::_utterance_event` exposes
+/// from the trait surface, plus the `post_*` post-processing metadata when
+/// a pass ran (`post` is `Some`), matching `vp_dictate.py:469-475`.
 pub(super) fn emit_utterance<W: Write>(
     writer: &mut W,
     text: &str,
@@ -53,8 +58,39 @@ pub(super) fn emit_utterance<W: Write>(
     inject_error: Option<String>,
     post: Option<&super::PostProcessOutcome>,
     replacements: &[crate::dictionary::ReplacementChange],
-) -> Result<(), SessionError> {
+) -> Result<Value, SessionError> {
+    let payload =
+        build_utterance_payload(text, result, recording_s, inject_error, post, replacements);
+    write_line(writer, &payload)?;
+    Ok(payload)
+}
+
+/// Assemble the utterance payload without emitting it. Split out so the
+/// session can build the payload once and share it with both the wire-format
+/// emitter and the history sink (Python parity: `_utterance_event` is built
+/// once, then `_emit_worker_event` and `append_record_sinks` both consume it).
+pub(super) fn build_utterance_payload(
+    text: &str,
+    result: &TranscribeResult,
+    recording_s: Value,
+    inject_error: Option<String>,
+    post: Option<&super::PostProcessOutcome>,
+    replacements: &[crate::dictionary::ReplacementChange],
+) -> Value {
     let mut payload: Map<String, Value> = Map::new();
+    // Python's `_base_event` stamps `ts = time.time()` (float seconds since
+    // the Unix epoch) on every utterance dict before `_emit_worker_event` +
+    // `append_record_sinks` see it. Without this, history rows written from
+    // the Rust engine lack a timestamp and the `history list` renderer shows
+    // blank leading timestamps. `SystemTime::now()` failure (clock before
+    // epoch) is exceedingly rare on a running machine; fall back to 0.0 so a
+    // clock-glitched session still records the utterance rather than
+    // panicking.
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    payload.insert("ts".into(), serde_json::json!(ts));
     payload.insert("event".into(), Value::from("utterance"));
     payload.insert("text".into(), Value::from(text));
     payload.insert(
@@ -138,7 +174,7 @@ pub(super) fn emit_utterance<W: Write>(
             .collect();
         payload.insert("dictionary_replacements".into(), Value::from(entries));
     }
-    write_line(writer, &Value::Object(payload))
+    Value::Object(payload)
 }
 
 /// True for `Value::Null` and the empty-string case, both of which

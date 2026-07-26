@@ -31,19 +31,27 @@
 //!   session uses for status / utterance events. Will be swapped for
 //!   the richer `crate::dictate::events` emitter from PR 1 (#412) by
 //!   PR 3, once both PRs are in `main`.
+//! - [`history_sink`] — the optional local-JSONL history writer that
+//!   ports `vp_history.append_record_sinks`'s write side to Rust so the
+//!   in-process engine records every completed utterance to the same
+//!   file the Python engine writes to today.
 //! - [`tests_support`] — `cfg(test)` test backends + helpers shared
 //!   across the test files.
 //! - [`tests_ported`] — the six characterisation tests ported from
 //!   `src/python/tests/test_dictate_loop.py`.
 //! - [`tests_transitions`] — supplementary state-transition invariants.
+//! - [`tests_history_sink`] — `HistorySink` wiring integration tests.
 
 use std::io::Write;
 
 use serde_json::{json, Value};
 
+pub mod history_sink;
 pub mod types;
 mod wire;
 
+#[cfg(test)]
+mod tests_history_sink;
 #[cfg(test)]
 mod tests_ported;
 #[cfg(test)]
@@ -51,6 +59,9 @@ mod tests_support;
 #[cfg(test)]
 mod tests_transitions;
 
+pub use history_sink::{
+    history_sink_from_settings, HistorySink, JsonlHistorySink, NoopHistorySink,
+};
 pub use types::{
     InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome, PostRedaction,
     SessionConfig, SessionError, SessionState, TranscribeBackend, TranscribeError,
@@ -126,6 +137,17 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// `VOICEPI_FEEDBACK_SOUNDS` on every call for parity with the
     /// Python engine's live env-driven gate.
     cue_sink: Box<dyn crate::dictate::feedback::CueSink + Send>,
+    /// Optional history-JSONL sink that receives the completed utterance
+    /// event alongside the worker-event emitter, mirroring Python's
+    /// `_record_utterance_event` (which calls `_emit_worker_event` AND
+    /// `append_record_sinks` on the same event dict). `None` -- the default
+    /// -- writes no history, so a session built with [`Self::new`] behaves
+    /// exactly as before this seam existed and the pre-existing tests
+    /// stay byte-identical. Sink errors are non-fatal: the implementation
+    /// logs a warning to stderr and the session continues, matching the
+    /// `try / except OSError` around `append_record_sinks` in
+    /// `vp_dictate.py::_record_utterance_event`.
+    history_sink: Option<Box<dyn HistorySink + Send>>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -144,6 +166,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             post_process: None,
             dictionary: None,
             cue_sink: Box::new(crate::dictate::feedback::NoOpCueSink),
+            history_sink: None,
         }
     }
 
@@ -160,6 +183,32 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         sink: Box<dyn crate::dictate::feedback::CueSink + Send>,
     ) -> Self {
         self.cue_sink = sink;
+        self
+    }
+
+    /// Attach a [`HistorySink`] so every completed utterance also lands in
+    /// the local JSONL history file (parity with Python's
+    /// `_record_utterance_event -> append_record_sinks`). `None` -- the
+    /// default -- keeps the pre-existing no-write behaviour. Sink errors
+    /// are non-fatal: the implementation logs a warning and the session
+    /// continues, so a broken history file can never drop a dictation.
+    ///
+    /// Passing this is opt-in: production wiring only attaches a sink when
+    /// the user has `history_enabled=true` (default) AND a resolvable
+    /// history path -- see [`history_sink_from_settings`].
+    pub fn with_history_sink(mut self, sink: Box<dyn HistorySink + Send>) -> Self {
+        self.history_sink = Some(sink);
+        self
+    }
+
+    /// Attach a history sink only when [`history_sink_from_settings`]
+    /// resolves one (i.e. the user has not disabled history). Convenience
+    /// wrapper so the real-backends factory can call `.with_optional_history_sink()`
+    /// without pre-checking the Option itself.
+    pub fn with_optional_history_sink(mut self, sink: Option<Box<dyn HistorySink + Send>>) -> Self {
+        if let Some(sink) = sink {
+            self.history_sink = Some(sink);
+        }
         self
     }
 
@@ -569,7 +618,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             // Python logs and continues — the utterance event still fires with
             // the text we attempted to inject. Surface the failure on the
             // utterance event so the supervisor can decide whether to retry.
-            wire::emit_utterance(
+            let payload = wire::emit_utterance(
                 writer,
                 &text,
                 &result,
@@ -578,9 +627,10 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 post.as_ref(),
                 &replacements,
             )?;
+            self.record_history(&payload);
             return Ok(UtteranceOutcome::Injected { text, result });
         }
-        wire::emit_utterance(
+        let payload = wire::emit_utterance(
             writer,
             &text,
             &result,
@@ -589,7 +639,22 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             post.as_ref(),
             &replacements,
         )?;
+        self.record_history(&payload);
         Ok(UtteranceOutcome::Injected { text, result })
+    }
+
+    /// Hand the just-emitted utterance payload to the history sink. A
+    /// missing sink is a no-op (matching a session built without
+    /// [`Self::with_history_sink`]). Sink errors are consumed by the
+    /// implementation itself (they log a warning to stderr and return);
+    /// this method has no failure mode surfaced to the state machine, so
+    /// a broken history file can never abort a dictation. Python parity:
+    /// `_record_utterance_event` wraps `append_record_sinks` in
+    /// `try / except OSError` and logs a warning.
+    fn record_history(&self, payload: &Value) {
+        if let Some(sink) = self.history_sink.as_ref() {
+            sink.append(payload);
+        }
     }
 
     /// Discard the in-flight recording if `requested_epoch` matches the
