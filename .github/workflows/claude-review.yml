@@ -17,15 +17,15 @@ name: Claude PR review
 on:
   pull_request:
     types: [opened]
-    # Skip prose-only PRs: no code changed = nothing for a code-review
-    # bot to review. Matches test.yml's `changes` filter so a docs-only
-    # PR that skips the test matrix also skips this review.
-    paths-ignore:
-      - '*.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.editorconfig'
-      - '.gitattributes'
+    # NO paths-ignore here, deliberately — see sonar.yml, which does
+    # have one. This workflow subscribes to `opened` ONLY, so it gets
+    # exactly one shot per pull request. Filtering that shot on paths
+    # means a PR opened with just a README edit is skipped, and if code
+    # is pushed to it afterwards the `synchronize` event has nothing
+    # subscribed to it — so the PR never gets an automatic review at
+    # all, silently, for the rest of its life. Sonar can afford the
+    # filter because it re-runs on every push; this cannot.
+    # (Codex P1 #587, confirmed by user — do NOT reintroduce.)
   # Allow manual re-trigger from the Actions tab on a stuck PR.
   workflow_dispatch:
     inputs:
