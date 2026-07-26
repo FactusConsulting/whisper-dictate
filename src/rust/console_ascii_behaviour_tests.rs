@@ -20,6 +20,7 @@ fn scan(src: &str, rel: &str) -> Vec<String> {
         rel,
         is_ui_scope(rel),
         false,
+        false,
         &mut out,
     );
     out.into_iter().map(|v| v.to_string()).collect()
@@ -255,7 +256,148 @@ fn console_bearing_attributes_are_scanned_but_doc_comments_are_not() {
     );
     assert!(
         scan(r#"#[doc = "a \u{2014} dash"] fn f() {}"#, "x.rs").is_empty(),
-        "doc comments never reach a console"
+        "doc comments on plain items never reach a console"
+    );
+}
+
+#[test]
+fn doc_comments_on_clap_derived_fields_reach_help_and_are_scanned() {
+    // Issue #590: `///` on a field of a type deriving `Parser` / `Args` /
+    // `Subcommand` / `ValueEnum` becomes `--help` text. Guard was blind
+    // to the derive context and let em dashes through.
+    let src = r#"
+        #[derive(Parser)]
+        struct Cli {
+            #[doc = "Prefer the environment \u{2014} VOICEPI_API_KEY"]
+            api_key: String,
+        }
+    "#;
+    assert_eq!(
+        scan(src, "cli.rs").len(),
+        1,
+        "field doc on a Parser struct is help text and must be reported"
+    );
+}
+
+#[test]
+fn doc_comments_on_ordinary_struct_fields_are_still_exempt() {
+    // The invariant that made the original exemption load-bearing must
+    // survive: doc comments elsewhere are prose, not console text. This
+    // test pins the negative case so a future scanner tightening cannot
+    // accidentally start flagging every `///` in the tree.
+    let src = r#"
+        #[derive(Debug)]
+        struct Plain {
+            #[doc = "Explain \u{2014} in prose"]
+            field: String,
+        }
+    "#;
+    assert!(
+        scan(src, "x.rs").is_empty(),
+        "doc on a non-clap struct is prose, not console"
+    );
+}
+
+#[test]
+fn doc_comments_on_clap_subcommand_variants_are_scanned() {
+    // Subcommand variant docs become the subcommand's `--help` line.
+    let src = r#"
+        #[derive(Subcommand)]
+        enum Command {
+            #[doc = "Do a thing \u{2014} carefully"]
+            DoIt,
+        }
+    "#;
+    assert_eq!(
+        scan(src, "cli.rs").len(),
+        1,
+        "Subcommand variant doc is help text",
+    );
+}
+
+#[test]
+fn clap_derive_can_be_path_qualified() {
+    // `#[derive(clap::Parser)]` must be recognised the same as bare
+    // `Parser` — same trait, same runtime behaviour.
+    let src = r#"
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[doc = "path-qualified \u{2014} derive"]
+            f: String,
+        }
+    "#;
+    assert_eq!(
+        scan(src, "cli.rs").len(),
+        1,
+        "path-qualified clap derive must still trigger doc scanning",
+    );
+}
+
+#[test]
+fn clap_derive_flag_does_not_leak_to_sibling_item() {
+    // Once we've consumed the derive on struct A, struct B (declared next
+    // at the same scope) must NOT inherit the clap-derived flag. If it
+    // did, ordinary sibling structs would start reporting their prose
+    // docs as help text.
+    let src = r#"
+        #[derive(Parser)]
+        struct A {
+            #[doc = "help \u{2014} text"]
+            f: String,
+        }
+
+        #[derive(Debug)]
+        struct B {
+            #[doc = "prose \u{2014} not help"]
+            g: String,
+        }
+    "#;
+    assert_eq!(
+        scan(src, "cli.rs").len(),
+        1,
+        "only A's field doc is help text; B's must stay exempt",
+    );
+}
+
+#[test]
+fn clap_derive_flag_does_not_leak_across_a_unit_struct() {
+    // `#[derive(Parser)] struct Unit;` has no brace body — the derive
+    // flag is stale. A brace-bodied sibling declared next must not
+    // inherit it.
+    let src = r#"
+        #[derive(Parser)]
+        struct Unit;
+
+        struct Plain {
+            #[doc = "prose \u{2014} not help"]
+            g: String,
+        }
+    "#;
+    assert!(
+        scan(src, "x.rs").is_empty(),
+        "the stale derive flag from a unit struct must not leak forward",
+    );
+}
+
+#[test]
+fn methods_in_impl_of_clap_type_are_not_treated_as_help() {
+    // impl blocks live at file scope, siblings of the struct. The doc
+    // on a method is API prose, not `--help` — clap only surfaces field
+    // docs from the derived-type BODY.
+    let src = r#"
+        #[derive(Parser)]
+        struct Cli {
+            f: String,
+        }
+
+        impl Cli {
+            #[doc = "internal helper \u{2014} not help text"]
+            fn helper(&self) {}
+        }
+    "#;
+    assert!(
+        scan(src, "cli.rs").is_empty(),
+        "impl-block method docs are prose, not clap help",
     );
 }
 
