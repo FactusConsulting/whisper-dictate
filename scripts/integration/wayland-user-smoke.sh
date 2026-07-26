@@ -23,6 +23,15 @@ pass=0
 fail=0
 skip=0
 
+# Cargo features observed at run time from the self-test sections below, so a
+# later section can tell a genuinely-capable binary from one that merely
+# starts. Tri-state on purpose: "unknown" means the probing section did not
+# get far enough to say (e.g. whisper-load skipped for a missing model
+# fixture, which reveals nothing about the feature), and must not be read as
+# either present or absent.
+FEATURE_WHISPER_RS_LOCAL=unknown
+FEATURE_AUDIO_IN_RUST=unknown
+
 # --- colour helpers (auto-disable when stdout isn't a TTY) ---
 if [ -t 1 ]; then
     C_BOLD_CYAN='\033[1;36m'
@@ -673,8 +682,10 @@ else
         rms="$(printf '%s' "$ac_out" | grep -oE '"rms":[^,}]+' | head -n1 | cut -d: -f2)"
         peak="$(printf '%s' "$ac_out" | grep -oE '"peak":[^,}]+' | head -n1 | cut -d: -f2)"
         quantum_branch="$(printf '%s' "$ac_out" | grep -oE '"pipewire_quantum_branch":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+        FEATURE_AUDIO_IN_RUST=yes
         ok "audio-capture: 1 s captured (rms=$rms peak=$peak quantum=$quantum_branch)"
     elif printf '%s' "$ac_out" | grep -qi "requires the .audio-in-rust. cargo feature\|rebuild with"; then
+        FEATURE_AUDIO_IN_RUST=no
         warn "self-test audio-capture requires audio-in-rust feature (skipped on this build)"
     elif printf '%s' "$ac_out" | grep -qi "no default input device\|input device not found\|no audio device delivered"; then
         warn "no audio device available (expected on headless / muted setups)"
@@ -713,8 +724,10 @@ else
     wl_rc=$?
     if [ "$wl_rc" -eq 0 ] && printf '%s' "$wl_out" | grep -q '"ok":true'; then
         elapsed=$(printf '%s' "$wl_out" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
+        FEATURE_WHISPER_RS_LOCAL=yes
         ok "whisper-load: $wl_model loaded in ${elapsed:-?}ms (status=ready)"
     elif printf '%s' "$wl_out" | grep -qi "whisper-rs-local\|rebuild with"; then
+        FEATURE_WHISPER_RS_LOCAL=no
         warn "self-test whisper-load requires whisper-rs-local feature (skipped on this build)"
     elif printf '%s' "$wl_out" | grep -qi "not in the cache\|models download"; then
         warn "self-test whisper-load: no tiny fixture cached — run 'whisper-dictate models download tiny' first"
@@ -859,55 +872,158 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust
-# reaches the Rust supervisor without spawning a Python worker child)
+# SECTION: in-process Rust runtime installs (VOICEPI_DICTATE_ENGINE=rust)
 #
-# Audit item 5 Phase B step 1. Drives the UI briefly under
-# `VOICEPI_DICTATE_ENGINE=rust` so that `RuntimeSupervisor::start`
-# actually runs the Phase B branch (`--version` returns from
-# `main::run` before the supervisor is reached, so it cannot detect a
-# regression at that branch -- Codex P2 PR #519 wayland-user-smoke.sh:646).
+# Replaces the previous `whisper-dictate ui` probe, which could NEVER pass —
+# it was structurally incapable of producing the evidence it grepped for, so
+# it warn-skipped on every run regardless of whether the code was healthy:
 #
-# On this smoke leg the required Whisper model + audio-in-rust runtime
-# are typically not present, so the strict `try_build_production_sink`
-# returns Err, `try_install` maps it to
-# `InProcessInstallError::MissingBackend`, and the supervisor emits
-# the "Phase B in-process dispatch refused" stderr line and falls
-# back to the Python worker. Grepping for that string is enough to
-# prove the branch was reached; a regression that avoided the
-# supervisor (missing import, panic before install, broken feature
-# gate, missing fallback wiring) would leave the string absent.
+#   1. `RuntimeSupervisor::start` is only reached from `start_runtime()`,
+#      whose sole callers are user interactions (ui/tabs/compact.rs and
+#      ui/tabs/shell.rs button handlers, plus restart-on-settings-save).
+#      Nothing starts the runtime on launch, so a UI that is spawned and
+#      SIGTERMed 3 s later without a single click never runs the branch.
+#   2. Even when the branch does run, its message goes to
+#      `RuntimeEvent::Stderr`, an in-process event channel that the UI
+#      renders into its own log pane via `append_runtime_log`. It never
+#      reaches process stdout/stderr, so grepping captured output cannot
+#      observe it. Confirmed empirically: the UI writes 0 bytes.
+#
+# The supervisor's Phase B branch is already covered where it can actually be
+# observed — at the event-channel level, by four dedicated Rust tests in
+# `src/rust/tests/runtime_supervisor.rs` (`supervisor_phase_b_*`), which
+# assert on the exact "Phase B in-process dispatch refused" string. The smoke
+# script should cover what those tests cannot: that the shipped binary really
+# installs the in-process runtime on this box, with this session's hotkey
+# driver and permissions.
+#
+# `dictate-run --json-events` does exactly that, and its documented first-line
+# contract is a stable `{"kind":"ready","ready":true,"engine":"rust",...}`
+# envelope on real stdout — which is what the old grep pattern was reaching
+# for. Run it bounded and gate on that envelope.
 # --------------------------------------------------------------------------
-section "Phase B in-process dispatch (VOICEPI_DICTATE_ENGINE=rust reaches Rust supervisor)"
-if [ "$CMD_MODE" = "rust" ]; then
-    if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-        warn "phase B verify skipped: no DISPLAY / WAYLAND_DISPLAY (headless environment cannot drive the UI)"
-    else
-        phaseB_log="$(mktemp)"
-        # 3s is enough for the supervisor to reach `attempt_in_process_start`
-        # and emit either the success ready event or the fallback stderr line.
-        # `timeout` returns 124 on the SIGTERM; a real crash would return
-        # 101 (Rust panic) or similar. We treat 124 as "expected" — the UI
-        # was supposed to be killed.
-        VOICEPI_DICTATE_ENGINE=rust timeout --preserve-status --kill-after=1s 3s \
-            whisper-dictate ui >"$phaseB_log" 2>&1
-        phaseB_rc=$?
-        # Look for evidence the Phase B branch was actually taken.
-        # Either the ready event (successful in-process install) OR the
-        # refused-stderr line (fallback path) proves the supervisor
-        # reached `attempt_in_process_start`. Either is a pass.
-        if grep -qE '(Phase B in-process dispatch refused|"engine":"rust"|engine=rust \(in-process\))' "$phaseB_log"; then
-            evidence="$(grep -E '(Phase B in-process dispatch refused|"engine":"rust"|engine=rust \(in-process\))' "$phaseB_log" | head -1)"
-            ok "Phase B branch reached RuntimeSupervisor::start: ${evidence:0:200}"
-        elif [ "$phaseB_rc" -eq 101 ]; then
-            bad "UI panicked under VOICEPI_DICTATE_ENGINE=rust: $(tail -3 "$phaseB_log")"
-        else
-            warn "Phase B branch evidence not found in ${phaseB_rc}-exit UI log (may indicate the supervisor branch was not reached): $(head -c 300 "$phaseB_log")"
-        fi
-        rm -f "$phaseB_log"
-    fi
+section "in-process Rust runtime installs (dictate-run --json-events)"
+if [ "$CMD_MODE" != "rust" ]; then
+    warn "dictate-run is a Rust subcommand — not exposed by the Python fallback"
 else
-    warn "phase B verification requires the Rust binary on PATH (Python-only build)"
+    # stdout and stderr are captured SEPARATELY. The first-line ready
+    # envelope is a stdout contract, and stderr carries pre-ready chatter
+    # that would otherwise win the `head -n 1` race: `load_settings()` prints
+    # the parakeet migration warnings (config/load.rs) before the envelope,
+    # and a failed Ctrl-C handler install warns from dictate_run.rs too.
+    # Folding them together with `2>&1` would fail a perfectly healthy
+    # runtime on any box that trips one of those paths.
+    dictaterun_out="$(mktemp)"
+    dictaterun_err="$(mktemp)"
+    # 3 s is ample: the ready envelope is printed once the listener + sink
+    # are installed, well under a second on this class of box. The verb runs
+    # until Ctrl-C by design, so the SIGTERM is the expected end — gate on
+    # the envelope, not on the exit status (`--preserve-status` surfaces the
+    # signal as 143/15, which is success here, while a genuine startup
+    # refusal exits non-zero on its own before the timeout fires).
+    #
+    # Nothing is injected: dictate-run only acts on a real PTT chord press,
+    # and no keys are synthesised here.
+    timeout --preserve-status --kill-after=1s 3s \
+        whisper-dictate dictate-run --json-events \
+        >"$dictaterun_out" 2>"$dictaterun_err"
+    dictaterun_rc=$?
+    dictaterun_first="$(head -n 1 "$dictaterun_out")"
+    # Classify startup diagnostics across both streams.
+    dictaterun_diag="$(cat "$dictaterun_out" "$dictaterun_err")"
+    if printf '%s' "$dictaterun_first" | grep -q '"kind":"ready"' \
+       && printf '%s' "$dictaterun_first" | grep -q '"engine":"rust"'; then
+        # `dictate-run` builds its sink with the LENIENT
+        # `rust_session_sink::build_production_sink`, which silently drops to
+        # the PR 4 stub backends when real-backend construction fails (no
+        # cached model, VOICEPI_WHISPER_MODEL_PATH unset, …) and still
+        # reports ready. Reporting a green "runtime ready" there would claim
+        # a transcribing binary that cannot transcribe. The degrade is
+        # observable: the sink emits a RuntimeEvent::Stderr that
+        # `--json-events` re-emits on stdout as
+        # `{"kind":"stderr","line":"[rust-session] real backend init failed …"}`.
+        #
+        # Warn rather than fail, matching how the neighbouring sections
+        # already classify the two things that trigger it — a missing model
+        # (`self-test whisper-load`) and a missing feature (`self-test
+        # audio-capture`) are warn-skips there too. What matters is that this
+        # section stops claiming readiness it did not verify.
+        #
+        # The event only exists when the real-backend block was COMPILED IN.
+        # Without `whisper-rs-local` the block is `#[cfg]`-ed out entirely and
+        # the stubs are installed silently, leaving nothing to observe — so
+        # the event check alone would fall straight through to `ok` on a
+        # binary that cannot transcribe. Cover that build from the other side,
+        # using the feature verdicts the self-test sections above recorded.
+        # `unknown` deliberately does NOT trigger this: a whisper-load skip
+        # for a missing model fixture says nothing about the feature, and
+        # treating silence as absence would fire on every un-cached box.
+        #
+        # A known-absent feature is a hard FAIL, not a skip. This script is the
+        # release-verification step, and a binary that installs its runtime but
+        # can never transcribe is exactly the thing a release must not ship —
+        # letting the run exit 0 there would make the whole smoke a rubber
+        # stamp. Building without the features is still fine as a dev
+        # configuration; it just is not something this script can bless.
+        if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
+            stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
+            warn "runtime installed but degraded to stub backends — cannot transcribe (${stub_reason:-reason not reported})"
+        elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ] || [ "$FEATURE_AUDIO_IN_RUST" = "no" ]; then
+            bad "runtime installs, but this build lacks whisper-rs-local=$FEATURE_WHISPER_RS_LOCAL / audio-in-rust=$FEATURE_AUDIO_IN_RUST — the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+        # A terminal audio failure during the window (mic disconnect, capture
+        # callback error, resampler/VAD failure) stops the pump permanently
+        # and re-emits `[rust-session-audio] device error` on stdout AFTER the
+        # ready line. Ready-then-dead is not ready.
+        elif grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then
+            bad "audio pump died after install — no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
+        else
+            # Surface the resolved driver + chord: on Wayland the driver MUST
+            # be evdev (rdev's XRecord path is deaf there), so a silent flip
+            # back to rdev is exactly the regression worth seeing here.
+            dr_driver="$(printf '%s' "$dictaterun_first" | grep -oE '"driver":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+            dr_chord="$(printf '%s' "$dictaterun_first" | grep -oE '"chord":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+            ok "in-process Rust runtime ready (driver=${dr_driver:-?} chord=${dr_chord:-?})"
+            if [ "$SESSION" = "wayland" ] && [ -n "$dr_driver" ] && [ "$dr_driver" != "evdev" ]; then
+                bad "Wayland session resolved driver=$dr_driver — only evdev can observe keys under Wayland"
+            fi
+        fi
+    elif printf '%s' "$dictaterun_diag" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
+        warn "dictate-run requires rust-hotkeys,rust-injection features (skipped on this build)"
+    # Listener refusals: the WRAPPER TEXT CANNOT CLASSIFY THEM. Every
+    # `InstallError::ListenerStartup` is rendered by dictate_run.rs:192 as
+    #
+    #   hotkey listener failed to start ({msg}); on Linux without an X display
+    #   this is expected — … or use the evdev backend if you have
+    #   `/dev/input/*` permissions
+    #
+    # so the string ALWAYS mentions both "X display" and "/dev/input",
+    # whatever the real cause. Matching on either turns the branch into a
+    # catch-all that silently downgrades genuine breakage — "manager thread
+    # spawn failed", "evdev reader thread spawn failed", "listener thread did
+    # not report readiness" — to a skip, letting a release-verification run
+    # exit 0 on a runtime that cannot arm at all. (An earlier revision of this
+    # section did exactly that in the other direction: it reported a headless
+    # box as a permissions problem, because the hint mentions /dev/input.)
+    #
+    # So classify on things that are NOT the wrapper:
+    #   - the inner message, for the one cause with distinctive wording
+    #     (evdev's "no readable keyboard found under /dev/input … usermod -aG
+    #     input $USER"), and
+    #   - the ENVIRONMENT, for the headless case — if there is no display at
+    #     all, an rdev refusal is expected here exactly as it is in the
+    #     `hotkey capture` section above.
+    # Anything else is a hard failure.
+    elif printf '%s' "$dictaterun_diag" | grep -qi "no readable keyboard\|usermod -aG input"; then
+        warn "dictate-run: user lacks /dev/input access (add user to the 'input' group)"
+    elif [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
+         && printf '%s' "$dictaterun_diag" | grep -qi "listener failed to start"; then
+        warn "dictate-run: hotkey listener unavailable without a display (expected on headless / WSL)"
+    elif [ "$dictaterun_rc" -eq 101 ]; then
+        bad "dictate-run panicked: $(tail -n 3 "$dictaterun_err")"
+    else
+        bad "in-process Rust runtime did not report ready (exit $dictaterun_rc): $(printf '%s' "$dictaterun_diag" | head -c 300)"
+    fi
+    rm -f "$dictaterun_out" "$dictaterun_err"
 fi
 
 # --------------------------------------------------------------------------
