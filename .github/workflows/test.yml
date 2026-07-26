@@ -401,7 +401,7 @@ jobs:
   # branch protection reads the context names verbatim.
   # ---------------------------------------------------------------------------
   rust:
-    needs: [changes, rust-features]
+    needs: [changes, rust-features, rust-release]
     if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
@@ -422,7 +422,18 @@ jobs:
         run: |
           echo "::error::rust-features matrix did not succeed (result=${{ needs.rust-features.result }}); failing required \`rust (${{ matrix.os }})\` check"
           exit 1
-      - run: echo "rust aggregator OK for ${{ matrix.os }} — rust-features matrix passed"
+      - name: Fail required check if rust-release matrix did not succeed
+        # Codex P2 #581: the Windows release CLI-output smoke (#564) and
+        # injection-idempotency (Codex #518 F6) live in rust-release and
+        # would otherwise NOT gate the required check — a red
+        # `rust-release (windows-2025)` on a PR would still let the
+        # aggregator go green and the regression could merge. Gating on
+        # rust-release.result closes that gap. `skipped` is fine (docs-only PR).
+        if: needs.rust-release.result != 'success' && needs.rust-release.result != 'skipped'
+        run: |
+          echo "::error::rust-release matrix did not succeed (result=${{ needs.rust-release.result }}); failing required \`rust (${{ matrix.os }})\` check to prevent a Windows regression from merging under a green required context"
+          exit 1
+      - run: echo "rust aggregator OK for ${{ matrix.os }} — rust-features + rust-release passed"
 
   # ---------------------------------------------------------------------------
   # rust-release: release-profile builds + release-mode regression smokes.

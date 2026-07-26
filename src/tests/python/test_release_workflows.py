@@ -633,12 +633,20 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         rust_body = m.group("body")
         # (a) both required matrix legs preserved.
         self.assertIn("os: [ubuntu-latest, windows-2025]", rust_body)
-        # (b) aggregator depends on rust-features (order-agnostic).
-        self.assertRegex(
-            rust_body,
-            r"needs:\s*\[\s*(?:changes\s*,\s*rust-features|rust-features\s*,\s*changes)\s*\]",
-            "the `rust` aggregator must `needs: [changes, rust-features]`"
-            " so the required check gates on the feature-split matrix",
+        # (b) aggregator depends on BOTH rust-features AND rust-release
+        # (Codex P2 #581: without rust-release in `needs`, a red Windows
+        # release guard would leave the required context green and let
+        # regressions merge). Order-agnostic on `changes`; both feature
+        # and release jobs must appear.
+        m2 = re.search(r"needs:\s*\[([^\]]+)\]", rust_body)
+        self.assertIsNotNone(m2, "`rust:` must declare a `needs:` list")
+        needs_list = {n.strip() for n in m2.group(1).split(",")}
+        self.assertIn("changes", needs_list)
+        self.assertIn("rust-features", needs_list)
+        self.assertIn(
+            "rust-release", needs_list,
+            "the `rust` aggregator must also `needs: rust-release` so a"
+            " red Windows release guard fails the required context (Codex P2 #581)",
         )
         # (c) explicit fail step on non-success/non-skipped rust-features result.
         self.assertIn(
@@ -646,6 +654,13 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             rust_body,
             "the aggregator must FAIL when rust-features didnt succeed"
             " (skipped is fine — that is the docs-only-PR path)",
+        )
+        # (d) same guard for rust-release (Codex P2 #581 follow-up).
+        self.assertIn(
+            "needs.rust-release.result != 'success' && needs.rust-release.result != 'skipped'",
+            rust_body,
+            "the aggregator must FAIL when rust-release didnt succeed"
+            " so Windows regressions (#564 / Codex #518 F6) block the required check",
         )
 
     def test_rust_release_keeps_windows_guards_on_pr_ci(self):
