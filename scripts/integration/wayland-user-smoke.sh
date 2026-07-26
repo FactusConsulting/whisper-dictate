@@ -93,9 +93,11 @@ detect_session() {
 #      An unrecognised value (or `auto`/empty) falls back to Auto, i.e. to
 #      session detection, which is what the fall-through below does.
 #   3. `is_wayland_session()` is an OR of XDG_SESSION_TYPE=wayland (matched
-#      case-insensitively) and a non-empty WAYLAND_DISPLAY. Either alone
-#      selects evdev, so a Wayland box that exports only the session type
-#      still gets evdev.
+#      case-insensitively, NOT trimmed) and a WAYLAND_DISPLAY that is
+#      non-empty AFTER TRIMMING. Either alone selects evdev, so a Wayland box
+#      that exports only the session type still gets evdev — while a
+#      whitespace-only WAYLAND_DISPLAY counts as unset and leaves rdev
+#      selected. The asymmetry is real: the Rust trims one and not the other.
 #
 # See `resolve_hotkey_driver_selftest` below for the regression cases.
 # --------------------------------------------------------------------------
@@ -113,8 +115,12 @@ resolve_hotkey_driver() {
     if [ "$(uname -s 2>/dev/null)" != "Linux" ]; then
         echo "rdev"; return
     fi
+    # XDG_SESSION_TYPE: case-folded, NOT trimmed (mirrors eq_ignore_ascii_case).
     _xdg="$(printf '%s' "${XDG_SESSION_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
-    if [ "$_xdg" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    # WAYLAND_DISPLAY: trimmed before the emptiness test (mirrors
+    # `!v.trim().is_empty()`), so a whitespace-only value counts as unset.
+    _wl="$(printf '%s' "${WAYLAND_DISPLAY:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ "$_xdg" = "wayland" ] || [ -n "$_wl" ]; then
         echo "evdev"
     else
         echo "rdev"
@@ -134,15 +140,39 @@ resolve_hotkey_driver_selftest() {
         [ "$_got" = "$1" ] || _drv_fails="${_drv_fails}
       driver=$(printf '%q' "$2") xdg=$(printf '%q' "$3") wl=$(printf '%q' "$4") -> $_got, expected $1"
     }
-    #         expect  DRIVER      XDG        WAYLAND_DISPLAY
-    _drv_case rdev    ""          ""         ""
-    _drv_case evdev   ""          "wayland"  ""
-    _drv_case evdev   ""          "Wayland"  ""
-    _drv_case evdev   ""          ""         "wayland-0"
-    _drv_case rdev    ""          "x11"      ""
-    _drv_case rdev    "auto"      ""         ""
-    _drv_case evdev   "auto"      "wayland"  ""
-    # Explicit override outranks session detection, in both directions.
+
+    # Session detection is Linux-only in the Rust (`#[cfg(target_os = "linux")]`
+    # around the Auto arm); every other platform falls through to rdev
+    # unconditionally. So the expectation for a Wayland-looking environment is
+    # NOT a constant — on Git Bash, which this script explicitly supports,
+    # `$WAYLAND` below is rdev and hard-coding evdev would fail the self-test
+    # and take the whole run down on a perfectly healthy box.
+    if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+        WAYLAND_AUTO=evdev
+    else
+        WAYLAND_AUTO=rdev
+    fi
+
+    # -- Auto / session detection (platform-dependent expectations) ----------
+    #         expect         DRIVER      XDG        WAYLAND_DISPLAY
+    _drv_case rdev           ""          ""         ""
+    _drv_case "$WAYLAND_AUTO" ""         "wayland"  ""
+    _drv_case "$WAYLAND_AUTO" ""         "Wayland"  ""
+    _drv_case "$WAYLAND_AUTO" ""         ""         "wayland-0"
+    _drv_case rdev           ""          "x11"      ""
+    _drv_case rdev           "auto"      ""         ""
+    _drv_case "$WAYLAND_AUTO" "auto"     "wayland"  ""
+    # XDG_SESSION_TYPE is compared WITHOUT trimming in the Rust, so a padded
+    # value does not count as Wayland.
+    _drv_case rdev           ""          " wayland " ""
+    # WAYLAND_DISPLAY *is* trimmed, so whitespace-only counts as unset.
+    _drv_case rdev           ""          ""         "   "
+    _drv_case "$WAYLAND_AUTO" ""         ""         "  wayland-0  "
+    # Unrecognised driver values fall back to Auto, i.e. session detection.
+    _drv_case "$WAYLAND_AUTO" "nonsense" "wayland"  ""
+    _drv_case rdev           "nonsense"  ""         ""
+
+    # -- Explicit overrides (platform-independent: parsed before detection) --
     _drv_case evdev   "evdev"     ""         ""
     _drv_case rdev    "rdev"      "wayland"  "wayland-0"
     # Aliases (DriverKind::parse) — the case this self-test exists for.
@@ -152,12 +182,9 @@ resolve_hotkey_driver_selftest() {
     _drv_case evdev   "  evdev  " ""         ""
     _drv_case rdev    "  X11 "    "wayland"  ""
     _drv_case evdev   "EVDEV"     ""         ""
-    # Unrecognised values fall back to Auto, i.e. session detection.
-    _drv_case evdev   "nonsense"  "wayland"  ""
-    _drv_case rdev    "nonsense"  ""         ""
 
     if [ -z "$_drv_fails" ]; then
-        ok "hotkey-driver resolution mirrors DriverKind::parse + resolve_driver"
+        ok "hotkey-driver resolution mirrors DriverKind::parse + resolve_driver (auto=$WAYLAND_AUTO on $(uname -s 2>/dev/null || echo unknown))"
     else
         bad "hotkey-driver mirror has drifted from the Rust:$_drv_fails"
     fi
@@ -1074,18 +1101,18 @@ else
         if grep -q "falling back to PR 4 stub backends" "$dictaterun_out"; then
             stub_reason="$(grep -o "real backend init failed ([^)]*)" "$dictaterun_out" | head -n 1)"
             if grep -q "audio-in-rust feature not compiled in" "$dictaterun_out"; then
-                bad "runtime installs, but this build lacks audio-in-rust — the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+                bad "runtime installs, but this build lacks audio-in-rust - the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
             else
-                warn "runtime installed but degraded to stub backends — cannot transcribe (${stub_reason:-reason not reported})"
+                warn "runtime installed but degraded to stub backends - cannot transcribe (${stub_reason:-reason not reported})"
             fi
         elif [ "$FEATURE_WHISPER_RS_LOCAL" = "no" ]; then
-            bad "runtime installs, but this build lacks whisper-rs-local — the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
+            bad "runtime installs, but this build lacks whisper-rs-local - the session runs on stub backends and cannot transcribe; rebuild with --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local"
         # A terminal audio failure during the window (mic disconnect, capture
         # callback error, resampler/VAD failure) stops the pump permanently
         # and re-emits `[rust-session-audio] device error` on stdout AFTER the
         # ready line. Ready-then-dead is not ready.
         elif grep -q "\[rust-session-audio\] device error" "$dictaterun_out"; then
-            bad "audio pump died after install — no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
+            bad "audio pump died after install - no frames can reach the session: $(grep -o '\[rust-session-audio\] device error[^"]*' "$dictaterun_out" | head -c 200)"
         else
             # Surface the resolved driver + chord: on Wayland the driver MUST
             # be evdev (rdev's XRecord path is deaf there), so a silent flip
@@ -1094,7 +1121,7 @@ else
             dr_chord="$(printf '%s' "$dictaterun_first" | grep -oE '"chord":"[^"]+"' | cut -d: -f2 | tr -d '"')"
             ok "in-process Rust runtime ready (driver=${dr_driver:-?} chord=${dr_chord:-?})"
             if [ "$SESSION" = "wayland" ] && [ -n "$dr_driver" ] && [ "$dr_driver" != "evdev" ]; then
-                bad "Wayland session resolved driver=$dr_driver — only evdev can observe keys under Wayland"
+                bad "Wayland session resolved driver=$dr_driver - only evdev can observe keys under Wayland"
             fi
         fi
     elif printf '%s' "$dictaterun_diag" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
@@ -1131,10 +1158,10 @@ else
     #     display variables.
     # Anything else is a hard failure.
     elif printf '%s' "$dictaterun_diag" | grep -qi "no readable keyboard\|usermod -aG input"; then
-        warn "dictate-run: user lacks /dev/input access (add user to the 'input' group)"
+        warn "dictate-run: user lacks /dev/input access (add user to the 'input' group) - NOTE: backend capability was NOT verified, the sink's event stream is only drained after the listener installs"
     elif [ "$(resolve_hotkey_driver)" = "rdev" ] && [ -z "${DISPLAY:-}" ] \
          && printf '%s' "$dictaterun_diag" | grep -qi "listener failed to start"; then
-        warn "dictate-run: rdev hotkey listener unavailable without a display (expected on headless / WSL)"
+        warn "dictate-run: rdev hotkey listener unavailable without a display (expected on headless / WSL) - NOTE: backend capability was NOT verified, the sink's event stream is only drained after the listener installs"
     elif [ "$dictaterun_rc" -eq 101 ]; then
         bad "dictate-run panicked: $(tail -n 3 "$dictaterun_err")"
     else
