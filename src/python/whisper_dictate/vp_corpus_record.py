@@ -20,10 +20,10 @@ Blue Yeti included). A tiny :class:`_Recorder` mixes in
   * :func:`vp_capture._resample_capture_buffer` — native-rate→16k resample reuse,
   * :meth:`CaptureMixin._stop_capture_streams` — clean teardown.
 
-Like ``--test-audio-device``, this NEVER raises out: every failure (unknown id,
-missing device, no corpus, sounddevice unavailable) is reported as a single
-``corpus_record_error`` JSON line on stdout and the worker exits 0. The UI parses
-the start/progress/done/error lines.
+Never raises out: every failure (unknown id, missing device, no corpus,
+sounddevice unavailable) is reported as a single ``corpus_record_error`` JSON
+line on stdout and the worker exits 0. The UI parses the start/progress/done/error
+lines.
 """
 from __future__ import annotations
 

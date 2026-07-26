@@ -8,11 +8,6 @@ use crate::runtime::{
     audio_devices_command, doctor_command, install_command, run_capture, windows_command,
     WorkerCommand,
 };
-// The Python shell-out constructor is only referenced on stock builds — the
-// native probe replaces it when `audio-capture` is on. Importing conditionally
-// keeps the unused-import lint happy without a per-branch allow attribute.
-#[cfg(not(feature = "audio-capture"))]
-use crate::runtime::test_audio_device_command;
 use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 
@@ -76,22 +71,27 @@ impl WhisperDictateApp {
     ///
     /// On `audio-capture` builds (the shipping binary) this runs the native
     /// cpal probe in a background thread and synthesises a
-    /// [`BackgroundTaskResult`] with the same single-line JSON envelope the
-    /// Python `--test-audio-device` query mode used to print — no subprocess,
-    /// no Python. Stock builds keep the Python shell-out fallback so a dev
-    /// build without cpal (rare) still shows the ✓/⚠/✗ pill.
+    /// [`BackgroundTaskResult`] with a single-line JSON envelope the UI parser
+    /// consumes — no subprocess, no Python. Step 2 of the `vp_device_test.py`
+    /// retirement removed the stock-build Python shell-out fallback: dev
+    /// builds without `audio-capture` log a "feature not enabled" message and
+    /// leave the ✓/⚠/✗ pill empty. Release binaries always ship with
+    /// `audio-capture`, so this only affects local dev builds.
     pub(in crate::ui) fn run_test_audio_device(&mut self) {
         // Clear any previous result so the user sees the in-flight "Testing…"
         // state and never a stale outcome from the last device.
         self.device_test_result = None;
-        let name = self.settings.audio_device.trim().to_owned();
         #[cfg(feature = "audio-capture")]
         {
+            let name = self.settings.audio_device.trim().to_owned();
             self.run_native_device_test(name);
         }
         #[cfg(not(feature = "audio-capture"))]
         {
-            self.run_background_command(TEST_AUDIO_DEVICE_LABEL, test_audio_device_command(&name));
+            self.append_runtime_log(
+                "[ui] microphone test unavailable: this dev build lacks the \
+                 `audio-capture` feature (rebuild with --features audio-capture)",
+            );
         }
     }
 

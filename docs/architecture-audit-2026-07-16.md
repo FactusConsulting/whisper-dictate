@@ -338,13 +338,22 @@ implementation is JSONL, not SQLite. `grep -r sqlite` returns nothing in
 
 ### 9. Audio devices (list, select, test microphone)
 
+> **Update (post-audit):** the `vp_device_test.py` mic-open probe was
+> retired in two PRs. Step 1 (#600) added the native Rust cpal probe at
+> `src/rust/audio/device_probe.rs` behind the `audio-capture` feature and
+> wired `whisper-dictate devices test <NAME>` + the UI's "Test Device"
+> button to it. Step 2 deleted `vp_device_test.py`, the
+> `--test-audio-device` argparse flag, and the Python fallback in the
+> Rust CLI/UI. The native probe is now the sole surface; the "Gap" +
+> "Effort estimate" lines below refer to the pre-retirement state.
+
 - **Core logic (Python):** `src/python/whisper_dictate/vp_devices.py`
   (561 LOC) — PortAudio/sounddevice enumeration, WASAPI/DirectSound/MME/WDM-KS
   duplicate collapsing, name matching. Called by
   `--list-audio-devices` (vp_cli.py:211-217) and by the Settings UI.
-- **Core logic (Python):** `vp_device_test.py` (280 LOC) — the
+- **Core logic (Rust):** `src/rust/audio/device_probe.rs` — the
   "dry-run open the mic" test that mirrors the same WASAPI open matrix as
-  capture.
+  capture. Replaced the retired Python `vp_device_test.py` (was 280 LOC).
 - **Core logic (Rust — parallel):** `src/rust/devices.rs` — cpal-based
   enumerator with the same JSON envelope shape the Settings UI reads.
   Gated on `--features audio-in-rust`. Called via
@@ -352,26 +361,23 @@ implementation is JSONL, not SQLite. `grep -r sqlite` returns nothing in
 - **UI:** `src/rust/ui/audio_devices.rs`, `ui/device_test.rs`,
   `ui/audio_device_picker_tests.rs` (unit-tested picker logic).
 - **CLI adapter:**
-  - Rust public: `whisper-dictate devices` (cli.rs:239-241) — JSON list.
-  - Python: `whisper-dictate run --list-audio-devices`,
-    `--test-audio-device NAME` (vp_cli.py:211-217, 213-217).
-  - **No Rust CLI for the microphone-open probe** — that's Python-only.
+  - Rust public: `whisper-dictate devices` (cli.rs:239-241) — JSON list;
+    `whisper-dictate devices test <NAME>` — native mic-open probe.
+  - Python: `whisper-dictate run --list-audio-devices` (vp_cli.py).
 - **Headless testable:** **Partial.**
-  - Python: `test_audio_device_listing.py`, `test_device_test_mode.py`,
-    `test_devices_rust_backend.py`.
+  - Python: `test_audio_device_listing.py`, `test_devices_rust_backend.py`.
   - Rust: `ui/audio_device_picker_tests.rs` covers the picker; devices.rs
     itself has unit tests around the enumeration shape but real cpal
     enumeration is host-dependent.
   - **Cannot** headless-test opening a real mic device (no audio hardware
     on CI Linux runners; PulseAudio dummy sink is a workaround, not tested).
 - **Gap:**
-  - Rust has no `devices test NAME` (dry-open probe) verb.
   - Python `vp_devices.py` is 561 LOC of PortAudio glue that will need to
     move to Rust or stay Python-owned depending on how far
     `--features audio-in-rust` graduates.
-- **Effort estimate:** **medium** to port `vp_device_test.py` to Rust (the
-  cpal open-config matrix mirrors what Python does with sounddevice);
-  **large** to retire `vp_devices.py` and cut over the Settings UI default.
+- **Effort estimate:** **large** to retire `vp_devices.py` and cut over
+  the Settings UI default. (The `vp_device_test.py` retirement is done —
+  see the update note above.)
 
 ---
 
@@ -495,17 +501,16 @@ sweep; enables shell-scripted smoke tests in the Ubuntu 26.04 CI container
 **Deliverable:** ~150 LOC across `cli.rs` + six handler stubs plus tests.
 **Effort:** ~1 day per verb group; ~3-4 days total.
 
-### 3. Port `vp_device_test.py` (mic-open probe) to Rust; add `whisper-dictate devices test NAME`
+### 3. Port `vp_device_test.py` (mic-open probe) to Rust; add `whisper-dictate devices test NAME` — **DONE**
 
-**Why now:** The cpal open-config matrix in `src/rust/audio/capture.rs`
-already exercises the same negotiation path as
-`vp_device_test._probe_device`. Moving it to Rust closes the last gap
-in the "devices" feature and starts to justify defaulting
-`VOICEPI_DEVICES_BACKEND=rust`. Also enables headless "does the mic even
-open" checks in CI containers with a PulseAudio dummy sink.
-**Deliverable:** `src/rust/devices.rs::test_open(name)` + `devices test`
-subcommand + unit tests.
-**Effort:** ~2 days (needs cross-platform host-specific config matrix work).
+**Status:** shipped in two PRs after this audit. Step 1 (#600) added the
+native cpal probe at `src/rust/audio/device_probe.rs` (behind the
+`audio-capture` feature) and wired the `whisper-dictate devices test
+<NAME>` verb + the UI's "Test Device" button to it. Step 2 deleted
+`vp_device_test.py`, the `--test-audio-device` argparse flag, and the
+Rust CLI/UI's Python fallback — the native probe is the sole surface.
+Non-`audio-capture` dev builds lose the CLI verb + UI button (documented
+regression; release binary always ships with `audio-capture`).
 
 ### 4. Retire Python parity implementations of dictionary training / suggest
 
@@ -689,6 +694,6 @@ effort:
 | Config | `config/mod.rs` + submodules | `vp_config.py` (compat) | `config {path,show}` |
 | History | `telemetry.rs` | `vp_history.py` (adapter) | `history {list,last}`, `append-*` (hidden) |
 | Prompt building | `dictionary::build_prompt` in `dictionary/mod.rs` | `vp_transcribe._dictionary_runtime` | `dictionary status` (indirectly), `dictionary-runtime` (hidden) |
-| Audio devices | `devices.rs` (feature-gated) | `vp_devices.py`, `vp_device_test.py` | `devices` |
+| Audio devices | `devices.rs` (feature-gated), `audio/device_probe.rs` | `vp_devices.py` | `devices`, `devices test <NAME>` |
 | UI | `ui/*` (egui) | — | `ui`, `settings` |
 | Runtime orchestration | `runtime.rs`, `dictate/session/`, `dictate/audio_route/`, `dictate/backends/` | `runtime.py`, `vp_dictate.py` | `run`, `ui`, `dictate-ops` (hidden) |

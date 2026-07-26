@@ -319,7 +319,10 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("tray must stay alive", workflow)
 
         # Worker no-model audio query modes, minimal deps only (no heavy ML).
-        self.assertIn("--test-audio-device", workflow)
+        # Note: --test-audio-device was retired in the vp_device_test.py step-2
+        # PR — the native `whisper-dictate devices test` CLI verb replaces it,
+        # so the smoke gate now covers only --list-audio-devices on the Python
+        # side.
         self.assertIn("--list-audio-devices", workflow)
         self.assertIn("sounddevice", workflow)
         for excluded in ("faster-whisper", "torch", "ctranslate2"):

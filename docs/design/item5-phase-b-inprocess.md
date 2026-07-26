@@ -393,5 +393,7 @@ bake gate.
   outright.** Even after Phase C, users may want to run the Python
   worker directly for debugging; the entrypoint stays until we have
   a Rust replacement for every one of its `--doctor`,
-  `--list-audio-devices`, `--test-audio-device`,
-  `--record-corpus-item` flags (see `worker_command.rs:132-262`).
+  `--list-audio-devices`, `--record-corpus-item` flags (see
+  `worker_command.rs`). The `--test-audio-device` flag was retired
+  in the `vp_device_test.py` step-2 PR; the native `whisper-dictate
+  devices test <NAME>` verb is the sole surface.
