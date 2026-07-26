@@ -44,6 +44,23 @@ impl HistorySink for CapturingSink {
     }
 }
 
+/// Shared-Arc wrapper around a [`CapturingSink`] so the test can retain a
+/// handle for `snapshot()` while the session takes ownership of the boxed
+/// sink. Extracted once here — each test just calls
+/// [`shared_sink()`] instead of re-declaring the wrapper.
+struct SharedSink(std::sync::Arc<CapturingSink>);
+impl HistorySink for SharedSink {
+    fn append(&self, event: &Value) {
+        self.0.append(event);
+    }
+}
+
+fn shared_sink() -> (std::sync::Arc<CapturingSink>, Box<dyn HistorySink + Send>) {
+    let inner = std::sync::Arc::new(CapturingSink::new());
+    let boxed: Box<dyn HistorySink + Send> = Box::new(SharedSink(std::sync::Arc::clone(&inner)));
+    (inner, boxed)
+}
+
 /// Handing the same-shaped payload as the worker-event emitter -- with
 /// `ts` and `text` fields -- verifies that the session hooks
 /// `record_history` into the successful-utterance branch.
@@ -53,19 +70,8 @@ fn successful_utterance_calls_history_sink() {
     let inject = TestInject::new();
     let (mut s, mut buf, _guard) = session(transcribe, inject);
 
-    // Wrap the capturing sink in an Arc-alike shim: we clone the box via
-    // an intermediate helper so the test can still see what was captured.
-    // Since Box<dyn HistorySink> would move ownership, we wrap the
-    // capturing sink in a small forwarder that shares state with a
-    // test-owned Arc.
-    struct SharedSink(std::sync::Arc<CapturingSink>);
-    impl HistorySink for SharedSink {
-        fn append(&self, event: &Value) {
-            self.0.append(event);
-        }
-    }
-    let captured = std::sync::Arc::new(CapturingSink::new());
-    s = s.with_history_sink(Box::new(SharedSink(std::sync::Arc::clone(&captured))));
+    let (captured, sink) = shared_sink();
+    s = s.with_history_sink(sink);
 
     s.start(&mut buf).expect("start");
     s.push_frame(&one_second_pcm());
@@ -100,14 +106,8 @@ fn inject_failure_still_calls_history_sink() {
     let inject = TestInject::failing("no display");
     let (mut s, mut buf, _guard) = session(transcribe, inject);
 
-    struct SharedSink(std::sync::Arc<CapturingSink>);
-    impl HistorySink for SharedSink {
-        fn append(&self, event: &Value) {
-            self.0.append(event);
-        }
-    }
-    let captured = std::sync::Arc::new(CapturingSink::new());
-    s = s.with_history_sink(Box::new(SharedSink(std::sync::Arc::clone(&captured))));
+    let (captured, sink) = shared_sink();
+    s = s.with_history_sink(sink);
 
     s.start(&mut buf).expect("start");
     s.push_frame(&one_second_pcm());
