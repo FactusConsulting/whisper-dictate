@@ -176,20 +176,20 @@ class _DictionaryAction(argparse.Action):
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--key", default=KEY,
-                    help="pynput Key name held to talk (ctrl_r, alt_r, f9…) "
+                    help="pynput Key name held to talk (ctrl_r, alt_r, f9...) "
                          "or chord: shift_r+ctrl_r; env VOICEPI_KEY")
     ap.add_argument("--model", default=MODEL_NAME,
                     help="Whisper model (default large-v3-turbo, fastest; "
                          "env VOICEPI_MODEL)")
     ap.add_argument("--lang", default=LANG,
-                    help="spoken-language hint: da, en, de, fr… "
-                         "(env VOICEPI_LANG) — omit to let Whisper auto-detect")
+                    help="spoken-language hint: da, en, de, fr... "
+                         "(env VOICEPI_LANG) - omit to let Whisper auto-detect")
     ap.add_argument("--autodetect", action="store_true",
                     help="explicitly auto-detect language (alias for omitting --lang)")
     ap.add_argument("--prompt", default=None, metavar="TEXT",
                     help="override the domain-vocabulary hint seeded into "
                          "Whisper's initial prompt for this run, e.g. "
-                         "\"Kubernetes, Proxmox, LiteLLM, ansible\" — wins over "
+                         "\"Kubernetes, Proxmox, LiteLLM, ansible\" - wins over "
                          "VOICEPI_INITIAL_PROMPT / the Quality tab's Initial "
                          "prompt (omit to use those); pass \"\" to disable it")
     g = ap.add_mutually_exclusive_group()
@@ -326,13 +326,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="extract domain terms from the golden-corpus reference TEXT "
                          "(curated terms + capitalized/multi-word/technical tokens) and "
                          "append+dedup them into the dictionary, then exit. Previews by "
-                         "default; pass --apply to write. Reads corpus TEXT only — it "
+                         "default; pass --apply to write. Reads corpus TEXT only - it "
                          "never records or touches audio. Honours --language/--category.")
     ap.add_argument("--dictionary-suggest-terms", metavar="JSONL",
                     help="read an annotated benchmark JSONL and SUGGEST the domain terms "
                          "the model missed (term_misses) as dictionary additions, then "
                          "exit. Previews by default; pass --apply to add the new terms. "
-                         "Reads result TEXT only — never records audio.")
+                         "Reads result TEXT only - never records audio.")
     ap.add_argument("--dictionary", metavar="PATH", default=None,
                     help="dictionary.json to read/append for the training commands "
                          "(default: $VOICEPI_DICTIONARY or the per-user dictionary.json)")
@@ -347,7 +347,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          "these languages, e.g. da or da,en")
     ap.add_argument("--category", default=None,
                     help="corpus profile: restrict to these categories or friendly "
-                         "groups (technical, business, names, short, long, ui, …) or an "
+                         "groups (technical, business, names, short, long, ui, ...) or an "
                          "exact corpus category; comma-separated")
     ap.add_argument("--device", default=DEVICE, choices=VALID_DEVICES,
                     help="auto|cuda|cpu (default auto; env VOICEPI_DEVICE). "

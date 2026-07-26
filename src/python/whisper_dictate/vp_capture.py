@@ -99,7 +99,7 @@ def _device_unusable_message(device_label: str) -> str:
     """
     return (
         f"Microphone {device_label!r} could not be opened on any audio backend "
-        "— select a different microphone in Settings."
+        "- select a different microphone in Settings."
     )
 
 # Populated lazily by _load_runtime_modules() (numpy + the arecord probe).

@@ -411,7 +411,7 @@ def _handle_dictionary_training(a, ap) -> int:
         # recognised flags is set — surface a clear error rather than an
         # empty argv.
         ap.error(
-            "no dictionary training flag set — expected "
+            "no dictionary training flag set - expected "
             "--dictionary-build-from-corpus or --dictionary-suggest-terms"
         )
     rc = _rust_dictionary_subcommand(args)

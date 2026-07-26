@@ -425,7 +425,7 @@ class KeyBackendMixin:
         target_codes = self._evdev_target_codes(evdev, key_names)
         devices = self._evdev_open_keyboards(evdev)
         if not devices:
-            sys.exit("evdev: no keyboard devices found — are you in the 'input' group?")
+            sys.exit("evdev: no keyboard devices found - are you in the 'input' group?")
 
         pressed: set[int] = set()
         recording = False
@@ -489,7 +489,7 @@ class KeyBackendMixin:
         quit_key = self._pynput_quit_key(keyboard)
         toggle_mode = _toggle_mode_enabled()
 
-        quit_hint = f"{QUIT_COUNT}× {QUIT_KEY} or Ctrl+C" if QUIT_COUNT > 0 else "Ctrl+C"
+        quit_hint = f"{QUIT_COUNT}x {QUIT_KEY} or Ctrl+C" if QUIT_COUNT > 0 else "Ctrl+C"
         verb = "Press" if toggle_mode else "Hold"
         suffix = (" Press again to stop." if toggle_mode else " to talk.")
         print(f"whisper-dictate [lang={self.lang or 'auto'}] (pynput). {verb} "

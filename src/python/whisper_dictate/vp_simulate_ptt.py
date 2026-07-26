@@ -193,7 +193,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "type into the active window. Off by "
                                    "default because it moves the user's "
                                    "cursor. Only the direct-typing strategy "
-                                   "is implemented in this POC — a headless "
+                                   "is implemented in this POC - a headless "
                                    "paste strategy is future work.")
     ap.add_argument("--lang", default=None,
                     help="Spoken language hint (da, en, ...); omit to let "
