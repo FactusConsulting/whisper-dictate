@@ -426,25 +426,40 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # rust-release: release-profile builds + release-mode regression smokes.
-  # Runs on push-to-main and workflow_call (release gate) only — PR CI skips
-  # it because the release-profile compile shares nothing with the debug
-  # builds above and would add another ~10 min to every push. Post-merge
-  # coverage is preserved: main runs it on push, and the release pipeline
-  # gates on it via workflow_call (see `release.yml`). PR-time coverage of
-  # the injection-idempotency bug class is still enforced through the
-  # `integration-ubuntu-2604` container job below, which runs the same
-  # self-test verb on every PR.
+  #
+  # Split coverage by OS to keep Windows-specific regression guards on PR CI
+  # while still shedding the Linux release compile from PR turnaround:
+  #   - windows-2025: runs on EVERY event (PR + push + workflow_call). The
+  #     Windows release CLI-output smoke (#564 windows_subsystem bug) and
+  #     injection-idempotency (Codex #518 F6 SendInput leakage) are both
+  #     Windows-specific and have no equivalent elsewhere in this workflow;
+  #     `integration-ubuntu-2604` is Linux-only, so it cannot cover them.
+  #     Removing them from PR CI would let a regression merge and only
+  #     surface on the post-merge push (Claude-bot review PR #581).
+  #   - ubuntu-latest: runs on push-to-main and workflow_call only. The
+  #     Linux release build is a link-surface smoke (whisper-rs API compat)
+  #     with no unique behavioural guard, and the release pipeline gates
+  #     on it via workflow_call before shipping — so PR CI saves ~10 min
+  #     without losing pre-ship coverage.
   # ---------------------------------------------------------------------------
   rust-release:
     needs: changes
-    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
     runs-on: ${{ matrix.os }}
     env:
-      RUN_RELEASE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+      # RUN_RELEASE=false when (a) `changes` failed, (b) docs-only PR, OR
+      # (c) this is the ubuntu leg on a pull_request (Linux release build
+      # is push/workflow_call only per the header comment above). The
+      # Windows leg gets RUN_RELEASE=true on PR so the #564 and #518 F6
+      # regression guards keep firing pre-merge.
+      RUN_RELEASE: >-
+        ${{ needs.changes.result == 'success'
+            && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request')
+            && (matrix.os == 'windows-2025' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail check if change detection broke
         if: needs.changes.result != 'success'
@@ -452,7 +467,13 @@ jobs:
           echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing rust-release leg"
           exit 1
       - if: env.RUN_RELEASE != 'true'
-        run: echo "::notice::Skipping rust-release leg — no code changes detected"
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "::notice::Skipping rust-release (ubuntu-latest) — Linux release build is push/workflow_call only"
+          else
+            echo "::notice::Skipping rust-release leg — no code changes detected"
+          fi
+        shell: bash
       - uses: actions/checkout@v6
         if: env.RUN_RELEASE == 'true'
         with:
