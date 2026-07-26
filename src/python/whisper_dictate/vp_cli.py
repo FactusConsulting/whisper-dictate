@@ -213,11 +213,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="show local GPU VRAM and which local models can fit, then exit")
     ap.add_argument("--list-audio-devices", action="store_true",
                     help="print available input (microphone) devices as JSON, then exit")
-    ap.add_argument("--test-audio-device", metavar="NAME", default=None,
-                    help="dry-run open the named microphone (resolve + try the same "
-                         "WASAPI/DirectSound/MME open matrix as capture, capturing no "
-                         "audio), print a single JSON usability result, then exit. "
-                         "Pass an empty string to test the system default input.")
     ap.add_argument("--record-corpus-item", metavar="ID", default=None,
                     help="record reference audio for the golden-corpus item ID from "
                          "the configured microphone (reusing the same negotiated capture "

@@ -69,9 +69,9 @@ all four and refuses to start unless every file matches its expected pattern.
      console.)
    - Creates a minimal venv (**only `sounddevice` + `numpy`** — no
      torch/faster-whisper/CUDA) and runs the installed worker's **no-model**
-     audio query modes (`--test-audio-device ""` and `--list-audio-devices`),
-     asserting they exit cleanly with parseable JSON rather than a traceback —
-     proving the installed worker package imports and runs.
+     `--list-audio-devices` query mode, asserting it exits cleanly with
+     parseable JSON rather than a traceback — proving the installed worker
+     package imports and runs.
 
    What it deliberately does **not** cover (still manual — see step 2): real
    microphone capture / inject / post end-to-end (a cloud VM has no audio

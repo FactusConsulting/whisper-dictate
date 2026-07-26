@@ -710,26 +710,7 @@ jobs:
           # Mirror that here so both worker invocations below can import it.
           $env:PYTHONPATH = Join-Path $appRoot 'src\python'
 
-          # 1) --test-audio-device "" tests the system default input. By contract
-          # it NEVER raises and ALWAYS exits 0, printing exactly ONE JSON object
-          # ({usable, endpoint, reason, ...}). On a headless runner with no audio
-          # this is the graceful "usable: false" path — still exit 0 + valid JSON,
-          # never a traceback. This is the strongest proof that the INSTALLED
-          # worker package imports and runs end to end.
-          Write-Host "Running: worker --test-audio-device `"`""
-          $td = & $venvPy -m whisper_dictate.runtime --app-root $appRoot --test-audio-device "" 2>&1
-          $tdCode = $LASTEXITCODE
-          Write-Host $td
-          if ($tdCode -ne 0) { throw "--test-audio-device exited $tdCode (expected 0)" }
-          # Parse the LAST stdout line as JSON (the worker prints a banner line
-          # first). It must be one object with a boolean 'usable' field.
-          $jsonLine = ($td | Where-Object { $_ -match '^\s*\{.*\}\s*$' } | Select-Object -Last 1)
-          if (-not $jsonLine) { throw "--test-audio-device printed no JSON object: $td" }
-          $obj = $jsonLine | ConvertFrom-Json
-          if ($null -eq $obj.usable) { throw "--test-audio-device JSON missing 'usable': $jsonLine" }
-          Write-Host "  ok  --test-audio-device usable=$($obj.usable)"
-
-          # 2) --list-audio-devices prints a JSON array of input devices (exit 0),
+          # --list-audio-devices prints a JSON array of input devices (exit 0),
           # or {"error": "..."} (exit 1) if sounddevice cannot enumerate on this
           # headless host. Either is GRACEFUL (parseable JSON, not a traceback).
           # The documented contract is exit 0 or exit 1 — any other exit code is

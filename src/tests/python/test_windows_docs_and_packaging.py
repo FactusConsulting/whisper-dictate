@@ -319,7 +319,6 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         self.assertIn("tray must stay alive", workflow)
 
         # Worker no-model audio query modes, minimal deps only (no heavy ML).
-        self.assertIn("--test-audio-device", workflow)
         self.assertIn("--list-audio-devices", workflow)
         self.assertIn("sounddevice", workflow)
         for excluded in ("faster-whisper", "torch", "ctranslate2"):
