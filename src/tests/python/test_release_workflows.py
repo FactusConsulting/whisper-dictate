@@ -703,6 +703,121 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Windows release CLI-output smoke", workflow)
         self.assertIn("injection-idempotency regression test", workflow)
 
+    def test_changes_filter_splits_per_language_and_gates_jobs(self):
+        # 2026-07-26 (#590 follow-up): the changes job emits three
+        # outputs — `code` (catch-all), `rust`, and `python` — so a
+        # pure-Python PR skips the ~5-15 min Rust matrix and a pure-Rust
+        # PR skips the ~1-2 min Python legs. Lock:
+        # (a) all three outputs declared with the same `|| 'true'`
+        #     fallback so non-PR events (push/workflow_call) still fire
+        #     every job.
+        # (b) `rust` and `python` filters BOTH include `.github/workflows/**`
+        #     so a workflow YAML change still exercises the full matrix
+        #     (documented invariant — silent-skipping YAML changes is how
+        #     broken pipelines merge).
+        # (c) `rust` filter includes shared config the Rust build reads
+        #     (schemas Rust deserializes via serde, sonar properties).
+        # (d) each downstream job uses the correct output: rust-features
+        #     + rust-release gate on `rust`, unit + smoke gate on
+        #     `python`, groq-integration + integration-ubuntu-2604 gate
+        #     on either.
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+
+        # (a) three outputs declared with the fallback.
+        for out in ("code", "rust", "python"):
+            self.assertRegex(
+                workflow,
+                rf"{out}:\s*\$\{{\{{\s*steps\.filter\.outputs\.{out}\s*\|\|\s*'true'\s*\}}\}}",
+                f"changes job must declare `{out}` output with `|| 'true'`"
+                " fallback so non-PR events run every downstream job",
+            )
+
+        # (b) both language filters include workflow YAML.
+        filter_block = re.search(
+            r"filters:\s*\|(?P<body>.*?)(?:\n  [a-zA-Z]|\Z)",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(filter_block, "filters: block must be present")
+        fb = filter_block.group("body")
+        for lang in ("rust", "python"):
+            block = re.search(
+                rf"\n            {lang}:\n(?P<body>(?:              - '[^']+'\n)+)",
+                fb,
+            )
+            self.assertIsNotNone(block, f"`{lang}` filter block must exist")
+            self.assertIn(
+                "'.github/workflows/**'", block.group("body"),
+                f"`{lang}` filter MUST include .github/workflows/** so a"
+                " workflow YAML change exercises the full matrix",
+            )
+
+        # (c) rust filter must also cover shared config paths.
+        rust_block = re.search(
+            r"\n            rust:\n(?P<body>(?:              - '[^']+'\n)+)",
+            fb,
+        )
+        self.assertIsNotNone(rust_block)
+        for shared in (
+            "'src/rust/**'",
+            "'rust-toolchain.toml'",
+            "'src/python/whisper_dictate/schemas/**'",
+        ):
+            self.assertIn(
+                shared, rust_block.group("body"),
+                f"`rust` filter must include {shared} so a change there"
+                " triggers the rust matrix",
+            )
+
+        # (d) downstream gate wiring: extract each job's RUN_* env value
+        # and assert the correct output is referenced.
+        cases = [
+            ("unit", "RUN_UNIT", "python"),
+            ("smoke", "RUN_SMOKE", "python"),
+            ("rust-features", "RUN_RUST", "rust"),
+        ]
+        for job_name, env_var, expected_output in cases:
+            m = re.search(
+                rf"\n  {re.escape(job_name)}:\n(?P<body>.*?)(?:\n  [a-zA-Z]|\Z)",
+                workflow,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(m, f"job `{job_name}` must exist")
+            body = m.group("body")
+            self.assertIn(
+                f"needs.changes.outputs.{expected_output} == 'true'", body,
+                f"{job_name}'s {env_var} must gate on"
+                f" `needs.changes.outputs.{expected_output}` for the"
+                " per-language skip to work",
+            )
+
+        # rust-release specifically must gate on `rust`, NOT `code`
+        # (a pure-Python PR shouldn't spin up a Windows release compile).
+        rr = re.search(
+            r"\n  rust-release:\n(?P<body>.*?)(?:\n  [a-zA-Z]|\Z)",
+            workflow, re.DOTALL,
+        )
+        self.assertIsNotNone(rr)
+        self.assertIn(
+            "needs.changes.outputs.rust == 'true'", rr.group("body"),
+            "rust-release must gate on `rust` so a pure-Python PR skips"
+            " the Windows release-profile compile",
+        )
+
+        # integration-ubuntu-2604 must gate on EITHER language (container
+        # exercises both).
+        ci = re.search(
+            r"\n  integration-ubuntu-2604:\n(?P<body>.*?)(?:\n  [a-zA-Z]|\Z)",
+            workflow, re.DOTALL,
+        )
+        self.assertIsNotNone(ci)
+        self.assertIn(
+            "needs.changes.outputs.rust == 'true'", ci.group("body"),
+        )
+        self.assertIn(
+            "needs.changes.outputs.python == 'true'", ci.group("body"),
+        )
+
     def test_rust_ci_uses_apt_pkgs_cache_on_linux_legs(self):
         # 2026-07-26 follow-up PR to #581 — the ONE clean wall-clock
         # win that survived Codex P2 review: cache the 12 apt packages

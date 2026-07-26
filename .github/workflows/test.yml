@@ -65,13 +65,20 @@ jobs:
       # On non-PR triggers (push to main, workflow_call from a tag release)
       # there is no PR-files API to consult and the docs-only skip is not
       # the intent anyway — every job must run. Skip the filter step
-      # entirely (see `if:` on the action below) and default the output to
-      # `true` so downstream gates evaluate as "real changes present".
+      # entirely (see `if:` on the action below) and default the outputs
+      # to `true` so downstream gates evaluate as "real changes present".
       # Before this fallback the release pipeline startup-failed on tag
       # push: the filter step would have nothing to diff against and the
       # downstream `Fail required check` step would fire (P0 follow-up to
       # #398 surfaced by the v1.19.0-rc.1 release attempt).
       code: ${{ steps.filter.outputs.code || 'true' }}
+      # 2026-07-26 (#590 follow-up): per-language outputs so a pure-Python
+      # PR skips the rust matrix (was ~5-15 min wall-clock on Windows)
+      # and a pure-Rust PR skips the Python unit/smoke legs. Both filters
+      # INCLUDE `.github/workflows/**` and shared config so a workflow
+      # YAML change still exercises the full matrix.
+      rust: ${{ steps.filter.outputs.rust || 'true' }}
+      python: ${{ steps.filter.outputs.python || 'true' }}
     steps:
       - uses: actions/checkout@v6
         if: github.event_name == 'pull_request'
@@ -118,6 +125,33 @@ jobs:
               - '!.gitignore'
               - '!.editorconfig'
               - '!.gitattributes'
+            # `rust` = touches Rust sources OR shared config a Rust build
+            # consumes (schemas, sonar config) OR any workflow YAML (a
+            # workflow change must exercise the full matrix). Docker
+            # image files are here too because the container leg builds
+            # the CI image on-demand from docker/ci-ubuntu2604/.
+            rust:
+              - 'src/rust/**'
+              - 'rust-toolchain.toml'
+              - 'sonar-project.properties'
+              - 'src/python/whisper_dictate/schemas/**'
+              - 'scripts/**'
+              - 'docker/**'
+              - '.github/workflows/**'
+            # `python` = Python sources + tests + requirements + shared
+            # config any Python job consumes. Workflow YAML is in here
+            # too because the unit job runs `test_release_workflows.py`
+            # which reads every workflow file; a YAML-only change must
+            # still exercise that suite.
+            python:
+              - 'src/python/**'
+              - 'src/tests/python/**'
+              - 'requirements/**'
+              - 'scripts/**'
+              - 'sonar-project.properties'
+              - 'pyproject.toml'
+              - 'docker/**'
+              - '.github/workflows/**'
 
   unit:
     needs: changes
@@ -130,7 +164,11 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     env:
-      RUN_UNIT: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+      # `python` output is the per-language gate (2026-07-26 #590 follow-up):
+      # a pure-Rust PR that doesn't touch Python sources, workflow YAML,
+      # shared config or scripts skips the unit job. Non-PR events always
+      # run (outputs default to 'true' when the filter step is skipped).
+      RUN_UNIT: ${{ needs.changes.result == 'success' && (needs.changes.outputs.python == 'true' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'
@@ -138,7 +176,7 @@ jobs:
           echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`unit\` check to avoid silently skipping tests on a code PR"
           exit 1
       - if: env.RUN_UNIT != 'true'
-        run: echo "::notice::no code changes detected — skipping unit tests"
+        run: echo "::notice::no Python-relevant changes detected — skipping unit tests"
       - uses: actions/checkout@v6
         if: env.RUN_UNIT == 'true'
         with:
@@ -159,7 +197,10 @@ jobs:
   # skip automatically when the GROQ_API_KEY secret is absent (e.g. fork PRs).
   groq-integration:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' || github.event_name != 'pull_request' }}
+    # Groq integration test is Python code that exercises the cloud STT
+    # backend. Runs on either python-relevant or rust-relevant changes so
+    # a Rust STT-backend refactor still gets the live-API sanity check.
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -226,7 +267,11 @@ jobs:
         os: [ubuntu-latest, windows-2025]
     runs-on: ${{ matrix.os }}
     env:
-      RUN_SMOKE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+      # Python-only smoke: `runtime --help` / `runtime --doctor` /
+      # probe-key are all Python entry points, so a pure-Rust PR skips.
+      # `pull_request` non-Python change → RUN_SMOKE=false → matrix leg
+      # runs but every step short-circuits (required-context still emits).
+      RUN_SMOKE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.python == 'true' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'
@@ -318,7 +363,11 @@ jobs:
             role: clippy
     runs-on: ${{ matrix.os }}
     env:
-      RUN_RUST: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+      # `rust` output is the per-language gate (2026-07-26 #590 follow-up):
+      # a pure-Python PR that doesn't touch Rust sources, workflow YAML,
+      # shared config or scripts skips the whole rust matrix (~5-15 min
+      # of wall-clock on Windows). Non-PR events always run.
+      RUN_RUST: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail matrix leg if change detection broke
         if: needs.changes.result != 'success'
@@ -326,7 +375,7 @@ jobs:
           echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing rust-features leg so the required \`rust\` aggregator fails too"
           exit 1
       - if: env.RUN_RUST != 'true'
-        run: echo "::notice::Skipping rust-features leg (${{ matrix.profile.id }}) — no code changes detected"
+        run: echo "::notice::Skipping rust-features leg (${{ matrix.profile.id }}) — no Rust-relevant changes detected"
       - uses: actions/checkout@v6
         if: env.RUN_RUST == 'true'
         with:
@@ -464,12 +513,15 @@ jobs:
     env:
       # RUN_RELEASE=false when (a) `changes` failed, (b) docs-only PR, OR
       # (c) this is the ubuntu leg on a pull_request (Linux release build
-      # is push/workflow_call only per the header comment above). The
-      # Windows leg gets RUN_RELEASE=true on PR so the #564 and #518 F6
-      # regression guards keep firing pre-merge.
+      # is push/workflow_call only per the header comment above), OR
+      # (d) the PR touches no Rust-relevant paths at all (a pure-Python
+      # PR doesn't need the Windows regression guards to fire because
+      # there's no Rust code to regress — 2026-07-26 #590 follow-up).
+      # The Windows leg still gets RUN_RELEASE=true on any Rust-touching
+      # PR so the #564 and #518 F6 regression guards keep firing pre-merge.
       RUN_RELEASE: >-
         ${{ needs.changes.result == 'success'
-            && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request')
+            && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request')
             && (matrix.os == 'windows-2025' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail check if change detection broke
@@ -645,7 +697,10 @@ jobs:
       contents: read
       packages: read
     env:
-      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+      # Container runs Rust tests + Python tests + models-download smokes,
+      # so gate on either language. A pure-workflow PR (only .github/**)
+      # is in BOTH filters, so this still fires — that's intentional.
+      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.python == 'true' || github.event_name != 'pull_request') }}
       IMAGE: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604:latest
     steps:
       - name: Skip on docs-only PRs
