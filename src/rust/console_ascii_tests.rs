@@ -134,9 +134,15 @@ fn literal_runtime_text(token: &proc_macro2::Literal) -> Option<String> {
         }
         // Byte strings look byte-oriented, but `b"\xE2\x80\x94"` spells an em
         // dash through escapes and reaches a console via `from_utf8_lossy`.
-        // Decode when the bytes are valid UTF-8; when they are not, they
-        // cannot contain the blocked characters anyway.
-        Ok(litrs::Literal::ByteString(b)) => String::from_utf8(b.value().to_vec()).ok(),
+        //
+        // LOSSY, matching the C-string arm. Strict `from_utf8` rejects the
+        // WHOLE literal when any byte is invalid, so `b"\xFF\xE2\x80\x94"`
+        // was skipped entirely -- yet at runtime `from_utf8_lossy` replaces
+        // only the `\xFF` and the em dash still reaches the console. The
+        // earlier justification ("not valid UTF-8, so it cannot contain the
+        // blocked characters") holds for a literal as a whole and is wrong
+        // for a substring of one.
+        Ok(litrs::Literal::ByteString(b)) => Some(String::from_utf8_lossy(b.value()).into_owned()),
         // A single byte is `u8`: it cannot hold a multi-byte character.
         // Numeric and bool literals carry no text.
         Ok(litrs::Literal::Byte(_)) => None,
@@ -150,11 +156,23 @@ fn literal_runtime_text(token: &proc_macro2::Literal) -> Option<String> {
     }
 }
 
-/// True for `#[doc = "..."]`, including the form rustc lowers `///` into.
-fn is_doc_attribute(group: &proc_macro2::Group) -> bool {
+/// Attributes whose string literals are printed to a console.
+///
+/// clap renders `#[command(about = "...")]` and `#[arg(help = "...")]` in
+/// `--help`; thiserror's `#[error("...")]` becomes the `Display` of an error
+/// that gets printed. 42 / 101 / 16 uses respectively in this tree.
+///
+/// An explicit list rather than "everything except `doc`": most attributes are
+/// METADATA, and scanning them produced false violations on things like
+/// `#[serde(rename = "...")]` and `#[path = "..."]` that never reach a
+/// console (caught in review of #582).
+const CONSOLE_ATTRIBUTES: &[&str] = &["command", "arg", "clap", "error"];
+
+/// True when this attribute body's literals are printed.
+fn is_console_attribute(group: &proc_macro2::Group) -> bool {
     matches!(
         group.stream().into_iter().next(),
-        Some(TokenTree::Ident(ref i)) if i == "doc"
+        Some(TokenTree::Ident(ref i)) if CONSOLE_ATTRIBUTES.iter().any(|a| i == a)
     )
 }
 
@@ -226,10 +244,19 @@ fn scan_tokens(
                     // gets printed. An ARRAY literal reaches this arm with
                     // `after_pound == false` and is scanned either way.
                     after_pound = false;
-                    if is_doc_attribute(&group) {
+                    if !is_console_attribute(&group) {
                         continue;
                     }
-                    scan_tokens(group.stream(), file, console_only, in_console, out);
+                    // `in_console = true`: these ARE console output, so they
+                    // must be checked even in `ui/**`, where `console_only`
+                    // would otherwise skip every literal outside a macro.
+                    scan_tokens(
+                        strip_cfg_test(group.stream()),
+                        file,
+                        console_only,
+                        true,
+                        out,
+                    );
                     pending_macro = None;
                     continue;
                 }
@@ -331,14 +358,32 @@ fn strip_cfg_test(stream: TokenStream) -> TokenStream {
     out.into_iter().collect()
 }
 
-/// Consume exactly one item following a `#[cfg(test)]` attribute: tokens up to
-/// and including either a brace group (`mod x { .. }`, `fn f() { .. }`) or a
-/// terminating `;` (`mod x;`).
+/// Consume exactly one item following a `#[cfg(test)]` attribute.
+///
+/// An attributed item ends at whichever comes first:
+///
+///   - a brace body   -- `mod x { .. }`, `fn f() { .. }`, `Variant => { .. }`
+///   - a `;`          -- `mod x;`, `use ..;`, `struct S;`
+///   - a `,`          -- a COMMA-DELIMITED element: a match arm, an enum
+///     variant, a struct field
+///
+/// The comma case was missing, and only started mattering once stripping went
+/// recursive: at file top level every item really does end in a brace or `;`,
+/// but inside a match body they end in commas. Without it, `#[cfg(test)]` on a
+/// non-final match arm consumed the arm AND every production arm after it --
+/// `Backend::Real => eprintln!("bad - output")` was swallowed whole and never
+/// scanned (caught in review of #582).
+///
+/// Angle-bracketed commas (`fn f() -> HashMap<K, V> { .. }`) would end the
+/// item early. No `#[cfg(test)]` item in this tree has that shape, and the
+/// failure direction is safe: the item's body gets SCANNED rather than
+/// skipped, which over-reports on a test-only string instead of hiding
+/// production output.
 fn skip_one_item(tokens: &mut std::iter::Peekable<proc_macro2::token_stream::IntoIter>) {
     for tree in tokens.by_ref() {
         match tree {
             TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => return,
-            TokenTree::Punct(p) if p.as_char() == ';' => return,
+            TokenTree::Punct(p) if p.as_char() == ';' || p.as_char() == ',' => return,
             _ => {}
         }
     }

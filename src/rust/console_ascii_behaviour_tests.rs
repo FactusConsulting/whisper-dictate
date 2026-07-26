@@ -26,6 +26,49 @@ fn scan(src: &str, rel: &str) -> Vec<String> {
 }
 
 #[test]
+fn cfg_test_match_arm_does_not_swallow_the_arms_after_it() {
+    let src = r#"
+        fn f() {
+            match x {
+                #[cfg(test)]
+                Backend::Test => 1,
+                Backend::Real => eprintln!("bad \u{2014} output"),
+            }
+        }
+    "#;
+    assert_eq!(
+        scan(src, "x.rs").len(),
+        1,
+        "production arm AFTER a cfg(test) arm"
+    );
+}
+
+#[test]
+fn byte_string_with_one_invalid_byte_still_decodes_the_rest() {
+    assert_eq!(
+        scan(
+            r#"fn f() { eprintln!("{}", String::from_utf8_lossy(b"\xFF\xE2\x80\x94")); }"#,
+            "x.rs"
+        )
+        .len(),
+        1,
+        "lossy decode still yields an em dash"
+    );
+}
+
+#[test]
+fn metadata_attributes_are_not_console_output() {
+    assert!(
+        scan(
+            r#"struct S { #[serde(rename = "a\u{2014}b")] f: u8 }"#,
+            "x.rs"
+        )
+        .is_empty(),
+        "serde rename is metadata, not console"
+    );
+}
+
+#[test]
 fn plain_violation_is_reported() {
     assert_eq!(scan(r#"fn f() { println!("a — b"); }"#, "x.rs").len(), 1);
 }
@@ -216,6 +259,11 @@ fn console_bearing_attributes_are_scanned_but_doc_comments_are_not() {
     );
 }
 
+// NOTE: this puts the `#[cfg(test)]` arm LAST, so over-consumption by
+// `skip_one_item` runs off the end of the stream harmlessly and the test stays
+// green either way. It passed against a broken scanner. The real coverage is
+// `cfg_test_match_arm_does_not_swallow_the_arms_after_it` above, which puts a
+// production arm after it -- keep both, since together they pin both ends.
 #[test]
 fn nested_cfg_test_item_inside_a_function_is_skipped() {
     // `audio/vad.rs` has `#[cfg(test)]` on individual match ARMS inside a
