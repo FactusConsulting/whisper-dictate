@@ -703,119 +703,77 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Windows release CLI-output smoke", workflow)
         self.assertIn("injection-idempotency regression test", workflow)
 
-    def test_rust_ci_wall_clock_optimisations_stay_wired(self):
-        # 2026-07-26 follow-up PR to #581: locks the four wall-clock
-        # savings so a later refactor cannot silently undo them (each
-        # regression here costs 1-10 min per PR turn).
-        #
-        # 1. Shared Swatinem cache-key across rust-features cells so the
-        #    first cell to save target/ warms every subsequent cell
-        #    (Cargo re-fingerprints its features but reuses shared deps).
-        # 2. CARGO_INCREMENTAL + CARGO_PROFILE_*_INCREMENTAL env vars on
-        #    the rust-features job — overrides Cargo.toml's
-        #    `incremental = false` (needed for local Windows dev stability
-        #    but pure overhead on fresh runners). Local dev is unaffected.
-        # 3. awalsh128/cache-apt-pkgs-action replacing the raw
-        #    `sudo apt install` on both rust-features + rust-release
-        #    Linux legs — turns a ~30-40s install into a ~5s cache read.
-        # 4. hotkeys + audio profiles are merged into a single
-        #    features-combined cell that tests both features in one
-        #    compile (the practical "build once, reuse" mechanism).
+    def test_rust_ci_uses_apt_pkgs_cache_on_linux_legs(self):
+        # 2026-07-26 follow-up PR to #581 — the ONE clean wall-clock
+        # win that survived Codex P2 review: cache the 12 apt packages
+        # both rust-features and rust-release install on Linux (~30-40s
+        # → ~5s on warm runs). The three other candidates (shared
+        # Swatinem cache-key, CARGO_INCREMENTAL env, merged
+        # features-combined cell) were reverted after Codex flagged
+        # them: shared-key regresses to whoever won the immutable-key
+        # save race, incremental state is excluded from Swatinem's
+        # save so it costs disk with zero cross-invocation reuse, and
+        # a combined-feature cell hides the "feature X alone doesn't
+        # compile" bug class since cargo features are additive.
         workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
 
-        # (1) shared cache-key present, per-profile `key:` gone from
-        # rust-features. The `shared-key: features` value must appear;
-        # `key: ${{ matrix.profile.id }}` (the previous-generation
-        # partitioning) MUST NOT reappear or parallel legs stop sharing.
-        m = re.search(
-            r"\n  rust-features:\n(?P<body>.*?)\n  rust:\n",
-            workflow,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(
-            m,
-            "test.yml must declare `rust-features:` immediately before `rust:`",
-        )
-        rf_body = m.group("body")
-        self.assertIn(
-            "shared-key: features", rf_body,
-            "rust-features cells must share one Swatinem cache-key so the"
-            " first cell warms target/ for every subsequent cell",
-        )
-        self.assertNotIn(
-            "key: ${{ matrix.profile.id }}", rf_body,
-            "per-profile key partitioning defeats the shared-cache win;"
-            " use shared-key instead",
-        )
-
-        # (2) Incremental compilation env vars — all three must be set
-        # so Cargo.toml's `incremental = false` is overridden in CI
-        # (the manifest keeps local Windows dev safe; CI runners are
-        # fresh so the lock issue doesn't apply).
-        self.assertRegex(
-            rf_body, r"CARGO_INCREMENTAL:\s*[\"']?1[\"']?",
-            "rust-features job env must set CARGO_INCREMENTAL=1",
-        )
-        self.assertRegex(
-            rf_body,
-            r"CARGO_PROFILE_DEV_INCREMENTAL:\s*[\"']?true[\"']?",
-            "rust-features job env must set CARGO_PROFILE_DEV_INCREMENTAL=true"
-            " to override Cargo.toml [profile.dev] incremental=false in CI",
-        )
-        self.assertRegex(
-            rf_body,
-            r"CARGO_PROFILE_TEST_INCREMENTAL:\s*[\"']?true[\"']?",
-            "rust-features job env must set CARGO_PROFILE_TEST_INCREMENTAL=true"
-            " to override Cargo.toml [profile.test] incremental=false in CI",
-        )
-
-        # (3) apt-cache action on BOTH Linux legs (rust-features +
-        # rust-release). Raw `sudo apt install` reappearing anywhere
-        # means someone reverted the cache — flag it explicitly.
+        # apt-cache action on both Linux legs; raw `sudo apt install`
+        # in either job means someone reverted the cache.
         self.assertIn(
             "awalsh128/cache-apt-pkgs-action", workflow,
             "Linux legs must use cache-apt-pkgs-action so the 12-package"
             " install is a warm-cache read on subsequent runs",
         )
-        # rust-features must NOT reintroduce raw apt install.
+        rf = re.search(
+            r"\n  rust-features:\n(?P<body>.*?)\n  rust:\n",
+            workflow, re.DOTALL,
+        )
+        self.assertIsNotNone(rf, "test.yml must declare rust-features: before rust:")
+        rf_body = rf.group("body")
         self.assertNotIn(
             "sudo apt install", rf_body,
-            "raw apt install in rust-features defeats the cache — use"
-            " awalsh128/cache-apt-pkgs-action",
+            "raw apt install in rust-features defeats the cache",
         )
         rr = re.search(
             r"\n  rust-release:\n(?P<body>.*?)(?:\n  [a-zA-Z]|\Z)",
-            workflow,
-            re.DOTALL,
+            workflow, re.DOTALL,
         )
         self.assertIsNotNone(rr, "test.yml must declare rust-release:")
         self.assertNotIn(
             "sudo apt install", rr.group("body"),
-            "raw apt install in rust-release defeats the cache — use"
-            " awalsh128/cache-apt-pkgs-action",
+            "raw apt install in rust-release defeats the cache",
         )
-
-        # (4) features-combined profile is the single cell that tests
-        # rust-hotkeys AND audio-in-rust in one compile. Guard both
-        # the profile id and the feature-arg pair.
-        self.assertIn("id: features-combined", rf_body,
-                      "the combined feature profile must exist")
+        # Standalone hotkeys + audio cells must stay: cargo features
+        # are additive, so a combined-only build hides feature-only
+        # compile errors (Codex P2 #585 line 315).
         self.assertIn(
-            '"--features rust-hotkeys,audio-in-rust"', rf_body,
-            "features-combined profile must test rust-hotkeys +"
-            " audio-in-rust in a single compile",
-        )
-        # The previous per-feature profile ids must be GONE — if they
-        # come back the shared-cache + build-once win regresses.
-        self.assertNotIn(
             "id: hotkeys\n", rf_body,
-            "standalone `hotkeys` profile has been merged into"
-            " features-combined; remove the redundant cell",
+            "standalone hotkeys cell must exist — a combined-features"
+            " test misses `--features rust-hotkeys` alone regressions",
         )
-        self.assertNotIn(
+        self.assertIn(
             "id: audio\n", rf_body,
-            "standalone `audio` profile has been merged into"
-            " features-combined; remove the redundant cell",
+            "standalone audio cell must exist — a combined-features"
+            " test misses `--features audio-in-rust` alone regressions",
+        )
+        # Per-profile cache key is correct here (Codex P2 #585 line 372):
+        # a shared-key across parallel cells regresses to whoever wins
+        # the immutable save race. Guard that shared-key: features is
+        # NOT reintroduced.
+        self.assertNotIn(
+            "shared-key: features", rf_body,
+            "rust-features must use per-profile `key:`, not shared-key —"
+            " actions/cache is immutable so only the first cell to save"
+            " wins and every subsequent restore gets its cache, not each"
+            " cell's own",
+        )
+        # Incremental env vars must stay OFF (Codex P2 #585 line 331):
+        # Swatinem excludes the incremental/ dir from the saved cache,
+        # so the env-vars just cost disk without cross-invocation reuse.
+        self.assertNotIn(
+            "CARGO_INCREMENTAL", rf_body,
+            "CARGO_INCREMENTAL adds disk/bookkeeping with no cross-run"
+            " reuse (Swatinem excludes incremental/) — leave it off",
         )
 
     def test_dev_check_wrapper_mirrors_ci_rust_matrix_legs(self):

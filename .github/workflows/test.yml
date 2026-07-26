@@ -297,22 +297,21 @@ jobs:
         os: [ubuntu-latest, windows-2025]
         # Each profile owns ONE cargo invocation. `feature_arg` is the
         # verbatim cargo flag (empty for the default feature set); `role`
-        # selects test vs clippy in the step gates below.
-        #
-        # `features-combined` is the "build once, test many features"
-        # cell (2026-07-26 follow-up): compiling rust-hotkeys +
-        # audio-in-rust together produces one target/ that runs the
-        # tests for both features in a single compile, instead of the
-        # previous per-feature cells that each paid full compile cost.
-        # If a feature only breaks when compiled alone (rare — cargo
-        # features are additive), extend dev-check.ps1's per-feature
-        # local coverage or add a dedicated cell.
+        # selects test vs clippy in the step gates below. Keep the
+        # feature-gated cells STANDALONE (not merged): cargo features
+        # are additive, so code gated on one feature can accidentally
+        # reference an item only present under another; a combined-only
+        # test would compile while the standalone case breaks for users
+        # who enable that one feature alone (Codex P2 #585).
         profile:
           - id: base
             feature_arg: ""
             role: test
-          - id: features-combined
-            feature_arg: "--features rust-hotkeys,audio-in-rust"
+          - id: hotkeys
+            feature_arg: "--features rust-hotkeys"
+            role: test
+          - id: audio
+            feature_arg: "--features audio-in-rust"
             role: test
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
@@ -320,15 +319,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUN_RUST: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
-      # Incremental compilation on: overrides src/rust/Cargo.toml's
-      # `[profile.dev] incremental = false` / `[profile.test] incremental
-      # = false` (Windows-lock lesson from local dev boxes doesn't apply
-      # to fresh runners). The `CARGO_PROFILE_*_INCREMENTAL` env vars win
-      # over the manifest so the flip is CI-only — no need to touch the
-      # manifest. Saves 10-20% on warm-cache pushes to the same PR.
-      CARGO_INCREMENTAL: "1"
-      CARGO_PROFILE_DEV_INCREMENTAL: "true"
-      CARGO_PROFILE_TEST_INCREMENTAL: "true"
     steps:
       - name: Fail matrix leg if change detection broke
         if: needs.changes.result != 'success'
@@ -361,15 +351,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: env.RUN_RUST == 'true'
         with:
-          # Single shared cache across all rust-features cells per OS: the
-          # first cell to complete saves target/, and every subsequent
-          # cell restores from that same warm cache instead of a cold
-          # compile. Cargo's fingerprint then only rebuilds artefacts
-          # that changed for this cell's feature-set — the deps compiled
-          # earlier are reused verbatim. This is the practical "build once
-          # and reuse" mechanism.
+          # Per-profile key: parallel cells all try to save under the
+          # same key otherwise, but actions/cache is immutable-key —
+          # only the first upload wins. Every cell then restores THAT
+          # winning cell's target/, not its own, so its cargo re-does
+          # feature-specific compilation on every warm run (Codex P2
+          # #585). Per-profile keys give each cell a 100% cache hit for
+          # its exact feature-set.
           workspaces: "src/rust -> ../target"
-          shared-key: features
+          key: ${{ matrix.profile.id }}
       - name: Rust format
         # fmt is OS- and feature-independent, so run it exactly once (in
         # the ubuntu `base` cell) instead of on every matrix leg.
@@ -515,7 +505,7 @@ jobs:
           workspaces: "src/rust -> ../target"
           # Release profile compiles into its own target sub-tree; keep
           # its cache separate from the PR-CI debug caches above.
-          shared-key: release
+          key: release
       - name: Rust build (whisper-rs-local feature)
         # rc.2 of Wave 8 (#348): the `whisper-rs-local` feature compiles
         # whisper.cpp from source via whisper-rs and is now shipping in
