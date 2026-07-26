@@ -17,6 +17,15 @@ name: Claude PR review
 on:
   pull_request:
     types: [opened]
+    # Skip prose-only PRs: no code changed = nothing for a code-review
+    # bot to review. Matches test.yml's `changes` filter so a docs-only
+    # PR that skips the test matrix also skips this review.
+    paths-ignore:
+      - '*.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.editorconfig'
+      - '.gitattributes'
   # Allow manual re-trigger from the Actions tab on a stuck PR.
   workflow_dispatch:
     inputs:
