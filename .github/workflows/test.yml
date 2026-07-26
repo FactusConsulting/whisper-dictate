@@ -297,8 +297,12 @@ jobs:
         os: [ubuntu-latest, windows-2025]
         # Each profile owns ONE cargo invocation. `feature_arg` is the
         # verbatim cargo flag (empty for the default feature set); `role`
-        # selects test vs clippy in the step gates below. Adding a profile
-        # here is the one-line way to extend PR-CI coverage.
+        # selects test vs clippy in the step gates below. Keep the
+        # feature-gated cells STANDALONE (not merged): cargo features
+        # are additive, so code gated on one feature can accidentally
+        # reference an item only present under another; a combined-only
+        # test would compile while the standalone case breaks for users
+        # who enable that one feature alone (Codex P2 #585).
         profile:
           - id: base
             feature_arg: ""
@@ -327,22 +331,16 @@ jobs:
         if: env.RUN_RUST == 'true'
         with:
           ref: ${{ inputs.ref }}
-      - name: Install Linux Rust UI build deps
+      - name: Install Linux Rust UI build deps (cached)
+        # awalsh128/cache-apt-pkgs-action wraps apt install + actions/cache
+        # so the 12-package install is a ~5s cache read on subsequent runs
+        # instead of ~30-40s of apt work every time. First-run cost is
+        # unchanged; the win is on every PR push after the initial one.
         if: env.RUN_RUST == 'true' && runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            pkg-config \
-            libdbus-1-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libxi-dev \
-            libxtst-dev \
-            libasound2-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          version: 1.0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RUST == 'true'
         with:
@@ -353,11 +351,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: env.RUN_RUST == 'true'
         with:
-          # Same cache dir as before ("src/rust -> ../target"); the extra
-          # key material below just partitions the cache per profile so
-          # parallel cells don't overwrite each other's saved target/ on
-          # the same OS. Retrieval prefix stays shared, so a fresh profile
-          # still falls back to the closest match instead of a cold cache.
+          # Per-profile key: parallel cells all try to save under the
+          # same key otherwise, but actions/cache is immutable-key —
+          # only the first upload wins. Every cell then restores THAT
+          # winning cell's target/, not its own, so its cargo re-does
+          # feature-specific compilation on every warm run (Codex P2
+          # #585). Per-profile keys give each cell a 100% cache hit for
+          # its exact feature-set.
           workspaces: "src/rust -> ../target"
           key: ${{ matrix.profile.id }}
       - name: Rust format
@@ -489,22 +489,14 @@ jobs:
         if: env.RUN_RELEASE == 'true'
         with:
           ref: ${{ inputs.ref }}
-      - name: Install Linux Rust UI build deps
+      - name: Install Linux Rust UI build deps (cached)
+        # Same apt-cache action as rust-features — the two jobs pin the
+        # same package list, so a hit on either warms both.
         if: env.RUN_RELEASE == 'true' && runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            pkg-config \
-            libdbus-1-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libxi-dev \
-            libxtst-dev \
-            libasound2-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          version: 1.0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RELEASE == 'true'
       - uses: Swatinem/rust-cache@v2
