@@ -3,6 +3,7 @@
 //! everything is a `RefCell` you read in the assertion.
 
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -10,6 +11,7 @@ use super::{
     DictateSession, InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome,
     SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult, SR,
 };
+use crate::dictate::feedback::{CueKind, CueSink};
 
 // ── test backends ────────────────────────────────────────────────────────────
 
@@ -154,6 +156,39 @@ impl PostProcessBackend for TestPostProcess {
             redacted: false,
             redactions: Vec::new(),
         }
+    }
+}
+
+/// Recording [`CueSink`] mock: every call to `play(kind)` is appended
+/// to a shared vector so a test can assert exactly which cues were
+/// played and in what order. `Send + Sync` because the session field
+/// requires `Send` and the mock's `Arc<Mutex<...>>` handle stays owned
+/// by the test to inspect afterwards.
+pub(super) struct RecordingCueSink {
+    pub(super) played: Arc<Mutex<Vec<CueKind>>>,
+}
+
+impl RecordingCueSink {
+    /// Fresh recorder. Hand `handle.clone()` to the session (via
+    /// [`super::DictateSession::with_cue_sink`]) and keep the returned
+    /// `Arc<Mutex<Vec<CueKind>>>` in the test for assertions.
+    pub(super) fn new() -> (Self, Arc<Mutex<Vec<CueKind>>>) {
+        let played = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                played: Arc::clone(&played),
+            },
+            played,
+        )
+    }
+}
+
+impl CueSink for RecordingCueSink {
+    fn play(&self, kind: CueKind) {
+        self.played
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(kind);
     }
 }
 

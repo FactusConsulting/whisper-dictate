@@ -64,6 +64,12 @@ pub mod backend;
 pub mod backends;
 pub mod env_gates;
 pub mod events;
+// Audible PTT press/release cues -- Rust port of `vp_feedback.py`.
+// Restores the start / stop cues on the Rust in-process engine
+// (parity blocker #3 on the engine assessment): default builds get
+// the same audible confirmation the Python engine has always emitted
+// when `VOICEPI_FEEDBACK_SOUNDS=1`.
+pub mod feedback;
 pub mod ops;
 pub mod restart;
 // Wave 5 PR 2 (#348): pure-logic per-utterance state machine that
@@ -95,6 +101,7 @@ pub use backends::EnigoInjectBackend;
 pub use backends::WhisperLocalTranscribeBackend;
 pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig, ProductionTranscribeBackend};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
+pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
     DictateSession, InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome,

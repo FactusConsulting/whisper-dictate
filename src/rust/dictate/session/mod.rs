@@ -116,6 +116,16 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// default -- applies no replacements, so a session built with
     /// [`Self::new`] behaves exactly as before this seam existed.
     dictionary: Option<Box<dyn crate::dictionary::DictionaryProvider + Send>>,
+    /// Sink that plays the audible press/release cues (Rust port of
+    /// `vp_feedback.play_cue`). Always present so the state machine
+    /// never has to `if let Some(...)` on the hot path; the default in
+    /// [`Self::new`] is [`crate::dictate::feedback::NoOpCueSink`] so
+    /// existing tests neither depend on the audio subsystem nor emit
+    /// sounds. Production wires [`crate::dictate::feedback::SystemCueSink`]
+    /// via [`Self::with_cue_sink`], which reads
+    /// `VOICEPI_FEEDBACK_SOUNDS` on every call for parity with the
+    /// Python engine's live env-driven gate.
+    cue_sink: Box<dyn crate::dictate::feedback::CueSink + Send>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -133,7 +143,24 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             inject,
             post_process: None,
             dictionary: None,
+            cue_sink: Box::new(crate::dictate::feedback::NoOpCueSink),
         }
+    }
+
+    /// Attach an audible-cue sink played at PTT press (start) and PTT
+    /// release (stop). The default sink is a silent no-op, so a
+    /// caller who does not opt in is byte-for-byte identical to a
+    /// session built before this seam existed. Production wiring
+    /// (`make_real_session`) attaches
+    /// [`crate::dictate::feedback::SystemCueSink`], which itself
+    /// respects the `VOICEPI_FEEDBACK_SOUNDS` env-var gate on every
+    /// call -- matching Python's `vp_feedback.play_cue`.
+    pub fn with_cue_sink(
+        mut self,
+        sink: Box<dyn crate::dictate::feedback::CueSink + Send>,
+    ) -> Self {
+        self.cue_sink = sink;
+        self
     }
 
     /// Attach an LLM post-processing backend, returning the session so
@@ -307,6 +334,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             self.state = SessionState::Idle;
             return Err(e);
         }
+        // Audible press cue -- matches `vp_dictate.py::_start` (line
+        // 589), which calls `play_cue("start")` AFTER the "listening..."
+        // print / status flip. `NoOpCueSink` (the default) makes this
+        // a no-op; production wires `SystemCueSink`, which itself
+        // gates on `VOICEPI_FEEDBACK_SOUNDS`. Non-blocking + never
+        // fails, so no error path is threaded here.
+        self.cue_sink.play(crate::dictate::feedback::CueKind::Start);
         Ok(id)
     }
 
@@ -357,6 +391,15 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             _ => unreachable!("guarded by matches! above"),
         };
         self.state = SessionState::Transcribing { id };
+
+        // Audible release cue -- matches `vp_dictate.py::_stop_and_transcribe`
+        // (line 704), which calls `play_cue("stop")` after capture is
+        // stopped and BEFORE the transcribe pass runs. Fires exactly
+        // once per utterance (guarded by the Recording -> Transcribing
+        // transition above); a `NotRecording` early-return never
+        // reaches this line, matching Python's `if not self.recording:
+        // return` short-circuit that also skips the cue.
+        self.cue_sink.play(crate::dictate::feedback::CueKind::Stop);
 
         // Drain the buffer up-front so any early-return path leaves the
         // session ready for the next press.
@@ -588,6 +631,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         }
         self.frame_buf.clear();
         self.state = SessionState::Idle;
+        // Chord-cancel parity with `vp_dictate.py::_cancel_and_discard`
+        // (lines 662-681): Python routes the cancel THROUGH
+        // `_stop_and_transcribe`, which fires `play_cue("stop")` before
+        // the discard branch runs. The Rust `cancel()` shortcuts around
+        // `stop_and_transcribe`, so we play the cue explicitly here to
+        // keep the audible "recording ended" signal even when the
+        // clip is dropped.
+        self.cue_sink.play(crate::dictate::feedback::CueKind::Stop);
         wire::emit_status(writer, "cancelled", &[("reason", Value::from("chord"))])?;
         wire::emit_status(writer, "ready", &self.capture_extras())?;
         Ok(())

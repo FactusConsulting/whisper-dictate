@@ -18,6 +18,7 @@
 
 use super::tests_support::*;
 use super::{SessionConfig, SessionError, SessionState, UtteranceOutcome};
+use crate::dictate::feedback::CueKind;
 
 #[test]
 fn push_frame_while_idle_is_dropped() {
@@ -815,4 +816,153 @@ fn worker_event_escapes_del_control_character() {
         "raw DEL (0x7f) leaked into worker-event stream: {:?}",
         std::str::from_utf8(&buf).unwrap_or("<non-utf8>"),
     );
+}
+
+// ── audible-cue lifecycle wiring (parity with `vp_feedback.play_cue`) ────────
+
+#[test]
+fn start_plays_the_start_cue_at_the_python_moment() {
+    // Parity with `vp_dictate.py::_start` line 589: `play_cue("start")`
+    // fires after the status flip to `recording`. The mock captures the
+    // call so we can pin the count and the argument.
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (sink, log) = RecordingCueSink::new();
+    s = s.with_cue_sink(Box::new(sink));
+
+    assert!(log.lock().unwrap().is_empty(), "no cue before start()");
+    s.start(&mut buf).expect("start");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![CueKind::Start],
+        "start() must play exactly the Start cue"
+    );
+}
+
+#[test]
+fn stop_plays_the_stop_cue_at_the_python_moment() {
+    // Parity with `vp_dictate.py::_stop_and_transcribe` line 704:
+    // `play_cue("stop")` fires after capture is stopped and BEFORE the
+    // transcribe pass. The mock captures the ordered call sequence to
+    // pin the press/release ordering across the full utterance.
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (sink, log) = RecordingCueSink::new();
+    s = s.with_cue_sink(Box::new(sink));
+
+    s.start(&mut buf).expect("start");
+    s.push_frame(&one_second_pcm());
+    s.stop_and_transcribe(&mut buf).expect("stop");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![CueKind::Start, CueKind::Stop],
+        "full utterance must play Start then Stop, no duplicates"
+    );
+}
+
+#[test]
+fn stop_while_idle_does_not_play_the_stop_cue() {
+    // The `if not self.recording: return` early-return in Python fires
+    // BEFORE `play_cue("stop")`, so a stop on an idle session emits
+    // nothing at all -- neither events nor cues. The Rust port has to
+    // honour that or a supervisor bug (double-release) would spam
+    // stop-cues.
+    let transcribe = TestTranscribe::returning_text("never");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (sink, log) = RecordingCueSink::new();
+    s = s.with_cue_sink(Box::new(sink));
+
+    let outcome = s.stop_and_transcribe(&mut buf).expect("stop");
+    assert_eq!(outcome, UtteranceOutcome::NotRecording);
+    assert!(
+        log.lock().unwrap().is_empty(),
+        "stop-when-idle must not fire the Stop cue"
+    );
+}
+
+#[test]
+fn refused_start_does_not_play_a_second_start_cue() {
+    // A second `start()` while already Recording is refused with
+    // `AlreadyActive`. The cue plays on the FIRST start; the second
+    // must NOT fire a duplicate Start cue (or a Stop cue).
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (sink, log) = RecordingCueSink::new();
+    s = s.with_cue_sink(Box::new(sink));
+
+    s.start(&mut buf).expect("start#1");
+    let err = s.start(&mut buf).expect_err("nested start must error");
+    assert!(matches!(err, SessionError::AlreadyActive { .. }));
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![CueKind::Start],
+        "refused second start must NOT play another Start cue"
+    );
+}
+
+#[test]
+fn chord_cancel_plays_the_stop_cue() {
+    // Parity with `vp_dictate.py::_cancel_and_discard` (lines 662-681):
+    // Python routes the cancel through `_stop_and_transcribe`, which
+    // fires `play_cue("stop")` even on the discard branch. The Rust
+    // cancel() shortcuts around stop_and_transcribe, so the cue has
+    // to be fired explicitly here or a chord-cancel would silently
+    // drop the audible "recording ended" signal.
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (sink, log) = RecordingCueSink::new();
+    s = s.with_cue_sink(Box::new(sink));
+
+    let epoch = s.start(&mut buf).expect("start");
+    s.cancel(epoch, &mut buf).expect("cancel");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![CueKind::Start, CueKind::Stop],
+        "chord-cancel must fire Start then Stop just like a full utterance"
+    );
+    assert_eq!(s.state(), SessionState::Idle);
+}
+
+#[test]
+fn stale_cancel_does_not_play_a_stop_cue() {
+    // A stale cancel (epoch mismatch) must NOT fire a second Stop cue,
+    // because doing so would emit an audible "recording ended" while
+    // the NEW recording is still capturing frames. Only the Start cue
+    // from the fresh `start()` should be present.
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (mut s, mut buf, _guard) = session(transcribe, inject);
+    let (sink, log) = RecordingCueSink::new();
+    s = s.with_cue_sink(Box::new(sink));
+
+    let epoch = s.start(&mut buf).expect("start");
+    let stale_epoch = epoch.wrapping_sub(1);
+    s.cancel(stale_epoch, &mut buf).expect("cancel");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![CueKind::Start],
+        "stale cancel must not fire a Stop cue"
+    );
+    assert!(matches!(s.state(), SessionState::Recording { .. }));
+}
+
+#[test]
+fn default_session_uses_the_silent_cue_sink() {
+    // Regression guard: without `.with_cue_sink(...)` the session must
+    // NOT touch the audio subsystem, so the huge existing test surface
+    // stays sound-free and the type stays byte-for-byte compatible
+    // with pre-cue callers. Strongest signal available without
+    // introspection into the default sink: a full utterance completes
+    // without panicking (the default NoOpCueSink drop-in never
+    // touches cpal / kernel32 / paplay).
+    let transcribe = TestTranscribe::returning_text("hi");
+    let inject = TestInject::new();
+    let (s, _buf, _guard) = session(transcribe, inject);
+    let (outcome, _bytes, _s) = run_one_utterance(s, &one_second_pcm());
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
 }
