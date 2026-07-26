@@ -542,7 +542,14 @@ fn scan_file(path: &Path) -> Vec<Violation> {
         .map_or(rel.clone(), |(_, r)| r.to_owned());
     let console_only = is_ui_scope(&rel);
     let mut out = Vec::new();
-    scan_tokens(strip_cfg_test(stream), &rel, console_only, false, false, &mut out);
+    scan_tokens(
+        strip_cfg_test(stream),
+        &rel,
+        console_only,
+        false,
+        false,
+        &mut out,
+    );
     out
 }
 
