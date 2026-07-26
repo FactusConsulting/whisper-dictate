@@ -82,29 +82,84 @@ detect_session() {
 # (src/rust/hotkey/manager/mod.rs:220-250). Used to decide whether a listener
 # refusal is the EXPECTED no-display rdev failure or a real defect.
 #
-# Kept faithful to the Rust in two details that a looser reading gets wrong:
+# Kept faithful to the Rust in three details that a looser reading gets wrong:
 #   1. An explicit `VOICEPI_HOTKEY_DRIVER` wins outright — session detection
 #      never overrides it (that is the documented escape hatch).
-#   2. `is_wayland_session()` is an OR of XDG_SESSION_TYPE=wayland (matched
+#   2. `DriverKind::parse` trims, lower-cases, and accepts ALIASES: `x11` is a
+#      synonym for rdev and `wayland` for evdev. Recognising only the
+#      canonical spellings makes the mirror disagree with the binary in both
+#      directions — `=wayland` on a headless box selects evdev in Rust, and
+#      reading it as rdev here would warn-skip a genuine evdev failure.
+#      An unrecognised value (or `auto`/empty) falls back to Auto, i.e. to
+#      session detection, which is what the fall-through below does.
+#   3. `is_wayland_session()` is an OR of XDG_SESSION_TYPE=wayland (matched
 #      case-insensitively) and a non-empty WAYLAND_DISPLAY. Either alone
 #      selects evdev, so a Wayland box that exports only the session type
 #      still gets evdev.
+#
+# See `resolve_hotkey_driver_selftest` below for the regression cases.
 # --------------------------------------------------------------------------
 resolve_hotkey_driver() {
-    case "$(printf '%s' "${VOICEPI_HOTKEY_DRIVER:-}" | tr '[:upper:]' '[:lower:]')" in
-        rdev)  echo "rdev";  return ;;
-        evdev) echo "evdev"; return ;;
+    # Mirror of `DriverKind::parse`: trim surrounding whitespace, fold case.
+    _drv="$(printf '%s' "${VOICEPI_HOTKEY_DRIVER:-}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$_drv" in
+        rdev|x11)     echo "rdev";  return ;;
+        evdev|wayland) echo "evdev"; return ;;
     esac
-    # `auto` (or unset) — session detection, Linux only. On any other OS the
-    # Rust falls through to rdev unconditionally.
+    # `auto`, empty, or unrecognised — session detection, Linux only. On any
+    # other OS the Rust falls through to rdev unconditionally.
     if [ "$(uname -s 2>/dev/null)" != "Linux" ]; then
         echo "rdev"; return
     fi
-    xdg_lower="$(printf '%s' "${XDG_SESSION_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
-    if [ "$xdg_lower" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    _xdg="$(printf '%s' "${XDG_SESSION_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+    if [ "$_xdg" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
         echo "evdev"
     else
         echo "rdev"
+    fi
+}
+
+# Regression cases for the mirror above. Pure function, no I/O — runs on every
+# invocation so a drift between this helper and `DriverKind::parse` /
+# `resolve_driver` is caught on the operator's own box rather than silently
+# mis-classifying a listener failure later in the run. Reports through the
+# normal ok/bad counters.
+resolve_hotkey_driver_selftest() {
+    _drv_fails=""
+    _drv_case() {  # <expected> <driver-env> <xdg> <wayland-display>
+        _got="$(VOICEPI_HOTKEY_DRIVER="$2" XDG_SESSION_TYPE="$3" \
+                WAYLAND_DISPLAY="$4" resolve_hotkey_driver)"
+        [ "$_got" = "$1" ] || _drv_fails="${_drv_fails}
+      driver=$(printf '%q' "$2") xdg=$(printf '%q' "$3") wl=$(printf '%q' "$4") -> $_got, expected $1"
+    }
+    #         expect  DRIVER      XDG        WAYLAND_DISPLAY
+    _drv_case rdev    ""          ""         ""
+    _drv_case evdev   ""          "wayland"  ""
+    _drv_case evdev   ""          "Wayland"  ""
+    _drv_case evdev   ""          ""         "wayland-0"
+    _drv_case rdev    ""          "x11"      ""
+    _drv_case rdev    "auto"      ""         ""
+    _drv_case evdev   "auto"      "wayland"  ""
+    # Explicit override outranks session detection, in both directions.
+    _drv_case evdev   "evdev"     ""         ""
+    _drv_case rdev    "rdev"      "wayland"  "wayland-0"
+    # Aliases (DriverKind::parse) — the case this self-test exists for.
+    _drv_case evdev   "wayland"   ""         ""
+    _drv_case rdev    "x11"       "wayland"  "wayland-0"
+    # Whitespace + case folding.
+    _drv_case evdev   "  evdev  " ""         ""
+    _drv_case rdev    "  X11 "    "wayland"  ""
+    _drv_case evdev   "EVDEV"     ""         ""
+    # Unrecognised values fall back to Auto, i.e. session detection.
+    _drv_case evdev   "nonsense"  "wayland"  ""
+    _drv_case rdev    "nonsense"  ""         ""
+
+    if [ -z "$_drv_fails" ]; then
+        ok "hotkey-driver resolution mirrors DriverKind::parse + resolve_driver"
+    else
+        bad "hotkey-driver mirror has drifted from the Rust:$_drv_fails"
     fi
 }
 
@@ -198,6 +253,9 @@ fi
 if [ "$SESSION" != "wayland" ]; then
     info "note: not a Wayland session — running headless-compatible checks anyway"
 fi
+
+info "hotkey driver      : $(resolve_hotkey_driver) (as the Rust binary would resolve it)"
+resolve_hotkey_driver_selftest
 
 # --------------------------------------------------------------------------
 # SECTION: --version
