@@ -86,6 +86,14 @@ pub mod model_capacity;
 // (unconditional). Extracted here to avoid a cross-module dependency that
 // crosses a feature boundary.
 pub(crate) mod os_cache;
+// Cross-platform host integration seams the dictate engine needs but that
+// don't cleanly belong to any feature-gated module. Today: the foreground-
+// window probe (title + process) that drives per-utterance target-profile
+// matching (Rust parity for `vp_inject._capture_target_window`
+// + `vp_events._apply_profile_settings`; parity blocker #5 on the engine
+// assessment). Kept at the crate root so the probe compiles in every build
+// config (no cargo features required).
+pub mod platform;
 // Rust port of `vp_postprocess.py` (Wave 4-B of #348). Owns the full
 // post-STT formatting / LLM cleanup pipeline: settings validation,
 // cloud-safe redaction, prompt construction, provider call (local
