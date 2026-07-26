@@ -168,6 +168,18 @@ fn literal_runtime_text(token: &proc_macro2::Literal) -> Option<String> {
 /// console (caught in review of #582).
 const CONSOLE_ATTRIBUTES: &[&str] = &["command", "arg", "clap", "error"];
 
+/// clap's derive traits — a `///` doc comment on a field or variant of a type
+/// deriving one of these becomes `--help` text at runtime, so within such an
+/// item's body `#[doc]` must be scanned like any console literal. Issue #590.
+///
+/// Names only — the derive can be qualified (`clap::Parser`) or aliased via
+/// `use`; we walk the token stream for these identifiers rather than reasoning
+/// about paths. That over-matches a hypothetical `mod fake { struct Parser; }`
+/// declaring a same-named local type, but doc-scanning a stray struct is a
+/// false POSITIVE — the safe failure direction (the alternative is missing
+/// real help-text violations).
+const CLAP_DERIVES: &[&str] = &["Parser", "Args", "Subcommand", "ValueEnum"];
+
 /// True when this attribute body's literals are printed.
 fn is_console_attribute(group: &proc_macro2::Group) -> bool {
     matches!(
@@ -176,15 +188,50 @@ fn is_console_attribute(group: &proc_macro2::Group) -> bool {
     )
 }
 
+/// True when this attribute is `#[doc = "..."]` — the desugared form of a
+/// `///` doc comment (rustc lowers both to the same shape).
+fn is_doc_attribute(group: &proc_macro2::Group) -> bool {
+    matches!(
+        group.stream().into_iter().next(),
+        Some(TokenTree::Ident(ref i)) if i == "doc"
+    )
+}
+
+/// True when this attribute is `#[derive(... T1, T2, ...)]` and any T mentions
+/// a [`CLAP_DERIVES`] trait. Scans every ident inside the inner group so
+/// `clap::Parser` matches the same as `Parser` (`clap` and `::` are also
+/// idents/puncts in the token stream, but only `Parser` is relevant to the
+/// match).
+fn declares_clap_derive(group: &proc_macro2::Group) -> bool {
+    let mut trees = group.stream().into_iter();
+    let Some(TokenTree::Ident(ref head)) = trees.next() else {
+        return false;
+    };
+    if head != "derive" {
+        return false;
+    }
+    let Some(TokenTree::Group(inner)) = trees.next() else {
+        return false;
+    };
+    inner.stream().into_iter().any(|t| match t {
+        TokenTree::Ident(i) => CLAP_DERIVES.iter().any(|c| i == c),
+        _ => false,
+    })
+}
+
 /// Walk a token stream, collecting violations.
 ///
 /// `console_only` restricts checking to [`CONSOLE_MACROS`] arguments, used for
 /// `ui/**`. `in_console` tracks whether the current group IS such an argument.
+/// `in_clap_derive` tracks whether the enclosing item's `#[derive(...)]` names
+/// a [`CLAP_DERIVES`] trait — inside such an item, `#[doc]` attributes are
+/// rendered as `--help` text and must be scanned (issue #590).
 fn scan_tokens(
     stream: TokenStream,
     file: &str,
     console_only: bool,
     in_console: bool,
+    in_clap_derive: bool,
     out: &mut Vec<Violation>,
 ) {
     let mut pending_macro: Option<String> = None;
@@ -194,6 +241,12 @@ fn scan_tokens(
     // `eprintln!("{:?}", ["bad — output"])` was skipped -- real console output
     // hidden by the array's own brackets (caught in review of #576).
     let mut after_pound = false;
+    // Set when we've just seen `#[derive(... CLAP_DERIVES trait ...)]`, and
+    // consumed when we enter the next brace body group (the derived item's
+    // body). If the item has no brace body (unit struct, `struct S;`), the
+    // flag gets cleared on the next non-attribute group so it can't leak into
+    // a sibling item.
+    let mut next_body_is_clap_derived = false;
     for tree in stream {
         match tree {
             TokenTree::Ident(ident) => {
@@ -224,6 +277,14 @@ fn scan_tokens(
                 if punct.as_char() != '!' {
                     pending_macro = None;
                 }
+                // `;` terminates an item at this scope. For a body-less item
+                // (unit struct, tuple struct, `type` alias, `use`) the
+                // `next_body_is_clap_derived` flag never reached a brace
+                // group; drop it here so it can't leak into a later sibling
+                // item at the same scope.
+                if punct.as_char() == ';' {
+                    next_body_is_clap_derived = false;
+                }
             }
             TokenTree::Group(group) => {
                 let is_console_call = pending_macro
@@ -233,18 +294,26 @@ fn scan_tokens(
                 if group.delimiter() == Delimiter::Bracket && after_pound {
                     // Attribute body: `#[..]` / `#![..]`.
                     //
-                    // Only `doc` is exempt, and only because rustc lowers
-                    // `///` into `#[doc = "..."]` -- this codebase's doc
-                    // comments are full of em dashes that never reach a
-                    // console. Every OTHER attribute is scanned, because
-                    // several carry real console text: clap's
-                    // `#[command(about = "...")]` and `#[arg(help = "...")]`
-                    // are printed by `--help`, and thiserror's
-                    // `#[error("...")]` becomes the Display of an error that
-                    // gets printed. An ARRAY literal reaches this arm with
+                    // `doc` is exempt UNLESS the enclosing item derives one
+                    // of the clap traits — clap renders those field docs as
+                    // `--help` text at runtime (issue #590). Ordinary `///`
+                    // comments elsewhere never reach a console. Other
+                    // attributes scan on the [`CONSOLE_ATTRIBUTES`] allow-
+                    // list (clap's `#[command]` / `#[arg]`, thiserror's
+                    // `#[error]`). An ARRAY literal reaches this arm with
                     // `after_pound == false` and is scanned either way.
                     after_pound = false;
-                    if !is_console_attribute(&group) {
+                    // Notice a clap derive BEFORE deciding whether to scan
+                    // this attribute itself — the derive body carries no
+                    // console literals, so its scanning is a no-op, but the
+                    // flag it sets governs how the next item's body is
+                    // treated (issue #590).
+                    if declares_clap_derive(&group) {
+                        next_body_is_clap_derived = true;
+                    }
+                    let should_scan = is_console_attribute(&group)
+                        || (in_clap_derive && is_doc_attribute(&group));
+                    if !should_scan {
                         continue;
                     }
                     // `in_console = true`: these ARE console output, so they
@@ -255,12 +324,23 @@ fn scan_tokens(
                         file,
                         console_only,
                         true,
+                        in_clap_derive,
                         out,
                     );
                     pending_macro = None;
                     continue;
                 }
                 after_pound = false;
+                // Non-attribute group. If this is the brace body immediately
+                // following a `#[derive(clap-trait)]`, its inner tokens are
+                // fields (struct) or variants (enum) whose `///` comments
+                // land in `--help`; propagate the flag. On any other group
+                // shape the flag is stale (unit struct, sibling function,
+                // etc.) and must NOT leak to a later sibling item.
+                let entering_clap_body =
+                    group.delimiter() == Delimiter::Brace && next_body_is_clap_derived;
+                let child_in_clap = in_clap_derive || entering_clap_body;
+                next_body_is_clap_derived = false;
                 scan_tokens(
                     // Strip at EVERY level, not just the top: `audio/vad.rs`
                     // has `#[cfg(test)]` on individual match ARMS inside a
@@ -270,6 +350,7 @@ fn scan_tokens(
                     file,
                     console_only,
                     nested_in_console,
+                    child_in_clap,
                     out,
                 );
                 pending_macro = None;
@@ -461,7 +542,7 @@ fn scan_file(path: &Path) -> Vec<Violation> {
         .map_or(rel.clone(), |(_, r)| r.to_owned());
     let console_only = is_ui_scope(&rel);
     let mut out = Vec::new();
-    scan_tokens(strip_cfg_test(stream), &rel, console_only, false, &mut out);
+    scan_tokens(strip_cfg_test(stream), &rel, console_only, false, false, &mut out);
     out
 }
 
