@@ -31,7 +31,7 @@ pub enum Command {
     ///
     /// Exit code is 0 when no check `fail`s (warnings are non-blocking) and
     /// 1 otherwise, so the same command drives interactive troubleshooting
-    /// and CI smoke gating. Every check is READ-ONLY — the doctor never
+    /// and CI smoke gating. Every check is READ-ONLY - the doctor never
     /// writes to config, downloads models, or opens the display server.
     /// Audit item 2 chunk E.
     Doctor {
@@ -47,7 +47,7 @@ pub enum Command {
     },
     /// Run the golden benchmark corpus through the configured backend and
     /// print a one-line `[benchmark] ...` summary. Same code path as the
-    /// "Run benchmark" button — the corpus is resolved relative to the app
+    /// "Run benchmark" button - the corpus is resolved relative to the app
     /// root (or per-user appdata) and the configured backend is used.
     #[command(alias = "benchmark")]
     Bench,
@@ -61,12 +61,12 @@ pub enum Command {
         /// `allow_hyphen_values` is required so clap accepts manifest ids that
         /// happen to start with `-` (e.g. `-sample`). The full allowlist is
         /// then enforced by `corpus_record::is_safe_corpus_id` BEFORE shelling
-        /// out — defence in depth on top of the worker's own guard.
+        /// out - defence in depth on top of the worker's own guard.
         #[arg(allow_hyphen_values = true)]
         id: String,
     },
     /// Library-first POC: drive the full push-to-talk pipeline
-    /// (transcribe → dictionary → post-process → inject) against a WAV
+    /// (transcribe -> dictionary -> post-process -> inject) against a WAV
     /// file, without opening a microphone or installing a keyboard hook.
     /// Defaults to a dry-run that prints the would-be-typed transcript;
     /// pass `--inject` to really type into the active window.
@@ -80,7 +80,7 @@ pub enum Command {
         #[arg(long)]
         wav: String,
         /// Really invoke the injection backend (default: dry-run).
-        /// Only the direct-typing strategy is implemented in this POC —
+        /// Only the direct-typing strategy is implemented in this POC -
         /// a headless paste strategy is future work, so no `--inject-mode`
         /// selector is exposed until it lands.
         #[arg(long, default_value_t = false)]
@@ -97,7 +97,7 @@ pub enum Command {
         json: bool,
     },
     /// Drive the in-process Rust `DictateSession` over a WAV file, offline,
-    /// via the cloud STT backend (Groq/OpenAI) — the Rust-engine counterpart
+    /// via the cloud STT backend (Groq/OpenAI) - the Rust-engine counterpart
     /// of `simulate-ptt` (which forwards to Python). Injection is
     /// preview-only. Used to CLI-integration-test the Rust engine alongside
     /// the Python one; hidden because it needs a cloud key and is primarily a
@@ -194,11 +194,11 @@ pub enum Command {
     /// Foreground driver for the full Rust dictation runtime: installs the
     /// hotkey listener + coordinator, wires them into the in-process
     /// `DictateSession` action sink (real backends when the required cargo
-    /// features are compiled in — see below), and runs until Ctrl-C.
+    /// features are compiled in - see below), and runs until Ctrl-C.
     ///
     /// **Audit item 5 Phase A step 1** (see
     /// `docs/design/item5-wire-dictate-session.md`). Adds the CLI verb only
-    /// — the Python entrypoint at `src/python/whisper_dictate/runtime.py`
+    /// -- the Python entrypoint at `src/python/whisper_dictate/runtime.py`
     /// still runs the shipping PTT loop unconditionally in this PR. A
     /// follow-up (Phase A step 2) will branch on `VOICEPI_DICTATE_ENGINE`
     /// and shell out to this verb when the operator has opted in. Nothing
@@ -207,7 +207,7 @@ pub enum Command {
     /// Feature-gated behind `rust-hotkeys,rust-injection`. On a stock build
     /// the CLI surface still parses (so smoke scripts can pin it without a
     /// shell-level feature detect) but the handler exits non-zero with an
-    /// actionable "rebuild with --features …" message. Matching sibling
+    /// actionable "rebuild with --features ..." message. Matching sibling
     /// features (`whisper-rs-local` for real Whisper inference,
     /// `audio-in-rust` for the cpal capture pump) upgrade the session from
     /// PR 4 stubs to the real backends via
@@ -219,7 +219,7 @@ pub enum Command {
         #[arg(long, value_name = "PATH")]
         config: Option<String>,
         /// Emit machine-readable JSONL on stdout instead of the human-
-        /// readable `[dictate-run] …` lines. First line is a stable
+        /// readable `[dictate-run] ...` lines. First line is a stable
         /// `{"kind":"ready","ready":true,"engine":"rust","chord":"...","driver":"..."}`
         /// envelope so a supervising parent process can gate on it before
         /// forwarding OS key events; subsequent lines are one JSON per
@@ -227,7 +227,7 @@ pub enum Command {
         /// machine-readable contract callers should pin.
         #[arg(long, default_value_t = false)]
         json_events: bool,
-        /// Documentation flag — the verb always runs in the foreground
+        /// Documentation flag - the verb always runs in the foreground
         /// today (the process itself IS the dictation runtime). Accepted
         /// so the Phase A step 2 Python dispatch can pass it through
         /// verbatim and so the flag exists when a future background variant
@@ -235,7 +235,7 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         foreground: bool,
     },
-    /// Headless self-tests for the shipped runtime — regression checks that
+    /// Headless self-tests for the shipped runtime - regression checks that
     /// exercise past-breakage classes without needing a display server, audio
     /// hardware, or root. Every sub-verb takes zero configuration and exits
     /// non-zero on any observed regression, so CI (and the wayland-user-smoke
@@ -244,7 +244,7 @@ pub enum Command {
         #[command(subcommand)]
         command: SelfTestCommand,
     },
-    /// Inject text into the active window — scripting + smoke-test wrapper
+    /// Inject text into the active window - scripting + smoke-test wrapper
     /// around the injection library. **Defaults to `--dry-run`**: the
     /// resolved backend + keystroke plan is printed and NOTHING is typed.
     /// Real injection requires `--do-it` (alias `--live`).
@@ -252,14 +252,14 @@ pub enum Command {
     /// Two invocation shapes coexist:
     ///
     /// * `inject-text <TEXT> [--dry-run|--do-it] [--backend NAME] [--json]`
-    ///   — the public scripting/smoke form (audit item 2 chunk B).
+    ///   - the public scripting/smoke form (audit item 2 chunk B).
     /// * `inject-text --mode {type|paste} --text ... --xkb-layout ...
-    ///   --target-title ... --target-process ...` — the legacy hidden
+    ///   --target-title ... --target-process ...` - the legacy hidden
     ///   helper that the Python worker still shells out to for Wayland
     ///   layout-aware typing. Keep working for backwards-compat; the
     ///   public path never sets `--mode`.
     InjectText {
-        /// Text to inject (public form — positional). When present the
+        /// Text to inject (public form - positional). When present the
         /// command runs the dry-run/inject flow; when absent the legacy
         /// `--mode` + `--text` helper path runs.
         #[arg(value_name = "TEXT")]
@@ -268,7 +268,7 @@ pub enum Command {
         /// self-documenting shell scripts; `--do-it` overrides.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        /// REALLY inject the text into the active window (dangerous —
+        /// REALLY inject the text into the active window (dangerous -
         /// moves the cursor, types keys). Off by default. `--live` is an
         /// alias for the same flag.
         #[arg(long, alias = "live", default_value_t = false)]
@@ -286,7 +286,7 @@ pub enum Command {
         )]
         backend: String,
         /// Machine-readable JSON output (single line). Default is a
-        /// human-readable summary — the JSON keys are stable so tests can
+        /// human-readable summary - the JSON keys are stable so tests can
         /// pin them.
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -382,7 +382,7 @@ pub enum Command {
     #[command(hide = true)]
     Privacy,
     /// Internal helper used by the Python worker for post-STT formatting /
-    /// LLM cleanup. JSON envelope on stdin, JSON response on stdout — see
+    /// LLM cleanup. JSON envelope on stdin, JSON response on stdout - see
     /// `src/rust/postprocess.rs`. Gated at runtime by
     /// `VOICEPI_POSTPROCESS_BACKEND=rust`; default install keeps the Python
     /// path.
@@ -390,7 +390,7 @@ pub enum Command {
     Postprocess,
     /// Internal helper used by the Python worker for OpenAI-compatible chat
     /// completion (post-processor cloud backend) + transcription prompt
-    /// capping. JSON envelope on stdin, JSON response on stdout — see
+    /// capping. JSON envelope on stdin, JSON response on stdout - see
     /// `src/rust/cloud_api/chat.rs`. Gated at runtime by
     /// `VOICEPI_EXTERNAL_API_BACKEND=rust`.
     #[command(hide = true)]
@@ -403,7 +403,7 @@ pub enum Command {
     /// binary was built with `--features whisper-rs-local`; otherwise exits
     /// non-zero with a clear "feature not compiled in" message so the Python
     /// caller falls back to its own path. JSON request on stdin, JSON
-    /// response on stdout — see `src/rust/whisper/dispatch.rs`.
+    /// response on stdout - see `src/rust/whisper/dispatch.rs`.
     ///
     /// The `--probe` flag short-circuits before reading stdin / the model env
     /// var: it exits 0 on a feature-enabled build and non-zero on a stock
@@ -423,7 +423,7 @@ pub enum Command {
     },
     /// Long-running in-process Whisper worker. Reads one JSON request per
     /// `\n`-terminated line from stdin, writes one JSON response per line to
-    /// stdout — same envelope as `transcribe-wav` but the GGML model is
+    /// stdout - same envelope as `transcribe-wav` but the GGML model is
     /// loaded ONCE and stays resident between calls (subject to
     /// `VOICEPI_WHISPER_IDLE_UNLOAD_S`). Per-request errors stay in-protocol
     /// as `{"error":"..."}` envelopes so a single bad request does not tear
@@ -443,7 +443,7 @@ pub enum Command {
     /// Enumerate input audio devices as JSON, or dry-run test a specific
     /// microphone. With no subcommand the binary reads a JSON envelope on
     /// stdin (`{"action":"list"|"default"|"find","query":"..."}`) and prints
-    /// the matching JSON response — this is the hidden helper `vp_devices.py`
+    /// the matching JSON response - this is the hidden helper `vp_devices.py`
     /// shells out to when `VOICEPI_DEVICES_BACKEND=rust`. Built into binaries
     /// with the `audio-in-rust` feature; binaries without the feature print
     /// a structured error and exit non-zero so the Python caller can fall
@@ -452,9 +452,9 @@ pub enum Command {
     /// The `test <NAME>` subcommand shells out to the Python worker's
     /// `--test-audio-device` query mode (which reuses the same live-capture
     /// WASAPI/DirectSound/MME open matrix), prints a single JSON usability
-    /// result to stdout and exits — no ML model is loaded. Pass an empty
+    /// result to stdout and exits - no ML model is loaded. Pass an empty
     /// string to test the system default input. Enables headless mic
-    /// verification in the CI container (audit item 3 —
+    /// verification in the CI container (audit item 3 -
     /// `docs/architecture-audit-2026-07-16.md`).
     Devices {
         #[command(subcommand)]
@@ -496,7 +496,7 @@ pub enum ConfigCommand {
     /// Print the current value of a single setting key.
     ///
     /// The key must be one of the settings owned by the typed `AppSettings`
-    /// (`stt_backend`, `audio_device`, `model`, …). Unknown keys exit 1 with
+    /// (`stt_backend`, `audio_device`, `model`, ...). Unknown keys exit 1 with
     /// an error message that lists every valid key. Emits the stored string
     /// form (boolean settings are stored as `"1"` / `"0"`) unless `--json` is
     /// passed, in which case the output is a single-line
@@ -515,7 +515,7 @@ pub enum ConfigCommand {
     /// Set a single setting key, validate, and persist the new config file.
     ///
     /// The value is validated via the same `AppSettings::validate` path the
-    /// UI uses on save — invalid enum values or unparseable numbers fail
+    /// UI uses on save - invalid enum values or unparseable numbers fail
     /// cleanly WITHOUT touching the file on disk. Booleans accept
     /// `1`/`0`/`true`/`false`/`yes`/`no`/`on`/`off` (case-insensitive) and
     /// are normalised to the `"1"`/`"0"` form the worker expects.
@@ -523,7 +523,7 @@ pub enum ConfigCommand {
         /// Setting key (e.g. `audio_device`, `model`, `stt_backend`).
         key: String,
         /// New value for `key`. Empty string clears the setting (equivalent
-        /// to removing the key from the config file — the worker will fall
+        /// to removing the key from the config file - the worker will fall
         /// back to the schema default). `allow_hyphen_values` lets a value
         /// that happens to begin with `-` (e.g. an audio device name or a
         /// negative dBFS) through clap.
@@ -538,7 +538,7 @@ pub enum ConfigCommand {
     /// Handy for shell completion and for scripting a "show me everything"
     /// dump without pretty-printing the entire config file.
     List {
-        /// Emit machine-readable JSON: an object of `{key: value, …}`.
+        /// Emit machine-readable JSON: an object of `{key: value, ...}`.
         #[arg(long)]
         json: bool,
         /// Override the config file path (default: platform user config).
@@ -593,7 +593,7 @@ pub enum DictionaryCommand {
         max_length: Option<usize>,
     },
     /// Print the raw terms + replacements the runtime loaded from the
-    /// dictionary. Bonus adapter around the same loader `prompt` uses —
+    /// dictionary. Bonus adapter around the same loader `prompt` uses -
     /// no network, no Python.
     #[command(name = "list")]
     List {
@@ -608,7 +608,7 @@ pub enum DictionaryCommand {
     /// Extract domain terms from the golden-corpus reference TEXT (curated
     /// terms + capitalised/multi-word/technical tokens) and append+dedup them
     /// into the dictionary. PREVIEW by default; pass `--apply` to write.
-    /// Reads corpus TEXT only — it never records or touches audio. Honours
+    /// Reads corpus TEXT only - it never records or touches audio. Honours
     /// `--language` / `--category` for profile selection.
     #[command(name = "build-from-corpus")]
     BuildFromCorpus {
@@ -646,7 +646,7 @@ pub enum DictionaryCommand {
     },
     /// Read an annotated benchmark JSONL and SUGGEST the domain terms the
     /// model missed (`term_misses`) as dictionary additions. PREVIEW by
-    /// default; pass `--apply` to add the new terms. Reads result TEXT only —
+    /// default; pass `--apply` to add the new terms. Reads result TEXT only -
     /// never records audio.
     #[command(name = "suggest-terms")]
     SuggestTerms {
@@ -667,7 +667,7 @@ pub enum DictionaryCommand {
         json: bool,
     },
     /// Read a benchmark / history JSONL and SUGGEST fuzzy REPLACEMENT pairs
-    /// (`from -> to`) mined from the transcripts — the fuzzy sibling of
+    /// (`from -> to`) mined from the transcripts - the fuzzy sibling of
     /// `suggest-terms` (which proposes term additions). PREVIEW only: the
     /// output is never written; a human/automation reviews it and then adds
     /// the accepted pairs via `dictionary replace FROM=TO`.
@@ -675,7 +675,7 @@ pub enum DictionaryCommand {
     /// Reads the live dictionary snapshot (via `--dictionary` / the same
     /// resolver as `dictionary status`) so already-known replacements and
     /// existing dictionary terms are filtered out. The scoring rules mirror
-    /// the Python `--dictionary-suggest` flag byte-for-byte (audit item 4 —
+    /// the Python `--dictionary-suggest` flag byte-for-byte (audit item 4 -
     /// `docs/architecture-audit-2026-07-16.md`).
     #[command(name = "suggest-replacements")]
     SuggestReplacements {
@@ -685,8 +685,8 @@ pub enum DictionaryCommand {
         /// `$VOICEPI_DICTIONARY` or the per-user `dictionary.json`.
         #[arg(long, value_name = "PATH")]
         dictionary: Option<String>,
-        /// Minimum fuzzy-match confidence for a suggestion to surface (0.0 …
-        /// 1.0; default 0.62 — matches the pre-Wave-8 Python flag default).
+        /// Minimum fuzzy-match confidence for a suggestion to surface (0.0 ...
+        /// 1.0; default 0.62 - matches the pre-Wave-8 Python flag default).
         #[arg(long, default_value_t = 0.62)]
         min_confidence: f64,
         /// Emit a JSON array of suggestions instead of the human preview.
@@ -699,14 +699,14 @@ pub enum DictionaryCommand {
 pub enum DevicesCommand {
     /// Dry-run open the named microphone and print a single JSON usability
     /// result. Resolves `name` against the live device list (case-insensitive
-    /// substring — same rule the picker uses), then tries the same
+    /// substring - same rule the picker uses), then tries the same
     /// WASAPI/DirectSound/MME open matrix as live capture (opening and
     /// immediately closing each candidate, capturing no audio). Loads no ML
     /// model. Pass an empty string to test the system default input.
     ///
     /// Output shape (single JSON object, one line):
     /// `{"device":"...", "usable":true|false, "endpoint":"wasapi|directsound|mme|default|null", "samplerate":<int|null>, "dtype":"...|null", "resampled":true|false, "reason":"...|null"}`.
-    /// A non-usable device still exits 0 — it's a normal reportable outcome,
+    /// A non-usable device still exits 0 - it's a normal reportable outcome,
     /// not a CLI error. Only sub-process launch failures return non-zero.
     Test {
         /// Microphone name (case-insensitive substring; same matching rule as
@@ -729,7 +729,7 @@ pub enum HistoryCommand {
         limit: usize,
     },
     /// Print the most recent N transcripts (newest first). By default emits
-    /// only the `text` field, one entry per line — pass `--json` to get the
+    /// only the `text` field, one entry per line - pass `--json` to get the
     /// full entry objects as a JSON array.
     Last {
         /// Number of transcripts to print (default 1). Values <=0 are
@@ -748,7 +748,7 @@ pub enum HistoryCommand {
     #[command(name = "copy-last")]
     CopyLast,
     /// Feed the last transcript back into the injection pipeline. Wraps
-    /// `inject-text` — same backend selection and dry-run guardrails — so
+    /// `inject-text` - same backend selection and dry-run guardrails - so
     /// this verb **defaults to a dry-run**: it prints the plan and does
     /// nothing else. Pass `--do-it` (alias `--live`) to actually type.
     #[command(name = "reinject-last")]
@@ -757,7 +757,7 @@ pub enum HistoryCommand {
         /// self-documenting shell scripts; `--do-it` overrides.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        /// REALLY inject the text into the active window (dangerous —
+        /// REALLY inject the text into the active window (dangerous -
         /// moves the cursor, types keys). Off by default.
         #[arg(long, alias = "live", default_value_t = false)]
         do_it: bool,
@@ -843,16 +843,16 @@ pub enum HotkeyCommand {
 pub enum SelfTestCommand {
     /// Regression test for the PTT-wedge class of bugs (v1.20.7 Windows,
     /// v1.20.2 Wayland via #467). Exercises the self-injection guard +
-    /// tracker end-to-end with synthetic events — NO OS-level hooks, NO
-    /// audio, NO display — so the check runs on any CI container.
+    /// tracker end-to-end with synthetic events - NO OS-level hooks, NO
+    /// audio, NO display - so the check runs on any CI container.
     ///
-    /// Each iteration simulates: first PTT chord → guard-bracketed
+    /// Each iteration simulates: first PTT chord -> guard-bracketed
     /// injection burst (unmapped VKs + STALE_MODIFIER_VKS-shaped releases)
-    /// → second PTT chord. Fails if any injected event leaks past the
+    /// -> second PTT chord. Fails if any injected event leaks past the
     /// guard OR the second chord silently doesn't fire (the classic wedge
     /// symptom).
     ///
-    /// Feature-gated behind `rust-hotkeys` + `rust-injection` — a stock
+    /// Feature-gated behind `rust-hotkeys` + `rust-injection` - a stock
     /// build exits with an actionable "rebuild with --features ..."
     /// message rather than hanging or reporting a false pass.
     PttWedge {
@@ -862,7 +862,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = 5)]
         iterations: usize,
         /// Emit a single JSON object with `kind`, `driver`, `iterations`,
-        /// `all_passed`, and per-iteration `results` — the machine-
+        /// `all_passed`, and per-iteration `results` - the machine-
         /// readable contract callers should pin.
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -870,7 +870,7 @@ pub enum SelfTestCommand {
         /// same canonical names and aliases (`x11` / `wayland`) as the
         /// `hotkey capture --driver` flag. The self-test drives the shared
         /// guard + tracker filter both drivers converge on, so this flag
-        /// only affects the report label — the underlying assertions are
+        /// only affects the report label - the underlying assertions are
         /// identical.
         #[arg(long, value_name = "AUTO|RDEV|EVDEV", default_value = "auto")]
         driver: String,
@@ -879,7 +879,7 @@ pub enum SelfTestCommand {
     /// Different bug class from `self-test ptt-wedge`: this verb probes
     /// the injection path itself (plan builder + guard bracket counter)
     /// for state that should reset between successive `inject()` calls
-    /// but doesn't — modifier stickiness, character-position leaks,
+    /// but doesn't - modifier stickiness, character-position leaks,
     /// backend-selection cache staleness, and unbalanced `arm_start` /
     /// `arm_end` pairs.
     ///
@@ -889,25 +889,25 @@ pub enum SelfTestCommand {
     /// [`crate::hotkey::inject_guard::InjectionGuard::arm_start`] /
     /// `arm_end` and asserts the guard's `is_active` returns to false
     /// past the post-grace horizon. Runs no OS side effects on the
-    /// default (dry-run) path — safe in CI.
+    /// default (dry-run) path - safe in CI.
     ///
     /// `--live` opts into the dangerous path: `execute_plan` really types
     /// into the active window. NEVER passed by the smoke script or CI.
     ///
-    /// Feature-gated behind `rust-hotkeys` + `rust-injection` — a stock
+    /// Feature-gated behind `rust-hotkeys` + `rust-injection` - a stock
     /// build exits with an actionable "rebuild with --features ..."
     /// message rather than hanging or reporting a false pass.
     InjectionIdempotency {
         /// Iterations to run. Each iteration uses a fresh guard so a
         /// failure in one does not cascade into the next; the loop stops
         /// at the first failure so the report unambiguously names the
-        /// broken cycle. Default 10 — an order of magnitude higher than
+        /// broken cycle. Default 10 - an order of magnitude higher than
         /// `ptt-wedge` so intermittent state leaks are more likely to
         /// surface.
         #[arg(long, default_value_t = 10)]
         iterations: usize,
         /// Emit a single JSON object with `kind`, `backend`, `live`,
-        /// `iterations`, `all_passed`, and per-iteration `results` — the
+        /// `iterations`, `all_passed`, and per-iteration `results` - the
         /// machine-readable contract callers should pin.
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -925,7 +925,7 @@ pub enum SelfTestCommand {
             ],
         )]
         backend: String,
-        /// REALLY execute the plan (dangerous — types into the active
+        /// REALLY execute the plan (dangerous - types into the active
         /// window using the resolved backend). Off by default; the smoke
         /// script and CI never pass this. Use only on a scratch VM /
         /// unfocused window when hunting a live-only regression.
@@ -939,7 +939,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         live: bool,
     },
-    /// Regression test for the audio-capture path (item 5 prereq 4 —
+    /// Regression test for the audio-capture path (item 5 prereq 4 -
     /// PipeWire quantum handling + foundation for real Rust dictation).
     /// Opens the cpal input stream for `--duration` seconds, tallies
     /// samples, and reports RMS + peak. Applies the v1.20.6 PipeWire
@@ -948,12 +948,12 @@ pub enum SelfTestCommand {
     ///
     /// Two failure modes this catches:
     ///   1. Stream opens but never delivers samples (v1.20.6 DMIC crash
-    ///      class) — `frames_captured == 0` → non-zero exit.
+    ///      class) - `frames_captured == 0` -> non-zero exit.
     ///   2. Optionally, capture succeeds but the signal is silence
     ///      (permission / mute bug). Off by default; enable with
     ///      `--fail-on-silence` where a live device is guaranteed.
     ///
-    /// Feature-gated behind `audio-in-rust` — a stock build exits with an
+    /// Feature-gated behind `audio-in-rust` - a stock build exits with an
     /// actionable "rebuild with --features audio-in-rust" message rather
     /// than hanging or reporting a false pass. Safe in headless CI: a
     /// missing device fails gracefully with a distinctive error message
@@ -967,7 +967,7 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = 2000)]
         duration_ms: u64,
         /// Input device selector. Same lookup precedence as `devices`
-        /// (exact → substring → numeric); empty string picks the
+        /// (exact -> substring -> numeric); empty string picks the
         /// system default.
         #[arg(long, default_value = "")]
         device: String,
@@ -989,11 +989,11 @@ pub enum SelfTestCommand {
     /// use in Phase C, reports wall-clock elapsed + on-disk file size,
     /// and exits non-zero on any load failure.
     ///
-    /// Feature-gated behind `whisper-rs-local` — a stock build exits with
+    /// Feature-gated behind `whisper-rs-local` - a stock build exits with
     /// an actionable "rebuild with --features whisper-rs-local" message
     /// rather than pretending to run the check.
     ///
-    /// The verb DOES NOT download the model — it expects the file to
+    /// The verb DOES NOT download the model - it expects the file to
     /// already be in the cache (run `whisper-dictate models download
     /// <name>` first). This keeps the self-test hermetic: a slow CI
     /// runner isn't punished by a HuggingFace fetch happening inside
@@ -1006,7 +1006,7 @@ pub enum SelfTestCommand {
         /// containing `/` or `\`, or ending in `.bin` / `.gguf`, is
         /// treated as a literal path.
         ///
-        /// Empty (the default) resolves to whichever tiny fixture is CACHED —
+        /// Empty (the default) resolves to whichever tiny fixture is CACHED -
         /// see `whisper::self_test::default_tiny_fixture`. A hardcoded default
         /// fails before the loader runs on a box prepared with the other
         /// variant, which would silently skip the very regression this
