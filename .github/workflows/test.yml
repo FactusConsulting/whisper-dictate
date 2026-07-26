@@ -297,17 +297,22 @@ jobs:
         os: [ubuntu-latest, windows-2025]
         # Each profile owns ONE cargo invocation. `feature_arg` is the
         # verbatim cargo flag (empty for the default feature set); `role`
-        # selects test vs clippy in the step gates below. Adding a profile
-        # here is the one-line way to extend PR-CI coverage.
+        # selects test vs clippy in the step gates below.
+        #
+        # `features-combined` is the "build once, test many features"
+        # cell (2026-07-26 follow-up): compiling rust-hotkeys +
+        # audio-in-rust together produces one target/ that runs the
+        # tests for both features in a single compile, instead of the
+        # previous per-feature cells that each paid full compile cost.
+        # If a feature only breaks when compiled alone (rare — cargo
+        # features are additive), extend dev-check.ps1's per-feature
+        # local coverage or add a dedicated cell.
         profile:
           - id: base
             feature_arg: ""
             role: test
-          - id: hotkeys
-            feature_arg: "--features rust-hotkeys"
-            role: test
-          - id: audio
-            feature_arg: "--features audio-in-rust"
+          - id: features-combined
+            feature_arg: "--features rust-hotkeys,audio-in-rust"
             role: test
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
@@ -315,6 +320,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUN_RUST: ${{ needs.changes.result == 'success' && (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') }}
+      # Incremental compilation on: overrides src/rust/Cargo.toml's
+      # `[profile.dev] incremental = false` / `[profile.test] incremental
+      # = false` (Windows-lock lesson from local dev boxes doesn't apply
+      # to fresh runners). The `CARGO_PROFILE_*_INCREMENTAL` env vars win
+      # over the manifest so the flip is CI-only — no need to touch the
+      # manifest. Saves 10-20% on warm-cache pushes to the same PR.
+      CARGO_INCREMENTAL: "1"
+      CARGO_PROFILE_DEV_INCREMENTAL: "true"
+      CARGO_PROFILE_TEST_INCREMENTAL: "true"
     steps:
       - name: Fail matrix leg if change detection broke
         if: needs.changes.result != 'success'
@@ -327,22 +341,16 @@ jobs:
         if: env.RUN_RUST == 'true'
         with:
           ref: ${{ inputs.ref }}
-      - name: Install Linux Rust UI build deps
+      - name: Install Linux Rust UI build deps (cached)
+        # awalsh128/cache-apt-pkgs-action wraps apt install + actions/cache
+        # so the 12-package install is a ~5s cache read on subsequent runs
+        # instead of ~30-40s of apt work every time. First-run cost is
+        # unchanged; the win is on every PR push after the initial one.
         if: env.RUN_RUST == 'true' && runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            pkg-config \
-            libdbus-1-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libxi-dev \
-            libxtst-dev \
-            libasound2-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          version: 1.0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RUST == 'true'
         with:
@@ -353,13 +361,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: env.RUN_RUST == 'true'
         with:
-          # Same cache dir as before ("src/rust -> ../target"); the extra
-          # key material below just partitions the cache per profile so
-          # parallel cells don't overwrite each other's saved target/ on
-          # the same OS. Retrieval prefix stays shared, so a fresh profile
-          # still falls back to the closest match instead of a cold cache.
+          # Single shared cache across all rust-features cells per OS: the
+          # first cell to complete saves target/, and every subsequent
+          # cell restores from that same warm cache instead of a cold
+          # compile. Cargo's fingerprint then only rebuilds artefacts
+          # that changed for this cell's feature-set — the deps compiled
+          # earlier are reused verbatim. This is the practical "build once
+          # and reuse" mechanism.
           workspaces: "src/rust -> ../target"
-          key: ${{ matrix.profile.id }}
+          shared-key: features
       - name: Rust format
         # fmt is OS- and feature-independent, so run it exactly once (in
         # the ubuntu `base` cell) instead of on every matrix leg.
@@ -489,22 +499,14 @@ jobs:
         if: env.RUN_RELEASE == 'true'
         with:
           ref: ${{ inputs.ref }}
-      - name: Install Linux Rust UI build deps
+      - name: Install Linux Rust UI build deps (cached)
+        # Same apt-cache action as rust-features — the two jobs pin the
+        # same package list, so a hit on either warms both.
         if: env.RUN_RELEASE == 'true' && runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            pkg-config \
-            libdbus-1-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libxi-dev \
-            libxtst-dev \
-            libasound2-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+          version: 1.0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RELEASE == 'true'
       - uses: Swatinem/rust-cache@v2
@@ -513,7 +515,7 @@ jobs:
           workspaces: "src/rust -> ../target"
           # Release profile compiles into its own target sub-tree; keep
           # its cache separate from the PR-CI debug caches above.
-          key: release
+          shared-key: release
       - name: Rust build (whisper-rs-local feature)
         # rc.2 of Wave 8 (#348): the `whisper-rs-local` feature compiles
         # whisper.cpp from source via whisper-rs and is now shipping in

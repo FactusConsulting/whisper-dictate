@@ -703,15 +703,130 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Windows release CLI-output smoke", workflow)
         self.assertIn("injection-idempotency regression test", workflow)
 
+    def test_rust_ci_wall_clock_optimisations_stay_wired(self):
+        # 2026-07-26 follow-up PR to #581: locks the four wall-clock
+        # savings so a later refactor cannot silently undo them (each
+        # regression here costs 1-10 min per PR turn).
+        #
+        # 1. Shared Swatinem cache-key across rust-features cells so the
+        #    first cell to save target/ warms every subsequent cell
+        #    (Cargo re-fingerprints its features but reuses shared deps).
+        # 2. CARGO_INCREMENTAL + CARGO_PROFILE_*_INCREMENTAL env vars on
+        #    the rust-features job — overrides Cargo.toml's
+        #    `incremental = false` (needed for local Windows dev stability
+        #    but pure overhead on fresh runners). Local dev is unaffected.
+        # 3. awalsh128/cache-apt-pkgs-action replacing the raw
+        #    `sudo apt install` on both rust-features + rust-release
+        #    Linux legs — turns a ~30-40s install into a ~5s cache read.
+        # 4. hotkeys + audio profiles are merged into a single
+        #    features-combined cell that tests both features in one
+        #    compile (the practical "build once, reuse" mechanism).
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+
+        # (1) shared cache-key present, per-profile `key:` gone from
+        # rust-features. The `shared-key: features` value must appear;
+        # `key: ${{ matrix.profile.id }}` (the previous-generation
+        # partitioning) MUST NOT reappear or parallel legs stop sharing.
+        m = re.search(
+            r"\n  rust-features:\n(?P<body>.*?)\n  rust:\n",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            m,
+            "test.yml must declare `rust-features:` immediately before `rust:`",
+        )
+        rf_body = m.group("body")
+        self.assertIn(
+            "shared-key: features", rf_body,
+            "rust-features cells must share one Swatinem cache-key so the"
+            " first cell warms target/ for every subsequent cell",
+        )
+        self.assertNotIn(
+            "key: ${{ matrix.profile.id }}", rf_body,
+            "per-profile key partitioning defeats the shared-cache win;"
+            " use shared-key instead",
+        )
+
+        # (2) Incremental compilation env vars — all three must be set
+        # so Cargo.toml's `incremental = false` is overridden in CI
+        # (the manifest keeps local Windows dev safe; CI runners are
+        # fresh so the lock issue doesn't apply).
+        self.assertRegex(
+            rf_body, r"CARGO_INCREMENTAL:\s*[\"']?1[\"']?",
+            "rust-features job env must set CARGO_INCREMENTAL=1",
+        )
+        self.assertRegex(
+            rf_body,
+            r"CARGO_PROFILE_DEV_INCREMENTAL:\s*[\"']?true[\"']?",
+            "rust-features job env must set CARGO_PROFILE_DEV_INCREMENTAL=true"
+            " to override Cargo.toml [profile.dev] incremental=false in CI",
+        )
+        self.assertRegex(
+            rf_body,
+            r"CARGO_PROFILE_TEST_INCREMENTAL:\s*[\"']?true[\"']?",
+            "rust-features job env must set CARGO_PROFILE_TEST_INCREMENTAL=true"
+            " to override Cargo.toml [profile.test] incremental=false in CI",
+        )
+
+        # (3) apt-cache action on BOTH Linux legs (rust-features +
+        # rust-release). Raw `sudo apt install` reappearing anywhere
+        # means someone reverted the cache — flag it explicitly.
+        self.assertIn(
+            "awalsh128/cache-apt-pkgs-action", workflow,
+            "Linux legs must use cache-apt-pkgs-action so the 12-package"
+            " install is a warm-cache read on subsequent runs",
+        )
+        # rust-features must NOT reintroduce raw apt install.
+        self.assertNotIn(
+            "sudo apt install", rf_body,
+            "raw apt install in rust-features defeats the cache — use"
+            " awalsh128/cache-apt-pkgs-action",
+        )
+        rr = re.search(
+            r"\n  rust-release:\n(?P<body>.*?)(?:\n  [a-zA-Z]|\Z)",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(rr, "test.yml must declare rust-release:")
+        self.assertNotIn(
+            "sudo apt install", rr.group("body"),
+            "raw apt install in rust-release defeats the cache — use"
+            " awalsh128/cache-apt-pkgs-action",
+        )
+
+        # (4) features-combined profile is the single cell that tests
+        # rust-hotkeys AND audio-in-rust in one compile. Guard both
+        # the profile id and the feature-arg pair.
+        self.assertIn("id: features-combined", rf_body,
+                      "the combined feature profile must exist")
+        self.assertIn(
+            '"--features rust-hotkeys,audio-in-rust"', rf_body,
+            "features-combined profile must test rust-hotkeys +"
+            " audio-in-rust in a single compile",
+        )
+        # The previous per-feature profile ids must be GONE — if they
+        # come back the shared-cache + build-once win regresses.
+        self.assertNotIn(
+            "id: hotkeys\n", rf_body,
+            "standalone `hotkeys` profile has been merged into"
+            " features-combined; remove the redundant cell",
+        )
+        self.assertNotIn(
+            "id: audio\n", rf_body,
+            "standalone `audio` profile has been merged into"
+            " features-combined; remove the redundant cell",
+        )
+
     def test_dev_check_wrapper_mirrors_ci_rust_matrix_legs(self):
         # Codex P2 #418 dev-check.ps1:121 + :51: the pre-push wrapper
-        # must drive the same Rust legs CI runs (fmt-check + clippy +
-        # default test + rust-hotkeys test + audio-in-rust test);
-        # running only the default leg locally lets a feature-gated
-        # regression slip through. Lock the four cargo invocations
-        # (fmt, clippy, default test, two feature-gated tests) into
-        # the script body so a future refactor cant silently shrink
-        # the matrix.
+        # drives per-feature test invocations so a feature-gated regression
+        # is caught locally BEFORE the push. This is DELIBERATELY stricter
+        # than CI's `features-combined` cell — running hotkeys and audio
+        # separately locally catches "feature X alone doesn't compile"
+        # regressions that the combined-features CI cell can't see (cargo
+        # features are additive: passing A+B always includes A alone, so
+        # the reverse compile-check is only meaningful when done alone).
         script = Path("scripts/dev/dev-check.ps1").read_text(encoding="utf-8")
         for needle in [
             "cargo fmt --all -- --check",
@@ -725,7 +840,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         ]:
             self.assertIn(
                 needle, script,
-                f"dev-check.ps1 must drive `{needle}` to match CIs ubuntu rust matrix",
+                f"dev-check.ps1 must drive `{needle}` for local pre-push coverage",
             )
         # Also assert the wrapper still uses Docker Desktop, not the
         # earlier rancher-desktop WSL routing (which kept failing on
