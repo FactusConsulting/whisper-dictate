@@ -609,6 +609,100 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "manual dispatch is enough and the per-push spam was the bug",
         )
 
+    def test_rust_aggregator_gates_on_rust_features_matrix(self):
+        # Codex P2 #581: the `rust` job is the required-status contract
+        # for branch protection (`rust (ubuntu-latest)` /
+        # `rust (windows-2025)`), and the 2026-07-26 refactor made it a
+        # thin aggregator over the parallel `rust-features` matrix. Lock:
+        # (a) both required matrix legs still exist,
+        # (b) the aggregator explicitly needs `rust-features` (else the
+        #     required check would go green with a broken matrix),
+        # (c) the failure gate is present so a non-success/non-skipped
+        #     rust-features result BUBBLES UP — silent-skip would hide
+        #     regressions in the parallel legs.
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        m = re.search(
+            r"\n  rust:\n(?P<body>.*?)\n  rust-release:\n",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            m,
+            "test.yml must declare `rust:` immediately before `rust-release:`",
+        )
+        rust_body = m.group("body")
+        # (a) both required matrix legs preserved.
+        self.assertIn("os: [ubuntu-latest, windows-2025]", rust_body)
+        # (b) aggregator depends on BOTH rust-features AND rust-release
+        # (Codex P2 #581: without rust-release in `needs`, a red Windows
+        # release guard would leave the required context green and let
+        # regressions merge). Order-agnostic on `changes`; both feature
+        # and release jobs must appear.
+        m2 = re.search(r"needs:\s*\[([^\]]+)\]", rust_body)
+        self.assertIsNotNone(m2, "`rust:` must declare a `needs:` list")
+        needs_list = {n.strip() for n in m2.group(1).split(",")}
+        self.assertIn("changes", needs_list)
+        self.assertIn("rust-features", needs_list)
+        self.assertIn(
+            "rust-release", needs_list,
+            "the `rust` aggregator must also `needs: rust-release` so a"
+            " red Windows release guard fails the required context (Codex P2 #581)",
+        )
+        # (c) explicit fail step on non-success/non-skipped rust-features result.
+        self.assertIn(
+            "needs.rust-features.result != 'success' && needs.rust-features.result != 'skipped'",
+            rust_body,
+            "the aggregator must FAIL when rust-features didnt succeed"
+            " (skipped is fine — that is the docs-only-PR path)",
+        )
+        # (d) same guard for rust-release (Codex P2 #581 follow-up).
+        self.assertIn(
+            "needs.rust-release.result != 'success' && needs.rust-release.result != 'skipped'",
+            rust_body,
+            "the aggregator must FAIL when rust-release didnt succeed"
+            " so Windows regressions (#564 / Codex #518 F6) block the required check",
+        )
+
+    def test_rust_release_keeps_windows_guards_on_pr_ci(self):
+        # Claude-bot review PR #581: the Windows-specific regression
+        # guards (release CLI-output smoke for PR #564 windows_subsystem
+        # bug, and injection-idempotency for Codex #518 F6 SendInput
+        # leakage) have no equivalent elsewhere in this workflow —
+        # `integration-ubuntu-2604` is Linux-only. Moving them to a
+        # push-only job would let a regression merge and only surface
+        # post-merge. Lock: the rust-release job condition must NOT
+        # exclude pull_request events outright, and its RUN_RELEASE
+        # env expression must gate the ubuntu-latest leg (not the
+        # windows-2025 leg) on non-PR events.
+        workflow = Path(".github/workflows/test.yml").read_text(encoding="utf-8")
+        m = re.search(
+            r"\n  rust-release:\n(?P<body>.*?)(?:\n  [a-zA-Z]|\Z)",
+            workflow,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(m, "test.yml must declare a `rust-release:` job")
+        rr_body = m.group("body")
+        # The job-level `if:` must NOT exclude pull_request wholesale —
+        # a regression to `if: !cancelled() && github.event_name != 'pull_request'`
+        # would silently drop the Windows guards from PR CI. Only the
+        # ubuntu-latest leg may be PR-excluded, and that gets done via
+        # the RUN_RELEASE env below.
+        self.assertNotRegex(
+            rr_body,
+            r"if:\s*\$\{\{\s*[^}]*github\.event_name\s*!=\s*'pull_request'[^}]*\}\}",
+            "rust-release job-level `if:` must NOT exclude pull_request events;"
+            " that removes Windows guards (#564 + Codex #518 F6) from PR CI",
+        )
+        # The RUN_RELEASE expression must scope the PR-excluded branch to
+        # the ubuntu leg (matrix.os == 'windows-2025' escape hatch keeps
+        # Windows running on PR).
+        self.assertIn("matrix.os == 'windows-2025'", rr_body)
+        # Both regression-guard step names must still live in the file
+        # (they were moved OUT of the required `rust` aggregator, so a
+        # future refactor could accidentally delete them entirely).
+        self.assertIn("Windows release CLI-output smoke", workflow)
+        self.assertIn("injection-idempotency regression test", workflow)
+
     def test_dev_check_wrapper_mirrors_ci_rust_matrix_legs(self):
         # Codex P2 #418 dev-check.ps1:121 + :51: the pre-push wrapper
         # must drive the same Rust legs CI runs (fmt-check + clippy +
