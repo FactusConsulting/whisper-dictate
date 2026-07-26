@@ -23,9 +23,9 @@ This module is the BACKEND-AGNOSTIC, side-effect-free half. It contains:
     captured from the *high-water mark* of the hold — i.e. the full set held at
     the moment release began, not just the first key.
 
-The live pynput listener (:mod:`whisper_dictate.vp_keys_capture_io`) is a thin IO
-shell that forwards real key events into a :class:`ChordCapture`, so all the
-interesting behaviour is unit-tested here without touching a keyboard.
+All the interesting behaviour is unit-tested here without touching a keyboard;
+the former live pynput listener shell (``vp_keys_capture_io``) was retired once
+the Rust ``capture-hotkey`` verb replaced the Python capture flow.
 
 Why high-water mark, not "set at first release": users assemble a chord by
 pressing keys one after another (Ctrl down, then Shift down) and then let go —

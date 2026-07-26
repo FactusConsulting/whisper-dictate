@@ -425,7 +425,6 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_keymap.py",
             "vp_keys.py",
             "vp_keys_capture.py",
-            "vp_keys_capture_io.py",
             "vp_keys_solo.py",
             "vp_postprocess.py",
             "vp_preview.py",
