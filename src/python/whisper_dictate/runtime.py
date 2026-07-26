@@ -411,7 +411,7 @@ def _handle_dictionary_training(a, ap) -> int:
         # recognised flags is set — surface a clear error rather than an
         # empty argv.
         ap.error(
-            "no dictionary training flag set — expected "
+            "no dictionary training flag set - expected "
             "--dictionary-build-from-corpus or --dictionary-suggest-terms"
         )
     rc = _rust_dictionary_subcommand(args)
@@ -660,7 +660,7 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
     if backend == "openai":
         print(f"using {label} {loaded_model_name} via configured API", flush=True)
     else:
-        print(f"loading {label} {loaded_model_name} on {dev} ({ctype})… "
+        print(f"loading {label} {loaded_model_name} on {dev} ({ctype})... "
               f"first run downloads the model", flush=True)
     _emit_worker_event(
         "status",
@@ -671,7 +671,7 @@ def _load_model(a, backend: str, dev: str, ctype: str) -> tuple[object, str, flo
         compute_type=ctype,
     )
     if dev == "cpu" and backend != "openai":
-        print("  note: CPU mode — transcription is slower; large-v3-turbo "
+        print("  note: CPU mode - transcription is slower; large-v3-turbo "
               "(default) is the fastest model", flush=True)
     _t = time.monotonic()
     try:
@@ -775,7 +775,7 @@ def _dispatch_engine(a, model, lang, backend: str, dev: str, ctype: str,
     if not vp_dictate_engine.is_known_engine(raw):
         print(
             f"[runtime] Unknown {vp_dictate_engine.ENGINE_ENV}={raw!r} "
-            "— falling back to python engine",
+            "- falling back to python engine",
             file=sys.stderr,
             flush=True,
         )

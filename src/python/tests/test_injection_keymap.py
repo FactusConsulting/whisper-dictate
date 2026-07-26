@@ -121,7 +121,7 @@ class InjectStrategyTests(unittest.TestCase):
         self.assertEqual(target._last_inject_strategy, "skipped-self")
         self.assertEqual(target.typed, [])
         self.assertEqual(target.pasted, [])
-        self.assertIn('[inject] → "Og hvad kan vi så se her?"', stdout.getvalue())
+        self.assertIn('[inject] -> "Og hvad kan vi så se her?"', stdout.getvalue())
         self.assertIn("[inject] skipped self-target", stdout.getvalue())
 
     def test_terminal_title_containing_project_name_is_not_self_target(self):

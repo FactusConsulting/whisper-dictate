@@ -197,7 +197,7 @@ def apply_config_to_environ() -> set[str]:
             changed.add(setting.env)
     if "VOICEPI_AUDIO_DEVICE" in changed:
         print(
-            f"[config] VOICEPI_AUDIO_DEVICE: {audio_device_before!r} → "
+            f"[config] VOICEPI_AUDIO_DEVICE: {audio_device_before!r} -> "
             f"{os.environ.get('VOICEPI_AUDIO_DEVICE', '')!r} "
             f"(config has audio_device={data.get('audio_device')!r})",
             file=sys.stderr,

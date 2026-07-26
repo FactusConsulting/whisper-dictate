@@ -99,7 +99,7 @@ def _device_unusable_message(device_label: str) -> str:
     """
     return (
         f"Microphone {device_label!r} could not be opened on any audio backend "
-        "— select a different microphone in Settings."
+        "- select a different microphone in Settings."
     )
 
 # Populated lazily by _load_runtime_modules() (numpy + the arecord probe).
@@ -709,7 +709,7 @@ class CaptureMixin:
                     if not getattr(self, "_cap_warned", False):
                         self._cap_warned = True
                         print(
-                            f"[cap] max recording reached ({cap:.0f}s) — release the key",
+                            f"[cap] max recording reached ({cap:.0f}s) - release the key",
                             flush=True,
                         )
                         _emit_worker_event("status", state="recording", capped=True,
@@ -746,7 +746,7 @@ class CaptureMixin:
                         if not getattr(self, "_cap_warned", False):
                             self._cap_warned = True
                             print(
-                                f"[cap] max recording reached ({cap:.0f}s) — release the key",
+                                f"[cap] max recording reached ({cap:.0f}s) - release the key",
                                 flush=True,
                             )
                             _emit_worker_event("status", state="recording", capped=True,
@@ -1005,7 +1005,7 @@ class CaptureMixin:
                 message = _device_unusable_message(label)
                 print(
                     f"[cap] device {device!r} ({label!r}) failed to open on every "
-                    "host API; explicit selection — NOT swapping to the system "
+                    "host API; explicit selection - NOT swapping to the system "
                     "default. Surfacing an error.",
                     file=sys.stderr,
                     flush=True,

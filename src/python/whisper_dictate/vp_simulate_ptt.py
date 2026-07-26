@@ -111,7 +111,7 @@ def simulate_ptt(
         injected = True
     else:
         preview = final_text if len(final_text) < 200 else final_text[:197] + "..."
-        print(f"[simulate-ptt] dry-run — would inject: {preview!r}", flush=True)
+        print(f"[simulate-ptt] dry-run - would inject: {preview!r}", flush=True)
 
     return SimulatePttResult(
         text=final_text,
@@ -193,7 +193,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "type into the active window. Off by "
                                    "default because it moves the user's "
                                    "cursor. Only the direct-typing strategy "
-                                   "is implemented in this POC — a headless "
+                                   "is implemented in this POC - a headless "
                                    "paste strategy is future work.")
     ap.add_argument("--lang", default=None,
                     help="Spoken language hint (da, en, ...); omit to let "

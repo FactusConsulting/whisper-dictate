@@ -94,5 +94,5 @@ def format_summary_line(
         and total
         and summary.get("skipped_no_audio") == total
     ):
-        line += f" — record corpus audio to {audio_hint_path}"
+        line += f" - record corpus audio to {audio_hint_path}"
     return line

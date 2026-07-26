@@ -35,8 +35,8 @@ fi
 
 STEP=0
 step() { STEP=$((STEP+1)); echo; echo "[$STEP] $*"; }
-ok()   { echo "    ✓ $*"; }
-info() { echo "    → $*"; }
+ok()   { echo "    + $*"; }
+info() { echo "    > $*"; }
 warn() { echo "    ! $*"; }
 SEP="================================================================"
 

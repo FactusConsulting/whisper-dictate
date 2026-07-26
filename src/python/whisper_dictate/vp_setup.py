@@ -197,7 +197,7 @@ def format_export(
     parts.append("")
     if shown_secrets and not include_secrets:
         parts.append(
-            "# secrets redacted (***) — re-run with --include-secrets to emit "
+            "# secrets redacted (***) - re-run with --include-secrets to emit "
             "them in full"
         )
     parts.append("# === PowerShell ===")
@@ -431,7 +431,7 @@ class _Wizard:
         basic = [r for r in rows if not r.get("advanced", True)]
         advanced = [r for r in rows if r.get("advanced", True)]
 
-        self._say("whisper-dictate setup — basic settings")
+        self._say("whisper-dictate setup - basic settings")
         self._say("Press ENTER to keep the shown value; type to change it.")
         for row in basic:
             self._prompt_one(row)

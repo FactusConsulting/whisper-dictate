@@ -122,7 +122,7 @@ def run_capture_hotkey(
     output("What you press is what gets bound (left/right modifiers bind the same).")
     if allow_media:
         output("(experimental) media / headset buttons are also captured.")
-    output("Listening…")
+    output("Listening...")
 
     chord = capture_fn(allow_media=allow_media, timeout=timeout)
     if not chord:
