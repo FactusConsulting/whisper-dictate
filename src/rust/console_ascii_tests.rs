@@ -86,7 +86,7 @@ fn ascii_equivalent(c: char) -> Option<&'static str> {
 /// But `ui/corpus.rs` really does `eprintln!` when rejecting an unsafe corpus
 /// id, and that DOES reach a Windows console -- a blanket module exemption
 /// would have covered it (caught in review of #576).
-const CONSOLE_MACROS: &[&str] = &["println", "eprintln", "print", "eprint"];
+const CONSOLE_MACROS: &[&str] = &["println", "eprintln", "print", "eprint", "dbg"];
 
 /// Exemptions scoped to a specific literal, never a whole file: a file-wide
 /// entry would silently cover every string added to it later.
@@ -132,10 +132,14 @@ fn literal_runtime_text(token: &proc_macro2::Literal) -> Option<String> {
         Ok(litrs::Literal::CString(c)) => {
             Some(String::from_utf8_lossy(c.value().to_bytes()).into_owned())
         }
-        // Byte and byte-string literals are `u8`-only: the Rust grammar
-        // forbids non-ASCII in them outright, so there is nothing to check.
+        // Byte strings look byte-oriented, but `b"\xE2\x80\x94"` spells an em
+        // dash through escapes and reaches a console via `from_utf8_lossy`.
+        // Decode when the bytes are valid UTF-8; when they are not, they
+        // cannot contain the blocked characters anyway.
+        Ok(litrs::Literal::ByteString(b)) => String::from_utf8(b.value().to_vec()).ok(),
+        // A single byte is `u8`: it cannot hold a multi-byte character.
         // Numeric and bool literals carry no text.
-        Ok(litrs::Literal::Byte(_) | litrs::Literal::ByteString(_)) => None,
+        Ok(litrs::Literal::Byte(_)) => None,
         Ok(litrs::Literal::Bool(_) | litrs::Literal::Integer(_) | litrs::Literal::Float(_)) => None,
         // `litrs::Literal` is `#[non_exhaustive]`, so a future Rust literal
         // kind lands here. Fail rather than skip: silently returning None is
@@ -144,6 +148,14 @@ fn literal_runtime_text(token: &proc_macro2::Literal) -> Option<String> {
         Ok(_) => panic!("unhandled literal kind {raw:?} -- teach literal_runtime_text about it"),
         Err(err) => panic!("unparseable literal {raw:?}: {err}"),
     }
+}
+
+/// True for `#[doc = "..."]`, including the form rustc lowers `///` into.
+fn is_doc_attribute(group: &proc_macro2::Group) -> bool {
+    matches!(
+        group.stream().into_iter().next(),
+        Some(TokenTree::Ident(ref i)) if i == "doc"
+    )
 }
 
 /// Walk a token stream, collecting violations.
@@ -201,16 +213,38 @@ fn scan_tokens(
                     .is_some_and(|m| CONSOLE_MACROS.contains(&m));
                 let nested_in_console = in_console || is_console_call;
                 if group.delimiter() == Delimiter::Bracket && after_pound {
-                    // Attribute body: `#[..]` / `#![..]`. Skipped because
-                    // rustc lowers `///` doc comments into `#[doc = "..."]`,
-                    // and this codebase's doc comments are full of em dashes
-                    // that never reach a console. An ARRAY literal reaches
-                    // this arm with `after_pound == false` and is scanned.
+                    // Attribute body: `#[..]` / `#![..]`.
+                    //
+                    // Only `doc` is exempt, and only because rustc lowers
+                    // `///` into `#[doc = "..."]` -- this codebase's doc
+                    // comments are full of em dashes that never reach a
+                    // console. Every OTHER attribute is scanned, because
+                    // several carry real console text: clap's
+                    // `#[command(about = "...")]` and `#[arg(help = "...")]`
+                    // are printed by `--help`, and thiserror's
+                    // `#[error("...")]` becomes the Display of an error that
+                    // gets printed. An ARRAY literal reaches this arm with
+                    // `after_pound == false` and is scanned either way.
                     after_pound = false;
+                    if is_doc_attribute(&group) {
+                        continue;
+                    }
+                    scan_tokens(group.stream(), file, console_only, in_console, out);
+                    pending_macro = None;
                     continue;
                 }
                 after_pound = false;
-                scan_tokens(group.stream(), file, console_only, nested_in_console, out);
+                scan_tokens(
+                    // Strip at EVERY level, not just the top: `audio/vad.rs`
+                    // has `#[cfg(test)]` on individual match ARMS inside a
+                    // production function, and those are absent from shipping
+                    // builds.
+                    strip_cfg_test(group.stream()),
+                    file,
+                    console_only,
+                    nested_in_console,
+                    out,
+                );
                 pending_macro = None;
             }
             TokenTree::Literal(lit) => {
@@ -350,6 +384,18 @@ fn normalize_line_endings(src: &str) -> String {
     src.replace("\r\n", "\n")
 }
 
+/// True for the egui modules, where only console-macro arguments are checked.
+///
+/// Covers `ui/**` AND the root `ui.rs`, which normalises without the prefix --
+/// it was previously having its rendered strings (window titles) checked as if
+/// they were console output.
+///
+/// Shared with the behaviour tests on purpose: a test computing this itself
+/// would be asserting against a copy of the rule rather than the rule.
+fn is_ui_scope(rel: &str) -> bool {
+    rel.starts_with("ui/") || rel == "ui.rs"
+}
+
 fn scan_file(path: &Path) -> Vec<Violation> {
     // Normalise CRLF before lexing, exactly as rustc does when it reads a
     // source file. Git checks these out with CRLF on Windows, and a string
@@ -368,7 +414,7 @@ fn scan_file(path: &Path) -> Vec<Violation> {
     let rel = rel
         .rsplit_once("/src/rust/")
         .map_or(rel.clone(), |(_, r)| r.to_owned());
-    let console_only = rel.starts_with("ui/");
+    let console_only = is_ui_scope(&rel);
     let mut out = Vec::new();
     scan_tokens(strip_cfg_test(stream), &rel, console_only, false, &mut out);
     out
@@ -400,212 +446,5 @@ fn no_typographic_punctuation_in_console_strings() {
 }
 
 #[cfg(test)]
-mod guard_behaviour {
-    use super::*;
-
-    fn scan(src: &str, rel: &str) -> Vec<String> {
-        let stream = normalize_line_endings(src)
-            .parse::<TokenStream>()
-            .expect("tokenizes");
-        let mut out = Vec::new();
-        scan_tokens(
-            strip_cfg_test(stream),
-            rel,
-            rel.starts_with("ui/"),
-            false,
-            &mut out,
-        );
-        out.into_iter().map(|v| v.to_string()).collect()
-    }
-
-    #[test]
-    fn plain_violation_is_reported() {
-        assert_eq!(scan(r#"fn f() { println!("a — b"); }"#, "x.rs").len(), 1);
-    }
-
-    #[test]
-    fn clean_source_is_silent() {
-        assert!(scan(r#"fn f() { println!("a - b"); }"#, "x.rs").is_empty());
-    }
-
-    #[test]
-    fn unicode_escape_is_decoded_before_checking() {
-        // The source contains no em dash, but the program prints one. A
-        // source-text scan misses this entirely; `ui/app.rs` already uses
-        // `\u{2026}` in production, so the syntax is in real use here.
-        let hits = scan(r#"fn f() { println!("bad \u{2014} output"); }"#, "x.rs");
-        assert_eq!(hits.len(), 1, "{hits:?}");
-    }
-
-    #[test]
-    fn char_literal_value_is_checked_not_just_skipped() {
-        // Skipping char literals to avoid the `'"'` desync must not mean
-        // ignoring what they contain.
-        assert_eq!(scan(r#"fn f() { println!("{}", '—'); }"#, "x.rs").len(), 1);
-        assert_eq!(
-            scan(r#"fn f() { println!("{}", '\u{2014}'); }"#, "x.rs").len(),
-            1
-        );
-    }
-
-    #[test]
-    fn quote_char_literal_does_not_hide_the_next_string() {
-        // `'"'` is real code here (keymap.rs, runtime/mod.rs). A hand-rolled
-        // scanner read it as a string opener and desynced for the rest of the
-        // file.
-        let src = "fn f() { let _q = '\"'; println!(\"bad — output\"); }";
-        assert_eq!(scan(src, "x.rs").len(), 1);
-    }
-
-    #[test]
-    fn raw_strings_of_every_prefix_and_hash_count_are_atomic() {
-        // `r##"has "# inside"##` ends only at a quote plus the SAME hash
-        // count; `br"..."` and `cr#"..."#` are distinct prefixes. Getting any
-        // of these wrong pairs quotes across expressions and hides what
-        // follows.
-        for opener in [
-            r####"let _ = r##"has "# inside"##;"####,
-            r####"let _ = br"bytes";"####,
-            r####"let _ = cr#"c "string""#;"####,
-        ] {
-            let src = format!("fn f() {{ {opener} println!(\"bad — output\"); }}");
-            assert_eq!(scan(&src, "x.rs").len(), 1, "hidden by: {opener}");
-        }
-    }
-
-    #[test]
-    fn nested_block_comment_does_not_hide_the_next_string() {
-        // Rust block comments nest; stopping at the first `*/` leaves the
-        // outer comment's text being parsed as code.
-        let src = "fn f() { /* outer /* inner */ \" note */ println!(\"bad — output\"); }";
-        assert_eq!(scan(src, "x.rs").len(), 1);
-    }
-
-    #[test]
-    fn array_literal_is_scanned_but_attribute_body_is_not() {
-        // The bracket-group skip exists because rustc lowers `///` doc
-        // comments into `#[doc = "..."]`, and this codebase's doc comments are
-        // full of em dashes that never reach a console. But an ARRAY literal
-        // has the same delimiter, so keying the skip on "bracket group with no
-        // pending identifier" hid real console output inside one.
-        assert_eq!(
-            scan(r#"fn f() { eprintln!("{:?}", ["bad — output"]); }"#, "x.rs").len(),
-            1,
-            "an array literal inside a console macro must be scanned"
-        );
-        assert!(
-            scan("#[doc = \"a — dash\"]\nfn f() {}", "x.rs").is_empty(),
-            "attribute bodies (including lowered doc comments) stay exempt"
-        );
-    }
-
-    #[test]
-    fn c_string_literal_value_is_checked() {
-        // `c"..."` holds UTF-8 and reaches a console via `to_string_lossy()`.
-        // It tokenizes atomically, but was falling through the decode match
-        // unchecked.
-        assert_eq!(
-            scan(
-                r#"fn f() { eprintln!("{}", c"bad — output".to_string_lossy()); }"#,
-                "x.rs"
-            )
-            .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn status_glyphs_are_rejected() {
-        // A check mark that renders as `Γ£ô` on a legacy code page is worse
-        // than the word it replaced.
-        for glyph in ["\u{2713}", "\u{2717}", "\u{26A0}", "\u{25CF}"] {
-            let src = format!("fn f() {{ println!(\"{glyph} status\"); }}");
-            assert_eq!(
-                scan(&src, "x.rs").len(),
-                1,
-                "glyph {glyph:?} must be caught"
-            );
-        }
-    }
-
-    #[test]
-    fn crlf_line_continuation_still_parses() {
-        // Windows-only regression: `\` at end of line followed by CRLF is not
-        // a valid escape to a lexer that has not normalised line endings, so
-        // the literal failed to parse there and parsed fine on Linux. This is
-        // real code shape -- long messages wrapped with a continuation are all
-        // over this codebase.
-        let crlf =
-            "fn f() {\r\n    println!(\"wrapped \\\r\n        message \u{2014} here\");\r\n}\r\n";
-        assert_eq!(
-            scan(crlf, "x.rs").len(),
-            1,
-            "a CRLF source with a line continuation must parse AND be checked"
-        );
-    }
-
-    #[test]
-    fn comments_are_never_reported() {
-        let src = "// a — dash in a comment\nfn f() { println!(\"clean\"); }";
-        assert!(scan(src, "x.rs").is_empty());
-    }
-
-    #[test]
-    fn mid_file_cfg_test_item_does_not_hide_production_code_after_it() {
-        // `runtime/mod.rs` declares `#[cfg(test)] mod app_root_tests;` at line
-        // 105 with shipping entry points below it. Truncating the file at the
-        // first test attribute skipped all of them.
-        let src = r#"
-            #[cfg(test)]
-            mod app_root_tests;
-            #[cfg(test)]
-            fn helper() {}
-            pub fn run_terminal() { eprintln!("bad — output"); }
-        "#;
-        assert_eq!(scan(src, "x.rs").len(), 1);
-    }
-
-    #[test]
-    fn cfg_test_module_body_is_not_reported() {
-        let src = r#"
-            #[cfg(test)]
-            mod tests { const X: &str = "in — tests"; }
-        "#;
-        assert!(scan(src, "x.rs").is_empty());
-    }
-
-    #[test]
-    fn ui_modules_check_console_macros_but_not_rendered_labels() {
-        // egui draws from a font atlas, so a label may hold an em dash. But
-        // `ui/corpus.rs` really does `eprintln!` on a rejected corpus id, and
-        // that reaches a Windows console.
-        assert!(
-            scan(r#"fn f() { ui.label("nice — label"); }"#, "ui/corpus.rs").is_empty(),
-            "rendered labels must stay exempt"
-        );
-        assert_eq!(
-            scan(
-                r#"fn f() { eprintln!("corpus: bad — id"); }"#,
-                "ui/corpus.rs"
-            )
-            .len(),
-            1,
-            "console output inside ui/ must still be checked"
-        );
-    }
-
-    #[test]
-    fn allowlist_entry_still_matches_a_real_literal() {
-        // A stale exemption silently widens the guard.
-        for (path, needle, reason) in ALLOWLIST {
-            assert!(!reason.trim().is_empty(), "{path} needs a reason");
-            let full = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-            let src = std::fs::read_to_string(&full)
-                .unwrap_or_else(|e| panic!("allowlisted {path} unreadable ({e}); drop the entry"));
-            assert!(
-                src.contains(needle),
-                "allowlist needle {needle:?} no longer appears in {path} -- delete the entry"
-            );
-        }
-    }
-}
+#[path = "console_ascii_behaviour_tests.rs"]
+mod guard_behaviour;
