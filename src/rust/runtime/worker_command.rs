@@ -233,16 +233,10 @@ pub fn windows_command() -> WorkerCommand {
     default_worker_command_with_args(vec!["--list-windows".to_owned()])
 }
 
-/// Worker command that runs the golden benchmark corpus
-/// (`benchmark/corpus.json`) through the configured backend and prints per-item
-/// JSONL plus a final `[benchmark]` summary line, then exits. Drives the System
-/// tab's "Run benchmark" action. Slow (loads the model + runs the corpus), so
-/// the UI runs it as a background task. Inherits the same `--app-root` +
-/// effective-config env as every other worker command, so it uses the same
-/// model/device/backend settings the dictation run would.
-pub fn benchmark_command() -> WorkerCommand {
-    default_worker_command_with_args(vec!["--run-benchmark".to_owned()])
-}
+// Step 2 of the `vp_benchmark.py` retirement (#348) removed
+// `benchmark_command`: the System tab's "Run benchmark" button now drives the
+// native runner in `benchmark::native::run` off-thread from the UI (see
+// `ui/tasks.rs::run_benchmark`), so there is no worker subprocess to spawn.
 
 /// Worker command that records reference audio for the golden-corpus item `id`
 /// from the configured microphone (reusing the same negotiated capture path as

@@ -47,7 +47,7 @@ Python source lives in `src/python/whisper_dictate`.
 | CLI compatibility | `vp_cli.py` | Argparse surface for `whisper-dictate run -- ...`, debug setting dump and Python-only direct execution compatibility. Public top-level subcommands should prefer Rust. |
 | Config compatibility/live reload | `vp_config.py` | Temporary Python compatibility layer for direct Python execution and live reload inside the worker. Normal Rust launches now export effective config into the worker environment before imports. |
 | Post-processing orchestration | `vp_postprocess.py` | Loads post-processing settings, talks to Ollama/OpenAI-compatible chat fallback and restores local redactions. Rust owns redaction and local-only checks. |
-| Benchmark/evaluation | `vp_benchmark.py` | Corpus loading, WER/CER annotation and multi-backend benchmark orchestration around Python STT models. |
+| Corpus manifest loader | `vp_benchmark_paths.py` | Corpus manifest + item resolution helpers. Retained as a Python module for `vp_corpus_record.py`; the benchmark subsystem itself is now native Rust (`src/rust/benchmark/native.rs`, `whisper-dictate bench`). |
 
 ## Migration Guidance
 

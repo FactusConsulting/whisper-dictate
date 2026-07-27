@@ -75,7 +75,7 @@ const BENCHMARK_STDOUT: &str = "whisper-dictate 1.12.0
 fn benchmark_result(success: bool) -> BackgroundTaskResult {
     BackgroundTaskResult {
         label: RUN_BENCHMARK_LABEL,
-        command: "py --run-benchmark".to_owned(),
+        command: "bench (native)".to_owned(),
         stdout: BENCHMARK_STDOUT.to_owned(),
         stderr: String::new(),
         success,
@@ -158,7 +158,7 @@ fn apply_benchmark_results_surfaces_run_failure_and_clears_model() {
     // A run that couldn't start (no stdout) clears the stale model and logs it.
     let failed = BackgroundTaskResult {
         label: RUN_BENCHMARK_LABEL,
-        command: "py --run-benchmark".to_owned(),
+        command: "bench (native)".to_owned(),
         stdout: String::new(),
         stderr: String::new(),
         success: false,

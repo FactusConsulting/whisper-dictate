@@ -220,13 +220,14 @@ def _peak_rms_dbfs(pcm) -> tuple[float, float]:
 def _resolve_item(item_id: str, *, app_root, appdata):
     """Find the corpus item with ``item_id`` (corpus resolved like the benchmark).
 
-    Reuses :func:`vp_benchmark.resolve_corpus_manifest` (app-root → appdata) and
-    :func:`vp_benchmark.load_corpus` so the recorder sees exactly the same corpus
+    Reuses :func:`vp_benchmark_paths.resolve_corpus_manifest` (app-root →
+    appdata) and :func:`vp_benchmark_paths.load_corpus` so the recorder sees
+    exactly the same corpus
     the "Run benchmark" button does. Returns the matching ``CorpusItem`` or raises
     ``LookupError`` (no corpus / unknown id) — the caller turns that into a clean
     ``corpus_record_error`` event.
     """
-    from whisper_dictate.vp_benchmark import load_corpus, resolve_corpus_manifest
+    from whisper_dictate.vp_benchmark_paths import load_corpus, resolve_corpus_manifest
 
     manifest = resolve_corpus_manifest(app_root, None, appdata)
     if manifest is None or not Path(manifest).exists():

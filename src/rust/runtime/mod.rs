@@ -188,11 +188,10 @@ pub use process::{
 };
 pub use supervisor::{RepaintNotifier, RuntimeEvent, RuntimeState, RuntimeSupervisor, WorkerEvent};
 pub use worker_command::{
-    audio_devices_command, audio_pipeline_available, audio_pipeline_requested, benchmark_command,
-    cli_exe_path, default_worker_command, default_worker_command_with_args, doctor_command,
-    install_command, install_command_from_exe, record_corpus_item_command, resource_app_root,
-    windows_command, worker_command, worker_command_with_args, PlannedCommand, WorkerCommand,
-    AUDIO_BACKEND_ENV,
+    audio_devices_command, audio_pipeline_available, audio_pipeline_requested, cli_exe_path,
+    default_worker_command, default_worker_command_with_args, doctor_command, install_command,
+    install_command_from_exe, record_corpus_item_command, resource_app_root, windows_command,
+    worker_command, worker_command_with_args, PlannedCommand, WorkerCommand, AUDIO_BACKEND_ENV,
 };
 
 // ---------------------------------------------------------------------------

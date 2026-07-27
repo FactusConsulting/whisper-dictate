@@ -227,25 +227,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="transcribe an audio file with the selected backend, "
                          "then exit. 16-bit WAV works natively; mp3/m4a and "
                          "other formats require ffmpeg.")
-    ap.add_argument("--benchmark-files", nargs="+", metavar="PATH",
-                    help="run one or more audio files through benchmark "
-                         "backend specs, then exit")
+    # Both #626 (vp_benchmark step 2) and #627 (simulate-ptt retirement)
+    # removed Python flags here: `--benchmark-files` / `--run-benchmark` /
+    # `--benchmark-backends` / `--benchmark-jsonl` are gone (native Rust
+    # `whisper-dictate bench` is the sole surface), and `--simulate-ptt` /
+    # `--wav` / `--inject` are gone (native `simulate-session` +
+    # `dictate-mic` are the replacements). `--benchmark-corpus` survives
+    # because the dictionary training path (`--dictionary-build-from-corpus`)
+    # still forwards it to the Rust `dictionary build-from-corpus`
+    # subcommand as an optional override.
     ap.add_argument("--benchmark-corpus", metavar="PATH",
-                    help="run benchmark entries from a corpus manifest, "
-                         "annotating results with reference text, WER/CER "
-                         "and term hits")
-    ap.add_argument("--benchmark-backends", default=None,
-                    help="comma-separated backend specs for benchmark runs, "
-                         "for example whisper:large-v3,openai:gpt-4o-mini-transcribe")
-    ap.add_argument("--benchmark-jsonl", default=None,
-                    help="append benchmark JSONL results to this path instead "
-                         "of stdout")
-    ap.add_argument("--run-benchmark", action="store_true",
-                    help="run the golden corpus (default benchmark/corpus.json, "
-                         "overridable via --benchmark-corpus) through the "
-                         "configured backend, print per-item JSONL plus one "
-                         "[benchmark] summary line, then exit. Drives the "
-                         "Settings UI \"Run benchmark\" button.")
+                    help="corpus manifest path used by "
+                         "--dictionary-build-from-corpus (forwarded to the "
+                         "Rust `dictionary build-from-corpus` subcommand)")
     ap.add_argument("--calibrate-mic", nargs="?", const=5.0, type=float,
                     metavar="SECONDS",
                     help="record a short sample, recommend audio threshold "

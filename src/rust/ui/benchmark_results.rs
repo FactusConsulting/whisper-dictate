@@ -1,9 +1,10 @@
 //! Pure parser + display model + localized strings for the "Run benchmark"
 //! results view (System tab).
 //!
-//! The worker's `--run-benchmark` prints one `benchmark_result` JSON object per
-//! corpus item on stdout, then a final `[benchmark] …` summary line. The
-//! background task captures the whole stdout and hands it here once finished;
+//! The native benchmark runner ([`crate::benchmark::native::run_to_writer`])
+//! writes one `benchmark_result` JSON object per corpus item, then a final
+//! `[benchmark] …` summary line. The background task captures the whole
+//! output and hands it here once finished;
 //! [`parse_benchmark_results`] scans it line-by-line (tolerating interleaved log
 //! noise and non-`benchmark_result` JSON), turning each per-item object into a
 //! [`BenchmarkRow`] and folding an aggregate [`BenchmarkSummary`] over them. The
@@ -337,7 +338,7 @@ fn sort_worst_first(rows: &mut [BenchmarkRow]) {
     });
 }
 
-/// Parse the worker's captured `--run-benchmark` stdout into the full results
+/// Parse the native benchmark runner's captured stdout into the full results
 /// model: per-item rows (sorted worst-WER-first among scored), the aggregate
 /// summary, and the raw stdout retained for the "show raw" panel.
 ///

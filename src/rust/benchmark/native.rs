@@ -1,13 +1,12 @@
-//! Native Rust benchmark runner — step 1 of `vp_benchmark` retirement (#348).
+//! Native Rust benchmark runner — the sole benchmark surface after step 2 of
+//! the `vp_benchmark.py` retirement (#348).
 //!
-//! Replaces the Python subprocess call in [`super::handle_bench`] for the
-//! shipping build with an in-process runner that drives the same corpus
-//! through the same [`crate::dictate::TranscribeBackend`] the live dictation
-//! path uses. Preserves the [`super::format_summary_line`] contract — user
-//! scripts grep for `[benchmark] …`, so byte parity with the Python line is
-//! non-negotiable.
+//! Drives the same corpus through the same [`crate::dictate::TranscribeBackend`]
+//! the live dictation path uses. Preserves the [`super::format_summary_line`]
+//! contract — user scripts grep for `[benchmark] …`, so byte parity with the
+//! retired Python line is non-negotiable.
 //!
-//! # Scope of step 1
+//! # Scope
 //!
 //! Two backends are covered natively:
 //!
@@ -15,19 +14,16 @@
 //!   Always compiled (cloud_api + hound are unconditional deps).
 //! * `whisper` — local Whisper via
 //!   [`crate::dictate::backends::WhisperLocalTranscribeBackend`]. Gated on
-//!   `whisper-rs-local`; on a build without the feature the runner returns
-//!   [`NativeBenchError::Unsupported`] and [`super::handle_bench`] falls back
-//!   to the Python worker with a `[benchmark] using Python fallback …` line
-//!   on stderr, matching the #600 `devices test` pattern.
+//!   `whisper-rs-local`; on a stock dev build the runner returns
+//!   [`NativeBenchError::Unsupported`] and [`super::handle_bench`] surfaces
+//!   the rebuild hint. The Python fallback that used to shell to
+//!   `vp_benchmark.py` is gone.
 //!
-//! # What still falls back to Python
+//! # Known limitations
 //!
-//! * Any spec `whisper` on a stock build (feature-off) — surfaces the
-//!   Unsupported error and the caller shells to the Python worker.
-//! * Per-spec `spec.model` override on local Whisper — the Python worker
-//!   translates it to `VOICEPI_MODEL`; the native path only honours
-//!   `VOICEPI_WHISPER_MODEL_PATH` (documented follow-up). Cloud specs DO
-//!   honour `spec.model` (it overrides `config.model`).
+//! * Per-spec `spec.model` override on local Whisper — only
+//!   `VOICEPI_WHISPER_MODEL_PATH` is honoured today (documented follow-up).
+//!   Cloud specs DO honour `spec.model` (it overrides `config.model`).
 //! * WAV shapes other than 16 kHz mono int/float — [`crate::whisper::wav`]
 //!   rejects them and the item is recorded as a failure (not skipped).
 //!
@@ -39,6 +35,7 @@
 //! bit-identical to the Python worker's output — cross-checked by the pure
 //! reporting-parity unit tests in `benchmark/reporting.rs`.
 
+use std::io::{self, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -83,11 +80,21 @@ impl From<anyhow::Error> for NativeBenchError {
 
 /// Entry point wired into [`super::handle_bench`].
 ///
-/// Resolves the corpus manifest (same rule as the Python worker:
-/// `<app_root>/benchmark/corpus.json` → `<appdata>/benchmark/corpus.json`),
-/// runs every item through each configured backend spec, writes per-item
-/// JSONL to stdout, and prints the final `[benchmark] …` summary line.
+/// Resolves the corpus manifest (`<app_root>/benchmark/corpus.json` →
+/// `<appdata>/benchmark/corpus.json`), runs every item through each
+/// configured backend spec, writes per-item JSONL to stdout, and prints the
+/// final `[benchmark] …` summary line.
 pub fn run() -> Result<(), NativeBenchError> {
+    let mut stdout = io::stdout().lock();
+    run_to_writer(&mut stdout)
+}
+
+/// Same as [`run`], but writes every JSONL line + the summary line to `out`
+/// instead of the process stdout. Used by the System tab's "Run benchmark"
+/// button to capture the runner's output on a background thread and hand it
+/// to the existing `apply_benchmark_results` parser as a synthesised
+/// `BackgroundTaskResult.stdout` — no subprocess, no Python.
+pub fn run_to_writer(out: &mut dyn Write) -> Result<(), NativeBenchError> {
     let app_root = crate::runtime::resource_app_root();
     let appdata = crate::config::platform_config_dir();
     let manifest = resolve_corpus_manifest(Some(&app_root), None, Some(&appdata));
@@ -97,7 +104,8 @@ pub fn run() -> Result<(), NativeBenchError> {
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        println!(
+        let _ = writeln!(
+            out,
             "[benchmark] no corpus manifest found (looked: {looked}) - \
              see docs/CONFIGURATION.md (Benchmark corpus)"
         );
@@ -105,13 +113,26 @@ pub fn run() -> Result<(), NativeBenchError> {
     };
     let items =
         load_corpus(&manifest).map_err(|e| NativeBenchError::Other(anyhow::anyhow!("{e:#}")))?;
-    run_with(&items, &appdata)
+    run_with_writer(&items, &appdata, out)
 }
 
 /// Testable core: given a pre-resolved corpus + appdata base, execute the
-/// runner and emit the summary line. Split out so unit tests can drive the
-/// end-to-end flow without touching `resource_app_root` / the real appdata.
+/// runner and write the JSONL + summary line to stdout. Retained as the thin
+/// wrapper unit tests + module callers reach for; new callers should prefer
+/// [`run_with_writer`] with an explicit sink.
 pub fn run_with(items: &[CorpusItem], appdata: &Path) -> Result<(), NativeBenchError> {
+    let mut stdout = io::stdout().lock();
+    run_with_writer(items, appdata, &mut stdout)
+}
+
+/// The writer-parameterised core of [`run_with`]. Split out so the UI thread
+/// can capture the output into a `Vec<u8>` for its `BackgroundTaskResult`
+/// stdout envelope without any process/pipe machinery.
+pub fn run_with_writer(
+    items: &[CorpusItem],
+    appdata: &Path,
+    out: &mut dyn Write,
+) -> Result<(), NativeBenchError> {
     let raw_spec = std::env::var("VOICEPI_STT_BACKEND").unwrap_or_default();
     let spec_str = if raw_spec.trim().is_empty() {
         "whisper"
@@ -121,7 +142,7 @@ pub fn run_with(items: &[CorpusItem], appdata: &Path) -> Result<(), NativeBenchE
     let specs = parse_backend_specs(spec_str).map_err(NativeBenchError::Other)?;
 
     // Reject specs that cannot run in this build BEFORE any I/O so the
-    // fallback message reaches the caller quickly (matches #600).
+    // rebuild-hint reaches the caller quickly.
     for spec in &specs {
         if spec.backend == "whisper" && !cfg!(feature = "whisper-rs-local") {
             return Err(NativeBenchError::Unsupported(
@@ -136,13 +157,13 @@ pub fn run_with(items: &[CorpusItem], appdata: &Path) -> Result<(), NativeBenchE
         for item in items {
             let audio = resolve_item_audio(&item.audio, Some(appdata));
             let event = run_one_item(item, &audio, backend.as_ref(), spec);
-            emit_jsonl(&event);
+            emit_jsonl(&event, out);
             scoring_events.push(scoring_event_from(&event));
         }
     }
     let summary = summarize_results(&scoring_events);
     let hint = appdata_audio_dir(appdata);
-    println!("{}", format_summary_line(&summary, Some(&hint)));
+    let _ = writeln!(out, "{}", format_summary_line(&summary, Some(&hint)));
     Ok(())
 }
 
@@ -343,12 +364,12 @@ fn annotate_event(mut event: Value, item: &CorpusItem, spec: &BackendSpec) -> Va
     event
 }
 
-/// Emit one JSONL line to stdout, ensure_ascii=False style (serde_json is
-/// UTF-8 by default). Mirrors the Python worker's per-item output so the
-/// same downstream tooling (log tail, jq filters) works unchanged.
-fn emit_jsonl(event: &Value) {
+/// Emit one JSONL line to `out`, ensure_ascii=False style (serde_json is
+/// UTF-8 by default). Mirrors the retired Python worker's per-item output so
+/// the same downstream tooling (log tail, jq filters) works unchanged.
+fn emit_jsonl(event: &Value, out: &mut dyn Write) {
     if let Ok(line) = serde_json::to_string(event) {
-        println!("{line}");
+        let _ = writeln!(out, "{line}");
     }
 }
 
@@ -405,11 +426,6 @@ impl AnyTranscribeBackend for FixedTextBackend {
 // the module root so callers outside the runner do not depend on them.
 #[allow(dead_code, unused_imports)]
 use paths_use::*;
-
-/// Craft the expected fallback message so both `handle_bench` and the tests
-/// stay in lock-step — anyone changing the wording only has to update this
-/// constant.
-pub const FALLBACK_MESSAGE_PREFIX: &str = "[benchmark] using Python fallback";
 
 #[cfg(test)]
 #[path = "native_tests.rs"]
