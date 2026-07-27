@@ -19,11 +19,15 @@
 //! surface `runtime::maybe_install_rust_hotkey` uses under the hood. That
 //! keeps the diagnostic and the shipping path in lockstep without a shim.
 
+#[cfg(feature = "rust-hotkeys")]
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
+#[cfg(feature = "rust-hotkeys")]
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -34,7 +38,7 @@ use crate::config::{load_settings, load_settings_from_path};
 
 use super::coordinator::CoordinatorAction;
 #[cfg(feature = "rust-hotkeys")]
-use super::manager::RawKeyEvent;
+use super::manager::{is_chord_key, RawKeyEvent};
 use super::{install_hotkey_with_raw_tap, HotkeyConfig, InstallError};
 
 /// Line-prefix used for the human-readable output. Kept as a constant so
@@ -368,7 +372,7 @@ fn run_capture(
         ));
     }
     let display_chord = key_names.join("+");
-    let cfg = HotkeyConfig::hold_to_talk(key_names);
+    let cfg = HotkeyConfig::hold_to_talk(key_names.clone());
 
     let counters = Arc::new(Counters::default());
     let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>();
@@ -378,14 +382,25 @@ fn run_capture(
     let raw_counters = Arc::clone(&counters);
     let raw_tx = event_tx.clone();
     let raw_start = Instant::now();
-    let raw_tap = build_raw_tap(raw_counters, raw_tx, raw_start);
+    let raw_tap = build_raw_tap(raw_counters, raw_tx, raw_start, key_names.clone());
 
     // Action sink runs on the coordinator thread — chord lifecycle events.
     let action_counters = Arc::clone(&counters);
     let action_tx = event_tx.clone();
     let action_start = raw_start;
     let action_sink = move |action: CoordinatorAction| {
-        action_counters.chords.fetch_add(1, Ordering::Relaxed);
+        // Count CHORD MATCHES, not coordinator actions. Every match is
+        // followed by a release or a cancel, so incrementing on each action
+        // reported exactly double -- the maintainer's 2-chord capture printed
+        // `"chords":4`. The field name (and the plain-text `Chords: N`) says
+        // how many times the chord fired, so make it mean that. The decision
+        // is factored into `counts_as_chord` so it can be unit-tested on its
+        // own (Codex P2 review of #609): the earlier revision had the guard
+        // inline, which left the producer side of the fix uncovered even as
+        // the formatter side got dedicated tests.
+        if counts_as_chord(&action) {
+            action_counters.chords.fetch_add(1, Ordering::Relaxed);
+        }
         let now = action_start.elapsed().as_secs_f64();
         let event = match action {
             CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched { t_secs: now, id },
@@ -494,6 +509,21 @@ fn run_capture(
 // makes the choice a runtime decision — read via `HotkeyHandle::driver_name()`
 // right after `install_hotkey_with_raw_tap` returns instead.
 
+/// Should this coordinator action increment the `Chords:` counter?
+///
+/// The coordinator emits three actions per chord (`StartRecording` on the
+/// rising edge, then `StopAndTranscribe` or `CancelRecording` on release), so
+/// counting every action double-reports — a two-chord capture showed
+/// `"chords":4`. Only the rising edge counts as one chord fire.
+///
+/// Extracted from the `action_sink` closure so the producing side of the fix
+/// can be unit-tested (`chords_counter_*`) directly. Otherwise only the
+/// formatter side of the counter was covered — the same failure mode this
+/// PR set out to fix for `foreign_keys`.
+fn counts_as_chord(action: &CoordinatorAction) -> bool {
+    matches!(action, CoordinatorAction::StartRecording(_))
+}
+
 /// Build the raw-event tap the manager thread invokes for every OS key
 /// event. Isolated into its own helper so the closure has a well-defined
 /// capture set — makes the borrow-checker happy and keeps run_capture
@@ -503,19 +533,50 @@ fn build_raw_tap(
     counters: Arc<Counters>,
     tx: Sender<CaptureEvent>,
     start: Instant,
+    targets: Vec<String>,
 ) -> impl super::manager::RawTap {
+    // Foreign keys are counted as PHYSICAL presses, not raw key-down events.
+    // Holding a non-chord key produces a stream of auto-repeat key-downs (the
+    // maintainer's capture logged ~20 for a single held Shift), so counting
+    // events would report 20 foreign keys for one keypress. Track which
+    // foreign keys are currently down and count only the not-held -> held
+    // transition.
+    //
+    // `RawTap` is `Fn + Send + Sync`, so the held-set needs interior
+    // mutability; the lock is uncontended (one listener thread) and held for
+    // a single set operation.
+    let held_foreign: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     move |raw: &RawKeyEvent| {
         counters.events.fetch_add(1, Ordering::Relaxed);
+        let is_foreign = !is_chord_key(&targets, &raw.name);
         let t_secs = start.elapsed().as_secs_f64();
         let event = match raw.kind {
-            super::manager::RawKeyKind::Press => CaptureEvent::KeyDown {
-                t_secs,
-                name: raw.name.clone(),
-            },
-            super::manager::RawKeyKind::Release => CaptureEvent::KeyUp {
-                t_secs,
-                name: raw.name.clone(),
-            },
+            super::manager::RawKeyKind::Press => {
+                if is_foreign {
+                    // `insert` returns false when the key was already held,
+                    // which is exactly the auto-repeat case.
+                    if let Ok(mut held) = held_foreign.lock() {
+                        if held.insert(raw.name.clone()) {
+                            counters.foreign_keys.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+                CaptureEvent::KeyDown {
+                    t_secs,
+                    name: raw.name.clone(),
+                }
+            }
+            super::manager::RawKeyKind::Release => {
+                if is_foreign {
+                    if let Ok(mut held) = held_foreign.lock() {
+                        held.remove(&raw.name);
+                    }
+                }
+                CaptureEvent::KeyUp {
+                    t_secs,
+                    name: raw.name.clone(),
+                }
+            }
         };
         let _ = tx.send(event);
     }
@@ -524,12 +585,19 @@ fn build_raw_tap(
 /// Non-feature build: the tap is never invoked (install returns Unsupported
 /// before threads spawn), so return a zero-cost noop. Kept here so
 /// `run_capture` compiles under both feature configurations.
+///
+/// Signature MUST match the feature-gated version — the caller in
+/// `run_capture` passes `key_names.clone()` as the fourth argument
+/// unconditionally, so this stub takes (and ignores) `_targets` too. Skipping
+/// it broke the stock (`--no-default-features` / no `rust-hotkeys`) build with
+/// an E0061 argument-count error while the feature build stayed green.
 #[cfg(not(feature = "rust-hotkeys"))]
 #[allow(clippy::unused_unit)]
 fn build_raw_tap(
     _counters: Arc<Counters>,
     _tx: Sender<CaptureEvent>,
     _start: Instant,
+    _targets: Vec<String>,
 ) -> impl Send + Sync + 'static {
     // `()` implements Send + Sync + 'static and satisfies the stock-build
     // `install_hotkey_with_raw_tap` bound. It is never invoked — the stock
@@ -891,6 +959,52 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // counts_as_chord — the producer-side of the Chords: counter
+    //
+    // Regression for Codex P2 (#609 review): the earlier revision kept the
+    // guard inline in `action_sink`, so the `chords` fix had no direct test
+    // — the same formatter-vs-producer gap the PR was closing for
+    // `foreign_keys`. These pin the shape end-to-end.
+    // -----------------------------------------------------------------------
+
+    fn rec_id(n: u8) -> super::super::coordinator::RecordingId {
+        super::super::coordinator::RecordingId::from(n)
+    }
+
+    #[test]
+    fn counts_as_chord_true_only_for_start_recording() {
+        assert!(counts_as_chord(&CoordinatorAction::StartRecording(rec_id(
+            1
+        ))));
+        assert!(!counts_as_chord(&CoordinatorAction::StopAndTranscribe(
+            rec_id(1)
+        )));
+        assert!(!counts_as_chord(&CoordinatorAction::CancelRecording(
+            rec_id(1)
+        )));
+    }
+
+    #[test]
+    fn one_full_chord_cycle_increments_counter_once() {
+        // Simulate what the action sink actually does: increment on every
+        // action for which `counts_as_chord` is true. Two full chord cycles
+        // (press → release, press → cancel) must report chords = 2, not 4.
+        let counters = Counters::default();
+        let cycle = [
+            CoordinatorAction::StartRecording(rec_id(1)),
+            CoordinatorAction::StopAndTranscribe(rec_id(1)),
+            CoordinatorAction::StartRecording(rec_id(2)),
+            CoordinatorAction::CancelRecording(rec_id(2)),
+        ];
+        for action in &cycle {
+            if counts_as_chord(action) {
+                counters.chords.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        assert_eq!(counters.chords.load(Ordering::Relaxed), 2);
+    }
+
     #[test]
     fn decide_terminal_ignores_release_and_cancel_actions() {
         // Only the *matched* rising edge triggers exit-on-chord — a release
@@ -903,5 +1017,95 @@ mod tests {
             CoordinatorAction::CancelRecording(super::super::coordinator::RecordingId::from(1u8));
         assert!(decide_terminal(&release, true, &counters, start).is_none());
         assert!(decide_terminal(&cancel, true, &counters, start).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Counter plumbing (build_raw_tap + action sink)
+    //
+    // The pre-existing tests here only exercised the FORMATTERS with
+    // hand-supplied numbers, so `foreign_keys` could be -- and was -- never
+    // incremented anywhere while every test stayed green. These drive the
+    // producing side instead.
+    // -----------------------------------------------------------------------
+    #[cfg(feature = "rust-hotkeys")]
+    mod counters {
+        use super::super::*;
+        use crate::hotkey::manager::{RawKeyEvent, RawKeyKind, RawTap};
+        use std::sync::mpsc;
+        use std::time::Instant;
+
+        fn ev(name: &str, kind: RawKeyKind) -> RawKeyEvent {
+            RawKeyEvent {
+                name: name.to_owned(),
+                kind,
+                at: Instant::now(),
+            }
+        }
+
+        fn tap_with(targets: &[&str]) -> (Arc<Counters>, impl RawTap) {
+            let counters = Arc::new(Counters::default());
+            let (tx, rx) = mpsc::channel();
+            // Keep the receiver alive for the tap's lifetime; the events
+            // themselves are covered by the formatter tests.
+            std::mem::forget(rx);
+            let tap = build_raw_tap(
+                Arc::clone(&counters),
+                tx,
+                Instant::now(),
+                targets.iter().map(|s| (*s).to_owned()).collect(),
+            );
+            (counters, tap)
+        }
+
+        #[test]
+        fn chord_keys_are_not_counted_as_foreign() {
+            let (counters, tap) = tap_with(&["ctrl_l"]);
+            tap.tap(&ev("ctrl_l", RawKeyKind::Press));
+            tap.tap(&ev("ctrl_l", RawKeyKind::Release));
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 0);
+            assert_eq!(counters.events.load(Ordering::Relaxed), 2);
+        }
+
+        #[test]
+        fn foreign_press_is_counted() {
+            let (counters, tap) = tap_with(&["ctrl_l"]);
+            tap.tap(&ev("shift_l", RawKeyKind::Press));
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 1);
+        }
+
+        #[test]
+        fn auto_repeat_counts_one_physical_press() {
+            // A held key emits a stream of key-downs with no interleaved
+            // key-up. The maintainer's real capture logged ~20 for one held
+            // Shift; counting events would report 20 foreign keys.
+            let (counters, tap) = tap_with(&["ctrl_l"]);
+            for _ in 0..20 {
+                tap.tap(&ev("shift_l", RawKeyKind::Press));
+            }
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 1);
+            // Released and pressed again -- that IS a second press.
+            tap.tap(&ev("shift_l", RawKeyKind::Release));
+            tap.tap(&ev("shift_l", RawKeyKind::Press));
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 2);
+        }
+
+        #[test]
+        fn distinct_foreign_keys_count_separately() {
+            let (counters, tap) = tap_with(&["ctrl_l"]);
+            tap.tap(&ev("shift_l", RawKeyKind::Press));
+            tap.tap(&ev("alt_l", RawKeyKind::Press));
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 2);
+        }
+
+        #[test]
+        fn generic_modifier_target_matches_concrete_side() {
+            // A `ctrl` binding must treat `ctrl_l` as part of the chord, the
+            // same way the tracker's `is_target` does. Re-deriving this with
+            // string equality would count it as foreign.
+            let (counters, tap) = tap_with(&["ctrl"]);
+            tap.tap(&ev("ctrl_l", RawKeyKind::Press));
+            tap.tap(&ev("ctrl_r", RawKeyKind::Press));
+            assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 0);
+        }
     }
 }
