@@ -250,14 +250,19 @@ fn attach_cloud_api_keys(command: &mut WorkerCommand) {
         Err(_) => return,
     };
 
-    // Classify the credential against the endpoint the WORKER will actually
-    // hit, not the raw config value. `worker_env_overrides()` has already
-    // baked env-var overrides into `command.env` (env > config > default), so
-    // resolving against `command.env` is what keeps the credential lookup
-    // aligned with the transcribe layer. Ignoring that leads to
+    // Classify the credential against the endpoint AND the effective mode the
+    // WORKER will actually run in, not the raw config values.
+    // `worker_env_overrides()` has already baked env-var overrides into
+    // `command.env` (env > config > default), so resolving against
+    // `command.env` is what keeps the credential lookup aligned with the
+    // transcribe layer. Ignoring the endpoint override leads to
     // `VOICEPI_STT_BASE_URL=https://api.openai.com/v1 whisper-dictate run`
-    // reaching for the Groq key saved for the config value -- either a miss
-    // that dies at startup, or (worse) the wrong provider's key on the wire.
+    // reaching for the Groq key saved for the config value; ignoring the
+    // BACKEND override (Codex P1 #615: `VOICEPI_STT_BACKEND=openai` /
+    // `VOICEPI_POST_PROCESSOR=groq` set only in the shell) makes the gates in
+    // `stt_credential_for` / `post_credential_for` short-circuit against the
+    // saved `whisper` / `none` defaults and never read the store at all --
+    // the worker then starts without the key that was saved through Settings.
     let stt_endpoint =
         effective_endpoint(&command.env, "VOICEPI_STT_BASE_URL", &settings.stt_base_url);
     let post_endpoint = effective_endpoint(
@@ -265,12 +270,22 @@ fn attach_cloud_api_keys(command: &mut WorkerCommand) {
         "VOICEPI_POST_BASE_URL",
         &settings.post_base_url,
     );
+    let stt_backend = effective_setting(
+        &command.env,
+        crate::dictate::backends::cloud_transcribe::STT_BACKEND_ENV,
+        &settings.stt_backend,
+    );
+    let post_processor = effective_setting(
+        &command.env,
+        crate::postprocess::POST_PROCESSOR_ENV,
+        &settings.post_processor,
+    );
 
     let additions = cloud_api_key_env_additions(
         &command.env,
         |name| std::env::var(name).ok(),
-        stt_credential_for(&settings.stt_backend, &stt_endpoint),
-        post_credential_for(&settings.post_processor, &post_endpoint),
+        stt_credential_for(&stt_backend, &stt_endpoint),
+        post_credential_for(&post_processor, &post_endpoint),
     );
     command.env.extend(additions);
 }
@@ -280,6 +295,16 @@ fn attach_cloud_api_keys(command: &mut WorkerCommand) {
 /// [`attach_cloud_api_keys`] so the precedence is unit-testable without a
 /// config file or a credential store.
 fn effective_endpoint(env: &[(String, String)], name: &str, config_value: &str) -> String {
+    effective_setting(env, name, config_value)
+}
+
+/// Generalised env-first setting resolver: prefer a non-blank value already
+/// in `command.env` (the spawner has already applied env > config > default
+/// via [`crate::config::schema::worker_env_overrides`]), otherwise fall back
+/// to the raw config value. Kept as a separate helper so the credential
+/// wiring can look up ANY effective mode (backend, processor, base URL) with
+/// the same precedence rule -- Codex P1 #615.
+fn effective_setting(env: &[(String, String)], name: &str, config_value: &str) -> String {
     env.iter()
         .find(|(k, _)| k == name)
         .map(|(_, v)| v.as_str())
@@ -767,5 +792,53 @@ mod cloud_api_key_wiring_tests {
         // `none` and `ollama` are both local -- no cloud endpoint, no key.
         assert!(post_credential_for("none", "https://api.openai.com/v1").is_none());
         assert!(post_credential_for("ollama", "http://localhost:11434").is_none());
+    }
+
+    #[test]
+    fn effective_setting_prefers_the_command_env_over_the_config() {
+        // Codex P1 #615: `attach_cloud_api_keys` must derive the effective
+        // stt_backend / post_processor from `command.env` (the schema has
+        // already applied env > config > default), not the raw saved
+        // settings -- otherwise the credential-lookup gates in
+        // `stt_credential_for` / `post_credential_for` short-circuit against
+        // the config's `whisper` / `none` defaults and never touch the store.
+        let e = env(&[("VOICEPI_STT_BACKEND", "openai")]);
+        assert_eq!(
+            super::effective_setting(&e, "VOICEPI_STT_BACKEND", "whisper"),
+            "openai",
+            "env override must win"
+        );
+        let e = env(&[("VOICEPI_POST_PROCESSOR", "groq")]);
+        assert_eq!(
+            super::effective_setting(&e, "VOICEPI_POST_PROCESSOR", "none"),
+            "groq"
+        );
+        // No env override -> fall back to the raw settings value.
+        assert_eq!(
+            super::effective_setting(&env(&[]), "VOICEPI_STT_BACKEND", "openai"),
+            "openai"
+        );
+        // Whitespace-only env value is a leftover; the config wins.
+        let e = env(&[("VOICEPI_STT_BACKEND", "   ")]);
+        assert_eq!(
+            super::effective_setting(&e, "VOICEPI_STT_BACKEND", "whisper"),
+            "whisper"
+        );
+    }
+
+    #[test]
+    fn env_override_of_backend_activates_the_credential_gate() {
+        // End-to-end shape of the P1 finding: the config still says
+        // `stt_backend=whisper`, but the launcher sees
+        // `VOICEPI_STT_BACKEND=openai` in the effective command env. The
+        // effective backend must be `openai` so `stt_credential_for` opens
+        // the store; using the raw settings value would keep it closed and
+        // start the worker without the saved key.
+        let e = env(&[("VOICEPI_STT_BACKEND", "openai")]);
+        let effective = super::effective_setting(&e, "VOICEPI_STT_BACKEND", "whisper");
+        assert_eq!(effective, "openai");
+        // The gate itself is exercised in
+        // `stt_credential_skipped_for_local_whisper_backend`; here we assert
+        // the input plumbing that decides which branch that gate takes.
     }
 }

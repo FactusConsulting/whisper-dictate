@@ -40,7 +40,7 @@ pub use run::{
 pub use settings::{
     default_base_url, looks_like_http_url, normalized_base_url, normalized_model,
     settings_from_env, settings_from_env_with, PostprocessSettings, DEFAULT_OLLAMA_BASE_URL,
-    DEFAULT_OLLAMA_POST_MODEL, VALID_MODES, VALID_PROCESSORS,
+    DEFAULT_OLLAMA_POST_MODEL, POST_PROCESSOR_ENV, VALID_MODES, VALID_PROCESSORS,
 };
 
 use std::io::{self, Read};
