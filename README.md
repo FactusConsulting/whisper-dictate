@@ -87,9 +87,13 @@ whisper-dictate.exe run --key ctrl_r --lang da --device cuda
 whisper-dictate doctor
 ```
 
-On Windows, the normal **whisper-dictate** shortcut runs the Rust UI and starts
-the Python worker hidden underneath it, with logs streamed into the Dictation
-tab.
+On Windows, the normal **whisper-dictate** shortcut runs the Rust UI and hosts
+the dictation runtime natively in-process (hotkey listener, coordinator, and
+session sink all run inside the Rust binary), with logs streamed into the
+Dictation tab. If you hit a Rust-engine regression during the transition
+window, set `VOICEPI_DICTATE_ENGINE=python` as a one-release safety-valve
+opt-out and the older Python worker path takes over; the opt-out is
+retired in the next release.
 
 ## Supported Platforms
 

@@ -697,6 +697,94 @@ fn supervisor_phase_b_unknown_engine_warns_and_falls_back() {
     );
 }
 
+#[test]
+fn supervisor_phase_1_default_flip_unset_env_triggers_in_process_path() {
+    // Phase 1 default flip regression: with `VOICEPI_DICTATE_ENGINE`
+    // unset the supervisor MUST take the in-process Rust dispatch
+    // path (was: Python worker before the flip). On a stock CI build
+    // without `rust-hotkeys` + `rust-injection` the in-process install
+    // fails with `FeaturesMissing`, the supervisor emits the
+    // actionable "Phase B in-process dispatch refused" stderr line,
+    // and the Python fallback runs — same observable behaviour as
+    // the explicit `=rust` case.
+    //
+    // Pins the flip so a future revert (re-defaulting to Python)
+    // surfaces here as a red test. Uses the ENGINE_ENV_LOCK guard
+    // even though we don't SET the env — we need to serialise against
+    // sibling tests that mutate it, otherwise a concurrent
+    // `EngineEnvGuard::set("python")` would race us and we'd see
+    // Python behaviour by accident.
+    #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
+    {
+        let Some(python) = test_python() else {
+            return;
+        };
+        // Take the lock and clear the env so the "unset" branch runs
+        // deterministically. Restore in Drop via a locally-defined
+        // guard that mirrors EngineEnvGuard's shape.
+        let previous;
+        let _lock;
+        {
+            _lock = engine_env_lock();
+            previous = env::var("VOICEPI_DICTATE_ENGINE").ok();
+            env::remove_var("VOICEPI_DICTATE_ENGINE");
+        }
+        struct UnsetGuard {
+            previous: Option<String>,
+        }
+        impl Drop for UnsetGuard {
+            fn drop(&mut self) {
+                match &self.previous {
+                    Some(v) => env::set_var("VOICEPI_DICTATE_ENGINE", v),
+                    None => env::remove_var("VOICEPI_DICTATE_ENGINE"),
+                }
+            }
+        }
+        let _restore = UnsetGuard { previous };
+
+        let mut supervisor = RuntimeSupervisor::new();
+        supervisor
+            .start(WorkerCommand {
+                program: python,
+                args: vec![
+                    "-c".to_owned(),
+                    "print('default-flip-fallback-ran', flush=True)".to_owned(),
+                ],
+                working_dir: env::current_dir().unwrap(),
+                env: Vec::new(),
+            })
+            .unwrap();
+        let events = collect_until(&mut supervisor, |events| {
+            has_stdout(events, "default-flip-fallback-ran") && has_exit(events)
+        });
+        // The Python fallback ran — same as env=rust on stock builds.
+        assert!(
+            has_stdout(&events, "default-flip-fallback-ran"),
+            "Python fallback must run on stock build with unset env after the Phase 1 flip"
+        );
+        // Supervisor emitted the Phase B stderr line — proves the
+        // unset env took the in-process Rust path (before falling
+        // back), not the pre-flip direct-Python path.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                RuntimeEvent::Stderr(line) if line.contains("Phase B in-process dispatch refused")
+            )),
+            "unset env must trigger Phase B in-process dispatch after Phase 1 flip; events: {events:#?}",
+        );
+    }
+    // On a fully-featured build we cannot drive the in-process install
+    // (needs a live display + audio + rdev listener the CI harness
+    // can't provide). The unit tests in `in_process::tests` pin the
+    // env-parser contract; this integration test only exercises the
+    // stock-build fallback shape.
+    #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+    {
+        // Silence unused-import warnings on the feature build.
+        let _ = engine_env_lock;
+    }
+}
+
 fn test_python() -> Option<PathBuf> {
     for candidate in python_candidates() {
         if Command::new(candidate)

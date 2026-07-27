@@ -2,24 +2,31 @@
 ``whisper-dictate dictate-run`` subprocess.
 
 Audit item 5 Phase A step 2 (see
-``docs/design/item5-wire-dictate-session.md``). Reads the env var
-``VOICEPI_DICTATE_ENGINE`` and, when set to ``rust``, subprocesses the
-Rust CLI verb (added in PR #512) instead of running the in-process
-Python PTT loop.
+``docs/design/item5-wire-dictate-session.md``) + Phase 1 default flip
+(default is now Rust, Python is a temporary opt-out). Reads the env
+var ``VOICEPI_DICTATE_ENGINE`` and — unless the operator explicitly
+sets it to ``python`` — subprocesses the Rust CLI verb (added in PR
+#512) instead of running the in-process Python PTT loop.
 
 Contract:
 
-* Default (unset or empty) is ``python`` — byte-identical to the pre-item-5
-  behaviour. Nobody who does not opt in sees a difference.
-* ``rust`` opts into the subprocess path. The Rust child emits JSONL
-  events on stdout; :func:`run_rust_engine` forwards each line verbatim
-  to the Python parent's stdout so the Rust supervisor above sees the
-  same event stream it would have seen from the Python worker.
+* **Default (unset or empty) is now** ``rust`` (Phase 1 flip). Anyone
+  who does nothing gets the Rust engine. This matches the Rust-side
+  ``EngineChoice::from_env_value`` — both dispatchers agree on the
+  same default so a direct ``python -m whisper_dictate.runtime``
+  invocation lands on the same engine the Rust supervisor would
+  install.
+* ``python`` is the transition-window safety-valve opt-out — runs the
+  in-process Python ``Dictate(...).run()`` loop unchanged so an
+  operator who hits a Rust-engine regression can fall back with one
+  env var. Retired in the Phase 2 PR that deletes the Python engine
+  modules.
+* ``rust`` (explicit) is treated the same as unset.
 * If the Rust engine cannot start (binary missing, features not
   compiled in, spawn error, or an early exit before the READY signal),
   we log the reason and return ``(False, code)`` so the caller falls
-  back to the Python engine. Rust is opt-in — a broken opt-in must NOT
-  take down the whole worker.
+  back to the Python engine. Failed default-Rust must NOT take down
+  the whole worker.
 * Any other value logs a warning and falls back to Python.
 
 The module deliberately keeps every subprocess seam explicit
@@ -58,15 +65,30 @@ _READY_ENGINE = "rust"
 def select_engine(env: Optional[dict] = None) -> str:
     """Return the canonical engine name (``"python"`` or ``"rust"``).
 
-    An unset or empty env var resolves to ``"python"``. An unknown value
-    also resolves to ``"python"`` — call :func:`is_known_engine` on the
-    raw value first if you want to log a warning for that case.
+    Phase 1 default flip: an unset or empty env var now resolves to
+    ``"rust"`` (was ``"python"`` before the flip). An explicit
+    ``"python"`` is the transition-window safety-valve opt-out; an
+    explicit ``"rust"`` is the same as unset. An unknown value falls
+    back to ``"python"`` — call :func:`is_known_engine` on the raw
+    value first if you want to log a warning for that case.
+
+    Mirrors the Rust-side ``EngineChoice::from_env_value`` — both
+    dispatchers agree on the same default so a direct
+    ``python -m whisper_dictate.runtime`` invocation lands on the same
+    engine the Rust supervisor would install.
     """
     if env is None:
         env = os.environ
     raw = _raw_engine(env)
-    if raw in (ENGINE_PYTHON, ENGINE_RUST):
-        return raw
+    if raw == ENGINE_PYTHON:
+        return ENGINE_PYTHON
+    if raw == ENGINE_RUST:
+        return ENGINE_RUST
+    if raw == "":
+        # Phase 1 default flip: unset / empty now resolves to Rust.
+        return ENGINE_RUST
+    # Unknown value: fall back to Python and let the caller log the
+    # warning via ``is_known_engine``.
     return ENGINE_PYTHON
 
 

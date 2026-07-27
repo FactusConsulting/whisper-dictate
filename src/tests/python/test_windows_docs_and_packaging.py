@@ -109,16 +109,23 @@ class WindowsDocsAndPackagingRegressionTests(unittest.TestCase):
         config = Path("docs/CONFIGURATION.md").read_text(encoding="utf-8")
         technical = Path("docs/TECHNICAL.md").read_text(encoding="utf-8")
 
+        # Phase 1 default flip: the docs now describe the Rust UI hosting
+        # the dictation runtime in-process (no Python worker spawned by
+        # default), with `VOICEPI_DICTATE_ENGINE=python` as the temporary
+        # safety-valve opt-out. Pin the new phrasing + the opt-out env var
+        # so a future doc edit that drops either surfaces here.
         self.assertIn(
-            "runs the Rust UI and starts the Python worker hidden underneath it",
+            "hosts the dictation runtime natively in-process",
             readme.replace("\n", " "),
         )
+        self.assertIn("VOICEPI_DICTATE_ENGINE=python", readme)
         self.assertIn("whisper-dictate run --key ctrl_r --lang da", readme)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da --device cuda", readme)
         self.assertIn(
-            "runs the Rust UI and starts the Python worker hidden underneath it",
+            "hosts the dictation runtime natively in-process",
             install.replace("\n", " "),
         )
+        self.assertIn("VOICEPI_DICTATE_ENGINE=python", install)
         self.assertIn("whisper-dictate.exe\" run --key ctrl_r --lang da --model large-v3 --device cuda", config)
         self.assertIn(r"whisper-dictate.exe run --key ctrl_r --lang da", config)
         self.assertIn("Rust UI is the installer Start-menu", technical)

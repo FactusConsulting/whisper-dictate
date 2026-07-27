@@ -29,13 +29,30 @@ from whisper_dictate import runtime, vp_dictate_engine
 # --------------------------------------------------------------------
 
 
-def test_select_engine_default_is_python():
-    assert vp_dictate_engine.select_engine({}) == vp_dictate_engine.ENGINE_PYTHON
+def test_select_engine_default_is_rust():
+    # Phase 1 default flip: unset now selects Rust (was Python). Pin
+    # this contract so a future refactor that would revert the default
+    # surfaces as a red test.
+    assert vp_dictate_engine.select_engine({}) == vp_dictate_engine.ENGINE_RUST
 
 
-def test_select_engine_empty_string_is_python():
+def test_select_engine_empty_string_is_rust():
+    # Phase 1 default flip: blank / whitespace-only lands in the same
+    # "unset" bucket and resolves to Rust.
     assert vp_dictate_engine.select_engine(
         {vp_dictate_engine.ENGINE_ENV: "   "}
+    ) == vp_dictate_engine.ENGINE_RUST
+
+
+def test_select_engine_explicit_python_is_safety_valve():
+    # The transition-window opt-out: explicit `python` still selects
+    # the Python engine so operators can fall back if the Rust engine
+    # misbehaves. Retired in the Phase 2 PR.
+    assert vp_dictate_engine.select_engine(
+        {vp_dictate_engine.ENGINE_ENV: "python"}
+    ) == vp_dictate_engine.ENGINE_PYTHON
+    assert vp_dictate_engine.select_engine(
+        {vp_dictate_engine.ENGINE_ENV: "PYTHON"}
     ) == vp_dictate_engine.ENGINE_PYTHON
 
 
@@ -322,9 +339,46 @@ def _min_args():
     )
 
 
-def test_dispatch_default_runs_python_engine(monkeypatch, dictate_stub):
+def test_dispatch_default_runs_rust_engine(monkeypatch, dictate_stub):
+    # Phase 1 default flip: unset env now dispatches to the Rust
+    # engine. The Python engine only runs on an explicit `python`
+    # opt-out or when the Rust engine reports startup failure.
     monkeypatch.delenv(vp_dictate_engine.ENGINE_ENV, raising=False)
     monkeypatch.delenv("VOICEPI_METRICS_JSONL", raising=False)
+    calls = []
+
+    def fake_run(config_path=None):
+        calls.append(config_path)
+        return (True, 0)
+
+    monkeypatch.setattr(vp_dictate_engine, "run_rust_engine", fake_run)
+
+    with pytest.raises(SystemExit) as exc:
+        runtime._dispatch_engine(
+            _min_args(), model=object(), lang="en", backend="faster",
+            dev="cpu", ctype="int8",
+            loaded_model_name="tiny.en", model_load_s=0.1,
+        )
+
+    assert exc.value.code == 0
+    assert len(calls) == 1
+    # Python engine must NOT start when Rust ran successfully.
+    assert dictate_stub.instances == []
+
+
+def test_dispatch_default_falls_back_to_python_when_rust_fails(
+    monkeypatch, dictate_stub, capsys,
+):
+    # Companion to the default-runs-Rust test: if the default Rust
+    # dispatch fails at startup (binary missing, features not compiled
+    # in, spawn error), the safety-net Python fallback must still
+    # run. A failed default must never take down the worker.
+    monkeypatch.delenv(vp_dictate_engine.ENGINE_ENV, raising=False)
+
+    def fake_run(config_path=None):
+        return (False, None)
+
+    monkeypatch.setattr(vp_dictate_engine, "run_rust_engine", fake_run)
 
     runtime._dispatch_engine(
         _min_args(), model=object(), lang="en", backend="faster",
@@ -332,12 +386,23 @@ def test_dispatch_default_runs_python_engine(monkeypatch, dictate_stub):
         loaded_model_name="tiny.en", model_load_s=0.1,
     )
 
+    # Python fallback ran even though the default was Rust.
     assert len(dictate_stub.instances) == 1
     assert dictate_stub.instances[0].ran is True
 
 
 def test_dispatch_python_env_runs_python_engine(monkeypatch, dictate_stub):
+    # Transition-window safety-valve opt-out: explicit `python` runs
+    # the Python engine directly, no Rust subprocess attempted.
     monkeypatch.setenv(vp_dictate_engine.ENGINE_ENV, "python")
+
+    def fake_run(config_path=None):
+        raise AssertionError(
+            "run_rust_engine must not be called when the user opted "
+            "out via VOICEPI_DICTATE_ENGINE=python",
+        )
+
+    monkeypatch.setattr(vp_dictate_engine, "run_rust_engine", fake_run)
 
     runtime._dispatch_engine(
         _min_args(), model=object(), lang="en", backend="faster",

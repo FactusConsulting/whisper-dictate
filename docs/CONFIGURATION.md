@@ -163,6 +163,7 @@ advanced guards) and so are documented by hand here:
 | `VOICEPI_NO_SPEECH_DROP` | `0.6` | float `0`-`1` | Always-on segment scrub: drop a segment whose `no_speech_prob` is at least this AND whose `avg_logprob` <= `VOICEPI_NO_SPEECH_DROP_LOGPROB`. |
 | `VOICEPI_NO_SPEECH_DROP_LOGPROB` | `-0.5` | float | Confidence ceiling for the no-speech segment scrub above. |
 | `VOICEPI_SKIP_SYSCHECK` | _(unset)_ | any non-empty | Linux: skip the `packaging/linux/ubuntu26.04/setup.sh` apt-dep check. Auto-set by the Homebrew/Nix wrappers. |
+| `VOICEPI_DICTATE_ENGINE` | _(unset)_ = `rust` | `rust` \| `python` | **Dictation engine selector.** Default (unset / empty) runs the native Rust in-process runtime (hotkey listener + coordinator + session sink inside the UI process, no Python worker spawned). `python` is a temporary safety-valve opt-out kept for one release cycle so operators can fall back if the Rust engine misbehaves; retired in the Phase 2 PR that deletes the Python engine modules. An unknown value logs a warning and falls back to `python`. |
 
 See [MICROPHONE.md](MICROPHONE.md) for what the capture-tuning dBFS/SNR
 numbers mean in practice.

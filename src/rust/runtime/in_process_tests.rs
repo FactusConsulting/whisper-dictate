@@ -8,21 +8,29 @@ use super::supervisor::RuntimeEvent;
 use std::sync::mpsc;
 
 #[test]
-fn engine_choice_unset_is_python() {
-    assert_eq!(EngineChoice::from_env_value(None), EngineChoice::Python);
+fn engine_choice_unset_is_rust() {
+    // Phase 1 default flip: unset now resolves to Rust (was Python).
+    // Pin this contract so a future refactor that would revert the
+    // default surfaces as a red test.
+    assert_eq!(EngineChoice::from_env_value(None), EngineChoice::Rust);
 }
 
 #[test]
-fn engine_choice_blank_is_python() {
-    assert_eq!(EngineChoice::from_env_value(Some("")), EngineChoice::Python);
+fn engine_choice_blank_is_rust() {
+    // Phase 1 default flip: blank / whitespace-only now resolves to
+    // Rust — same "unset" bucket, same default.
+    assert_eq!(EngineChoice::from_env_value(Some("")), EngineChoice::Rust);
     assert_eq!(
         EngineChoice::from_env_value(Some("   ")),
-        EngineChoice::Python
+        EngineChoice::Rust
     );
 }
 
 #[test]
-fn engine_choice_explicit_python() {
+fn engine_choice_explicit_python_is_safety_valve() {
+    // The transition-window safety-valve opt-out: explicit `python`
+    // still selects the Python engine so operators can fall back if
+    // the Rust engine misbehaves. Retired in the Phase 2 PR.
     assert_eq!(
         EngineChoice::from_env_value(Some("python")),
         EngineChoice::Python
