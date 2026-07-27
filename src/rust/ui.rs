@@ -30,7 +30,7 @@ use crate::runtime::{self, RuntimeState, RuntimeSupervisor};
 #[cfg(test)]
 pub(in crate::ui) use crate::runtime::WorkerEvent;
 
-mod api_keys;
+pub(crate) mod api_keys;
 mod app;
 mod audio_devices;
 mod benchmark_results;

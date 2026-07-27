@@ -66,7 +66,7 @@ pub fn resolve_api_key_with(
 ///     makes this safe; a substring test reads it the other way round.
 ///   - **trailing dot** -- `api.groq.com.` is the same host to a resolver, so
 ///     it is normalised away rather than falling through as unrecognised.
-fn provider_host(base_url: &str) -> Option<String> {
+pub(crate) fn provider_host(base_url: &str) -> Option<String> {
     let after_scheme = base_url
         .trim()
         .split_once("://")

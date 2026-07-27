@@ -116,7 +116,7 @@ pub(in crate::ui) fn save_file_secret(user: &str, secret: &str) -> Result<()> {
     write_secret_store_file(&store)
 }
 
-pub(in crate::ui) fn os_keyring_disabled() -> bool {
+pub(crate) fn os_keyring_disabled() -> bool {
     env::var(DISABLE_OS_KEYRING_ENV)
         .map(|value| {
             let value = value.trim().to_ascii_lowercase();
@@ -125,7 +125,7 @@ pub(in crate::ui) fn os_keyring_disabled() -> bool {
         .unwrap_or(false)
 }
 
-pub(in crate::ui) fn load_file_secret(user: &str) -> Result<String> {
+pub(crate) fn load_file_secret(user: &str) -> Result<String> {
     Ok(load_secret_store_file()?.remove(user).unwrap_or_default())
 }
 
@@ -179,7 +179,7 @@ fn write_secret_store_contents(path: &std::path::Path, contents: &str) -> Result
     Ok(())
 }
 
-pub(in crate::ui) fn secret_store_path() -> PathBuf {
+pub(crate) fn secret_store_path() -> PathBuf {
     if let Some(raw) = env::var_os(SECRET_STORE_ENV) {
         return PathBuf::from(raw);
     }

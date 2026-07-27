@@ -114,6 +114,9 @@ pub mod telemetry;
 #[cfg(test)]
 #[path = "console_ascii_tests.rs"]
 mod console_ascii_tests;
+pub mod credentials;
+#[cfg(test)]
+mod credentials_tests;
 #[cfg(test)]
 pub(crate) mod test_env_lock;
 pub mod ui;
