@@ -376,6 +376,53 @@ mod tests {
 ///   - a helper that is on PATH but cannot execute (spawn errors),
 ///   - X11 helpers with no reachable display,
 ///   - `ydotool` when `ydotoold` is not running / its socket is unusable.
+/// Error returned from a single helper attempt in the runtime fallback
+/// chain (`dispatcher::try_helpers`). Carries both the underlying error and
+/// a flag that indicates whether the helper had already pushed one or more
+/// keystrokes to the compositor when it failed.
+///
+/// `partial: true` disables fallback -- the next helper would re-type the
+/// successful prefix on top of what the first helper already injected,
+/// silently double-typing part of the transcript into the user's document.
+/// Losing an utterance is annoying; corrupting a document is worse.
+///
+/// Two producers exist:
+///
+/// * The evdev-driven [`super::wayland::type_text_tracked`] path splits an
+///   injection into multiple `ydotool` calls and DOES observe partial
+///   progress; it stamps `partial: true` whenever any op succeeded before
+///   the failure.
+/// * Subprocess helpers (`kwtype` / `wtype` / `xdotool` / `dotool` as a
+///   single opaque child process) cannot see partial progress; they build a
+///   `HelperError` via [`HelperError::opaque`] and rely on
+///   [`is_safe_to_try_next_helper`] as the safety gate -- a conservative
+///   text-match against KNOWN startup / capability signatures. Anything
+///   unrecognised stops the chain, matching the pre-tracking behaviour.
+pub struct HelperError {
+    pub err: anyhow::Error,
+    pub partial: bool,
+}
+
+impl HelperError {
+    /// Failure that the helper cannot classify as pre- or post-first-key.
+    /// The dispatcher will fall back to text-matching on the error string
+    /// via [`is_safe_to_try_next_helper`]. Only use this for subprocess
+    /// helpers whose partial state is unobservable from Rust.
+    pub fn opaque(err: anyhow::Error) -> Self {
+        Self {
+            err,
+            partial: false,
+        }
+    }
+
+    /// Failure AFTER at least one keystroke reached the compositor. The
+    /// dispatcher MUST NOT try the next helper -- doing so would re-type
+    /// the already-injected prefix.
+    pub fn partial(err: anyhow::Error) -> Self {
+        Self { err, partial: true }
+    }
+}
+
 pub fn is_safe_to_try_next_helper(error_text: &str) -> bool {
     let lower = error_text.to_ascii_lowercase();
     const STARTUP_FAILURES: &[&str] = &[
@@ -387,7 +434,12 @@ pub fn is_safe_to_try_next_helper(error_text: &str) -> bool {
         "no such file or directory",
         "permission denied",
         "exec format error",
-        // X11 helpers without a display.
+        // X11 helpers without a display. `xdotool` really prints
+        // `Error: Can't open display: (null)` (with an apostrophe) --
+        // the previous `cannot open display` matcher never fired for
+        // the exact tool it was meant to catch. Keep the other spellings
+        // for kwtype/wtype/dotool cross-tool defence.
+        "can't open display",
         "cannot open display",
         "unable to open display",
         "failed to connect to display",
@@ -474,7 +526,11 @@ mod runtime_fallback_tests {
         for msg in [
             "No such file or directory (os error 2)",
             "Permission denied (os error 13)",
-            "xdotool type failed: Error: Can't open display: (null)\ncannot open display",
+            // The exact stderr xdotool prints when $DISPLAY is unset --
+            // regression pin so anyone who normalises the STARTUP_FAILURES
+            // list can't silently drop the real xdotool string. Note the
+            // apostrophe -- `cannot open display` would NOT catch this.
+            "xdotool type failed: Error: Can't open display: (null)",
             "ydotool: failed to connect socket: No such file or directory",
         ] {
             assert!(is_safe_to_try_next_helper(msg), "should retry after: {msg}");

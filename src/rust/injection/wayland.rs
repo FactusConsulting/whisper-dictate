@@ -159,17 +159,39 @@ fn paste_shortcut_chord(
 }
 
 pub fn type_text(text: &str, xkb_layout: &str) -> Result<()> {
+    type_text_tracked(text, xkb_layout)
+        .map(|_| ())
+        .map_err(|(err, _sent)| err)
+}
+
+/// Same as [`type_text`] but returns the number of `ydotool` ops that
+/// SUCCEEDED before the failure (or the total count on success).
+///
+/// The runtime fallback in `dispatcher::try_helpers` uses the count to
+/// decide whether to try the next helper: `sent > 0` means at least one
+/// keystroke already reached the compositor, and re-typing the burst via
+/// a second helper would double-type the successful prefix on top. See
+/// [`super::fallback::HelperError::partial`].
+pub fn type_text_tracked(
+    text: &str,
+    xkb_layout: &str,
+) -> std::result::Result<usize, (anyhow::Error, usize)> {
+    let mut sent = 0usize;
     for op in build_ydotool_ops(text, xkb_layout) {
-        match op {
-            YdotoolOp::Type(chunk) => run_ydotool(["type", "--", &chunk])?,
+        let outcome = match op {
+            YdotoolOp::Type(chunk) => run_ydotool(["type", "--", &chunk]),
             YdotoolOp::Key(keys) => {
                 let mut args = vec!["key".to_owned()];
                 args.extend(keys);
-                run_ydotool(args.iter().map(String::as_str))?;
+                run_ydotool(args.iter().map(String::as_str))
             }
+        };
+        match outcome {
+            Ok(()) => sent += 1,
+            Err(err) => return Err((err, sent)),
         }
     }
-    Ok(())
+    Ok(sent)
 }
 
 pub fn paste_shortcut(target_title: &str, target_process: &str) -> Result<()> {
