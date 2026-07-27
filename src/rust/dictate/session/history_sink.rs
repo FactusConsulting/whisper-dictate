@@ -44,6 +44,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
+use super::path_util::expand_user;
 use crate::config;
 use crate::telemetry;
 
@@ -68,8 +69,22 @@ pub struct EffectiveHistorySettings {
     pub enabled: bool,
     /// Absolute path the history JSONL is written to. Always populated
     /// (`config::default_history_path` on the "unset" branch) so the
-    /// caller does not have to re-derive the default.
+    /// caller does not have to re-derive the default. Any leading `~`
+    /// in an env / config override is expanded via
+    /// [`super::path_util::expand_user`] to match Python's
+    /// `os.path.expanduser`, so `~/.voicepi/history.jsonl` writes to
+    /// `$HOME/.voicepi/history.jsonl` rather than a literal `~`
+    /// directory under `cwd` (Codex P2 #620 history_sink.rs:107).
     pub path: PathBuf,
+    /// `Some(err)` when `config.json` could NOT be loaded (I/O error or
+    /// JSON parse failure). Codex P2 #620 finding
+    /// `Fail closed when live history config cannot be read`: previously
+    /// this error was swallowed via `load_raw_config().unwrap_or(Null)`,
+    /// so a user whose config says `history_enabled=false` could have
+    /// dictation persisted while the file was being rewritten or was
+    /// temporarily invalid. [`ReloadingHistorySink::append`] now checks
+    /// this field and skips the append with a `[history]` warn line.
+    pub config_error: Option<String>,
 }
 
 /// Resolve the effective history settings the way Python's
@@ -82,7 +97,14 @@ pub struct EffectiveHistorySettings {
 /// the sinks' single overlay point. Codex P1 #605 finding 1.
 pub fn effective_history_settings() -> EffectiveHistorySettings {
     // Config file first (the "user saved a value in the UI" path).
-    let raw_config = config::load_raw_config().unwrap_or(serde_json::Value::Null);
+    // Preserve the load error rather than collapsing it to `Null` --
+    // the `ReloadingHistorySink` inspects `config_error` to fail-closed
+    // on a transient/malformed config.json (Codex P2 #620 finding
+    // `Fail closed when live history config cannot be read`).
+    let (raw_config, config_error) = match config::load_raw_config() {
+        Ok(v) => (v, None),
+        Err(err) => (serde_json::Value::Null, Some(err.to_string())),
+    };
     let object = raw_config.as_object();
 
     let enabled_from_config = object
@@ -103,11 +125,21 @@ pub fn effective_history_settings() -> EffectiveHistorySettings {
         .or_else(|| std::env::var(HISTORY_JSONL_ENV).ok())
         .filter(|v| !v.trim().is_empty());
     let path = match path_raw {
-        Some(raw) => PathBuf::from(raw),
+        // `~/.voicepi/history.jsonl` must land in $HOME, not a literal
+        // `~` directory under `cwd`. Python's `history_path()` calls
+        // `expanduser()`; without this the Rust writer would silently
+        // diverge from the Python reader / the metrics sink (which
+        // already expanded via `expand_user`). Codex P2 #620
+        // history_sink.rs:107.
+        Some(raw) => expand_user(raw.trim()),
         None => config::default_history_path(),
     };
 
-    EffectiveHistorySettings { enabled, path }
+    EffectiveHistorySettings {
+        enabled,
+        path,
+        config_error,
+    }
 }
 
 /// Mirror of Python's `_truthy` in `vp_history.py`: everything except
@@ -236,6 +268,40 @@ impl ReloadingHistorySink {
     pub fn last_resolved(&self) -> Option<EffectiveHistorySettings> {
         self.last.lock().ok().and_then(|guard| guard.clone())
     }
+
+    /// Same as [`HistorySink::append`] but returns the underlying write
+    /// result instead of swallowing it. Used by the `self-test
+    /// history-write` verb (Codex P2 #621 history_write.rs:174) so a
+    /// broken file surfaces as `ok=false` in the JSON envelope instead
+    /// of the pre-fix hard-coded `Ok(())`. Both the gate-off branch
+    /// and the config-error fail-closed branch return `Ok(None)`; a
+    /// real I/O error bubbles as an `Err`; a successful append returns
+    /// `Ok(Some(path))` so the caller can `metadata()` the exact file
+    /// the sink wrote to.
+    pub fn append_with_result(&self, event: &Value) -> anyhow::Result<Option<PathBuf>> {
+        let settings = effective_history_settings();
+        if let Ok(mut guard) = self.last.lock() {
+            *guard = Some(settings.clone());
+        }
+        if let Some(err) = &settings.config_error {
+            // Fail-closed: an operator with `history_enabled=false` in
+            // a transiently-invalid config.json must NOT have their
+            // dictation persisted to the platform default. Log at warn
+            // level so the operator sees the broken config in stderr.
+            eprintln!(
+                "[history] warn: config read failed ({err}); \
+                 dropping this row to fail-closed rather than falling through \
+                 to defaults -- fix config.json to resume writing"
+            );
+            return Ok(None);
+        }
+        if !settings.enabled {
+            return Ok(None);
+        }
+        let filtered = telemetry::history_event(event);
+        telemetry::append_jsonl(&settings.path, &filtered)?;
+        Ok(Some(settings.path))
+    }
 }
 
 impl Default for ReloadingHistorySink {
@@ -246,23 +312,25 @@ impl Default for ReloadingHistorySink {
 
 impl HistorySink for ReloadingHistorySink {
     fn append(&self, event: &Value) {
-        let settings = effective_history_settings();
-        if let Ok(mut guard) = self.last.lock() {
-            *guard = Some(settings.clone());
-        }
-        if !settings.enabled {
-            // The gate flipped to disabled between utterances (or was
-            // never on). Silently drop -- matches Python, whose
-            // `_append_history` also short-circuits when
-            // `history_enabled()` is false.
-            return;
-        }
-        let filtered = telemetry::history_event(event);
-        if let Err(err) = telemetry::append_jsonl(&settings.path, &filtered) {
-            eprintln!(
-                "[history] could not append to {}: {err}",
-                settings.path.display()
-            );
+        // Delegate to the result-returning variant so the shipping
+        // trait impl (which swallows errors) and the self-test verb
+        // (which surfaces them, Codex P2 #621 history_write.rs:174)
+        // share exactly the same resolve-then-write path. Only the
+        // trailing error-handling differs.
+        match self.append_with_result(event) {
+            Ok(_) => {}
+            Err(err) => {
+                // Log the path we would have written to (cached from
+                // the resolve inside `append_with_result`).
+                let path_hint = self
+                    .last
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone())
+                    .map(|s| s.path.display().to_string())
+                    .unwrap_or_else(|| "<unresolved>".to_owned());
+                eprintln!("[history] could not append to {path_hint}: {err}");
+            }
         }
     }
 }
@@ -586,6 +654,203 @@ mod tests {
         let resolved = effective_history_settings();
         assert!(resolved.enabled, "schema default is enabled=true");
         assert_eq!(resolved.path, config::default_history_path());
+    }
+
+    /// A `VOICEPI_HISTORY_JSONL=~/history.jsonl` env override must
+    /// expand `~` to `$HOME/…` before the sink writes; without this,
+    /// `PathBuf::from("~/history.jsonl")` would land in a literal `~`
+    /// directory under the current working directory and diverge from
+    /// the Python writer / any downstream reader. Codex P2 #620
+    /// history_sink.rs:107.
+    #[test]
+    fn effective_history_settings_tilde_in_env_var_is_expanded() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&[
+            "VOICEPI_CONFIG",
+            HISTORY_ENABLED_ENV,
+            HISTORY_JSONL_ENV,
+            "HOME",
+            "USERPROFILE",
+        ]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::remove_var(HISTORY_ENABLED_ENV);
+        std::env::set_var(HISTORY_JSONL_ENV, "~/history.jsonl");
+        std::env::set_var("HOME", dir.path());
+        std::env::set_var("USERPROFILE", dir.path());
+
+        let resolved = effective_history_settings();
+        assert_eq!(
+            resolved.path,
+            dir.path().join("history.jsonl"),
+            "leading `~` must be expanded to $HOME, not written to a literal `~` directory"
+        );
+    }
+
+    /// The same tilde expansion must apply when the path comes from
+    /// `config.json` (config layer wins over env, but both must
+    /// expand the same way).
+    #[test]
+    fn effective_history_settings_tilde_in_config_value_is_expanded() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&[
+            "VOICEPI_CONFIG",
+            HISTORY_ENABLED_ENV,
+            HISTORY_JSONL_ENV,
+            "HOME",
+            "USERPROFILE",
+        ]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(
+            &cfg,
+            serde_json::json!({ "history_jsonl": "~/history.jsonl" }).to_string(),
+        )
+        .unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::remove_var(HISTORY_ENABLED_ENV);
+        std::env::remove_var(HISTORY_JSONL_ENV);
+        std::env::set_var("HOME", dir.path());
+        std::env::set_var("USERPROFILE", dir.path());
+
+        let resolved = effective_history_settings();
+        assert_eq!(resolved.path, dir.path().join("history.jsonl"));
+    }
+
+    /// The reloading sink appends via the shipping `~`-expanded path so
+    /// a user with `history_jsonl=~/history.jsonl` in config can `cat`
+    /// the file at `$HOME/history.jsonl` after the append -- not at
+    /// `./~/history.jsonl` under cwd. Round-trip regression for the
+    /// tilde-expansion fix.
+    #[test]
+    fn reloading_history_sink_writes_to_tilde_expanded_path() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&[
+            "VOICEPI_CONFIG",
+            HISTORY_ENABLED_ENV,
+            HISTORY_JSONL_ENV,
+            "HOME",
+            "USERPROFILE",
+        ]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(HISTORY_ENABLED_ENV, "1");
+        std::env::set_var(HISTORY_JSONL_ENV, "~/history.jsonl");
+        std::env::set_var("HOME", dir.path());
+        std::env::set_var("USERPROFILE", dir.path());
+
+        let sink = ReloadingHistorySink::new();
+        sink.append(&json!({"text": "tilde", "event": "utterance"}));
+
+        let expected = dir.path().join("history.jsonl");
+        assert!(
+            expected.exists(),
+            "sink must write to $HOME/history.jsonl (`~` expanded), not to \
+             a literal `~` directory under cwd"
+        );
+        let literal_tilde = std::path::PathBuf::from("~").join("history.jsonl");
+        assert!(
+            !literal_tilde.exists(),
+            "unexpanded literal `~` path must NOT exist under cwd"
+        );
+    }
+
+    /// A malformed `config.json` used to drop through to the env layer
+    /// (which defaults to `enabled=1`), so a user whose config says
+    /// `history_enabled=false` could have dictation persisted while the
+    /// file was being rewritten or was transiently invalid. Codex P2
+    /// #620 finding `Fail closed when live history config cannot be
+    /// read`.
+    #[test]
+    fn effective_history_settings_reports_config_read_failure() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        // Not JSON.
+        std::fs::write(&cfg, "not-json {").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::remove_var(HISTORY_ENABLED_ENV);
+        std::env::remove_var(HISTORY_JSONL_ENV);
+
+        let resolved = effective_history_settings();
+        assert!(
+            resolved.config_error.is_some(),
+            "malformed config.json must be surfaced as `config_error` \
+             so the sink can fail-closed rather than silently defaulting"
+        );
+    }
+
+    /// The reloading sink must NOT write on a config-load error, even
+    /// when the env layer alone would have defaulted to enabled.
+    /// Fail-closed regression.
+    #[test]
+    fn reloading_history_sink_skips_append_on_config_error() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "definitely not json").unwrap();
+        let target = dir.path().join("history.jsonl");
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(HISTORY_ENABLED_ENV, "1");
+        std::env::set_var(HISTORY_JSONL_ENV, &target);
+
+        let sink = ReloadingHistorySink::new();
+        sink.append(&json!({"text": "should not land", "event": "utterance"}));
+        assert!(
+            !target.exists(),
+            "config-load error must fail-closed; no history row should be written"
+        );
+    }
+
+    /// The result-returning variant used by the self-test verb must
+    /// bubble an I/O error to the caller (Codex P2 #621
+    /// history_write.rs:174: the trait impl swallows the error and
+    /// pre-fix the verb hard-coded `Ok(())`).
+    #[test]
+    fn reloading_history_sink_append_with_result_propagates_io_error() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        let file_as_parent = dir.path().join("not-a-dir");
+        std::fs::write(&file_as_parent, "").unwrap();
+        let unwritable = file_as_parent.join("history.jsonl");
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(HISTORY_ENABLED_ENV, "1");
+        std::env::set_var(HISTORY_JSONL_ENV, &unwritable);
+
+        let sink = ReloadingHistorySink::new();
+        let result = sink.append_with_result(&json!({"text": "boom", "event": "utterance"}));
+        assert!(
+            result.is_err(),
+            "the result-returning variant must surface unwritable-path errors, \
+             not swallow them like the shipping `HistorySink::append` does"
+        );
     }
 
     /// Reloading sink: a Settings save between utterances (config file

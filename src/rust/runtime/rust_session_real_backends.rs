@@ -84,7 +84,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::dictate::audio_route::RouteConfig;
 use crate::dictate::backends::cloud_transcribe::{
-    cloud_backend_local_only_checked, cloud_backend_requested_from_env,
+    cloud_backend_local_only_checked, cloud_backend_requested_from_env, STT_BACKEND_CLOUD,
+    STT_MODEL_ENV,
 };
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 use crate::dictate::backends::WhisperLocalTranscribeBackend;
@@ -214,11 +215,37 @@ pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
 /// keys (`RESTART_KEYS`). Codex P1 #606 metrics-schema follow-up.
 pub(crate) fn session_config_from_env() -> SessionConfig {
     let route = RouteConfig::from_env();
+    // Resolve stt_backend + model TOGETHER via the same selection
+    // `make_real_session` uses. Previously both fields were read from
+    // `VOICEPI_STT_BACKEND` / `VOICEPI_MODEL` verbatim, which produced
+    // two schema-level lies in history/metrics rows:
+    //
+    // * When `VOICEPI_STT_BACKEND=openai`, the row's `model` field was
+    //   populated from the local-only `VOICEPI_MODEL` env var, so a
+    //   cloud request looked like it had used `large-v3-turbo` when it
+    //   actually used `gpt-4o-transcribe` (Codex P2 #620
+    //   rust_session_real_backends.rs:221 —
+    //   "Label cloud events with the cloud model").
+    // * A noncanonical `VOICEPI_STT_BACKEND=OPENAI` or stale
+    //   `parakeet` / `faster-whisper` value flowed straight to disk
+    //   even though `cloud_backend_requested_from_env` normalises to
+    //   `openai` / local Whisper (Codex P2 #620
+    //   rust_session_real_backends.rs:220 —
+    //   "Canonicalize the backend label from the selected backend").
+    //
+    // Deriving both labels from the same `cloud_backend_requested_from_env`
+    // gate that selects the backend keeps the schema row honest and
+    // guarantees writer/reader agreement across the migration.
+    let (stt_backend, model) = if cloud_backend_requested_from_env() {
+        (STT_BACKEND_CLOUD.to_owned(), env_string(STT_MODEL_ENV))
+    } else {
+        ("whisper".to_owned(), env_string("VOICEPI_MODEL"))
+    };
     SessionConfig {
         min_record_seconds: route.min_record_seconds,
         format_command_set: format_command_set_from_env(),
-        stt_backend: env_string("VOICEPI_STT_BACKEND"),
-        model: env_string("VOICEPI_MODEL"),
+        stt_backend,
+        model,
         device: env_string("VOICEPI_DEVICE"),
         compute_type: env_string("VOICEPI_COMPUTE_TYPE"),
         inject_mode: env_string("VOICEPI_INJECT_MODE"),

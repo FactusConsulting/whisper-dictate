@@ -53,10 +53,14 @@ use serde_json::{json, Value};
 
 pub mod history_sink;
 pub mod metrics_sink;
+mod path_util;
 pub mod preview;
 pub mod types;
 mod wire;
 
+#[cfg(test)]
+#[path = "path_util_tests.rs"]
+mod path_util_tests;
 #[cfg(test)]
 mod tests_history_sink;
 #[cfg(test)]

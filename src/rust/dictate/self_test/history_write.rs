@@ -37,9 +37,7 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use crate::dictate::session::history_sink::{
-    effective_history_settings, history_sink_from_settings,
-};
+use crate::dictate::session::history_sink::{effective_history_settings, ReloadingHistorySink};
 
 /// Options for [`run_history_write_self_test`].
 #[derive(Debug, Clone, Default)]
@@ -150,18 +148,21 @@ pub fn run_history_write_self_test(opts: HistoryWriteOptions) -> HistoryWriteRep
     let filtered = crate::telemetry::history_event(&event);
 
     let write_result = if let Some(override_path) = opts.path_override.as_ref() {
-        // Direct-write path: bypass `history_sink_from_settings` so the
-        // unit tests can point at a scratch dir without leaking the
+        // Direct-write path: bypass the reloading sink so the unit
+        // tests can point at a scratch dir without leaking the
         // shipping settings.
         crate::telemetry::append_jsonl(override_path, &filtered)
     } else {
-        // Production path: build the shipping reloading sink so the
-        // exact code path the session runs is exercised.
-        let sink = history_sink_from_settings();
-        if let Some(sink) = sink {
-            sink.append(&event);
-        }
-        Ok(())
+        // Production path: exercise the shipping reloading sink via
+        // its result-returning variant so a failure surfaces as
+        // `ok=false` in the JSON envelope. Codex P2 #621
+        // history_write.rs:174: pre-fix the trait `append` swallowed
+        // the error and this branch hard-coded `Ok(())`, so a broken
+        // history file was invisible to the self-test AND the Wayland
+        // smoke script.
+        ReloadingHistorySink::new()
+            .append_with_result(&event)
+            .map(|_| ())
     };
 
     let (bytes_written, error) = match write_result {
@@ -272,5 +273,72 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("history write failed"));
+    }
+
+    /// The production branch (no `path_override`) must also propagate
+    /// I/O failures. Pre-fix (Codex P2 #621 history_write.rs:174) the
+    /// verb hard-coded `Ok(())` and only the `path_override` branch
+    /// could ever fail. Here we set env vars so the reloading sink
+    /// resolves to an unwritable path, and exercise the SHIPPING code
+    /// path -- the report must show `ok=false` + a descriptive error.
+    #[test]
+    fn write_failure_in_production_branch_propagates_from_reloading_sink() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let dir = tempdir().unwrap();
+        // Empty valid config.json so `effective_history_settings`
+        // resolves via env.
+        let cfg = dir.path().join("config.json");
+        fs::write(&cfg, "{}").unwrap();
+        // Parent that CANNOT be created because it's a regular file.
+        let file_as_parent = dir.path().join("not-a-dir");
+        fs::write(&file_as_parent, "").unwrap();
+        let unwritable = file_as_parent.join("history.jsonl");
+
+        // Save + set the env vars the reloading sink reads.
+        let saved_cfg = std::env::var_os("VOICEPI_CONFIG");
+        let saved_enabled = std::env::var_os("VOICEPI_HISTORY_ENABLED");
+        let saved_path = std::env::var_os("VOICEPI_HISTORY_JSONL");
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var("VOICEPI_HISTORY_ENABLED", "1");
+        std::env::set_var("VOICEPI_HISTORY_JSONL", &unwritable);
+
+        let report = run_history_write_self_test(HistoryWriteOptions {
+            text: "prod-boom".to_owned(),
+            path_override: None,
+            force_enabled: None,
+        });
+
+        // Restore.
+        match saved_cfg {
+            Some(v) => std::env::set_var("VOICEPI_CONFIG", v),
+            None => std::env::remove_var("VOICEPI_CONFIG"),
+        }
+        match saved_enabled {
+            Some(v) => std::env::set_var("VOICEPI_HISTORY_ENABLED", v),
+            None => std::env::remove_var("VOICEPI_HISTORY_ENABLED"),
+        }
+        match saved_path {
+            Some(v) => std::env::set_var("VOICEPI_HISTORY_JSONL", v),
+            None => std::env::remove_var("VOICEPI_HISTORY_JSONL"),
+        }
+
+        assert!(
+            !report.exit_ok(),
+            "the production branch (no path_override) MUST surface \
+             the shipping sink's I/O failures; pre-fix this returned \
+             ok=true because the trait `append` swallowed the error"
+        );
+        assert!(
+            report
+                .error
+                .as_deref()
+                .map(|e| e.contains("history write failed"))
+                .unwrap_or(false),
+            "error text must be descriptive; got {:?}",
+            report.error
+        );
     }
 }
