@@ -263,6 +263,57 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
             canned_text,
             json,
         ),
+        SelfTestCommand::HotkeyBoot {
+            hold_ms,
+            chord,
+            json,
+        } => handle_self_test_hotkey_boot(hold_ms, &chord, json),
+    }
+}
+
+/// Dispatch `self-test hotkey-boot`. Exercises the SAME
+/// [`whisper_dictate_app::hotkey::install_hotkey`] path the Phase-B
+/// supervisor uses so a Windows-side wedge is reproducible from
+/// PowerShell with visible stderr (the GUI binary's
+/// `windows_subsystem = "windows"` discards its stderr).
+fn handle_self_test_hotkey_boot(hold_ms: u64, chord: &str, json: bool) -> anyhow::Result<()> {
+    use whisper_dictate_app::hotkey::boot_self_test::{
+        features_available, resolve_chord, run_boot_test,
+    };
+    if !features_available() {
+        return Err(anyhow::anyhow!(
+            "self-test hotkey-boot requires the `rust-hotkeys` and `rust-injection` \
+             cargo features - rebuild with \
+             `cargo build --features rust-hotkeys,rust-injection`"
+        ));
+    }
+    // Fetch the on-disk config's `key` field so a bare invocation
+    // uses the same chord the supervisor would. Any config-load
+    // error surfaces as an anyhow bubble — the operator running this
+    // is debugging a wedge and would rather see the config path
+    // than a silent fallback.
+    let config_key = whisper_dictate_app::config::load_settings()
+        .map(|s| s.key)
+        .unwrap_or_default();
+    let resolved = resolve_chord(chord, &config_key);
+    if resolved.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no PTT chord configured: pass `--chord <chord>` or set one via \
+             `whisper-dictate config set key ctrl_l+shift_l` first"
+        ));
+    }
+    let report = run_boot_test(resolved, hold_ms);
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        println!("{}", report.to_plain());
+    }
+    if report.ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test hotkey-boot failed (see report above for the driver / chord / error)"
+        ))
     }
 }
 

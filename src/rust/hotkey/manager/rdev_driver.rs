@@ -142,8 +142,31 @@ where
             };
             if let Err(err) = rdev::listen(cb) {
                 let msg = format!("{err:?}");
-                eprintln!("[hotkey] rdev listener failed: {msg}");
+                // Tee via `crate::diag::log!` so the failure surfaces in
+                // the Windows GUI diagnostic file (`gui-diagnostic.log`)
+                // — plain `eprintln!` here would be discarded because
+                // `whisper-dictate-gui.exe` is `windows_subsystem =
+                // "windows"` and has no console attached (the Windows
+                // PTT bug-report symptom that showed up as "Stderr is
+                // silent (0 bytes) even with RUST_LOG=debug").
+                crate::diag::log!("[hotkey] rdev listener failed: {msg}");
                 let _ = ready_tx.send(ListenerSignal::Failed(msg));
+            } else {
+                // rdev's `listen` is documented to block for the process
+                // lifetime on success. If it EVER returns Ok, the LL
+                // hook the listener installed against this thread is
+                // now dead (per-thread lifetime), and PTT will silently
+                // fail for the rest of the process. Surface it via the
+                // diagnostic channel so a future wedge that traces back
+                // to this early exit is inspectable in the Windows GUI
+                // diagnostic log.
+                crate::diag::log!(
+                    "[hotkey] rdev listener returned Ok - the OS \
+                     message loop exited before shutdown. PTT will no \
+                     longer fire on this process; the hook the listener \
+                     installed against this thread is uninstalled with \
+                     the thread. This is unexpected on healthy sessions."
+                );
             }
         })
         .map_err(|e| SpawnError::ListenerStartup(format!("thread spawn failed: {e}")))?;

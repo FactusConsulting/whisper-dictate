@@ -785,6 +785,85 @@ fn supervisor_phase_1_default_flip_unset_env_triggers_in_process_path() {
     }
 }
 
+#[test]
+fn supervisor_phase_b_fallback_stderr_line_is_stable_grep_target() {
+    // Windows PTT-boot regression: the operator runs the GUI with
+    // `VOICEPI_DICTATE_ENGINE=rust`, PTT fires no event, and there
+    // is NO signal at all — because `whisper-dictate-gui.exe` has
+    // `windows_subsystem = "windows"` and every `eprintln!` from the
+    // supervisor's fallback branch goes to a discarded stderr.
+    //
+    // The fix (a) tees the fallback message through
+    // `crate::diag::log!` so the Windows GUI diagnostic file
+    // (`%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log`) captures
+    // it, AND (b) keeps the SAME `RuntimeEvent::Stderr(line)` fanout
+    // so the UI's Log tab shows the reason live. This test pins the
+    // machine-readable contract of that fanout line — `Phase B in-
+    // process dispatch refused: <reason>` — so a future refactor
+    // that reworded (or removed) the string breaks a test rather
+    // than a grep pattern in a support script.
+    //
+    // Only runs on stock-feature builds because we need the Phase-B
+    // install to REFUSE (via `FeaturesMissing`) so we can observe
+    // the fallback line. Feature-complete builds can't drive this
+    // path from CI (no live rdev listener / display / audio).
+    #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
+    {
+        let Some(python) = test_python() else {
+            return;
+        };
+        let _guard = EngineEnvGuard::set("rust");
+        let mut supervisor = RuntimeSupervisor::new();
+        supervisor
+            .start(WorkerCommand {
+                program: python,
+                args: vec![
+                    "-c".to_owned(),
+                    "print('phase-b-fallback-line-ran', flush=True)".to_owned(),
+                ],
+                working_dir: env::current_dir().unwrap(),
+                env: Vec::new(),
+            })
+            .unwrap();
+        let events = collect_until(&mut supervisor, |events| {
+            has_stdout(events, "phase-b-fallback-line-ran") && has_exit(events)
+        });
+        // The exact prefix a support script grep pattern would target.
+        // Uses `starts_with` on the trimmed leading token so a future
+        // fix that appends context (e.g. "[runtime] Phase B ...:
+        // <reason> (advice: rebuild with ...)") still matches.
+        let matched: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                RuntimeEvent::Stderr(line) if line.starts_with("[runtime] Phase B in-process dispatch refused: ") => Some(line.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !matched.is_empty(),
+            "supervisor must emit exactly one `[runtime] Phase B in-process dispatch refused: <reason>` \
+             stderr line so the UI's Log tab and any grep-based support script have a stable target; \
+             events: {events:#?}",
+        );
+        // Only ONE such line per start()  — a duplicate would spam
+        // the UI log and confuse an operator debugging a wedge.
+        assert_eq!(
+            matched.len(),
+            1,
+            "expected exactly one fallback line per start(), got {}: {matched:?}",
+            matched.len(),
+        );
+    }
+    #[cfg(all(feature = "rust-hotkeys", feature = "rust-injection"))]
+    {
+        // Feature-complete build cannot drive the Phase-B refusal
+        // path from CI (would need a live rdev listener + audio).
+        // Kept as a compile-time no-op so the test is still
+        // discovered on every feature configuration.
+        let _ = engine_env_lock;
+    }
+}
+
 fn test_python() -> Option<PathBuf> {
     for candidate in python_candidates() {
         if Command::new(candidate)

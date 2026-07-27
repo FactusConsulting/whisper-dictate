@@ -54,6 +54,15 @@ pub mod corpus_record_native;
 // language/category (Rust port of `vp_corpus_profile.py`). Used by the
 // `dictionary build-from-corpus` subcommand to mirror the Python flags.
 pub mod corpus_profile;
+// Diagnostic file sink for the Windows GUI binary. Solves the
+// "stderr is silent" symptom of Windows PTT bug reports —
+// `whisper-dictate-gui.exe` is `windows_subsystem = "windows"` so it
+// has no console, and every `eprintln!` from the rdev listener,
+// supervisor Phase-B branches, and hotkey install path goes to a
+// discarded stderr. This module lets the GUI open a tee log at
+// `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log` so future
+// Windows PTT wedges are inspectable after the fact without a rebuild.
+pub mod diag;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
 // Python-removal roadmap #348). Gated behind `audio-capture` so the default
 // build does not pull cpal — this is a cpal-only enumeration (no ONNX), so it
