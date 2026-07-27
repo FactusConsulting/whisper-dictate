@@ -48,7 +48,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `key` | `VOICEPI_KEY` | `ctrl_r` | Restart | Hold-to-talk hotkey, e.g. ctrl_r, alt_r, f9, or a chord like shift_r+ctrl_r. An all-bare-modifier binding fires only on that exact combo. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API). |
-| `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. |
+| `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. Rust transcribe backend uses Vulkan (see "Rust transcribe backend — GPU acceleration" below); `cuda` here still routes through Vulkan on that path. |
 | `compute_type` | `VOICEPI_COMPUTE_TYPE` | _(unset)_ | Restart | Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Live | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
@@ -961,6 +961,38 @@ ctranslate2/CUDA context (~300–500 MB). `large-v3` weights alone:
 setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8; setx VOICEPI_COMPUTE_TYPE float16; setx VOICEPI_LANG da
 # restart whisper-dictate; first [stt] line in the log will show your new compute type
 ```
+
+## Rust transcribe backend — GPU acceleration
+
+The Rust transcribe path (opt-in via `VOICEPI_TRANSCRIBE_BACKEND=rust`) runs
+whisper.cpp inside the Rust binary. Its GPU support is a **compile-time**
+concern: the binary was either linked with the `whisper-rs-vulkan` cargo
+feature at build time or it wasn't. Runtime env vars can only *disable* GPU
+on a GPU-capable binary — they cannot enable GPU on a CPU-only binary.
+
+- **Windows release binary (v1.22.0+)** — built with `whisper-rs-vulkan`.
+  GPU is used automatically on any Windows 10/11 machine with an
+  up-to-date NVIDIA / AMD / Intel GPU driver (the driver ships
+  `vulkan-1.dll`). RTX 3080 / 4070 / etc. all light up. First transcribe
+  log line will read `whisper_init_with_params_no_state: use gpu = 1` and
+  `whisper_backend_init_gpu: using Vulkan backend`.
+- **Older Windows release binaries (≤ rc.9)** — built without
+  `whisper-rs-vulkan`. `use gpu = 0` regardless of GPU/driver — a
+  large-v3-turbo transcribe of a 3-second clip took 5+ minutes on CPU.
+  Upgrade to v1.22.0+ (Chocolatey / Inno / winget) to get the GPU build.
+- **Linux release binary** — CPU-only today; the Vulkan build for Linux
+  has not been enabled in the release pipeline yet. Track the follow-up
+  in the issue tracker.
+- **Homebrew / macOS** — CPU-only today (Metal backend planned).
+- **`VOICEPI_WHISPER_GPU`** — runtime override on a GPU-capable build:
+  `auto` (default) uses GPU, `off`/`cpu` forces CPU, `vulkan` explicitly
+  picks the Vulkan backend. On a CPU-only build all three degrade
+  silently to CPU.
+- **Vendor note** — the Rust transcribe path uses Vulkan (not CUDA)
+  because Vulkan is vendor-agnostic (NVIDIA + AMD + Intel from one
+  feature flag). The Python `faster-whisper` path (default at
+  `stt_backend=whisper` without the Rust opt-in) still uses CUDA
+  directly and is unaffected by this.
 
 ## Quick recommendations
 

@@ -56,6 +56,16 @@ jobs:
     permissions:
       contents: write
       packages: write
+    env:
+      # Kill-switch for the whisper.cpp Vulkan build (#645). Default '1' =
+      # ship a GPU-capable Windows binary (whisper-rs-vulkan feature + Vulkan
+      # SDK setup + linked-backend regression check). Override to '0' at the
+      # repo (Settings -> Secrets and variables -> Actions -> Variables) by
+      # adding `VOICEPI_BUILD_VULKAN=0` if the Vulkan SDK action or the build
+      # ever wedges, and re-run the release to ship a CPU-only artefact
+      # without editing this workflow. The runtime falls back to CPU cleanly
+      # per `should_use_gpu` in src/rust/whisper/gpu.rs.
+      VOICEPI_BUILD_VULKAN: ${{ vars.VOICEPI_BUILD_VULKAN || '1' }}
     steps:
       - name: Resolve tag
         shell: bash
@@ -120,13 +130,102 @@ jobs:
         if: steps.win-check.outputs.changed == 'true'
         with:
           workspaces: "src/rust -> ../target"
-          shared-key: "rust-release-windows"
+          # Vulkan flip (#645): the release cache is now Vulkan-linked. Keep it
+          # separate from any prior CPU-only release-windows cache so a warm cache
+          # from a pre-Vulkan run cannot pollute this build (a cached whisper-rs-sys
+          # artefact from the CPU build would silently omit GGML_VULKAN symbols).
+          # Bump this suffix again if the Vulkan link surface changes.
+          shared-key: "rust-release-windows-vulkan"
           cache-on-failure: true
+
+      # Vulkan SDK is needed at BUILD time to compile whisper.cpp's GGML_VULKAN
+      # backend: whisper.cpp compiles its GPU shaders at build time via `glslc`
+      # (from shaderc), and the whisper-rs-sys build script links against the
+      # SDK's vulkan-1 import library. At RUNTIME the user's NVIDIA / AMD /
+      # Intel driver ships vulkan-1.dll (Windows 10+ with any up-to-date GPU
+      # driver), so no runtime DLL travels in the installer.
+      #
+      # Uses jakoch/install-vulkan-sdk-action (the LunarG installer, which
+      # includes glslc) NOT humbletim/setup-vulkan-sdk (headers+loader only,
+      # no glslc → whisper.cpp's shader compile step fails). Sets
+      # VULKAN_SDK; the "Build Rust desktop UI" step below adds
+      # $VULKAN_SDK\Bin to PATH so cargo's build script finds glslc.
+      #
+      # Skipping this step (or setting `VOICEPI_BUILD_VULKAN=0` on the repo
+      # Variables tab) yields a CPU-only build — the transcribe path still
+      # works, GPU just falls back per `should_use_gpu` in
+      # src/rust/whisper/gpu.rs.
+      - name: Install Vulkan SDK (Windows GPU acceleration for whisper.cpp)
+        if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.3.290.0
+          install_runtime: true
+          cache: true
+          stripdown: true
 
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
-        run: cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+        run: |
+          # Base feature set is the four shipping Rust backends (the
+          # test_release_builds_ship_all_four_rust_backends structure test
+          # asserts on this exact substring across release.yml,
+          # windows-installer-build.yml and scripts/windows/build-installer.ps1
+          # — do not reorder). Vulkan is appended as a fifth feature on the
+          # default (GPU) build; setting the repo variable
+          # `VOICEPI_BUILD_VULKAN=0` drops it back to a CPU-only artefact
+          # without editing this recipe.
+          if ($env:VOICEPI_BUILD_VULKAN -ne '0') {
+            # whisper.cpp's cmake looks for glslc via PATH; the LunarG
+            # installer puts it in $VULKAN_SDK\Bin. Prepend so any bundled
+            # MSYS / MinGW shim can't shadow it.
+            if (-not $env:VULKAN_SDK) { throw "VULKAN_SDK not set — the 'Install Vulkan SDK' step did not run or failed silently" }
+            $env:PATH = (Join-Path $env:VULKAN_SDK 'Bin') + ';' + $env:PATH
+            Write-Host "VULKAN_SDK = $env:VULKAN_SDK"
+            $glslc = (Get-Command glslc -ErrorAction SilentlyContinue).Source
+            if (-not $glslc) { throw "glslc not on PATH after VULKAN_SDK\Bin prepend — SDK layout regression" }
+            Write-Host "glslc = $glslc"
+            Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+          } else {
+            Write-Host "VOICEPI_BUILD_VULKAN=0 — building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+          }
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+
+      # Regression guard for the Vulkan wiring (root cause of #645: the
+      # Windows release binary shipped CPU-only, so `use gpu = 1` never
+      # took effect on an NVIDIA RTX 3080 — 5+ min for a 3 s clip). Read
+      # the built .exe as raw bytes and search for the whisper.cpp Vulkan
+      # backend's compiled-in string constants ("ggml_vk", "GGML_VULKAN"
+      # log line, or the SPIR-V "vulkan1.1" ID). Absence = whisper-rs was
+      # linked without the `vulkan` feature, i.e. the CPU-only fallback
+      # shipped. Skipped when the Vulkan feature was intentionally
+      # disabled via `VOICEPI_BUILD_VULKAN=0`.
+      - name: Verify whisper.cpp Vulkan backend is linked into the release binary
+        if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0'
+        shell: pwsh
+        run: |
+          $exe = "target\release\whisper-dictate.exe"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "release binary missing at $exe" }
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          # Convert once to ASCII string; whisper.cpp's Vulkan strings are
+          # ASCII printable so a naive scan is enough (avoids pulling a
+          # PE-parser dependency for a one-shot regression check).
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          # These tokens are compiled INTO the whisper.cpp Vulkan backend
+          # (ggml/src/ggml-vulkan). Any one of them appearing proves the
+          # backend was linked. Require at least one match.
+          $tokens = @('ggml_vk_', 'ggml_vulkan', 'GGML_VULKAN', 'VkInstance')
+          $hits = @()
+          foreach ($t in $tokens) {
+            if ($ascii.Contains($t)) { $hits += $t }
+          }
+          if ($hits.Count -eq 0) {
+            throw "Vulkan backend NOT linked into whisper-dictate.exe: none of $($tokens -join ', ') found in the binary. The build fell back to CPU-only — this is the #645 regression. Check the 'Install Vulkan SDK' + 'Build Rust desktop UI' steps."
+          }
+          Write-Host "OK Vulkan backend linked - found tokens: $($hits -join ', ')"
 
       - name: Build installers
         if: steps.win-check.outputs.changed == 'true'
