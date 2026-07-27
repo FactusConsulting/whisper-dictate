@@ -256,10 +256,7 @@ mod imp {
     /// Python's `_windows_process_name_shared` (which uses `os.path.basename`)
     /// is unit-testable without the OS involved.
     pub(super) fn basename(path: &str) -> String {
-        path.rsplit(['\\', '/'])
-            .next()
-            .unwrap_or(path)
-            .to_owned()
+        path.rsplit(['\\', '/']).next().unwrap_or(path).to_owned()
     }
 
     #[cfg(test)]
