@@ -244,6 +244,186 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
             fail_on_silence,
         } => handle_audio_capture_self_test(duration_ms, device, json, fail_on_silence),
         SelfTestCommand::WhisperLoad { model, json } => handle_whisper_load(&model, json),
+        SelfTestCommand::Feedback { delay_ms, json } => handle_self_test_feedback(delay_ms, json),
+        SelfTestCommand::AudioDucking { duration_ms, json } => {
+            handle_self_test_audio_ducking(duration_ms, json)
+        }
+        SelfTestCommand::ProfileMatch {
+            title,
+            process,
+            json,
+        } => handle_self_test_profile_match(&title, &process, json),
+        SelfTestCommand::HistoryWrite { text, json } => handle_self_test_history_write(&text, json),
+        SelfTestCommand::MetricsWrite { text, json } => handle_self_test_metrics_write(&text, json),
+        SelfTestCommand::Preview {
+            frames,
+            frame_samples,
+            sample_rate,
+            interval_ms,
+            canned_text,
+            json,
+        } => handle_self_test_preview(
+            frames,
+            frame_samples,
+            sample_rate,
+            interval_ms,
+            canned_text,
+            json,
+        ),
+    }
+}
+
+/// Dispatch `self-test feedback`.
+fn handle_self_test_feedback(delay_ms: u64, json: bool) -> anyhow::Result<()> {
+    use whisper_dictate_app::dictate::self_test::feedback::{
+        run_feedback_self_test, FeedbackOptions,
+    };
+    let report = run_feedback_self_test(FeedbackOptions {
+        delay: std::time::Duration::from_millis(delay_ms),
+    });
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.exit_ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test feedback failed: {}",
+            report.error.unwrap_or_else(|| "unknown".to_owned())
+        ))
+    }
+}
+
+/// Dispatch `self-test audio-ducking`.
+fn handle_self_test_audio_ducking(duration_ms: u64, json: bool) -> anyhow::Result<()> {
+    use whisper_dictate_app::dictate::self_test::audio_ducking::{
+        run_audio_ducking_self_test, AudioDuckingOptions,
+    };
+    let report = run_audio_ducking_self_test(AudioDuckingOptions {
+        duration: std::time::Duration::from_millis(duration_ms),
+        force_enabled: None,
+        force_level: None,
+    });
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.exit_ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test audio-ducking failed: {}",
+            report.error.unwrap_or_else(|| "unknown".to_owned())
+        ))
+    }
+}
+
+/// Dispatch `self-test profile-match`.
+fn handle_self_test_profile_match(title: &str, process: &str, json: bool) -> anyhow::Result<()> {
+    use whisper_dictate_app::dictate::self_test::profile_match::{
+        run_profile_match_self_test, ProfileMatchOptions,
+    };
+    let report = run_profile_match_self_test(ProfileMatchOptions {
+        title: title.to_owned(),
+        process: process.to_owned(),
+        profiles_json_override: String::new(),
+    });
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.exit_ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test profile-match failed: {}",
+            report.error.unwrap_or_else(|| "unknown".to_owned())
+        ))
+    }
+}
+
+/// Dispatch `self-test history-write`.
+fn handle_self_test_history_write(text: &str, json: bool) -> anyhow::Result<()> {
+    use whisper_dictate_app::dictate::self_test::history_write::{
+        run_history_write_self_test, HistoryWriteOptions,
+    };
+    let report = run_history_write_self_test(HistoryWriteOptions {
+        text: text.to_owned(),
+        path_override: None,
+        force_enabled: None,
+    });
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.exit_ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test history-write failed: {}",
+            report.error.unwrap_or_else(|| "unknown".to_owned())
+        ))
+    }
+}
+
+/// Dispatch `self-test metrics-write`.
+fn handle_self_test_metrics_write(text: &str, json: bool) -> anyhow::Result<()> {
+    use whisper_dictate_app::dictate::self_test::metrics_write::{
+        run_metrics_write_self_test, MetricsWriteOptions,
+    };
+    let report = run_metrics_write_self_test(MetricsWriteOptions {
+        text: text.to_owned(),
+        path_override: None,
+    });
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.exit_ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test metrics-write failed: {}",
+            report.error.unwrap_or_else(|| "unknown".to_owned())
+        ))
+    }
+}
+
+/// Dispatch `self-test preview`.
+fn handle_self_test_preview(
+    frames: usize,
+    frame_samples: usize,
+    sample_rate: u32,
+    interval_ms: u64,
+    canned_text: String,
+    json: bool,
+) -> anyhow::Result<()> {
+    use whisper_dictate_app::dictate::self_test::preview::{run_preview_self_test, PreviewOptions};
+    let report = run_preview_self_test(PreviewOptions {
+        frames,
+        frame_samples,
+        sample_rate,
+        interval: std::time::Duration::from_millis(interval_ms),
+        canned_text,
+    });
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        print!("{}", report.to_plain());
+    }
+    if report.exit_ok() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test preview failed: {}",
+            report.error.unwrap_or_else(|| "unknown".to_owned())
+        ))
     }
 }
 
