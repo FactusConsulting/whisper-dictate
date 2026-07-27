@@ -266,6 +266,250 @@ fn empty_profile_list_is_a_no_op_when_matcher_attached() {
     assert!(s.active_profile().is_none());
 }
 
+// ── backend override coverage (Codex P1 #607) ────────────────────────────────
+
+/// Recording backends that log every `apply_profile_overrides` call so a test
+/// can assert the session forwarded the profile settings to the backend hooks.
+/// Kept local (rather than in `tests_support.rs`) because only these tests
+/// need to observe the override side effect.
+mod backend_override_coverage {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    use super::super::tests_support::*;
+    use super::super::{SessionConfig, UtteranceOutcome};
+    use crate::dictate::profile::StaticProfileMatcher;
+    use crate::dictate::session::{
+        DictateSession, InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome,
+        TranscribeBackend, TranscribeError, TranscribeResult,
+    };
+    use crate::platform::foreground_window::FixedForegroundWindow;
+    use serde_json::json;
+
+    struct SnoopTranscribe {
+        seen: RefCell<Vec<BTreeMap<String, String>>>,
+    }
+
+    impl SnoopTranscribe {
+        fn new() -> Self {
+            Self {
+                seen: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl TranscribeBackend for SnoopTranscribe {
+        fn transcribe(
+            &self,
+            _pcm: &[f32],
+            _sample_rate: u32,
+        ) -> Result<TranscribeResult, TranscribeError> {
+            Ok(TranscribeResult {
+                text: "hello".to_owned(),
+                is_hallucination: false,
+                latency_ms: 1,
+                duration_s: 1.0,
+                language: String::new(),
+                gate: None,
+            })
+        }
+
+        fn apply_profile_overrides(&self, settings: &BTreeMap<String, String>) {
+            self.seen.borrow_mut().push(settings.clone());
+        }
+    }
+
+    struct SnoopInject {
+        seen: RefCell<Vec<BTreeMap<String, String>>>,
+    }
+
+    impl SnoopInject {
+        fn new() -> Self {
+            Self {
+                seen: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl InjectBackend for SnoopInject {
+        fn inject(&self, _text: &str) -> Result<(), InjectError> {
+            Ok(())
+        }
+
+        fn apply_profile_overrides(&self, settings: &BTreeMap<String, String>) {
+            self.seen.borrow_mut().push(settings.clone());
+        }
+    }
+
+    struct SnoopPost {
+        seen: std::sync::Mutex<Vec<BTreeMap<String, String>>>,
+    }
+
+    impl SnoopPost {
+        fn new() -> Self {
+            Self {
+                seen: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl PostProcessBackend for SnoopPost {
+        fn post_process(&self, text: &str) -> PostProcessOutcome {
+            PostProcessOutcome {
+                text: text.to_owned(),
+                processor: "mock".to_owned(),
+                mode: "clean".to_owned(),
+                model: "mock".to_owned(),
+                latency_ms: 0,
+                changed: false,
+                fallback: false,
+                error: String::new(),
+                redacted: false,
+                redactions: Vec::new(),
+            }
+        }
+
+        fn apply_profile_overrides(&self, settings: &BTreeMap<String, String>) {
+            self.seen
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(settings.clone());
+        }
+    }
+
+    #[test]
+    fn profile_overrides_reach_all_three_backends_each_utterance() {
+        // Codex P1 #607: a profile with `initial_prompt`, `inject_mode`,
+        // and `post_processor` keys must reach the whisper/inject/post
+        // backends respectively on the next utterance. Uses snooping
+        // backends that only record the settings they received; the
+        // production impls each own the interior-mutability slot that
+        // consumes those settings.
+        let guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+
+        let transcribe = SnoopTranscribe::new();
+        let inject = SnoopInject::new();
+        let post = std::sync::Arc::new(SnoopPost::new());
+        let post_for_backend = std::sync::Arc::clone(&post);
+        struct PostAdapter(std::sync::Arc<SnoopPost>);
+        impl PostProcessBackend for PostAdapter {
+            fn post_process(&self, text: &str) -> PostProcessOutcome {
+                self.0.post_process(text)
+            }
+            fn apply_profile_overrides(&self, settings: &BTreeMap<String, String>) {
+                self.0.apply_profile_overrides(settings)
+            }
+            fn is_active(&self) -> bool {
+                self.0.is_active()
+            }
+        }
+
+        let mut s = DictateSession::new(transcribe, inject, SessionConfig::default())
+            .with_post_process(Box::new(PostAdapter(post_for_backend)))
+            .with_profile_matcher(
+                Box::new(StaticProfileMatcher::new(json!([
+                    {
+                        "name": "code editor",
+                        "match": {"process": "code"},
+                        "settings": {
+                            "initial_prompt": "Rust, Cargo, clippy",
+                            "language": "en",
+                            "inject_mode": "print",
+                            "post_processor": "ollama",
+                            "post_mode": "clean"
+                        }
+                    }
+                ]))),
+                Box::new(FixedForegroundWindow::from_parts(
+                    Some("main.rs — code"),
+                    Some("Code.exe"),
+                )),
+            );
+
+        let mut buf = Vec::new();
+        s.start(&mut buf).expect("start");
+        s.push_frame(&one_second_pcm());
+        let outcome = s.stop_and_transcribe(&mut buf).expect("stop");
+        assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+
+        // Each backend must have received the FULL settings map on the
+        // apply-profile step (the session forwards all keys, not just
+        // the ones it consumes itself).
+        let transcribe_seen = s.transcribe_backend().seen.borrow();
+        let inject_seen = s.inject_backend().seen.borrow();
+        let post_seen = post.seen.lock().unwrap_or_else(|p| p.into_inner());
+
+        assert_eq!(
+            transcribe_seen.len(),
+            1,
+            "transcribe backend must see one apply_profile_overrides call per utterance"
+        );
+        assert_eq!(
+            transcribe_seen[0].get("initial_prompt").map(String::as_str),
+            Some("Rust, Cargo, clippy")
+        );
+        assert_eq!(
+            transcribe_seen[0].get("language").map(String::as_str),
+            Some("en")
+        );
+
+        assert_eq!(inject_seen.len(), 1);
+        assert_eq!(
+            inject_seen[0].get("inject_mode").map(String::as_str),
+            Some("print")
+        );
+
+        assert_eq!(post_seen.len(), 1);
+        assert_eq!(
+            post_seen[0].get("post_processor").map(String::as_str),
+            Some("ollama")
+        );
+
+        drop(guard);
+    }
+
+    #[test]
+    fn non_matching_profile_still_forwards_empty_map_to_reset_overrides() {
+        // Reset semantics: when the matcher returns no profile the session
+        // still calls apply_profile_overrides with an EMPTY map so the
+        // backend can drop any per-utterance override it stashed for a
+        // previous match. Without this a profile that fired for utterance N
+        // would silently persist into N+1 (Codex P1 #607).
+        let guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
+
+        let transcribe = SnoopTranscribe::new();
+        let inject = SnoopInject::new();
+        // A profile with a narrow match block that WON'T fire for the
+        // probe below -- so the matcher returns AppliedProfile::none().
+        let mut s = DictateSession::new(transcribe, inject, SessionConfig::default())
+            .with_profile_matcher(
+                Box::new(StaticProfileMatcher::new(json!([
+                    {"name": "never", "match": {"process": "no-such-app"}, "settings": {"initial_prompt": "X"}}
+                ]))),
+                Box::new(FixedForegroundWindow::from_parts(Some("Editor"), Some("code"))),
+            );
+
+        let mut buf = Vec::new();
+        s.start(&mut buf).expect("start");
+        s.push_frame(&one_second_pcm());
+        s.stop_and_transcribe(&mut buf).expect("stop");
+        assert!(s.active_profile().is_none());
+        assert_eq!(s.transcribe_backend().seen.borrow().len(), 1);
+        assert!(
+            s.transcribe_backend().seen.borrow()[0].is_empty(),
+            "non-matching profile must forward an empty settings map so backends can RESET"
+        );
+
+        drop(guard);
+    }
+}
+
 #[test]
 fn unparseable_min_record_seconds_falls_back_to_base() {
     // A profile that carries a bogus numeric string must not crash the

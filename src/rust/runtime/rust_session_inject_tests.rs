@@ -3,8 +3,9 @@
 //! Two behaviours over the bare `EnigoInjectBackend`:
 //!
 //! - **Inject-mode env parse** ([`super::InjectModeChoice::from_env_value`]).
-//! - **Print branch:** the [`super::ProductionInjectBackend::Print`]
-//!   variant skips OS injection. We can't observe stdout from inside
+//! - **Print branch:** the print arm of
+//!   [`super::ProductionInjectBackend`] skips OS injection. We can't
+//!   observe stdout from inside
 //!   the test (the default test harness captures it), but we CAN
 //!   verify it returns `Ok` and never constructs a recording fake
 //!   backend.
@@ -146,6 +147,54 @@ fn from_env_missing_value_defaults_to_typing() {
 }
 
 // ── explicit-paste helper ────────────────────────────────────────────────────
+
+// ── profile-override plumbing (Codex P1 #607) ──────────────────────────────
+
+#[test]
+fn profile_inject_mode_override_flips_active_mode_for_next_utterance() {
+    // Codex P1 #607: a profile that carries `inject_mode=print` must
+    // flip the active mode to Print for the NEXT inject call, even when
+    // the backend was constructed with Typing. Uses `active_mode()`
+    // (test-only) to snapshot the Mutex without a full session cycle.
+    let backend = ProductionInjectBackend::for_choice(InjectModeChoice::Typing);
+    assert_eq!(backend.active_mode(), InjectModeChoice::Typing);
+    let mut profile = std::collections::BTreeMap::new();
+    profile.insert("inject_mode".to_owned(), "print".to_owned());
+    backend.apply_profile_overrides(&profile);
+    assert_eq!(
+        backend.active_mode(),
+        InjectModeChoice::Print,
+        "profile inject_mode=print must swap the Mutex slot"
+    );
+    // Reset semantics: an empty profile map must snap back to the
+    // ambient env-driven choice so a fired profile does not leak into
+    // the next utterance.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var(INJECT_MODE_ENV).ok();
+    std::env::remove_var(INJECT_MODE_ENV);
+    backend.apply_profile_overrides(&std::collections::BTreeMap::new());
+    assert_eq!(
+        backend.active_mode(),
+        InjectModeChoice::Typing,
+        "empty profile map must reset to the ambient (unset -> Typing) env mode"
+    );
+    if let Some(v) = prev {
+        std::env::set_var(INJECT_MODE_ENV, v);
+    }
+}
+
+#[test]
+fn profile_inject_mode_upgrade_from_print_to_type_is_supported() {
+    // The struct always constructs an EnigoInjectBackend so a profile
+    // can upgrade a Print session to Typing (or Paste) at any time --
+    // matching Python's live-reload of the `inject_mode` config key.
+    let backend = ProductionInjectBackend::for_choice(InjectModeChoice::Print);
+    assert_eq!(backend.active_mode(), InjectModeChoice::Print);
+    let mut profile = std::collections::BTreeMap::new();
+    profile.insert("inject_mode".to_owned(), "type".to_owned());
+    backend.apply_profile_overrides(&profile);
+    assert_eq!(backend.active_mode(), InjectModeChoice::Typing);
+}
 
 #[test]
 fn explicit_paste_shortcut_round_trips() {

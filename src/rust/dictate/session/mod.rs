@@ -501,6 +501,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         self.active_profile.as_ref()
     }
 
+    /// Whether a profile matcher has been attached via
+    /// [`Self::with_profile_matcher`]. Exposed so the production factory's
+    /// unit tests can assert the wire-up (Codex P1 #607) without the
+    /// session having to leak its private matcher field.
+    pub fn has_profile_matcher(&self) -> bool {
+        self.profile_matcher.is_some()
+    }
+
     /// Apply the resolved [`AppliedProfile`] to the effective
     /// [`SessionConfig`] for this utterance. Called from [`Self::start`]
     /// after probing + matching. Split out so the mapping between
@@ -519,10 +527,20 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// than a silent fall-through to the default.
     fn apply_active_profile(&mut self) {
         self.config = self.base_config.clone();
-        let Some(profile) = self.active_profile.as_ref() else {
-            return;
-        };
-        if let Some(value) = profile.settings.get("format_commands") {
+        // Empty map when no profile matched -- the backends need this so
+        // they can RESET any overrides they applied for a PREVIOUS
+        // utterance's profile (else a profile that fired for utterance N
+        // would silently persist into N+1 when N+1 hits the wildcard /
+        // default branch). Mirrors the config-reset done above for
+        // `self.config`.
+        let empty_settings: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        let settings = self
+            .active_profile
+            .as_ref()
+            .map(|p| &p.settings)
+            .unwrap_or(&empty_settings);
+        if let Some(value) = settings.get("format_commands") {
             let trimmed = value.trim();
             self.config.format_command_set = if trimmed.is_empty() {
                 None
@@ -530,10 +548,20 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 Some(trimmed.to_owned())
             };
         }
-        if let Some(value) = profile.settings.get("min_record_seconds") {
+        if let Some(value) = settings.get("min_record_seconds") {
             if let Ok(parsed) = value.trim().parse::<f64>() {
                 self.config.min_record_seconds = parsed;
             }
+        }
+        // Backend-owned overrides (Codex P1 #607: `initial_prompt`,
+        // `language`, `model` on the whisper backend; `inject_mode` on the
+        // inject backend; `post_*` on the post-process backend). Each
+        // backend picks the keys it understands and stashes them behind
+        // interior mutability so its next call sees the override.
+        self.transcribe.apply_profile_overrides(settings);
+        self.inject.apply_profile_overrides(settings);
+        if let Some(backend) = self.post_process.as_ref() {
+            backend.apply_profile_overrides(settings);
         }
     }
 
@@ -945,11 +973,18 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // was actually injected) plus the `post_*` and `dictionary_replacements`
         // metadata, matching Python (`vp_dictate.py:469-475`) so
         // `ui/log_render.rs` + telemetry see what the pipeline did.
-        let post = if let Some(backend) = self.post_process.as_ref() {
-            wire::emit_status(writer, "post-processing", &self.capture_extras())?;
-            Some(backend.post_process(&result.text))
-        } else {
-            None
+        let post = match self.post_process.as_ref() {
+            // Python parity: post-processing runs when a processor is
+            // configured AND the mode is not `raw`. `is_active` moves that
+            // gate into the backend so a profile that flipped
+            // `post_processor` mid-session is respected (Codex P1 #607),
+            // while a backend that never disables itself keeps the default
+            // `is_active() = true`.
+            Some(backend) if backend.is_active() => {
+                wire::emit_status(writer, "post-processing", &self.capture_extras())?;
+                Some(backend.post_process(&result.text))
+            }
+            _ => None,
         };
         let post_processed = post
             .as_ref()

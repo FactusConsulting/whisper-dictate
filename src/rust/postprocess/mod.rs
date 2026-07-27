@@ -44,6 +44,7 @@ pub use settings::{
 };
 
 use std::io::{self, Read};
+use std::sync::Mutex;
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -63,42 +64,68 @@ use crate::dictate::{PostProcessBackend, PostProcessOutcome, PostRedaction};
 /// provider / transport error or empty rewrite -- so attaching this backend
 /// can never drop the user's dictation, only improve it.
 pub struct SessionPostProcess {
-    settings: PostprocessSettings,
+    /// Live settings the pass consults on every utterance. Wrapped in
+    /// [`Mutex`] so the profile-matcher (Codex P1 #607) can overwrite
+    /// selected keys mid-session via
+    /// [`PostProcessBackend::apply_profile_overrides`] without rebuilding
+    /// the backend. The BASE snapshot is preserved separately so a
+    /// non-matching profile can RESET the overrides on the next
+    /// utterance.
+    settings: Mutex<PostprocessSettings>,
+    /// Immutable snapshot of the settings stamped at construction, kept
+    /// so [`Self::apply_profile_overrides`] can reset to the base when
+    /// the profile does not carry a given key -- mirroring the
+    /// per-utterance `base_config` reset in `DictateSession::apply_active_profile`.
+    base_settings: PostprocessSettings,
 }
 
 impl SessionPostProcess {
     /// Wrap an explicit settings snapshot (used by tests and by
     /// [`Self::from_settings`]).
     pub fn new(settings: PostprocessSettings) -> Self {
-        Self { settings }
-    }
-
-    /// Build from a settings snapshot, returning `None` when the pass would
-    /// be a no-op: no processor configured (`processor == "none"`) OR a
-    /// passthrough `raw` mode. Python gates the `post-processing` status on
-    /// BOTH `processor != "none"` and `mode != "raw"`; skipping the attach
-    /// here keeps the session from emitting a `post-processing` status for a
-    /// stage that never runs (and avoids per-utterance overhead for the
-    /// default config).
-    pub fn from_settings(settings: PostprocessSettings) -> Option<Self> {
-        if settings.processor == "none" || normalize_mode(&settings.mode) == "raw" {
-            None
-        } else {
-            Some(Self::new(settings))
+        Self {
+            base_settings: settings.clone(),
+            settings: Mutex::new(settings),
         }
     }
 
+    /// Build from a settings snapshot. Codex P1 #607: this used to return
+    /// `None` when the processor was `none` / the mode was `raw`, which
+    /// meant a profile that flipped `post_processor=ollama` mid-session
+    /// had NO backend attached and its override was silently dropped.
+    /// The session now gates the pass on [`PostProcessBackend::is_active`]
+    /// so the backend is always attached and the profile can enable it.
+    pub fn from_settings(settings: PostprocessSettings) -> Self {
+        Self::new(settings)
+    }
+
     /// Build from the process environment (the `VOICEPI_POST_*` vars the UI
-    /// exports into the worker env). `None` when the operator has not
-    /// enabled a post-processor.
-    pub fn from_env() -> Option<Self> {
+    /// exports into the worker env). Codex P1 #607: always returns `Self`
+    /// so the session has a target for [`Self::apply_profile_overrides`].
+    /// A default (unset) env still runs [`Self::is_active`] returning
+    /// `false`, so a stock config pays zero per-utterance cost.
+    pub fn from_env() -> Self {
         Self::from_settings(settings_from_env())
+    }
+
+    /// Test-only: snapshot the current (post-override) settings.
+    #[cfg(test)]
+    pub(crate) fn current_settings(&self) -> PostprocessSettings {
+        self.settings
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 }
 
 impl PostProcessBackend for SessionPostProcess {
     fn post_process(&self, text: &str) -> PostProcessOutcome {
-        let result = postprocess_text(text, &self.settings);
+        let settings_snapshot = self
+            .settings
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let result = postprocess_text(text, &settings_snapshot);
         let redactions = result
             .redactions
             .into_iter()
@@ -119,6 +146,96 @@ impl PostProcessBackend for SessionPostProcess {
             error: result.error,
             redacted: result.redacted,
             redactions,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        // Python parity: post-processing runs when a processor is
+        // configured AND the mode is not `raw`.
+        let settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+        settings.processor != "none" && normalize_mode(&settings.mode) != "raw"
+    }
+
+    fn apply_profile_overrides(&self, profile: &std::collections::BTreeMap<String, String>) {
+        // Reset to the base snapshot FIRST so overrides from a PREVIOUS
+        // utterance's profile do not leak into this one when the current
+        // profile carries a different (or empty) set of `post_*` keys.
+        // Mirrors the `SessionConfig` reset in `apply_active_profile`.
+        let mut settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+        *settings = self.base_settings.clone();
+        // Each key: profile trims + normalises + overrides the field.
+        // Blank / whitespace-only values are treated as "unset" (fall
+        // through to the base) matching the `settings_from_env_with`
+        // treatment. Unknown numeric strings fall through to the base
+        // (permissive, matches Python's config-layer coercion).
+        if let Some(processor) = profile
+            .get("post_processor")
+            .map(|v| v.trim().to_ascii_lowercase())
+            .filter(|v| !v.is_empty() && VALID_PROCESSORS.contains(&v.as_str()))
+        {
+            settings.processor = processor;
+        }
+        if let Some(mode) = profile
+            .get("post_mode")
+            .map(|v| normalize_mode(v.trim()))
+            .filter(|v| VALID_MODES.contains(&v.as_str()))
+        {
+            settings.mode = mode;
+        }
+        if let Some(model) = profile
+            .get("post_model")
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+        {
+            settings.model = normalized_model(&settings.processor, &model);
+        } else {
+            // Re-normalise the base model against a (possibly overridden)
+            // processor so a profile that flips ollama -> groq keeps the
+            // groq default when no explicit `post_model` is set.
+            settings.model = normalized_model(&settings.processor, &self.base_settings.model);
+        }
+        if let Some(base_url) = profile
+            .get("post_base_url")
+            .map(|v| v.trim().trim_end_matches('/').to_owned())
+            .filter(|v| !v.is_empty())
+        {
+            settings.base_url = normalized_base_url(&settings.processor, &base_url);
+        } else {
+            settings.base_url =
+                normalized_base_url(&settings.processor, &self.base_settings.base_url);
+        }
+        if let Some(timeout) = profile
+            .get("post_timeout_ms")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| (v.trunc().max(0.0) as u64).max(100))
+        {
+            settings.timeout_ms = timeout;
+        }
+        if let Some(max_in) = profile
+            .get("post_max_input_chars")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| (v.trunc().max(0.0) as u64).max(100) as usize)
+        {
+            settings.max_input_chars = max_in;
+        }
+        if let Some(max_out) = profile
+            .get("post_max_output_chars")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| (v.trunc().max(0.0) as u64).max(100) as usize)
+        {
+            settings.max_output_chars = max_out;
+        }
+        if let Some(redact) = profile.get("post_redact") {
+            settings.redact = crate::dictate::is_truthy(Some(redact.trim()));
+        }
+        if let Some(terms) = profile
+            .get("post_redact_terms")
+            .map(|v| v.trim().to_owned())
+        {
+            settings.redact_terms = terms;
         }
     }
 }
@@ -202,30 +319,92 @@ mod session_backend_tests {
     }
 
     #[test]
-    fn from_settings_returns_none_for_disabled_processor() {
-        assert!(SessionPostProcess::from_settings(settings("none")).is_none());
-        assert!(SessionPostProcess::from_settings(settings("ollama")).is_some());
-    }
+    fn is_active_gates_on_processor_and_mode() {
+        // Codex P1 #607: `from_settings` now always returns Self so the
+        // profile-matcher can enable a `none` -> `ollama` swap mid-session.
+        // The session gates the pass on `is_active` instead. Pins the
+        // Python parity contract (`processor != "none" && mode != "raw"`).
+        let none = SessionPostProcess::from_settings(settings("none"));
+        assert!(!none.is_active(), "processor=none is inactive");
 
-    #[test]
-    fn from_settings_returns_none_for_raw_mode() {
-        // A selected processor with `raw` mode is a passthrough -- do not
-        // attach (parity with Python's `mode != "raw"` gate).
-        let mut s = settings("ollama");
-        s.mode = "raw".to_owned();
-        assert!(SessionPostProcess::from_settings(s).is_none());
+        let ollama = SessionPostProcess::from_settings(settings("ollama"));
+        assert!(
+            ollama.is_active(),
+            "processor=ollama + mode=clean is active"
+        );
+
+        let mut raw = settings("ollama");
+        raw.mode = "raw".to_owned();
+        let raw = SessionPostProcess::from_settings(raw);
+        assert!(
+            !raw.is_active(),
+            "mode=raw is inactive even with a processor"
+        );
     }
 
     #[test]
     fn post_process_is_passthrough_when_processor_none() {
         // A `none` processor never touches the network: `post_process`
         // returns the input verbatim. (The backend would normally be
-        // skipped via `from_settings` -> None, but constructing it directly
+        // skipped via `is_active() == false`, but constructing it directly
         // pins the passthrough contract.)
         let backend = SessionPostProcess::new(settings("none"));
         assert_eq!(
             backend.post_process("keep me exactly").text,
             "keep me exactly"
+        );
+    }
+
+    #[test]
+    fn apply_profile_overrides_flips_processor_and_model_and_url_for_one_utterance() {
+        // Codex P1 #607: a profile that carries `post_processor` /
+        // `post_model` / `post_base_url` must reach the pass on the next
+        // utterance. Also pins the RESET semantics: a subsequent empty
+        // profile snapshot restores the base settings so per-utterance
+        // overrides do not leak between presses.
+        let backend = SessionPostProcess::from_settings(settings("ollama"));
+        let base_url = backend.current_settings().base_url.clone();
+
+        let mut profile = std::collections::BTreeMap::new();
+        profile.insert("post_processor".to_owned(), "groq".to_owned());
+        profile.insert("post_model".to_owned(), "custom-llama".to_owned());
+        profile.insert(
+            "post_base_url".to_owned(),
+            "https://api.groq.com/openai/v1".to_owned(),
+        );
+        profile.insert("post_timeout_ms".to_owned(), "9000".to_owned());
+        backend.apply_profile_overrides(&profile);
+
+        let snap = backend.current_settings();
+        assert_eq!(snap.processor, "groq");
+        assert_eq!(snap.model, "custom-llama");
+        assert_eq!(snap.base_url, "https://api.groq.com/openai/v1");
+        assert_eq!(snap.timeout_ms, 9000);
+        assert!(backend.is_active());
+
+        // Empty profile map -> reset to base (no processor swap leaks).
+        backend.apply_profile_overrides(&std::collections::BTreeMap::new());
+        let snap = backend.current_settings();
+        assert_eq!(snap.processor, "ollama");
+        assert_eq!(snap.base_url, base_url);
+        assert_eq!(snap.timeout_ms, settings("ollama").timeout_ms);
+    }
+
+    #[test]
+    fn apply_profile_overrides_enables_a_previously_disabled_backend() {
+        // Session was constructed with `processor=none` (default), so
+        // `is_active` starts false. A profile with `post_processor=ollama`
+        // must flip it active for THIS utterance without rebuilding the
+        // backend.
+        let backend = SessionPostProcess::from_env();
+        assert!(!backend.is_active(), "default env has processor=none");
+        let mut profile = std::collections::BTreeMap::new();
+        profile.insert("post_processor".to_owned(), "ollama".to_owned());
+        profile.insert("post_mode".to_owned(), "clean".to_owned());
+        backend.apply_profile_overrides(&profile);
+        assert!(
+            backend.is_active(),
+            "profile must be able to enable the pass"
         );
     }
 
