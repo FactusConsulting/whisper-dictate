@@ -69,8 +69,12 @@ run_cli() {
 json_field() { "$PY" -c "import sys,json;print(json.load(sys.stdin)[sys.argv[1]])" "$1"; }
 
 echo "[groq-cli-smoke] 1/4 cloud-transcribe '$WAV' via Groq ($STT_MODEL)"
-stt_json="$(run_cli cloud-transcribe \
-  --base-url "$GROQ_BASE" --api-key "$GROQ_API_KEY" \
+# The key goes in the ENVIRONMENT, never in argv: a command line is readable
+# by other local users (`ps aux`, `/proc/<pid>/cmdline`). The helper reads
+# VOICEPI_STT_API_KEY when `--api-key` is absent (see PR #588, which fixed the
+# same leak in the shipping Python worker).
+stt_json="$(VOICEPI_STT_API_KEY="$GROQ_API_KEY" run_cli cloud-transcribe \
+  --base-url "$GROQ_BASE" \
   --model "$STT_MODEL" --audio-wav-path "$WAV")"
 transcript="$(printf '%s' "$stt_json" | json_field text)"
 if [[ -z "${transcript//[[:space:]]/}" ]]; then
@@ -83,9 +87,13 @@ echo "[groq-cli-smoke] 2/4 postprocess (Groq clean, $POST_MODEL)"
 # Build the stdin envelope the `postprocess` verb consumes. postprocess_text
 # falls back to the input text on any provider error, so this asserts the verb
 # runs and yields non-empty text (wiring), not that the LLM changed anything.
-post_envelope="$("$PY" - "$transcript" "$GROQ_API_KEY" "$GROQ_BASE" "$POST_MODEL" <<'PY'
-import json, sys
-text, key, base, model = sys.argv[1:5]
+# Same rule here: the envelope CONTENT carries the key, but it reaches the
+# `postprocess` verb on stdin (not argv). The builder itself must not take it
+# as an argument either, or `ps` would show it on this python process.
+post_envelope="$("$PY" - "$transcript" "$GROQ_BASE" "$POST_MODEL" <<'PY'
+import json, os, sys
+text, base, model = sys.argv[1:4]
+key = os.environ["GROQ_API_KEY"]
 print(json.dumps({
     "action": "process",
     "text": text,
