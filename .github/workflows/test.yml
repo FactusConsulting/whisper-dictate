@@ -181,6 +181,14 @@ jobs:
         if: env.RUN_UNIT == 'true'
         with:
           ref: ${{ inputs.ref }}
+          # test_regression_test_discipline.py diffs HEAD against
+          # origin/main to find production code added without a
+          # matching test file. actions/checkout defaults to
+          # depth=1, which does not fetch the base ref -- so the
+          # scanner would silently skipTest on every PR CI run and
+          # the discipline would stay unenforced. Full history costs
+          # a few seconds on a repo this size.
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         if: env.RUN_UNIT == 'true'
         with:
