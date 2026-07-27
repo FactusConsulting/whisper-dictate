@@ -52,6 +52,7 @@
 //! modules are `pub` for the unit tests and the integration test (which
 //! drives the coordinator and tracker directly with synthetic events).
 
+pub mod boot_self_test;
 pub mod capture;
 pub mod coordinator;
 pub mod inject_guard;

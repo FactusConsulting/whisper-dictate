@@ -1118,6 +1118,55 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Windows PTT-boot regression: installs the Rust hotkey subsystem
+    /// (rdev / evdev) with the CURRENTLY-CONFIGURED PTT chord, waits
+    /// `--for` seconds for the listener to prove it is alive, then
+    /// unhooks and reports pass/fail. Catches the Windows GUI
+    /// regression where `whisper-dictate-gui.exe` starts but no PTT
+    /// event ever fires - running this verb from PowerShell exercises
+    /// the SAME `install_hotkey` path the Phase-B supervisor uses and
+    /// surfaces `rdev` listener-startup errors that the GUI would
+    /// discard because `windows_subsystem = "windows"` detaches from
+    /// the parent console.
+    ///
+    /// This does NOT open the audio pump or load the Whisper model -
+    /// the goal is to verify the OS hook, driver selection, and
+    /// coordinator wiring only, so a run stays fast (`--for 2`) and
+    /// does not need a mic / model on disk. For the full boot check
+    /// including audio + model, use `dictate-run` directly.
+    ///
+    /// Feature-gated behind `rust-hotkeys` + `rust-injection` (the
+    /// same combined features Phase A / Phase B of item 5 require).
+    /// Stock builds exit with an actionable "rebuild with --features"
+    /// message rather than reporting a false pass.
+    HotkeyBoot {
+        /// Milliseconds to hold the listener alive after install. The
+        /// verb reports whether the listener stayed up for the full
+        /// window - a Windows regression that lets rdev's `listen`
+        /// return Ok prematurely (per-thread hook dies with the
+        /// thread) would surface here as `listener_exited_early:
+        /// true`. Default 2000 ms is enough to catch the fast-fail
+        /// cases without slowing smoke scripts.
+        ///
+        /// Milliseconds (not seconds with a decimal) so the enum
+        /// stays `Eq`-derivable alongside the other subcommands -
+        /// matches the `AudioCapture` / `AudioDucking` convention.
+        #[arg(long, default_value_t = 2000)]
+        hold_ms: u64,
+        /// Override the configured PTT chord. Accepts the same
+        /// `+`-separated key names as the `key` setting (`ctrl_l`,
+        /// `ctrl_l+shift_l`, `f9`, ...). Empty (the default) reads
+        /// the current config so a user reproducing a bug hits the
+        /// exact same install as the GUI.
+        #[arg(long, default_value = "")]
+        chord: String,
+        /// Emit a single JSON object with `kind`, `ok`, `driver`,
+        /// `chord`, `install_ms`, `listener_exited_early`,
+        /// `install_error`. Machine-readable contract for CI /
+        /// support-script pinning.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[cfg(test)]

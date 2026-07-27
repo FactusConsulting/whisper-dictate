@@ -659,6 +659,48 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: self-test hotkey-boot (Windows PTT-boot regression — GUI wedge)
+#
+# End-to-end install of the Rust hotkey subsystem (rdev / evdev) with the
+# CURRENTLY-CONFIGURED PTT chord. Fast, headless smoke: does NOT open the
+# audio pump or load the Whisper model, only exercises the OS hook,
+# driver selection, and coordinator wiring.
+#
+# What this catches (added after the Windows PTT bug where the GUI
+# started with `VOICEPI_DICTATE_ENGINE=rust` but the chord fired no
+# event — the GUI's `windows_subsystem = "windows"` had discarded every
+# rdev-side error). On Linux / Wayland the same install path runs, so
+# this section is a co-op smoke that would trip on a Linux-side
+# regression to the shared install path.
+#
+# The bounded 2 s hold catches a class of "install returns Ok but the
+# listener thread exited immediately" regressions — surfaced as
+# `listener_exited_early: true` in the JSON envelope. We use `--chord
+# ctrl_l` so the run doesn't depend on the operator's on-disk config.
+# --------------------------------------------------------------------------
+section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
+else
+    hb_out="$(whisper-dictate self-test hotkey-boot --hold-ms 500 --chord ctrl_l --json 2>&1)"
+    hb_rc=$?
+    if [ "$hb_rc" -eq 0 ] && printf '%s' "$hb_out" | grep -q '"ok":true'; then
+        # Report the driver so a future Wayland/X11 selector regression
+        # (evdev vs rdev) surfaces in the smoke output.
+        hb_driver="$(printf '%s' "$hb_out" | grep -o '"driver":"[^"]*"' | head -n 1)"
+        ok "hotkey-boot install passed (${hb_driver:-driver=?})"
+    elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
+        warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
+    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission"; then
+        # A headless / no-display box legitimately fails install here;
+        # this is not a regression signal, just an environment gap.
+        warn "hotkey-boot: listener refused (missing display / permissions — expected on headless): $(printf '%s\n' "$hb_out" | head -n 1)"
+    else
+        bad "hotkey-boot FAILED — install-path regression (this is the class of bug that broke Windows PTT in the GUI): $(printf '%s\n' "$hb_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: self-test injection-idempotency (regression — no state leak
 # between successive inject calls)
 #

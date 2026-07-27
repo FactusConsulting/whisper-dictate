@@ -222,6 +222,18 @@ impl RuntimeSupervisor {
                 match self.attempt_in_process_start(&effective_command) {
                     Ok(()) => return Ok(()),
                     Err(err) => {
+                        // Tee to the diagnostic log AND the UI runtime
+                        // channel: the UI's Log tab shows this via the
+                        // stderr fanout, and the Windows GUI diagnostic
+                        // file (`gui-diagnostic.log`) captures it for
+                        // post-mortem inspection when the operator has
+                        // no console to observe the runtime log live.
+                        // Solves the Windows PTT bug report's "Stderr
+                        // is silent (0 bytes)" symptom for this
+                        // decision point.
+                        crate::diag::log!(
+                            "[runtime] Phase B in-process dispatch refused: {err}"
+                        );
                         let _ = self.tx.send(RuntimeEvent::Stderr(format!(
                             "[runtime] Phase B in-process dispatch refused: {err}"
                         )));
@@ -532,16 +544,71 @@ impl RuntimeSupervisor {
 
         // Emit Started + ready worker event so the UI's ready-latch
         // fires identically to the Python-worker path (design-doc
-        // risk #2: status-event parity).
+        // risk #2: status-event parity). Include the driver and chord
+        // in the command label so the UI's runtime log AND the Windows
+        // GUI diagnostic file (`gui-diagnostic.log`) both show which
+        // OS backend actually took over PTT and what chord it will
+        // fire on — solves the Windows PTT bug report's "PTT chord
+        // fires no event" symptom where the operator had no signal
+        // that Phase B did (or did not) install successfully.
+        let (driver, chord) = self.in_process_install_summary();
         self.state = RuntimeState::Running;
+        let started_line = format!(
+            "{ENGINE_ENV}=rust (in-process; driver={driver}, chord={chord})"
+        );
+        crate::diag::log!("[runtime] Phase B in-process dispatch installed: {started_line}");
         let _ = self.tx.send(RuntimeEvent::Started {
-            command: format!("{ENGINE_ENV}=rust (in-process)"),
+            command: started_line,
         });
         in_process::emit_ready_worker_event(&self.tx);
         if let Some(notifier) = self.repaint_notifier.as_ref() {
             notifier();
         }
         Ok(())
+    }
+
+    /// Best-effort `(driver, chord)` snapshot for the Phase-B started
+    /// line. The driver comes from the live hotkey handle when
+    /// available (feature-complete build); the chord comes from the
+    /// currently-configured settings via
+    /// [`in_process::resume_key_names_from_env`], the same helper the
+    /// restart path uses. On any resolution failure both fields fall
+    /// back to `"?"` — the started line still emits so the operator at
+    /// least sees the Phase-B path was taken.
+    fn in_process_install_summary(&self) -> (&'static str, String) {
+        let driver = self.in_process_driver_label();
+        let chord = in_process::resume_key_names_from_env()
+            .map(|names| {
+                if names.is_empty() {
+                    "?".to_owned()
+                } else {
+                    names.join("+")
+                }
+            })
+            .unwrap_or_else(|_| "?".to_owned());
+        (driver, chord)
+    }
+
+    /// Driver name (`"rdev"` / `"evdev"` / `"none"`) of the currently
+    /// installed hotkey handle. `"none"` when the slot is empty (the
+    /// call site only invokes this after a successful install so this
+    /// should not happen in practice, but we prefer a sentinel over a
+    /// panic).
+    #[cfg(feature = "rust-hotkeys")]
+    fn in_process_driver_label(&self) -> &'static str {
+        self.hotkey_handle
+            .as_ref()
+            .map(|h| h.driver_name())
+            .unwrap_or("none")
+    }
+
+    #[cfg(not(feature = "rust-hotkeys"))]
+    fn in_process_driver_label(&self) -> &'static str {
+        // On a stock build the Phase-B install always returns
+        // FeaturesMissing before reaching the started-line site, so
+        // this stub is unreachable at runtime. Kept so the caller
+        // type-checks without a `#[cfg]` at every use.
+        "none"
     }
 
     /// Feature-gated stash — moves the installation's live handle into
