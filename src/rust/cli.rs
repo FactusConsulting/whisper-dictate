@@ -838,6 +838,16 @@ pub enum HotkeyCommand {
         /// not silently fall back.
         #[arg(long, value_name = "AUTO|RDEV|EVDEV", default_value = "auto")]
         driver: String,
+        /// Chord to listen for, instead of the one in the config
+        /// (`ctrl_l`, `shift_r+f9`, ...). Same `+`-separated syntax and key
+        /// names as `settings.key`.
+        ///
+        /// Exists so a chord can be verified WITHOUT editing the user's real
+        /// config: confirming "does this key reach the listener on Wayland"
+        /// previously meant mutating `config.json`, restoring it afterwards,
+        /// and hoping nothing crashed in between.
+        #[arg(long, value_name = "CHORD")]
+        chord: Option<String>,
     },
 }
 
@@ -1872,6 +1882,8 @@ mod tests {
                     // (evdev on Linux Wayland, rdev everywhere else). Pin
                     // the default here so a CLI-schema change is caught.
                     driver: "auto".to_owned(),
+                    // No override -- the chord comes from the config.
+                    chord: None,
                 },
             })
         );
@@ -1891,6 +1903,8 @@ mod tests {
             "/tmp/cfg.json",
             "--driver",
             "evdev",
+            "--chord",
+            "shift_r+f9",
         ]);
         assert_eq!(
             cli.command,
@@ -1901,9 +1915,26 @@ mod tests {
                     exit_on_chord: true,
                     config: Some("/tmp/cfg.json".to_owned()),
                     driver: "evdev".to_owned(),
+                    chord: Some("shift_r+f9".to_owned()),
                 },
             })
         );
+    }
+
+    #[test]
+    fn parses_hotkey_capture_chord_override_alone() {
+        // `--chord` must work without `--config`: the whole point is to test
+        // a chord WITHOUT touching the user's saved settings.
+        let cli = Cli::parse_from(["whisper-dictate", "hotkey", "capture", "--chord", "ctrl_l"]);
+        match cli.command {
+            Some(Command::Hotkey {
+                command: HotkeyCommand::Capture { chord, config, .. },
+            }) => {
+                assert_eq!(chord, Some("ctrl_l".to_owned()));
+                assert_eq!(config, None);
+            }
+            other => panic!("expected hotkey capture with --chord, got {other:?}"),
+        }
     }
 
     #[test]
