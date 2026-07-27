@@ -231,9 +231,7 @@ impl RuntimeSupervisor {
                         // Solves the Windows PTT bug report's "Stderr
                         // is silent (0 bytes)" symptom for this
                         // decision point.
-                        crate::diag::log!(
-                            "[runtime] Phase B in-process dispatch refused: {err}"
-                        );
+                        crate::diag::log!("[runtime] Phase B in-process dispatch refused: {err}");
                         let _ = self.tx.send(RuntimeEvent::Stderr(format!(
                             "[runtime] Phase B in-process dispatch refused: {err}"
                         )));
@@ -553,9 +551,8 @@ impl RuntimeSupervisor {
         // that Phase B did (or did not) install successfully.
         let (driver, chord) = self.in_process_install_summary();
         self.state = RuntimeState::Running;
-        let started_line = format!(
-            "{ENGINE_ENV}=rust (in-process; driver={driver}, chord={chord})"
-        );
+        let started_line =
+            format!("{ENGINE_ENV}=rust (in-process; driver={driver}, chord={chord})");
         crate::diag::log!("[runtime] Phase B in-process dispatch installed: {started_line}");
         let _ = self.tx.send(RuntimeEvent::Started {
             command: started_line,

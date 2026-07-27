@@ -835,7 +835,11 @@ fn supervisor_phase_b_fallback_stderr_line_is_stable_grep_target() {
         let matched: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                RuntimeEvent::Stderr(line) if line.starts_with("[runtime] Phase B in-process dispatch refused: ") => Some(line.clone()),
+                RuntimeEvent::Stderr(line)
+                    if line.starts_with("[runtime] Phase B in-process dispatch refused: ") =>
+                {
+                    Some(line.clone())
+                }
                 _ => None,
             })
             .collect();
