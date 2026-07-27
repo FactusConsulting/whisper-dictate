@@ -1050,6 +1050,62 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: credential lookup honors env-overridden endpoint (P1 for #615)
+#
+# The bug the P1 review flagged: `attach_cloud_api_keys` classified the
+# credential against `settings.stt_base_url` (config value), NOT the
+# endpoint the worker would actually hit after
+# `worker_env_overrides()` baked in a `VOICEPI_STT_BASE_URL` override.
+# Result: config says Groq, env says OpenAI, worker got the Groq key (or a
+# miss) while talking to OpenAI.
+#
+# This check pins the fix by saving the key under the OPENAI account,
+# leaving the config on Groq, and OVERRIDING the endpoint back to OpenAI
+# via env. The worker must find the openai-stored key -- if it reads the
+# config's Groq account instead, there is nothing to find and it dies at
+# startup with the missing-key message.
+#
+# Deliberately cross-OS: named "wayland-user-smoke" for historical
+# reasons but the credential-resolution check itself runs anywhere the
+# `whisper-dictate` binary and the file-fallback store do (Linux, macOS,
+# Windows Git-Bash / WSL). The store uses `VOICEPI_DISABLE_OS_KEYRING=1`
+# so we never touch the operator's real OS credential manager.
+# --------------------------------------------------------------------------
+section "CLI classifies the credential against the effective endpoint"
+if [ "$CMD_MODE" != "rust" ]; then
+    warn "endpoint-override check is a Rust-side behaviour - not exposed by the Python fallback"
+else
+    ep_store="$(mktemp -t wd-keys-ep-smoke.XXXXXX.json)"
+    ep_config="$(mktemp -t wd-cfg-ep-smoke.XXXXXX.json)"
+    # Key saved for OpenAI only. Groq account is absent on purpose: if the
+    # lookup falls back to the config value it will find nothing and the
+    # worker will die at startup.
+    printf '{"stt-api-key:openai":"smoke-openai-not-a-real-key"}\n' >"$ep_store"
+    printf '{"stt_backend":"openai","stt_base_url":"https://api.groq.com/openai/v1","stt_model":"whisper-large-v3-turbo","post_processor":"off"}\n' >"$ep_config"
+
+    ep_out="$(env -u VOICEPI_STT_API_KEY -u VOICEPI_POST_API_KEY \
+                  -u GROQ_API_KEY -u OPENAI_API_KEY \
+                  VOICEPI_API_KEY_STORE="$ep_store" \
+                  VOICEPI_DISABLE_OS_KEYRING=1 \
+                  VOICEPI_CONFIG="$ep_config" \
+                  VOICEPI_STT_BASE_URL=https://api.openai.com/v1 \
+              timeout --preserve-status --kill-after=2s 12s \
+              whisper-dictate run 2>&1)"
+    ep_rc=$?
+    rm -f "$ep_store" "$ep_config"
+
+    if printf '%s' "$ep_out" | grep -qi "requires OPENAI_API_KEY"; then
+        bad "endpoint-override ignored - credential looked up against the config value, not the env"
+    elif printf '%s' "$ep_out" | grep -qi "api ready\|state.:.opening\|listener_installed\|ready-signal"; then
+        ok "credential resolved against the env-overridden endpoint (openai stored key wins over the groq config value)"
+    elif printf '%s' "$ep_out" | grep -qi "no default input device\|no audio\|input device not found"; then
+        warn "endpoint-override key resolved but no audio device (headless / muted)"
+    else
+        bad "endpoint-override worker startup shape not recognised (exit $ep_rc): $(printf '%s' "$ep_out" | head -c 300)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: in-process Rust runtime installs (VOICEPI_DICTATE_ENGINE=rust)
 #
 # Replaces the previous `whisper-dictate ui` probe, which could NEVER pass —

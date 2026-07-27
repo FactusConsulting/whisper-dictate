@@ -111,7 +111,7 @@ pub fn resolve_stt_api_key(base_url: &str) -> Option<String> {
         provider.generic_env(),
         Some(provider.stt_account()),
         |name| std::env::var(name).ok(),
-        |account| load_secret(account).ok(),
+        load_secret_reported,
     )
 }
 
@@ -127,8 +127,27 @@ pub fn resolve_post_api_key(base_url: &str) -> Option<String> {
         provider.generic_env(),
         provider.post_account(),
         |name| std::env::var(name).ok(),
-        |account| load_secret(account).ok(),
+        load_secret_reported,
     )
+}
+
+/// Same as [`load_secret`] but never returns an error: a real failure is
+/// surfaced on stderr and swallowed to `None`, so the caller sees the reason
+/// the credential store went silent instead of an unexplained "no key". The
+/// UI store treats `NoEntry` + missing/blank file as `Ok("")`, so an `Err`
+/// here really does mean the OS keyring path is broken (permissions, DBus
+/// down, corrupt api-keys.json) rather than "nothing saved yet".
+fn load_secret_reported(account: &str) -> Option<String> {
+    match load_secret(account) {
+        Ok(secret) => Some(secret),
+        Err(err) => {
+            eprintln!(
+                "warning: credential store read for {account} failed \
+                 (falling back to environment): {err:#}"
+            );
+            None
+        }
+    }
 }
 
 /// Testable core: every source is injected so the precedence can be exercised
@@ -287,6 +306,26 @@ mod tests {
             table(&[]),
         );
         assert_eq!(got.as_deref(), Some("shared"));
+    }
+
+    #[test]
+    fn store_failure_falls_through_to_none_not_a_panic() {
+        // `load_secret_reported` maps a broken store to `None` so resolution
+        // continues instead of aborting -- the P2 review flagged that the
+        // previous `.ok()` silently swallowed the reason. This test pins the
+        // fall-through; the eprintln!() itself is out of scope for a unit
+        // test but is asserted by inspection in the log.
+        let got = resolve_with(
+            &["VOICEPI_STT_API_KEY"],
+            Some("GROQ_API_KEY"),
+            Some(STT_GROQ),
+            table(&[]),
+            // Store lookup returns None to model a failure surfaced by
+            // `load_secret_reported`. Behaviour must match "nothing here"
+            // rather than "unknown -- keep going".
+            |_| None,
+        );
+        assert_eq!(got, None);
     }
 
     #[test]
