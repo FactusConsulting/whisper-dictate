@@ -37,9 +37,12 @@ use anyhow::{anyhow, Result};
 
 use crate::runtime;
 
+pub mod native;
+pub mod paths;
 pub mod reporting;
 pub mod scoring;
 
+pub use paths::{appdata_audio_dir, resolve_item_audio};
 pub use reporting::{format_summary_line, summarize_results, BenchmarkEvent, BenchmarkSummary};
 pub use scoring::{casefold, cer, levenshtein, normalize_words, term_report, wer, TermReport};
 
@@ -117,15 +120,33 @@ pub fn parse_backend_specs(spec: &str) -> Result<Vec<BackendSpec>> {
     Ok(out)
 }
 
-/// CLI entry point for `whisper-dictate bench`. Shells out to the Python
-/// worker via the same [`runtime::benchmark_command`] the UI button drives, so
-/// the corpus resolution + JSONL output + final `[benchmark] ...` summary line
-/// is bit-identical no matter who started the run. The foreground worker is
-/// launched with `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` (see
-/// `runtime::run_foreground`) so a redirected stdout never mojibakes the
-/// Danish corpus text or `ensure_ascii=False` JSONL on Windows.
+/// CLI entry point for `whisper-dictate bench`.
+///
+/// Step 1 of the `vp_benchmark.py` retirement (#348): tries the native Rust
+/// runner in [`native::run`] first. When the runner reports
+/// [`native::NativeBenchError::Unsupported`] — the SELECTED backend cannot
+/// run in this build (e.g. a `whisper` spec on a stock build without the
+/// `whisper-rs-local` feature) — we emit a one-line stderr breadcrumb and
+/// shell to the Python worker via the same
+/// [`runtime::benchmark_command`] the UI button drives.
+///
+/// Matches the #600 `devices test` fallback pattern: the native path takes
+/// over for the shipping build, and the Python worker stays available as
+/// the safety net until step 2 retires `vp_benchmark.py` altogether.
+///
+/// The Python foreground worker inherits `PYTHONUTF8=1` /
+/// `PYTHONIOENCODING=utf-8` (see [`runtime::run_foreground`]) so a
+/// redirected stdout never mojibakes the Danish corpus text or the
+/// `ensure_ascii=False` JSONL on Windows.
 pub fn handle_bench() -> Result<()> {
-    runtime::run_foreground(&runtime::benchmark_command())
+    match native::run() {
+        Ok(()) => Ok(()),
+        Err(native::NativeBenchError::Unsupported(reason)) => {
+            eprintln!("{} ({reason})", native::FALLBACK_MESSAGE_PREFIX);
+            runtime::run_foreground(&runtime::benchmark_command())
+        }
+        Err(native::NativeBenchError::Other(e)) => Err(e),
+    }
 }
 
 #[cfg(test)]
