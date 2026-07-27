@@ -20,6 +20,8 @@
 pub mod dispatcher;
 pub mod enigo_backend;
 pub mod fallback;
+#[cfg(test)]
+mod fallback_tests;
 pub mod keymap;
 #[cfg(target_os = "linux")]
 pub mod linux_helpers;

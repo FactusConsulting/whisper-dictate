@@ -22,11 +22,11 @@ use serde::{Deserialize, Serialize};
 
 use super::enigo_backend::InjectorBackend;
 #[cfg(target_os = "linux")]
-use super::fallback::{locate_on_path, select_helper, LinuxSession};
+use super::fallback::{locate_on_path, select_helper, HelperError, LinuxSession};
 use super::paste::PasteShortcut;
 #[cfg(target_os = "linux")]
 use super::wayland::{
-    paste_shortcut_for, target_prefers_terminal_paste, type_text as wayland_type,
+    paste_shortcut_for, target_prefers_terminal_paste, type_text_tracked as wayland_type_tracked,
 };
 
 /// Which strategy to use for a single injection.
@@ -212,33 +212,82 @@ impl Injector {
         // ydotool already has a fully-featured layout-aware code path in
         // wayland.rs — reuse it when ydotool wins the chain. The other helpers
         // get a generic invocation through super::linux_helpers.
-        use super::fallback::select_paste_helper;
-        use super::linux_helpers::{invoke_paste, invoke_type};
+        use super::linux_helpers::invoke_type;
 
         let session = LinuxSession::detect();
         match method {
             InjectMethod::Typing => {
-                let helper = select_helper(session, locate_on_path).ok_or_else(|| {
-                    anyhow!(
-                        "no Linux injection helper found on PATH (tried: {:?})",
-                        super::fallback::fallback_chain(session)
-                    )
-                })?;
-                if helper == "ydotool" {
-                    wayland_type(text, &self.xkb_layout)
-                } else {
-                    invoke_type(helper, text)
-                }
+                // Walk the chain instead of committing to the first helper
+                // that merely EXISTS on PATH. Presence is not capability:
+                // on KDE Wayland `wtype` is installed and shipped by the
+                // distro, but KWin does not implement
+                // `zwp_virtual_keyboard_v1`, so every injection failed while
+                // a working `ydotool` sat two entries further down and was
+                // never tried.
+                try_helpers(
+                    session,
+                    |helper| {
+                        if helper == "ydotool" {
+                            // ydotool goes through the evdev path which
+                            // splits into multiple sub-invocations -- we
+                            // KNOW how many ops landed before the failure,
+                            // so a mid-burst failure is stamped `partial`
+                            // and the dispatcher suppresses fallback to
+                            // avoid double-typing. Codex P1 dispatcher.rs
+                            // findings on PR #613.
+                            match wayland_type_tracked(text, &self.xkb_layout) {
+                                Ok(_) => Ok(()),
+                                Err((err, sent)) => Err(if sent > 0 {
+                                    HelperError::partial(err)
+                                } else {
+                                    HelperError::opaque(err)
+                                }),
+                            }
+                        } else {
+                            // kwtype / wtype / dotool / xdotool: single
+                            // opaque subprocess. We can't observe partial
+                            // progress; fall back to the text-based
+                            // `is_safe_to_try_next_helper` gate in
+                            // try_helpers -- it only whitelists KNOWN
+                            // startup / capability signatures, so any
+                            // unrecognised error stops the chain.
+                            invoke_type(helper, text).map_err(HelperError::opaque)
+                        }
+                    },
+                    false,
+                    "injection",
+                )
             }
             InjectMethod::Paste(shortcut) => {
                 // P3 #371 finding 1: dotool has no paste-chord support,
                 // so the paste-only helper picker filters it out.
-                let helper = select_paste_helper(session, locate_on_path).ok_or_else(|| {
-                    anyhow!(
-                        "no Linux paste helper found on PATH (tried: {:?}, dotool excluded - no paste chord)",
-                        super::fallback::fallback_chain(session)
-                    )
-                })?;
+                //
+                // Paste is a single chord: either the whole thing lands
+                // or nothing does. `HelperError::opaque` is correct -- a
+                // mid-chord failure wouldn't type visible characters into
+                // the document anyway (the modifier stays down / comes
+                // back up with no printable payload).
+                try_helpers(
+                    session,
+                    |helper| {
+                        self.paste_with_helper(helper, shortcut)
+                            .map_err(HelperError::opaque)
+                    },
+                    true,
+                    "paste",
+                )
+            }
+        }
+    }
+
+    /// One paste attempt with a chosen helper. Split out of the chain walk so
+    /// the per-helper shortcut logic below stays readable and the retry loop
+    /// stays about retrying.
+    #[cfg(target_os = "linux")]
+    fn paste_with_helper(&self, helper: &str, shortcut: Option<PasteShortcut>) -> Result<()> {
+        use super::linux_helpers::invoke_paste;
+        {
+            {
                 if helper == "ydotool" {
                     // P2 #391 follow-up: ydotool path now also honours an
                     // explicit `Some(shortcut)`. Previously `paste_shortcut`
@@ -466,6 +515,110 @@ fn read_request() -> Result<InjectRequest> {
     let mut raw = String::new();
     io::stdin().read_to_string(&mut raw)?;
     Ok(serde_json::from_str(&raw)?)
+}
+
+/// Try each available helper, in chain order, until one succeeds.
+///
+/// Candidates come from [`available_helpers`], the same list the single-pick
+/// selectors delegate to, so the runtime fallback cannot disagree with them
+/// about what is eligible or in which order.
+///
+/// Fallback safety has two independent gates:
+///
+/// 1. **Progress signal** ([`HelperError::partial`]): the ydotool path
+///    tracks how many evdev ops landed before the failure and marks
+///    `partial: true` when any keystroke reached the compositor. That kind
+///    of failure is NEVER retried -- the next helper would re-type the
+///    successful prefix on top of it.
+/// 2. **Text signal** ([`is_safe_to_try_next_helper`]) for subprocess
+///    helpers whose partial state we can't observe from Rust. Only KNOWN
+///    startup / capability signatures whitelist a retry; anything
+///    unrecognised stops the chain, matching the pre-tracking behaviour.
+#[cfg(target_os = "linux")]
+fn try_helpers<A>(
+    session: LinuxSession,
+    mut attempt: A,
+    paste_capable_only: bool,
+    what: &str,
+) -> Result<()>
+where
+    A: FnMut(&str) -> std::result::Result<(), HelperError>,
+{
+    let candidates =
+        super::fallback::available_helpers(session, locate_on_path, paste_capable_only);
+    if candidates.is_empty() {
+        return Err(anyhow!(
+            "no Linux {what} helper found on PATH (tried: {:?})",
+            super::fallback::fallback_chain(session)
+        ));
+    }
+    try_helpers_over(&candidates, &mut attempt, what)
+}
+
+/// Pure walk over a candidate list. Split from [`try_helpers`] so tests can
+/// exercise the retry / partial-failure logic against a fake `attempt`
+/// closure without touching `$PATH` or spawning subprocesses. Codex P2 #613
+/// dispatcher.rs:521 -- runtime fallback needs a regression test.
+#[cfg(target_os = "linux")]
+fn try_helpers_over<A>(candidates: &[&str], attempt: &mut A, what: &str) -> Result<()>
+where
+    A: FnMut(&str) -> std::result::Result<(), HelperError>,
+{
+    if candidates.is_empty() {
+        return Err(anyhow!("no Linux {what} helper available"));
+    }
+
+    let mut last_err: Option<anyhow::Error> = None;
+    for (idx, helper) in candidates.iter().copied().enumerate() {
+        match attempt(helper) {
+            Ok(()) => {
+                if idx > 0 {
+                    // Worth a line: the helper the operator would expect to
+                    // be used did not work, and knowing WHICH one carried
+                    // the text is the difference between "it works" and
+                    // "it works for a reason I can reproduce". Codex P2 #613
+                    // dispatcher.rs:531 -- surface fallback diagnostics.
+                    eprintln!(
+                        "[inject] {what}: {helper} succeeded after {:?} failed",
+                        &candidates[..idx]
+                    );
+                }
+                return Ok(());
+            }
+            Err(HelperError { err, partial: true }) => {
+                // The helper had already pushed at least one keystroke
+                // through the compositor when it died. Falling back to
+                // the next helper would re-type the successful prefix on
+                // top of it, silently corrupting the user's document.
+                // Codex P1 #613 dispatcher.rs:540 -- suppress fallback on
+                // any observable partial injection.
+                eprintln!(
+                    "[inject] {what}: {helper} failed AFTER typing keys ({err:#}); \
+                     suppressing fallback to avoid double-typing"
+                );
+                return Err(err);
+            }
+            Err(HelperError {
+                err,
+                partial: false,
+            }) => {
+                let text = format!("{err:#}");
+                if !super::fallback::is_safe_to_try_next_helper(&text) {
+                    // Unrecognised subprocess failure: it may have typed
+                    // part of the text. Stop rather than risk duplicating.
+                    return Err(err);
+                }
+                eprintln!("[inject] {what}: {helper} unusable ({text}); trying next helper");
+                last_err = Some(err);
+            }
+        }
+    }
+
+    Err(last_err
+        .unwrap_or_else(|| anyhow!("no Linux {what} helper produced a result"))
+        .context(format!(
+            "every Linux {what} helper failed (tried: {candidates:?})"
+        )))
 }
 
 #[cfg(test)]
@@ -748,5 +901,133 @@ mod tests {
         let mut injector = Injector::new();
         assert!(injector.release_held_modifiers(&[vk::VK_CONTROL]).is_ok());
         assert!(injector.release_held_modifiers(&[]).is_ok());
+    }
+
+    // -- Runtime fallback chain (Codex #613 findings) --------------------
+    //
+    // These exercise `try_helpers_over` directly with a fake `attempt`
+    // closure. They pin the three behaviours that the review flagged:
+    //   1. When helper A fails with a startup signature, B is tried.
+    //   2. When a helper reports `HelperError::partial` (any keys landed),
+    //      fallback is suppressed even if the next helper is available.
+    //   3. When helper A fails first, B succeeds, an info line is emitted
+    //      so the operator knows the fallback actually kicked in.
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_falls_back_after_startup_failure() {
+        // Codex P2 #613 dispatcher.rs:521 -- the runtime retry loop was
+        // never covered by a test. Fake: kwtype refuses at startup (a
+        // known-safe signature), wtype succeeds. Expected: the second
+        // helper is called and `try_helpers_over` returns Ok.
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_c = calls.clone();
+        let mut attempt = move |helper: &str| -> std::result::Result<(), HelperError> {
+            calls_c.lock().unwrap().push(helper.to_owned());
+            if helper == "kwtype" {
+                // "Compositor does not support the virtual keyboard
+                // protocol" is a recognised startup failure per
+                // `is_safe_to_try_next_helper`.
+                Err(HelperError::opaque(anyhow!(
+                    "kwtype type failed: Compositor does not support the virtual keyboard protocol"
+                )))
+            } else {
+                Ok(())
+            }
+        };
+        let candidates = ["kwtype", "wtype", "ydotool"];
+        try_helpers_over(&candidates, &mut attempt, "injection")
+            .expect("wtype should have carried the injection");
+        assert_eq!(*calls.lock().unwrap(), vec!["kwtype", "wtype"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_suppresses_fallback_after_partial_failure() {
+        // Codex P1 #613 dispatcher.rs:540. Fake: ydotool typed some ops,
+        // then died. `HelperError::partial` MUST stop the chain -- if
+        // wtype ran next it would type the whole burst on top of the
+        // successful prefix, silently doubling half the transcript into
+        // the user's document.
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_c = calls.clone();
+        let mut attempt = move |helper: &str| -> std::result::Result<(), HelperError> {
+            calls_c.lock().unwrap().push(helper.to_owned());
+            if helper == "ydotool" {
+                Err(HelperError::partial(anyhow!(
+                    "ydotool: broken pipe after 12 keystrokes"
+                )))
+            } else {
+                panic!("unreachable: fallback must not run after a partial failure");
+            }
+        };
+        let candidates = ["ydotool", "wtype"];
+        let err = try_helpers_over(&candidates, &mut attempt, "injection")
+            .expect_err("partial failure must NOT fall through to the next helper");
+        assert!(
+            format!("{err:#}").contains("broken pipe"),
+            "expected the partial error surfaced verbatim, got {err:#}"
+        );
+        // The safety property, expressed as the call transcript.
+        assert_eq!(*calls.lock().unwrap(), vec!["ydotool"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_stops_on_unrecognised_opaque_failure() {
+        // Belt-and-braces: `HelperError::opaque` with an error string
+        // that doesn't match any known startup signature must also stop
+        // the chain, because a subprocess helper might have typed a
+        // partial burst before it crashed with a novel message.
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_c = calls.clone();
+        let mut attempt = move |helper: &str| -> std::result::Result<(), HelperError> {
+            calls_c.lock().unwrap().push(helper.to_owned());
+            Err(HelperError::opaque(anyhow!(
+                "wtype type failed: killed by signal 9"
+            )))
+        };
+        let candidates = ["wtype", "ydotool"];
+        let err = try_helpers_over(&candidates, &mut attempt, "injection")
+            .expect_err("unrecognised failure must stop the chain");
+        assert!(format!("{err:#}").contains("killed by signal 9"));
+        assert_eq!(*calls.lock().unwrap(), vec!["wtype"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_succeeds_immediately_on_first_helper() {
+        // No fallback needed: the happy path returns Ok after a single
+        // call and never touches later helpers.
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_c = calls.clone();
+        let mut attempt = move |helper: &str| -> std::result::Result<(), HelperError> {
+            calls_c.lock().unwrap().push(helper.to_owned());
+            Ok(())
+        };
+        let candidates = ["kwtype", "wtype", "ydotool"];
+        try_helpers_over(&candidates, &mut attempt, "injection").unwrap();
+        assert_eq!(*calls.lock().unwrap(), vec!["kwtype"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_errors_when_all_helpers_fail_with_startup_signatures() {
+        // Every candidate fails with a recognised startup signature: the
+        // chain exhausts, and the surfaced error must be the LAST one
+        // (wrapped with a "every ... helper failed" context).
+        let mut attempt = |helper: &str| -> std::result::Result<(), HelperError> {
+            Err(HelperError::opaque(anyhow!(
+                "{helper} type failed: Compositor does not support the virtual keyboard protocol"
+            )))
+        };
+        let candidates = ["kwtype", "wtype"];
+        let err = try_helpers_over(&candidates, &mut attempt, "injection")
+            .expect_err("chain of startup failures should surface an error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("every Linux injection helper failed"),
+            "got: {msg}"
+        );
     }
 }

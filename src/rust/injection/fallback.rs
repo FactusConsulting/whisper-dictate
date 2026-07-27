@@ -83,6 +83,29 @@ pub fn fallback_chain(session: LinuxSession) -> &'static [&'static str] {
     }
 }
 
+/// Every helper from the session's chain that is present on PATH, in chain
+/// order. `paste_capable_only` applies the same dotool exclusion
+/// [`select_paste_helper`] documents.
+///
+/// Both single-pick helpers delegate here so the candidate SET and its order
+/// can only be defined once -- a runtime fallback that walked its own list
+/// would be free to disagree with the picker about what is eligible.
+pub fn available_helpers<F>(
+    session: LinuxSession,
+    locator: F,
+    paste_capable_only: bool,
+) -> Vec<&'static str>
+where
+    F: Fn(&str) -> Option<PathBuf>,
+{
+    fallback_chain(session)
+        .iter()
+        .copied()
+        .filter(|name| !(paste_capable_only && *name == "dotool"))
+        .filter(|name| locator(name).is_some())
+        .collect()
+}
+
 /// Walk the chain and return the first helper present on `$PATH`, or `None`
 /// when no usable helper is installed. `locator` is injected so unit tests can
 /// simulate a sparse install without polluting the process environment.
@@ -90,10 +113,7 @@ pub fn select_helper<F>(session: LinuxSession, locator: F) -> Option<&'static st
 where
     F: Fn(&str) -> Option<PathBuf>,
 {
-    fallback_chain(session)
-        .iter()
-        .copied()
-        .find(|name| locator(name).is_some())
+    available_helpers(session, locator, false).first().copied()
 }
 
 /// Like [`select_helper`] but skips helpers that cannot perform a paste
@@ -114,11 +134,7 @@ pub fn select_paste_helper<F>(session: LinuxSession, locator: F) -> Option<&'sta
 where
     F: Fn(&str) -> Option<PathBuf>,
 {
-    fallback_chain(session)
-        .iter()
-        .copied()
-        .filter(|name| *name != "dotool")
-        .find(|name| locator(name).is_some())
+    available_helpers(session, locator, true).first().copied()
 }
 
 /// Default helper locator: `which`-style search across `$PATH`. Tested via the
@@ -338,5 +354,204 @@ mod tests {
             select_paste_helper(LinuxSession::KdeWayland, locator),
             Some("kwtype")
         );
+    }
+}
+
+/// Whether a failed helper invocation is safe to follow with the NEXT helper
+/// in the chain.
+///
+/// This gate is the whole risk of a runtime fallback. If a helper typed half
+/// the transcript and then died, retrying would type the other helper's full
+/// text on top of the partial one -- duplicating the user's dictation into
+/// whatever document they were writing. Losing an utterance is annoying;
+/// silently corrupting a document is worse. So the rule is deliberately
+/// conservative: retry ONLY on failures that prove nothing reached the
+/// compositor, and surface anything unrecognised as-is.
+///
+/// The recognised signatures are all startup / capability failures, i.e. the
+/// helper refused before emitting a single keystroke:
+///
+///   - `wtype` on a compositor without `zwp_virtual_keyboard_v1` (KWin --
+///     the case that motivated this),
+///   - a helper that is on PATH but cannot execute (spawn errors),
+///   - X11 helpers with no reachable display,
+///   - `ydotool` when `ydotoold` is not running / its socket is unusable.
+/// Error returned from a single helper attempt in the runtime fallback
+/// chain (`dispatcher::try_helpers`). Carries both the underlying error and
+/// a flag that indicates whether the helper had already pushed one or more
+/// keystrokes to the compositor when it failed.
+///
+/// `partial: true` disables fallback -- the next helper would re-type the
+/// successful prefix on top of what the first helper already injected,
+/// silently double-typing part of the transcript into the user's document.
+/// Losing an utterance is annoying; corrupting a document is worse.
+///
+/// Two producers exist:
+///
+/// * The evdev-driven [`super::wayland::type_text_tracked`] path splits an
+///   injection into multiple `ydotool` calls and DOES observe partial
+///   progress; it stamps `partial: true` whenever any op succeeded before
+///   the failure.
+/// * Subprocess helpers (`kwtype` / `wtype` / `xdotool` / `dotool` as a
+///   single opaque child process) cannot see partial progress; they build a
+///   `HelperError` via [`HelperError::opaque`] and rely on
+///   [`is_safe_to_try_next_helper`] as the safety gate -- a conservative
+///   text-match against KNOWN startup / capability signatures. Anything
+///   unrecognised stops the chain, matching the pre-tracking behaviour.
+pub struct HelperError {
+    pub err: anyhow::Error,
+    pub partial: bool,
+}
+
+impl HelperError {
+    /// Failure that the helper cannot classify as pre- or post-first-key.
+    /// The dispatcher will fall back to text-matching on the error string
+    /// via [`is_safe_to_try_next_helper`]. Only use this for subprocess
+    /// helpers whose partial state is unobservable from Rust.
+    pub fn opaque(err: anyhow::Error) -> Self {
+        Self {
+            err,
+            partial: false,
+        }
+    }
+
+    /// Failure AFTER at least one keystroke reached the compositor. The
+    /// dispatcher MUST NOT try the next helper -- doing so would re-type
+    /// the already-injected prefix.
+    pub fn partial(err: anyhow::Error) -> Self {
+        Self { err, partial: true }
+    }
+}
+
+pub fn is_safe_to_try_next_helper(error_text: &str) -> bool {
+    let lower = error_text.to_ascii_lowercase();
+    const STARTUP_FAILURES: &[&str] = &[
+        // wtype / kwtype: compositor lacks the virtual-keyboard protocol.
+        "does not support",
+        "no such interface",
+        // Spawn failures (binary on PATH but unusable: wrong arch, noexec
+        // mount, missing loader).
+        "no such file or directory",
+        "permission denied",
+        "exec format error",
+        // X11 helpers without a display. `xdotool` really prints
+        // `Error: Can't open display: (null)` (with an apostrophe) --
+        // the previous `cannot open display` matcher never fired for
+        // the exact tool it was meant to catch. Keep the other spellings
+        // for kwtype/wtype/dotool cross-tool defence.
+        "can't open display",
+        "cannot open display",
+        "unable to open display",
+        "failed to connect to display",
+        // ydotool without a running ydotoold.
+        "failed to connect socket",
+        "connection refused",
+        "socket file",
+    ];
+    STARTUP_FAILURES.iter().any(|sig| lower.contains(sig))
+}
+
+#[cfg(test)]
+mod runtime_fallback_tests {
+    use super::*;
+
+    fn present(names: &'static [&'static str]) -> impl Fn(&str) -> Option<PathBuf> {
+        move |n: &str| {
+            names
+                .contains(&n)
+                .then(|| PathBuf::from(format!("/usr/bin/{n}")))
+        }
+    }
+
+    #[test]
+    fn available_helpers_keeps_chain_order_and_drops_absent() {
+        // KDE chain is kwtype, wtype, dotool, ydotool.
+        let got = available_helpers(
+            LinuxSession::KdeWayland,
+            present(&["ydotool", "wtype"]),
+            false,
+        );
+        assert_eq!(got, vec!["wtype", "ydotool"]);
+    }
+
+    #[test]
+    fn available_helpers_excludes_dotool_for_paste_only() {
+        let installed = present(&["dotool", "ydotool"]);
+        assert_eq!(
+            available_helpers(LinuxSession::OtherWayland, &installed, false),
+            vec!["dotool", "ydotool"]
+        );
+        assert_eq!(
+            available_helpers(LinuxSession::OtherWayland, &installed, true),
+            vec!["ydotool"]
+        );
+    }
+
+    #[test]
+    fn single_pickers_agree_with_the_list_they_delegate_to() {
+        // The whole point of routing both through `available_helpers`: the
+        // runtime fallback and the single-shot pickers cannot drift.
+        for session in [
+            LinuxSession::KdeWayland,
+            LinuxSession::OtherWayland,
+            LinuxSession::X11,
+            LinuxSession::Unknown,
+        ] {
+            let installed = present(&["dotool", "ydotool", "wtype", "xdotool"]);
+            assert_eq!(
+                select_helper(session, &installed),
+                available_helpers(session, &installed, false)
+                    .first()
+                    .copied()
+            );
+            assert_eq!(
+                select_paste_helper(session, &installed),
+                available_helpers(session, &installed, true)
+                    .first()
+                    .copied()
+            );
+        }
+    }
+
+    #[test]
+    fn wtype_on_kwin_is_safe_to_follow_with_the_next_helper() {
+        // The exact message from the KDE Plasma box that motivated this.
+        assert!(is_safe_to_try_next_helper(
+            "wtype type failed: Compositor does not support the virtual keyboard protocol"
+        ));
+    }
+
+    #[test]
+    fn spawn_and_display_failures_are_safe_to_retry() {
+        for msg in [
+            "No such file or directory (os error 2)",
+            "Permission denied (os error 13)",
+            // The exact stderr xdotool prints when $DISPLAY is unset --
+            // regression pin so anyone who normalises the STARTUP_FAILURES
+            // list can't silently drop the real xdotool string. Note the
+            // apostrophe -- `cannot open display` would NOT catch this.
+            "xdotool type failed: Error: Can't open display: (null)",
+            "ydotool: failed to connect socket: No such file or directory",
+        ] {
+            assert!(is_safe_to_try_next_helper(msg), "should retry after: {msg}");
+        }
+    }
+
+    #[test]
+    fn unrecognised_failures_are_not_retried() {
+        // The safety property: anything that might have typed PART of the
+        // text must stop the chain, or the next helper types the whole
+        // transcript again on top of it.
+        for msg in [
+            "wtype type failed: killed by signal 9",
+            "ydotool type failed: broken pipe after 12 keystrokes",
+            "xdotool type failed: X Error of failed request: BadWindow",
+            "some entirely novel failure",
+        ] {
+            assert!(
+                !is_safe_to_try_next_helper(msg),
+                "must NOT retry after: {msg}"
+            );
+        }
     }
 }
