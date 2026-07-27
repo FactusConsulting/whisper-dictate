@@ -274,8 +274,8 @@ fn handle_self_test(cmd: SelfTestCommand) -> anyhow::Result<()> {
 /// Dispatch `self-test hotkey-boot`. Exercises the SAME
 /// [`whisper_dictate_app::hotkey::install_hotkey`] path the Phase-B
 /// supervisor uses so a Windows-side wedge is reproducible from
-/// PowerShell with visible stderr (the GUI binary's
-/// `windows_subsystem = "windows"` discards its stderr).
+/// PowerShell with visible stderr (the GUI binary runs under the
+/// Windows GUI subsystem attribute and discards its stderr).
 fn handle_self_test_hotkey_boot(hold_ms: u64, chord: &str, json: bool) -> anyhow::Result<()> {
     use whisper_dictate_app::hotkey::boot_self_test::{
         features_available, resolve_chord, run_boot_test,
