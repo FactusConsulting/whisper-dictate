@@ -34,12 +34,16 @@
 //! whisper.cpp dep, so a stock `cargo build` still ships the UI and CLI
 //! affordances even without CMake / a C++ toolchain on the build host.
 
+pub mod device_options;
 pub mod download_stall;
 pub mod gpu;
 pub mod idle;
 pub mod model_manager;
 pub mod models_cli;
 pub mod protocol;
+
+#[cfg(test)]
+mod device_options_tests;
 /// WAV decode helpers (16 kHz mono). Compiled unconditionally so the pure
 /// WAV logic is unit-tested without the `whisper-rs-local` / CMake build.
 pub mod wav;

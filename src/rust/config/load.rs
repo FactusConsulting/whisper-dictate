@@ -34,6 +34,7 @@ impl AppSettings {
                 .transpose()?
                 .unwrap_or_else(|| defaults.profiles_json.clone());
             migrate_parakeet_backend(&mut settings, object, &defaults);
+            migrate_unsupported_device(&mut settings, &defaults);
         }
         Ok(settings)
     }
@@ -226,6 +227,52 @@ fn migrate_parakeet_backend(
     }
 }
 
+/// Coerce a saved `device` value the current binary can't honour back to the
+/// schema default (`auto`).
+///
+/// Motivation: the shipping Windows rc.9 binary was built without any
+/// whisper.cpp GPU backend but the Settings UI still offered `cuda`; users
+/// picked it, so their `config.json` now carries `device = "cuda"`. On a
+/// CPU-only build [`AppSettings::validate`] will reject that value on the
+/// next save, which would make the Settings UI's Save button hard-fail
+/// even if the user never touched the Device field. Silently coercing on
+/// load fixes forward without a user-visible error, and the `auto` fallback
+/// is byte-identical to what Whisper actually did anyway (silent CPU
+/// fallback). One-line warning surfaces the change in the log so the user
+/// can rebuild with a GPU feature if they wanted CUDA.
+///
+/// The migration is skipped when the value is empty (loader falls through
+/// to the default already) and is a no-op when the value is legal on this
+/// build — no warning noise for users on GPU-enabled binaries.
+fn migrate_unsupported_device(settings: &mut AppSettings, defaults: &AppSettings) {
+    use crate::whisper::device_options::{is_device_supported, ALL_DEVICE_VALUES};
+
+    let trimmed = settings.device.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // Only coerce values that WERE a legal `device` value in older builds
+    // (`cuda` above all) but that this binary can't honour. Values outside
+    // ALL_DEVICE_VALUES (typos, hand-edited garbage, schema-probe test
+    // fixtures) are left alone so `AppSettings::validate` can still surface
+    // the "must be one of …" error on save; silently rewriting arbitrary
+    // strings would hide bugs.
+    let recognised = ALL_DEVICE_VALUES
+        .iter()
+        .any(|candidate| trimmed.eq_ignore_ascii_case(candidate));
+    if !recognised || is_device_supported(&settings.device) {
+        return;
+    }
+    eprintln!(
+        "[config] device={:?} is not supported by this build (no matching \
+         whisper.cpp backend compiled in); coercing to device={:?}. See \
+         `whisper-dictate config set device --help` for the values this \
+         binary accepts.",
+        settings.device, defaults.device,
+    );
+    settings.device = defaults.device.clone();
+}
+
 fn string_value(object: &Map<String, Value>, key: &str, default: &str) -> String {
     object
         .get(key)
@@ -344,6 +391,46 @@ mod tests {
         let value = serde_json::json!({ "stt_backend": "whisper" });
         let settings = AppSettings::from_value(value).unwrap();
         assert_eq!(settings.stt_backend, "whisper");
+    }
+
+    #[test]
+    fn unsupported_device_migrates_to_auto_on_cpu_only_builds() {
+        // The rc.9 Windows regression: a config carrying `device = "cuda"`
+        // from the old always-CUDA dropdown must not blow up on a CPU-only
+        // binary. The load path coerces it to the schema default (`auto`),
+        // matching what Whisper actually did at runtime anyway (silent CPU
+        // fallback). Skip on GPU-enabled builds — `cuda` is legal there.
+        if crate::whisper::device_options::any_gpu_backend_compiled() {
+            return;
+        }
+        let value = serde_json::json!({ "device": "cuda" });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.device, "auto");
+    }
+
+    #[test]
+    fn supported_device_is_preserved_on_load() {
+        // The migration must never touch a value the binary *can* honour;
+        // an `auto` config on a fresh install must round-trip untouched
+        // otherwise the "clean config never triggers a warning" invariant
+        // is broken.
+        for value in ["auto", "cpu"] {
+            let json = serde_json::json!({ "device": value });
+            let settings = AppSettings::from_value(json).unwrap();
+            assert_eq!(settings.device, value, "device={value:?} was rewritten");
+        }
+    }
+
+    #[test]
+    fn unrecognised_device_value_is_left_for_the_validator() {
+        // A hand-edited / typo value (`"gpu"`, `"foo"`) must NOT be
+        // silently rewritten — that would hide typos on save. The
+        // validator's "must be one of …" error is the intended UX. Uses a
+        // probe-shaped value to lock in the invariant the schema round-trip
+        // test relies on (see config::tests::every_schema_setting_is_wired…).
+        let value = serde_json::json!({ "device": "auto_wdprobe" });
+        let settings = AppSettings::from_value(value).unwrap();
+        assert_eq!(settings.device, "auto_wdprobe");
     }
 
     #[test]
