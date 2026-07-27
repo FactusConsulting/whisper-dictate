@@ -72,6 +72,8 @@ mod tests_profile;
 mod tests_support;
 #[cfg(test)]
 mod tests_transitions;
+#[cfg(test)]
+mod wire_tests;
 
 pub use history_sink::{
     effective_history_settings, history_sink_from_settings, EffectiveHistorySettings, HistorySink,
