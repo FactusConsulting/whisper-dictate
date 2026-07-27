@@ -1034,6 +1034,119 @@ pub enum SelfTestCommand {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Round 2/3 feedback-cues self-test. Plays the PTT start cue, waits
+    /// `--delay-ms` milliseconds, and plays the stop cue via the same
+    /// [`crate::dictate::feedback::SystemCueSink`] the live session uses.
+    /// Reports which backend fired (`kernel32_beep` / `paplay` / `pw-play`
+    /// / `noop`). Exits non-zero when the env gate is on but no backend
+    /// is available (the silent-mute regression this verb catches).
+    Feedback {
+        /// Sleep between the two cues in milliseconds. `0` still exercises
+        /// the code path (playback happens on a detached thread) but a
+        /// listener won't hear both cues cleanly.
+        #[arg(long, default_value_t = 100)]
+        delay_ms: u64,
+        /// Emit a single JSON object with `kind`, `ok`, `error`,
+        /// `env_enabled`, `backend`, `start_played`, `stop_played`,
+        /// `delay_ms`.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Round 2/3 audio-ducker self-test. Enters the
+    /// [`crate::dictate::audio_ducking::SystemAudioDucker`], sleeps for
+    /// `--duration-ms`, then exits. Reports the resolved backend
+    /// (`wasapi` / `unsupported_platform` / `feature_disabled`), the
+    /// effective target volume, and whether enter+exit fired.
+    AudioDucking {
+        /// How long to hold the ducked state in milliseconds. Defaults
+        /// to 500 ms - enough for a listener to hear media dampen.
+        #[arg(long, default_value_t = 500)]
+        duration_ms: u64,
+        /// Emit a single JSON object with `kind`, `ok`, `backend`,
+        /// `env_enabled`, `target_volume`, `duration_ms`, `entered`,
+        /// `exited`, `error`.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Round 2/3 target-profile matcher self-test. Constructs a synthetic
+    /// [`crate::platform::foreground_window::WindowInfo`] from
+    /// `--title` / `--process` and runs the user's configured profile
+    /// list against it via the same
+    /// [`crate::dictate::profile::ReloadingProfileMatcher`] the live
+    /// session uses.
+    ProfileMatch {
+        /// Window title to match. Empty (default) sends `None` to the
+        /// matcher, mirroring a Wayland / macOS foreground probe.
+        #[arg(long, default_value = "")]
+        title: String,
+        /// Process image name. Empty (default) sends `None`.
+        #[arg(long, default_value = "")]
+        process: String,
+        /// Emit a single JSON object with `kind`, `ok`, `title`,
+        /// `process`, `matched`, `profile`.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Round 2/3 history-sink self-test. Builds a synthetic utterance
+    /// event carrying `--text`, runs it through
+    /// [`crate::dictate::session::history_sink::history_sink_from_settings`]
+    /// (which reads the same `VOICEPI_HISTORY_JSONL` /
+    /// `VOICEPI_HISTORY_ENABLED` overlay the shipping session honours),
+    /// and reports the resolved file path plus the filtered row.
+    HistoryWrite {
+        /// Utterance text to write. Empty string still writes a row
+        /// (useful for pinning the shape).
+        #[arg(long, default_value = "")]
+        text: String,
+        /// Emit a single JSON object with `kind`, `ok`, `enabled`,
+        /// `path`, `row`, `bytes_written`, `error`.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Round 2/3 metrics-sink self-test. Same shape as `history-write`
+    /// but for the metrics sink
+    /// ([`crate::dictate::session::metrics_sink::metrics_sink_from_settings`]).
+    /// Honours the two-part `VOICEPI_JSON` + `VOICEPI_METRICS_JSONL`
+    /// gate. Reports `enabled=false, path=null` when either half of the
+    /// gate is off (the correct "user did not opt in" answer).
+    MetricsWrite {
+        /// Utterance text to write.
+        #[arg(long, default_value = "")]
+        text: String,
+        /// Emit a single JSON object with `kind`, `ok`, `enabled`,
+        /// `path`, `row`, `bytes_written`, `error`.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Round 2/3 live-preview self-test. Spawns a real
+    /// [`crate::dictate::PreviewEngine`] with a canned mock backend,
+    /// pushes `--frames` fake PCM frames, waits for the tick, and
+    /// collects the emissions. The pass signal is at least one emission
+    /// for a non-empty canned text.
+    Preview {
+        /// Number of frames to push. Default `5`.
+        #[arg(long, default_value_t = 5)]
+        frames: usize,
+        /// Samples per frame. Default `24000` (1.5 s @ 16 kHz), enough
+        /// to clear the fresh-audio gate on the first tick.
+        #[arg(long, default_value_t = 24_000)]
+        frame_samples: usize,
+        /// Sample rate the fake frames are at.
+        #[arg(long, default_value_t = 16_000)]
+        sample_rate: u32,
+        /// Interval between preview ticks in milliseconds.
+        #[arg(long, default_value_t = 100)]
+        interval_ms: u64,
+        /// Text the mock backend returns per tick. Empty string exercises
+        /// the "backend returned nothing" branch (engine skips the
+        /// emission - which is the correct behaviour).
+        #[arg(long, default_value = "canned preview")]
+        canned_text: String,
+        /// Emit a single JSON object with `kind`, `ok`, `frames_pushed`,
+        /// `frame_samples`, `sample_rate`, `interval_ms`, `emissions`.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[cfg(test)]
@@ -2216,6 +2329,243 @@ mod tests {
                 config: None,
                 json_events: true,
                 foreground: false,
+            })
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // self-test round 2/3 backend verbs — feedback, audio-ducking,
+    // profile-match, history-write, metrics-write, preview. CLI-shape tests
+    // pin the flag names + defaults so the smoke script (which invokes each
+    // verb with a fixed argv) cannot drift silently.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parses_self_test_feedback_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "feedback"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::Feedback {
+                    delay_ms: 100,
+                    json: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_feedback_all_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "feedback",
+            "--delay-ms",
+            "0",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::Feedback {
+                    delay_ms: 0,
+                    json: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_audio_ducking_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "audio-ducking"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::AudioDucking {
+                    duration_ms: 500,
+                    json: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_audio_ducking_with_short_duration_and_json() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "audio-ducking",
+            "--duration-ms",
+            "200",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::AudioDucking {
+                    duration_ms: 200,
+                    json: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_profile_match_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "profile-match"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::ProfileMatch {
+                    title: String::new(),
+                    process: String::new(),
+                    json: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_profile_match_with_synthetic_window() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "profile-match",
+            "--title",
+            "Cursor",
+            "--process",
+            "cursor.exe",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::ProfileMatch {
+                    title: "Cursor".to_owned(),
+                    process: "cursor.exe".to_owned(),
+                    json: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_history_write_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "history-write"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::HistoryWrite {
+                    text: String::new(),
+                    json: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_history_write_with_text_and_json() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "history-write",
+            "--text",
+            "smoke test",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::HistoryWrite {
+                    text: "smoke test".to_owned(),
+                    json: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_metrics_write_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "metrics-write"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::MetricsWrite {
+                    text: String::new(),
+                    json: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_metrics_write_with_text_and_json() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "metrics-write",
+            "--text",
+            "smoke test",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::MetricsWrite {
+                    text: "smoke test".to_owned(),
+                    json: true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_preview_default_flags() {
+        let cli = Cli::parse_from(["whisper-dictate", "self-test", "preview"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::Preview {
+                    frames: 5,
+                    frame_samples: 24_000,
+                    sample_rate: 16_000,
+                    interval_ms: 100,
+                    canned_text: "canned preview".to_owned(),
+                    json: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parses_self_test_preview_all_flags() {
+        let cli = Cli::parse_from([
+            "whisper-dictate",
+            "self-test",
+            "preview",
+            "--frames",
+            "3",
+            "--frame-samples",
+            "16000",
+            "--sample-rate",
+            "16000",
+            "--interval-ms",
+            "50",
+            "--canned-text",
+            "hi",
+            "--json",
+        ]);
+        assert_eq!(
+            cli.command,
+            Some(Command::SelfTest {
+                command: SelfTestCommand::Preview {
+                    frames: 3,
+                    frame_samples: 16_000,
+                    sample_rate: 16_000,
+                    interval_ms: 50,
+                    canned_text: "hi".to_owned(),
+                    json: true,
+                },
             })
         );
     }

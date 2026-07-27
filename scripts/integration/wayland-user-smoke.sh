@@ -863,6 +863,136 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: self-test feedback (Round 2/3 backend — PTT audible cues)
+#
+# Exercises the same SystemCueSink the live session uses at PTT press +
+# release. Reports which backend the resolver picked (kernel32_beep /
+# paplay / pw-play / noop). The verb intentionally fails only when the
+# env gate is on but no backend is available (the silent-mute regression);
+# with the gate off it exits 0 and reports backend="noop" — which is the
+# correct "user did not opt in" answer.
+# --------------------------------------------------------------------------
+section "self-test feedback (Round 2/3 — PTT audible cues)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test feedback is a Rust subcommand — not exposed by the Python fallback"
+else
+    fb_out="$(whisper-dictate self-test feedback --delay-ms 50 --json 2>&1)"
+    fb_rc=$?
+    if [ "$fb_rc" -eq 0 ] && printf '%s' "$fb_out" | grep -q '"ok":true'; then
+        fb_backend="$(printf '%s' "$fb_out" | grep -oE '"backend":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+        ok "feedback cues: backend=$fb_backend (start+stop played)"
+    else
+        bad "self-test feedback FAILED — cues silently muted: $(printf '%s\n' "$fb_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# SECTION: self-test audio-ducking (Round 2/3 backend — WASAPI ducker)
+#
+# WASAPI-only backend today — on Linux the verb reports
+# backend="unsupported_platform" and exits 0. Failure only when the env
+# gate is on but no backend is available (the silent-no-duck regression).
+# --------------------------------------------------------------------------
+section "self-test audio-ducking (Round 2/3 — WASAPI ducker)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test audio-ducking is a Rust subcommand — not exposed by the Python fallback"
+else
+    ad_out="$(whisper-dictate self-test audio-ducking --duration-ms 200 --json 2>&1)"
+    ad_rc=$?
+    if [ "$ad_rc" -eq 0 ] && printf '%s' "$ad_out" | grep -q '"ok":true'; then
+        ad_backend="$(printf '%s' "$ad_out" | grep -oE '"backend":"[^"]+"' | cut -d: -f2 | tr -d '"')"
+        ok "audio-ducking: backend=$ad_backend (enter+exit fired)"
+    else
+        bad "self-test audio-ducking FAILED: $(printf '%s\n' "$ad_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# SECTION: self-test profile-match (Round 2/3 backend — target profiles)
+#
+# Runs the user's live profile list against a synthetic Cursor window.
+# `matched=false` is a valid diagnostic answer (the operator has no
+# Cursor profile configured); we only trip on a config-load error.
+# --------------------------------------------------------------------------
+section "self-test profile-match (Round 2/3 — target profiles)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test profile-match is a Rust subcommand — not exposed by the Python fallback"
+else
+    pm_out="$(whisper-dictate self-test profile-match --title "Cursor" --process "cursor" --json 2>&1)"
+    pm_rc=$?
+    if [ "$pm_rc" -eq 0 ] && printf '%s' "$pm_out" | grep -q '"ok":true'; then
+        pm_matched="$(printf '%s' "$pm_out" | grep -oE '"matched":(true|false)' | cut -d: -f2)"
+        ok "profile-match: synthetic Cursor window matched=$pm_matched"
+    else
+        bad "self-test profile-match FAILED: $(printf '%s\n' "$pm_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# SECTION: self-test history-write (Round 2/3 backend — history JSONL sink)
+#
+# Writes one synthetic utterance event through the shipping
+# history_sink_from_settings and reports the file path + bytes written.
+# Honours the operator's config gate: `enabled=false` means history is
+# disabled, and the verb still exits 0 (that's the correct "user did not
+# opt in" answer).
+# --------------------------------------------------------------------------
+section "self-test history-write (Round 2/3 — history JSONL sink)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test history-write is a Rust subcommand — not exposed by the Python fallback"
+else
+    hw_out="$(whisper-dictate self-test history-write --text "wayland smoke" --json 2>&1)"
+    hw_rc=$?
+    if [ "$hw_rc" -eq 0 ] && printf '%s' "$hw_out" | grep -q '"ok":true'; then
+        hw_enabled="$(printf '%s' "$hw_out" | grep -oE '"enabled":(true|false)' | head -1 | cut -d: -f2)"
+        ok "history-write: enabled=$hw_enabled (path resolved)"
+    else
+        bad "self-test history-write FAILED: $(printf '%s\n' "$hw_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# SECTION: self-test metrics-write (Round 2/3 backend — metrics JSONL sink)
+#
+# Same shape as history-write but for the metrics sink. The default gate
+# (json_output off, metrics_jsonl unset) reports enabled=false and passes.
+# --------------------------------------------------------------------------
+section "self-test metrics-write (Round 2/3 — metrics JSONL sink)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test metrics-write is a Rust subcommand — not exposed by the Python fallback"
+else
+    mw_out="$(whisper-dictate self-test metrics-write --text "wayland smoke" --json 2>&1)"
+    mw_rc=$?
+    if [ "$mw_rc" -eq 0 ] && printf '%s' "$mw_out" | grep -q '"ok":true'; then
+        mw_enabled="$(printf '%s' "$mw_out" | grep -oE '"enabled":(true|false)' | head -1 | cut -d: -f2)"
+        ok "metrics-write: enabled=$mw_enabled (gate honoured)"
+    else
+        bad "self-test metrics-write FAILED: $(printf '%s\n' "$mw_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# SECTION: self-test preview (Round 2/3 backend — live partial transcribe)
+#
+# Boots a real PreviewEngine with a canned mock backend, pushes 5 fake
+# frames, and asserts at least one emission lands on the sink. Fails on
+# an empty emission list (worker thread / channel wiring broken).
+# --------------------------------------------------------------------------
+section "self-test preview (Round 2/3 — live partial transcribe)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test preview is a Rust subcommand — not exposed by the Python fallback"
+else
+    pv_out="$(whisper-dictate self-test preview --json 2>&1)"
+    pv_rc=$?
+    if [ "$pv_rc" -eq 0 ] && printf '%s' "$pv_out" | grep -q '"ok":true'; then
+        pv_count="$(printf '%s' "$pv_out" | grep -oE '"emissions":\[[^]]*\]' | grep -oE '"text"' | wc -l)"
+        ok "preview: $pv_count emissions collected"
+    else
+        bad "self-test preview FAILED — engine did not emit: $(printf '%s\n' "$pv_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: dictate-run CLI (Rust dictation runtime — Phase A step 1)
 #
 # Audit item 5 Phase A step 1: adds the `whisper-dictate dictate-run` verb

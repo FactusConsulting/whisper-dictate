@@ -102,6 +102,13 @@ pub mod simulate;
 // `main.rs`.
 #[cfg(feature = "audio-capture")]
 pub mod mic;
+// Round 2/3 backend self-tests: one CLI verb per Round 2/3 backend
+// (feedback cues, WASAPI audio ducking, profile matching, history +
+// metrics JSONL sinks, live preview). Each verb is a pure, headless
+// exercise of the backend so it can be run on any dev box without
+// cloud STT keys, audio hardware, or a display. See
+// `src/rust/dictate/self_test/mod.rs` for the module map.
+pub mod self_test;
 pub mod skip;
 
 pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelError};
