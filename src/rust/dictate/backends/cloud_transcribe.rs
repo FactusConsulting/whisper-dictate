@@ -204,6 +204,12 @@ fn map_cloud_result(
         duration_s,
         is_hallucination: hallucinated,
         gate: None,
+        // Cloud STT does not surface a distinct raw_text or a
+        // language probability -- both fields fall through to the
+        // session's own fallback (raw_text <- source_text at event
+        // build time; language_probability omitted from the payload
+        // when 0.0). Codex P1 #606 metrics-schema follow-up.
+        ..Default::default()
     }
 }
 

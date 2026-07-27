@@ -40,11 +40,99 @@
 //!   dictation.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde_json::Value;
 
 use crate::config;
 use crate::telemetry;
+
+/// Config-key + env-var pair for the "history enabled" gate. Kept as
+/// named constants because the same string pair is consulted from both
+/// [`effective_history_settings`] and the tests, and the Python worker's
+/// `vp_history.history_enabled` reads the same names via `get_value`.
+const HISTORY_ENABLED_KEY: &str = "history_enabled";
+const HISTORY_ENABLED_ENV: &str = "VOICEPI_HISTORY_ENABLED";
+/// Config-key + env-var pair for the "history JSONL path" override.
+const HISTORY_JSONL_KEY: &str = "history_jsonl";
+const HISTORY_JSONL_ENV: &str = "VOICEPI_HISTORY_JSONL";
+
+/// Resolved history settings AFTER config→env→default overlay. Returned
+/// by [`effective_history_settings`] and consumed by both
+/// [`history_sink_from_settings`] and [`ReloadingHistorySink::append`]
+/// so the two seams cannot drift on the precedence rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveHistorySettings {
+    /// Whether the history file should be written. Mirrors Python's
+    /// `vp_history.history_enabled()` result.
+    pub enabled: bool,
+    /// Absolute path the history JSONL is written to. Always populated
+    /// (`config::default_history_path` on the "unset" branch) so the
+    /// caller does not have to re-derive the default.
+    pub path: PathBuf,
+}
+
+/// Resolve the effective history settings the way Python's
+/// `vp_history` does: **config-file value wins first, then env var,
+/// then schema default**. Mirrors `vp_config.get_value` (which is what
+/// `vp_history.history_enabled()` / `history_path()` both call). The
+/// Rust [`config::AppSettings`] path only reads config.json, so left
+/// alone it silently ignores `VOICEPI_HISTORY_ENABLED=0` /
+/// `VOICEPI_HISTORY_JSONL=...` set in the environment -- this helper is
+/// the sinks' single overlay point. Codex P1 #605 finding 1.
+pub fn effective_history_settings() -> EffectiveHistorySettings {
+    // Config file first (the "user saved a value in the UI" path).
+    let raw_config = config::load_raw_config().unwrap_or_else(|_| serde_json::Value::Null);
+    let object = raw_config.as_object();
+
+    let enabled_from_config = object
+        .and_then(|obj| obj.get(HISTORY_ENABLED_KEY))
+        .and_then(value_as_env_string);
+    let path_from_config = object
+        .and_then(|obj| obj.get(HISTORY_JSONL_KEY))
+        .and_then(value_as_env_string);
+
+    // Config → env → schema default (`"1"` for enabled).
+    let enabled_raw = enabled_from_config
+        .or_else(|| std::env::var(HISTORY_ENABLED_ENV).ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "1".to_owned());
+    let enabled = is_truthy(&enabled_raw);
+
+    let path_raw = path_from_config
+        .or_else(|| std::env::var(HISTORY_JSONL_ENV).ok())
+        .filter(|v| !v.trim().is_empty());
+    let path = match path_raw {
+        Some(raw) => PathBuf::from(raw),
+        None => config::default_history_path(),
+    };
+
+    EffectiveHistorySettings { enabled, path }
+}
+
+/// Mirror of Python's `_truthy` in `vp_history.py`: everything except
+/// the falsy tokens is truthy, including the empty default `"1"`.
+fn is_truthy(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "0" | "false" | "no" | "off"
+    )
+}
+
+/// Normalise a JSON value the same way `config::schema::value_to_env_string`
+/// does, so a `bool` (`true`/`false` from config.json) or a string are
+/// both accepted as a truthy/falsy history-enabled value. `null` /
+/// empty-string are treated as "unset" (fall through to the env layer).
+fn value_as_env_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(v) if v.is_empty() => None,
+        serde_json::Value::String(v) => Some(v.clone()),
+        serde_json::Value::Bool(true) => Some("1".to_owned()),
+        serde_json::Value::Bool(false) => Some("0".to_owned()),
+        other => Some(other.to_string()),
+    }
+}
 
 /// The seam the session calls on every successful utterance. The
 /// production impl [`JsonlHistorySink`] writes to the local JSONL file;
@@ -112,37 +200,89 @@ impl HistorySink for NoopHistorySink {
     fn append(&self, _event: &Value) {}
 }
 
-/// Resolve the production history sink from `AppSettings`, matching
-/// Python's `vp_history.history_enabled` / `vp_history.history_path`
-/// pair:
+/// Live-reloading history sink: re-reads config + env on EVERY
+/// [`Self::append`], so a Settings save between utterances (via the
+/// UI's `save_settings`) takes effect on the next utterance without an
+/// app restart. Mirrors Python's `vp_history._append_history` /
+/// `history_enabled()` pair, both of which read the config+env on every
+/// call. Codex P1 #605 finding 2.
 ///
-/// * `history_enabled=false` -> `None` (session pays zero cost).
-/// * `history_enabled=true` + `history_jsonl` set in config -> sink
-///   writing to that path.
-/// * `history_enabled=true` + `history_jsonl` unset -> sink writing to
-///   [`config::default_history_path`] (the platform default).
-///
-/// A settings-load failure is treated as "history off" with a warning to
-/// stderr, so a corrupt config never blocks the whole session from
-/// running (parity with Python, whose config load surfaces to the UI but
-/// does not tear the worker down).
-pub fn history_sink_from_settings() -> Option<Box<dyn HistorySink + Send>> {
-    let settings = match config::load_settings() {
-        Ok(s) => s,
-        Err(err) => {
-            eprintln!("[history] could not load settings; disabling history: {err}");
-            return None;
+/// The wrapper is cheap: reading `config.json` on each utterance is a
+/// small JSON parse, and the sink can decide to skip entirely when the
+/// gate has been flipped to disabled. When the path changes between
+/// utterances the sink opens the new file on the next `append` (the
+/// underlying `telemetry::append_jsonl` reopens per call already).
+pub struct ReloadingHistorySink {
+    /// Cache of the last-resolved settings so a test can inspect what
+    /// the sink saw on its most recent call. Also lets us short-circuit
+    /// the "gate flipped off between utterances" path without keeping a
+    /// second copy of the [`EffectiveHistorySettings`] around.
+    last: Mutex<Option<EffectiveHistorySettings>>,
+}
+
+impl ReloadingHistorySink {
+    /// Build a reloading sink. No settings are read until the first
+    /// [`Self::append`] call, so a session that never fires an
+    /// utterance pays no per-construct disk cost either.
+    pub fn new() -> Self {
+        Self {
+            last: Mutex::new(None),
         }
-    };
-    if !settings.history_enabled {
-        return None;
     }
-    let path = if settings.history_jsonl.trim().is_empty() {
-        config::default_history_path()
-    } else {
-        PathBuf::from(settings.history_jsonl)
-    };
-    Some(Box::new(JsonlHistorySink::new(path)))
+
+    /// Last-resolved settings (test hook). `None` before the first
+    /// `append` fires.
+    #[cfg(test)]
+    pub fn last_resolved(&self) -> Option<EffectiveHistorySettings> {
+        self.last.lock().ok().and_then(|guard| guard.clone())
+    }
+}
+
+impl Default for ReloadingHistorySink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HistorySink for ReloadingHistorySink {
+    fn append(&self, event: &Value) {
+        let settings = effective_history_settings();
+        if let Ok(mut guard) = self.last.lock() {
+            *guard = Some(settings.clone());
+        }
+        if !settings.enabled {
+            // The gate flipped to disabled between utterances (or was
+            // never on). Silently drop -- matches Python, whose
+            // `_append_history` also short-circuits when
+            // `history_enabled()` is false.
+            return;
+        }
+        let filtered = telemetry::history_event(event);
+        if let Err(err) = telemetry::append_jsonl(&settings.path, &filtered) {
+            eprintln!(
+                "[history] could not append to {}: {err}",
+                settings.path.display()
+            );
+        }
+    }
+}
+
+/// Resolve the production history sink for the session. Always returns
+/// a [`ReloadingHistorySink`] -- the sink itself re-reads config + env
+/// on every [`ReloadingHistorySink::append`] so a Settings save between
+/// utterances takes effect on the next one (Python parity:
+/// `_append_history` re-reads `history_enabled()` / `history_path()`
+/// per call). Codex P1 #605 findings 1 + 2.
+///
+/// Callers do not need to pre-check the enabled gate here anymore --
+/// the reloading sink short-circuits internally when the gate is off,
+/// so a session that always attaches this sink still pays zero write
+/// cost when the user has disabled history. Returned as `Option` for
+/// API compatibility with the previous "off => None" behaviour; the
+/// only caller today (`rust_session_real_backends`) always unwraps to
+/// `with_optional_history_sink`.
+pub fn history_sink_from_settings() -> Option<Box<dyn HistorySink + Send>> {
+    Some(Box::new(ReloadingHistorySink::new()))
 }
 
 // ---------------------------------------------------------------------------
@@ -333,5 +473,189 @@ mod tests {
         // accidentally turn Noop into a fallback that touches disk.
         let sink = NoopHistorySink;
         sink.append(&json!({"text": "ignored"}));
+    }
+
+    // ── env overlay + live reload (Codex P1 #605) ──────────────────
+
+    /// RAII snapshot for a set of process-env keys; restores each on
+    /// drop. Bundled here to keep the reload tests small.
+    struct EnvSnapshot {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+    impl EnvSnapshot {
+        fn new(keys: &[&'static str]) -> Self {
+            let saved = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+            Self { saved }
+        }
+    }
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    /// Config file wins over env var. Mirrors Python's
+    /// `vp_config.get_value`: the config-file value is the highest-priority
+    /// source, then env, then default. Fixture:
+    ///   config -> history_jsonl="config/history.jsonl"
+    ///   env    -> VOICEPI_HISTORY_JSONL="env/history.jsonl"
+    ///   want   -> config path (config wins)
+    #[test]
+    fn effective_history_settings_config_wins_over_env() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "history_enabled": "0",
+                "history_jsonl": dir.path().join("config-history.jsonl").to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(HISTORY_ENABLED_ENV, "1");
+        std::env::set_var(HISTORY_JSONL_ENV, dir.path().join("env-history.jsonl"));
+
+        let resolved = effective_history_settings();
+        assert!(
+            !resolved.enabled,
+            "config-file `history_enabled=0` must override env-var `=1`"
+        );
+        assert_eq!(
+            resolved.path,
+            dir.path().join("config-history.jsonl"),
+            "config-file path must override env path"
+        );
+    }
+
+    /// Env var wins over the schema default. Fixture:
+    ///   config -> (no history keys)
+    ///   env    -> VOICEPI_HISTORY_ENABLED=0, VOICEPI_HISTORY_JSONL=/env/path
+    ///   want   -> disabled + env path (env wins over default)
+    #[test]
+    fn effective_history_settings_env_wins_over_default() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(HISTORY_ENABLED_ENV, "0");
+        let env_path = dir.path().join("env-only.jsonl");
+        std::env::set_var(HISTORY_JSONL_ENV, &env_path);
+
+        let resolved = effective_history_settings();
+        assert!(
+            !resolved.enabled,
+            "env-var `VOICEPI_HISTORY_ENABLED=0` must beat the schema default (`1`)"
+        );
+        assert_eq!(
+            resolved.path, env_path,
+            "env-var `VOICEPI_HISTORY_JSONL` must beat the platform default"
+        );
+    }
+
+    /// Default (nothing set anywhere): enabled=true, path=platform default.
+    #[test]
+    fn effective_history_settings_all_unset_yields_defaults() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::remove_var(HISTORY_ENABLED_ENV);
+        std::env::remove_var(HISTORY_JSONL_ENV);
+
+        let resolved = effective_history_settings();
+        assert!(resolved.enabled, "schema default is enabled=true");
+        assert_eq!(resolved.path, config::default_history_path());
+    }
+
+    /// Reloading sink: a Settings save between utterances (config file
+    /// rewritten to disable history) MUST take effect on the very next
+    /// `append` -- without rebuilding the session. Codex P1 #605 finding 2.
+    #[test]
+    fn reloading_sink_picks_up_config_change_between_appends() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", HISTORY_ENABLED_ENV, HISTORY_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let hist = dir.path().join("history.jsonl");
+
+        // Round 1: enabled + explicit path. Env unset so config wins.
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "history_enabled": "1",
+                "history_jsonl": hist.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::remove_var(HISTORY_ENABLED_ENV);
+        std::env::remove_var(HISTORY_JSONL_ENV);
+
+        let sink = ReloadingHistorySink::new();
+        sink.append(&json!({"text": "one", "event": "utterance"}));
+        let raw1 = std::fs::read_to_string(&hist).unwrap();
+        assert_eq!(raw1.lines().count(), 1, "first append must land on disk");
+
+        // Round 2: rewrite config to disable history. Next append is a no-op.
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "history_enabled": "0",
+                "history_jsonl": hist.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        sink.append(&json!({"text": "two", "event": "utterance"}));
+        let raw2 = std::fs::read_to_string(&hist).unwrap();
+        assert_eq!(
+            raw2.lines().count(),
+            1,
+            "second append must skip -- config flipped to disabled between utterances"
+        );
+
+        // Round 3: rewrite config back to enabled + a NEW path. Next
+        // append lands in the new file (path live-reloaded too).
+        let hist2 = dir.path().join("history-v2.jsonl");
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "history_enabled": "1",
+                "history_jsonl": hist2.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        sink.append(&json!({"text": "three", "event": "utterance"}));
+        assert!(hist2.exists(), "new path must be picked up on next append");
+        let raw3 = std::fs::read_to_string(&hist2).unwrap();
+        assert_eq!(raw3.lines().count(), 1);
     }
 }

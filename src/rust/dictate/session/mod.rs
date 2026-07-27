@@ -74,10 +74,12 @@ mod tests_support;
 mod tests_transitions;
 
 pub use history_sink::{
-    history_sink_from_settings, HistorySink, JsonlHistorySink, NoopHistorySink,
+    effective_history_settings, history_sink_from_settings, EffectiveHistorySettings, HistorySink,
+    JsonlHistorySink, NoopHistorySink, ReloadingHistorySink,
 };
 pub use metrics_sink::{
-    metrics_sink_from_settings, JsonlMetricsSink, MetricsSink, NoopMetricsSink,
+    effective_metrics_settings, metrics_sink_from_settings, EffectiveMetricsSettings,
+    JsonlMetricsSink, MetricsSink, NoopMetricsSink, ReloadingMetricsSink,
 };
 pub use preview::{
     build_preview_status, stderr_preview_sink, PreviewBackend, PreviewEmission, PreviewEngine,
@@ -225,6 +227,15 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     base_config: SessionConfig,
     /// The profile the matcher resolved for the current / most-recent utterance.
     active_profile: Option<AppliedProfile>,
+    /// Foreground-window snapshot captured at [`Self::start`] alongside
+    /// [`Self::active_profile`]. Held so the completed utterance's
+    /// `target_title` / `target_process` fields (Python parity:
+    /// `_inject_target_title` / `_inject_target_process`) reflect the
+    /// window the user was focused on when they pressed PTT -- not the
+    /// window they happened to be on when injection ran. `None` when no
+    /// profile matcher is attached (unit tests, `simulate-session`).
+    /// Codex P1 #606 metrics-schema follow-up.
+    active_window: Option<WindowInfo>,
     /// Optional live-preview engine that emits `state="preview"` worker events
     /// during recording (see PR #608 / `preview` module).
     preview: Option<PreviewEngine>,
@@ -258,6 +269,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 crate::platform::foreground_window::FixedForegroundWindow::default(),
             ),
             active_profile: None,
+            active_window: None,
             preview: None,
             metrics_sink: None,
             audio_ducker: Box::new(crate::dictate::audio_ducking::NoOpAudioDucker),
@@ -642,6 +654,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // matcher is a zero-cost no-op (see `resolve_profile`).
         let (window, applied) = self.resolve_profile();
         self.active_profile = applied;
+        // Stash the window snapshot so the utterance event carries the
+        // target the user was focused on at PTT-press (not at
+        // inject-time). Codex P1 #606 metrics-schema follow-up.
+        self.active_window = if window.is_empty() {
+            None
+        } else {
+            Some(window.clone())
+        };
         self.apply_active_profile();
         emit_profile_status(writer, &window, self.active_profile.as_ref())?;
         self.state = SessionState::Opening { id };
@@ -848,6 +868,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             Ok(result) => result,
         };
 
+        // `raw_text` -- the pre-dictionary backend text. Held on the
+        // stack so the utterance-event `raw_text` field mirrors Python's
+        // `result.raw_text or source_text` semantics when the backend
+        // itself did not surface a distinct raw copy on the
+        // `TranscribeResult`. Codex P1 #606.
+        let pre_dictionary_text = result.text.clone();
         let (dictated, replacements) = self.apply_dictionary(&result.text);
         if dictated != result.text {
             // The dictionary rewrote the text; re-classify the corrected text
@@ -857,6 +883,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             result.is_hallucination = crate::dictate::backends::is_hallucination(dictated.trim());
         }
         result.text = dictated;
+        // Populate the raw_text field on the result so the wire emitter
+        // has one place to read from. When the backend already surfaced
+        // a raw copy (production Whisper), leave that untouched.
+        if result.raw_text.is_empty() {
+            result.raw_text = pre_dictionary_text;
+        }
 
         if result.text.is_empty() {
             // Python distinguishes `too_quiet`, `no_speech`, `empty` from
@@ -926,7 +958,22 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             self.config.format_command_set.as_deref(),
         )
         .text;
-        if let Err(err) = self.inject.inject(&text) {
+        // Snapshot the metadata the wire emitter needs (owned copies so
+        // the borrow checker does not fight the mutable state machine
+        // when `inject.inject` runs in the middle of assembling the
+        // event). Python parity: `_utterance_event` reads exactly the
+        // same fields from `self` at event-build time.
+        let dictionary_text = result.text.clone();
+        let profile_name = self.active_profile.as_ref().and_then(|p| p.name.clone());
+        let window = self.active_window.clone();
+        let inject_result = self.inject.inject(&text);
+        let extras = wire::UtteranceExtras {
+            dictionary_text: dictionary_text.as_str(),
+            window: window.as_ref(),
+            profile: profile_name.as_deref(),
+            config: &self.config,
+        };
+        if let Err(err) = inject_result {
             // Python logs and continues — the utterance event still fires with
             // the text we attempted to inject. Surface the failure on the
             // utterance event so the supervisor can decide whether to retry.
@@ -938,6 +985,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 Some(err.to_string()),
                 post.as_ref(),
                 &replacements,
+                extras,
             )?;
             self.record_sinks(&payload);
             return Ok(UtteranceOutcome::Injected { text, result });
@@ -950,6 +998,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             None,
             post.as_ref(),
             &replacements,
+            extras,
         )?;
         self.record_sinks(&payload);
         Ok(UtteranceOutcome::Injected { text, result })

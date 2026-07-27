@@ -38,6 +38,25 @@ pub struct TranscribeResult {
     /// Detected language code (Python's `result.language`); empty for
     /// auto-detect.
     pub language: String,
+    /// Detected-language probability from the backend (Python's
+    /// `result.language_probability` -- faster-whisper surfaces this on
+    /// every pass). `0.0` when the backend does not surface a score
+    /// (e.g. cloud STT, canned test fixtures). Emitted verbatim on the
+    /// metrics utterance event so external tooling sees the same
+    /// signal the Python engine writes today. Codex P1 #606 metrics-schema
+    /// follow-up.
+    pub language_probability: f64,
+    /// Untouched decoded text as the backend produced it, BEFORE the
+    /// per-utterance dictionary replacement pass rewrites `text`.
+    /// Mirrors Python's `result.raw_text` in `vp_transcribe.TranscribeResult`
+    /// (populated by `_transcribe_detail` before `_dictionary_runtime`).
+    /// Emitted verbatim on the utterance event so metrics / history
+    /// carry the pre-dictionary form for auditing. Empty when the
+    /// backend does not surface a distinct raw copy; the session then
+    /// falls back to the dictionary-rewritten text at event build time
+    /// (mirrors Python's `result.raw_text or source_text`). Codex P1
+    /// #606 metrics-schema follow-up.
+    pub raw_text: String,
     /// Python's `result.gate` -- the speech-gate verdict the backend
     /// returned, in whatever shape the gate produced (production
     /// gates return messages like `"input too quiet: -42 dBFS"` /
@@ -208,6 +227,35 @@ pub struct SessionConfig {
     /// live re-read is deferred to the same future PR that wires the
     /// audio route's per-`start_recording` env refresh.
     pub format_command_set: Option<String>,
+    /// STT engine label surfaced on every utterance metrics/history row
+    /// (Python's `stt_backend`: `"whisper"` for local, `"openai"` for
+    /// cloud). Empty when the session is built from a bare
+    /// [`Self::default`] (e.g. unit-test transcribe backends); production
+    /// wiring stamps this from `VOICEPI_STT_BACKEND` at construction.
+    /// Codex P1 #606 metrics-schema follow-up.
+    pub stt_backend: String,
+    /// Whisper model tag surfaced on every utterance row (Python's
+    /// `model`: e.g. `"large-v3-turbo"`). Empty on the cloud path (the
+    /// cloud request carries the caller-supplied `stt_model`) and on
+    /// default-constructed test sessions. Codex P1 #606.
+    pub model: String,
+    /// Compute device surfaced on every utterance row (Python's
+    /// `device`: `"cuda"` / `"cpu"` / `"auto"`). Empty on the cloud path
+    /// and on default-constructed test sessions. Codex P1 #606.
+    pub device: String,
+    /// Compute precision surfaced on every utterance row (Python's
+    /// `compute_type`: `"int8_float16"` / `"int8"` / `"float16"` /
+    /// `"bfloat16"` / `"float32"`). Empty when the backend picks a
+    /// default silently and on default-constructed test sessions.
+    /// Codex P1 #606.
+    pub compute_type: String,
+    /// Injection strategy label surfaced on every utterance row (Python's
+    /// `inject_mode`: `"auto"` / `"type"` / `"paste"` / `"print"`).
+    /// The raw configured mode -- distinct from what the injector
+    /// actually did (Python's `_last_inject_strategy`, which is out of
+    /// scope for this pass; see the PR body). Empty on
+    /// default-constructed test sessions. Codex P1 #606.
+    pub inject_mode: String,
 }
 
 impl Default for SessionConfig {
@@ -218,6 +266,11 @@ impl Default for SessionConfig {
             audio_device: String::new(),
             capture_channels: 1,
             format_command_set: None,
+            stt_backend: String::new(),
+            model: String::new(),
+            device: String::new(),
+            compute_type: String::new(),
+            inject_mode: String::new(),
         }
     }
 }

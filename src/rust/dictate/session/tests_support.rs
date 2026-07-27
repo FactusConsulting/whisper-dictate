@@ -42,6 +42,7 @@ impl TestTranscribe {
                 duration_s: 1.23,
                 language: "en".into(),
                 gate: None,
+                ..Default::default()
             })),
             seen_pcm_len: RefCell::new(Vec::new()),
             seen_sample_rate: RefCell::new(Vec::new()),
@@ -57,6 +58,7 @@ impl TestTranscribe {
             duration_s: 0.4,
             language: "en".into(),
             gate: None,
+            ..Default::default()
         });
         t
     }

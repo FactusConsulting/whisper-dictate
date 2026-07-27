@@ -243,12 +243,25 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         let (text, is_hallucination) =
             finalize_transcript(&raw_text, duration_s, max_chars_per_second_from_env());
         Ok(TranscribeResult {
+            // Preserve the untouched decoded text as `raw_text` so the
+            // utterance event carries it verbatim, matching Python's
+            // `TranscribeResult(raw_text=raw_text, text=text, ...)`
+            // shape. The session falls back to `dictionary_text` when
+            // this is empty; leaving it set here means the local
+            // backend's row shape matches Python 1:1. Codex P1 #606.
+            raw_text: raw_text.clone(),
             text,
             is_hallucination,
             latency_ms,
             duration_s,
             language: self.config.language.clone().unwrap_or_default(),
             gate: None,
+            // Local Whisper does not currently expose a language
+            // probability (the whisper.cpp binding used here surfaces
+            // detected-language token IDs only); the payload's
+            // `language_probability` field is dropped when 0.0 so
+            // downstream tooling sees no field rather than a false 0.
+            ..Default::default()
         })
     }
 }

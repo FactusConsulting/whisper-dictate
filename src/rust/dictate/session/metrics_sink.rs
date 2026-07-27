@@ -44,10 +44,87 @@
 //!   dictation.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::config;
+/// Config-key + env-var pair for the "JSON output" gate. Kept as named
+/// constants because Python's `vp_history.append_record_sinks` also
+/// combines the two via `vp_config.get_value("VOICEPI_JSON")`.
+const JSON_OUTPUT_KEY: &str = "json_output";
+const JSON_OUTPUT_ENV: &str = "VOICEPI_JSON";
+/// Config-key + env-var pair for the "metrics JSONL path" override.
+const METRICS_JSONL_KEY: &str = "metrics_jsonl";
+const METRICS_JSONL_ENV: &str = "VOICEPI_METRICS_JSONL";
+
+/// Resolved metrics settings AFTER config→env→default overlay. `None`
+/// on either the "json_output off" or the "path empty" branch, since
+/// both gate the sink identically -- matching Python's
+/// `metrics_path = os.path.expanduser(raw) if json_output and raw else ""`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveMetricsSettings {
+    /// Absolute (tilde-expanded) path the metrics JSONL is written to.
+    pub path: PathBuf,
+}
+
+/// Resolve the effective metrics settings the way Python does:
+/// **config-file value wins first, then env var, then schema default**.
+/// Mirrors `vp_config.get_value` (which is what `vp_dictate` consults
+/// for the equivalent `json_output` / `metrics_jsonl` pair). The Rust
+/// [`crate::config::AppSettings`] path only reads config.json, so left
+/// alone it silently ignores `VOICEPI_JSON=1` /
+/// `VOICEPI_METRICS_JSONL=...` set in the environment -- this helper is
+/// the sinks' single overlay point. Codex P1 #606 finding 3 + 5.
+///
+/// Returns `None` when the metrics file must NOT be written (either
+/// `json_output` is off OR `metrics_jsonl` is empty/whitespace) --
+/// matching Python's gate.
+pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
+    let raw_config = crate::config::load_raw_config().unwrap_or(serde_json::Value::Null);
+    let object = raw_config.as_object();
+
+    // json_output: config → env → default (unset).
+    let json_output_raw = object
+        .and_then(|obj| obj.get(JSON_OUTPUT_KEY))
+        .and_then(value_as_env_string)
+        .or_else(|| std::env::var(JSON_OUTPUT_ENV).ok())
+        .filter(|v| !v.trim().is_empty());
+    let json_output = json_output_raw.as_deref().map(is_truthy).unwrap_or(false);
+    if !json_output {
+        return None;
+    }
+
+    let path_raw = object
+        .and_then(|obj| obj.get(METRICS_JSONL_KEY))
+        .and_then(value_as_env_string)
+        .or_else(|| std::env::var(METRICS_JSONL_ENV).ok())
+        .filter(|v| !v.trim().is_empty())?;
+    Some(EffectiveMetricsSettings {
+        path: expand_user(path_raw.trim()),
+    })
+}
+
+/// Mirror of Python's `_truthy` in `vp_events.py` / `vp_history.py`:
+/// everything except the falsy tokens is truthy.
+fn is_truthy(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "0" | "false" | "no" | "off"
+    )
+}
+
+/// Normalise a JSON value the same way `config::schema::value_to_env_string`
+/// does. `null` / empty-string are treated as "unset" (fall through).
+fn value_as_env_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(v) if v.is_empty() => None,
+        serde_json::Value::String(v) => Some(v.clone()),
+        serde_json::Value::Bool(true) => Some("1".to_owned()),
+        serde_json::Value::Bool(false) => Some("0".to_owned()),
+        other => Some(other.to_string()),
+    }
+}
 
 /// The seam the session calls on every utterance the wire layer emitted a
 /// payload for. The production impl [`JsonlMetricsSink`] writes to the
@@ -113,35 +190,79 @@ impl MetricsSink for NoopMetricsSink {
     fn append(&self, _event: &Value) {}
 }
 
-/// Resolve the production metrics sink from `AppSettings`, matching
-/// Python's `append_record_sinks(metrics_jsonl=..., json_output=...)`
-/// gate:
-///
-/// * `inject_json=false` -> `None` (the metrics file is off; a
-///   prefilled `metrics_jsonl` stays inert).
-/// * `metrics_jsonl` empty / whitespace -> `None` (no path, no sink).
-/// * both set -> sink writing to the tilde-expanded `metrics_jsonl` path.
-///
-/// A settings-load failure is treated as "metrics off" with a warning to
-/// stderr, so a corrupt config never blocks the whole session from
-/// running (parity with Python, whose config load surfaces to the UI but
-/// does not tear the worker down).
-pub fn metrics_sink_from_settings() -> Option<Box<dyn MetricsSink + Send>> {
-    let settings = match config::load_settings() {
-        Ok(s) => s,
-        Err(err) => {
-            eprintln!("[metrics] could not load settings; disabling metrics: {err}");
-            return None;
+/// Live-reloading metrics sink: re-reads config + env on EVERY
+/// [`Self::append`], so a Settings save between utterances flips the
+/// gate or picks up a new `metrics_jsonl` path on the next utterance
+/// without an app restart. Mirrors Python's `vp_history.append_record_sinks`,
+/// which resolves the path + gate per call. Codex P1 #606 finding 3.
+pub struct ReloadingMetricsSink {
+    /// Cache of the last-resolved settings so a test can inspect what
+    /// the sink saw on its most recent call. `None` when the gate was
+    /// off (Python's "no path" branch) at last resolution.
+    last: Mutex<Option<Option<EffectiveMetricsSettings>>>,
+}
+
+impl ReloadingMetricsSink {
+    /// Build a reloading sink. No settings are read until the first
+    /// [`Self::append`] call.
+    pub fn new() -> Self {
+        Self {
+            last: Mutex::new(None),
         }
-    };
-    if !settings.inject_json {
-        return None;
     }
-    let raw = settings.metrics_jsonl.trim();
-    if raw.is_empty() {
-        return None;
+
+    /// Last-resolved settings (test hook). Outer `None` before the
+    /// first `append`; inner `None` when the gate was off.
+    #[cfg(test)]
+    pub fn last_resolved(&self) -> Option<Option<EffectiveMetricsSettings>> {
+        self.last.lock().ok().and_then(|guard| guard.clone())
     }
-    Some(Box::new(JsonlMetricsSink::new(expand_user(raw))))
+}
+
+impl Default for ReloadingMetricsSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetricsSink for ReloadingMetricsSink {
+    fn append(&self, event: &Value) {
+        let settings = effective_metrics_settings();
+        if let Ok(mut guard) = self.last.lock() {
+            *guard = Some(settings.clone());
+        }
+        let Some(settings) = settings else {
+            // Gate off, or path unset -- silently drop, matching
+            // Python's `if not metrics_path and not history_out: return`
+            // short-circuit on the metrics branch.
+            return;
+        };
+        if let Err(err) = crate::telemetry::append_jsonl(&settings.path, event) {
+            eprintln!(
+                "[metrics] could not append to {}: {err}",
+                settings.path.display()
+            );
+        }
+    }
+}
+
+/// Resolve the production metrics sink for the session. Always returns
+/// a [`ReloadingMetricsSink`] -- the sink itself re-reads config + env
+/// on every [`ReloadingMetricsSink::append`] so a Settings save between
+/// utterances toggles the sink on/off or repoints it to a fresh path
+/// without an app restart (Python parity:
+/// `vp_history.append_record_sinks` reads its knobs per call). Codex P1
+/// #606 findings 3 + 5.
+///
+/// Callers no longer pre-check the gate here -- the reloading sink
+/// short-circuits internally when the gate is off, so a session that
+/// always attaches this sink still pays zero write cost when the user
+/// has disabled JSON output. Returned as `Option` for API compatibility
+/// with the previous "off => None" behaviour; the sole caller today
+/// (`rust_session_real_backends`) always feeds it to
+/// `with_optional_metrics_sink`.
+pub fn metrics_sink_from_settings() -> Option<Box<dyn MetricsSink + Send>> {
+    Some(Box::new(ReloadingMetricsSink::new()))
 }
 
 /// Expand a leading `~` to the user's home directory, matching Python's
@@ -347,5 +468,179 @@ mod tests {
             Some(v) => std::env::set_var("USERPROFILE", v),
             None => std::env::remove_var("USERPROFILE"),
         }
+    }
+
+    // ── env overlay + live reload (Codex P1 #606) ──────────────────
+
+    struct EnvSnapshot {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+    impl EnvSnapshot {
+        fn new(keys: &[&'static str]) -> Self {
+            let saved = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+            Self { saved }
+        }
+    }
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    /// Config file wins over env var (Python parity: `vp_config.get_value`).
+    /// Fixture:
+    ///   config -> json_output=1, metrics_jsonl="/config/metrics.jsonl"
+    ///   env    -> VOICEPI_JSON=0, VOICEPI_METRICS_JSONL="/env/metrics.jsonl"
+    ///   want   -> Some(config path) because config's json_output=1 wins,
+    ///             and config's path wins over env path.
+    #[test]
+    fn effective_metrics_settings_config_wins_over_env() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let cfg_path = dir.path().join("config-metrics.jsonl");
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "json_output": "1",
+                "metrics_jsonl": cfg_path.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(JSON_OUTPUT_ENV, "0");
+        std::env::set_var(METRICS_JSONL_ENV, dir.path().join("env-metrics.jsonl"));
+
+        let resolved = effective_metrics_settings()
+            .expect("config json_output=1 must beat env=0; sink must be enabled");
+        assert_eq!(
+            resolved.path, cfg_path,
+            "config-file path must override env path"
+        );
+    }
+
+    /// Env var wins over the schema default (Python parity). Fixture:
+    ///   config -> {} (no keys)
+    ///   env    -> VOICEPI_JSON=1, VOICEPI_METRICS_JSONL=/env/path
+    ///   want   -> Some(env path) because env beats the "unset" default
+    #[test]
+    fn effective_metrics_settings_env_wins_over_default() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(JSON_OUTPUT_ENV, "1");
+        let env_path = dir.path().join("env-only.jsonl");
+        std::env::set_var(METRICS_JSONL_ENV, &env_path);
+
+        let resolved = effective_metrics_settings()
+            .expect("env VOICEPI_JSON=1 must beat the unset default (off)");
+        assert_eq!(
+            resolved.path, env_path,
+            "env VOICEPI_METRICS_JSONL must beat the unset default"
+        );
+    }
+
+    /// The gate is OFF by default when nothing is configured: schema
+    /// `json_output` default is null (unset), so the metrics file stays
+    /// inert. Codex P1 #606 finding 5 sanity check.
+    #[test]
+    fn effective_metrics_settings_all_unset_yields_none() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::remove_var(JSON_OUTPUT_ENV);
+        std::env::remove_var(METRICS_JSONL_ENV);
+
+        assert!(effective_metrics_settings().is_none());
+    }
+
+    /// Reloading sink: config-flip between utterances flips the sink
+    /// on / off with no session rebuild. Codex P1 #606 finding 3.
+    #[test]
+    fn reloading_metrics_sink_picks_up_config_change_between_appends() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        let metrics = dir.path().join("metrics.jsonl");
+
+        // Round 1: enabled + path set. Env unset so config wins.
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "json_output": "1",
+                "metrics_jsonl": metrics.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::remove_var(JSON_OUTPUT_ENV);
+        std::env::remove_var(METRICS_JSONL_ENV);
+
+        let sink = ReloadingMetricsSink::new();
+        sink.append(&serde_json::json!({"text": "one", "event": "utterance"}));
+        assert_eq!(
+            std::fs::read_to_string(&metrics).unwrap().lines().count(),
+            1,
+            "first append lands"
+        );
+
+        // Round 2: flip json_output off between utterances. Next append is a no-op.
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "json_output": "0",
+                "metrics_jsonl": metrics.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        sink.append(&serde_json::json!({"text": "two", "event": "utterance"}));
+        assert_eq!(
+            std::fs::read_to_string(&metrics).unwrap().lines().count(),
+            1,
+            "second append must skip -- gate flipped off between utterances"
+        );
+
+        // Round 3: enable again with a fresh path -- sink writes there.
+        let metrics2 = dir.path().join("metrics-v2.jsonl");
+        std::fs::write(
+            &cfg,
+            serde_json::json!({
+                "json_output": "1",
+                "metrics_jsonl": metrics2.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        sink.append(&serde_json::json!({"text": "three", "event": "utterance"}));
+        assert!(metrics2.exists(), "new path picked up on next append");
     }
 }
