@@ -149,7 +149,12 @@ pub fn run_boot_test(chord: String, hold_ms: u64) -> BootReport {
 
     let start = Instant::now();
     let cfg = HotkeyConfig {
-        key_names: chord.split('+').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect(),
+        key_names: chord
+            .split('+')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect(),
         mode: crate::hotkey::coordinator::Mode::HoldToTalk,
         // We are NOT running the session sink here — the coordinator
         // exists only to accept the tracker's outputs during the
@@ -358,7 +363,10 @@ mod tests {
             install_error: None,
         };
         let plain = pass.to_plain();
-        assert!(plain.starts_with("[self-test hotkey-boot]"), "grep prefix: {plain}");
+        assert!(
+            plain.starts_with("[self-test hotkey-boot]"),
+            "grep prefix: {plain}"
+        );
         assert!(plain.contains("driver=rdev"));
         assert!(plain.contains("chord=ctrl_l"));
         assert!(plain.ends_with(" -> PASS"), "PASS marker missing: {plain}");
@@ -371,7 +379,10 @@ mod tests {
             install_error: Some("boom".to_owned()),
         };
         let plain = fail.to_plain();
-        assert!(plain.contains("install_error="), "install_error missing: {plain}");
+        assert!(
+            plain.contains("install_error="),
+            "install_error missing: {plain}"
+        );
         assert!(plain.ends_with(" -> FAIL"), "FAIL marker missing: {plain}");
     }
 

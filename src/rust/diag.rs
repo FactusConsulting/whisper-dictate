@@ -87,11 +87,8 @@ pub fn default_gui_diagnostic_path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("USERPROFILE").map(|home| {
-                PathBuf::from(home)
-                    .join("AppData")
-                    .join("Local")
-            })
+            std::env::var_os("USERPROFILE")
+                .map(|home| PathBuf::from(home).join("AppData").join("Local"))
         })?;
     Some(base.join("WhisperDictate").join("gui-diagnostic.log"))
 }
