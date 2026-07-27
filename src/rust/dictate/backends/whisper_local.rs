@@ -20,10 +20,11 @@
 //! cloud backend shares it and it is unit-tested on every build (matching
 //! Python's backend-agnostic gate). This backend calls it after decoding.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use super::hallucination::{finalize_transcript, max_chars_per_second_from_env};
+use crate::dictate::session::preview::{PreviewBackend, PreviewError};
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError, TranscribeResult};
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
@@ -76,7 +77,15 @@ pub struct WhisperBackendConfig {
 ///   The session maps the reason to a `too_quiet`/`no_speech` no-text
 ///   event via `crate::dictate::session::normalize_gate_reason`.
 pub struct WhisperLocalTranscribeBackend {
-    model: IdleUnloadingModel<LocalWhisper>,
+    /// Model instance wrapped in `Arc<>` so a live-preview engine can share
+    /// the same resident model without doubling RAM (see
+    /// [`Self::share_for_preview`] and
+    /// [`crate::dictate::session::preview::PreviewEngine`]). Both the final
+    /// transcribe pass here and the preview thread serialise on the
+    /// wrapper's internal `Mutex<Option<M>>`, matching Python's
+    /// `TRANSCRIBE_LOCK` semantics (a preview never runs while the final
+    /// pass holds the lock and vice versa).
+    model: Arc<IdleUnloadingModel<LocalWhisper>>,
     config: WhisperBackendConfig,
     /// When set, the STT prompt is re-folded from `config.initial_prompt`
     /// (treated as the BASE prompt) + the live dictionary terms on every
@@ -102,9 +111,28 @@ impl WhisperLocalTranscribeBackend {
     /// [`crate::whisper::parse_idle_timeout_from_env`]).
     pub fn new(model: IdleUnloadingModel<LocalWhisper>, config: WhisperBackendConfig) -> Self {
         Self {
-            model,
+            model: Arc::new(model),
             config,
             prompt_reload: None,
+        }
+    }
+
+    /// Return a [`PreviewBackend`] wrapper that shares this backend's
+    /// resident model instance -- so a live-preview worker
+    /// ([`crate::dictate::session::preview::PreviewEngine`]) can run cheap
+    /// mid-utterance transcribes without loading a second copy of the
+    /// GGML weights into RAM. Both this backend's `transcribe` and the
+    /// preview's `transcribe_partial` serialise on the wrapper's internal
+    /// `Mutex<Option<M>>` -- so a preview can never run concurrently with
+    /// the final pass (mirroring Python's `TRANSCRIBE_LOCK`).
+    ///
+    /// The returned wrapper's `Send + Sync` bound is satisfied by
+    /// [`Arc<IdleUnloadingModel<LocalWhisper>>`] (both `Send + Sync`) so
+    /// it can move into the preview worker thread.
+    pub fn share_for_preview(&self) -> WhisperLocalPreviewBackend {
+        WhisperLocalPreviewBackend {
+            model: Arc::clone(&self.model),
+            language: self.config.language.clone().filter(|s| !s.is_empty()),
         }
     }
 
@@ -140,7 +168,15 @@ impl WhisperLocalTranscribeBackend {
     /// the supervisor (UI / telemetry) can observe `is_loaded()` /
     /// `idle_timeout()` without an extra channel.
     pub fn model(&self) -> &IdleUnloadingModel<LocalWhisper> {
-        &self.model
+        self.model.as_ref()
+    }
+
+    /// Expose the shared model handle so a caller (e.g. the runtime factory)
+    /// can wire ancillary consumers (preview, telemetry) that need to share
+    /// the same resident model instance. Prefer [`Self::share_for_preview`]
+    /// when the consumer is the live-preview engine.
+    pub fn shared_model(&self) -> Arc<IdleUnloadingModel<LocalWhisper>> {
+        Arc::clone(&self.model)
     }
 
     /// Configured per-call hints.
@@ -214,6 +250,46 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             language: self.config.language.clone().unwrap_or_default(),
             gate: None,
         })
+    }
+}
+
+/// [`PreviewBackend`] wrapper around a shared
+/// [`Arc<IdleUnloadingModel<LocalWhisper>>`] -- constructed via
+/// [`WhisperLocalTranscribeBackend::share_for_preview`]. Runs the same
+/// pre-transcription speech gate the final pass uses (too-quiet audio ->
+/// empty string, no model load); on a passing buffer it invokes the
+/// shared model and returns the decoded text as-is. Skips the
+/// hallucination filter and dictionary rewrite entirely -- previews are
+/// display-only so the raw model text is what the UI should show growing.
+pub struct WhisperLocalPreviewBackend {
+    model: Arc<IdleUnloadingModel<LocalWhisper>>,
+    /// Language hint, already collapsed from `Some("")` -> `None` so the
+    /// whisper.cpp loader is never handed a literal empty string
+    /// (matches [`WhisperLocalTranscribeBackend::transcribe`]'s guard).
+    language: Option<String>,
+}
+
+impl PreviewBackend for WhisperLocalPreviewBackend {
+    fn transcribe_partial(&self, pcm: &[f32], sample_rate: u32) -> Result<String, PreviewError> {
+        // Pre-transcription speech gate: reject too-quiet / no-contrast
+        // audio BEFORE loading the model. On rejection return "" so the
+        // preview engine skips the emission (matching the empty-text
+        // branch in `run_tick`); no error surfaces because a gated
+        // preview is not a failure.
+        let audio = match crate::audio_dsp::prepare_for_transcription(
+            pcm,
+            sample_rate,
+            &crate::audio_dsp::thresholds_from_env(),
+        ) {
+            crate::audio_dsp::PreparedAudio::Reject { .. } => return Ok(String::new()),
+            crate::audio_dsp::PreparedAudio::Decode { audio, .. } => audio,
+        };
+        // Pass `None` as `initial_prompt` -- the preview is a rolling
+        // window (mostly the recent tail) so dictionary-biased hints are
+        // less useful than for the final pass; keep this fast + simple.
+        self.model
+            .with_model(|m| m.transcribe_samples(&audio, self.language.as_deref(), None))
+            .map_err(|e| PreviewError::Backend(format!("{e:#}")))
     }
 }
 

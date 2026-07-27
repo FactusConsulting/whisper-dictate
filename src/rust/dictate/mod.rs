@@ -105,18 +105,19 @@ pub use backend::{backend_label, validate_backend, BackendKind, BackendLabelErro
 // Cloud STT backend is stock (no cargo-feature gate).
 #[cfg(feature = "rust-injection")]
 pub use backends::EnigoInjectBackend;
-#[cfg(feature = "whisper-rs-local")]
-pub use backends::WhisperLocalTranscribeBackend;
 pub use backends::{CloudTranscribeBackend, CloudTranscribeConfig, ProductionTranscribeBackend};
+#[cfg(feature = "whisper-rs-local")]
+pub use backends::{WhisperLocalPreviewBackend, WhisperLocalTranscribeBackend};
 pub use env_gates::{config_dump_enabled, is_truthy, trace_enabled};
 pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
 pub use restart::{changed_restart_keys, RESTART_REQUIRED_KEYS};
 pub use session::{
-    history_sink_from_settings, DictateSession, HistorySink, InjectBackend, InjectError,
-    JsonlHistorySink, NoopHistorySink, PostProcessBackend, PostProcessOutcome, PostRedaction,
-    SessionConfig, SessionError, SessionState, TranscribeBackend, TranscribeError,
-    TranscribeResult, UtteranceOutcome,
+    build_preview_status, history_sink_from_settings, stderr_preview_sink, DictateSession,
+    HistorySink, InjectBackend, InjectError, JsonlHistorySink, NoopHistorySink, PostProcessBackend,
+    PostProcessOutcome, PostRedaction, PreviewBackend, PreviewEmission, PreviewEngine,
+    PreviewEngineConfig, PreviewError, PreviewSink, SessionConfig, SessionError, SessionState,
+    TranscribeBackend, TranscribeError, TranscribeResult, UtteranceOutcome, SR,
 };
 pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};
 
