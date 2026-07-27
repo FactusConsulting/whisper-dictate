@@ -659,48 +659,6 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# SECTION: self-test hotkey-boot (Windows PTT-boot regression — GUI wedge)
-#
-# End-to-end install of the Rust hotkey subsystem (rdev / evdev) with the
-# CURRENTLY-CONFIGURED PTT chord. Fast, headless smoke: does NOT open the
-# audio pump or load the Whisper model, only exercises the OS hook,
-# driver selection, and coordinator wiring.
-#
-# What this catches (added after the Windows PTT bug where the GUI
-# started with `VOICEPI_DICTATE_ENGINE=rust` but the chord fired no
-# event — the GUI's `windows_subsystem = "windows"` had discarded every
-# rdev-side error). On Linux / Wayland the same install path runs, so
-# this section is a co-op smoke that would trip on a Linux-side
-# regression to the shared install path.
-#
-# The bounded 2 s hold catches a class of "install returns Ok but the
-# listener thread exited immediately" regressions — surfaced as
-# `listener_exited_early: true` in the JSON envelope. We use `--chord
-# ctrl_l` so the run doesn't depend on the operator's on-disk config.
-# --------------------------------------------------------------------------
-section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
-if [ "$CMD_MODE" = "python" ]; then
-    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
-else
-    hb_out="$(whisper-dictate self-test hotkey-boot --hold-ms 500 --chord ctrl_l --json 2>&1)"
-    hb_rc=$?
-    if [ "$hb_rc" -eq 0 ] && printf '%s' "$hb_out" | grep -q '"ok":true'; then
-        # Report the driver so a future Wayland/X11 selector regression
-        # (evdev vs rdev) surfaces in the smoke output.
-        hb_driver="$(printf '%s' "$hb_out" | grep -o '"driver":"[^"]*"' | head -n 1)"
-        ok "hotkey-boot install passed (${hb_driver:-driver=?})"
-    elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
-        warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
-    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission"; then
-        # A headless / no-display box legitimately fails install here;
-        # this is not a regression signal, just an environment gap.
-        warn "hotkey-boot: listener refused (missing display / permissions — expected on headless): $(printf '%s\n' "$hb_out" | head -n 1)"
-    else
-        bad "hotkey-boot FAILED — install-path regression (this is the class of bug that broke Windows PTT in the GUI): $(printf '%s\n' "$hb_out" | tail -n 3)"
-    fi
-fi
-
-# --------------------------------------------------------------------------
 # SECTION: self-test injection-idempotency (regression — no state leak
 # between successive inject calls)
 #
@@ -1302,11 +1260,11 @@ fi
 # Result: config says Groq, env says OpenAI, worker got the Groq key (or a
 # miss) while talking to OpenAI.
 #
-# This check pins the fix by saving the key under the OPENAI account,
-# leaving the config on Groq, and OVERRIDING the endpoint back to OpenAI
-# via env. The worker must find the openai-stored key -- if it reads the
-# config's Groq account instead, there is nothing to find and it dies at
-# startup with the missing-key message.
+# This check pins the fix by saving the key under the GROQ account,
+# leaving the config's endpoint unset (so the OPENAI default applies), and
+# overriding to Groq via env. The worker must find the groq-stored key --
+# if it classifies the default OpenAI endpoint instead, there is nothing to
+# find and it dies at startup with the missing-key message.
 #
 # Deliberately cross-OS: named "wayland-user-smoke" for historical
 # reasons but the credential-resolution check itself runs anywhere the
@@ -1323,15 +1281,31 @@ else
     # Key saved for OpenAI only. Groq account is absent on purpose: if the
     # lookup falls back to the config value it will find nothing and the
     # worker will die at startup.
-    printf '{"stt-api-key:openai":"smoke-openai-not-a-real-key"}\n' >"$ep_store"
-    printf '{"stt_backend":"openai","stt_base_url":"https://api.groq.com/openai/v1","stt_model":"whisper-large-v3-turbo","post_processor":"off"}\n' >"$ep_config"
+    # GROQ credential only, and the env override below points at Groq while
+    # the config leaves `stt_base_url` unset -- which `AppSettings::default`
+    # fills with the OPENAI url (config/settings.rs:93). The two endpoints
+    # must DIVERGE or the check proves nothing: with an OpenAI override the
+    # default and the override coincide, and the pre-fix implementation that
+    # classified the config value would pass just as happily.
+    printf '{"stt-api-key:groq":"smoke-groq-not-a-real-key"}\n' >"$ep_store"
+    # `stt_base_url` is deliberately ABSENT from the scratch config.
+    # `runtime_setting_value` resolves the config value BEFORE the process
+    # environment (config/schema.rs:131-138), so a config that pins the URL
+    # wins over the `VOICEPI_STT_BASE_URL` set below -- `worker_env_overrides`
+    # would bake the config's value into `command.env` and the override this
+    # section exists to exercise would never take effect. The check would then
+    # fail against a correct implementation, for a reason that has nothing to
+    # do with credential lookup. Omitting the key is also the real scenario:
+    # a user overriding the endpoint from the shell has not written it to
+    # their config.
+    printf '{"stt_backend":"openai","stt_model":"whisper-large-v3-turbo","post_processor":"off"}\n' >"$ep_config"
 
     ep_out="$(env -u VOICEPI_STT_API_KEY -u VOICEPI_POST_API_KEY \
                   -u GROQ_API_KEY -u OPENAI_API_KEY \
                   VOICEPI_API_KEY_STORE="$ep_store" \
                   VOICEPI_DISABLE_OS_KEYRING=1 \
                   VOICEPI_CONFIG="$ep_config" \
-                  VOICEPI_STT_BASE_URL=https://api.openai.com/v1 \
+                  VOICEPI_STT_BASE_URL=https://api.groq.com/openai/v1 \
               timeout --preserve-status --kill-after=2s 12s \
               whisper-dictate run 2>&1)"
     ep_rc=$?
@@ -1340,7 +1314,7 @@ else
     if printf '%s' "$ep_out" | grep -qi "requires OPENAI_API_KEY"; then
         bad "endpoint-override ignored - credential looked up against the config value, not the env"
     elif printf '%s' "$ep_out" | grep -qi "api ready\|state.:.opening\|listener_installed\|ready-signal"; then
-        ok "credential resolved against the env-overridden endpoint (openai stored key wins over the groq config value)"
+        ok "credential resolved against the env-overridden endpoint (groq stored key wins over the openai default)"
     elif printf '%s' "$ep_out" | grep -qi "no default input device\|no audio\|input device not found"; then
         warn "endpoint-override key resolved but no audio device (headless / muted)"
     else

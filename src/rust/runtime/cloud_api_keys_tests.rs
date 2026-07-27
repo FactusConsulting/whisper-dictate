@@ -4,7 +4,8 @@
 //! which the AGENTS.md test-discipline scanner also looks for.
 
 use super::{
-    cloud_api_key_env_additions, effective_endpoint, post_credential_for, stt_credential_for,
+    cloud_api_key_env_additions, effective_endpoint, post_credential_for, post_credential_with,
+    stt_credential_for,
 };
 
 fn none(_: &str) -> Option<String> {
@@ -209,4 +210,56 @@ fn env_override_of_backend_activates_the_credential_gate() {
     // The gate itself is exercised in
     // `stt_credential_skipped_for_local_whisper_backend`; here we assert
     // the input plumbing that decides which branch that gate takes.
+}
+
+#[test]
+fn post_credential_lookup_receives_the_normalised_endpoint() {
+    // Observes the CHANGED path: capture the endpoint `post_credential_for`
+    // actually hands the store. A test that only exercised
+    // `normalized_base_url` would stay green if the production call were
+    // reverted -- that helper is already covered in `postprocess::settings`
+    // -- and the saved-key failure would come straight back.
+    use std::cell::RefCell;
+    let seen = RefCell::new(Vec::<String>::new());
+    let spy = |endpoint: &str| -> Option<String> {
+        seen.borrow_mut().push(endpoint.to_owned());
+        Some("key".to_owned())
+    };
+
+    // A cloud post-processor with the URL left at the schema's local Ollama
+    // default is the DEFAULT path: the UI does not rewrite the URL when the
+    // processor changes.
+    assert_eq!(
+        post_credential_with("groq", "http://localhost:11434", spy),
+        Some("key".to_owned())
+    );
+    assert_eq!(
+        seen.borrow().last().map(String::as_str),
+        Some("https://api.groq.com/openai/v1"),
+        "the store must be queried for the endpoint the WORKER resolves"
+    );
+
+    assert!(post_credential_with("openai", "", spy).is_some());
+    assert_eq!(
+        seen.borrow().last().map(String::as_str),
+        Some("https://api.openai.com/v1")
+    );
+
+    // A genuinely custom endpoint is passed through untouched -- a saved
+    // provider key must never be offered to a self-hosted host.
+    assert!(post_credential_with("groq", "https://llm.internal.example/v1", spy).is_some());
+    assert_eq!(
+        seen.borrow().last().map(String::as_str),
+        Some("https://llm.internal.example/v1")
+    );
+
+    // Local processors never reach the store at all.
+    let before = seen.borrow().len();
+    assert!(post_credential_with("ollama", "http://localhost:11434", spy).is_none());
+    assert!(post_credential_with("none", "https://api.groq.com/openai/v1", spy).is_none());
+    assert_eq!(
+        seen.borrow().len(),
+        before,
+        "local processors must not query the store"
+    );
 }

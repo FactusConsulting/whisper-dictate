@@ -36,6 +36,48 @@ What it covers:
 - **external-api (#567)** — an empty key classifies `terminal` (no retry / no
   double-charge); an unresolvable host classifies `transport`.
 
+## Windows Credential Manager -> worker key injection
+
+**Not covered by any automated test, on purpose.** The Rust launcher resolves a
+saved cloud API key and passes it to the worker in the child's environment
+(`runtime::cloud_api_keys`). The shell smoke in
+`scripts/integration/wayland-user-smoke.sh` sets `VOICEPI_DISABLE_OS_KEYRING=1`,
+so it exercises only the `api-keys.json` file fallback -- never Windows
+Credential Manager, which is the PRIMARY store on the primary supported
+desktop.
+
+Writing an automated check for a store this machine cannot reach would produce
+a test whose passing means nothing. So it is written down as a human step
+instead:
+
+1. In Settings -> Speech, paste a cloud STT key and click **Save API key**.
+   The status line must say it was stored in the credential store (not only
+   the fallback file).
+2. Confirm it really is in Credential Manager, not just the file:
+
+   ```powershell
+   # Should list a whisper-dictate entry for stt-api-key:<provider>
+   cmdkey /list | Select-String whisper-dictate
+   # And the file fallback must NOT be the only copy:
+   Get-Content "$env:APPDATA\whisper-dictate\api-keys.json" -ErrorAction SilentlyContinue
+   ```
+
+3. Close the app. In a NEW PowerShell with no key exported:
+
+   ```powershell
+   Remove-Item Env:VOICEPI_STT_API_KEY, Env:OPENAI_API_KEY, Env:GROQ_API_KEY -ErrorAction SilentlyContinue
+   whisper-dictate run
+   ```
+
+   It must start and reach `api ready`. The failure this guards against is
+   `x startup error: openai API requires OPENAI_API_KEY, ...` -- which means
+   the launcher never read the credential store.
+4. Repeat with a cloud **post-processor** configured (`post_processor=groq` or
+   `openai`) and only the post key saved, to cover the second account name.
+
+Record the result in the release-candidate notes. If step 3 fails, the launcher
+credential path is broken on Windows regardless of what the Linux smoke says.
+
 ## Full-app checklist (run the actual GUI / worker)
 
 The script covers the CLI contracts; these need the real app running:
