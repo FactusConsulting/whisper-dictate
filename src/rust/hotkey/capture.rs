@@ -19,12 +19,15 @@
 //! surface `runtime::maybe_install_rust_hotkey` uses under the hood. That
 //! keeps the diagnostic and the shipping path in lockstep without a shim.
 
+#[cfg(feature = "rust-hotkeys")]
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(feature = "rust-hotkeys")]
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -390,8 +393,12 @@ fn run_capture(
         // followed by a release or a cancel, so incrementing on each action
         // reported exactly double -- the maintainer's 2-chord capture printed
         // `"chords":4`. The field name (and the plain-text `Chords: N`) says
-        // how many times the chord fired, so make it mean that.
-        if matches!(action, CoordinatorAction::StartRecording(_)) {
+        // how many times the chord fired, so make it mean that. The decision
+        // is factored into `counts_as_chord` so it can be unit-tested on its
+        // own (Codex P2 review of #609): the earlier revision had the guard
+        // inline, which left the producer side of the fix uncovered even as
+        // the formatter side got dedicated tests.
+        if counts_as_chord(&action) {
             action_counters.chords.fetch_add(1, Ordering::Relaxed);
         }
         let now = action_start.elapsed().as_secs_f64();
@@ -502,6 +509,21 @@ fn run_capture(
 // makes the choice a runtime decision — read via `HotkeyHandle::driver_name()`
 // right after `install_hotkey_with_raw_tap` returns instead.
 
+/// Should this coordinator action increment the `Chords:` counter?
+///
+/// The coordinator emits three actions per chord (`StartRecording` on the
+/// rising edge, then `StopAndTranscribe` or `CancelRecording` on release), so
+/// counting every action double-reports — a two-chord capture showed
+/// `"chords":4`. Only the rising edge counts as one chord fire.
+///
+/// Extracted from the `action_sink` closure so the producing side of the fix
+/// can be unit-tested (`chords_counter_*`) directly. Otherwise only the
+/// formatter side of the counter was covered — the same failure mode this
+/// PR set out to fix for `foreign_keys`.
+fn counts_as_chord(action: &CoordinatorAction) -> bool {
+    matches!(action, CoordinatorAction::StartRecording(_))
+}
+
 /// Build the raw-event tap the manager thread invokes for every OS key
 /// event. Isolated into its own helper so the closure has a well-defined
 /// capture set — makes the borrow-checker happy and keeps run_capture
@@ -563,12 +585,19 @@ fn build_raw_tap(
 /// Non-feature build: the tap is never invoked (install returns Unsupported
 /// before threads spawn), so return a zero-cost noop. Kept here so
 /// `run_capture` compiles under both feature configurations.
+///
+/// Signature MUST match the feature-gated version — the caller in
+/// `run_capture` passes `key_names.clone()` as the fourth argument
+/// unconditionally, so this stub takes (and ignores) `_targets` too. Skipping
+/// it broke the stock (`--no-default-features` / no `rust-hotkeys`) build with
+/// an E0061 argument-count error while the feature build stayed green.
 #[cfg(not(feature = "rust-hotkeys"))]
 #[allow(clippy::unused_unit)]
 fn build_raw_tap(
     _counters: Arc<Counters>,
     _tx: Sender<CaptureEvent>,
     _start: Instant,
+    _targets: Vec<String>,
 ) -> impl Send + Sync + 'static {
     // `()` implements Send + Sync + 'static and satisfies the stock-build
     // `install_hotkey_with_raw_tap` bound. It is never invoked — the stock
@@ -928,6 +957,52 @@ mod tests {
             err.contains("uinput"),
             "error should echo the bad value: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // counts_as_chord — the producer-side of the Chords: counter
+    //
+    // Regression for Codex P2 (#609 review): the earlier revision kept the
+    // guard inline in `action_sink`, so the `chords` fix had no direct test
+    // — the same formatter-vs-producer gap the PR was closing for
+    // `foreign_keys`. These pin the shape end-to-end.
+    // -----------------------------------------------------------------------
+
+    fn rec_id(n: u8) -> super::super::coordinator::RecordingId {
+        super::super::coordinator::RecordingId::from(n)
+    }
+
+    #[test]
+    fn counts_as_chord_true_only_for_start_recording() {
+        assert!(counts_as_chord(&CoordinatorAction::StartRecording(rec_id(
+            1
+        ))));
+        assert!(!counts_as_chord(&CoordinatorAction::StopAndTranscribe(
+            rec_id(1)
+        )));
+        assert!(!counts_as_chord(&CoordinatorAction::CancelRecording(
+            rec_id(1)
+        )));
+    }
+
+    #[test]
+    fn one_full_chord_cycle_increments_counter_once() {
+        // Simulate what the action sink actually does: increment on every
+        // action for which `counts_as_chord` is true. Two full chord cycles
+        // (press → release, press → cancel) must report chords = 2, not 4.
+        let counters = Counters::default();
+        let cycle = [
+            CoordinatorAction::StartRecording(rec_id(1)),
+            CoordinatorAction::StopAndTranscribe(rec_id(1)),
+            CoordinatorAction::StartRecording(rec_id(2)),
+            CoordinatorAction::CancelRecording(rec_id(2)),
+        ];
+        for action in &cycle {
+            if counts_as_chord(action) {
+                counters.chords.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        assert_eq!(counters.chords.load(Ordering::Relaxed), 2);
     }
 
     #[test]
