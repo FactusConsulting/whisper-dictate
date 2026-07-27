@@ -998,6 +998,58 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: CLI reads the saved cloud API key (credential store, not just env)
+#
+# The keys are written by the Settings UI into the OS credential store (with
+# an `api-keys.json` fallback). For a long time only the UI could read them
+# back, so a cloud-configured user running the documented terminal test
+# (`VOICEPI_DICTATE_ENGINE=rust whisper-dictate run`) got
+#
+#   x startup error: openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
+#     VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY
+#
+# on a machine where the key was saved and working in the UI.
+#
+# Runs entirely against SCRATCH state -- a temp store holding an obviously
+# fake key, a temp config selecting the cloud backend, and the OS keyring
+# disabled so the check neither reads nor writes the operator's real
+# credentials. The fake key is never used for a request: the worker resolves
+# it at STARTUP, which is the step that used to fail, and the run is killed
+# before any dictation could happen.
+# --------------------------------------------------------------------------
+section "CLI reads the saved cloud API key (not just the environment)"
+if [ "$CMD_MODE" != "rust" ]; then
+    warn "credential-store lookup is a Rust-side behaviour - not exposed by the Python fallback"
+else
+    key_store="$(mktemp -t wd-keys-smoke.XXXXXX.json)"
+    key_config="$(mktemp -t wd-cfg-keys-smoke.XXXXXX.json)"
+    printf '{"stt-api-key:groq":"smoke-not-a-real-key"}\n' >"$key_store"
+    printf '{"stt_backend":"openai","stt_base_url":"https://api.groq.com/openai/v1","stt_model":"whisper-large-v3-turbo","post_processor":"off"}\n' >"$key_config"
+
+    # Drop every ambient key so the store is the ONLY possible source -- with
+    # one exported the check would pass without exercising the lookup at all.
+    key_out="$(env -u VOICEPI_STT_API_KEY -u VOICEPI_POST_API_KEY \
+                   -u GROQ_API_KEY -u OPENAI_API_KEY \
+                   VOICEPI_API_KEY_STORE="$key_store" \
+                   VOICEPI_DISABLE_OS_KEYRING=1 \
+                   VOICEPI_CONFIG="$key_config" \
+               timeout --preserve-status --kill-after=2s 12s \
+               whisper-dictate run 2>&1)"
+    key_rc=$?
+    rm -f "$key_store" "$key_config"
+
+    if printf '%s' "$key_out" | grep -qi "requires OPENAI_API_KEY"; then
+        bad "worker started without the saved key - the credential store was not consulted"
+    elif printf '%s' "$key_out" | grep -qi "api ready\|state.:.opening\|listener_installed\|ready-signal"; then
+        ok "cloud key resolved from the credential store (worker reached startup)"
+    elif printf '%s' "$key_out" | grep -qi "no default input device\|no audio\|input device not found"; then
+        warn "worker got past the key check but has no audio device (headless / muted)"
+    else
+        bad "worker startup shape not recognised (exit $key_rc): $(printf '%s' "$key_out" | head -c 300)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: in-process Rust runtime installs (VOICEPI_DICTATE_ENGINE=rust)
 #
 # Replaces the previous `whisper-dictate ui` probe, which could NEVER pass —

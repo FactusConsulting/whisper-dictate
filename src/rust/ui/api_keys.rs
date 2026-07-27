@@ -417,7 +417,7 @@ fn load_post_api_key(provider: PostProvider) -> Result<String> {
     load_secret(provider.credential_user())
 }
 
-fn load_secret(user: &str) -> Result<String> {
+pub(crate) fn load_secret(user: &str) -> Result<String> {
     if os_keyring_disabled() {
         return load_file_secret(user);
     }

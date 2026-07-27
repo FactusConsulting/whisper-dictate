@@ -225,8 +225,75 @@ pub(crate) use worker_command::{
 // ---------------------------------------------------------------------------
 
 pub fn run_terminal(args: Vec<String>) -> Result<()> {
-    let command = default_worker_command_with_args(args);
+    let mut command = default_worker_command_with_args(args);
+    attach_cloud_api_keys(&mut command);
     run_foreground(&command)
+}
+
+/// Give the worker the cloud API keys the user already saved in Settings.
+///
+/// Until this existed only the UI could read the credential store, so it was
+/// the only entry point that could start a cloud-configured worker. A bare
+/// `whisper-dictate run` -- including the terminal test documented in
+/// `docs/testing-rust-engine-v1.22.md` -- died at startup with
+/// "openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
+/// VOICEPI_STT_API_KEY/VOICEPI_POST_API_KEY" on a machine where the key was
+/// saved and working in the UI.
+///
+/// The key travels in the child's ENVIRONMENT, never argv: a command line is
+/// readable by other local users (the leak fixed in #588).
+fn attach_cloud_api_keys(command: &mut WorkerCommand) {
+    let settings = match crate::config::load_settings() {
+        Ok(settings) => settings,
+        // No readable config: nothing to resolve a provider from. The worker
+        // reports the missing key itself, which is a better message than
+        // anything invented here.
+        Err(_) => return,
+    };
+    let additions = cloud_api_key_env_additions(
+        &command.env,
+        |name| std::env::var(name).ok(),
+        crate::credentials::resolve_stt_api_key(&settings.stt_base_url),
+        crate::credentials::resolve_post_api_key(&settings.post_base_url),
+    );
+    command.env.extend(additions);
+}
+
+/// Which key variables to add to the worker's env, given what is already
+/// there. Split from [`attach_cloud_api_keys`] so the PRECEDENCE of the
+/// wiring is unit-testable without a config file, a credential store, or a
+/// spawned process -- the resolver having correct precedence says nothing
+/// about whether the caller wired it up correctly, and it was the wiring that
+/// was missing entirely.
+///
+/// An existing value always wins, whether it came from the caller-built
+/// command or the ambient environment, so
+/// `VOICEPI_STT_API_KEY=... whisper-dictate run` still overrides the store.
+fn cloud_api_key_env_additions<E>(
+    existing: &[(String, String)],
+    env_lookup: E,
+    stt: Option<String>,
+    post: Option<String>,
+) -> Vec<(String, String)>
+where
+    E: Fn(&str) -> Option<String>,
+{
+    let mut out = Vec::new();
+    for (name, resolved) in [
+        ("VOICEPI_STT_API_KEY", stt),
+        ("VOICEPI_POST_API_KEY", post),
+    ] {
+        if existing.iter().any(|(k, _)| k == name) {
+            continue;
+        }
+        if env_lookup(name).is_some_and(|v| !v.trim().is_empty()) {
+            continue;
+        }
+        if let Some(value) = resolved {
+            out.push((name.to_owned(), value));
+        }
+    }
+    out
 }
 
 pub fn doctor() -> Result<()> {
@@ -490,4 +557,83 @@ pub fn version() -> String {
     }
 
     env!("CARGO_PKG_VERSION").to_owned()
+}
+
+#[cfg(test)]
+mod cloud_api_key_wiring_tests {
+    use super::cloud_api_key_env_additions;
+
+    fn none(_: &str) -> Option<String> {
+        None
+    }
+
+    fn names(v: &[(String, String)]) -> Vec<&str> {
+        v.iter().map(|(k, _)| k.as_str()).collect()
+    }
+
+    #[test]
+    fn store_keys_are_added_when_nothing_is_set() {
+        // The actual bug: key saved in the UI, no env exported, worker
+        // started without it and died at startup.
+        let got = cloud_api_key_env_additions(
+            &[],
+            none,
+            Some("stt-from-store".to_owned()),
+            Some("post-from-store".to_owned()),
+        );
+        assert_eq!(names(&got), vec!["VOICEPI_STT_API_KEY", "VOICEPI_POST_API_KEY"]);
+        assert_eq!(got[0].1, "stt-from-store");
+    }
+
+    #[test]
+    fn ambient_environment_wins_over_the_store() {
+        let got = cloud_api_key_env_additions(
+            &[],
+            |name| (name == "VOICEPI_STT_API_KEY").then(|| "from-env".to_owned()),
+            Some("from-store".to_owned()),
+            None,
+        );
+        assert!(
+            got.is_empty(),
+            "an exported key must not be overridden by the store: {got:?}"
+        );
+    }
+
+    #[test]
+    fn blank_ambient_value_does_not_block_the_store() {
+        // `export VOICEPI_STT_API_KEY=` is a leftover, not a choice.
+        let got = cloud_api_key_env_additions(
+            &[],
+            |name| (name == "VOICEPI_STT_API_KEY").then(|| "   ".to_owned()),
+            Some("from-store".to_owned()),
+            None,
+        );
+        assert_eq!(names(&got), vec!["VOICEPI_STT_API_KEY"]);
+    }
+
+    #[test]
+    fn a_key_already_on_the_command_is_left_alone() {
+        let existing = vec![("VOICEPI_STT_API_KEY".to_owned(), "caller".to_owned())];
+        let got = cloud_api_key_env_additions(&existing, none, Some("from-store".to_owned()), None);
+        assert!(got.is_empty(), "must not duplicate an existing entry: {got:?}");
+    }
+
+    #[test]
+    fn unresolvable_keys_add_nothing() {
+        // A local-Whisper user has no cloud key at all; the worker must not
+        // be handed an empty variable that looks configured.
+        assert!(cloud_api_key_env_additions(&[], none, None, None).is_empty());
+    }
+
+    #[test]
+    fn the_two_keys_are_decided_independently() {
+        // STT exported, post only in the store: exactly one addition.
+        let got = cloud_api_key_env_additions(
+            &[],
+            |name| (name == "VOICEPI_STT_API_KEY").then(|| "from-env".to_owned()),
+            Some("stt-store".to_owned()),
+            Some("post-store".to_owned()),
+        );
+        assert_eq!(names(&got), vec!["VOICEPI_POST_API_KEY"]);
+    }
 }
