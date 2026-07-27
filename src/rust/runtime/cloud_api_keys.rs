@@ -107,9 +107,37 @@ fn stt_credential_for(stt_backend: &str, endpoint: &str) -> Option<String> {
 /// active. `none` and `ollama` are both local (no cloud endpoint), so the
 /// credential lookup is skipped. Matches the schema's `post_processor`
 /// values: `none` / `ollama` / `openai` / `groq`.
+///
+/// The endpoint is NORMALISED before classification, through the same
+/// `postprocess::normalized_base_url` the worker itself applies. Without that
+/// step a config with `post_processor=groq` and `post_base_url` left at the
+/// schema's local Ollama default (or empty) classified as a CUSTOM host here
+/// and loaded no credential -- while the worker substituted the provider's
+/// real endpoint and then needed the key. Selecting a cloud post-processor in
+/// Settings without also editing the URL is the normal path, so that gap hit
+/// the default configuration rather than an exotic one.
 fn post_credential_for(post_processor: &str, endpoint: &str) -> Option<String> {
+    post_credential_with(
+        post_processor,
+        endpoint,
+        crate::credentials::resolve_post_api_key,
+    )
+}
+
+/// Testable core of [`post_credential_for`]: the store lookup is injected so
+/// a test can observe WHICH endpoint the resolver is handed. Asserting on the
+/// normaliser alone would not do -- that helper is already covered by
+/// `postprocess::settings`, so reverting the normalisation here would leave
+/// such a test green while the saved-key failure came straight back.
+fn post_credential_with<R>(post_processor: &str, endpoint: &str, resolve: R) -> Option<String>
+where
+    R: Fn(&str) -> Option<String>,
+{
     matches!(post_processor, "openai" | "groq")
-        .then(|| crate::credentials::resolve_post_api_key(endpoint))
+        .then(|| {
+            let effective = crate::postprocess::normalized_base_url(post_processor, endpoint);
+            resolve(&effective)
+        })
         .flatten()
 }
 
