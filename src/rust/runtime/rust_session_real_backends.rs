@@ -203,13 +203,39 @@ pub(crate) fn whisper_backend_config_from_env() -> WhisperBackendConfig {
 /// `start_recording`, but for the rust-session sink today the
 /// construction-time stamp is enough to fix Codex P2 #423
 /// rust_session_real_backends.rs:107 (finding 5).
+///
+/// Also stamps the STT / device / inject_mode labels the metrics +
+/// history sinks emit on every utterance (`stt_backend`, `model`,
+/// `device`, `compute_type`, `inject_mode`). These fields are
+/// construction-time stamps rather than live-reloaded because they
+/// require rebuilding the backend anyway (a `stt_backend` flip switches
+/// local <-> cloud; a `model` swap unloads/reloads GGML weights) --
+/// matching Python, which restarts the worker for the same set of
+/// keys (`RESTART_KEYS`). Codex P1 #606 metrics-schema follow-up.
 pub(crate) fn session_config_from_env() -> SessionConfig {
     let route = RouteConfig::from_env();
     SessionConfig {
         min_record_seconds: route.min_record_seconds,
         format_command_set: format_command_set_from_env(),
+        stt_backend: env_string("VOICEPI_STT_BACKEND"),
+        model: env_string("VOICEPI_MODEL"),
+        device: env_string("VOICEPI_DEVICE"),
+        compute_type: env_string("VOICEPI_COMPUTE_TYPE"),
+        inject_mode: env_string("VOICEPI_INJECT_MODE"),
         ..SessionConfig::default()
     }
+}
+
+/// Trim + collapse-empty helper: an unset / whitespace-only env var
+/// returns the empty string, which the wire emitter's
+/// [`crate::dictate::session::wire::insert_non_empty`] then drops from
+/// the utterance payload so a partial config never emits blank
+/// `"model": ""` rows.
+fn env_string(key: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_owned())
+        .unwrap_or_default()
 }
 
 /// Read the spoken formatting-command set from [`FORMAT_COMMANDS_ENV`].

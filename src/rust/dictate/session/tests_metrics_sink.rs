@@ -255,6 +255,87 @@ fn metrics_and_history_sinks_both_receive_the_same_payload() {
     );
 }
 
+/// Codex P1 #606 finding 4: the metrics utterance row must carry the
+/// FULL schema Python's `_utterance_event` emits, not the trimmed
+/// subset the first cut wrote. This test pins the presence of every
+/// field the wire emitter now populates from `SessionConfig` +
+/// `TranscribeResult` + the profile matcher.
+///
+/// The tests_support session default omits many of these (bare
+/// SessionConfig), so we build a hand-populated config to prove the
+/// wire emitter fans it out. Reload sinks / env overlay are covered by
+/// their own unit tests in `metrics_sink::tests`.
+#[test]
+fn metrics_row_carries_full_utterance_schema() {
+    use crate::dictate::session::SessionConfig;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("metrics.jsonl");
+
+    let transcribe = TestTranscribe::returning_text("hej verden");
+    let inject = TestInject::new();
+    let config = SessionConfig {
+        stt_backend: "whisper".to_owned(),
+        model: "large-v3-turbo".to_owned(),
+        device: "cuda".to_owned(),
+        compute_type: "int8_float16".to_owned(),
+        inject_mode: "auto".to_owned(),
+        ..SessionConfig::default()
+    };
+    let (mut s, mut buf, _guard) =
+        crate::dictate::session::tests_support::session_with_config(transcribe, inject, config);
+    s = s.with_metrics_sink(Box::new(JsonlMetricsSink::new(path.clone())));
+
+    s.start(&mut buf).expect("start");
+    s.push_frame(&one_second_pcm());
+    let _ = s.stop_and_transcribe(&mut buf).expect("stop");
+
+    let raw = fs::read_to_string(&path).unwrap();
+    let row: Value = serde_json::from_str(raw.trim()).unwrap();
+
+    // Python `_utterance_event` field list -- pinned here so a future
+    // wire.rs refactor cannot silently drop a field.
+    for (key, why) in [
+        ("stt_backend", "session config"),
+        ("model", "session config"),
+        ("device", "session config"),
+        ("compute_type", "session config"),
+        ("inject_mode", "session config"),
+        (
+            "raw_text",
+            "transcribe result (or dictionary_text fallback)",
+        ),
+        ("text_preview", "_compact_text of final text"),
+        ("dictionary_text", "post-dictionary, pre-postprocess"),
+        ("real_time_factor", "compute_s / audio_duration_s"),
+    ] {
+        assert!(
+            row.get(key).is_some(),
+            "metrics row is missing `{key}` ({why}); Codex P1 #606 finding 4"
+        );
+    }
+    assert_eq!(row["stt_backend"], "whisper");
+    assert_eq!(row["model"], "large-v3-turbo");
+    assert_eq!(row["device"], "cuda");
+    assert_eq!(row["compute_type"], "int8_float16");
+    assert_eq!(row["inject_mode"], "auto");
+    // The test transcribe returns text "hej verden" without a raw_text
+    // (the tests_support fixture uses `..Default::default()`), so the
+    // session's fallback kicks in and raw_text mirrors the dictionary
+    // text (which itself mirrors the final text when the dictionary is
+    // a passthrough).
+    assert_eq!(row["raw_text"], "hej verden");
+    assert_eq!(row["dictionary_text"], "hej verden");
+    assert_eq!(row["text_preview"], "hej verden");
+    // real_time_factor = compute_s / audio_duration_s
+    //                  = (42 ms / 1000) / 1.23 s
+    //                  ≈ 0.03
+    assert!(
+        row["real_time_factor"].is_number(),
+        "real_time_factor must be numeric"
+    );
+}
+
 /// A broken metrics file (path whose parent cannot be created because the
 /// parent is a regular file) must not abort the utterance -- the session
 /// completes with `Injected`, the sink swallows the write error. Python
