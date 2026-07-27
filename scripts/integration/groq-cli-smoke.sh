@@ -15,9 +15,9 @@
 #          VOICEPI_DICTIONARY rewrites the spoken words, proving the session's
 #          replacement seam is wired through the real CLI + Groq.
 #
-# Step 4 is the Rust-engine counterpart of the Python `simulate-ptt` offline
-# drive, so BOTH engines get CLI integration coverage while Python still
-# exists. Everything runs with NO local Whisper model, GPU, or microphone
+# Step 4 drives the Rust in-process DictateSession offline (superseding the
+# retired Python `simulate-ptt` verb). Everything runs with NO local Whisper
+# model, GPU, or microphone
 # (Groq does STT over HTTP), so it behaves identically on ubuntu-latest and
 # windows-2025 (invoke with `shell: bash`).
 #

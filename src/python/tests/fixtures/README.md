@@ -1,6 +1,7 @@
 # test fixtures
 
-Small audio fixtures used by simulate-ptt smoke tests.
+Small audio fixtures used by the WAV-driven dictation smoke tests
+(`simulate-session` and friends).
 
 ## `hello.wav`
 

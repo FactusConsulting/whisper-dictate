@@ -17,7 +17,6 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-FIXTURE_WAV="${REPO_ROOT}/src/python/tests/fixtures/hello.wav"
 
 pass=0
 fail=0
@@ -196,10 +195,9 @@ resolve_hotkey_driver_selftest() {
 #   2) Python fallback: PYTHONPATH=repo/src/python python3 -m whisper_dictate.vp_cli
 #
 # The Python fallback exposes a subset of the shipped surface (the
-# argparse-based flags in vp_cli.py) — enough to exercise --simulate-ptt
-# and a few flag-only checks, but NOT the Rust subcommands like
-# `models list` or `config show`. Those sections warn-skip when only
-# the Python fallback is available.
+# argparse-based flags in vp_cli.py) — a few flag-only checks — but NOT
+# the Rust subcommands like `models list` or `config show`. Those
+# sections warn-skip when only the Python fallback is available.
 # --------------------------------------------------------------------------
 CMD_SOURCE=""   # "installed" | "source" | "none"
 CMD_MODE=""     # "rust" | "python"
@@ -239,10 +237,6 @@ run_cli() {
                         PYTHONPATH="${REPO_ROOT}/src/python" python3 -c \
                             "import whisper_dictate; print(getattr(whisper_dictate, '__version__', 'unknown'))"
                     fi
-                    ;;
-                "simulate-ptt")
-                    PYTHONPATH="${REPO_ROOT}/src/python" python3 -m \
-                        whisper_dictate.vp_simulate_ptt "$@"
                     ;;
                 *)
                     return 127
@@ -343,10 +337,9 @@ fi
 #
 # `devices test <NAME>` (PR #495) opens the cpal input stream against a
 # named device (empty string = system default) and reports back — fast
-# check that the audio subsystem is reachable before the heavier
-# simulate-ptt run. A missing device on a headless box is not a hard
-# fail: the check downgrades to warn-skip so the smoke stays green on
-# CI runners with no audio hardware.
+# check that the audio subsystem is reachable. A missing device on a
+# headless box is not a hard fail: the check downgrades to warn-skip
+# so the smoke stays green on CI runners with no audio hardware.
 # --------------------------------------------------------------------------
 section "devices test (default device)"
 if [ "$CMD_MODE" = "python" ]; then
@@ -379,11 +372,11 @@ fi
 # exercising the loader at all. Both names stay resolvable via the hidden
 # catalog entries.
 #
-# Deliberately NOT used by simulate-ptt: even in Rust command mode that verb
-# fronts the PYTHON worker, which builds `faster_whisper.WhisperModel` against
-# a separate HuggingFace/CTranslate2 cache and never reads a GGML file. Probing
-# `models path` says nothing about what faster-whisper has cached, so that
-# section keeps a fixed fixture instead.
+# Used only by `self-test whisper-load`. The former Python `simulate-ptt`
+# section — retired alongside the verb itself — built its faster-whisper
+# model against a separate HuggingFace/CTranslate2 cache and never touched
+# GGML; this fixture rule was the note flagging that. Kept here so anyone
+# adding a new whisper-load-adjacent section understands what the fixture is.
 # --------------------------------------------------------------------------
 TINY_FIXTURE="tiny"
 if [ "$CMD_MODE" = "rust" ]; then
@@ -400,120 +393,35 @@ fi
 info "tiny fixture in use: $TINY_FIXTURE"
 
 # --------------------------------------------------------------------------
-# SECTION: simulate-ptt (headless dictation pipeline)
+# SECTION: simulate-session / dictate-mic (WAV + live-mic Rust CLI drivers)
 #
-# Runs against a SCRATCH config (VOICEPI_CONFIG override) plus an explicit
-# `VOICEPI_STT_BACKEND=whisper`. Without both, the section is not hermetic:
-# `--model tiny.en` only names the local model, while the BACKEND still comes
-# from the operator's real config.json. On the maintainer's own Wayland box
-# (`stt_backend=openai`, Groq base URL) the run therefore took the cloud path
-# and died with "openai API requires OPENAI_API_KEY, GROQ_API_KEY, or
-# VOICEPI_STT_API_KEY" — the key lives in the OS credential store and is only
-# exported into the worker by the UI, never by a bare CLI verb. That is a
-# false failure: the section exists to prove the LOCAL capture → transcribe →
-# inject plumbing still works, which is exactly what a cloud-configured box
-# never got to exercise.
-#
-# BOTH command modes need the isolation. The Python fallback is not flag-only:
-# `vp_simulate_ptt._load_model_for_cli()` imports `vp_cli`, whose module init
-# runs `apply_config_to_environ()`, after which `vp_transcribe.STT_BACKEND`
-# resolves `get_value("VOICEPI_STT_BACKEND", "whisper")` from the same real
-# config.json. `--model` / `--device` do not override it.
+# `simulate-ptt` was retired in favour of two Rust-native verbs: `simulate-
+# session` (WAV-driven, cloud STT) and `dictate-mic` (live mic capture,
+# cloud STT). Both need a cloud API key + network to drive a real end-to-end
+# pipeline, so this smoke script — which must stay hermetic on a headless
+# ThinkPad without a Groq/OpenAI key — only verifies the CLI surface is
+# wired (`--help` exits 0 and prints the expected line). The real Rust
+# in-process pipeline is exercised by the `simulate-session` job in
+# `scripts/integration/groq-cli-smoke.sh` under the `GROQ_API_KEY` gate.
 # --------------------------------------------------------------------------
-section "simulate-ptt (fixture WAV, dry-run, tiny.en, CPU)"
-if [ ! -f "$FIXTURE_WAV" ]; then
-    warn "fixture WAV missing: $FIXTURE_WAV"
+section "simulate-session / dictate-mic (CLI surface --help check)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "simulate-session and dictate-mic are Rust subcommands — not exposed by the Python fallback"
 else
-    # Resolve the operator's effective local-only setting BEFORE the scratch
-    # config hides it, and carry it into the run below. `local_only` is a
-    # PRIVACY lock: it forces the model libraries offline, so silently
-    # dropping it could let a missing tiny.en be fetched from the network by
-    # an operator who explicitly opted out of that.
-    #
-    # ENV FIRST, and passed through VERBATIM. Both engines give the ambient
-    # env var precedence over the config file (`model_manager::is_local_only`
-    # returns early on a truthy VOICEPI_LOCAL_ONLY; the Python side resolves
-    # it through `get_value`), but `whisper-dictate config get local_only`
-    # does NOT — it reports the persisted setting and its defaults, returning
-    # `0` even with VOICEPI_LOCAL_ONLY=1 exported (verified). So consulting
-    # the config unconditionally would overwrite an inherited `1` with `0`
-    # and turn the lock OFF for this run — strictly worse than the untouched
-    # inheritance this section had before.
-    #
-    # Verbatim rather than normalised on purpose: the two engines' truthiness
-    # tables are not identical (Rust accepts 1/true/True/TRUE; Python treats
-    # anything outside ""/0/false/no/off as on), so re-interpreting the value
-    # here could only introduce a third reading. Passing the operator's own
-    # string through lets each engine apply its own rule, exactly as it would
-    # without this section's involvement.
-    if [ -n "${VOICEPI_LOCAL_ONLY+set}" ]; then
-        simptt_local_only="$VOICEPI_LOCAL_ONLY"
-    elif [ "$CMD_MODE" = "rust" ]; then
-        simptt_local_only="$(whisper-dictate config get local_only 2>/dev/null)"
-    else
-        simptt_local_only="$(PYTHONPATH="${REPO_ROOT}/src/python" python3 -c \
-            "from whisper_dictate.vp_config import get_value
-print((get_value('VOICEPI_LOCAL_ONLY') or '').strip())" 2>/dev/null)"
-    fi
-    # An unresolvable lookup yields the empty string, which every consumer
-    # treats as "off" — the same as the pre-existing behaviour.
-    : "${simptt_local_only:=}"
-
-    # Reserve the scratch path with mktemp rather than composing one from
-    # $$: a pre-existing/PID-reused `wd-simptt-smoke-<pid>.json` would be
-    # read as real configuration (config values outrank env, so a stale
-    # `stt_backend=openai` in it would defeat the pin below) and the
-    # cleanup would delete a file this script never created. Deleting the
-    # reserved file is deliberate — the loader's missing-file branch is
-    # what yields built-in defaults, the same fresh-user path the config
-    # section relies on.
-    simptt_config="$(mktemp -t wd-simptt-smoke.XXXXXX.json)"
-    rm -f "$simptt_config"
-
-    if [ "$CMD_MODE" = "rust" ]; then
-        # Rust subcommand: --language, --model, --wav; no --device switch,
-        # so pin CPU via env so the check never depends on a GPU being
-        # present. --dry-run is the default (no --inject).
-        out="$(VOICEPI_CONFIG="$simptt_config" \
-               VOICEPI_STT_BACKEND=whisper \
-               VOICEPI_LOCAL_ONLY="$simptt_local_only" \
-               VOICEPI_DEVICE=cpu whisper-dictate simulate-ptt \
-                    --wav "$FIXTURE_WAV" \
-                    --model tiny.en \
-                    --language en \
-                    --json 2>&1)"
-        rc=$?
-    else
-        # Python fallback: --wav, --dry-run, --model, --device, --lang, --json
-        out="$(VOICEPI_CONFIG="$simptt_config" \
-               VOICEPI_STT_BACKEND=whisper \
-               VOICEPI_LOCAL_ONLY="$simptt_local_only" \
-               PYTHONPATH="${REPO_ROOT}/src/python" python3 -m \
-                    whisper_dictate.vp_simulate_ptt \
-                    --wav "$FIXTURE_WAV" \
-                    --dry-run \
-                    --model tiny.en \
-                    --device cpu \
-                    --lang en \
-                    --json 2>&1)"
-        rc=$?
-    fi
-    # Belt-and-braces: the run should never create the file, but a future
-    # write-through would otherwise litter $TMPDIR.
-    rm -f "$simptt_config"
-
-    if [ "$rc" -eq 0 ]; then
-        if printf '%s' "$out" | grep -q "simulate_ptt\|simulate-ptt"; then
-            ok "pipeline exit 0, simulate_ptt event/tag present"
-            info "(empty transcription on a synthetic tone is expected — checking pipeline plumbing, not ASR)"
+    for verb in simulate-session dictate-mic; do
+        if out="$(whisper-dictate "$verb" --help 2>&1)"; then
+            if printf '%s' "$out" | grep -qi "$verb\|usage"; then
+                ok "$verb --help exits 0 with usage output"
+            else
+                bad "$verb --help exit 0 but usage line not seen"
+                info "$out"
+            fi
         else
-            bad "exit 0 but simulate_ptt marker not seen in output"
+            rc=$?
+            bad "$verb --help exit $rc"
             info "$out"
         fi
-    else
-        bad "exit $rc"
-        info "$out"
-    fi
+    done
 fi
 
 # --------------------------------------------------------------------------
