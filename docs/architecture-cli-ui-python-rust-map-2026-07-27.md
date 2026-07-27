@@ -125,12 +125,6 @@ lands:
 - `corpus-record` two-step: native Rust + Python retirement (#624, #629)
 - `simulate-ptt` retirement (#627): superseded by `simulate-session` + `dictate-mic`
 
-5. **Setup wizard**: no Rust equivalent yet. Needs a design pass.
-
-6. **rust-stdin bridge retirement** (pending user go-ahead): drops ~450 lines
-   of Python audio decoder once we accept that Rust-audio users switch to full
-   Rust engine.
-
 ## Where this lives
 
 - CLI dispatch: `src/rust/main.rs` (`match cli.command`).
