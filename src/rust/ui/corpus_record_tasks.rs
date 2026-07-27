@@ -9,11 +9,15 @@
 
 use super::*;
 use crate::config;
-use crate::runtime::{record_corpus_item_command, resource_app_root};
+use crate::runtime::resource_app_root;
 use std::path::PathBuf;
+#[cfg(feature = "audio-capture")]
+use std::sync::mpsc;
+#[cfg(feature = "audio-capture")]
+use std::thread;
 use std::time::{Duration, Instant};
 
-/// Background-task label for the worker's `--record-corpus-item` run. Routed in
+/// Background-task label for the native corpus recorder run. Routed in
 /// `poll_background_task` to `apply_corpus_record`, which parses the terminal
 /// done/error event into the inline System-tab confirmation.
 pub(in crate::ui) const RECORD_CORPUS_ITEM_LABEL: &str = "record corpus item";
@@ -80,12 +84,13 @@ impl WhisperDictateApp {
         self.launch_record_for(&id);
     }
 
-    /// Launch the single-item worker for `id`, applying the runtime-stopped gate
-    /// and clearing the previous inline result. Shared by the single Record
+    /// Launch the single-item recorder for `id`, applying the runtime-stopped
+    /// gate and clearing the previous inline result. Shared by the single Record
     /// button and by the batch flow (which chains one launch per item), so both
-    /// take the identical proven capture path. The `run_background_command` call
-    /// enforces the no-other-task half of the gate; a runtime that is not stopped
-    /// is logged and skipped (the batch poll then stops the run on the next tick).
+    /// take the identical proven capture path. A runtime that is not stopped is
+    /// logged and skipped (the batch poll then stops the run on the next tick);
+    /// another background task in flight is also logged and skipped by
+    /// [`Self::run_native_record_corpus_item`].
     pub(in crate::ui) fn launch_record_for(&mut self, id: &str) {
         if self.runtime_state != RuntimeState::Stopped {
             let hint = corpus_record_text(
@@ -96,7 +101,56 @@ impl WhisperDictateApp {
             return;
         }
         self.corpus_record_result = None;
-        self.run_background_command(RECORD_CORPUS_ITEM_LABEL, record_corpus_item_command(id));
+        #[cfg(feature = "audio-capture")]
+        {
+            self.run_native_record_corpus_item(id.to_owned());
+        }
+        #[cfg(not(feature = "audio-capture"))]
+        {
+            let _ = id;
+            self.append_runtime_log(
+                "[ui] record corpus item unavailable: this dev build lacks the \
+                 `audio-capture` feature (rebuild with --features audio-capture)",
+            );
+        }
+    }
+
+    /// Native corpus recorder on a background thread. Synthesises a
+    /// [`BackgroundTaskResult`] whose stdout is the newline-delimited JSON
+    /// events the `apply_corpus_record` parser consumes — the parser stays
+    /// authoritative and the wire contract is byte-identical to what the CLI
+    /// verb produces. Same pattern as `run_native_device_test` /
+    /// `run_native_list_audio_devices` (PR #623).
+    #[cfg(feature = "audio-capture")]
+    fn run_native_record_corpus_item(&mut self, id: String) {
+        if self.background_task.is_some() {
+            self.append_runtime_log(format!(
+                "[ui] {RECORD_CORPUS_ITEM_LABEL} skipped: another task is running"
+            ));
+            return;
+        }
+        let display = format!("corpus-record {id:?} (native)");
+        self.append_runtime_log(format!("[ui] {RECORD_CORPUS_ITEM_LABEL}: {display}"));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let stdout = crate::corpus_record_native::run_native_to_string(&id);
+            let _ = tx.send(BackgroundTaskResult {
+                label: RECORD_CORPUS_ITEM_LABEL,
+                command: display,
+                stdout,
+                stderr: String::new(),
+                // The native recorder always "succeeds" at the process level —
+                // every failure is a `corpus_record_error` line the terminal-
+                // event scanner turns into an inline Failed outcome. Success
+                // here is about the run reaching a terminal event, not about
+                // whether the recording itself saved.
+                success: true,
+                code: Some(0),
+                error: None,
+            });
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some(RECORD_CORPUS_ITEM_LABEL);
     }
 
     /// Whether the Record button should be enabled: an item is selected, the
@@ -196,7 +250,7 @@ impl WhisperDictateApp {
         }
     }
 
-    /// Handle a finished `--record-corpus-item` run: parse the terminal
+    /// Handle a finished corpus-record run: parse the terminal
     /// done/error event into the inline System-tab confirmation
     /// (`corpus_record_result`) and log the outcome. A run failure (worker
     /// couldn't even start) is stored as an `Err`. On a successful save the

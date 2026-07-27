@@ -1,26 +1,26 @@
-//! Native Rust implementation of `whisper-dictate corpus-record <id>` — step 1
-//! of retiring the Python `vp_corpus_record.py` worker (Wave 6 of #348,
-//! same pattern as PR #600 for `devices test`).
+//! Native Rust implementation of `whisper-dictate corpus-record <id>` — the
+//! sole surface for corpus recording now that step 2 of the
+//! `vp_corpus_record.py` retirement (Wave 6 of #348, same pattern as PR #602
+//! for `devices test`) has deleted the Python worker.
 //!
 //! Runs entirely on the cpal capture path (`crate::audio::capture` →
-//! `crate::audio::resampler`) so a stock Rust build no longer needs the
-//! Python `vp_capture` machinery to record golden benchmark audio. The
-//! wire contract with the UI is preserved bit for bit:
+//! `crate::audio::resampler`). The wire contract with the UI parser
+//! ([`crate::ui::corpus_record`]) is preserved bit for bit:
 //!
-//!   * stdout is newline-delimited JSON events (`corpus_record_start`,
-//!     `corpus_record_progress`, `corpus_record_done`, `corpus_record_error`),
+//!   * events are newline-delimited JSON (`corpus_record_start`,
+//!     `corpus_record_progress`, `corpus_record_done`, `corpus_record_error`)
+//!     — sent to stdout when driven from the CLI, buffered into a String
+//!     when driven in-process from the UI background thread,
 //!   * the WAV output is `<appdata>/benchmark/audio/<id>.wav` written as
-//!     16 kHz mono 16-bit PCM (matches Python's `wave.open`/`setsampwidth(2)`),
+//!     16 kHz mono 16-bit PCM (matches the original Python `wave.open`
+//!     contract so pre-existing recordings remain interchangeable),
 //!   * a bad corpus id / missing corpus / mic error is a single
 //!     `corpus_record_error` line + exit 0 (never an unhandled panic).
 //!
-//! The UI parser in [`crate::ui::corpus_record`] therefore keeps working
-//! unchanged; the Python subprocess is simply replaced by an in-process
-//! cpal recorder that emits the same JSON envelopes.
-//!
 //! Feature-gated on `audio-capture` because it needs `cpal` + `rubato`;
-//! the stock-build fallback lives in [`crate::corpus_record`] and shells
-//! to the Python worker exactly like the pre-migration path.
+//! a stock-build (no `audio-capture`) invocation of `whisper-dictate
+//! corpus-record` returns a clear "rebuild with --features audio-capture"
+//! error and exits non-zero from [`crate::corpus_record::handle_corpus_record`].
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -74,38 +74,44 @@ enum CorpusEvent<'a> {
     },
 }
 
-/// Print one JSON event line to stdout, flushed. `ensure_ascii=false`
+/// Sink for one serialized JSON event line. The CLI sink writes to stdout
+/// (flushed); the in-process UI sink appends to a String the background
+/// thread hands to [`crate::ui::corpus_record::parse_corpus_record_result`]
+/// once the run finishes. Using a `dyn FnMut` here means the same recording
+/// pipeline drives both surfaces without a second code path.
+type EventSink<'a> = dyn FnMut(String) + 'a;
+
+/// Serialize one JSON event and hand the line to `sink`. `ensure_ascii=false`
 /// equivalent: `serde_json` emits non-ASCII characters literally in a JSON
-/// string (Danish reference text like `Hej` / `æøå` survives untouched),
-/// matching `vp_corpus_record._print_event` which passes `ensure_ascii=False`.
-fn emit_event(event: &CorpusEvent<'_>) {
+/// string (Danish reference text like `Hej` / `æøå` survives untouched).
+fn emit_event(sink: &mut EventSink<'_>, event: &CorpusEvent<'_>) {
     // A serialisation failure here would be a bug in the event enum (all
     // fields are owned Rust primitives + borrowed &str), not a runtime
     // condition — but even in that impossible case we prefer a single log
     // line on stderr to a panic, so the record still exits 0.
     match serde_json::to_string(event) {
-        Ok(line) => {
-            println!("{line}");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-        }
+        Ok(line) => sink(line),
         Err(err) => {
             eprintln!("corpus-record: event serialize failed: {err}");
         }
     }
 }
 
-/// Emit a `corpus_record_error` line for `message` and return `Ok(())`.
+/// Emit a `corpus_record_error` line for `message` through `sink`.
 ///
-/// The Python worker treats every failure — bad id, missing corpus, mic
-/// unavailable, disk-full on write — as a single terminal error event and
-/// exits 0. We keep exactly that contract so the UI's terminal-event scanner
-/// ([`crate::ui::corpus_record::parse_corpus_record_result`]) always sees a
-/// clean end-of-run marker rather than a subprocess crash.
-fn emit_error(message: impl AsRef<str>) {
-    emit_event(&CorpusEvent::Error {
-        event: "corpus_record_error",
-        error: message.as_ref(),
-    });
+/// Every failure — bad id, missing corpus, mic unavailable, disk-full on write
+/// — is a single terminal error event and the run exits 0. That preserves the
+/// contract the UI's terminal-event scanner
+/// ([`crate::ui::corpus_record::parse_corpus_record_result`]) relies on: a
+/// clean end-of-run marker rather than a subprocess/thread crash.
+fn emit_error(sink: &mut EventSink<'_>, message: impl AsRef<str>) {
+    emit_event(
+        sink,
+        &CorpusEvent::Error {
+            event: "corpus_record_error",
+            error: message.as_ref(),
+        },
+    );
 }
 
 /// Recording length (s) for `text`, cloned from [`crate::corpus_record::compute_record_seconds`].
@@ -338,22 +344,52 @@ fn capture_for(
     Ok(pcm)
 }
 
-/// Native `corpus-record <id>` entry point.
+/// Native `corpus-record <id>` CLI entry point — invoked from
+/// [`crate::corpus_record::handle_corpus_record`] on `audio-capture` builds.
 ///
-/// Always returns `Ok(())` (the CLI exits 0) — every failure mode is a
-/// `corpus_record_error` JSON line on stdout, matching the Python worker's
-/// "an error is a normal, reportable outcome" contract so the UI's terminal-
-/// event scanner sees a clean end marker instead of a subprocess crash.
-///
-/// This is invoked from [`crate::corpus_record::handle_corpus_record`] on
-/// `audio-capture` builds; stock builds still shell out to the Python
-/// worker until the step-2 PR retires it.
+/// Prints one JSON event per line to stdout and always returns `Ok(())` (the
+/// CLI exits 0) — every failure mode is a `corpus_record_error` line, so the
+/// UI's terminal-event scanner always sees a clean end marker instead of a
+/// process crash.
 pub fn run_native(id: &str) -> anyhow::Result<()> {
+    let mut sink = |line: String| {
+        println!("{line}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    };
+    run_native_with_sink(id, &mut sink)
+}
+
+/// In-process variant used by the UI: run the recorder on the current thread
+/// and return the newline-joined JSON events the CLI would have printed.
+///
+/// The UI's background-task path spawns a thread that calls this and feeds the
+/// returned String into
+/// [`crate::ui::corpus_record::parse_corpus_record_result`] via the shared
+/// [`crate::ui::BackgroundTaskResult`] envelope — the same parser the CLI-
+/// subprocess path used, so the wire contract stays authoritative.
+pub fn run_native_to_string(id: &str) -> String {
+    let mut buf = String::new();
+    let mut sink = |line: String| {
+        buf.push_str(&line);
+        buf.push('\n');
+    };
+    // Errors are already reported as `corpus_record_error` events on `sink`
+    // (the pipeline never returns `Err`), so the caller only needs the
+    // captured event stream.
+    let _ = run_native_with_sink(id, &mut sink);
+    buf
+}
+
+/// Shared implementation: drive one recording, feeding every JSON event line
+/// through `sink`. `run_native` and `run_native_to_string` differ only in the
+/// sink they install, so the recording logic (validation, corpus resolution,
+/// capture, WAV write, dBFS report) has one home.
+fn run_native_with_sink(id: &str, sink: &mut EventSink<'_>) -> anyhow::Result<()> {
     let id = id.trim();
     // id safety is re-checked by handle_corpus_record before we get here,
     // but the defence-in-depth check keeps this callable independently.
     if !crate::corpus_record::is_safe_corpus_id(id) {
-        emit_error(format!("unsafe corpus id: {id:?}"));
+        emit_error(sink, format!("unsafe corpus id: {id:?}"));
         return Ok(());
     }
 
@@ -363,60 +399,70 @@ pub fn run_native(id: &str) -> anyhow::Result<()> {
     let item = match resolve_item(id, &app_root, &appdata) {
         Ok(item) => item,
         Err(err) => {
-            emit_error(err);
+            emit_error(sink, err);
             return Ok(());
         }
     };
 
     let seconds = record_seconds_for(&item.text);
-    emit_event(&CorpusEvent::Start {
-        event: "corpus_record_start",
-        id: &item.id,
-        text: &item.text,
-        seconds: round1(seconds),
-    });
+    emit_event(
+        sink,
+        &CorpusEvent::Start {
+            event: "corpus_record_start",
+            id: &item.id,
+            text: &item.text,
+            seconds: round1(seconds),
+        },
+    );
 
     // The configured mic. Empty means "system default" (matches
-    // `capture::start_capture`'s empty-selector semantics and Python's
-    // `sd.default.device[0] is None` fallback).
+    // `capture::start_capture`'s empty-selector semantics).
     let device = crate::config::load_settings()
         .map(|s| s.audio_device)
         .unwrap_or_default();
 
+    // Progress emission borrows `sink` for the duration of the capture call,
+    // so we can't touch `sink` again until `capture_for` returns.
     let pcm = match capture_for(&device, seconds, |remaining| {
-        emit_event(&CorpusEvent::Progress {
-            event: "corpus_record_progress",
-            remaining_s: remaining,
-        });
+        emit_event(
+            sink,
+            &CorpusEvent::Progress {
+                event: "corpus_record_progress",
+                remaining_s: remaining,
+            },
+        );
     }) {
         Ok(pcm) => pcm,
         Err(err) => {
-            emit_error(err);
+            emit_error(sink, err);
             return Ok(());
         }
     };
 
     if pcm.is_empty() {
-        emit_error("no audio was captured (check the microphone)");
+        emit_error(sink, "no audio was captured (check the microphone)");
         return Ok(());
     }
 
     let out_path = output_wav_path(&appdata, &item.id);
     if let Err(err) = write_wav_int16(&out_path, &pcm) {
-        emit_error(err);
+        emit_error(sink, err);
         return Ok(());
     }
 
     let (peak_dbfs, rms_dbfs) = peak_rms_dbfs(&pcm);
     let seconds_recorded = round1(pcm.len() as f64 / f64::from(TARGET_SAMPLE_RATE));
-    emit_event(&CorpusEvent::Done {
-        event: "corpus_record_done",
-        id: &item.id,
-        path: &out_path.to_string_lossy(),
-        seconds_recorded,
-        peak_dbfs,
-        rms_dbfs,
-    });
+    emit_event(
+        sink,
+        &CorpusEvent::Done {
+            event: "corpus_record_done",
+            id: &item.id,
+            path: &out_path.to_string_lossy(),
+            seconds_recorded,
+            peak_dbfs,
+            rms_dbfs,
+        },
+    );
     Ok(())
 }
 

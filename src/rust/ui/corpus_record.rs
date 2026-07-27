@@ -3,16 +3,17 @@
 //!
 //! Kept self-contained (its own localized strings, parser, and display model)
 //! so the feature can be added/removed without touching the over-500-line
-//! `text.rs` enum that parallel PRs also edit. The worker
-//! (`--record-corpus-item <id>`) prints newline-delimited JSON events on stdout:
+//! `text.rs` enum that parallel PRs also edit. The native recorder
+//! ([`crate::corpus_record_native`], invoked in-process from a background
+//! thread) emits newline-delimited JSON events:
 //!
 //!   * `corpus_record_start`    — id, the reference text, the computed seconds,
 //!   * `corpus_record_progress` — a countdown `remaining_s` (streamed to the log),
 //!   * `corpus_record_done`     — id, saved path, seconds_recorded, peak/rms dBFS,
 //!   * `corpus_record_error`    — a short error string.
 //!
-//! The background task captures the whole stdout and hands it here once finished;
-//! [`parse_corpus_record_result`] scans it for the terminal done/error event and
+//! The background task collects the full event stream and hands it here once
+//! finished; [`parse_corpus_record_result`] scans it for the terminal done/error event and
 //! turns it into a [`CorpusRecordOutcome`] the System tab renders inline (a green
 //! "Saved …" confirmation or a red error), mirroring the device-test result row.
 

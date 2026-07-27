@@ -5,7 +5,7 @@
 //! resolves recordings in the per-user appdata dir. The Rust UI reads the SAME
 //! manifest so its picker can list the corpus items (id + a short text preview)
 //! and mark which ones already have a recording in appdata — then launch the
-//! `--record-corpus-item <id>` worker for the chosen item.
+//! native cpal recorder ([`crate::corpus_record_native`]) for the chosen item.
 //!
 //! Kept pure and free of egui so it unit-tests without a UI: [`parse_corpus`]
 //! turns a manifest string into [`CorpusItem`]s, and [`resolve_corpus_path`] /
@@ -22,9 +22,9 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// One corpus item as the picker needs it: the `id` (the value passed to
-/// `--record-corpus-item`), the full reference `text` the user reads aloud, and
-/// the `language` tag (shown as context). Extra manifest keys (category, terms,
+/// One corpus item as the picker needs it: the `id` (the value handed to the
+/// native recorder), the full reference `text` the user reads aloud, and the
+/// `language` tag (shown as context). Extra manifest keys (category, terms,
 /// audio) are ignored here — the picker doesn't surface them.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(in crate::ui) struct CorpusItem {

@@ -392,8 +392,10 @@ bake gate.
 - **Removing the `python -m whisper_dictate.runtime` entrypoint
   outright.** Even after Phase C, users may want to run the Python
   worker directly for debugging; the entrypoint stays until we have
-  a Rust replacement for every one of its `--doctor`,
-  `--list-audio-devices`, `--record-corpus-item` flags (see
-  `worker_command.rs`). The `--test-audio-device` flag was retired
-  in the `vp_device_test.py` step-2 PR; the native `whisper-dictate
-  devices test <NAME>` verb is the sole surface.
+  a Rust replacement for every one of its remaining flags (`--doctor`,
+  `--list-audio-devices`, see `worker_command.rs`). The
+  `--test-audio-device` flag was retired in the `vp_device_test.py`
+  step-2 PR and `--record-corpus-item` was retired in the
+  `vp_corpus_record.py` step-2 PR; the native `whisper-dictate devices
+  test <NAME>` and `whisper-dictate corpus-record <ID>` verbs are the
+  sole surfaces.

@@ -318,7 +318,8 @@ struct WhisperDictateApp {
     /// the tab doesn't re-read the file every frame.
     corpus_loaded: bool,
     /// The corpus item id currently selected in the picker, or `None` before any
-    /// selection. Passed to `--record-corpus-item` when Record is clicked.
+    /// selection. Passed to `corpus_record_native::run_native_to_string` when
+    /// Record is clicked.
     corpus_selected_id: Option<String>,
     /// Cached set of corpus item IDs that already have a recording under appdata.
     /// Populated by [`recorded_ids_set`] in `ensure_corpus_loaded` (and refreshed
@@ -331,8 +332,8 @@ struct WhisperDictateApp {
     corpus_record_result: Option<Result<CorpusRecordOutcome, String>>,
     /// Transient (non-persisted) batch recording cursor. `Some` while a "Record
     /// all"/"Record all missing" sequence is walking the corpus item-by-item;
-    /// each item still uses the proven single-item `--record-corpus-item` worker,
-    /// chained in the UI on every done-event. `None` outside a batch run. Dropped
+    /// each item still uses the proven single-item native recorder path, chained
+    /// in the UI on every done-event. `None` outside a batch run. Dropped
     /// on completion or when the user clicks Stop. Never persisted.
     corpus_batch: Option<CorpusBatch>,
     /// Transient (non-persisted) deadline for the small breathing gap between

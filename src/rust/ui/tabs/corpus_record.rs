@@ -13,7 +13,8 @@ use egui_material_icons::icons;
 impl WhisperDictateApp {
     /// The "Record corpus audio" cluster: a picker of corpus items, the selected
     /// item's reference text (read aloud), and a Record button that launches the
-    /// `--record-corpus-item` worker. Gated on the dictation runtime being stopped
+    /// native cpal recorder on a background thread. Gated on the dictation
+    /// runtime being stopped
     /// (recording must never disturb the managed runtime — they would fight over
     /// the microphone) and no background task running; a localized hint explains
     /// the runtime block. The terminal done/error event is shown inline.
