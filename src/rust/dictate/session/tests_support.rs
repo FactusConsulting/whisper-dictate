@@ -11,6 +11,7 @@ use super::{
     DictateSession, InjectBackend, InjectError, PostProcessBackend, PostProcessOutcome,
     SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult, SR,
 };
+use crate::dictate::audio_ducking::AudioDucker;
 use crate::dictate::feedback::{CueKind, CueSink};
 
 // ── test backends ────────────────────────────────────────────────────────────
@@ -189,6 +190,57 @@ impl CueSink for RecordingCueSink {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(kind);
+    }
+}
+
+/// Recording [`AudioDucker`] mock: every enter/exit call is appended to
+/// a shared vector so a test can assert exactly when the ducker fired
+/// across the session lifecycle. Kept next to [`RecordingCueSink`] so
+/// the two side-effect-capturing mocks live together and follow the
+/// same shape.
+///
+/// A `Drop` impl pushes `"drop"` so tests can assert the RAII
+/// safety-net path (session cancelled mid-utterance -> ducker exit
+/// still runs) without a second mock type. `SystemAudioDucker`'s own
+/// `Drop` calls `self.exit()`, so this mirrors the production
+/// invariant that matters for parity blocker #2.
+pub(super) struct RecordingDucker {
+    pub(super) events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl RecordingDucker {
+    pub(super) fn new() -> (Self, Arc<Mutex<Vec<&'static str>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                events: Arc::clone(&events),
+            },
+            events,
+        )
+    }
+}
+
+impl AudioDucker for RecordingDucker {
+    fn enter(&mut self) {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push("enter");
+    }
+    fn exit(&mut self) {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push("exit");
+    }
+}
+
+impl Drop for RecordingDucker {
+    fn drop(&mut self) {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push("drop");
     }
 }
 

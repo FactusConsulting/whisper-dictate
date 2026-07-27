@@ -16,6 +16,7 @@
 //!   - Windows: `%APPDATA%\WhisperDictate\history.jsonl`
 //!   - Linux/macOS: `$XDG_STATE_HOME/whisper-dictate/history.jsonl`
 //!     (default `~/.local/state`)
+//!
 //!   These are the exact same defaults `vp_history.default_history_path`
 //!   returns, so a user upgrading from the Python engine keeps appending
 //!   to their existing file with no schema break.

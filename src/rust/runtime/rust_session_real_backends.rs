@@ -404,10 +404,14 @@ pub(crate) fn make_real_session(
             // returns `None` when `history_enabled=false`, so this pays
             // zero per-utterance cost on that path. Closes parity blocker #1.
             .with_optional_history_sink(crate::dictate::history_sink_from_settings())
-            // JSONL metrics sink parity with Python (parity blocker #6).
+            // JSONL metrics sink parity (blocker #6).
             .with_optional_metrics_sink(crate::dictate::metrics_sink_from_settings())
             // Live partial-transcription preview parity (blocker #4).
-            .with_optional_preview_engine(preview_engine);
+            .with_optional_preview_engine(preview_engine)
+            // Audio ducking parity (blocker #2). `SystemAudioDucker::from_env`
+            // reads `VOICEPI_AUDIO_DUCKING` + `VOICEPI_AUDIO_DUCKING_LEVEL`
+            // and early-returns without touching WASAPI when the gate is off.
+            .with_ducker(Box::new(crate::dictate::SystemAudioDucker::from_env()));
         if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
             dictate = dictate.with_post_process(Box::new(post));
         }

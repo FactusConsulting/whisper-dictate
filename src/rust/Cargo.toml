@@ -234,7 +234,7 @@ windows-native-keyring-store = "1.1"
 # features. OPTIONAL + pulled in by `audio-capture` (the only feature that
 # compiles devices.rs) so a stock build without audio does not activate these
 # features — same feature-boundary discipline as the other optional audio deps.
-windows = { version = "0.62", features = ["Win32_Media_Audio_DirectSound", "Win32_Foundation"], optional = true }
+windows = { version = "0.62", features = ["Win32_Media_Audio_DirectSound", "Win32_Media_Audio", "Win32_Foundation", "Win32_System_Com"], optional = true }
 
 [build-dependencies]
 winresource = "0.1"

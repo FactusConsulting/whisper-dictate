@@ -217,8 +217,7 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// `try / except OSError` around `append_record_sinks` in
     /// `vp_dictate.py::_record_utterance_event`.
     history_sink: Option<Box<dyn HistorySink + Send>>,
-    /// Optional per-utterance target-profile matcher (parity port of
-    /// Python's `_profiled_config`). See target-profile matching PR.
+    /// Optional per-utterance target-profile matcher.
     profile_matcher: Option<Box<dyn ProfileMatcher>>,
     /// Foreground-window probe consulted at [`Self::start`]. Always present.
     foreground_probe: Box<dyn ForegroundWindowProbe>,
@@ -229,19 +228,11 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// Optional live-preview engine that emits `state="preview"` worker events
     /// during recording (see PR #608 / `preview` module).
     preview: Option<PreviewEngine>,
-    /// Optional metrics-JSONL sink, the sibling of `history_sink` that
-    /// receives the FULL utterance event (unfiltered — unlike history,
-    /// which passes rows through `telemetry::history_event`). Mirrors
-    /// Python's `append_record_sinks(metrics_jsonl=..., json_output=...)`
-    /// second branch, which writes the raw event dict verbatim. `None` --
-    /// the default -- writes no metrics; production wires the real sink
-    /// from [`metrics_sink_from_settings`] which returns `None` unless
-    /// BOTH `inject_json=true` AND a non-empty `metrics_jsonl` path are
-    /// set (matching Python's `metrics_path = ... if json_output and
-    /// raw_metrics_path else ""`). Sink errors are non-fatal for the
-    /// same reason as history: a broken metrics file must never abort a
-    /// dictation.
+    /// Optional metrics-JSONL sink (parity blocker #6). See #606.
     metrics_sink: Option<Box<dyn MetricsSink + Send>>,
+    /// Audio ducker driven at PTT press (start) / PTT release (stop / cancel).
+    /// Rust port of Python's `vp_audio_ducking.AudioDucker` (parity blocker #2).
+    audio_ducker: Box<dyn crate::dictate::audio_ducking::AudioDucker + Send>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -269,6 +260,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             active_profile: None,
             preview: None,
             metrics_sink: None,
+            audio_ducker: Box::new(crate::dictate::audio_ducking::NoOpAudioDucker),
         }
     }
 
@@ -291,6 +283,21 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         if let Some(engine) = engine {
             self.preview = Some(engine);
         }
+        self
+    }
+
+    /// Attach an audio ducker driven at PTT press (start) / PTT release
+    /// (stop / cancel). Default is a silent no-op; production wiring
+    /// (`make_real_session`) attaches
+    /// [`crate::dictate::audio_ducking::SystemAudioDucker`], whose
+    /// `from_env` constructor reads `VOICEPI_AUDIO_DUCKING` +
+    /// `VOICEPI_AUDIO_DUCKING_LEVEL` (parity with Python's
+    /// `vp_audio_ducking.AudioDucker.from_config()`). Closes parity blocker #2.
+    pub fn with_ducker(
+        mut self,
+        ducker: Box<dyn crate::dictate::audio_ducking::AudioDucker + Send>,
+    ) -> Self {
+        self.audio_ducker = ducker;
         self
     }
 
@@ -660,13 +667,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // gates on `VOICEPI_FEEDBACK_SOUNDS`. Non-blocking + never
         // fails, so no error path is threaded here.
         self.cue_sink.play(crate::dictate::feedback::CueKind::Start);
-        // Arm the live-preview worker for this recording (Python parity:
-        // `vp_dictate._start_preview` at the tail of `_start`). A `None`
-        // preview is a no-op, so a session built without one is byte-for-byte
-        // identical to the pre-preview implementation.
+        // Arm the live-preview worker for this recording (parity: `_start_preview`).
         if let Some(engine) = self.preview.as_ref() {
             engine.notify_start();
         }
+        // Audio ducking -- matches vp_dictate.py::_start's
+        // `self.audio_ducker.enter()` right before the capture handshake.
+        // Infallible by trait contract; failures swallowed into a one-shot warning.
+        self.audio_ducker.enter();
         Ok(id)
     }
 
@@ -748,6 +756,16 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // session ready for the next press.
         let buf = std::mem::take(&mut self.frame_buf);
 
+        // Restore audio-ducking BEFORE running transcription, matching
+        // Python's `finally: self.audio_ducker.exit()` in
+        // `_stop_and_transcribe` (line 706), which fires right after
+        // capture stops and BEFORE the transcribe pass runs. Doing it
+        // here (not after transcription) means background media returns
+        // to its normal level the moment the user releases PTT, exactly
+        // like the Python engine -- transcription can take seconds and
+        // we don't want to keep other apps dampened that whole time.
+        // `exit()` is infallible by trait contract.
+        self.audio_ducker.exit();
         let outcome = self.run_transcription(writer, &buf);
         // Always settle back to Idle + emit `status=ready`, matching
         // Python's `finally: _emit_worker_event(..., state="ready")`.
@@ -1004,14 +1022,13 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         // keep the audible "recording ended" signal even when the
         // clip is dropped.
         self.cue_sink.play(crate::dictate::feedback::CueKind::Stop);
-        // Chord-cancel path: the preview worker must ALSO stop so a
-        // stale in-flight tick cannot emit onto the wire after the UI has
-        // switched to the cancelled state (matching the Python
-        // `_cancel_and_discard -> _stop_and_transcribe` chain, which
-        // stops the preview thread before dropping the audio buffer).
+        // Preview worker must stop (parity: _cancel_and_discard -> _stop_and_transcribe).
         if let Some(engine) = self.preview.as_ref() {
             engine.notify_stop();
         }
+        // Audio ducking must exit explicitly here — Rust cancel() shortcuts
+        // around stop_and_transcribe, so restore background volume manually.
+        self.audio_ducker.exit();
         wire::emit_status(writer, "cancelled", &[("reason", Value::from("chord"))])?;
         wire::emit_status(writer, "ready", &self.capture_extras())?;
         Ok(())
