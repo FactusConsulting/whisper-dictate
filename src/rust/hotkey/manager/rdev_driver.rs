@@ -8,10 +8,15 @@
 //! * the *manager* thread, which owns the `Mutex<KeyTracker>` and processes
 //!   register/unregister commands sent over an mpsc.
 //!
-//! The two are split because `rdev::listen` is not `Send`, blocks the thread
-//! it runs on for the process lifetime, and offers no register/unregister
-//! API of its own — so the manager thread is the only place from which the
-//! rest of the runtime can safely talk to the binding.
+//! Since PR #644, a third thread (the *heartbeat* thread) also runs and
+//! logs periodic diagnostics — see [`spawn_heartbeat_thread`] and the
+//! Windows PTT wedge story in the module-level `HEARTBEAT` docs below.
+//!
+//! The two production threads are split because `rdev::listen` is not
+//! `Send`, blocks the thread it runs on for the process lifetime, and
+//! offers no register/unregister API of its own — so the manager thread
+//! is the only place from which the rest of the runtime can safely talk
+//! to the binding.
 //!
 //! ## Listener readiness
 //!
@@ -26,7 +31,33 @@
 //! returns. This is what surfaces "rdev never made it past listen()" to the
 //! caller of `install_hotkey()` so the supervisor can keep the Python
 //! listener wired instead of parking it.
+//!
+//! ## Heartbeat instrumentation (Windows PTT wedge diagnostic)
+//!
+//! The Windows GUI (`whisper-dictate-gui.exe`) has `windows_subsystem =
+//! "windows"` and no attached console. The `%LOCALAPPDATA%\WhisperDictate\
+//! gui-diagnostic.log` tee added in PR #644 shows that Phase-B install
+//! runs, but users report that pressing the configured chord never fires
+//! a session. To distinguish the three possible root causes without a
+//! second bug-report round-trip, this driver ships two complementary
+//! diagnostics:
+//!
+//! 1. A **heartbeat thread** logs `[hotkey/rdev] listener heartbeat;
+//!    events_since_last_heartbeat=N; total_events=T` every
+//!    [`HEARTBEAT_INTERVAL`]. The counters are updated by the LL-hook
+//!    callback, so a heartbeat of `events_since_last_heartbeat=0` in the
+//!    same window that the user was pressing keys narrows the fault to
+//!    the OS listener path (message pump not delivering to the callback,
+//!    or hook never installed by rdev), not the tracker or coordinator.
+//! 2. A **rate-limited per-event trace**: the first
+//!    [`RAW_EVENT_INITIAL_TRACE`] events always log, then every
+//!    [`RAW_EVENT_TRACE_EVERY`]th event. This surfaces the actual key
+//!    names rdev delivers so a chord-matcher rejection ("hook is alive
+//!    but the event is called `ctrl` not `ctrl_l`", or "AltGr shows up
+//!    as `alt_gr` but the user configured `alt_r`") is visible without
+//!    a rebuild.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -46,6 +77,26 @@ pub use super::driver_common::{
 /// like headless Linux without making CI slow.
 const READY_PROBE_WINDOW: Duration = Duration::from_millis(250);
 
+/// How often the heartbeat thread emits its `[hotkey/rdev] listener
+/// heartbeat; ...` line. Five seconds is short enough that a user testing
+/// PTT interactively will see fresh output within one press cycle, and long
+/// enough that the tee file does not grow noticeably during quiet periods
+/// (12 lines per minute; ~17 kB per hour of steady-state runtime).
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Number of leading raw events that always emit a `[hotkey/rdev] raw
+/// event #N: ...` trace line. Ensures the very first keystroke after a
+/// suspected-wedged install produces a log entry — without this a user
+/// who presses ctrl_l exactly once at startup would see the heartbeat's
+/// non-zero counter but no name/kind of the event.
+const RAW_EVENT_INITIAL_TRACE: u64 = 10;
+
+/// After the leading window, only every N-th raw event logs. Balances
+/// "we can see forward progress in a long session" against "typing
+/// bursts don't flood the tee". 100 → one trace line per typical
+/// dictation utterance in steady-state use.
+const RAW_EVENT_TRACE_EVERY: u64 = 100;
+
 /// Signals the listener thread sends to the spawn-side coordinator.
 enum ListenerSignal {
     /// The thread is up and about to call into rdev.
@@ -53,6 +104,23 @@ enum ListenerSignal {
     /// `rdev::listen` returned Err quickly (no display, missing OS
     /// permission, ...). The string is the rdev error formatted for logs.
     Failed(String),
+}
+
+/// Rate-limit decision for the per-event trace line. Pure so it can be
+/// unit-tested without spawning any threads — the runtime just calls it
+/// with the current event counter (1-indexed).
+///
+/// Returns true for events `1..=RAW_EVENT_INITIAL_TRACE`, then for every
+/// `RAW_EVENT_TRACE_EVERY`-th event thereafter. Zero is treated as "no
+/// index" and always returns false; callers must pass at least 1.
+pub(crate) fn should_log_raw_event(n: u64) -> bool {
+    if n == 0 {
+        return false;
+    }
+    if n <= RAW_EVENT_INITIAL_TRACE {
+        return true;
+    }
+    n.is_multiple_of(RAW_EVENT_TRACE_EVERY)
 }
 
 /// Spawn the manager thread plus the `rdev` listener thread. Every tracker
@@ -106,6 +174,28 @@ where
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
 
+    // Per-listener event counters — updated on every raw OS event from
+    // inside the LL-hook callback, read by the heartbeat thread. Atomics
+    // (rather than `Mutex<u64>`) so the callback stays lock-free on the
+    // hot path — matters because on Windows the callback runs from
+    // inside the LL-hook thread for every desktop-wide keydown/keyup.
+    let events_total = Arc::new(AtomicU64::new(0));
+    let events_since_heartbeat = Arc::new(AtomicU64::new(0));
+    // Heartbeat stop signal — set on Drop of the listener side would be
+    // ideal, but the rdev listener thread cannot be joined, and the
+    // production `HotkeyHandle` is a process-lifetime resource (never
+    // dropped in shipping code). The heartbeat thread therefore runs
+    // until process exit; the atomic exists so the test-only shutdown
+    // path can nudge it, and so a future rework can wire it in without
+    // reshaping the spawn signature.
+    let heartbeat_stop = Arc::new(AtomicBool::new(false));
+
+    spawn_heartbeat_thread(
+        Arc::clone(&events_total),
+        Arc::clone(&events_since_heartbeat),
+        Arc::clone(&heartbeat_stop),
+    );
+
     // Listener thread — owns rdev. Translates raw events through the shared
     // tracker. Signals readiness / startup failure on a sync channel so
     // `spawn` can surface a quick-failure to the caller (P1 finding #2).
@@ -113,6 +203,8 @@ where
     let listener_sink = Arc::clone(&on_output);
     let listener_tap = Arc::clone(&raw_tap);
     let listener_guard = Arc::clone(&injection_guard);
+    let listener_total = Arc::clone(&events_total);
+    let listener_since = Arc::clone(&events_since_heartbeat);
     let (ready_tx, ready_rx) = mpsc::channel::<ListenerSignal>();
     thread::Builder::new()
         .name("vp-hotkey-rdev".to_owned())
@@ -121,8 +213,32 @@ where
             // this the spawn-side can't tell "thread never scheduled" apart
             // from "rdev is blocking healthily".
             let _ = ready_tx.send(ListenerSignal::Started);
+            // Diagnostic marker so the tee file records the listener
+            // thread actually reached rdev::listen. Combined with the
+            // heartbeat, "startup log line present + heartbeat present
+            // but events_since_last_heartbeat=0" is the Windows PTT
+            // wedge signature (hook installed, pump idle).
+            crate::diag::log!(
+                "[hotkey/rdev] listener thread started; installing global hook \
+                 (WH_KEYBOARD_LL on Windows / XRecord on X11 / CGEventTap on macOS)"
+            );
             let cb = move |event: rdev::Event| {
                 if let Some(raw) = raw_from_rdev(&event) {
+                    // Update counters BEFORE the guard / tracker check —
+                    // the heartbeat records every raw event rdev delivered,
+                    // even ones self-injection filtering drops. If the
+                    // guard is armed and the event is swallowed the raw
+                    // count still moves; if the pump is dead the count
+                    // stays flat. That's the exact signal we need.
+                    let n = listener_total.fetch_add(1, Ordering::Relaxed) + 1;
+                    listener_since.fetch_add(1, Ordering::Relaxed);
+                    if should_log_raw_event(n) {
+                        crate::diag::log!(
+                            "[hotkey/rdev] raw event #{n}: name={:?} kind={:?}",
+                            raw.name,
+                            raw.kind
+                        );
+                    }
                     listener_tap.tap(&raw);
                     // `dispatch_raw_event` short-circuits when the guard
                     // is armed — the injector's own SendInput bursts get
@@ -200,13 +316,65 @@ where
     Ok((handle, manager_thread))
 }
 
+/// Spawn the heartbeat thread. Runs until `stop` flips to `true`, which in
+/// production never happens — the rdev listener itself cannot be joined so
+/// there is no clean shutdown for the diagnostic layer above it either.
+/// Test hosts flip the atomic to keep the tee file from growing across a
+/// full unit-test run; production callers ignore it and accept a
+/// process-lifetime thread.
+///
+/// The thread name is set explicitly so a Windows dump / a `taskkill /f
+/// /t` trace names it, and so `Thread::current().name()` in a future
+/// panic hook can attribute stack traces to the right subsystem.
+fn spawn_heartbeat_thread(
+    events_total: Arc<AtomicU64>,
+    events_since_heartbeat: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+) {
+    let _ = thread::Builder::new()
+        .name("vp-hotkey-rdev-heartbeat".to_owned())
+        .spawn(move || {
+            // First heartbeat also emits an install-time marker so the
+            // absolute t=<ms> value of the first `heartbeat` line pins
+            // the listener-start moment even if the LL hook is silent.
+            crate::diag::log!(
+                "[hotkey/rdev] heartbeat thread started; interval={:?}",
+                HEARTBEAT_INTERVAL
+            );
+            while !stop.load(Ordering::Relaxed) {
+                // Sleep in small slices so the stop signal is honoured
+                // promptly in tests. A production process never toggles
+                // stop, so the sliced sleep is a no-op there.
+                let deadline = Instant::now() + HEARTBEAT_INTERVAL;
+                while Instant::now() < deadline {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let remaining = deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(250));
+                    thread::sleep(remaining);
+                }
+                let total = events_total.load(Ordering::Relaxed);
+                let since = events_since_heartbeat.swap(0, Ordering::Relaxed);
+                crate::diag::log!(
+                    "[hotkey/rdev] listener heartbeat; events_since_last_heartbeat={since}; \
+                     total_events={total}"
+                );
+            }
+        });
+}
+
 /// Convert an `rdev::Event` into the platform-agnostic [`RawKeyEvent`] the
 /// tracker consumes. Returns `None` only for non-keyboard events (mouse,
 /// etc.); unknown key variants get a synthetic `__rdev_<Debug>` name so the
 /// tracker can still detect foreign-key holds for bare-modifier rule 1/2
 /// (P2 #346 finding 2). PTT-target matching never collides with these names
 /// since every PTT-able name is in `key_to_name`.
-fn raw_from_rdev(event: &rdev::Event) -> Option<RawKeyEvent> {
+///
+/// `pub(crate)` so the companion `rdev_driver_tests.rs` can drive it with
+/// synthetic events without a shim.
+pub(crate) fn raw_from_rdev(event: &rdev::Event) -> Option<RawKeyEvent> {
     let (key, kind) = match event.event_type {
         rdev::EventType::KeyPress(k) => (k, RawKeyKind::Press),
         rdev::EventType::KeyRelease(k) => (k, RawKeyKind::Release),
@@ -308,165 +476,6 @@ fn key_to_name(key: rdev::Key) -> Option<String> {
     Some(name.to_owned())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[test]
-    fn register_and_unregister_roundtrip() {
-        // Lightweight test that register/unregister responses come back
-        // through the mpsc — does NOT exercise the rdev listener thread
-        // (it's still installed but no synthetic events are injected).
-        // In headless CI / containers rdev::listen returns Err immediately
-        // (no X display / no accessibility permission) — that's exactly
-        // the P1-#2 startup-failure path, so we skip the round-trip on
-        // such platforms rather than assert success.
-        let count = Arc::new(AtomicUsize::new(0));
-        let count_cb = Arc::clone(&count);
-        let guard = Arc::new(InjectionGuard::new());
-        let (handle, _thread) = match spawn(guard, move |_out| {
-            count_cb.fetch_add(1, Ordering::SeqCst);
-        }) {
-            Ok(pair) => pair,
-            Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
-                eprintln!(
-                    "skipping register_and_unregister_roundtrip: rdev listener \
-                     refused to start (headless env)"
-                );
-                return;
-            }
-        };
-        handle
-            .register(vec!["ctrl_l".to_owned(), "f9".to_owned()])
-            .expect("register");
-        handle.unregister().expect("unregister");
-        handle
-            .register(vec!["shift_r".to_owned()])
-            .expect("re-register");
-        // No events fired through the tracker — count stays zero.
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-        handle.shutdown();
-        // Do NOT join: the rdev listener thread is unjoinable, but the
-        // manager thread is — drop the handle and let the test runner
-        // finish. (The thread exits on its own when it sees Shutdown.)
-    }
-
-    #[test]
-    fn listener_startup_failure_is_surfaced_to_caller() {
-        // On a headless Linux container rdev::listen returns Err very
-        // quickly (no X display). The driver MUST propagate that to the
-        // spawn-side caller instead of silently logging and exiting, so
-        // the supervisor can keep the Python listener wired (P1 #2).
-        // We don't have a way to force the failure on platforms where the
-        // hook genuinely works, so on those we treat success as "test not
-        // applicable" rather than fail.
-        let guard = Arc::new(InjectionGuard::new());
-        match spawn(guard, |_out| {}) {
-            Ok((handle, _thread)) => {
-                handle.shutdown();
-            }
-            Err(SpawnError::ListenerStartup(msg)) => {
-                assert!(
-                    !msg.is_empty(),
-                    "ListenerStartup error message should not be empty"
-                );
-            }
-            Err(SpawnError::ListenerHung) => {
-                // Hung is also a "tell the caller" outcome — acceptable.
-            }
-        }
-    }
-
-    #[test]
-    fn rdev_name_set_covers_every_emitted_key() {
-        // Every name the rdev->name mapping can emit must appear in the
-        // supported-names set so the install-time validator never rejects
-        // a name we DO support. If you add a key in `key_to_name`, add it
-        // to `RDEV_SUPPORTED_NAMES` (and adjust this assertion if you also
-        // expose a new bare-modifier alias).
-        for key in [
-            rdev::Key::ControlLeft,
-            rdev::Key::ControlRight,
-            rdev::Key::ShiftLeft,
-            rdev::Key::ShiftRight,
-            rdev::Key::Alt,
-            rdev::Key::AltGr,
-            rdev::Key::MetaLeft,
-            rdev::Key::MetaRight,
-            rdev::Key::F1,
-            rdev::Key::F12,
-            rdev::Key::Space,
-            rdev::Key::Escape,
-            rdev::Key::Tab,
-            rdev::Key::Return,
-        ] {
-            let name = key_to_name(key).expect("mapped name");
-            assert!(
-                is_rdev_supported_name(&name),
-                "rdev emits {name} but install-time validator rejects it",
-            );
-        }
-    }
-
-    #[test]
-    fn unsupported_names_are_rejected_by_validator() {
-        // Names accepted by the Python evdev/pynput backends but NOT by the
-        // rdev driver. Without the validator a configuration that contains
-        // any of these would install successfully but never fire (P2 #6).
-        for name in ["super_l", "super_r", "menu", "scroll_lock", "pause"] {
-            assert!(
-                !is_rdev_supported_name(name),
-                "rdev driver claims to support {name} — update the test or the map",
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // P2 #346 finding 4: right_alt / ralt aliases.
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn right_alt_and_ralt_aliases_are_accepted_by_validator() {
-        // Users and documentation sometimes refer to AltGr as "right_alt"
-        // or "ralt". The install-time validator must accept these so the
-        // Rust backend doesn't reject a valid AltGr PTT binding.
-        for name in ["right_alt", "ralt"] {
-            assert!(
-                is_rdev_supported_name(name),
-                "{name} should be accepted as an AltGr alias (P2 #346 finding 4)",
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // P2 #346 finding 2: unmapped (ordinary) keys reach the tracker.
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn raw_from_rdev_produces_event_for_unmapped_key() {
-        // Keys not in key_to_name (e.g. letter keys) must still produce a
-        // RawKeyEvent so the tracker can detect foreign-key holds and emit
-        // ChordCancel for bare-modifier bindings (rule 2). Previously
-        // raw_from_rdev returned None for these, silently dropping them.
-        use rdev::{Event, EventType};
-
-        let press_a = Event {
-            event_type: EventType::KeyPress(rdev::Key::KeyA),
-            time: std::time::SystemTime::UNIX_EPOCH,
-            name: None,
-        };
-        let raw = raw_from_rdev(&press_a);
-        assert!(
-            raw.is_some(),
-            "ordinary key press must produce a RawKeyEvent for foreign-key tracking"
-        );
-        let raw = raw.unwrap();
-        assert!(
-            raw.name.starts_with("__rdev_"),
-            "unmapped key should use synthetic __rdev_ name, got {:?}",
-            raw.name
-        );
-        assert_eq!(raw.kind, RawKeyKind::Press);
-    }
-}
+// Unit tests moved to sibling `rdev_driver_tests.rs` so the regression
+// -test discipline scanner sees a matching companion file for the new
+// `should_log_raw_event` helper and the heartbeat instrumentation.
