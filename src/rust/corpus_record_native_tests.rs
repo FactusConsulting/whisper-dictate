@@ -261,3 +261,99 @@ fn danish_text_survives_ensure_ascii_false_equivalent() {
     let line = serde_json::to_string(&ev).unwrap();
     assert!(line.contains("Hej med dig, æøå"), "escaped: {line}");
 }
+
+#[test]
+fn clamp_to_max_record_respects_cap_below_heuristic() {
+    // Codex P2 #624 regression pin: the corpus heuristic can ask for up to
+    // 92 s; a user cap of 30 s must be honoured so a long corpus item
+    // cannot bypass the configured maximum.
+    assert_eq!(clamp_to_max_record_with(92.0, Some("30")), 30.0);
+}
+
+#[test]
+fn clamp_to_max_record_leaves_heuristic_alone_when_below_cap() {
+    // When the heuristic asks for less than the cap the cap doesn't move
+    // the value — the recorder still records only what it needs.
+    assert_eq!(clamp_to_max_record_with(30.0, Some("120")), 30.0);
+}
+
+#[test]
+fn clamp_to_max_record_disables_cap_when_value_is_zero() {
+    // `"0"` (or any non-positive parsed value) disables the cap — same
+    // "0 = uncapped" contract as `RouteConfig::from_env`.
+    assert_eq!(clamp_to_max_record_with(150.0, Some("0")), 150.0);
+    assert_eq!(clamp_to_max_record_with(150.0, Some("-5")), 150.0);
+}
+
+#[test]
+fn clamp_to_max_record_falls_back_to_default_when_missing_or_unparseable() {
+    // Missing -> 120 s default; unparseable -> 120 s default (matches
+    // `parse_max_record_seconds`). A heuristic of 92 s stays below the
+    // default and passes through; a synthetic 300 s clamps to 120.
+    assert_eq!(clamp_to_max_record_with(92.0, None), 92.0);
+    assert_eq!(clamp_to_max_record_with(300.0, None), 120.0);
+    assert_eq!(clamp_to_max_record_with(300.0, Some("garbage")), 120.0);
+}
+
+#[test]
+fn clamp_to_max_record_trims_whitespace_around_the_value() {
+    // Same trim as `parse_max_record_seconds`: `"  30  "` parses as 30 s.
+    assert_eq!(clamp_to_max_record_with(92.0, Some("  30  ")), 30.0);
+}
+
+#[cfg(feature = "audio-in-rust")]
+#[test]
+fn max_record_env_matches_the_audio_route_side() {
+    // The two constants (env-var name and default cap) are duplicated across
+    // this module and `dictate::audio_route::config` because the audio route
+    // is behind a stronger feature (`audio-in-rust`) than this recorder
+    // (`audio-capture`). Pin them here so a rename or a default change on
+    // the route side is caught at test-time instead of drifting silently
+    // in the recorder path. Codex P2 #624 pointed out this recorder must
+    // honour the same cap the route uses; keeping them literally identical
+    // is what makes that promise cheap to maintain.
+    assert_eq!(
+        super::MAX_RECORD_ENV,
+        crate::dictate::audio_route::config::MAX_RECORD_ENV,
+    );
+    assert_eq!(
+        super::DEFAULT_MAX_RECORD_S,
+        crate::dictate::audio_route::config::DEFAULT_MAX_RECORD_S,
+    );
+}
+
+#[test]
+fn effective_audio_device_reads_env_var() {
+    // Codex P2 #624 regression pin: `VOICEPI_AUDIO_DEVICE=Yeti
+    // whisper-dictate corpus-record …` must land on the shell-exported
+    // mic name (trimmed) instead of the OS-default fallback. Serialised
+    // through the shared env-var lock so a parallel schema loader in a
+    // sibling module doesn't race.
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let old_env = std::env::var("VOICEPI_AUDIO_DEVICE").ok();
+    // `CONFIG_ENV` is `pub(crate)` inside `config::io` (a private
+    // submodule); tests reach it via the literal to avoid re-exporting.
+    const CONFIG_ENV: &str = "VOICEPI_CONFIG";
+    let old_config = std::env::var(CONFIG_ENV).ok();
+    // Isolate from any persisted user config on the developer's machine by
+    // pointing `VOICEPI_CONFIG` at an empty temp file, so the schema
+    // resolver falls through to the process env (which is what we're
+    // testing here).
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.json");
+    std::fs::write(&cfg, "{}").unwrap();
+    std::env::set_var(CONFIG_ENV, &cfg);
+    std::env::set_var("VOICEPI_AUDIO_DEVICE", "  Yeti Blue  ");
+    let device = effective_audio_device();
+    match old_env {
+        Some(v) => std::env::set_var("VOICEPI_AUDIO_DEVICE", v),
+        None => std::env::remove_var("VOICEPI_AUDIO_DEVICE"),
+    }
+    match old_config {
+        Some(v) => std::env::set_var(CONFIG_ENV, v),
+        None => std::env::remove_var(CONFIG_ENV),
+    }
+    assert_eq!(device, "Yeti Blue", "trim + honour env override");
+}
