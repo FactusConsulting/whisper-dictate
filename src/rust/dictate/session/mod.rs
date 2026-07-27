@@ -53,6 +53,7 @@ use serde_json::{json, Value};
 
 pub mod history_sink;
 pub mod metrics_sink;
+mod path_util;
 pub mod preview;
 pub mod types;
 mod wire;

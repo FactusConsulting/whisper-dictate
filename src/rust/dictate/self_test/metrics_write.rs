@@ -35,9 +35,7 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use crate::dictate::session::metrics_sink::{
-    effective_metrics_settings, metrics_sink_from_settings,
-};
+use crate::dictate::session::metrics_sink::{effective_metrics_settings, ReloadingMetricsSink};
 
 /// Options for [`run_metrics_write_self_test`].
 #[derive(Debug, Clone, Default)]
@@ -170,17 +168,22 @@ pub fn run_metrics_write_self_test(opts: MetricsWriteOptions) -> MetricsWriteRep
         };
     };
     let path = settings.path.clone();
-    let sink = metrics_sink_from_settings();
-    if let Some(sink) = sink {
-        sink.append(&event);
-    }
-    let bytes_written = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    // Exercise the shipping reloading sink via its result-returning
+    // variant so a failure surfaces as `ok=false` in the JSON envelope.
+    // Codex P2 #621 metrics_write.rs:186: pre-fix, this branch called
+    // `sink.append(&event)` (which swallows all errors) and then
+    // hard-coded `error: None`, so a broken metrics file was invisible
+    // to the self-test AND the Wayland smoke script.
+    let (bytes_written, error) = match ReloadingMetricsSink::new().append_with_result(&event) {
+        Ok(_) => (fs::metadata(&path).map(|m| m.len()).unwrap_or(0), None),
+        Err(err) => (0, Some(format!("metrics write failed: {err}"))),
+    };
     MetricsWriteReport {
         enabled: true,
         path: Some(path),
         row: Some(event),
         bytes_written,
-        error: None,
+        error,
     }
 }
 
@@ -263,5 +266,65 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("metrics write failed"));
+    }
+
+    /// The production branch (no `path_override`) must also propagate
+    /// I/O failures. Pre-fix (Codex P2 #621 metrics_write.rs:186) the
+    /// verb hard-coded `error: None` even when the sink swallowed a
+    /// write failure, so the JSON envelope reported `ok=true` while
+    /// nothing landed on disk.
+    #[test]
+    fn write_failure_in_production_branch_propagates_from_reloading_sink() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        fs::write(&cfg, "{}").unwrap();
+        let file_as_parent = dir.path().join("not-a-dir");
+        fs::write(&file_as_parent, "").unwrap();
+        let unwritable = file_as_parent.join("metrics.jsonl");
+
+        let saved_cfg = std::env::var_os("VOICEPI_CONFIG");
+        let saved_json = std::env::var_os("VOICEPI_JSON");
+        let saved_path = std::env::var_os("VOICEPI_METRICS_JSONL");
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var("VOICEPI_JSON", "1");
+        std::env::set_var("VOICEPI_METRICS_JSONL", &unwritable);
+
+        let report = run_metrics_write_self_test(MetricsWriteOptions {
+            text: "prod-boom".to_owned(),
+            path_override: None,
+        });
+
+        match saved_cfg {
+            Some(v) => std::env::set_var("VOICEPI_CONFIG", v),
+            None => std::env::remove_var("VOICEPI_CONFIG"),
+        }
+        match saved_json {
+            Some(v) => std::env::set_var("VOICEPI_JSON", v),
+            None => std::env::remove_var("VOICEPI_JSON"),
+        }
+        match saved_path {
+            Some(v) => std::env::set_var("VOICEPI_METRICS_JSONL", v),
+            None => std::env::remove_var("VOICEPI_METRICS_JSONL"),
+        }
+
+        assert!(
+            !report.exit_ok(),
+            "the production branch (no path_override) MUST surface \
+             the shipping sink's I/O failures; pre-fix this returned \
+             ok=true because the trait `append` swallowed the error"
+        );
+        assert!(
+            report
+                .error
+                .as_deref()
+                .map(|e| e.contains("metrics write failed"))
+                .unwrap_or(false),
+            "error text must be descriptive; got {:?}",
+            report.error
+        );
     }
 }

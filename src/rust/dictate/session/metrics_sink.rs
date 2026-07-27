@@ -48,6 +48,8 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
+use super::path_util::expand_user;
+
 /// Config-key + env-var pair for the "JSON output" gate. Kept as named
 /// constants because Python's `vp_history.append_record_sinks` also
 /// combines the two via `vp_config.get_value("VOICEPI_JSON")`.
@@ -67,6 +69,30 @@ pub struct EffectiveMetricsSettings {
     pub path: PathBuf,
 }
 
+/// Metrics resolution: gate off, gate on with a resolved path, or the
+/// config file couldn't be loaded so we can't tell. Codex P2 #620
+/// history_sink.rs:85 (finding `Fail closed when live history config
+/// cannot be read`) applies to the metrics sink for the SAME reason: an
+/// operator with `json_output=true` + `metrics_jsonl=/path` in a
+/// transiently-invalid config.json would previously drop through to the
+/// env layer, which normally holds neither var, silently disabling the
+/// sink. The old failure was silent because
+/// `load_raw_config().unwrap_or(Null)` swallowed the parse error before
+/// we could report it. `ConfigError` lets the reloading sink log warn
+/// AND fail-closed (skip the append) so the operator sees the broken
+/// config in stderr rather than losing metrics rows without a hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetricsResolution {
+    /// Gate off: either `json_output=false` or `metrics_jsonl` is empty.
+    /// The sink silently drops appends (Python parity).
+    Disabled,
+    /// Gate on: sink appends to `settings.path`.
+    Enabled(EffectiveMetricsSettings),
+    /// `config::load_raw_config` errored (I/O or JSON parse). The sink
+    /// fail-closes AND logs a warning so the operator can fix the file.
+    ConfigError(String),
+}
+
 /// Resolve the effective metrics settings the way Python does:
 /// **config-file value wins first, then env var, then schema default**.
 /// Mirrors `vp_config.get_value` (which is what `vp_dictate` consults
@@ -76,11 +102,22 @@ pub struct EffectiveMetricsSettings {
 /// `VOICEPI_METRICS_JSONL=...` set in the environment -- this helper is
 /// the sinks' single overlay point. Codex P1 #606 finding 3 + 5.
 ///
-/// Returns `None` when the metrics file must NOT be written (either
-/// `json_output` is off OR `metrics_jsonl` is empty/whitespace) --
-/// matching Python's gate.
-pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
-    let raw_config = crate::config::load_raw_config().unwrap_or(serde_json::Value::Null);
+/// Returns [`MetricsResolution::ConfigError`] when `config.json` can't be
+/// loaded (used by [`ReloadingMetricsSink::append`] to log + skip),
+/// [`MetricsResolution::Disabled`] when the gate is off, and
+/// [`MetricsResolution::Enabled`] otherwise. Callers on the wire API
+/// today (`metrics_sink_from_settings`, self-test verbs) use the
+/// [`effective_metrics_settings`] wrapper below which flattens the
+/// resolution back to the historical `Option<...>` shape and reports the
+/// config error to stderr.
+pub fn effective_metrics_resolution() -> MetricsResolution {
+    let (raw_config, load_err) = match crate::config::load_raw_config() {
+        Ok(v) => (v, None),
+        Err(err) => (serde_json::Value::Null, Some(err.to_string())),
+    };
+    if let Some(err) = load_err {
+        return MetricsResolution::ConfigError(err);
+    }
     let object = raw_config.as_object();
 
     // json_output: config → env → default (unset).
@@ -91,17 +128,41 @@ pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
         .filter(|v| !v.trim().is_empty());
     let json_output = json_output_raw.as_deref().map(is_truthy).unwrap_or(false);
     if !json_output {
-        return None;
+        return MetricsResolution::Disabled;
     }
 
     let path_raw = object
         .and_then(|obj| obj.get(METRICS_JSONL_KEY))
         .and_then(value_as_env_string)
         .or_else(|| std::env::var(METRICS_JSONL_ENV).ok())
-        .filter(|v| !v.trim().is_empty())?;
-    Some(EffectiveMetricsSettings {
-        path: expand_user(path_raw.trim()),
-    })
+        .filter(|v| !v.trim().is_empty());
+    match path_raw {
+        Some(raw) => MetricsResolution::Enabled(EffectiveMetricsSettings {
+            path: expand_user(raw.trim()),
+        }),
+        None => MetricsResolution::Disabled,
+    }
+}
+
+/// Historical wrapper: flatten [`MetricsResolution`] back to the pre-P1
+/// `Option<...>` shape. On [`MetricsResolution::ConfigError`] this logs
+/// a `[metrics]` warn line to stderr and returns `None` -- the sink
+/// therefore fail-closes rather than dropping through to the env layer
+/// (previous silent behaviour, Codex P2 #620 finding
+/// `Fail closed when live history config cannot be read`).
+pub fn effective_metrics_settings() -> Option<EffectiveMetricsSettings> {
+    match effective_metrics_resolution() {
+        MetricsResolution::Enabled(s) => Some(s),
+        MetricsResolution::Disabled => None,
+        MetricsResolution::ConfigError(err) => {
+            eprintln!(
+                "[metrics] warn: config read failed ({err}); \
+                 fail-closed and dropping this row rather than falling through \
+                 to the env layer -- fix config.json to resume writing"
+            );
+            None
+        }
+    }
 }
 
 /// Mirror of Python's `_truthy` in `vp_events.py` / `vp_history.py`:
@@ -217,6 +278,30 @@ impl ReloadingMetricsSink {
     pub fn last_resolved(&self) -> Option<Option<EffectiveMetricsSettings>> {
         self.last.lock().ok().and_then(|guard| guard.clone())
     }
+
+    /// Same as [`MetricsSink::append`] but returns the underlying write
+    /// result instead of swallowing it. Used by the `self-test
+    /// metrics-write` verb (Codex P2 #621 metrics_write.rs:186) so a
+    /// broken file surfaces as `ok=false` in the JSON envelope instead
+    /// of the pre-fix hard-coded `Ok(())`. Signals both "gate off" and
+    /// "config error" as a successful no-op result (`Ok(None)`); real
+    /// I/O errors bubble as an `Err`; a successful append returns
+    /// `Ok(Some(path))` so the caller can `metadata()` the exact file
+    /// the sink wrote to.
+    pub fn append_with_result(&self, event: &Value) -> anyhow::Result<Option<PathBuf>> {
+        let settings = effective_metrics_settings();
+        if let Ok(mut guard) = self.last.lock() {
+            *guard = Some(settings.clone());
+        }
+        let Some(settings) = settings else {
+            // Gate off, or `effective_metrics_settings` fail-closed on
+            // a config-read error (which it already logged). No write,
+            // no error.
+            return Ok(None);
+        };
+        crate::telemetry::append_jsonl(&settings.path, event)?;
+        Ok(Some(settings.path))
+    }
 }
 
 impl Default for ReloadingMetricsSink {
@@ -227,21 +312,28 @@ impl Default for ReloadingMetricsSink {
 
 impl MetricsSink for ReloadingMetricsSink {
     fn append(&self, event: &Value) {
-        let settings = effective_metrics_settings();
-        if let Ok(mut guard) = self.last.lock() {
-            *guard = Some(settings.clone());
-        }
-        let Some(settings) = settings else {
-            // Gate off, or path unset -- silently drop, matching
-            // Python's `if not metrics_path and not history_out: return`
-            // short-circuit on the metrics branch.
-            return;
-        };
-        if let Err(err) = crate::telemetry::append_jsonl(&settings.path, event) {
-            eprintln!(
-                "[metrics] could not append to {}: {err}",
-                settings.path.display()
-            );
+        // Delegate to the result-returning variant so the shipping
+        // trait impl (which swallows the error) and the self-test verb
+        // (which surfaces it, Codex P2 #621 metrics_write.rs:186) share
+        // exactly the same resolve-then-write path. Only the trailing
+        // error-handling differs.
+        match self.append_with_result(event) {
+            Ok(_) => {}
+            Err(err) => {
+                // Non-fatal, matching Python's
+                // `except OSError: print(f"[sinks] could not write ...")`.
+                // We don't know the exact path here (append_with_result
+                // resolves per-call), so log via the cached last-resolved
+                // path when available; fall back to a generic message.
+                let path_hint = self
+                    .last
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone().flatten())
+                    .map(|s| s.path.display().to_string())
+                    .unwrap_or_else(|| "<unresolved>".to_owned());
+                eprintln!("[metrics] could not append to {path_hint}: {err}");
+            }
         }
     }
 }
@@ -265,25 +357,8 @@ pub fn metrics_sink_from_settings() -> Option<Box<dyn MetricsSink + Send>> {
     Some(Box::new(ReloadingMetricsSink::new()))
 }
 
-/// Expand a leading `~` to the user's home directory, matching Python's
-/// `os.path.expanduser`. Anything without a leading `~` is returned as-is.
-/// A missing `HOME`/`USERPROFILE` falls through to `.` -- the same
-/// last-resort the sibling `dictionary::store::expand_user` and
-/// `corpus::expand_tilde` helpers pick.
-fn expand_user(raw: &str) -> PathBuf {
-    if let Some(stripped) = raw.strip_prefix('~') {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let rest = stripped.trim_start_matches(['/', '\\']);
-        if rest.is_empty() {
-            return home;
-        }
-        return home.join(rest);
-    }
-    PathBuf::from(raw)
-}
+// `expand_user` moved to `super::path_util` so the sibling history sink
+// can honour the same `~/…` expansion (Codex P2 #620 history_sink.rs:107).
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -435,39 +510,111 @@ mod tests {
         sink.append(&json!({"text": "ignored"}));
     }
 
+    // `expand_user` was moved to `super::path_util`; the behavioural
+    // test now lives in `path_util::tests`. This module still exercises
+    // the tilde behaviour end-to-end via
+    // `effective_metrics_settings_tilde_in_env_var_is_expanded` below.
+
+    /// A `VOICEPI_METRICS_JSONL=~/metrics.jsonl` env override must
+    /// expand `~` to `$HOME/…` before the sink writes. This has always
+    /// worked on the metrics side; the parallel test on `history_sink`
+    /// closes the same gap on the history side (Codex P2 #620
+    /// history_sink.rs:107).
     #[test]
-    fn expand_user_expands_leading_tilde() {
-        // Set a fake HOME so the test is deterministic on any machine.
-        // Uses a scratch dir so we don't rely on the real user's home.
-        // Take the crate-wide ENV_LOCK: `set_var`/`remove_var` are
-        // `unsafe` under Rust 2024 precisely because parallel tests in
-        // the same binary observing HOME/USERPROFILE would race here.
+    fn effective_metrics_settings_tilde_in_env_var_is_expanded() {
         let _guard = crate::test_env_lock::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&[
+            "VOICEPI_CONFIG",
+            JSON_OUTPUT_ENV,
+            METRICS_JSONL_ENV,
+            "HOME",
+            "USERPROFILE",
+        ]);
+
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-        let saved_home = std::env::var_os("HOME");
-        let saved_userprofile = std::env::var_os("USERPROFILE");
-        std::env::set_var("HOME", home);
-        std::env::set_var("USERPROFILE", home);
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(JSON_OUTPUT_ENV, "1");
+        std::env::set_var(METRICS_JSONL_ENV, "~/metrics.jsonl");
+        std::env::set_var("HOME", dir.path());
+        std::env::set_var("USERPROFILE", dir.path());
 
-        assert_eq!(expand_user("~"), home.to_path_buf());
-        assert_eq!(expand_user("~/metrics.jsonl"), home.join("metrics.jsonl"));
+        let resolved = effective_metrics_settings().expect("gate on + non-empty path must resolve");
         assert_eq!(
-            expand_user("/tmp/metrics.jsonl"),
-            PathBuf::from("/tmp/metrics.jsonl")
+            resolved.path,
+            dir.path().join("metrics.jsonl"),
+            "leading `~` must be expanded to $HOME, not written to a literal `~` directory"
         );
+    }
 
-        // Restore env so sibling tests are unaffected.
-        match saved_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
+    /// A malformed `config.json` used to drop through to the env-only
+    /// layer (which was normally off), silently disabling the sink.
+    /// Now [`effective_metrics_resolution`] surfaces
+    /// [`MetricsResolution::ConfigError`] and the flattened
+    /// [`effective_metrics_settings`] logs + returns `None`.
+    /// Codex P2 #620 finding `Fail closed when live history config
+    /// cannot be read` (same shape applies to the metrics sink).
+    #[test]
+    fn effective_metrics_resolution_reports_config_read_failure() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        // Not JSON.
+        std::fs::write(&cfg, "not-json {").unwrap();
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        // Also set env: PREVIOUSLY these would enable the sink even
+        // though config.json is broken. The fail-closed contract is
+        // that a broken config beats env-only opt-in.
+        std::env::set_var(JSON_OUTPUT_ENV, "1");
+        std::env::set_var(METRICS_JSONL_ENV, dir.path().join("metrics.jsonl"));
+
+        match effective_metrics_resolution() {
+            MetricsResolution::ConfigError(_) => {}
+            other => panic!("expected ConfigError, got {other:?}"),
         }
-        match saved_userprofile {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
-        }
+        assert!(
+            effective_metrics_settings().is_none(),
+            "malformed config.json must fail-closed, not fall through to env"
+        );
+    }
+
+    /// The result-returning variant used by the self-test verb must
+    /// bubble an I/O error to the caller (previously the trait impl
+    /// swallowed it, hard-coding `Ok(())` in `metrics_write.rs`).
+    /// Codex P2 #621 metrics_write.rs:186.
+    #[test]
+    fn reloading_metrics_sink_append_with_result_propagates_io_error() {
+        let _guard = crate::test_env_lock::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.json");
+        std::fs::write(&cfg, "{}").unwrap();
+        // Point at a path whose parent is a REGULAR FILE so
+        // `create_dir_all` fails inside `append_jsonl`.
+        let file_as_parent = dir.path().join("not-a-dir");
+        std::fs::write(&file_as_parent, "").unwrap();
+        let unwritable = file_as_parent.join("metrics.jsonl");
+        std::env::set_var("VOICEPI_CONFIG", &cfg);
+        std::env::set_var(JSON_OUTPUT_ENV, "1");
+        std::env::set_var(METRICS_JSONL_ENV, &unwritable);
+
+        let sink = ReloadingMetricsSink::new();
+        let result = sink.append_with_result(&serde_json::json!({"text": "boom"}));
+        assert!(
+            result.is_err(),
+            "the result-returning variant must surface unwritable-path errors, \
+             not swallow them like the shipping `MetricsSink::append` does"
+        );
     }
 
     // ── env overlay + live reload (Codex P1 #606) ──────────────────

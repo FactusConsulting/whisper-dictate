@@ -143,6 +143,92 @@ fn session_config_threads_format_commands_from_env() {
     assert_eq!(cfg.format_command_set.as_deref(), Some("en"));
 }
 
+// ── canonical stt_backend + model label (Codex P2 #620) ──────────────────────
+
+/// When the operator selected the cloud backend, the utterance row's
+/// `model` label must come from `VOICEPI_STT_MODEL` (the cloud model),
+/// NOT `VOICEPI_MODEL` (the local Whisper model). Codex P2 #620
+/// `Label cloud events with the cloud model`.
+#[test]
+fn session_config_uses_cloud_model_when_cloud_backend_selected() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _backend = EnvVarGuard::set("VOICEPI_STT_BACKEND", "openai");
+    let _stt_model = EnvVarGuard::set("VOICEPI_STT_MODEL", "gpt-4o-transcribe");
+    // The local `VOICEPI_MODEL` is DELIBERATELY set to a stale value
+    // -- the fix must ignore it on the cloud path so the row reports
+    // the actual model that was used.
+    let _local_model = EnvVarGuard::set("VOICEPI_MODEL", "large-v3-turbo");
+
+    let cfg = session_config_from_env();
+    assert_eq!(
+        cfg.stt_backend, "openai",
+        "cloud selection must emit the canonical `openai` label"
+    );
+    assert_eq!(
+        cfg.model, "gpt-4o-transcribe",
+        "cloud selection must label the row with VOICEPI_STT_MODEL, \
+         NOT the local-only VOICEPI_MODEL"
+    );
+}
+
+/// The canonical backend label must be `openai` regardless of the
+/// operator's raw casing / whitespace. Codex P2 #620 `Canonicalize the
+/// backend label from the selected backend` finding.
+#[test]
+fn session_config_canonicalises_cloud_backend_case_and_whitespace() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _backend = EnvVarGuard::set("VOICEPI_STT_BACKEND", "  OpenAI  ");
+    let _stt_model = EnvVarGuard::set("VOICEPI_STT_MODEL", "whisper-1");
+    let _local_model = EnvVarGuard::unset("VOICEPI_MODEL");
+
+    let cfg = session_config_from_env();
+    assert_eq!(
+        cfg.stt_backend, "openai",
+        "case/whitespace variant of `openai` must still emit the canonical label"
+    );
+    assert_eq!(cfg.model, "whisper-1");
+}
+
+/// A stale legacy `VOICEPI_STT_BACKEND=parakeet` (or `faster-whisper`)
+/// value collapses to local Whisper because
+/// `cloud_backend_requested_from_env` only recognises `openai`, and
+/// `ProductionTranscribeBackend::select` runs the local thunk on any
+/// non-cloud value. The row must therefore label the actual backend
+/// used (`whisper`), never re-introduce the stale value on disk.
+#[test]
+fn session_config_collapses_legacy_backend_values_to_whisper() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _backend = EnvVarGuard::set("VOICEPI_STT_BACKEND", "parakeet");
+    let _stt_model = EnvVarGuard::set("VOICEPI_STT_MODEL", "stale-cloud-model");
+    let _local_model = EnvVarGuard::set("VOICEPI_MODEL", "large-v3");
+
+    let cfg = session_config_from_env();
+    assert_eq!(
+        cfg.stt_backend, "whisper",
+        "a stale/unknown VOICEPI_STT_BACKEND must NOT flow verbatim to \
+         history/metrics rows; the row must reflect the actual backend"
+    );
+    assert_eq!(
+        cfg.model, "large-v3",
+        "on the local path the model label must come from VOICEPI_MODEL, \
+         never the (unused) VOICEPI_STT_MODEL"
+    );
+}
+
+/// Unset backend defaults to local Whisper -- schema default matches
+/// `settings_schema.json:stt_backend=whisper`.
+#[test]
+fn session_config_defaults_to_whisper_when_backend_env_unset() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _backend = EnvVarGuard::unset("VOICEPI_STT_BACKEND");
+    let _stt_model = EnvVarGuard::unset("VOICEPI_STT_MODEL");
+    let _local_model = EnvVarGuard::set("VOICEPI_MODEL", "small");
+
+    let cfg = session_config_from_env();
+    assert_eq!(cfg.stt_backend, "whisper");
+    assert_eq!(cfg.model, "small");
+}
+
 /// Unset / blank `VOICEPI_FORMAT_COMMANDS` collapses to `None` so the
 /// session short-circuits to a passthrough (no format-command layer),
 /// matching the schema default of `off`.
