@@ -48,7 +48,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `key` | `VOICEPI_KEY` | `ctrl_r` | Restart | Hold-to-talk hotkey, e.g. ctrl_r, alt_r, f9, or a chord like shift_r+ctrl_r. An all-bare-modifier binding fires only on that exact combo. |
 | `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Restart | Local Whisper model. large-v3-turbo = fastest default; large-v3 = best accuracy, slower. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Restart | Speech-to-text engine: whisper (local faster-whisper) or openai (external OpenAI-compatible cloud API). |
-| `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. Rust transcribe backend uses Vulkan (see "Rust transcribe backend — GPU acceleration" below); `cuda` here still routes through Vulkan on that path. |
+| `device` | `VOICEPI_DEVICE` | `auto` | Restart | Compute device for local STT: auto picks an NVIDIA GPU if present, else CPU; force with cuda or cpu. |
 | `compute_type` | `VOICEPI_COMPUTE_TYPE` | _(unset)_ | Restart | Whisper/CTranslate2 precision override (int8, int8_float16, float16, bfloat16, float32). Defaults to int8_float16 on GPU, int8 on CPU. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Live | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
