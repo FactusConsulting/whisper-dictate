@@ -42,6 +42,14 @@ pub mod driver_common;
 #[cfg(feature = "rust-hotkeys")]
 pub mod rdev_driver;
 
+// Companion tests for `rdev_driver.rs`. Extracted from an inline
+// `#[cfg(test)] mod tests` so the regression-test discipline scanner sees
+// a matching test file next to the production module — see
+// `src/tests/python/test_regression_test_discipline.py`.
+#[cfg(all(test, feature = "rust-hotkeys"))]
+#[path = "rdev_driver_tests.rs"]
+mod rdev_driver_tests;
+
 // evdev backend is Linux-only — it reads `/dev/input` directly, which is the
 // only listener that works under Wayland (rdev's X11 XRecord is deaf there).
 #[cfg(all(feature = "rust-hotkeys", target_os = "linux"))]
