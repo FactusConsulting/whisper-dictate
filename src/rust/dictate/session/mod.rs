@@ -35,24 +35,32 @@
 //!   ports `vp_history.append_record_sinks`'s write side to Rust so the
 //!   in-process engine records every completed utterance to the same
 //!   file the Python engine writes to today.
+//! - [`metrics_sink`] — sibling to `history_sink`: the metrics-JSONL
+//!   writer that fans the utterance event out to the machine-readable
+//!   metrics file (`metrics_jsonl`, gated on `inject_json`), matching
+//!   Python's `vp_history.append_record_sinks` metrics branch.
 //! - [`tests_support`] — `cfg(test)` test backends + helpers shared
 //!   across the test files.
 //! - [`tests_ported`] — the six characterisation tests ported from
 //!   `src/python/tests/test_dictate_loop.py`.
 //! - [`tests_transitions`] — supplementary state-transition invariants.
 //! - [`tests_history_sink`] — `HistorySink` wiring integration tests.
+//! - [`tests_metrics_sink`] — `MetricsSink` wiring integration tests.
 
 use std::io::Write;
 
 use serde_json::{json, Value};
 
 pub mod history_sink;
+pub mod metrics_sink;
 pub mod preview;
 pub mod types;
 mod wire;
 
 #[cfg(test)]
 mod tests_history_sink;
+#[cfg(test)]
+mod tests_metrics_sink;
 #[cfg(test)]
 mod tests_ported;
 // Wave 5 follow-up (rust-target-profile-matching branch): tests for the
@@ -67,6 +75,9 @@ mod tests_transitions;
 
 pub use history_sink::{
     history_sink_from_settings, HistorySink, JsonlHistorySink, NoopHistorySink,
+};
+pub use metrics_sink::{
+    metrics_sink_from_settings, JsonlMetricsSink, MetricsSink, NoopMetricsSink,
 };
 pub use preview::{
     build_preview_status, stderr_preview_sink, PreviewBackend, PreviewEmission, PreviewEngine,
@@ -207,49 +218,30 @@ pub struct DictateSession<T: TranscribeBackend, I: InjectBackend> {
     /// `vp_dictate.py::_record_utterance_event`.
     history_sink: Option<Box<dyn HistorySink + Send>>,
     /// Optional per-utterance target-profile matcher (parity port of
-    /// Python's `_profiled_config`). `None` -- the default -- disables
-    /// profile matching entirely so a session built with [`Self::new`]
-    /// behaves exactly as before this seam existed. Attach via
-    /// [`Self::with_profile_matcher`]; production wiring pairs it with
-    /// [`ReloadingProfileMatcher`] so a Settings save picks up on the
-    /// next PTT press without an app restart, matching Python's
-    /// `_reload_live_config_if_changed` -> `_profiled_config` sequence in
-    /// `vp_dictate._start`.
+    /// Python's `_profiled_config`). See target-profile matching PR.
     profile_matcher: Option<Box<dyn ProfileMatcher>>,
-    /// Foreground-window probe consulted at [`Self::start`] to feed the
-    /// [`Self::profile_matcher`]. Always present so the hot path never has
-    /// to `if let Some(...)` on it; the default is a no-op probe that
-    /// always returns an empty [`WindowInfo`], so a session without a
-    /// matcher pays zero cost. Attached via [`Self::with_profile_matcher`]
-    /// together with the matcher itself (they only make sense as a pair
-    /// -- a matcher without a probe would see empty windows and only
-    /// fire wildcard profiles, while a probe without a matcher is
-    /// wasted work).
+    /// Foreground-window probe consulted at [`Self::start`]. Always present.
     foreground_probe: Box<dyn ForegroundWindowProbe>,
-    /// Immutable base copy of [`Self::config`] taken at construction. Held
-    /// so the per-utterance profile overlay (see [`Self::start`]) can be
-    /// wiped from the effective [`Self::config`] at the start of each
-    /// utterance before the next match applies -- otherwise a profile that
-    /// fired for one utterance would leak its overrides into the next.
-    /// Mutations that are meant to be sticky (e.g.
-    /// [`Self::update_min_record_seconds`]) go to BOTH `config` and
-    /// `base_config`.
+    /// Immutable base copy of [`Self::config`] for per-utterance profile overlay wipe.
     base_config: SessionConfig,
-    /// The profile the matcher resolved for the current / most-recent
-    /// utterance. Exposed via [`Self::active_profile`] so downstream
-    /// consumers (backend factories, post-processor, UI logging) can read
-    /// the remaining setting keys the session itself does not honour
-    /// directly. `None` after construction and after any utterance where
-    /// nothing matched.
+    /// The profile the matcher resolved for the current / most-recent utterance.
     active_profile: Option<AppliedProfile>,
     /// Optional live-preview engine that emits `state="preview"` worker events
-    /// during recording. Ported from `src/python/whisper_dictate/vp_preview.py`
-    /// -- see [`preview`] for the full contract. `None` (the default) means
-    /// no preview thread is spawned and `push_frame` pays zero extra cost,
-    /// matching the pre-preview session behaviour. Production wires this
-    /// ONLY on the local Whisper backend (Python's `PREVIEW_BACKENDS` gate);
-    /// the cloud backend leaves it unset so previews never hit a paid API.
+    /// during recording (see PR #608 / `preview` module).
     preview: Option<PreviewEngine>,
+    /// Optional metrics-JSONL sink, the sibling of `history_sink` that
+    /// receives the FULL utterance event (unfiltered — unlike history,
+    /// which passes rows through `telemetry::history_event`). Mirrors
+    /// Python's `append_record_sinks(metrics_jsonl=..., json_output=...)`
+    /// second branch, which writes the raw event dict verbatim. `None` --
+    /// the default -- writes no metrics; production wires the real sink
+    /// from [`metrics_sink_from_settings`] which returns `None` unless
+    /// BOTH `inject_json=true` AND a non-empty `metrics_jsonl` path are
+    /// set (matching Python's `metrics_path = ... if json_output and
+    /// raw_metrics_path else ""`). Sink errors are non-fatal for the
+    /// same reason as history: a broken metrics file must never abort a
+    /// dictation.
+    metrics_sink: Option<Box<dyn MetricsSink + Send>>,
 }
 
 impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
@@ -276,6 +268,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             ),
             active_profile: None,
             preview: None,
+            metrics_sink: None,
         }
     }
 
@@ -339,6 +332,34 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     pub fn with_optional_history_sink(mut self, sink: Option<Box<dyn HistorySink + Send>>) -> Self {
         if let Some(sink) = sink {
             self.history_sink = Some(sink);
+        }
+        self
+    }
+
+    /// Attach a [`MetricsSink`] so every completed utterance also lands
+    /// in the machine-readable metrics JSONL file (parity with Python's
+    /// `_record_utterance_event -> append_record_sinks` metrics branch).
+    /// `None` -- the default -- keeps the pre-existing no-write behaviour.
+    /// Sink errors are non-fatal: the implementation logs a warning and the
+    /// session continues, so a broken metrics file can never drop a
+    /// dictation.
+    ///
+    /// Passing this is opt-in: production wiring only attaches a sink when
+    /// the user has `inject_json=true` (Python `json_output`) AND a
+    /// non-empty `metrics_jsonl` path -- see [`metrics_sink_from_settings`].
+    pub fn with_metrics_sink(mut self, sink: Box<dyn MetricsSink + Send>) -> Self {
+        self.metrics_sink = Some(sink);
+        self
+    }
+
+    /// Attach a metrics sink only when [`metrics_sink_from_settings`]
+    /// resolves one (i.e. the user has `inject_json=true` AND a non-empty
+    /// `metrics_jsonl` path). Convenience wrapper so the real-backends
+    /// factory can call `.with_optional_metrics_sink()` without pre-checking
+    /// the Option itself.
+    pub fn with_optional_metrics_sink(mut self, sink: Option<Box<dyn MetricsSink + Send>>) -> Self {
+        if let Some(sink) = sink {
+            self.metrics_sink = Some(sink);
         }
         self
     }
@@ -900,7 +921,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 post.as_ref(),
                 &replacements,
             )?;
-            self.record_history(&payload);
+            self.record_sinks(&payload);
             return Ok(UtteranceOutcome::Injected { text, result });
         }
         let payload = wire::emit_utterance(
@@ -912,20 +933,26 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             post.as_ref(),
             &replacements,
         )?;
-        self.record_history(&payload);
+        self.record_sinks(&payload);
         Ok(UtteranceOutcome::Injected { text, result })
     }
 
-    /// Hand the just-emitted utterance payload to the history sink. A
-    /// missing sink is a no-op (matching a session built without
-    /// [`Self::with_history_sink`]). Sink errors are consumed by the
-    /// implementation itself (they log a warning to stderr and return);
-    /// this method has no failure mode surfaced to the state machine, so
-    /// a broken history file can never abort a dictation. Python parity:
-    /// `_record_utterance_event` wraps `append_record_sinks` in
-    /// `try / except OSError` and logs a warning.
-    fn record_history(&self, payload: &Value) {
+    /// Hand the just-emitted utterance payload to every attached JSONL
+    /// sink -- history (filtered allow-list) and metrics (full event) --
+    /// in the same order Python's `_record_utterance_event` fans out to
+    /// `append_record_sinks`. Missing sinks are silent no-ops (matching a
+    /// session built without the corresponding `with_*_sink`). Sink
+    /// errors are consumed by each implementation itself (they log a
+    /// warning to stderr and return); this method has no failure mode
+    /// surfaced to the state machine, so a broken sink file can never
+    /// abort a dictation. Python parity: `_record_utterance_event` wraps
+    /// `append_record_sinks` in `try / except OSError` and logs a warning
+    /// covering BOTH sinks together.
+    fn record_sinks(&self, payload: &Value) {
         if let Some(sink) = self.history_sink.as_ref() {
+            sink.append(payload);
+        }
+        if let Some(sink) = self.metrics_sink.as_ref() {
             sink.append(payload);
         }
     }
