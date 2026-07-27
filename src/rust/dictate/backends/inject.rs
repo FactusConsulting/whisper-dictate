@@ -336,8 +336,21 @@ impl EnigoInjectBackend {
     }
 }
 
-impl InjectBackend for EnigoInjectBackend {
-    fn inject(&self, text: &str) -> Result<(), InjectError> {
+impl EnigoInjectBackend {
+    /// Same as [`InjectBackend::inject`] but uses `method` for this call
+    /// instead of `self.method`. Split out so the profile-matcher path in
+    /// [`crate::runtime::rust_session_inject::ProductionInjectBackend`]
+    /// can hot-swap Typing / Paste per utterance without carrying a
+    /// separate `EnigoInjectBackend` per mode. Codex P1 #619
+    /// runtime/rust_session_inject.rs:146 -- a saved profile with
+    /// `inject_mode=paste` previously landed on the constructor's
+    /// `InjectMethod::Typing` because the wrapper had no way to override
+    /// it, so paste silently degraded to typing.
+    ///
+    /// The pre-injection cleanup (stale-modifier release, self-injection
+    /// guard bracket) is identical to the trait impl and shared here so
+    /// both entry points behave the same.
+    pub fn inject_using(&self, text: &str, method: InjectMethod) -> Result<(), InjectError> {
         // Recover from a poisoned mutex: a panic inside a previous
         // injection (e.g. enigo failing in an unexpected way) would
         // poison the lock. Neither the injector nor the clipboard
@@ -384,18 +397,22 @@ impl InjectBackend for EnigoInjectBackend {
             eprintln!("[inject] stale-modifier release failed: {e:#}");
         }
 
-        match self.method {
+        match method {
             InjectMethod::Typing => state
                 .injector
                 .inject_text(text, InjectMethod::Typing)
                 .map_err(|e| InjectError::Backend(format!("{e:#}"))),
-            InjectMethod::Paste(_) => {
-                inject_via_paste(state, text, self.method, self.restore_delay)
-            }
+            InjectMethod::Paste(_) => inject_via_paste(state, text, method, self.restore_delay),
         }
         // `_bracket` drops here, extending the horizon by the post-arm
         // grace (covers WH_KEYBOARD_LL drain latency after the last
         // SendInput returns).
+    }
+}
+
+impl InjectBackend for EnigoInjectBackend {
+    fn inject(&self, text: &str) -> Result<(), InjectError> {
+        self.inject_using(text, self.method)
     }
 }
 

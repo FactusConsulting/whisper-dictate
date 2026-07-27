@@ -157,7 +157,52 @@ class InjectViaRustTests(TestCase):
 
         with _env(VOICEPI_RUST_INJECTOR="/bin/whisper-dictate"), \
                 patch.object(subprocess, "run", side_effect=fake_run):
-            self.assertFalse(vp_inject_rust.inject_via_rust("hi"))
+            result = vp_inject_rust.inject_via_rust("hi")
+        self.assertFalse(result)          # bool(result) == result.ok
+        self.assertFalse(result.ok)
+        self.assertFalse(result.partial)  # no partial signal in this response
+
+    def test_partial_flag_propagates_from_rust(self):
+        # Codex P1 #613 dispatcher.rs:599: when Rust already typed part
+        # of the transcript, the response carries `"partial": true`. The
+        # Python wrapper MUST surface that flag so the outer
+        # `_inject_via_rust_backend` can stand down and skip the Python
+        # fallback (which would double-type the successful prefix).
+        def fake_run(*_args, **_kwargs):
+            return _FakeCompleted(
+                returncode=0,
+                stdout=(
+                    b'{"ok":false,"error":"ydotool broken pipe after 12 keys",'
+                    b'"partial":true,"method":"typing"}'
+                ),
+            )
+
+        with _env(VOICEPI_RUST_INJECTOR="/bin/whisper-dictate"), \
+                patch.object(subprocess, "run", side_effect=fake_run):
+            result = vp_inject_rust.inject_via_rust("hello world")
+        self.assertFalse(result.ok, "partial failure is still not a success")
+        self.assertTrue(
+            result.partial,
+            "Rust reported partial=true; the wrapper MUST propagate it so the "
+            "outer Python fallback stands down (Codex P1 #613 dispatcher.rs:599)",
+        )
+        self.assertFalse(bool(result), "bool(result) tracks ok, not partial")
+
+    def test_success_response_reports_partial_false(self):
+        # Success path: the Rust dispatcher never sets partial on ok=true.
+        # Pin the wrapper's default so a future response schema drift
+        # (or a bug that stamps partial on ok=true) is caught here.
+        def fake_run(*_args, **_kwargs):
+            return _FakeCompleted(
+                returncode=0,
+                stdout=b'{"ok":true,"method":"typing","partial":false}',
+            )
+
+        with _env(VOICEPI_RUST_INJECTOR="/bin/whisper-dictate"), \
+                patch.object(subprocess, "run", side_effect=fake_run):
+            result = vp_inject_rust.inject_via_rust("hi")
+        self.assertTrue(result.ok)
+        self.assertFalse(result.partial)
 
     def test_subprocess_exception_returns_false(self):
         def fake_run(*_args, **_kwargs):

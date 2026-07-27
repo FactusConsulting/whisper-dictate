@@ -123,24 +123,43 @@ impl Injector {
     ///   existing `wayland.rs` path (`ydotool`) when `ydotool` is the pick;
     ///   the other helpers (`kwtype`, `wtype`, `dotool`, `xdotool`) get a
     ///   best-effort `Command::new(helper).args(...)` invocation.
+    ///
+    /// Callers that need to know whether the failure landed a partial
+    /// prefix (so an outer fallback path can suppress duplicate injection
+    /// -- Codex P1 #613 dispatcher.rs:599) should use
+    /// [`Self::inject_text_ex`] instead.
     pub fn inject_text(&mut self, text: &str, method: InjectMethod) -> Result<()> {
+        self.inject_text_ex(text, method).result
+    }
+
+    /// Same as [`Self::inject_text`] but returns [`InjectOutcome`], which
+    /// carries `partial: bool` alongside the result. `partial=true` means
+    /// at least one keystroke reached the compositor before the failure;
+    /// an outer path (Python `_inject_via_rust_backend`, or any future
+    /// caller) MUST NOT re-inject the full text because that would silently
+    /// double-type the prefix. Codex P1 #613.
+    pub fn inject_text_ex(&mut self, text: &str, method: InjectMethod) -> InjectOutcome {
         #[cfg(any(windows, target_os = "macos"))]
         {
-            inject_via_backend(self.backend_mut()?, text, method)
+            let backend = match self.backend_mut() {
+                Ok(b) => b,
+                Err(err) => return InjectOutcome::failed(err),
+            };
+            InjectOutcome::from_result(inject_via_backend(backend, text, method))
         }
         #[cfg(target_os = "linux")]
         {
             // Linux still uses the helper-chain path; the trait-object
             // backend is only consulted when a test injects one explicitly.
             if let Some(backend) = self.backend.as_deref_mut() {
-                return inject_via_backend(backend, text, method);
+                return InjectOutcome::from_result(inject_via_backend(backend, text, method));
             }
             self.inject_on_linux(text, method)
         }
         #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
             let _ = (text, method);
-            Err(anyhow!("unsupported platform for rust injection"))
+            InjectOutcome::failed(anyhow!("unsupported platform for rust injection"))
         }
     }
 
@@ -208,7 +227,7 @@ impl Injector {
     }
 
     #[cfg(target_os = "linux")]
-    fn inject_on_linux(&self, text: &str, method: InjectMethod) -> Result<()> {
+    fn inject_on_linux(&self, text: &str, method: InjectMethod) -> InjectOutcome {
         // ydotool already has a fully-featured layout-aware code path in
         // wayland.rs — reuse it when ydotool wins the chain. The other helpers
         // get a generic invocation through super::linux_helpers.
@@ -400,6 +419,62 @@ pub struct InjectResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub method: String,
+    /// True iff at least one keystroke reached the compositor before a
+    /// failure. Python's outer fallback (`vp_inject._inject`) MUST NOT
+    /// re-inject the transcript when this is set -- doing so would type
+    /// the successful prefix a second time on top of what already landed
+    /// in the user's document. Always emitted (even on `ok: true`) so
+    /// consumers can rely on the key existing. Codex P1 #613
+    /// dispatcher.rs:599.
+    pub partial: bool,
+}
+
+/// Result of an injection attempt with the extra `partial` signal.
+///
+/// `partial: true` means at least one keystroke reached the compositor
+/// before the failure. Any outer fallback (Python's
+/// `vp_inject._inject`, another retry loop, etc.) MUST NOT re-inject
+/// the same text -- doing so would silently double-type the successful
+/// prefix into the user's document. Codex P1 #613 dispatcher.rs:599.
+#[derive(Debug)]
+pub struct InjectOutcome {
+    pub result: Result<()>,
+    pub partial: bool,
+}
+
+impl InjectOutcome {
+    pub fn ok() -> Self {
+        Self {
+            result: Ok(()),
+            partial: false,
+        }
+    }
+
+    pub fn failed(err: anyhow::Error) -> Self {
+        Self {
+            result: Err(err),
+            partial: false,
+        }
+    }
+
+    /// Failure that landed a partial prefix. Outer fallbacks must NOT
+    /// re-run the injection or the prefix will be double-typed.
+    pub fn partial(err: anyhow::Error) -> Self {
+        Self {
+            result: Err(err),
+            partial: true,
+        }
+    }
+
+    /// Bridge an existing `Result<()>` into an [`InjectOutcome`] with
+    /// `partial=false`. Used by paths that cannot observe partial
+    /// progress (enigo on Windows/macOS, injected trait-object backends).
+    pub fn from_result(result: Result<()>) -> Self {
+        match result {
+            Ok(()) => Self::ok(),
+            Err(err) => Self::failed(err),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -429,17 +504,19 @@ pub fn handle_inject() -> Result<()> {
                 .with_target(&target_title, &target_process)
                 .with_xkb_layout(&xkb_layout);
             let method = resolve_method(&method)?;
-            let result = injector.inject_text(&text, method);
-            let response = match result {
+            let outcome = injector.inject_text_ex(&text, method);
+            let response = match outcome.result {
                 Ok(()) => InjectResponse {
                     ok: true,
                     error: None,
                     method: method_label(method),
+                    partial: false,
                 },
                 Err(err) => InjectResponse {
                     ok: false,
                     error: Some(err.to_string()),
                     method: method_label(method),
+                    partial: outcome.partial,
                 },
             };
             println!("{}", serde_json::to_string(&response)?);
@@ -540,14 +617,14 @@ fn try_helpers<A>(
     mut attempt: A,
     paste_capable_only: bool,
     what: &str,
-) -> Result<()>
+) -> InjectOutcome
 where
     A: FnMut(&str) -> std::result::Result<(), HelperError>,
 {
     let candidates =
         super::fallback::available_helpers(session, locate_on_path, paste_capable_only);
     if candidates.is_empty() {
-        return Err(anyhow!(
+        return InjectOutcome::failed(anyhow!(
             "no Linux {what} helper found on PATH (tried: {:?})",
             super::fallback::fallback_chain(session)
         ));
@@ -560,12 +637,12 @@ where
 /// closure without touching `$PATH` or spawning subprocesses. Codex P2 #613
 /// dispatcher.rs:521 -- runtime fallback needs a regression test.
 #[cfg(target_os = "linux")]
-fn try_helpers_over<A>(candidates: &[&str], attempt: &mut A, what: &str) -> Result<()>
+fn try_helpers_over<A>(candidates: &[&str], attempt: &mut A, what: &str) -> InjectOutcome
 where
     A: FnMut(&str) -> std::result::Result<(), HelperError>,
 {
     if candidates.is_empty() {
-        return Err(anyhow!("no Linux {what} helper available"));
+        return InjectOutcome::failed(anyhow!("no Linux {what} helper available"));
     }
 
     let mut last_err: Option<anyhow::Error> = None;
@@ -583,7 +660,7 @@ where
                         &candidates[..idx]
                     );
                 }
-                return Ok(());
+                return InjectOutcome::ok();
             }
             Err(HelperError { err, partial: true }) => {
                 // The helper had already pushed at least one keystroke
@@ -592,11 +669,17 @@ where
                 // top of it, silently corrupting the user's document.
                 // Codex P1 #613 dispatcher.rs:540 -- suppress fallback on
                 // any observable partial injection.
+                //
+                // The `partial=true` flag is propagated all the way up to
+                // `InjectResponse.partial` so the Python outer fallback
+                // (`vp_inject._inject`) can also stand down instead of
+                // re-typing the transcript on top of the successful prefix.
+                // Codex P1 #613 dispatcher.rs:599.
                 eprintln!(
                     "[inject] {what}: {helper} failed AFTER typing keys ({err:#}); \
                      suppressing fallback to avoid double-typing"
                 );
-                return Err(err);
+                return InjectOutcome::partial(err);
             }
             Err(HelperError {
                 err,
@@ -606,7 +689,24 @@ where
                 if !super::fallback::is_safe_to_try_next_helper(&text) {
                     // Unrecognised subprocess failure: it may have typed
                     // part of the text. Stop rather than risk duplicating.
-                    return Err(err);
+                    //
+                    // Codex P1 #613 dispatcher.rs:609 -- once we're past
+                    // the first candidate the chain has necessarily
+                    // *invoked* one or more subprocess helpers, so any
+                    // later opaque failure is "possibly partial" from
+                    // Python's perspective: we cannot prove nothing
+                    // reached the compositor, and the outer fallback
+                    // would re-type the whole transcript on top. Stamp
+                    // `partial=true` in that case so the Python bridge
+                    // stands down. For `idx == 0` we're back in the
+                    // single-helper world the original code assumed --
+                    // return without the partial stamp so the pre-#613
+                    // Python fallback semantics survive verbatim.
+                    return if idx > 0 {
+                        InjectOutcome::partial(err)
+                    } else {
+                        InjectOutcome::failed(err)
+                    };
                 }
                 eprintln!("[inject] {what}: {helper} unusable ({text}); trying next helper");
                 last_err = Some(err);
@@ -614,11 +714,13 @@ where
         }
     }
 
-    Err(last_err
-        .unwrap_or_else(|| anyhow!("no Linux {what} helper produced a result"))
-        .context(format!(
-            "every Linux {what} helper failed (tried: {candidates:?})"
-        )))
+    InjectOutcome::failed(
+        last_err
+            .unwrap_or_else(|| anyhow!("no Linux {what} helper produced a result"))
+            .context(format!(
+                "every Linux {what} helper failed (tried: {candidates:?})"
+            )),
+    )
 }
 
 #[cfg(test)]
@@ -936,8 +1038,11 @@ mod tests {
             }
         };
         let candidates = ["kwtype", "wtype", "ydotool"];
-        try_helpers_over(&candidates, &mut attempt, "injection")
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        outcome
+            .result
             .expect("wtype should have carried the injection");
+        assert!(!outcome.partial, "success must never set partial=true");
         assert_eq!(*calls.lock().unwrap(), vec!["kwtype", "wtype"]);
     }
 
@@ -962,7 +1067,14 @@ mod tests {
             }
         };
         let candidates = ["ydotool", "wtype"];
-        let err = try_helpers_over(&candidates, &mut attempt, "injection")
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        assert!(
+            outcome.partial,
+            "partial-burst failure must stamp partial=true so the Python outer \
+             fallback stands down (Codex P1 #613 dispatcher.rs:599)"
+        );
+        let err = outcome
+            .result
             .expect_err("partial failure must NOT fall through to the next helper");
         assert!(
             format!("{err:#}").contains("broken pipe"),
@@ -988,10 +1100,60 @@ mod tests {
             )))
         };
         let candidates = ["wtype", "ydotool"];
-        let err = try_helpers_over(&candidates, &mut attempt, "injection")
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        let err = outcome
+            .result
             .expect_err("unrecognised failure must stop the chain");
         assert!(format!("{err:#}").contains("killed by signal 9"));
+        // idx == 0 preserves the pre-#613 single-helper semantics: an
+        // unrecognised opaque failure of the FIRST helper does not stamp
+        // partial=true, so the Python outer fallback can still retry.
+        // The `idx > 0` branch is exercised by the paired test below.
+        assert!(
+            !outcome.partial,
+            "first-helper opaque failure must NOT stamp partial=true"
+        );
         assert_eq!(*calls.lock().unwrap(), vec!["wtype"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn try_helpers_over_marks_partial_after_fallback_fired() {
+        // Codex P1 #613 dispatcher.rs:609. If helper[0] fails with a
+        // recognised startup signature (chain retries) and helper[1] then
+        // fails with an UNrecognised opaque error, helper[1] may have
+        // typed part of the transcript before dying. Stamp `partial=true`
+        // so the Python outer fallback stands down instead of re-typing
+        // the full text on top of the successful prefix.
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_c = calls.clone();
+        let mut attempt = move |helper: &str| -> std::result::Result<(), HelperError> {
+            calls_c.lock().unwrap().push(helper.to_owned());
+            if helper == "kwtype" {
+                Err(HelperError::opaque(anyhow!(
+                    "kwtype type failed: Compositor does not support the virtual keyboard protocol"
+                )))
+            } else {
+                // wtype dies with a novel unrecognised message *after*
+                // some keystrokes may have landed.
+                Err(HelperError::opaque(anyhow!(
+                    "wtype type failed: killed by signal 9"
+                )))
+            }
+        };
+        let candidates = ["kwtype", "wtype", "ydotool"];
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        assert!(
+            outcome.partial,
+            "opaque failure on helper idx>0 must stamp partial=true so the \
+             outer Python fallback does not double-type"
+        );
+        let err = outcome
+            .result
+            .expect_err("post-fallback opaque failure must stop the chain");
+        assert!(format!("{err:#}").contains("killed by signal 9"));
+        // Chain did move past kwtype but stopped at wtype (no ydotool).
+        assert_eq!(*calls.lock().unwrap(), vec!["kwtype", "wtype"]);
     }
 
     #[cfg(target_os = "linux")]
@@ -1006,7 +1168,9 @@ mod tests {
             Ok(())
         };
         let candidates = ["kwtype", "wtype", "ydotool"];
-        try_helpers_over(&candidates, &mut attempt, "injection").unwrap();
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        outcome.result.expect("first helper succeeded, must be Ok");
+        assert!(!outcome.partial, "success cannot be partial");
         assert_eq!(*calls.lock().unwrap(), vec!["kwtype"]);
     }
 
@@ -1022,12 +1186,20 @@ mod tests {
             )))
         };
         let candidates = ["kwtype", "wtype"];
-        let err = try_helpers_over(&candidates, &mut attempt, "injection")
+        let outcome = try_helpers_over(&candidates, &mut attempt, "injection");
+        let err = outcome
+            .result
             .expect_err("chain of startup failures should surface an error");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("every Linux injection helper failed"),
             "got: {msg}"
+        );
+        // Every failure was a recognised startup signature (i.e. no
+        // helper is believed to have typed anything), so `partial=false`.
+        assert!(
+            !outcome.partial,
+            "recognised startup-only failures cannot have typed a partial burst"
         );
     }
 }

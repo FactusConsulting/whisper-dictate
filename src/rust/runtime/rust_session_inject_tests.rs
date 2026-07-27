@@ -15,10 +15,74 @@
 //! the existing tests in `inject_cleanup_tests.rs`. The wrapper just
 //! delegates, so verifying the same contract twice would be churn.
 
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::Result;
+
 use super::{InjectModeChoice, ProductionInjectBackend, INJECT_MODE_ENV};
+use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::InjectBackend;
-use crate::injection::{InjectMethod, PasteShortcut};
+use crate::injection::enigo_backend::InjectorBackend;
+use crate::injection::paste::Clipboard;
+use crate::injection::{InjectMethod, Injector, PasteShortcut};
 use crate::test_env_lock::ENV_LOCK;
+
+/// Minimal recording backend for the profile-paste regression test
+/// (Codex P1 #619). Captures the sequence of `type_text` / `key_chord`
+/// calls so we can assert the paste chord actually fired instead of
+/// per-character typing. Duplicates the (private) helper in
+/// `dictate::backends::inject_test_support` on purpose so this test
+/// stays scope-local -- exposing the shared helper cross-module would
+/// pull test-only scaffolding into the public crate API.
+#[derive(Default, Clone)]
+struct PasteRecordingBackend {
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+impl InjectorBackend for PasteRecordingBackend {
+    fn type_text(&mut self, text: &str) -> Result<()> {
+        self.events.lock().unwrap().push(format!("type:{text}"));
+        Ok(())
+    }
+    fn key_chord(&mut self, modifiers: &[u16], key: u16) -> Result<()> {
+        let mods: Vec<String> = modifiers.iter().map(|m| format!("{m:#x}")).collect();
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("chord:[{}]+{:#x}", mods.join(","), key));
+        Ok(())
+    }
+    fn release_modifiers(&mut self, modifiers: &[u16]) -> Result<()> {
+        let mods: Vec<String> = modifiers.iter().map(|m| format!("{m:#x}")).collect();
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("release:[{}]", mods.join(",")));
+        Ok(())
+    }
+}
+
+#[derive(Default, Clone)]
+struct PasteRecordingClipboard {
+    writes: Arc<Mutex<Vec<String>>>,
+}
+
+impl PasteRecordingClipboard {
+    fn writes(&self) -> Vec<String> {
+        self.writes.lock().unwrap().clone()
+    }
+}
+
+impl Clipboard for PasteRecordingClipboard {
+    fn read(&mut self) -> Option<String> {
+        None
+    }
+    fn write(&mut self, value: &str) -> bool {
+        self.writes.lock().unwrap().push(value.to_owned());
+        true
+    }
+}
 
 // ── env-mode parser ──────────────────────────────────────────────────────────
 
@@ -108,21 +172,25 @@ fn from_env_print_value_selects_print_branch() {
 }
 
 #[test]
-fn from_env_paste_value_currently_collapses_to_typing() {
-    // Paste mode is documented to collapse to Typing in this PR -- the
-    // underlying `EnigoInjectBackend` requires a `Clipboard` backend
-    // wired via `with_clipboard` to drive the paste arm (Codex P1 #419
-    // inject.rs:266) and the rust-session sink does not own a
-    // Clipboard impl yet. Pin the contract so the follow-up that
-    // wires `arboard` knows which test to flip.
+fn from_env_paste_value_selects_paste_end_to_end() {
+    // Codex P1 #619 runtime/rust_session_inject.rs:146. Previously
+    // `paste` collapsed silently to `Typing` because the wrapper
+    // hard-wired `EnigoInjectBackend::new(_, InjectMethod::Typing)` and
+    // had no path to override it at inject time. The fix hoists the
+    // per-call method through `inject_using`; a user (or profile) that
+    // asks for paste now actually gets paste. `method()` reflects the
+    // effective backend method, so pin it here as the wire-level
+    // regression guard for the fix (the paste chord side is exercised
+    // in `profile_inject_mode_override_from_typing_to_paste_actually_pastes`
+    // with a recording backend).
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let prev = std::env::var(INJECT_MODE_ENV).ok();
     std::env::set_var(INJECT_MODE_ENV, "paste");
     let backend = ProductionInjectBackend::from_env();
     assert_eq!(
         backend.method(),
-        Some(InjectMethod::Typing),
-        "paste collapses to Typing in this PR; follow-up will wire a Clipboard"
+        Some(InjectMethod::Paste(None)),
+        "VOICEPI_INJECT_MODE=paste must select Paste, not silently collapse to Typing"
     );
     match prev {
         Some(v) => std::env::set_var(INJECT_MODE_ENV, v),
@@ -202,5 +270,75 @@ fn explicit_paste_shortcut_round_trips() {
     assert_eq!(
         backend.method(),
         Some(InjectMethod::Paste(Some(PasteShortcut::CtrlShiftV)))
+    );
+}
+
+#[test]
+fn profile_inject_mode_override_from_typing_to_paste_actually_pastes() {
+    // Codex P1 #619 runtime/rust_session_inject.rs:146. The regression:
+    // a saved user profile with `inject_mode=paste` used to flip the
+    // wrapper's Mutex slot to `Paste` while the underlying
+    // `EnigoInjectBackend` stayed on the constructor's `Typing`
+    // method, so `inject()` silently typed the transcript
+    // character-by-character. This test drives the fix end-to-end:
+    // build a `ProductionInjectBackend` starting on `Typing`, apply a
+    // profile with `inject_mode=paste`, call `inject()`, and assert
+    // the recording backend saw a paste CHORD (not per-character typing)
+    // and that the clipboard was populated.
+    let fake = PasteRecordingBackend::default();
+    let events = fake.events.clone();
+    let clipboard = PasteRecordingClipboard::default();
+    let clipboard_probe = clipboard.clone();
+    let injector = Injector::new().with_backend(Box::new(fake));
+    let enigo = EnigoInjectBackend::new(injector, InjectMethod::Typing)
+        .with_clipboard(Box::new(clipboard))
+        .with_restore_delay(Duration::ZERO);
+    let backend =
+        ProductionInjectBackend::with_enigo_for_test(InjectModeChoice::Typing, enigo);
+
+    // Sanity: before the override, the wrapper reports Typing and
+    // routes through the typing branch. We do not inject here -- the
+    // regression is specifically about what happens AFTER the profile
+    // flips the mode, so keep the pre-state to `method()` only.
+    assert_eq!(backend.method(), Some(InjectMethod::Typing));
+
+    // Apply a profile that carries `inject_mode=paste` -- the exact
+    // key/value contract `SessionConfig::from_profile_overrides` reads
+    // from the matched profile.
+    let mut profile = std::collections::BTreeMap::new();
+    profile.insert("inject_mode".to_owned(), "paste".to_owned());
+    backend.apply_profile_overrides(&profile);
+
+    // Effective method now reports Paste -- the fix propagates the
+    // override down to the enigo dispatch.
+    assert_eq!(
+        backend.method(),
+        Some(InjectMethod::Paste(None)),
+        "profile inject_mode=paste must flip the effective method to Paste, \
+         not silently keep Typing"
+    );
+
+    // Actually inject and observe: the recorder must see a paste chord
+    // (release-modifiers sweep + `chord:[...]+..`), NOT a `type:` event.
+    backend
+        .inject("profile-paste-text")
+        .expect("paste with clipboard wired must succeed");
+
+    let recorded = events.lock().unwrap().clone();
+    assert!(
+        recorded.iter().any(|e| e.starts_with("chord:[")),
+        "profile paste override MUST emit a paste chord, got events: {recorded:?}"
+    );
+    assert!(
+        !recorded.iter().any(|e| e.starts_with("type:")),
+        "profile paste override MUST NOT fall through to per-character typing; \
+         got events: {recorded:?}"
+    );
+
+    // The transcript reached the clipboard via the paste guard.
+    assert_eq!(
+        clipboard_probe.writes(),
+        vec!["profile-paste-text".to_owned()],
+        "paste path must copy the transcript to the clipboard before the chord fires"
     );
 }
