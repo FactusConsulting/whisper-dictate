@@ -74,6 +74,14 @@ pub(crate) mod rust_session_sink;
 #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
 pub(crate) mod rust_session_real_backends;
 
+// Codex P1 #608 rust_session_real_backends.rs:372 -- the in-process
+// preview sink that routes preview events onto the `RuntimeEvent`
+// channel (the pre-fix sink wrote them to stderr, invisible to the
+// in-process UI). Split into its own module so the parent stays
+// under the AGENTS.md 500-LOC modularity limit.
+#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+pub(crate) mod rust_session_preview;
+
 // Wave 5 PR 5 of #348 round 2 (Codex P2 #423 finding 4): production
 // `InjectBackend` wrapper that honors `VOICEPI_INJECT_MODE=print`
 // (stdout-only dry-run). Modifier release lives inside

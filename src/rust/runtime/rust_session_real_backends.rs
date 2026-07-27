@@ -93,6 +93,8 @@ use crate::dictate::{
     ProductionTranscribeBackend, SessionConfig,
 };
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
+
+use super::rust_session_preview::runtime_channel_preview_sink;
 use crate::whisper::{
     parse_idle_timeout_from_env, resolve_model_path_from_env, IdleUnloadingModel,
 };
@@ -369,7 +371,22 @@ pub(crate) fn make_real_session(
                 PreviewEngineConfig::from_seconds(preview_seconds_from_env(), crate::dictate::SR)
                     .map(|config| {
                         let backend: Arc<dyn PreviewBackend> = Arc::new(local.share_for_preview());
-                        PreviewEngine::spawn(backend, config, crate::dictate::stderr_preview_sink())
+                        // Route preview events through the in-process runtime
+                        // channel (Codex P1 #608 rust_session_real_backends.rs:372).
+                        // The pre-fix wiring passed `stderr_preview_sink()`,
+                        // which writes preview events to the process's stderr;
+                        // the in-process engine's UI only reads events from
+                        // the `RuntimeEvent` channel, so the previews never
+                        // surfaced. `runtime_channel_preview_sink` publishes
+                        // each preview as a `RuntimeEvent::Worker` whose
+                        // payload is byte-equivalent to the parsed shape the
+                        // subprocess path produces, keeping the UI's
+                        // downstream handling identical across paths.
+                        PreviewEngine::spawn(
+                            backend,
+                            config,
+                            runtime_channel_preview_sink(tx.clone(), repaint_notifier.clone()),
+                        )
                     })
             }
             ProductionTranscribeBackend::Cloud(_) => None,
