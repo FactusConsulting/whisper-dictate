@@ -342,16 +342,27 @@ class InjectMixin:
         ):
             return False
 
-        ok = inject_via_rust(
+        result = inject_via_rust(
             text,
             mode=rust_mode,
             target_title=getattr(self, "_inject_target_title", None),
             target_process=getattr(self, "_inject_target_process", None),
             xkb_layout=getattr(self, "_xkb_layout", None),
         )
-        if ok:
+        if result.ok:
             self._last_inject_strategy = f"rust-{rust_mode}"
-        return ok
+            return True
+        if result.partial:
+            # Codex P1 #613 dispatcher.rs:599: Rust helper typed part of
+            # the transcript before failing. Falling back to the Python
+            # path here would re-type the whole burst on top of the
+            # successful prefix, doubling half the utterance in the
+            # user's document. Report the strategy so operator logs still
+            # tell them WHICH backend carried the (partial) burst and
+            # return True so the outer `_inject` skips its fallback.
+            self._last_inject_strategy = f"rust-{rust_mode}-partial"
+            return True
+        return False
 
     def _try_rust_inject(self, mode: str, text: str = "") -> bool:
         helper = os.environ.get("VOICEPI_RUST_INJECTOR")

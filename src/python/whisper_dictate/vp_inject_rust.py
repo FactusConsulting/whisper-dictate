@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from dataclasses import dataclass
 from whisper_dictate.vp_rust import no_console_window_kwargs
 import threading
 from typing import Callable, Optional
@@ -35,6 +36,28 @@ from typing import Callable, Optional
 RUST_INJECTION_BACKEND_ENV = "VOICEPI_INJECTION_BACKEND"
 RUST_INJECTION_BACKEND_VALUE = "rust"
 RUST_INJECTOR_BINARY_ENV = "VOICEPI_RUST_INJECTOR"
+
+
+@dataclass(frozen=True)
+class RustInjectResult:
+    """Full outcome of a ``whisper-dictate inject`` invocation.
+
+    ``ok`` — the injection succeeded end-to-end.
+    ``partial`` — Rust reports it typed at least one keystroke before
+    failing. The outer Python fallback (``vp_inject._inject``) MUST NOT
+    re-inject the same text when this is set, or the successful prefix
+    will be double-typed into the user's document. Codex P1 #613
+    dispatcher.rs:599.
+
+    ``__bool__`` returns ``ok`` so the legacy bool-shaped call sites
+    (``if inject_via_rust(...)``) continue to behave the same way.
+    """
+
+    ok: bool
+    partial: bool = False
+
+    def __bool__(self) -> bool:  # legacy call sites
+        return self.ok
 
 
 def rust_injection_backend_enabled() -> bool:
@@ -58,17 +81,25 @@ def inject_via_rust(
     xkb_layout: str | None = None,
     helper: str | None = None,
     timeout: float = 10.0,
-) -> bool:
+) -> RustInjectResult:
     """Shell out to ``whisper-dictate inject`` with a JSON request envelope.
 
-    Returns True on success, False on any failure (binary missing, subprocess
-    error, JSON parse error, helper-reported ``ok=False``). The envelope
-    matches the Rust ``dispatcher::InjectRequest::Inject`` variant — see
+    Returns a :class:`RustInjectResult` carrying ``ok`` and ``partial``.
+    ``bool(result)`` matches ``result.ok`` so the legacy ``if
+    inject_via_rust(...)`` call sites keep working. Callers that need to
+    prevent the Python outer fallback from re-injecting after a partial
+    Rust burst (Codex P1 #613) must read ``result.partial`` -- see
+    :meth:`whisper_dictate.vp_inject._Inject._inject_via_rust_backend`.
+
+    Any failure (binary missing, subprocess error, JSON parse error,
+    helper-reported ``ok=False``) surfaces as ``RustInjectResult(ok=False,
+    partial=...)``. The envelope matches the Rust
+    ``dispatcher::InjectRequest::Inject`` variant — see
     ``src/rust/injection/dispatcher.rs`` for the schema.
     """
     binary = helper or os.environ.get(RUST_INJECTOR_BINARY_ENV)
     if not binary:
-        return False
+        return RustInjectResult(ok=False)
     request = {
         "action": "inject",
         "text": text,
@@ -87,22 +118,27 @@ def inject_via_rust(
         )
     except Exception as exc:
         print(f"[inject] rust injector launch failed: {exc}", flush=True)
-        return False
+        return RustInjectResult(ok=False)
     if completed.returncode != 0:
         err = completed.stderr.decode(errors="replace").strip()
         if err:
             print(f"[inject] rust injector exited {completed.returncode}: {err}", flush=True)
-        return False
+        # The Rust CLI only reaches non-zero for launch / parse errors
+        # before any injection is attempted, so partial cannot be true
+        # here even if a future revision were to try.
+        return RustInjectResult(ok=False)
     try:
         response = json.loads(completed.stdout.decode("utf-8") or "{}")
     except json.JSONDecodeError as exc:
         print(f"[inject] rust injector returned invalid JSON: {exc}", flush=True)
-        return False
+        return RustInjectResult(ok=False)
     ok = bool(response.get("ok"))
+    partial = bool(response.get("partial"))
     if not ok:
         err = response.get("error") or "unknown error"
-        print(f"[inject] rust injector reported failure: {err}", flush=True)
-    return ok
+        suffix = " (partial burst -- suppressing Python fallback)" if partial else ""
+        print(f"[inject] rust injector reported failure{suffix}: {err}", flush=True)
+    return RustInjectResult(ok=ok, partial=partial)
 
 
 def resolve_rust_inject_mode(

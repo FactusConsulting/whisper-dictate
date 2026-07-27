@@ -404,7 +404,7 @@ class InjectWaylandDispatchTests(_InjectBase):
 class InjectViaRustBackendMixinTests(_InjectBase):
     """Mixin-level dispatch through `_inject_via_rust_backend` (Codex P1/P2)."""
 
-    def _rust_target(self, mode="auto", title=None, process=None):
+    def _rust_target(self, mode="auto", title=None, process=None, result=None):
         t = self._target(mode=mode, title=title, process=process)
         # _target binds the platform predicates/methods but not the rust
         # delegate — bind it now so InjectMixin._inject can find it.
@@ -413,12 +413,16 @@ class InjectViaRustBackendMixinTests(_InjectBase):
             t, type(t)
         )
         # Capture the inject_via_rust shellout calls so we can assert on
-        # the (mode, text) actually delegated.
+        # the (mode, text) actually delegated. Callers can override the
+        # canned result to exercise the partial-burst / failure branches
+        # (Codex P1 #613 dispatcher.rs:599).
+        from whisper_dictate.vp_inject_rust import RustInjectResult
         t._rust_calls = []
+        canned = result if result is not None else RustInjectResult(ok=True)
 
         def _fake_inject(text, **kwargs):
             t._rust_calls.append({"text": text, **kwargs})
-            return True
+            return canned
 
         return t, _fake_inject
 
@@ -475,6 +479,95 @@ class InjectViaRustBackendMixinTests(_InjectBase):
         self.assertEqual(t._last_inject_strategy, "rust-paste")
         self.assertEqual(t._rust_calls[0]["mode"], "paste")
         self.assertEqual(self.clip.copied, ["hello"])
+
+    def test_partial_rust_burst_suppresses_python_fallback(self):
+        """Codex P1 #613 dispatcher.rs:599 — partial Rust burst must NOT double-type.
+
+        When the Rust dispatcher stamps ``partial: true`` in its response
+        (a helper already pushed some keystrokes to the compositor before
+        failing), the Python outer ``_inject`` MUST NOT re-run its own
+        typing / paste fallback -- doing so would re-type the successful
+        prefix on top of what Rust just injected. This test drives the
+        integration end-to-end: fake `inject_via_rust` returns
+        ``ok=False, partial=True`` and we assert the mixin recorded a
+        `-partial` strategy AND that the Wayland-typing fallback was
+        never invoked.
+        """
+        from whisper_dictate.vp_inject_rust import RustInjectResult
+
+        partial_result = RustInjectResult(ok=False, partial=True)
+        t, fake = self._rust_target(mode="type", result=partial_result)
+        # Instrument the fallback paths -- if the outer `_inject` re-runs
+        # `_inject_wayland` or `_inject_other`, one of these lists would
+        # gain an entry, which is the exact regression the P1 catches.
+        t.typed_wayland = []
+
+        def _wayland_type(text):
+            t.typed_wayland.append(text)
+            return True
+
+        t._wayland_type = _wayland_type
+        # `_inject_log_preview` reads this on the Wayland path; refocus
+        # is orthogonal to the partial-burst assertion, so pin False so
+        # the code under test never tries to talk to a compositor.
+        t._restore_target_focus = lambda: False
+
+        with _env(VOICEPI_INJECTION_BACKEND="rust",
+                  VOICEPI_RUST_INJECTOR="/bin/whisper-dictate",
+                  WAYLAND_DISPLAY="wayland-0"), \
+                patch("whisper_dictate.vp_inject.inject_via_rust", side_effect=fake), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "half typed before crash")
+
+        # Rust ran, recorded the partial outcome...
+        self.assertEqual(len(t._rust_calls), 1)
+        # ...and the mixin surfaced it in the operator-visible strategy
+        # (`-partial` suffix distinguishes "Rust handled all of it" from
+        # "Rust got part-way and we chose not to retry").
+        self.assertEqual(t._last_inject_strategy, "rust-typing-partial")
+        # The regression guard: NO Python-side fallback typing ran.
+        # Without the `partial` propagation the outer `_inject` would
+        # invoke `_inject_wayland`, which would then re-type the whole
+        # transcript on top of Rust's successful prefix.
+        self.assertEqual(
+            t.typed_wayland, [],
+            "Python Wayland fallback must NOT run after a Rust partial burst",
+        )
+        # And no direct pynput typing either.
+        self.assertNotIn(
+            ("type", "half typed before crash"), t._kb.events,
+            "pynput typing fallback must NOT run after a Rust partial burst",
+        )
+
+    def test_full_rust_failure_still_falls_back_to_python(self):
+        """Sanity check for the non-partial path: `ok=False, partial=False`
+        preserves the existing fallback contract so a genuine Rust
+        launch/config failure still lets the Python path recover.
+        """
+        from whisper_dictate.vp_inject_rust import RustInjectResult
+
+        full_failure = RustInjectResult(ok=False, partial=False)
+        t, fake = self._rust_target(mode="type", result=full_failure)
+        t.typed_wayland = []
+
+        def _wayland_type(text):
+            t.typed_wayland.append(text)
+            return True
+
+        t._wayland_type = _wayland_type
+        t._restore_target_focus = lambda: False
+
+        with _env(VOICEPI_INJECTION_BACKEND="rust",
+                  VOICEPI_RUST_INJECTOR="/bin/whisper-dictate",
+                  WAYLAND_DISPLAY="wayland-0"), \
+                patch("whisper_dictate.vp_inject.inject_via_rust", side_effect=fake), \
+                _capture_stdout():
+            self.inject.InjectMixin._inject(t, "clean fallback text")
+
+        # Rust attempted, reported full failure -> Python Wayland
+        # typing takes over and carries the transcript.
+        self.assertEqual(len(t._rust_calls), 1)
+        self.assertEqual(t.typed_wayland, ["clean fallback text"])
 
     def test_releases_stale_modifiers_before_delegating(self):
         """P2 #2 — physical Ctrl held from a PTT chord must be released first."""
