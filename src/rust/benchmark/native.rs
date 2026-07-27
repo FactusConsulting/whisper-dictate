@@ -276,11 +276,7 @@ pub fn run_with_writer(
         };
         for (item, audio) in &resolved_items {
             let event = if !audio.exists() {
-                annotate_event(
-                    skipped_event(item, audio, MISSING_AUDIO_REASON),
-                    item,
-                    spec,
-                )
+                annotate_event(skipped_event(item, audio, MISSING_AUDIO_REASON), item, spec)
             } else if let Some(backend) = backend.as_deref() {
                 run_one_item(item, audio, backend, spec, &dictionary, &post_settings)
             } else {
@@ -288,11 +284,7 @@ pub fn run_with_writer(
                 // resolved audio exists, and the outer `!audio.exists()`
                 // branch handles the missing ones. Defence-in-depth path so
                 // a refactor that skips the branch cannot silently drop rows.
-                annotate_event(
-                    skipped_event(item, audio, MISSING_AUDIO_REASON),
-                    item,
-                    spec,
-                )
+                annotate_event(skipped_event(item, audio, MISSING_AUDIO_REASON), item, spec)
             };
             emit_jsonl(&event, out)?;
             scoring_events.push(scoring_event_from(&event));
