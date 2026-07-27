@@ -376,6 +376,7 @@ mod tests {
 ///   - a helper that is on PATH but cannot execute (spawn errors),
 ///   - X11 helpers with no reachable display,
 ///   - `ydotool` when `ydotoold` is not running / its socket is unusable.
+///
 /// Error returned from a single helper attempt in the runtime fallback
 /// chain (`dispatcher::try_helpers`). Carries both the underlying error and
 /// a flag that indicates whether the helper had already pushed one or more

@@ -39,7 +39,11 @@ pub enum ProductionTranscribeBackend<L> {
     /// Local Whisper inference (`stt_backend=local`, the default).
     Local(L),
     /// Cloud `/audio/transcriptions` endpoint (`stt_backend=openai`).
-    Cloud(CloudTranscribeBackend),
+    ///
+    /// Boxed so the enum's size is dominated by the smaller `Local`
+    /// variant (`CloudTranscribeBackend` carries a large HTTP config
+    /// struct -- clippy's `large_enum_variant` fires otherwise).
+    Cloud(Box<CloudTranscribeBackend>),
 }
 
 impl<L> ProductionTranscribeBackend<L> {
@@ -67,7 +71,7 @@ impl<L> ProductionTranscribeBackend<L> {
         build_local: impl FnOnce() -> Result<L, E>,
     ) -> Result<Self, E> {
         if cloud_requested {
-            Ok(Self::Cloud(build_cloud()?))
+            Ok(Self::Cloud(Box::new(build_cloud()?)))
         } else {
             Ok(Self::Local(build_local()?))
         }

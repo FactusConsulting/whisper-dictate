@@ -72,8 +72,9 @@ fn cloud_variant_delegates_to_cloud_backend() {
     // Empty api_key trips CloudTranscribeBackend's pre-network guard, so
     // an Err proves the enum routed to the Cloud arm without a live call.
     // Feed gate-passing audio so the speech gate doesn't short-circuit first.
-    let backend: ProductionTranscribeBackend<StubLocal> =
-        ProductionTranscribeBackend::Cloud(CloudTranscribeBackend::new(cloud_config_no_key()));
+    let backend: ProductionTranscribeBackend<StubLocal> = ProductionTranscribeBackend::Cloud(
+        Box::new(CloudTranscribeBackend::new(cloud_config_no_key())),
+    );
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("empty key must error through the cloud arm");

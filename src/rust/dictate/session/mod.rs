@@ -1019,9 +1019,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 &text,
                 &result,
                 recording_s.clone(),
-                Some(err.to_string()),
-                post.as_ref(),
-                &replacements,
+                wire::UtterancePost {
+                    inject_error: Some(err.to_string()),
+                    post: post.as_ref(),
+                    replacements: &replacements,
+                },
                 extras,
             )?;
             self.record_sinks(&payload);
@@ -1032,9 +1034,11 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             &text,
             &result,
             recording_s.clone(),
-            None,
-            post.as_ref(),
-            &replacements,
+            wire::UtterancePost {
+                inject_error: None,
+                post: post.as_ref(),
+                replacements: &replacements,
+            },
             extras,
         )?;
         self.record_sinks(&payload);

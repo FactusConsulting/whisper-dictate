@@ -44,7 +44,7 @@ use crate::dictate::profile::{
 use crate::platform::foreground_window::WindowInfo;
 
 /// Options for [`run_profile_match_self_test`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ProfileMatchOptions {
     /// Foreground-window title to match against. Empty string sends
     /// `None` through to the matcher (mirrors a Wayland / macOS probe
@@ -56,16 +56,6 @@ pub struct ProfileMatchOptions {
     /// the user's `config.json` (mirrors the shipping session). When
     /// populated, a `StaticProfileMatcher` is built from the string.
     pub profiles_json_override: String,
-}
-
-impl Default for ProfileMatchOptions {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            process: String::new(),
-            profiles_json_override: String::new(),
-        }
-    }
 }
 
 /// Verb output.
@@ -245,8 +235,10 @@ mod tests {
 
     #[test]
     fn report_json_shape_matches_contract() {
-        let mut applied = AppliedProfile::default();
-        applied.name = Some("Cursor".to_owned());
+        let mut applied = AppliedProfile {
+            name: Some("Cursor".to_owned()),
+            ..Default::default()
+        };
         applied.settings.insert("lang".to_owned(), "en".to_owned());
         let report = ProfileMatchReport {
             title: Some("Cursor".to_owned()),

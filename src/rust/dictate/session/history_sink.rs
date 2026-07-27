@@ -82,7 +82,7 @@ pub struct EffectiveHistorySettings {
 /// the sinks' single overlay point. Codex P1 #605 finding 1.
 pub fn effective_history_settings() -> EffectiveHistorySettings {
     // Config file first (the "user saved a value in the UI" path).
-    let raw_config = config::load_raw_config().unwrap_or_else(|_| serde_json::Value::Null);
+    let raw_config = config::load_raw_config().unwrap_or(serde_json::Value::Null);
     let object = raw_config.as_object();
 
     let enabled_from_config = object

@@ -68,6 +68,24 @@ pub(super) fn emit_status<W: Write>(
     write_line(writer, &Value::Object(payload))
 }
 
+/// Post-processing artifacts bundled with an `emit_utterance` /
+/// `build_utterance_payload` call. Grouping these three related pieces
+/// (inject outcome + post-processing pass + dictionary rewrite list)
+/// keeps the wire emitter under clippy's `too_many_arguments` limit
+/// without changing what any field carries.
+#[derive(Debug, Clone)]
+pub(super) struct UtterancePost<'a> {
+    /// Injection failure text (mirrors Python's `inject_error` field);
+    /// `None` on the success path.
+    pub inject_error: Option<String>,
+    /// Post-processing outcome (`post_*` fields), `None` when no pass
+    /// ran for this utterance.
+    pub post: Option<&'a super::PostProcessOutcome>,
+    /// Dictionary replacement records emitted as `dictionary_replacements`
+    /// when non-empty.
+    pub replacements: &'a [crate::dictionary::ReplacementChange],
+}
+
 /// Extra context bundled with an `emit_utterance` call so the payload
 /// carries every field `vp_dictate.py::_utterance_event` populates.
 /// Kept as a small parameter struct so the callsite is readable.
@@ -107,20 +125,10 @@ pub(super) fn emit_utterance<W: Write>(
     text: &str,
     result: &TranscribeResult,
     recording_s: Value,
-    inject_error: Option<String>,
-    post: Option<&super::PostProcessOutcome>,
-    replacements: &[crate::dictionary::ReplacementChange],
+    post: UtterancePost<'_>,
     extras: UtteranceExtras<'_>,
 ) -> Result<Value, SessionError> {
-    let payload = build_utterance_payload(
-        text,
-        result,
-        recording_s,
-        inject_error,
-        post,
-        replacements,
-        extras,
-    );
+    let payload = build_utterance_payload(text, result, recording_s, post, extras);
     write_line(writer, &payload)?;
     Ok(payload)
 }
@@ -133,11 +141,14 @@ pub(super) fn build_utterance_payload(
     text: &str,
     result: &TranscribeResult,
     recording_s: Value,
-    inject_error: Option<String>,
-    post: Option<&super::PostProcessOutcome>,
-    replacements: &[crate::dictionary::ReplacementChange],
+    post_bundle: UtterancePost<'_>,
     extras: UtteranceExtras<'_>,
 ) -> Value {
+    let UtterancePost {
+        inject_error,
+        post,
+        replacements,
+    } = post_bundle;
     let mut payload: Map<String, Value> = Map::new();
     // Python's `_base_event` stamps `ts = time.time()` (float seconds since
     // the Unix epoch) on every utterance dict before `_emit_worker_event` +

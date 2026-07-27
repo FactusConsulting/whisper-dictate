@@ -42,7 +42,7 @@ use crate::dictate::session::history_sink::{
 };
 
 /// Options for [`run_history_write_self_test`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HistoryWriteOptions {
     /// Utterance text to write. Required (empty string still writes a
     /// row so the operator can pin the shape).
@@ -54,16 +54,6 @@ pub struct HistoryWriteOptions {
     /// Force the gate on regardless of the ambient env / config. Same
     /// safety-net as `path_override`.
     pub force_enabled: Option<bool>,
-}
-
-impl Default for HistoryWriteOptions {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            path_override: None,
-            force_enabled: None,
-        }
-    }
 }
 
 /// Verb output.
