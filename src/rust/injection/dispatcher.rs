@@ -212,33 +212,52 @@ impl Injector {
         // ydotool already has a fully-featured layout-aware code path in
         // wayland.rs — reuse it when ydotool wins the chain. The other helpers
         // get a generic invocation through super::linux_helpers.
-        use super::fallback::select_paste_helper;
-        use super::linux_helpers::{invoke_paste, invoke_type};
+        use super::linux_helpers::invoke_type;
 
         let session = LinuxSession::detect();
         match method {
             InjectMethod::Typing => {
-                let helper = select_helper(session, locate_on_path).ok_or_else(|| {
-                    anyhow!(
-                        "no Linux injection helper found on PATH (tried: {:?})",
-                        super::fallback::fallback_chain(session)
-                    )
-                })?;
-                if helper == "ydotool" {
-                    wayland_type(text, &self.xkb_layout)
-                } else {
-                    invoke_type(helper, text)
-                }
+                // Walk the chain instead of committing to the first helper
+                // that merely EXISTS on PATH. Presence is not capability:
+                // on KDE Wayland `wtype` is installed and shipped by the
+                // distro, but KWin does not implement
+                // `zwp_virtual_keyboard_v1`, so every injection failed while
+                // a working `ydotool` sat two entries further down and was
+                // never tried.
+                try_helpers(
+                    session,
+                    |helper| {
+                        if helper == "ydotool" {
+                            wayland_type(text, &self.xkb_layout)
+                        } else {
+                            invoke_type(helper, text)
+                        }
+                    },
+                    false,
+                    "injection",
+                )
             }
             InjectMethod::Paste(shortcut) => {
                 // P3 #371 finding 1: dotool has no paste-chord support,
                 // so the paste-only helper picker filters it out.
-                let helper = select_paste_helper(session, locate_on_path).ok_or_else(|| {
-                    anyhow!(
-                        "no Linux paste helper found on PATH (tried: {:?}, dotool excluded - no paste chord)",
-                        super::fallback::fallback_chain(session)
-                    )
-                })?;
+                try_helpers(
+                    session,
+                    |helper| self.paste_with_helper(helper, shortcut),
+                    true,
+                    "paste",
+                )
+            }
+        }
+    }
+
+    /// One paste attempt with a chosen helper. Split out of the chain walk so
+    /// the per-helper shortcut logic below stays readable and the retry loop
+    /// stays about retrying.
+    #[cfg(target_os = "linux")]
+    fn paste_with_helper(&self, helper: &str, shortcut: Option<PasteShortcut>) -> Result<()> {
+        use super::linux_helpers::invoke_paste;
+        {
+            {
                 if helper == "ydotool" {
                     // P2 #391 follow-up: ydotool path now also honours an
                     // explicit `Some(shortcut)`. Previously `paste_shortcut`
@@ -466,6 +485,71 @@ fn read_request() -> Result<InjectRequest> {
     let mut raw = String::new();
     io::stdin().read_to_string(&mut raw)?;
     Ok(serde_json::from_str(&raw)?)
+}
+
+/// Try each available helper, in chain order, until one succeeds.
+///
+/// Candidates come from [`available_helpers`], the same list the single-pick
+/// selectors delegate to, so the runtime fallback cannot disagree with them
+/// about what is eligible or in which order.
+///
+/// Only failures that provably typed nothing advance to the next helper --
+/// see [`is_safe_to_try_next_helper`]. An unrecognised failure is returned
+/// immediately, because a helper that died mid-text must not be followed by
+/// another one typing the whole text again.
+#[cfg(target_os = "linux")]
+fn try_helpers<A>(
+    session: LinuxSession,
+    mut attempt: A,
+    paste_capable_only: bool,
+    what: &str,
+) -> Result<()>
+where
+    A: FnMut(&str) -> Result<()>,
+{
+    let candidates =
+        super::fallback::available_helpers(session, locate_on_path, paste_capable_only);
+    if candidates.is_empty() {
+        return Err(anyhow!(
+            "no Linux {what} helper found on PATH (tried: {:?})",
+            super::fallback::fallback_chain(session)
+        ));
+    }
+
+    let mut last_err: Option<anyhow::Error> = None;
+    for (idx, helper) in candidates.iter().copied().enumerate() {
+        match attempt(helper) {
+            Ok(()) => {
+                if idx > 0 {
+                    // Worth a line: the helper the operator would expect to
+                    // be used did not work, and knowing WHICH one carried
+                    // the text is the difference between "it works" and
+                    // "it works for a reason I can reproduce".
+                    eprintln!(
+                        "[inject] {what}: {helper} succeeded after {:?} failed",
+                        &candidates[..idx]
+                    );
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                let text = format!("{err:#}");
+                if !super::fallback::is_safe_to_try_next_helper(&text) {
+                    // Unrecognised failure: it may have typed part of the
+                    // text. Stop rather than risk duplicating it.
+                    return Err(err);
+                }
+                eprintln!("[inject] {what}: {helper} unusable ({text}); trying next helper");
+                last_err = Some(err);
+            }
+        }
+    }
+
+    Err(last_err
+        .unwrap_or_else(|| anyhow!("no Linux {what} helper produced a result"))
+        .context(format!(
+            "every Linux {what} helper failed (tried: {candidates:?})"
+        )))
 }
 
 #[cfg(test)]
