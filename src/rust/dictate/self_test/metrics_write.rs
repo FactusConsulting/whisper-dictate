@@ -40,7 +40,7 @@ use crate::dictate::session::metrics_sink::{
 };
 
 /// Options for [`run_metrics_write_self_test`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MetricsWriteOptions {
     /// Utterance text to write.
     pub text: String,
@@ -49,15 +49,6 @@ pub struct MetricsWriteOptions {
     /// so a caller that specifies `path_override` doesn't need to also
     /// export `VOICEPI_JSON=1`.
     pub path_override: Option<PathBuf>,
-}
-
-impl Default for MetricsWriteOptions {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            path_override: None,
-        }
-    }
 }
 
 /// Verb output.

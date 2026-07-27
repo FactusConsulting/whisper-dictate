@@ -142,7 +142,7 @@ fn scoring_and_reporting_agree_on_a_small_run() {
     let tmp = tempfile::tempdir().unwrap();
     let audio_a = tiny_wav(tmp.path(), "a.wav");
     let audio_b = tiny_wav(tmp.path(), "b.wav");
-    let items = vec![
+    let items = [
         item("a", "hello world", audio_a.clone()),
         item("b", "Claude Code virker", audio_b.clone()),
     ];

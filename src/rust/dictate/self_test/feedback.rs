@@ -157,7 +157,7 @@ pub fn resolve_backend() -> &'static str {
                 };
             }
         }
-        return "noop";
+        "noop"
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
