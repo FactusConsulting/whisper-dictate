@@ -301,7 +301,14 @@ fn run_one_item_applies_dictionary_replacements() {
         max_chars: 256,
         enabled: true,
     };
-    let event = run_one_item(&it, &audio, &backend, &spec, &dictionary, &passthrough_post());
+    let event = run_one_item(
+        &it,
+        &audio,
+        &backend,
+        &spec,
+        &dictionary,
+        &passthrough_post(),
+    );
     let map = event.as_object().unwrap();
     assert_eq!(map["text"].as_str(), Some("Claude Code virker"));
     // WER over normalised tokens: "claude code virker" == "claude code virker" → 0.
@@ -437,7 +444,11 @@ fn run_with_writer_captures_summary_line_to_buffer() {
 fn run_with_writer_rejects_empty_corpus() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().unwrap();
-    let prev = snapshot_clear(&["VOICEPI_STT_BACKEND", "VOICEPI_STT_API_KEY", "OPENAI_API_KEY"]);
+    let prev = snapshot_clear(&[
+        "VOICEPI_STT_BACKEND",
+        "VOICEPI_STT_API_KEY",
+        "OPENAI_API_KEY",
+    ]);
     std::env::set_var("VOICEPI_STT_BACKEND", "openai");
     std::env::set_var("VOICEPI_STT_API_KEY", "test-key");
     let mut buf: Vec<u8> = Vec::new();
@@ -516,7 +527,10 @@ fn run_with_writer_rejects_local_whisper_model_qualifier() {
         // rejection fires first — either shape confirms the invalid
         // comparison never emits mislabeled rows.
         Err(NativeBenchError::Unsupported(_)) => {}
-        other => panic!("expected model-qualifier rejection, got {:?}", other.is_ok()),
+        other => panic!(
+            "expected model-qualifier rejection, got {:?}",
+            other.is_ok()
+        ),
     }
 }
 

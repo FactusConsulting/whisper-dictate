@@ -179,10 +179,7 @@ impl ProductionInjectBackend {
         // Codex P1 #619: profile mode overrides must actually reach
         // the backend method, not just this wrapper's mutex slot.
         let starting = enigo_method_for(choice);
-        Self::with_enigo(
-            choice,
-            EnigoInjectBackend::new(Injector::new(), starting),
-        )
+        Self::with_enigo(choice, EnigoInjectBackend::new(Injector::new(), starting))
     }
 
     /// Test-only: build with an explicit paste shortcut. Kept for the
@@ -266,9 +263,9 @@ impl InjectBackend for ProductionInjectBackend {
             // constructor's method field, so passing it through here
             // is what makes the paste-profile actually paste (Codex
             // P1 #619 runtime/rust_session_inject.rs:146).
-            other @ (InjectModeChoice::Typing | InjectModeChoice::Paste) => self
-                .enigo
-                .inject_using(text, enigo_method_for(other)),
+            other @ (InjectModeChoice::Typing | InjectModeChoice::Paste) => {
+                self.enigo.inject_using(text, enigo_method_for(other))
+            }
         }
     }
 

@@ -293,8 +293,7 @@ fn profile_inject_mode_override_from_typing_to_paste_actually_pastes() {
     let enigo = EnigoInjectBackend::new(injector, InjectMethod::Typing)
         .with_clipboard(Box::new(clipboard))
         .with_restore_delay(Duration::ZERO);
-    let backend =
-        ProductionInjectBackend::with_enigo_for_test(InjectModeChoice::Typing, enigo);
+    let backend = ProductionInjectBackend::with_enigo_for_test(InjectModeChoice::Typing, enigo);
 
     // Sanity: before the override, the wrapper reports Typing and
     // routes through the typing branch. We do not inject here -- the
