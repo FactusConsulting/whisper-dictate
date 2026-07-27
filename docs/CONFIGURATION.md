@@ -565,10 +565,8 @@ Passed after the Rust controller (`whisper-dictate run -- ...`):
 | `--include-secrets` | off | — | With `--export-config`, emit API keys in full instead of `***` (for backup/migration). |
 | `whisper-dictate model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading Python or Whisper. |
 | `--transcribe-file PATH` | off | audio path | Transcribe an audio file with the selected backend/config and exit. 16-bit WAV works natively; mp3/m4a/other formats require ffmpeg. Combine with `--json` for structured output. |
-| `--benchmark-files PATH...` | off | audio paths | Run one or more files through benchmark backend specs and emit one JSONL event per file/backend. |
-| `--benchmark-corpus PATH` | off | manifest path | Run a benchmark corpus manifest and annotate results with reference text, WER/CER and technical-term hits/misses. |
-| `--benchmark-backends SPEC` | current backend | CSV specs | Backend/model specs for benchmarking, e.g. `whisper:large-v3,openai:gpt-4o-mini-transcribe`. (Wave 8 of #348 removed the legacy `parakeet:...` spec together with the backend.) |
-| `--benchmark-jsonl PATH` | stdout | file path | Append benchmark JSONL results to a file instead of stdout. |
+| `whisper-dictate bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. (Step 2 of #348 replaced the previous `--run-benchmark` / `--benchmark-files` / `--benchmark-backends` / `--benchmark-jsonl` Python subsystem with this verb.) |
+| `--benchmark-corpus PATH` | off | manifest path | Corpus manifest path used by `--dictionary-build-from-corpus` (forwarded to the Rust `dictionary build-from-corpus` subcommand). |
 | `--calibrate-mic [SECONDS]` | off | seconds, default `5` | Record a short mic sample, print pass/warn/fail audio diagnostics and recommended threshold settings, then exit. |
 | `--calibrate-file PATH` | off | audio path | Analyze an existing audio file with the same calibration logic. Combine with `--json` for structured output. |
 | `--post-process-text TEXT` | off | text | Run the configured post-processor on text and exit. Useful for testing Ollama/OpenAI text cleanup without recording audio. |
@@ -795,9 +793,10 @@ missing everywhere are reported as `skipped` in the summary, so a fresh install
 shows e.g. `[benchmark] 0/31 passed, 31 skipped (no audio)` — and when _every_
 item is skipped for missing audio, the line appends
 `record corpus audio to <that audio dir>` so you know exactly what to do next.
-In a dev checkout, `scripts/benchmark/record-corpus.py` records each item next to
-the manifest (`benchmark/audio/`); to keep recordings across reinstalls, copy
-them into the per-user audio dir above (the worker checks it as a fallback).
+Record missing items with `whisper-dictate corpus-record <ID>` (the native
+Rust recorder that replaced the previous `scripts/benchmark/record-corpus.py`
+dev script). Recordings land in the per-user audio dir above by default, so
+they survive reinstalls automatically.
 
 ### Target profiles
 

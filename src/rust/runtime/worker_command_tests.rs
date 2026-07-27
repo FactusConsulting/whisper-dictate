@@ -257,48 +257,11 @@ fn disable_python_hotkey_is_idempotent() {
     assert_eq!(count, 1, "calling twice must not duplicate the flag");
 }
 
-#[test]
-fn benchmark_command_adds_run_benchmark_argument_with_app_root_and_config() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.json");
-    std::fs::write(
-        &config_path,
-        serde_json::json!({ "model": "large-v3", "device": "cuda" }).to_string(),
-    )
-    .unwrap();
-
-    let _app_root_guard = EnvVarGuard::set(APP_ROOT_ENV, "/installed/app");
-    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
-    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
-    let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config_path);
-    let _model_guard = EnvVarGuard::remove("VOICEPI_MODEL");
-    let _device_guard = EnvVarGuard::remove("VOICEPI_DEVICE");
-
-    let command = benchmark_command();
-
-    // Drives the worker's `--run-benchmark` entry, inheriting the same
-    // `--app-root` the other one-shot worker commands use.
-    assert_eq!(
-        command.args,
-        vec![
-            "-m".to_owned(),
-            "whisper_dictate.runtime".to_owned(),
-            "--app-root".to_owned(),
-            "/installed/app".to_owned(),
-            "--run-benchmark".to_owned(),
-        ]
-    );
-    // The benchmark inherits the same effective model/device config as a
-    // dictation run, so it benchmarks what the user actually has selected.
-    let env = command
-        .env
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(env["VOICEPI_MODEL"], "large-v3");
-    assert_eq!(env["VOICEPI_DEVICE"], "cuda");
-}
+// Step 2 of the `vp_benchmark.py` retirement (#348) removed
+// `benchmark_command`, so the `benchmark_command_adds_run_benchmark_argument_
+// with_app_root_and_config` test that pinned its argv + inherited env is
+// gone. The System tab now drives the native runner in-process; UI-side
+// coverage lives in `ui/benchmark_task_tests.rs`.
 
 // -----------------------------------------------------------------------
 // P2 #346 finding 1: install_rust_hotkey_from_command helper.

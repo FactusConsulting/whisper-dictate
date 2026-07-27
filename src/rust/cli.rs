@@ -622,7 +622,8 @@ pub enum DictionaryCommand {
     /// never records audio.
     #[command(name = "suggest-terms")]
     SuggestTerms {
-        /// Path to the annotated benchmark JSONL emitted by `--run-benchmark`.
+        /// Path to the annotated benchmark JSONL emitted by
+        /// `whisper-dictate bench`.
         jsonl: String,
         /// Dictionary file to read / append. Default: `$VOICEPI_DICTIONARY` or
         /// the per-user `dictionary.json`.

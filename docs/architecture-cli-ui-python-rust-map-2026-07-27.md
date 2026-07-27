@@ -20,7 +20,7 @@ GUI wiring + a full round of manual + smoke verification.
 | `ui`, `settings` | ✅ | | Opens the egui Rust UI. UI itself may spawn Python worker for dictation. |
 | `run` | | ✅ | Alias for the Python dictation loop (`runtime::run_terminal`). |
 | `doctor` | ✅ | | Native (`doctor::handle_doctor`). |
-| `bench` | | ✅ | Rust dispatcher shells to `runtime::benchmark_command()` → Python `--run-benchmark`. Two-step migration pending. |
+| `bench` | ✅ | | Native Rust runner (`benchmark::native::run`) since step 2 of #348. Requires shipping features (`whisper-rs-local,audio-capture`); stock dev builds emit a rebuild hint. |
 | `corpus-record` | | ✅ | Rust dispatcher shells to `runtime::record_corpus_item_command()`. Two-step migration pending (same shape as retired `--test-audio-device`). |
 | ~~`simulate-ptt`~~ | | | **Retired**; superseded by `simulate-session` (WAV + cloud) and `dictate-mic` (live + cloud). |
 | `simulate-session` | ✅ | | Rust-engine WAV driver. Cloud STT only; hidden verb, CI/diag use. Replaces `simulate-ptt` for WAV-driven end-to-end checks. |
@@ -50,7 +50,7 @@ GUI wiring + a full round of manual + smoke verification.
 | **Test audio device** button | ✅ | | Native since #600 (WASAPI on Windows, cpal on Linux). |
 | List windows | | ✅ | Shells via `windows_command()`. |
 | Install / Repair | | ✅ | Shells; legitimately Python for dep install. |
-| Run benchmark | | ✅ | Shells via `benchmark_command()`. Requires the two-step migration. |
+| Run benchmark | ✅ | | Native since step 2 of #348. `run_benchmark` calls `benchmark::native::run_to_writer` on a background thread and captures the output for the existing results parser. |
 | Record corpus item | | ✅ | Shells via `record_corpus_item_command()`. Same shape. |
 | Cancel task / Kill worker | ✅ | | Native (task management is Rust-side). |
 | Debug log tail | ✅ | | Native. Reads runtime events channel. |
@@ -93,8 +93,12 @@ Modules whose PRIMARY caller is Python (not just a compat shim):
 - `vp_postprocess.py` — Python post-processing shim.
 - `vp_inject.py` + `vp_inject_rust.py` — Python injection dispatch.
 - `vp_setup.py` — Setup wizard (no Rust equivalent yet).
-- `vp_benchmark.py` + `vp_corpus_record.py` — benchmark + corpus recording
-  subsystems. Rust CLI verbs (`bench`, `corpus-record`) currently shell to these.
+- `vp_corpus_record.py` — corpus recording. The Rust `corpus-record` CLI
+  verb + UI Record button run the native cpal recorder since #624; the
+  Python subprocess path is scheduled for step 2 removal.
+- (`vp_benchmark.py` retired in step 2 of #348 — see `vp_benchmark_paths.py`
+  for the surviving corpus-loader helpers that `vp_corpus_record.py` still
+  imports.)
 - `vp_history.py`, `vp_events.py`, `vp_health.py`, `vp_preview.py`,
   `vp_feedback.py`, `vp_audio_ducking.py`, `vp_dictionary_store.py` — Python
   primary implementations of features Rust ALSO has (parity ports). Used only
@@ -118,8 +122,11 @@ lands:
 3. **`corpus-record` two-step migration**: native cpal capture in Rust, then
    retire `vp_corpus_record.py` + `--record-corpus-item` argparse flag.
 
-4. **`bench` two-step migration**: native Rust benchmark runner, then retire
-   `vp_benchmark.py` (~505 lines) + report/paths helpers.
+4. ~~**`bench` two-step migration**~~ — done. Step 1 (native runner) landed in
+   #625; step 2 retired `vp_benchmark.py` + `vp_benchmark_report.py` and
+   removed the `--run-benchmark` / `--benchmark-files` / `--benchmark-backends`
+   / `--benchmark-jsonl` argparse flags. `vp_benchmark_paths.py` is kept for
+   its corpus-loader (used by `vp_corpus_record.py` pending its own step 2).
 
 5. **Setup wizard**: no Rust equivalent yet. Needs a design pass.
 

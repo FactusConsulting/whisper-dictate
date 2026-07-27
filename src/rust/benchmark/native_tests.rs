@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::corpus::CorpusItem;
-use std::fs;
 use std::path::PathBuf;
 
 fn tiny_wav(dir: &std::path::Path, name: &str) -> PathBuf {
@@ -181,12 +180,13 @@ fn native_bench_error_wraps_anyhow() {
 }
 
 #[test]
-fn run_with_falls_back_when_local_whisper_feature_absent() {
+fn run_with_reports_unsupported_when_local_whisper_feature_absent() {
     // Without the `whisper-rs-local` feature we cannot build the local
     // Whisper backend natively; the runner must surface the Unsupported
-    // signal so `handle_bench` shells to Python. On feature-on builds this
-    // path is not reachable (the backend builds successfully), so the
-    // assertion is cfg-gated.
+    // signal so `handle_bench` (post step-2, no Python fallback) can turn
+    // it into a clear rebuild hint. On feature-on builds this path is not
+    // reachable (the backend builds successfully), so the assertion is
+    // cfg-gated.
     if cfg!(feature = "whisper-rs-local") {
         return;
     }
@@ -210,6 +210,35 @@ fn run_with_falls_back_when_local_whisper_feature_absent() {
 }
 
 #[test]
+fn run_with_writer_captures_summary_line_to_buffer() {
+    // The System tab's "Run benchmark" button captures the runner output
+    // into a String on a background thread instead of shelling out to
+    // Python. Prove the writer path emits the same `[benchmark] …` summary
+    // line the stdout path does, since the UI's `apply_benchmark_results`
+    // parser keys on it.
+    let tmp = tempfile::tempdir().unwrap();
+    let audio = tiny_wav(tmp.path(), "greet.wav");
+    let items = vec![item("greet", "hello world", audio)];
+    // Force the openai backend so we don't need the `whisper-rs-local`
+    // feature to exercise this — build_backend uses it directly, but we
+    // want run_with_writer to be reachable via VOICEPI_STT_BACKEND on the
+    // stock build.
+    let prev = std::env::var("VOICEPI_STT_BACKEND").ok();
+    std::env::set_var("VOICEPI_STT_BACKEND", "openai");
+    let mut buf: Vec<u8> = Vec::new();
+    let _ = super::run_with_writer(&items, tmp.path(), &mut buf);
+    match prev {
+        Some(v) => std::env::set_var("VOICEPI_STT_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_STT_BACKEND"),
+    }
+    let out = String::from_utf8(buf).unwrap();
+    assert!(
+        out.contains("[benchmark]"),
+        "writer must receive the summary line: {out}"
+    );
+}
+
+#[test]
 fn tiny_wav_decodes_via_public_helper() {
     // Sanity check on the fixture writer so any decoder tweak up-stream
     // fails here, not deep in run_one_item.
@@ -219,9 +248,6 @@ fn tiny_wav_decodes_via_public_helper() {
     assert_eq!(pcm.len(), 3_200);
 }
 
-#[test]
-fn fallback_message_prefix_is_stable() {
-    // The message users grep for stays intact across refactors.
-    assert!(FALLBACK_MESSAGE_PREFIX.starts_with("[benchmark]"));
-    assert!(FALLBACK_MESSAGE_PREFIX.contains("using Python fallback"));
-}
+// Step 2 of the vp_benchmark retirement removed FALLBACK_MESSAGE_PREFIX +
+// the corresponding stability test — the Python fallback is gone, so there
+// is no fallback line for users to grep for.

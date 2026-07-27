@@ -10,22 +10,26 @@ ignored by git.
 
 ## Record audio
 
-Install the normal runtime dependencies first, then record missing samples:
+Use the native corpus recorder to capture missing samples one item at a time.
+It writes to the per-user audio dir (`%APPDATA%\WhisperDictate\benchmark\audio`
+on Windows, the XDG equivalent elsewhere), so recordings survive reinstalls:
 
 ```powershell
-py -3.12 scripts\benchmark\record-corpus.py --manifest benchmark\corpus.json --seconds 7
+whisper-dictate corpus-record <ID>
 ```
 
-The script records each missing item to `benchmark\audio\<id>.wav`.
+The System tab in the app has a UI equivalent (picker + Record button).
 
 ## Run a benchmark
 
 ```powershell
-whisper-dictate run `
-  --benchmark-corpus benchmark\corpus.json `
-  --benchmark-backends "whisper:large-v3,openai:gpt-4o-mini-transcribe" `
-  --benchmark-jsonl benchmark\results.jsonl
+whisper-dictate bench
 ```
+
+The native runner resolves `benchmark/corpus.json` (app root first, then the
+per-user appdata dir), runs the configured backend against every item and
+prints per-item JSONL plus one `[benchmark]` summary line. The same code path
+drives the System tab's "Run benchmark" button.
 
 Each JSONL row includes backend/model timing plus corpus metadata:
 

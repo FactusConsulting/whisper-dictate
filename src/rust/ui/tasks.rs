@@ -575,14 +575,11 @@ impl WhisperDictateApp {
 // live here at the end of the file so this feature can be added/removed without
 // touching the import list or the main `impl` block above (which a parallel UI
 // PR also edits).
-use crate::runtime::benchmark_command;
 
-/// Background-task label for the worker's `--run-benchmark` run. Mostly handled
-/// by the generic `poll_background_task`: the per-item JSONL + the `[benchmark]`
-/// summary line are streamed verbatim to the runtime log. The one special case
-/// there is the `[OK]` completion line — it normally echoes the whole stdout as
-/// its detail, which for the benchmark would re-dump the full JSONL into one
-/// giant line, so it carries only `benchmark_summary_line` instead.
+/// Background-task label for the native benchmark run. Routed in
+/// `poll_background_task` to `apply_benchmark_results`, which parses the
+/// captured JSONL + the trailing `[benchmark] …` summary line into the
+/// System tab's digestible model.
 pub(in crate::ui) const RUN_BENCHMARK_LABEL: &str = "run benchmark";
 
 /// Extract the concise final `[benchmark] …` summary line from the run's stdout
@@ -596,29 +593,77 @@ fn benchmark_summary_line(stdout: &str) -> Option<&str> {
 }
 
 impl WhisperDictateApp {
-    /// Run the golden benchmark corpus off-thread via the worker's
-    /// `--run-benchmark`. Same non-blocking pattern as "Refresh devices" so the
-    /// (slow: model load + corpus) run never freezes the UI; gated on no other
-    /// background task running. The captured stdout/stderr — including the final
-    /// `[benchmark] …` summary line — lands in the runtime log when it completes.
+    /// Run the golden benchmark corpus off-thread using the native Rust
+    /// runner ([`crate::benchmark::native::run_to_writer`]) — the same code
+    /// path the `whisper-dictate bench` CLI verb drives. Step 2 of the
+    /// `vp_benchmark.py` retirement (#348) removed the Python subprocess:
+    /// this now runs entirely in-process on the shipping build (feature
+    /// combo `whisper-rs-local,audio-capture`), and reports a clear rebuild
+    /// hint on stock dev builds.
     ///
-    /// Prints an immediate "benchmark started" line (only when the run actually
-    /// starts, i.e. no other task is in flight) so the button never feels dead:
-    /// the model load + corpus pass is slow, and without this the runtime log
-    /// would stay silent for many seconds after the click.
+    /// The runner's output (per-item JSONL + the final `[benchmark] …`
+    /// summary line) is captured on the background thread and handed to
+    /// [`apply_benchmark_results`] via a synthesised [`BackgroundTaskResult`]
+    /// so the digestible view + runtime-log lines stay identical to the
+    /// previous shell-out path — the parser stays authoritative.
+    ///
+    /// Prints an immediate "benchmark started" line (only when the run
+    /// actually starts, i.e. no other task is in flight) so the button
+    /// never feels dead: the model load + corpus pass is slow, and without
+    /// this the runtime log would stay silent for many seconds after the
+    /// click.
     pub(in crate::ui) fn run_benchmark(&mut self) {
-        if self.background_task.is_none() {
-            // Clear any previous parsed results so the digestible view shows the
-            // in-flight state, not a stale table from the last run. Only when the
-            // run actually starts (no other task in flight) — mirrors the start
-            // line so a gated click leaves the prior results visible.
-            self.benchmark_results = None;
-            self.append_runtime_log("[ui] benchmark started — results appear here when finished");
+        if self.background_task.is_some() {
+            self.append_runtime_log(format!(
+                "[ui] {RUN_BENCHMARK_LABEL} skipped: another task is running"
+            ));
+            return;
         }
-        self.run_background_command(RUN_BENCHMARK_LABEL, benchmark_command());
+        // Clear any previous parsed results so the digestible view shows the
+        // in-flight state, not a stale table from the last run. Only when
+        // the run actually starts (no other task in flight) — mirrors the
+        // start line so a gated click leaves the prior results visible.
+        self.benchmark_results = None;
+        self.append_runtime_log("[ui] benchmark started — results appear here when finished");
+        // Log the equivalent of `command.display()` so the runtime log line
+        // reads the same shape as every other background task — makes
+        // native-vs-shellout indistinguishable in the log.
+        let display = "bench (native)".to_owned();
+        self.append_runtime_log(format!("[ui] {RUN_BENCHMARK_LABEL}: {display}"));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buf: Vec<u8> = Vec::new();
+            let outcome = crate::benchmark::native::run_to_writer(&mut buf);
+            let stdout = String::from_utf8_lossy(&buf).into_owned();
+            let (success, code, error) = match outcome {
+                Ok(()) => (true, Some(0), None),
+                Err(crate::benchmark::native::NativeBenchError::Unsupported(reason)) => (
+                    false,
+                    Some(1),
+                    Some(format!(
+                        "`whisper-dictate bench` is only available in the shipping build \
+                         ({reason}); rebuild with --features whisper-rs-local,audio-capture"
+                    )),
+                ),
+                Err(crate::benchmark::native::NativeBenchError::Other(e)) => {
+                    (false, Some(1), Some(format!("{e:#}")))
+                }
+            };
+            let _ = tx.send(BackgroundTaskResult {
+                label: RUN_BENCHMARK_LABEL,
+                command: display,
+                stdout,
+                stderr: String::new(),
+                success,
+                code,
+                error,
+            });
+        });
+        self.background_task = Some(rx);
+        self.background_task_label = Some(RUN_BENCHMARK_LABEL);
     }
 
-    /// Handle a finished `--run-benchmark` run: parse the captured per-item JSONL
+    /// Handle a finished benchmark run: parse the captured per-item JSONL
     /// stdout into the digestible [`BenchmarkResults`] model the System tab
     /// renders (a coloured headline + a worst-WER-first table), AND preserve the
     /// exact runtime-log behaviour the user already relied on — the per-item

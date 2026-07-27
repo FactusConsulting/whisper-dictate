@@ -293,45 +293,13 @@ def _handle_model_capacity(a, ap) -> None:
         ap.error("Rust model-capacity helper is not available")
 
 
-def _benchmark_profile(a):
-    """Build the corpus profile from --language/--category, or None when unset.
-
-    Returns None when neither selector is given so the benchmark keeps its default
-    (all corpus items); otherwise a CorpusProfile that filters the corpus subset.
-    """
-    if not getattr(a, "language", None) and not getattr(a, "category", None):
-        return None
-    from whisper_dictate.vp_corpus_profile import build_profile
-    return build_profile(language=a.language, category=a.category)
-
-
-def _handle_benchmark(a, ap) -> None:
-    from whisper_dictate.vp_benchmark import run_benchmark, run_corpus_benchmark
-    profile = _benchmark_profile(a)
-    try:
-        if getattr(a, "run_benchmark", False):
-            # The UI "Run benchmark" button drives this: the corpus is resolved
-            # relative to --app-root (so it works in the installed app, not just a
-            # dev checkout), configured backend, per-item JSONL + one [benchmark]
-            # summary line on stdout.
-            run_corpus_benchmark(
-                a.benchmark_corpus,
-                a.benchmark_backends,
-                output_jsonl=a.benchmark_jsonl,
-                app_root=getattr(a, "app_root", None),
-                profile=profile,
-            )
-        else:
-            run_benchmark(
-                a.benchmark_files,
-                a.benchmark_backends,
-                output_jsonl=a.benchmark_jsonl,
-                corpus_manifest=a.benchmark_corpus,
-                appdata=appdata_dir(),
-                profile=profile,
-            )
-    except Exception as e:  # noqa: BLE001 - argparse should report cleanly
-        ap.error(str(e))
+# Step 2 of the `vp_benchmark.py` retirement (#348) removed `_handle_benchmark`
+# and `_benchmark_profile`: the native Rust runner in
+# `src/rust/benchmark/native.rs` (dispatched by the `whisper-dictate bench`
+# verb) is the sole surface. The `--run-benchmark`, `--benchmark-files`,
+# `--benchmark-backends` and `--benchmark-jsonl` argparse flags were removed
+# with them; `--benchmark-corpus` survives on the argparse surface as the
+# optional override for `--dictionary-build-from-corpus`.
 
 
 def _handle_calibrate(a, ap) -> None:
@@ -516,8 +484,8 @@ def _run_utility_subcommands(a, ap) -> None:
         raise SystemExit(print_audio_devices())
     if getattr(a, "record_corpus_item", None) is not None:
         from whisper_dictate.vp_corpus_record import record_corpus_item
-        # Same corpus resolution as --run-benchmark (--app-root → appdata) and the
-        # same per-user audio dir the benchmark already reads from.
+        # Same corpus resolution the native `bench` runner uses
+        # (--app-root → appdata), against the same per-user audio dir.
         raise SystemExit(record_corpus_item(
             a.record_corpus_item,
             app_root=getattr(a, "app_root", None),
@@ -527,9 +495,6 @@ def _run_utility_subcommands(a, ap) -> None:
         raise SystemExit(print_windows())
     if a.model_capacity:
         _handle_model_capacity(a, ap)
-        raise SystemExit(0)
-    if a.benchmark_files or a.benchmark_corpus or getattr(a, "run_benchmark", False):
-        _handle_benchmark(a, ap)
         raise SystemExit(0)
     if a.calibrate_mic is not None or a.calibrate_file:
         _handle_calibrate(a, ap)
