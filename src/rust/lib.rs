@@ -63,6 +63,8 @@ pub mod corpus_profile;
 // `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log` so future
 // Windows PTT wedges are inspectable after the fact without a rebuild.
 pub mod diag;
+#[cfg(test)]
+mod diag_tests;
 // Input-device enumeration (Rust port of vp_devices.py, Phase 2.2.z of the
 // Python-removal roadmap #348). Gated behind `audio-capture` so the default
 // build does not pull cpal — this is a cpal-only enumeration (no ONNX), so it
