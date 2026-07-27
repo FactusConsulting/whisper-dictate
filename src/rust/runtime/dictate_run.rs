@@ -140,6 +140,9 @@ fn run(args: DictateRunArgs) -> Result<()> {
     let cfg = HotkeyConfig {
         key_names: key_names.clone(),
         mode,
+        // Shipping runtime: the session sink drives `ProcessingFinished`
+        // from the real transcription pass, so no synthetic completion.
+        auto_complete_processing: false,
     };
 
     // 1b. The settings loaded above cover the PTT chord, but the production

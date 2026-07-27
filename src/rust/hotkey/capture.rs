@@ -25,9 +25,9 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::Arc;
 #[cfg(feature = "rust-hotkeys")]
 use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -36,7 +36,7 @@ use serde_json::json;
 use crate::cli::HotkeyCommand;
 use crate::config::{load_settings, load_settings_from_path};
 
-use super::coordinator::CoordinatorAction;
+use super::coordinator::{CoordinatorAction, CoordinatorEvent, CoordinatorHandle, RecordingId};
 #[cfg(feature = "rust-hotkeys")]
 use super::manager::{is_chord_key, RawKeyEvent};
 use super::{install_hotkey_with_raw_tap, HotkeyConfig, InstallError};
@@ -411,7 +411,18 @@ fn run_capture(
 ) -> Result<()> {
     let key_names = resolve_chord_key_names(chord_override, config_override)?;
     let display_chord = key_names.join("+");
-    let cfg = HotkeyConfig::hold_to_talk(key_names.clone());
+    // `auto_complete_processing` makes the coordinator synthesise
+    // `ProcessingFinished` synchronously right after `StopAndTranscribe`,
+    // *before* the loop reads the next event. The diagnostic has no
+    // transcription pass to wait for, and without this a press/release pair
+    // already queued behind the release would land in `Stage::Processing`,
+    // where the release clears `pending_press` and the second chord is
+    // silently swallowed (Codex P2 review of #612 -- the fallback where the
+    // sink sent `ProcessingFinished` async raced against already-queued
+    // input). The out-of-band handle-based completion below is kept as a
+    // belt-and-braces for the case where the option somehow gets missed
+    // (e.g. a future refactor drops the plumbing).
+    let cfg = HotkeyConfig::hold_to_talk(key_names.clone()).with_auto_complete_processing(true);
 
     let counters = Arc::new(Counters::default());
     let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>();
@@ -423,10 +434,27 @@ fn run_capture(
     let raw_start = Instant::now();
     let raw_tap = build_raw_tap(raw_counters, raw_tx, raw_start, key_names.clone());
 
+    // Closing the coordinator loop. `Release` moves the coordinator to
+    // `Stage::Processing(id)`, which it leaves ONLY on
+    // `CoordinatorEvent::ProcessingFinished`. In the shipping runtime the
+    // session sink sends that once transcription completes
+    // (`dictate_run.rs` populates the same kind of slot). This diagnostic
+    // has no session and never sent it, so the coordinator parked in
+    // Processing after the very first chord release and silently swallowed
+    // every later press -- the verb went deaf at the exact moment it was
+    // supposed to be reporting.
+    //
+    // There is nothing to wait for here, so completion is immediate. The
+    // handle only exists after `install_hotkey_with_raw_tap` returns, while
+    // the sink must be built before it, hence the `OnceLock` -- the same
+    // chicken-and-egg the production wiring solves the same way.
+    let coord_slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+
     // Action sink runs on the coordinator thread — chord lifecycle events.
     let action_counters = Arc::clone(&counters);
     let action_tx = event_tx.clone();
     let action_start = raw_start;
+    let action_coord = Arc::clone(&coord_slot);
     let action_sink = move |action: CoordinatorAction| {
         // Count CHORD MATCHES, not coordinator actions. Every match is
         // followed by a release or a cancel, so incrementing on each action
@@ -444,6 +472,7 @@ fn run_capture(
         let event = match action {
             CoordinatorAction::StartRecording(id) => CaptureEvent::ChordMatched { t_secs: now, id },
             CoordinatorAction::StopAndTranscribe(id) => {
+                complete_processing_stage(action_coord.get(), id);
                 CaptureEvent::ChordReleased { t_secs: now, id }
             }
             CoordinatorAction::CancelRecording(id) => {
@@ -480,6 +509,13 @@ fn run_capture(
             ));
         }
     };
+
+    // Publish the handle so the action sink can complete the Processing
+    // stage. Must happen before the first chord can fire; the coordinator
+    // thread is already running, but it cannot emit StopAndTranscribe until
+    // a chord is pressed and released, which needs a human or a driven
+    // event -- and `set` is atomic either way.
+    let _ = coord_slot.set(handle.coordinator_handle());
 
     let start = raw_start;
     let deadline = start + duration;
@@ -567,6 +603,22 @@ fn counts_as_chord(action: &CoordinatorAction) -> bool {
 /// event. Isolated into its own helper so the closure has a well-defined
 /// capture set — makes the borrow-checker happy and keeps run_capture
 /// readable.
+/// Hand the coordinator back to Idle after a stop.
+///
+/// `Release` moves the coordinator to `Stage::Processing(id)`, which it
+/// leaves ONLY on a matching `ProcessingFinished`. The shipping runtime sends
+/// that when transcription completes; this diagnostic has no session, so
+/// completion is immediate and unconditional.
+///
+/// A `None` handle is a no-op rather than an error: the slot is populated
+/// right after install, and the only window where it is empty is before any
+/// chord can have fired.
+fn complete_processing_stage(handle: Option<&CoordinatorHandle>, id: RecordingId) {
+    if let Some(handle) = handle {
+        handle.send(CoordinatorEvent::ProcessingFinished(id));
+    }
+}
+
 #[cfg(feature = "rust-hotkeys")]
 fn build_raw_tap(
     counters: Arc<Counters>,
@@ -1241,6 +1293,190 @@ mod tests {
             tap.tap(&ev("ctrl_l", RawKeyKind::Press));
             tap.tap(&ev("ctrl_r", RawKeyKind::Press));
             assert_eq!(counters.foreign_keys.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Coordinator loop-closing (the "deaf after the first chord" regression)
+    // -----------------------------------------------------------------------
+    #[cfg(feature = "rust-hotkeys")]
+    mod processing_stage {
+        use super::super::*;
+        use crate::hotkey::coordinator::{self, CoordinatorEvent, Mode, Options};
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        /// Drive a real coordinator through TWO complete press -> release
+        /// cycles, wiring the sink exactly the way `run_capture` does.
+        ///
+        /// Before the fix this yielded a single StartRecording: the first
+        /// release parked the coordinator in `Stage::Processing` and nothing
+        /// ever completed it, so every later press was swallowed. Observed on
+        /// a real Wayland box as 14 keypresses producing no chord at all.
+        ///
+        /// The second cycle is sent only AFTER the first stop has been
+        /// observed, mirroring reality -- a human cannot press again before
+        /// the release they just made has been processed. Queueing all four
+        /// events up front instead would land the second press inside
+        /// `Processing`, where the coordinator legitimately defers it, and
+        /// the test would be measuring event ordering rather than the missing
+        /// feedback.
+        fn start_recordings_over_two_cycles(complete_stage: bool) -> usize {
+            let (action_tx, action_rx) = mpsc::channel();
+            let slot: Arc<OnceLock<CoordinatorHandle>> = Arc::new(OnceLock::new());
+            let sink_slot = Arc::clone(&slot);
+            let sink = move |action: CoordinatorAction| {
+                if let CoordinatorAction::StopAndTranscribe(id) = action {
+                    if complete_stage {
+                        complete_processing_stage(sink_slot.get(), id);
+                    }
+                }
+                let _ = action_tx.send(action);
+            };
+            // Inject a clock that jumps well past PRESS_DEBOUNCE (30 ms)
+            // between events. Without it the second press is debounced away
+            // and the test would "pass" for entirely the wrong reason -- it
+            // would measure the debounce, not the Processing stage.
+            let base = Instant::now();
+            let mut ticks = 0u32;
+            let clock = move || {
+                ticks += 1;
+                base + Duration::from_millis(100 * u64::from(ticks))
+            };
+            let (handle, thread) = coordinator::spawn(
+                Options {
+                    mode: Mode::HoldToTalk,
+                    // This suite exercises the SINK-side completion path
+                    // explicitly; auto-complete would defeat the point.
+                    auto_complete_processing: false,
+                },
+                sink,
+                clock,
+            );
+            let _ = slot.set(handle.clone());
+
+            let mut starts = 0usize;
+            let recv = |rx: &mpsc::Receiver<CoordinatorAction>| {
+                rx.recv_timeout(Duration::from_millis(500))
+            };
+
+            handle.send(CoordinatorEvent::Press);
+            handle.send(CoordinatorEvent::Release);
+            // Cycle 1: expect StartRecording then StopAndTranscribe.
+            if matches!(recv(&action_rx), Ok(CoordinatorAction::StartRecording(_))) {
+                starts += 1;
+            }
+            let _ = recv(&action_rx);
+            // Let the ProcessingFinished the sink just queued be consumed
+            // before the next press -- this is the human gap.
+            std::thread::sleep(Duration::from_millis(50));
+
+            handle.send(CoordinatorEvent::Press);
+            handle.send(CoordinatorEvent::Release);
+            if matches!(recv(&action_rx), Ok(CoordinatorAction::StartRecording(_))) {
+                starts += 1;
+            }
+
+            handle.shutdown();
+            drop(thread);
+            starts
+        }
+
+        #[test]
+        fn second_chord_fires_when_the_processing_stage_is_completed() {
+            assert_eq!(
+                start_recordings_over_two_cycles(true),
+                2,
+                "both chords must fire once the sink completes the Processing stage"
+            );
+        }
+
+        #[test]
+        fn without_completion_the_coordinator_goes_deaf_after_one_chord() {
+            // Pins the mechanism, so a future change that drops the
+            // ProcessingFinished feedback fails loudly here instead of
+            // silently making the diagnostic lie again.
+            assert_eq!(
+                start_recordings_over_two_cycles(false),
+                1,
+                "without ProcessingFinished the coordinator stays in Processing"
+            );
+        }
+
+        /// Direct P2 regression (Codex review of #612): a press/release pair
+        /// queued behind the first release, WITHOUT a scheduling gap for the
+        /// sink's async `ProcessingFinished` to be dequeued first. The
+        /// second Release then lands in `Stage::Processing` and clears
+        /// `pending_press`, so the second chord goes silent.
+        ///
+        /// With `auto_complete_processing: true` the coordinator
+        /// synthesises `ProcessingFinished` inline immediately after
+        /// emitting `StopAndTranscribe` -- BEFORE it reads the next event
+        /// off the queue -- so already-queued input is processed in Idle
+        /// and both chords fire.
+        fn starts_when_second_pair_is_queued_up_front(auto_complete: bool) -> usize {
+            let (action_tx, action_rx) = mpsc::channel();
+            let sink = move |action: CoordinatorAction| {
+                let _ = action_tx.send(action);
+            };
+            let base = Instant::now();
+            let mut ticks = 0u32;
+            let clock = move || {
+                ticks += 1;
+                base + Duration::from_millis(100 * u64::from(ticks))
+            };
+            let (handle, thread) = coordinator::spawn(
+                Options {
+                    mode: Mode::HoldToTalk,
+                    auto_complete_processing: auto_complete,
+                },
+                sink,
+                clock,
+            );
+
+            // Queue BOTH cycles up front, no gap between them. Reproduces
+            // the macro / replayed-input / briefly-descheduled-coordinator
+            // case the Codex reviewer called out.
+            handle.send(CoordinatorEvent::Press);
+            handle.send(CoordinatorEvent::Release);
+            handle.send(CoordinatorEvent::Press);
+            handle.send(CoordinatorEvent::Release);
+
+            let mut starts = 0usize;
+            while let Ok(action) = action_rx.recv_timeout(Duration::from_millis(500)) {
+                if matches!(action, CoordinatorAction::StartRecording(_)) {
+                    starts += 1;
+                }
+                if starts == 2 {
+                    break;
+                }
+            }
+
+            handle.shutdown();
+            drop(thread);
+            starts
+        }
+
+        #[test]
+        fn auto_complete_lets_the_second_of_two_queued_pairs_fire() {
+            assert_eq!(
+                starts_when_second_pair_is_queued_up_front(true),
+                2,
+                "with auto_complete_processing the coordinator must reach \
+                 Idle before the queued second Press is consumed",
+            );
+        }
+
+        #[test]
+        fn without_auto_complete_the_second_queued_pair_is_swallowed() {
+            // Pins the race the P2 finding described so a regression that
+            // silently drops the auto-complete plumbing fails loudly here.
+            assert_eq!(
+                starts_when_second_pair_is_queued_up_front(false),
+                1,
+                "the pre-fix behaviour must still be reproducible so the \
+                 regression stays visible",
+            );
         }
     }
 }

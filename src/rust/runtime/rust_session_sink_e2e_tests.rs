@@ -104,7 +104,14 @@ fn wire_coordinator_with_session(mode: Mode) -> CoordinatorTestRig {
         None,
     );
 
-    let (coord_handle, coord_thread) = spawn_coordinator(Options { mode }, sink, Instant::now);
+    let (coord_handle, coord_thread) = spawn_coordinator(
+        Options {
+            mode,
+            auto_complete_processing: false,
+        },
+        sink,
+        Instant::now,
+    );
     // `OnceLock::set` returns `Err(value)` on second call; we own the
     // slot here so this is the first writer.
     if coord_slot.set(coord_handle.clone()).is_err() {

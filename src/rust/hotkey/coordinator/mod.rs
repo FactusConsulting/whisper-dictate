@@ -153,6 +153,20 @@ pub enum CoordinatorAction {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
     pub mode: Mode,
+    /// When true, [`coordinator_loop`] synthesises a matching
+    /// [`CoordinatorEvent::ProcessingFinished`] IMMEDIATELY after emitting
+    /// [`CoordinatorAction::StopAndTranscribe`] — before it reads the next
+    /// event from its inbound queue. Callers that have no real transcription
+    /// pass to wait for (the `hotkey capture` diagnostic) want this so a
+    /// press/release pair already queued behind the release doesn't land in
+    /// [`Stage::Processing`], where the release would silently clear
+    /// `pending_press` and the second chord would be swallowed (P2 review of
+    /// #612: "complete processing before consuming the next chord").
+    ///
+    /// The shipping runtime leaves this at the default `false` — real
+    /// transcription DOES take time, and only the host knows when it is
+    /// finished, so the completion must come from the host.
+    pub auto_complete_processing: bool,
 }
 
 /// Public handle to the coordinator thread. Cloneable so multiple producers
@@ -175,6 +189,19 @@ impl CoordinatorHandle {
     /// via the [`CoordinatorThread`] handle.
     pub fn shutdown(&self) {
         let _ = self.tx.send(CoordinatorEvent::Shutdown);
+    }
+
+    /// Build a disconnected handle — the paired receiver is dropped, so
+    /// every [`Self::send`] silently no-ops. Exists solely so the stock
+    /// (no `rust-hotkeys` feature) [`super::HotkeyHandle`] can satisfy the
+    /// `coordinator_handle()` accessor's return type; that stub install
+    /// path never returns a live `HotkeyHandle`, so the handle produced
+    /// here is unreachable at runtime. Gated to the stock build so the
+    /// feature build doesn't flag it as dead code.
+    #[cfg(not(feature = "rust-hotkeys"))]
+    pub(crate) fn disconnected() -> Self {
+        let (tx, _rx) = mpsc::channel();
+        Self { tx }
     }
 }
 
@@ -400,6 +427,30 @@ fn coordinator_loop<F, C>(
         let now = clock();
         if let Some(action) = step(&mut state, options, now, event) {
             action_sink(action);
+            // Auto-complete-processing is the diagnostic's escape hatch: it
+            // has no real transcription to wait for, so leaving the state
+            // machine in `Processing` until an out-of-band
+            // `ProcessingFinished` lands on the queue lets any press/release
+            // pair already queued behind the release be handled in
+            // `Processing`. The release there clears `pending_press`, so the
+            // second chord is silently swallowed even though nothing was
+            // actually processing. Synthesising `ProcessingFinished`
+            // synchronously here — BEFORE reading the next event — is what
+            // makes the ordering deterministic. Guarded so shipping runtime
+            // (`auto_complete_processing == false`) is untouched.
+            if options.auto_complete_processing {
+                if let CoordinatorAction::StopAndTranscribe(id) = action {
+                    let now = clock();
+                    if let Some(followup) = step(
+                        &mut state,
+                        options,
+                        now,
+                        CoordinatorEvent::ProcessingFinished(id),
+                    ) {
+                        action_sink(followup);
+                    }
+                }
+            }
         }
     }
 }
