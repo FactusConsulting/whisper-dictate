@@ -59,6 +59,9 @@ pub mod types;
 mod wire;
 
 #[cfg(test)]
+#[path = "path_util_tests.rs"]
+mod path_util_tests;
+#[cfg(test)]
 mod tests_history_sink;
 #[cfg(test)]
 mod tests_metrics_sink;

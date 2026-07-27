@@ -30,47 +30,7 @@ pub(super) fn expand_user(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Set a fake HOME so the assertion is deterministic on any machine.
-    /// Serialised through the crate ENV_LOCK because `set_var` /
-    /// `remove_var` are process-global.
-    #[test]
-    fn expands_leading_tilde_from_home_env() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-        let saved_home = std::env::var_os("HOME");
-        let saved_userprofile = std::env::var_os("USERPROFILE");
-        std::env::set_var("HOME", home);
-        std::env::set_var("USERPROFILE", home);
-
-        assert_eq!(expand_user("~"), home.to_path_buf());
-        assert_eq!(expand_user("~/history.jsonl"), home.join("history.jsonl"));
-        // Windows-flavoured separator inside a `~\path` -- must also be stripped.
-        assert_eq!(expand_user("~\\history.jsonl"), home.join("history.jsonl"));
-        // Absolute paths pass through untouched.
-        assert_eq!(
-            expand_user("/tmp/history.jsonl"),
-            PathBuf::from("/tmp/history.jsonl")
-        );
-
-        // Restore env so sibling tests are unaffected.
-        match saved_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        match saved_userprofile {
-            Some(v) => std::env::set_var("USERPROFILE", v),
-            None => std::env::remove_var("USERPROFILE"),
-        }
-    }
-}
+// Tests live in the sibling `path_util_tests.rs` so the
+// regression-test discipline scanner (`test_regression_test_discipline.py`)
+// picks them up as "the matching test file" for this module.
+// Registered via `#[path]` on the `mod path_util_tests;` in `mod.rs`.
