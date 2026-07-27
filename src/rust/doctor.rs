@@ -430,15 +430,24 @@ fn python_candidates() -> Vec<PythonCandidate> {
 /// Ask a candidate `python --version`; return `Some((major, minor))` on
 /// success. Silently returns None on any failure (not found, non-zero exit,
 /// unparseable output) — the caller decides whether that is a warn or fail.
+///
+/// Codex P2 #623: the release GUI (`whisper-dictate-gui.exe`) drives this via
+/// `ui::tasks::run_doctor`, so each probe spawns a `py` / `python.exe` child.
+/// Without `CREATE_NO_WINDOW` those children flash a black console window
+/// while the user watches the Doctor tab -- the replaced `run_capture` path
+/// (`configure_background_process`) explicitly hid its children. Route this
+/// probe through the same helper so the CLI and the GUI stay equivalent on
+/// Windows.
 fn probe_python(cand: &PythonCandidate) -> Option<(u32, u32)> {
-    let output = Command::new(&cand.program)
+    let mut command = Command::new(&cand.program);
+    command
         .args(&cand.args)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
+        .stderr(Stdio::piped());
+    crate::runtime::process::configure_background_process(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }

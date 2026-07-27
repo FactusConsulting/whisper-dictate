@@ -99,35 +99,128 @@ class GroqCliSmokeNoArgvKey(unittest.TestCase):
         # reads it from `os.environ["GROQ_API_KEY"]`.
         #
         # Whitelist the safe shapes we actually use so any new appearance of
-        # `"$GROQ_API_KEY"` or `$GROQ_API_KEY` is flagged for review:
-        #   - `VAR="$GROQ_API_KEY"` — env-var assignment (safe; the child
-        #     process sees it in its environment, not its argv)
-        #   - `[[ -z "${GROQ_API_KEY:-}" ]]` etc. — brace-form parameter
+        # `"$GROQ_API_KEY"`, `$GROQ_API_KEY`, `${GROQ_API_KEY...}`, or
+        # `"${GROQ_API_KEY...}"` is flagged for review:
+        #   - `VAR="$GROQ_API_KEY"` / `VAR="${GROQ_API_KEY:-}"` — env-var
+        #     assignment (safe; the child process sees it in its environment,
+        #     not its argv)
+        #   - inside a `[[ ... ]]` or `[ ... ]` test — brace-form parameter
         #     expansion for the skip-when-absent check (safe; not a subprocess
         #     invocation)
         #
-        # Anything else — a bare `"$GROQ_API_KEY"` as a positional argument to
-        # a command — is the class of leak Codex flagged.
-        key_ref = re.compile(r'"\$GROQ_API_KEY"|\$GROQ_API_KEY(?![_A-Za-z])')
-        env_assign = re.compile(r'[A-Z_][A-Z0-9_]*="\$GROQ_API_KEY"')
-        brace_form = re.compile(r'\$\{GROQ_API_KEY[:\-\}]')
+        # Anything else — a bare `"$GROQ_API_KEY"` or `"${GROQ_API_KEY}"` as
+        # a positional argument to a command — is the class of leak Codex
+        # flagged. Codex P2 #617 pointed out the previous matcher treated
+        # `${GROQ_API_KEY}` as inherently safe everywhere, which would let a
+        # refactor like `run_cli cloud-transcribe "${GROQ_API_KEY}"` pass —
+        # this test now walks each expansion and requires it to sit inside a
+        # safe context (env assignment OR a bash test), not merely to use
+        # brace form.
+        key_ref = re.compile(
+            r'"\$GROQ_API_KEY"'          # "$GROQ_API_KEY"
+            r'|"\$\{GROQ_API_KEY[^}]*\}"'  # "${GROQ_API_KEY...}"
+            r'|\$\{GROQ_API_KEY[^}]*\}'  # ${GROQ_API_KEY...}
+            r'|\$GROQ_API_KEY(?![_A-Za-z])'  # bare $GROQ_API_KEY
+        )
+        env_assign = re.compile(
+            r'[A-Z_][A-Z0-9_]*='
+            r'(?:"\$GROQ_API_KEY"|"\$\{GROQ_API_KEY[^}]*\}"|\$GROQ_API_KEY(?![_A-Za-z])|\$\{GROQ_API_KEY[^}]*\})'
+        )
+        # A test context is a line that opens `[[` / `[` (with matching close
+        # on the same line — the smoke script only tests on one line) and
+        # nothing outside those brackets except the leading keyword (`if`,
+        # `elif`, `while`, `until`) or nothing at all. That covers the
+        # `if [[ -z "${GROQ_API_KEY:-}" ]]; then` shape and rejects any
+        # command invocation dressed up with a redundant test.
+        test_context = re.compile(r'^\s*(?:if|elif|while|until)?\s*\[\[.*\]\](?:\s*;?\s*(?:then|do)?\s*)?$')
         offenders: list[str] = []
         for line in self.code:
             if not key_ref.search(line):
                 continue
-            # Every occurrence in this line must be part of a safe shape.
+            # Inside a bash test / `[[ ... ]]` — every expansion in there is a
+            # parameter check, never argv. The whole line must be the test.
+            if test_context.match(line.strip()):
+                continue
+            # Otherwise every occurrence must be part of a safe env
+            # assignment. Anything left over is a positional argv leak.
             residue = env_assign.sub("", line)
-            residue = brace_form.sub("", residue)
             if key_ref.search(residue):
                 offenders.append(line)
         self.assertEqual(
             offenders,
             [],
-            "GROQ_API_KEY must only appear as `VAR=\"$GROQ_API_KEY\"` "
-            "(env-var handoff) or `${GROQ_API_KEY...}` (parameter expansion); "
-            "passing it as a positional argv leaks it into `ps` listings. "
+            "GROQ_API_KEY must only appear as `VAR=\"$GROQ_API_KEY\"` / "
+            "`VAR=\"${GROQ_API_KEY:-}\"` (env-var handoff) or inside a "
+            "`[[ ... ]]` bash test (parameter presence check); passing it as "
+            "a positional argv leaks it into `ps` listings. "
             f"Offenders: {offenders}",
         )
+
+
+class GroqCliSmokeMatcherSelfTest(unittest.TestCase):
+    """Pin the argv-leak detector on synthetic snippets.
+
+    Backfills the Codex P2 #617 finding: the earlier matcher treated any
+    `${GROQ_API_KEY}` reference as safe, so a positional
+    ``run_cli cloud-transcribe "${GROQ_API_KEY}"`` snuck past. Now that the
+    matcher requires either an env-assignment or a bash-test context, these
+    scenarios pin the classifier so a future refactor cannot silently
+    reintroduce the leak.
+    """
+
+    def _detect(self, snippet: str) -> list[str]:
+        # Reuse the same normalisation the real test does.
+        lines = _code_lines(snippet)
+        checker = GroqCliSmokeNoArgvKey()
+        checker.code = lines
+        # Capture assertion failures as the offender list they'd have raised.
+        try:
+            checker.test_groq_api_key_reference_never_appears_as_positional_argv()
+        except AssertionError as err:
+            # The message ends with "Offenders: [...]"; parse the list back
+            # so the tests can assert on it as data.
+            import ast
+            marker = "Offenders: "
+            idx = str(err).rfind(marker)
+            if idx == -1:
+                return ["<unparseable-offender>"]
+            tail = str(err)[idx + len(marker):]
+            try:
+                return ast.literal_eval(tail)
+            except (SyntaxError, ValueError):
+                return ["<unparseable-offender>"]
+        return []
+
+    def test_bare_positional_dollar_form_is_flagged(self):
+        # The historical exposure PR #597 removed.
+        offenders = self._detect('run_cli cloud-transcribe "$GROQ_API_KEY"\n')
+        self.assertEqual(len(offenders), 1, offenders)
+
+    def test_positional_brace_form_is_flagged(self):
+        # The Codex #617 gap: brace form was silently treated as safe.
+        offenders = self._detect('run_cli cloud-transcribe "${GROQ_API_KEY}"\n')
+        self.assertEqual(len(offenders), 1, offenders)
+
+    def test_positional_brace_default_form_is_flagged(self):
+        # `${GROQ_API_KEY:-}` etc. — the default-expansion sugar — is still
+        # argv when it's a bare command argument.
+        offenders = self._detect('run_cli cloud-transcribe "${GROQ_API_KEY:-}"\n')
+        self.assertEqual(len(offenders), 1, offenders)
+
+    def test_env_assignment_dollar_form_is_allowed(self):
+        # `VAR="$GROQ_API_KEY" cmd` is the sanctioned handoff.
+        offenders = self._detect('VOICEPI_STT_API_KEY="$GROQ_API_KEY" run_cli x\n')
+        self.assertEqual(offenders, [])
+
+    def test_env_assignment_brace_form_is_allowed(self):
+        # Same rule, brace form — some scripts prefer the explicit shape.
+        offenders = self._detect('VOICEPI_STT_API_KEY="${GROQ_API_KEY:-}" run_cli x\n')
+        self.assertEqual(offenders, [])
+
+    def test_bash_test_brace_form_is_allowed(self):
+        # `[[ -z "${GROQ_API_KEY:-}" ]]` — the skip-when-absent guard.
+        offenders = self._detect('if [[ -z "${GROQ_API_KEY:-}" ]]; then\n  echo skip\nfi\n')
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":  # pragma: no cover - manual runner

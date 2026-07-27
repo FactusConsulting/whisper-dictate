@@ -81,6 +81,24 @@ impl Provider {
         }
     }
 
+    /// The STT credential-store account for THIS provider, or `None` for a
+    /// custom endpoint. Used as a post-key fallback (Codex P2 #615): both
+    /// STT and post-processing use one key per Groq/OpenAI account, and the
+    /// UI's `load_post_api_key_from_env` treats the STT env var as a
+    /// fallback for the post lookup -- the credential store must apply the
+    /// same rule so a user who saved only the STT credential still reaches
+    /// cloud post-processing.
+    fn stt_account_for_post_fallback(self) -> Option<&'static str> {
+        match self {
+            Self::Groq => Some(STT_GROQ),
+            Self::OpenAi => Some(STT_OPENAI),
+            // A custom endpoint has no cross-account fallback: sending a
+            // provider's saved key to an unrelated host is exactly the leak
+            // `post_account` already guards against.
+            Self::Custom => None,
+        }
+    }
+
     /// `None` for a custom endpoint: there is no post-processing account for
     /// a self-hosted provider, and falling back to another provider's would
     /// send its key somewhere it does not belong.
@@ -109,7 +127,7 @@ pub fn resolve_stt_api_key(base_url: &str) -> Option<String> {
     resolve_with(
         &["VOICEPI_STT_API_KEY"],
         provider.generic_env(),
-        Some(provider.stt_account()),
+        &[Some(provider.stt_account())],
         |name| std::env::var(name).ok(),
         load_secret_reported,
     )
@@ -119,13 +137,22 @@ pub fn resolve_stt_api_key(base_url: &str) -> Option<String> {
 ///
 /// `VOICEPI_STT_API_KEY` is accepted as a fallback because both providers
 /// issue one key per account -- the UI's `load_post_api_key_from_env` applies
-/// the same rule.
+/// the same rule. Codex P2 #615 extended the same fallback to the credential
+/// store: after the post-specific account comes up empty, we try the STT
+/// account for THIS provider so a user who saved only the STT credential
+/// still reaches Groq / OpenAI post-processing without configuring the key
+/// twice. Custom endpoints do NOT get this fallback -- a self-hosted URL has
+/// no cross-account trust and forwarding another provider's key would be a
+/// leak (matches `post_account`'s reasoning).
 pub fn resolve_post_api_key(base_url: &str) -> Option<String> {
     let provider = Provider::from_base_url(base_url);
     resolve_with(
         &["VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY"],
         provider.generic_env(),
-        provider.post_account(),
+        &[
+            provider.post_account(),
+            provider.stt_account_for_post_fallback(),
+        ],
         |name| std::env::var(name).ok(),
         load_secret_reported,
     )
@@ -152,10 +179,15 @@ fn load_secret_reported(account: &str) -> Option<String> {
 
 /// Testable core: every source is injected so the precedence can be exercised
 /// without touching process env or the real credential store.
+///
+/// `accounts` is walked in order after every env lookup comes up empty --
+/// callers pass `&[Some(primary), Some(fallback)]` when a second store
+/// account should be consulted (e.g. resolve_post_api_key falling back to
+/// the STT account for the same provider, Codex P2 #615).
 fn resolve_with<E, S>(
     specific_env: &[&str],
     generic_env: Option<&str>,
-    account: Option<&str>,
+    accounts: &[Option<&str>],
     env_lookup: E,
     store_lookup: S,
 ) -> Option<String>
@@ -171,7 +203,11 @@ where
         .iter()
         .find_map(|name| env_lookup(name).and_then(clean))
         .or_else(|| generic_env.and_then(&env_lookup).and_then(clean))
-        .or_else(|| account.and_then(&store_lookup).and_then(clean))
+        .or_else(|| {
+            accounts
+                .iter()
+                .find_map(|account| account.and_then(&store_lookup).and_then(clean))
+        })
 }
 
 #[cfg(test)]
@@ -232,7 +268,7 @@ mod tests {
         let got = resolve_with(
             &["VOICEPI_STT_API_KEY"],
             Some("GROQ_API_KEY"),
-            Some(STT_GROQ),
+            &[Some(STT_GROQ)],
             table(&[
                 ("VOICEPI_STT_API_KEY", "specific"),
                 ("GROQ_API_KEY", "generic"),
@@ -247,7 +283,7 @@ mod tests {
         let got = resolve_with(
             &["VOICEPI_STT_API_KEY"],
             Some("GROQ_API_KEY"),
-            Some(STT_GROQ),
+            &[Some(STT_GROQ)],
             table(&[("GROQ_API_KEY", "generic")]),
             table(&[(STT_GROQ, "stored")]),
         );
@@ -261,7 +297,7 @@ mod tests {
         let got = resolve_with(
             &["VOICEPI_STT_API_KEY"],
             Some("GROQ_API_KEY"),
-            Some(STT_GROQ),
+            &[Some(STT_GROQ)],
             table(&[]),
             table(&[(STT_GROQ, "stored")]),
         );
@@ -273,7 +309,7 @@ mod tests {
         let got = resolve_with(
             &["VOICEPI_STT_API_KEY"],
             Some("GROQ_API_KEY"),
-            Some(STT_GROQ),
+            &[Some(STT_GROQ)],
             table(&[("VOICEPI_STT_API_KEY", "   "), ("GROQ_API_KEY", "")]),
             table(&[(STT_GROQ, "stored")]),
         );
@@ -289,7 +325,7 @@ mod tests {
         let got = resolve_with(
             &["VOICEPI_STT_API_KEY"],
             provider.generic_env(),
-            Some(provider.stt_account()),
+            &[Some(provider.stt_account())],
             table(&[("GROQ_API_KEY", "groq"), ("OPENAI_API_KEY", "openai")]),
             table(&[(STT_GROQ, "stored-groq")]),
         );
@@ -301,11 +337,77 @@ mod tests {
         let got = resolve_with(
             &["VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY"],
             Some("GROQ_API_KEY"),
-            Some(POST_GROQ),
+            &[Some(POST_GROQ)],
             table(&[("VOICEPI_STT_API_KEY", "shared")]),
             table(&[]),
         );
         assert_eq!(got.as_deref(), Some("shared"));
+    }
+
+    #[test]
+    fn post_falls_back_to_the_stt_store_account_for_the_same_provider() {
+        // Codex P2 #615: a user who saved only the STT credential in Settings
+        // and paired local Whisper with Groq post-processing must still reach
+        // cloud post -- the store fallback goes to STT_GROQ after POST_GROQ
+        // is empty. The env fallback covered by `post_falls_back_to_the_stt_env_var`
+        // does not help when nothing is exported.
+        let got = resolve_post_api_key_with(
+            "https://api.groq.com/openai/v1",
+            table(&[]),
+            table(&[(STT_GROQ, "shared-store")]),
+        );
+        assert_eq!(got.as_deref(), Some("shared-store"));
+    }
+
+    #[test]
+    fn post_specific_account_still_wins_over_the_stt_store_fallback() {
+        // A saved POST-specific account (POST_GROQ) must take precedence over
+        // the STT fallback: the fallback exists for missing POST accounts, not
+        // for overriding a user's explicit post-only key.
+        let got = resolve_post_api_key_with(
+            "https://api.groq.com/openai/v1",
+            table(&[]),
+            table(&[(POST_GROQ, "post-specific"), (STT_GROQ, "stt-fallback")]),
+        );
+        assert_eq!(got.as_deref(), Some("post-specific"));
+    }
+
+    #[test]
+    fn custom_post_endpoint_gets_no_stt_store_fallback() {
+        // Self-hosted post endpoint must not receive Groq/OpenAI's saved key.
+        // (Same reasoning as `custom_endpoint_gets_no_generic_key_and_no_foreign_account`.)
+        let got = resolve_post_api_key_with(
+            "https://llm.internal.example/v1",
+            table(&[]),
+            table(&[(STT_GROQ, "stt-groq"), (STT_OPENAI, "stt-openai")]),
+        );
+        assert_eq!(got, None);
+    }
+
+    /// Same testable shape as `resolve_post_api_key`, but with the env /
+    /// store lookups injected so the new store fallback (Codex P2 #615) can
+    /// be exercised without touching process env or the real credential
+    /// store.
+    fn resolve_post_api_key_with<E, S>(
+        base_url: &str,
+        env_lookup: E,
+        store_lookup: S,
+    ) -> Option<String>
+    where
+        E: Fn(&str) -> Option<String>,
+        S: Fn(&str) -> Option<String>,
+    {
+        let provider = Provider::from_base_url(base_url);
+        resolve_with(
+            &["VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY"],
+            provider.generic_env(),
+            &[
+                provider.post_account(),
+                provider.stt_account_for_post_fallback(),
+            ],
+            env_lookup,
+            store_lookup,
+        )
     }
 
     #[test]
@@ -318,7 +420,7 @@ mod tests {
         let got = resolve_with(
             &["VOICEPI_STT_API_KEY"],
             Some("GROQ_API_KEY"),
-            Some(STT_GROQ),
+            &[Some(STT_GROQ)],
             table(&[]),
             // Store lookup returns None to model a failure surfaced by
             // `load_secret_reported`. Behaviour must match "nothing here"
@@ -334,7 +436,7 @@ mod tests {
             resolve_with(
                 &["VOICEPI_STT_API_KEY"],
                 Some("GROQ_API_KEY"),
-                Some(STT_GROQ),
+                &[Some(STT_GROQ)],
                 table(&[]),
                 table(&[]),
             ),
