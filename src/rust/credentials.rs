@@ -3,8 +3,8 @@
 //! The keys live in the OS credential store (with an `api-keys.json` file
 //! fallback), written by the Settings UI. Until now ONLY the UI could read
 //! them back: it loads the key and exports it into the worker's environment
-//! before starting the runtime. Every CLI entry point -- `run`,
-//! `simulate-ptt`, and by extension the documented terminal test in
+//! before starting the runtime. Every CLI entry point -- `run` and by
+//! extension the documented terminal test in
 //! `docs/testing-rust-engine-v1.22.md` -- started a worker with no key at
 //! all, so a user configured for cloud STT hit
 //!

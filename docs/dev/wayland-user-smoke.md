@@ -87,6 +87,7 @@ one loses track. When the underlying capability ships, replace the
 - Ubuntu 26.04 CI container:
   `.github/workflows/` (see #490) — same OS baseline as the ThinkPad, so
   green CI + green local smoke is the shipping bar.
-- POC that this script leans on today:
-  `whisper-dictate simulate-ptt` (see #491,
-  `src/python/whisper_dictate/vp_simulate_ptt.py`).
+- The retired `simulate-ptt` verb (see #491) is superseded by
+  `simulate-session` (WAV + cloud) and `dictate-mic` (live + cloud); the
+  smoke script now only verifies their `--help` surfaces because both
+  need a cloud key for a real end-to-end drive.

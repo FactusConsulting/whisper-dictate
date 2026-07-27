@@ -431,7 +431,6 @@ class PythonPackageLayoutTests(unittest.TestCase):
             "vp_rust.py",
             "vp_rust_audio_source.py",
             "vp_setup.py",
-            "vp_simulate_ptt.py",
             "vp_transcribe.py",
             "vp_windows.py",
         }

@@ -1,13 +1,7 @@
 //! `whisper-dictate simulate-session` — offline, WAV-driven end-to-end drive
 //! of the in-process Rust [`DictateSession`], for CLI integration testing of
-//! the **new** (Rust) engine alongside the **old** (Python) `simulate-ptt`.
-//!
-//! The Python worker has `python -m whisper_dictate.vp_simulate_ptt --wav …`
-//! which runs its full pipeline (transcribe → post-process → format →
-//! inject-preview) on a fixture WAV. The Rust engine had no equivalent: its
-//! only CLI entry (`dictate-run`) is live/hotkey-driven, and `simulate-ptt`
-//! forwards to Python. This verb closes that gap so BOTH engines are
-//! exercised from the CLI while Python still exists.
+//! the Rust engine. Superseded the retired `simulate-ptt` verb (which
+//! forwarded to a Python-side WAV pipeline).
 //!
 //! It drives the REAL `DictateSession` through the same
 //! `start → push_frame → stop_and_transcribe` API the live supervisor uses,

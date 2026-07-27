@@ -7,7 +7,7 @@ GUI-wiring phase (Doctor + List Devices buttons currently mid-migration).
 
 ## TL;DR
 
-**No, the CLI does not exclusively use Rust.** Six verbs still shell to Python.
+**No, the CLI does not exclusively use Rust.** Five verbs still shell to Python.
 The Rust in-process dictation engine (`VOICEPI_DICTATE_ENGINE=rust`) IS
 feature-complete relative to the Python engine after Round 1–3, but Python
 remains the default engine — flipping the default is a separate step, gated on
@@ -22,8 +22,8 @@ GUI wiring + a full round of manual + smoke verification.
 | `doctor` | ✅ | | Native (`doctor::handle_doctor`). |
 | `bench` | | ✅ | Rust dispatcher shells to `runtime::benchmark_command()` → Python `--run-benchmark`. Two-step migration pending. |
 | `corpus-record` | | ✅ | Rust dispatcher shells to `runtime::record_corpus_item_command()`. Two-step migration pending (same shape as retired `--test-audio-device`). |
-| `simulate-ptt` | | ✅ | Forwards to Python `--simulate-ptt`. |
-| `simulate-session` | ✅ | | Rust-engine counterpart. Cloud STT only; hidden verb, CI/diag use. |
+| ~~`simulate-ptt`~~ | | | **Retired**; superseded by `simulate-session` (WAV + cloud) and `dictate-mic` (live + cloud). |
+| `simulate-session` | ✅ | | Rust-engine WAV driver. Cloud STT only; hidden verb, CI/diag use. Replaces `simulate-ptt` for WAV-driven end-to-end checks. |
 | `dictate-run` | ✅ | | Full in-process Rust dictation runtime (installs hotkey + coordinator + session sink). |
 | `dictate-mic` | ✅ | | Feature-gated (`audio-capture`). Cpal capture → cloud STT → preview inject. |
 | `install` | | ✅ | Python dep install. Legitimately Python. |
