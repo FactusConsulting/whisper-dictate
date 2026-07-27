@@ -92,6 +92,26 @@ fn list_input_devices_with_directsound() -> Vec<DeviceInfo> {
     enumerate_all_hosts(true)
 }
 
+/// JSON envelope the desktop UI's Microphone picker consumes — a raw JSON array
+/// of `{index, name, max_input_channels, default, …}` entries. Matches the
+/// wire shape the Python worker's `--list-audio-devices` used to emit, so the
+/// UI parser in [`crate::ui::parse_audio_devices_json`] stays authoritative.
+///
+/// Uses [`list_input_devices_with_directsound`] so a freshly docked/hot-plugged
+/// mic visible only on Windows DirectSound still shows up in the picker (the
+/// UI-side sounddevice equivalent). Empty result serialises as `"[]"`.
+///
+/// Exposed as `pub` so `ui::tasks::run_list_audio_devices` can call it in a
+/// background thread and skip the Python subprocess. Result is a single JSON
+/// line with a trailing newline so appending to a log stream keeps the same
+/// shape a subprocess capture would have written.
+pub fn list_input_devices_for_ui_json_line() -> String {
+    let devices = list_input_devices_with_directsound();
+    let mut out = serde_json::to_string(&devices).unwrap_or_else(|_| "[]".to_owned());
+    out.push('\n');
+    out
+}
+
 /// The host's default input device, if any. Returns the same `DeviceInfo`
 /// shape so the UI can render it identically to the picker entries. The
 /// `index` field reports the device's real position in [`list_input_devices`]
@@ -936,6 +956,24 @@ mod tests {
             1,
             "truncated DirectSound name must not duplicate the WASAPI entry"
         );
+    }
+
+    #[test]
+    fn list_input_devices_for_ui_json_line_shape_is_a_parseable_array_with_trailing_newline() {
+        // The UI parser (parse_audio_devices_json) tolerates surrounding log
+        // noise but the envelope MUST be a JSON array (not the CLI verb's
+        // {"devices": [...]} wrapper). The output also lands in the runtime
+        // log, so it MUST terminate with exactly one newline so the next log
+        // line starts on its own row.
+        let line = list_input_devices_for_ui_json_line();
+        assert!(line.ends_with('\n'), "expected trailing newline: {line:?}");
+        let trimmed = line.trim();
+        assert!(
+            trimmed.starts_with('[') && trimmed.ends_with(']'),
+            "expected a JSON array, got: {trimmed}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(trimmed).expect("valid JSON array");
+        assert!(parsed.is_array(), "expected a JSON array: {parsed}");
     }
 
     #[test]
