@@ -141,7 +141,7 @@ impl FeedbackReport {
 pub fn resolve_backend() -> &'static str {
     #[cfg(windows)]
     {
-        return "kernel32_beep";
+        "kernel32_beep"
     }
     #[cfg(target_os = "linux")]
     {
