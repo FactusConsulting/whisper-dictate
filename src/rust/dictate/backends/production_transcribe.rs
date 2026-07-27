@@ -85,6 +85,16 @@ impl<L: TranscribeBackend> TranscribeBackend for ProductionTranscribeBackend<L> 
             Self::Cloud(backend) => backend.transcribe(pcm, sample_rate),
         }
     }
+
+    fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
+        // Route the override to whichever arm is active so a profile's
+        // `initial_prompt` / `language` reach the running backend on
+        // both local Whisper and cloud STT (Codex P1 #607).
+        match self {
+            Self::Local(backend) => backend.apply_profile_overrides(settings),
+            Self::Cloud(backend) => backend.apply_profile_overrides(settings),
+        }
+    }
 }
 
 #[cfg(test)]

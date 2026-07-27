@@ -24,6 +24,8 @@
 //! on `whisper-rs-local` so the rust-session real path requires both
 //! features.
 
+use std::sync::Mutex;
+
 use crate::dictate::backends::EnigoInjectBackend;
 use crate::dictate::session::types::{InjectBackend, InjectError};
 #[cfg(test)]
@@ -79,37 +81,52 @@ impl InjectModeChoice {
 
 /// Production [`InjectBackend`] for the rust-session sink. Built from
 /// the live `VOICEPI_INJECT_MODE` env var by [`Self::from_env`].
-pub(crate) enum ProductionInjectBackend {
-    /// Real OS injection through the existing
-    /// [`EnigoInjectBackend`]. The wrapper itself adds no behaviour
-    /// here -- modifier release + clipboard copy/restore live inside
-    /// the backend -- but holding the variant separately keeps the
-    /// `Print` short-circuit cheap (no `Injector` constructed for the
-    /// stdout-only path).
-    Enigo(EnigoInjectBackend),
-    /// Stdout-only "dry-run" mode. Mirrors Python's
-    /// `vp_inject._inject` when `mode == "print"`.
-    Print,
+///
+/// # Structure (Codex P1 #607)
+///
+/// Previously an enum with `Enigo(...)` + `Print` variants -- swap-in
+/// at construction time. The profile-matcher wiring needed a way for a
+/// per-utterance profile with `inject_mode=print` to short-circuit even
+/// when the initial mode was `type`, and vice versa. Hoisting the
+/// active mode into a [`Mutex<InjectModeChoice>`] with an always-present
+/// `EnigoInjectBackend` (constructed lazily via `Injector::new`, which is
+/// cheap and does NOT talk to the OS until the first inject) is the
+/// smallest change that lets profile overrides hot-swap the strategy
+/// without an app restart -- matching Python's live-reload of the
+/// `inject_mode` config key. The Enigo instance is always constructed so
+/// a profile can override Print -> Type / Paste at any time; the Print
+/// variant simply short-circuits `inject` to stdout.
+pub(crate) struct ProductionInjectBackend {
+    /// Active mode for the NEXT [`Self::inject`] call. Updated by
+    /// [`InjectBackend::apply_profile_overrides`] when the matched
+    /// profile carries an `inject_mode` key. Wrapped in [`Mutex`] so
+    /// `inject(&self, ...)` still respects the trait's borrow.
+    active_mode: Mutex<InjectModeChoice>,
+    /// The Enigo backend used for [`InjectModeChoice::Typing`] /
+    /// [`InjectModeChoice::Paste`]. Always constructed so a profile
+    /// override can flip from Print to a real OS inject without an app
+    /// restart. `Injector::new` is a cheap struct init that does not
+    /// touch the OS.
+    enigo: EnigoInjectBackend,
 }
 
 impl std::fmt::Debug for ProductionInjectBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Enigo(inner) => f
-                .debug_tuple("ProductionInjectBackend::Enigo")
-                .field(inner)
-                .finish(),
-            Self::Print => write!(f, "ProductionInjectBackend::Print"),
-        }
+        f.debug_struct("ProductionInjectBackend")
+            .field(
+                "active_mode",
+                &*self.active_mode.lock().unwrap_or_else(|p| p.into_inner()),
+            )
+            .field("enigo", &self.enigo)
+            .finish()
     }
 }
 
 impl ProductionInjectBackend {
     /// Build the variant indicated by `VOICEPI_INJECT_MODE`. Reads the
-    /// env once at construction; PR 5 does NOT live-reload the mode
-    /// (a Settings change between presses takes effect on the next
-    /// supervisor restart, matching the rust-session sink's other
-    /// construction-time knobs).
+    /// env once at construction; the per-utterance profile matcher
+    /// (Codex P1 #607) can flip the active mode between presses via
+    /// [`InjectBackend::apply_profile_overrides`].
     ///
     /// Paste mode collapses to Typing in this PR -- the underlying
     /// `EnigoInjectBackend` requires a `Clipboard` backend via
@@ -127,42 +144,54 @@ impl ProductionInjectBackend {
     /// Build for a specific choice. Split out so tests can construct
     /// each variant without setting env vars.
     pub(crate) fn for_choice(choice: InjectModeChoice) -> Self {
-        match choice {
-            InjectModeChoice::Print => Self::Print,
-            // Paste collapses to Typing -- see `from_env` docs.
-            InjectModeChoice::Typing | InjectModeChoice::Paste => Self::Enigo(
-                EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing),
-            ),
-        }
+        Self::with_enigo(
+            choice,
+            EnigoInjectBackend::new(Injector::new(), InjectMethod::Typing),
+        )
     }
 
-    /// Test-only: build the Enigo variant with an explicit paste
-    /// shortcut. The wrapping `EnigoInjectBackend` would still need a
-    /// clipboard for the chord to actually fire; this constructor is
-    /// only exercised by tests that swap in a recording backend.
+    /// Test-only: build with an explicit paste shortcut. Kept for the
+    /// legacy `explicit_paste_shortcut_round_trips` test; the wrapping
+    /// backend still needs a clipboard for a real paste to fire.
     #[cfg(test)]
     pub(crate) fn with_explicit_paste_shortcut(shortcut: PasteShortcut) -> Self {
-        Self::Enigo(EnigoInjectBackend::new(
-            Injector::new(),
-            InjectMethod::Paste(Some(shortcut)),
-        ))
+        Self::with_enigo(
+            InjectModeChoice::Paste,
+            EnigoInjectBackend::new(Injector::new(), InjectMethod::Paste(Some(shortcut))),
+        )
+    }
+
+    fn with_enigo(choice: InjectModeChoice, enigo: EnigoInjectBackend) -> Self {
+        Self {
+            active_mode: Mutex::new(choice),
+            enigo,
+        }
     }
 
     /// The currently-configured [`InjectMethod`], if any. Returns
-    /// `None` for the [`Self::Print`] variant.
+    /// `None` when the active mode is [`InjectModeChoice::Print`].
     #[cfg(test)]
     pub(crate) fn method(&self) -> Option<InjectMethod> {
-        match self {
-            Self::Enigo(inner) => Some(inner.method()),
-            Self::Print => None,
+        let mode = *self.active_mode.lock().unwrap_or_else(|p| p.into_inner());
+        match mode {
+            InjectModeChoice::Print => None,
+            _ => Some(self.enigo.method()),
         }
+    }
+
+    /// Snapshot the active mode (test-only introspection for the profile
+    /// override coverage). Not meaningful to callers outside tests.
+    #[cfg(test)]
+    pub(crate) fn active_mode(&self) -> InjectModeChoice {
+        *self.active_mode.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
 
 impl InjectBackend for ProductionInjectBackend {
     fn inject(&self, text: &str) -> Result<(), InjectError> {
-        match self {
-            Self::Print => {
+        let mode = *self.active_mode.lock().unwrap_or_else(|p| p.into_inner());
+        match mode {
+            InjectModeChoice::Print => {
                 // Print to stdout, matching Python's
                 // `vp_inject._inject` "print" branch literally so a
                 // user grepping their log can pin the strategy that
@@ -175,8 +204,27 @@ impl InjectBackend for ProductionInjectBackend {
             // `EnigoInjectBackend::inject` (Codex P2 #417 inject.rs:110
             // + Codex P1 #419 inject.rs:266); the wrapper just passes
             // the call straight through.
-            Self::Enigo(inner) => inner.inject(text),
+            InjectModeChoice::Typing | InjectModeChoice::Paste => self.enigo.inject(text),
         }
+    }
+
+    fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
+        // `inject_mode`: parsed through the same normaliser the env-var
+        // path uses, so `type` / `auto` / unknown all land on Typing and
+        // `print` / `paste` map through directly. An unset / blank value
+        // RESETs the mode to the ambient env-driven choice so a profile
+        // that fired for one utterance cannot leak into the next -- the
+        // same reset semantics `SessionConfig` gets via the base_config
+        // clone in `apply_active_profile`.
+        let override_mode = settings
+            .get("inject_mode")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(|v| InjectModeChoice::from_env_value(Some(v)));
+        let new_mode = override_mode.unwrap_or_else(|| {
+            InjectModeChoice::from_env_value(std::env::var(INJECT_MODE_ENV).ok().as_deref())
+        });
+        *self.active_mode.lock().unwrap_or_else(|p| p.into_inner()) = new_mode;
     }
 }
 

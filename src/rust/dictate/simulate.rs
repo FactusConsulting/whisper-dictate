@@ -188,9 +188,11 @@ pub(crate) fn build_cloud_preview_session(
     let inject = CaptureInject::default();
     let mut session = DictateSession::new(transcribe, inject, config)
         .with_reloading_dictionary(crate::dictionary::ReloadPrecedence::EnvFirst);
-    if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
-        session = session.with_post_process(Box::new(post));
-    }
+    // Codex P1 #607: `from_env` now always returns Self. The session
+    // gates on `PostProcessBackend::is_active`, so attaching in the
+    // default (`processor=none`) case is free until a profile flips it on.
+    session =
+        session.with_post_process(Box::new(crate::postprocess::SessionPostProcess::from_env()));
     Ok(session)
 }
 

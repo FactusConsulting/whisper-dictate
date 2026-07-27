@@ -5,6 +5,7 @@
 //! cancel) and the wire-format emitter. All items here are re-exported
 //! through `crate::dictate::session`.
 
+use std::collections::BTreeMap;
 use std::io;
 
 /// Sample rate (Hz) the Whisper model consumes. Mirrors `SR` in
@@ -92,6 +93,18 @@ pub trait TranscribeBackend {
         pcm: &[f32],
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError>;
+
+    /// Apply per-utterance profile overrides to this backend (Python parity
+    /// port of the settings hot-swap in `vp_dictate._apply_effective_config`).
+    /// The session calls this from `apply_active_profile` before every
+    /// utterance, passing the profile's raw `settings` map (empty when no
+    /// profile matched, so the backend can reset its overrides between
+    /// presses). Each backend picks the subset of keys it cares about (e.g.
+    /// `initial_prompt`, `language`, `model`) and stores them behind interior
+    /// mutability so a per-utterance `transcribe(&self, ...)` call sees the
+    /// override. Default impl is a no-op so mock backends do not have to
+    /// know about the profile system.
+    fn apply_profile_overrides(&self, _settings: &BTreeMap<String, String>) {}
 }
 
 /// Errors an [`InjectBackend::inject`] call can surface.
@@ -112,6 +125,13 @@ pub trait InjectBackend {
     /// Inject `text` into the focused window. The session calls this
     /// once per successful utterance, after post-processing has run.
     fn inject(&self, text: &str) -> Result<(), InjectError>;
+
+    /// Apply per-utterance profile overrides. See
+    /// [`TranscribeBackend::apply_profile_overrides`] for the contract; the
+    /// production impl reads the `inject_mode` key to switch between
+    /// typing / paste / print for a single utterance without rebuilding
+    /// the backend.
+    fn apply_profile_overrides(&self, _settings: &BTreeMap<String, String>) {}
 }
 
 /// Optional boundary for the LLM post-processing pass that runs AFTER
@@ -141,6 +161,28 @@ pub trait PostProcessBackend {
     /// The returned [`PostProcessOutcome::text`] must never be empty for
     /// non-empty input (fall back to the input instead).
     fn post_process(&self, text: &str) -> PostProcessOutcome;
+
+    /// True when this backend will actually rewrite the input this utterance.
+    /// The session calls this AFTER [`Self::apply_profile_overrides`] so a
+    /// profile that flips `post_processor=ollama` on a session initially
+    /// constructed with a `none` processor still runs. When it returns
+    /// `false` the session skips the `post-processing` status emission and
+    /// the [`Self::post_process`] call entirely, matching Python's gate on
+    /// `processor != "none" && mode != "raw"`. Default `true` keeps the
+    /// existing behaviour for backends that never disable themselves (e.g.
+    /// the test mock).
+    fn is_active(&self) -> bool {
+        true
+    }
+
+    /// Apply per-utterance profile overrides. See
+    /// [`TranscribeBackend::apply_profile_overrides`] for the contract; the
+    /// production impl reads the `post_processor`, `post_mode`, `post_model`,
+    /// `post_base_url`, `post_timeout_ms`, `post_max_input_chars`,
+    /// `post_max_output_chars`, `post_redact`, and `post_redact_terms` keys
+    /// so a per-app profile can point the post-processing pass at a
+    /// different provider / model for one utterance.
+    fn apply_profile_overrides(&self, _settings: &BTreeMap<String, String>) {}
 }
 
 /// Result of a [`PostProcessBackend`] pass: the (possibly rewritten) text

@@ -227,6 +227,15 @@ pub struct CloudTranscribeBackend {
     /// `ProductionTranscribeBackend` enum) small when no reloading prompt is
     /// attached.
     prompt_reload: Option<Box<Mutex<crate::dictionary::ReloadingDictionary>>>,
+    /// Per-utterance profile overrides (Codex P1 #607) -- see the sibling
+    /// fields on [`super::WhisperLocalTranscribeBackend`] for the contract.
+    /// A `model` override is reported through
+    /// [`Self::profile_model_warned`] but not honoured (would require
+    /// re-resolving `VOICEPI_STT_MODEL` + the api_key contract);
+    /// documented as a follow-up.
+    profile_prompt: Mutex<Option<String>>,
+    profile_language: Mutex<Option<String>>,
+    profile_model_warned: Mutex<Option<String>>,
 }
 
 impl CloudTranscribeBackend {
@@ -234,6 +243,9 @@ impl CloudTranscribeBackend {
         Self {
             config,
             prompt_reload: None,
+            profile_prompt: Mutex::new(None),
+            profile_language: Mutex::new(None),
+            profile_model_warned: Mutex::new(None),
         }
     }
 
@@ -253,10 +265,18 @@ impl CloudTranscribeBackend {
         self
     }
 
-    /// The effective STT prompt for this utterance: the live-reloaded
-    /// base + terms when a reloading prompt is attached, else the fixed
-    /// `config.prompt`.
+    /// The effective STT prompt for this utterance. Order of precedence
+    /// (highest first): profile override (Codex P1 #607), reload-prompt
+    /// fold, fixed config prompt.
     fn effective_prompt(&self) -> Option<String> {
+        if let Some(profile) = self
+            .profile_prompt
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+        {
+            return Some(profile);
+        }
         match &self.prompt_reload {
             Some(reload) => reload
                 .lock()
@@ -264,6 +284,20 @@ impl CloudTranscribeBackend {
                 .initial_prompt(self.config.prompt.as_deref()),
             None => self.config.prompt.clone(),
         }
+    }
+
+    /// Language hint that will apply to the NEXT utterance: profile override
+    /// wins over the config hint. Blank string is treated as "auto detect"
+    /// and collapsed to `None`. Codex P1 #607.
+    fn effective_language(&self) -> Option<String> {
+        let profile = self
+            .profile_language
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        profile
+            .or_else(|| self.config.language.clone())
+            .filter(|s| !s.is_empty())
     }
 
     /// Read-only view of the resolved config (tests / diagnostics).
@@ -309,21 +343,73 @@ impl TranscribeBackend for CloudTranscribeBackend {
         let wav = encode_wav_mono_16bit(pcm, sample_rate)
             .map_err(|e| TranscribeError::Backend(format!("wav encode failed: {e}")))?;
         // Re-fold the dictionary terms into the prompt per utterance when a
-        // reloading prompt is attached (else the fixed config prompt).
+        // reloading prompt is attached (else the fixed config prompt). The
+        // profile override (Codex P1 #607) wins over both in `effective_*`.
         let prompt = self.effective_prompt();
+        let effective_language = self.effective_language();
         let started = Instant::now();
         let result = cloud_transcribe(
             &self.config.base_url,
             &self.config.api_key,
             &self.config.model,
             &wav,
-            self.config.language.as_deref(),
+            effective_language.as_deref(),
             prompt.as_deref(),
             self.config.timeout_ms,
         )
         .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         Ok(map_cloud_result(result, latency_ms, pcm.len(), sample_rate))
+    }
+
+    fn apply_profile_overrides(&self, settings: &std::collections::BTreeMap<String, String>) {
+        // Mirror `WhisperLocalTranscribeBackend`'s handling so a profile
+        // that flips STT provider mid-session sees the same overrides.
+        let prompt_override = settings
+            .get("initial_prompt")
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        *self
+            .profile_prompt
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = prompt_override;
+        let language_override = settings
+            .get("language")
+            .or_else(|| settings.get("lang"))
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        *self
+            .profile_language
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = language_override;
+        // `model`: DEFERRED. The api_key contract is provider-scoped
+        // (openai vs groq); a profile-driven model swap that crosses
+        // providers also needs a re-resolved key. Warn once per new
+        // value, matching `WhisperLocalTranscribeBackend`.
+        if let Some(model) = settings
+            .get("model")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+        {
+            let mut warned = self
+                .profile_model_warned
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if warned.as_deref() != Some(model) {
+                eprintln!(
+                    "[profile] model_change_deferred model={} restart_needed=true \
+                     (cloud STT backend model is stamped at construction; \
+                     restart the app for a `model` profile override to take effect)",
+                    model
+                );
+                *warned = Some(model.to_owned());
+            }
+        } else {
+            *self
+                .profile_model_warned
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = None;
+        }
     }
 }
 

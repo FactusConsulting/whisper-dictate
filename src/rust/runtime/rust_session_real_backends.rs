@@ -32,8 +32,8 @@
 //!    [`crate::dictate::backends::EnigoInjectBackend::inject`] itself
 //!    (Codex P2 #417 inject.rs:110 follow-up, PR #419), so no
 //!    additional wrapping is needed here. The
-//!    [`super::rust_session_inject::ProductionInjectBackend::Enigo`]
-//!    variant delegates straight through.
+//!    [`super::rust_session_inject::ProductionInjectBackend`]'s Enigo
+//!    arm delegates straight through.
 //! 4. **P2 print mode** -- new
 //!    [`super::rust_session_inject::ProductionInjectBackend`] wrapper
 //!    honors `VOICEPI_INJECT_MODE=print` by skipping OS injection.
@@ -454,10 +454,25 @@ pub(crate) fn make_real_session(
             // Audio ducking parity (blocker #2). `SystemAudioDucker::from_env`
             // reads `VOICEPI_AUDIO_DUCKING` + `VOICEPI_AUDIO_DUCKING_LEVEL`
             // and early-returns without touching WASAPI when the gate is off.
-            .with_ducker(Box::new(crate::dictate::SystemAudioDucker::from_env()));
-        if let Some(post) = crate::postprocess::SessionPostProcess::from_env() {
-            dictate = dictate.with_post_process(Box::new(post));
-        }
+            .with_ducker(Box::new(crate::dictate::SystemAudioDucker::from_env()))
+            // Per-utterance target-window profile matcher (Codex P1 #607).
+            // Previously never attached in production, so users' `apply_profile`
+            // config was dead code -- Settings changes never fired on the Rust
+            // engine. `ReloadingProfileMatcher` re-reads `config.json` on every
+            // press (matching Python's `_reload_live_config_if_changed`);
+            // `SystemForegroundWindow` is the per-OS focused-window probe.
+            .with_profile_matcher(
+                Box::new(crate::dictate::profile::ReloadingProfileMatcher::new()),
+                Box::new(crate::platform::foreground_window::SystemForegroundWindow),
+            );
+        // Codex P1 #607: always attach the post-processing pass so a profile
+        // that flips `post_processor=ollama` (Python parity) reaches an
+        // actual backend. `PostProcessBackend::is_active` gates the pass on
+        // Python's `processor != "none" && mode != "raw"` -- a stock
+        // (unset) config still emits no `post-processing` status and pays
+        // zero per-utterance cost.
+        dictate =
+            dictate.with_post_process(Box::new(crate::postprocess::SessionPostProcess::from_env()));
         let session: Arc<Mutex<RealSession>> = Arc::new(Mutex::new(dictate));
 
         // Spawn the audio pump LAST so a model-path / idle-timeout

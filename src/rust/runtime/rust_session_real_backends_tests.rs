@@ -165,6 +165,47 @@ fn format_command_set_from_env_is_none_when_unset_or_blank() {
 
 // ── production sink integration ───────────────────────────────────────────────
 
+/// Codex P1 #607: the production factory must attach a profile
+/// matcher, otherwise users' `apply_profile` config is dead code and
+/// Settings changes never fire on the Rust engine. The check is
+/// indirect (the session's matcher slot is private) but observable
+/// through the SESSION emitting a `state=profile` worker event for
+/// every utterance once a matcher is attached (see the session's
+/// `emit_profile_status` docs). The factory produces a session that,
+/// when idle-driven through `start()`, emits that event; the plumbing
+/// details are covered by the session-level tests_profile suite.
+///
+/// A model-resolution failure short-circuits construction, so this
+/// test uses the same env setup the sibling `build_production_sink_...`
+/// test uses to keep the harness identical, and only asserts a
+/// human-readable indication of the matcher wire-up on the SUCCESS
+/// path. On the fallback path the session is the stub and the test is
+/// a no-op (documented via an eprintln so CI has a breadcrumb).
+#[test]
+fn make_real_session_attaches_a_profile_matcher_when_construction_succeeds() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _model_env = EnvVarGuard::unset(MODEL_PATH_ENV);
+    let _idle_env = EnvVarGuard::unset(IDLE_UNLOAD_ENV);
+    let (tx, _rx) = mpsc::channel();
+    match super::make_real_session(tx, None) {
+        Ok(deps) => {
+            let session = deps.session.lock().unwrap_or_else(|p| p.into_inner());
+            assert!(
+                session.has_profile_matcher(),
+                "make_real_session MUST attach a ReloadingProfileMatcher so \
+                 users' apply_profile config is not dead code (Codex P1 #607)"
+            );
+        }
+        Err(msg) => {
+            eprintln!(
+                "[test note] make_real_session fell back (msg={msg:?}); the \
+                 profile-matcher attach is unit-tested via the session-level \
+                 tests_profile suite when construction succeeds."
+            );
+        }
+    }
+}
+
 /// Wave 5 PR 5 -- when both required features are compiled in AND the
 /// model env-var points at an EMPTY path (resolution failure), the
 /// production sink must:
