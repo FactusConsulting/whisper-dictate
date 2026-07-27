@@ -229,7 +229,11 @@ where
         );
         return None;
     }
-    let cfg = crate::hotkey::HotkeyConfig { key_names, mode };
+    let cfg = crate::hotkey::HotkeyConfig {
+        key_names,
+        mode,
+        auto_complete_processing: false,
+    };
     match crate::hotkey::install_hotkey(cfg, action_sink) {
         Ok(handle) => {
             // P2 #7: the Rust backend only owns the PTT chord; the

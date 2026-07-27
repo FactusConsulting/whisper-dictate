@@ -385,11 +385,18 @@ fn install_supported(
     //    `install_hotkey`'s per-error variants into a single
     //    fallback-eligible `HotkeyInstallFailed` so the supervisor's
     //    caller does not need to know the hotkey error taxonomy.
-    let handle =
-        install_hotkey(HotkeyConfig { key_names, mode }, sink).map_err(|err| match err {
-            InstallError::Unsupported => InProcessInstallError::FeaturesMissing,
-            other => InProcessInstallError::HotkeyInstallFailed(other.to_string()),
-        })?;
+    let handle = install_hotkey(
+        HotkeyConfig {
+            key_names,
+            mode,
+            auto_complete_processing: false,
+        },
+        sink,
+    )
+    .map_err(|err| match err {
+        InstallError::Unsupported => InProcessInstallError::FeaturesMissing,
+        other => InProcessInstallError::HotkeyInstallFailed(other.to_string()),
+    })?;
 
     // 4. Wire the coordinator handle back into the sink's OnceLock so
     //    `on_processing_finished` can send `ProcessingFinished(id)` when

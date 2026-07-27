@@ -64,12 +64,11 @@ use std::sync::Arc;
 #[cfg(feature = "rust-hotkeys")]
 use std::time::Instant;
 
-use coordinator::Mode;
+use coordinator::{CoordinatorHandle, Mode};
 
 #[cfg(feature = "rust-hotkeys")]
 use coordinator::{
-    spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, CoordinatorHandle,
-    CoordinatorThread, Options,
+    spawn as spawn_coordinator, CoordinatorAction, CoordinatorEvent, CoordinatorThread, Options,
 };
 pub use inject_guard::{InjectionBracket, InjectionGuard};
 #[cfg(feature = "rust-hotkeys")]
@@ -100,6 +99,13 @@ type SpawnManagerOk = (&'static str, ManagerHandle, ManagerThread);
 pub struct HotkeyConfig {
     pub key_names: Vec<String>,
     pub mode: Mode,
+    /// Forwarded to [`coordinator::Options::auto_complete_processing`]. The
+    /// diagnostic `hotkey capture` CLI sets this so it doesn't need a
+    /// per-cycle `ProcessingFinished` from the sink — the coordinator
+    /// completes the stage synchronously as part of the same loop iteration
+    /// that emitted `StopAndTranscribe`, before any already-queued next
+    /// press is consumed. The shipping supervisor leaves it `false`.
+    pub auto_complete_processing: bool,
 }
 
 impl HotkeyConfig {
@@ -110,7 +116,16 @@ impl HotkeyConfig {
         Self {
             key_names,
             mode: Mode::HoldToTalk,
+            auto_complete_processing: false,
         }
+    }
+
+    /// Fluent setter for [`Self::auto_complete_processing`]. Used by the
+    /// diagnostic capture CLI; keeps `HotkeyConfig::hold_to_talk`'s
+    /// signature unchanged.
+    pub fn with_auto_complete_processing(mut self, on: bool) -> Self {
+        self.auto_complete_processing = on;
+        self
     }
 }
 
@@ -236,7 +251,10 @@ where
         }
     }
 
-    let options = Options { mode: config.mode };
+    let options = Options {
+        mode: config.mode,
+        auto_complete_processing: config.auto_complete_processing,
+    };
     let (coord_handle, coord_thread) = spawn_coordinator(options, action_sink, Instant::now);
 
     // Shared self-injection guard — armed by the injector wrapper around
@@ -503,6 +521,16 @@ impl HotkeyHandle {
     /// call site type-check without a feature-gate at every use.
     pub fn driver_name(&self) -> &'static str {
         "none"
+    }
+    /// Stub coordinator handle so `capture::run_capture` can call
+    /// `handle.coordinator_handle()` without a feature-gate at every
+    /// use — same shape as [`Self::driver_name`]. The stock
+    /// [`install_hotkey_with_raw_tap`] always returns
+    /// [`InstallError::Unsupported`], so no `HotkeyHandle` value is ever
+    /// produced on this path and this method cannot be invoked at runtime;
+    /// the returned handle's send channel is disconnected on purpose.
+    pub fn coordinator_handle(&self) -> CoordinatorHandle {
+        CoordinatorHandle::disconnected()
     }
 }
 

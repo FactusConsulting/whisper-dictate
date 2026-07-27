@@ -3,11 +3,15 @@ use super::*;
 fn hold_options() -> Options {
     Options {
         mode: Mode::HoldToTalk,
+        auto_complete_processing: false,
     }
 }
 
 fn toggle_options() -> Options {
-    Options { mode: Mode::Toggle }
+    Options {
+        mode: Mode::Toggle,
+        auto_complete_processing: false,
+    }
 }
 
 #[test]
