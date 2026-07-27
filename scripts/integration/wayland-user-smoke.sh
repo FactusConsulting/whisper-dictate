@@ -729,6 +729,67 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: corpus-record (Linux installer audio-capture regression — #629)
+#
+# PR #629 removed the Python `vp_corpus_record.py` fallback, so on a build
+# WITHOUT `--features audio-capture` the CLI compiles to a stub that prints
+# "corpus-record is not available in this build: rebuild with
+# `--features audio-capture`" and exits non-zero. Every shipping release
+# builds with the feature; the Linux source installer
+# (`scripts/linux/install-rust-ui.sh`) originally shipped WITHOUT it, which
+# is the codex P1 this smoke section defends against.
+#
+# Two checks:
+#   1. `corpus-record --help` prints clap usage and exits 0 — cheap CLI
+#      surface check (clap doesn't run the handler, so a stub build passes
+#      this one too; kept as the "the verb is at least wired" smoke).
+#   2. `corpus-record <bogus id>` — a well-formed id that isn't in any
+#      manifest. On a feature-on build the recorder is invoked, fails to
+#      resolve the id, and emits a `corpus_record_error` JSON event with
+#      exit 0. On a stub build the dispatch stub returns the "rebuild with
+#      `--features audio-capture`" anyhow error, main.rs prints it to
+#      stderr, and the process exits non-zero. The section fails ONLY
+#      when the stub phrase appears — anything else (audio device missing,
+#      manifest lookup failure) is expected/acceptable.
+# --------------------------------------------------------------------------
+section "corpus-record (Linux installer audio-capture regression — #629)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "corpus-record is a Rust subcommand — not exposed by the Python fallback"
+else
+    cr_help_out="$(whisper-dictate corpus-record --help 2>&1)"
+    cr_help_rc=$?
+    if [ "$cr_help_rc" -eq 0 ] && printf '%s' "$cr_help_out" | grep -qi "corpus-record\|usage"; then
+        # A stub build still passes clap's --help (the stub is in the handler,
+        # not in the parser), but the --help output itself must NEVER include
+        # the stub's "rebuild with `--features audio-capture`" phrase. This
+        # catches the accidental case where someone leaks the stub message
+        # into the doc comment / long-help.
+        if printf '%s' "$cr_help_out" | grep -q "rebuild with .--features audio-capture."; then
+            bad "corpus-record --help leaks the audio-capture stub message"
+            info "$(printf '%s\n' "$cr_help_out" | head -n 5)"
+        else
+            ok "corpus-record --help works (verb wired, no stub leak in usage)"
+        fi
+    else
+        bad "corpus-record --help failed (exit $cr_help_rc): $(printf '%s\n' "$cr_help_out" | head -n 2)"
+    fi
+
+    # Bogus but well-formed id — passes `is_safe_corpus_id` so the recorder
+    # dispatch runs, then fails to resolve. On a feature-on build the failure
+    # is "not in the corpus manifest" (exit 0, JSON event on stdout); on a
+    # stub build the failure is "rebuild with `--features audio-capture`"
+    # (non-zero exit, message on stderr). We look for the stub phrase; any
+    # other failure shape is fine for this smoke.
+    cr_out="$(whisper-dictate corpus-record wd-smoke-nonexistent 2>&1)"
+    if printf '%s' "$cr_out" | grep -q "rebuild with .--features audio-capture."; then
+        bad "corpus-record was built WITHOUT --features audio-capture — this is the #629 installer regression"
+        info "$(printf '%s\n' "$cr_out" | head -n 3)"
+    else
+        ok "corpus-record dispatches to the native recorder (audio-capture feature is compiled in)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: self-test whisper-load (regression — Whisper cold-load latency + OOM)
 #
 # Item 5 prereq 5: load the tiny GGML model through the same background

@@ -66,6 +66,17 @@ class RustUiInstallerTests(unittest.TestCase):
         self.assertIn('CARGO_MANIFEST="${HERE}/src/rust/Cargo.toml"', script)
         self.assertIn('if [[ -x "${HERE}/whisper-dictate" ]]; then', script)
         self.assertIn("cargo build --release -p whisper-dictate-app", script)
+        # Regression #629: the installer MUST build with `--features
+        # audio-capture` so `corpus-record` gets the native cpal recorder
+        # instead of the stub error added when the Python fallback was
+        # retired. Assert on the exact flag placement (before --manifest-path)
+        # so a copy-paste that drops the feature after the manifest path
+        # tightens the check rather than loosening it.
+        self.assertIn("--features audio-capture", script)
+        self.assertIn(
+            "cargo build --release -p whisper-dictate-app --features audio-capture --manifest-path",
+            script,
+        )
         self.assertIn('--manifest-path "${CARGO_MANIFEST}" --target-dir "${HERE}/target"', script)
         self.assertIn('REAL_BIN="${LIB_DIR}/whisper-dictate-app"', script)
         self.assertIn('SOURCE_BIN="${HERE}/target/release/whisper-dictate"', script)
