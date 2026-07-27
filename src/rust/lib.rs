@@ -34,20 +34,20 @@ pub mod dictate;
 // Wave 6 follow-up to the dictionary-training CLI port). Used by the
 // `dictionary build-from-corpus` subcommand.
 pub mod corpus;
-// Pure-logic port of the `--record-corpus-item` user tool (Wave 6 of #348).
+// Pure-logic helpers for the `corpus-record` user tool (Wave 6 of #348).
 // Owns the corpus-id safety guard + the duration heuristic + the
 // `corpus-record` CLI handler. On `audio-capture` builds the handler
-// dispatches to the native cpal recorder in `corpus_record_native`
-// (step 1 of the Python retirement, same pattern as PR #600); on stock
-// builds it still shells out to the Python worker as a fallback.
+// dispatches to the native cpal recorder in `corpus_record_native`; on stock
+// dev builds (no `audio-capture`) it returns a "rebuild with --features
+// audio-capture" error. Step 2 of the retirement (same pattern as PR #602 for
+// `devices test`) deleted the Python `vp_corpus_record.py` fallback.
 pub mod corpus_record;
-// Native cpal recorder for `corpus-record <id>` — step 1 of the
-// `vp_corpus_record.py` retirement (#348). Emits the SAME JSON envelope
-// the UI parser expects and writes the SAME 16 kHz mono int16 WAV to
-// `<appdata>/benchmark/audio/<id>.wav` so existing recordings remain
-// interchangeable. Gated on `audio-capture` because it needs the
-// `crate::audio` capture stack; the stock-build fallback in
-// `corpus_record` shells out to Python instead.
+// Native cpal recorder for `corpus-record <id>` — the sole surface for corpus
+// recording after step 2 of the `vp_corpus_record.py` retirement (#348).
+// Emits the SAME JSON envelope the UI parser expects and writes 16 kHz mono
+// int16 WAVs to `<appdata>/benchmark/audio/<id>.wav` so existing recordings
+// remain interchangeable. Gated on `audio-capture` because it needs the
+// `crate::audio` capture stack.
 #[cfg(feature = "audio-capture")]
 pub mod corpus_record_native;
 // Pure corpus filter-profiles: select a subset of corpus items by

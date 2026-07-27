@@ -1,11 +1,12 @@
 //! Pure batch-recording model for the System tab's "Benchmark reference recordings" cluster.
 //!
-//! The single-item flow records one picked item via the `--record-corpus-item`
-//! worker. Batch recording walks a *list* of items in turn, reusing that SAME
-//! proven single-item worker for each clip and chaining them in the UI: when one
-//! clip's done-event arrives, the UI advances to the next target and launches it
-//! again. There is deliberately NO Python batch mode — each clip still takes the
-//! single-item path that already negotiates the capture device correctly.
+//! The single-item flow records one picked item via the native cpal recorder
+//! ([`crate::corpus_record_native`]). Batch recording walks a *list* of items
+//! in turn, reusing that SAME proven single-item path for each clip and
+//! chaining them in the UI: when one clip's done-event arrives, the UI
+//! advances to the next target and launches it again. There is deliberately
+//! NO dedicated batch entry point — each clip still takes the single-item
+//! path that already negotiates the capture device correctly.
 //!
 //! This module holds only the *pure* part of that flow so it unit-tests without
 //! egui or a worker:

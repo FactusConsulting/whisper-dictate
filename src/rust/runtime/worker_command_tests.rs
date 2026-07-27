@@ -602,64 +602,6 @@ fn audio_devices_command_propagation_is_idempotent_against_pre_populated_command
 }
 
 // -----------------------------------------------------------------------
-// P3 #372 finding 1: corpus_record id passed as `--flag=value` to argparse
-// so a leading-hyphen id is not mis-parsed as another flag.
-// -----------------------------------------------------------------------
-
-#[test]
-fn record_corpus_item_command_joins_id_with_equals_sign() {
-    // Argparse processes `--flag value` by greedy lookahead and treats a
-    // value starting with `-` as another flag. is_safe_corpus_id allows
-    // leading hyphens (its allowlist is [A-Za-z0-9._-]) so the worker
-    // command builder must use the unambiguous `--flag=value` form to
-    // round-trip such ids correctly through Python argparse.
-    let _guard = ENV_LOCK.lock().unwrap();
-    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
-    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
-
-    let command = super::record_corpus_item_command("-leading-hyphen");
-
-    assert!(
-        command
-            .args
-            .iter()
-            .any(|a| a == "--record-corpus-item=-leading-hyphen"),
-        "expected joined `--record-corpus-item=-leading-hyphen` token in args, got {:?}",
-        command.args
-    );
-    // And there must be no naked `--record-corpus-item` flag followed by a
-    // separate value token — argparse would parse `-leading-hyphen` as a
-    // flag in that case.
-    assert!(
-        !command.args.iter().any(|a| a == "--record-corpus-item"),
-        "must not emit the split `--record-corpus-item <id>` form; got {:?}",
-        command.args
-    );
-}
-
-#[test]
-fn record_corpus_item_command_joins_typical_id_too() {
-    // Belt-and-braces: the joined form is the only emitted form for every
-    // id, not just the hyphen-leading edge case. Catches a future refactor
-    // that re-introduces the split form for "normal-looking" ids and
-    // silently loses the hyphen protection.
-    let _guard = ENV_LOCK.lock().unwrap();
-    let _home_guard = EnvVarGuard::set("HOME", "/tmp/no-whisper-dictate-venv");
-    let _python_guard = EnvVarGuard::remove(PYTHON_ENV);
-
-    let command = super::record_corpus_item_command("da-001");
-
-    assert!(
-        command
-            .args
-            .iter()
-            .any(|a| a == "--record-corpus-item=da-001"),
-        "ordinary ids also use the joined form; got {:?}",
-        command.args
-    );
-}
-
-// -----------------------------------------------------------------------
 // P3 #372 finding 2: run_foreground must call configure_piped_python_stdio
 // so foreground subcommands (bench / corpus-record / doctor / models)
 // inherit UTF-8 stdio on Windows where the console code page defaults to

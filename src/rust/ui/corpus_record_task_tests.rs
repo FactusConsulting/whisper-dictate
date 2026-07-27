@@ -4,12 +4,11 @@
 //! dictation runtime being STOPPED (recording must never disturb the managed
 //! runtime — they would fight over the microphone) AND no other background task
 //! running. These exercise ONLY the gated branches and the pure
-//! `can_record_corpus_item` predicate, so no Python worker is ever spawned.
+//! `can_record_corpus_item` predicate, so no recorder thread is ever spawned.
 
 use super::corpus_record_tasks::RECORD_CORPUS_ITEM_LABEL;
 use super::test_support::test_app;
 use super::*;
-use crate::runtime::record_corpus_item_command;
 use std::sync::mpsc;
 
 fn app_with_selection() -> WhisperDictateApp {
@@ -43,11 +42,12 @@ fn app_with_corpus() -> WhisperDictateApp {
     app
 }
 
-/// A synthetic `corpus_record_done` background result for `id` (no worker spawned).
+/// A synthetic `corpus_record_done` background result for `id` (no recorder
+/// thread spawned).
 fn done_result(id: &str) -> BackgroundTaskResult {
     BackgroundTaskResult {
         label: RECORD_CORPUS_ITEM_LABEL,
-        command: format!("py --record-corpus-item {id}"),
+        command: format!("corpus-record {id:?} (native)"),
         stdout: format!(
             "{{\"event\":\"corpus_record_done\",\"id\":\"{id}\",\"path\":\"/a/{id}.wav\",\"seconds_recorded\":3.0}}\n"
         ),
@@ -75,6 +75,12 @@ fn record_is_skipped_while_the_runtime_is_running() {
     assert!(!app.can_record_corpus_item());
 }
 
+// The "another task is running" gate lives inside
+// `run_native_record_corpus_item`, which is compiled only on `audio-capture`
+// (release binaries always ship with it). Stock dev builds take the
+// "unavailable — rebuild with --features audio-capture" branch, so the
+// skip-vs-unavailable assertion here is meaningful only on `audio-capture`.
+#[cfg(feature = "audio-capture")]
 #[test]
 fn record_is_skipped_while_another_background_task_runs() {
     let mut app = app_with_selection();
@@ -117,17 +123,6 @@ fn can_record_requires_selection_stopped_and_idle() {
 }
 
 #[test]
-fn command_construction_passes_record_corpus_item_with_id() {
-    let command = record_corpus_item_command("da-001");
-    let display = command.display();
-    assert!(
-        display.contains("--record-corpus-item"),
-        "missing flag in: {display}"
-    );
-    assert!(display.contains("da-001"), "missing id in: {display}");
-}
-
-#[test]
 fn label_is_stable() {
     // The label is the dispatch key the poll handler routes on; pin it so a
     // rename is a conscious, test-visible change.
@@ -139,7 +134,7 @@ fn apply_corpus_record_parses_done_into_inline_result() {
     let mut app = app_with_selection();
     let result = BackgroundTaskResult {
         label: RECORD_CORPUS_ITEM_LABEL,
-        command: "py --record-corpus-item da-001".to_owned(),
+        command: "corpus-record \"da-001\" (native)".to_owned(),
         stdout: "{\"event\":\"corpus_record_done\",\"id\":\"da-001\",\"path\":\"/a/da-001.wav\",\"seconds_recorded\":9.8,\"peak_dbfs\":-6.0}\n".to_owned(),
         stderr: String::new(),
         success: true,
@@ -163,7 +158,7 @@ fn apply_corpus_record_parses_error_into_inline_result() {
     let mut app = app_with_selection();
     let result = BackgroundTaskResult {
         label: RECORD_CORPUS_ITEM_LABEL,
-        command: "py --record-corpus-item bad".to_owned(),
+        command: "corpus-record \"bad\" (native)".to_owned(),
         stdout: "{\"event\":\"corpus_record_error\",\"error\":\"unknown corpus id: bad\"}\n"
             .to_owned(),
         stderr: String::new(),
@@ -187,7 +182,7 @@ fn apply_corpus_record_surfaces_run_failure_as_err() {
     let mut app = app_with_selection();
     let result = BackgroundTaskResult {
         label: RECORD_CORPUS_ITEM_LABEL,
-        command: "py --record-corpus-item da-001".to_owned(),
+        command: "corpus-record \"da-001\" (native)".to_owned(),
         stdout: String::new(),
         stderr: String::new(),
         success: false,
@@ -318,7 +313,7 @@ fn batch_aborts_when_a_clip_reports_a_failure() {
     // rather than looping the same failure across the remaining items.
     let failed = BackgroundTaskResult {
         label: RECORD_CORPUS_ITEM_LABEL,
-        command: "py --record-corpus-item a".to_owned(),
+        command: "corpus-record \"a\" (native)".to_owned(),
         stdout: "{\"event\":\"corpus_record_error\",\"error\":\"no audio was captured\"}\n"
             .to_owned(),
         stderr: String::new(),

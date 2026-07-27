@@ -213,13 +213,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="show local GPU VRAM and which local models can fit, then exit")
     ap.add_argument("--list-audio-devices", action="store_true",
                     help="print available input (microphone) devices as JSON, then exit")
-    ap.add_argument("--record-corpus-item", metavar="ID", default=None,
-                    help="record reference audio for the golden-corpus item ID from "
-                         "the configured microphone (reusing the same negotiated capture "
-                         "path as dictation), save it to "
-                         "<appdata>/benchmark/audio/<ID>.wav so the benchmark can score "
-                         "it, print start/progress/done JSON events, then exit. The "
-                         "recording length is derived from the reference text length.")
     ap.add_argument("--list-windows", action="store_true",
                     help="print visible top-level windows (title + process) as JSON, "
                          "then exit. Windows only; exits with code 1 on other platforms.")

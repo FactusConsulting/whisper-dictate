@@ -482,15 +482,6 @@ def _run_utility_subcommands(a, ap) -> None:
         raise SystemExit(run_doctor())
     if a.list_audio_devices:
         raise SystemExit(print_audio_devices())
-    if getattr(a, "record_corpus_item", None) is not None:
-        from whisper_dictate.vp_corpus_record import record_corpus_item
-        # Same corpus resolution the native `bench` runner uses
-        # (--app-root → appdata), against the same per-user audio dir.
-        raise SystemExit(record_corpus_item(
-            a.record_corpus_item,
-            app_root=getattr(a, "app_root", None),
-            appdata=appdata_dir(),
-        ))
     if a.list_windows:
         raise SystemExit(print_windows())
     if a.model_capacity:

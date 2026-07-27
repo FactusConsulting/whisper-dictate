@@ -20,9 +20,9 @@ GUI wiring + a full round of manual + smoke verification.
 | `ui`, `settings` | ✅ | | Opens the egui Rust UI. UI itself may spawn Python worker for dictation. |
 | `run` | | ✅ | Alias for the Python dictation loop (`runtime::run_terminal`). |
 | `doctor` | ✅ | | Native (`doctor::handle_doctor`). |
-| `bench` | ✅ | | Native Rust runner (`benchmark::native::run`) since step 2 of #348. Requires shipping features (`whisper-rs-local,audio-capture`); stock dev builds emit a rebuild hint. |
-| `corpus-record` | | ✅ | Rust dispatcher shells to `runtime::record_corpus_item_command()`. Two-step migration pending (same shape as retired `--test-audio-device`). |
-| ~~`simulate-ptt`~~ | | | **Retired**; superseded by `simulate-session` (WAV + cloud) and `dictate-mic` (live + cloud). |
+| `bench` | ✅ | | Native Rust runner (`benchmark::native`) as of step 2 of the retirement (#626); stock dev builds without `whisper-rs-local`+`audio-capture` return a rebuild hint. |
+| `corpus-record` | ✅ | | Native cpal recorder (`corpus_record_native::run_native`) as of step 2 of the retirement (#629); stock dev builds without `audio-capture` return a rebuild hint. |
+| ~~`simulate-ptt`~~ | | | **Retired (#627)**; superseded by `simulate-session` (WAV + cloud) and `dictate-mic` (live + cloud). |
 | `simulate-session` | ✅ | | Rust-engine WAV driver. Cloud STT only; hidden verb, CI/diag use. Replaces `simulate-ptt` for WAV-driven end-to-end checks. |
 | `dictate-run` | ✅ | | Full in-process Rust dictation runtime (installs hotkey + coordinator + session sink). |
 | `dictate-mic` | ✅ | | Feature-gated (`audio-capture`). Cpal capture → cloud STT → preview inject. |
@@ -50,8 +50,8 @@ GUI wiring + a full round of manual + smoke verification.
 | **Test audio device** button | ✅ | | Native since #600 (WASAPI on Windows, cpal on Linux). |
 | List windows | | ✅ | Shells via `windows_command()`. |
 | Install / Repair | | ✅ | Shells; legitimately Python for dep install. |
-| Run benchmark | ✅ | | Native since step 2 of #348. `run_benchmark` calls `benchmark::native::run_to_writer` on a background thread and captures the output for the existing results parser. |
-| Record corpus item | | ✅ | Shells via `record_corpus_item_command()`. Same shape. |
+| Run benchmark | ✅ | | Native as of #626 — `run_benchmark` calls `benchmark::native::run_to_writer` on a background thread and captures output for the existing results parser. |
+| Record corpus item | ✅ | | Native on `audio-capture` builds (#629) — background thread calls `corpus_record_native::run_native_to_string` and hands JSON events to the same UI parser. Dev builds without `audio-capture` log a "feature not enabled" message. |
 | Cancel task / Kill worker | ✅ | | Native (task management is Rust-side). |
 | Debug log tail | ✅ | | Native. Reads runtime events channel. |
 | History tab (list/reinject/copy-last) | ✅ | | Native. Same code path as the `history` CLI verb. |
@@ -93,12 +93,8 @@ Modules whose PRIMARY caller is Python (not just a compat shim):
 - `vp_postprocess.py` — Python post-processing shim.
 - `vp_inject.py` + `vp_inject_rust.py` — Python injection dispatch.
 - `vp_setup.py` — Setup wizard (no Rust equivalent yet).
-- `vp_corpus_record.py` — corpus recording. The Rust `corpus-record` CLI
-  verb + UI Record button run the native cpal recorder since #624; the
-  Python subprocess path is scheduled for step 2 removal.
-- (`vp_benchmark.py` retired in step 2 of #348 — see `vp_benchmark_paths.py`
-  for the surviving corpus-loader helpers that `vp_corpus_record.py` still
-  imports.)
+- `vp_benchmark_paths.py` — corpus-loader helpers surviving after `vp_benchmark.py`
+  retirement (#626); may be dropped when the last Python consumer goes.
 - `vp_history.py`, `vp_events.py`, `vp_health.py`, `vp_preview.py`,
   `vp_feedback.py`, `vp_audio_ducking.py`, `vp_dictionary_store.py` — Python
   primary implementations of features Rust ALSO has (parity ports). Used only
@@ -116,23 +112,18 @@ lands:
    vp_dictionary_store, plus most of vp_dictate/runtime/vp_capture/
    vp_transcribe/vp_inject/vp_postprocess) become dead and can be retired.
 
-2. **GUI wiring — Doctor + List Devices** (in-flight): drops two Python
-   subprocess call-sites from the UI.
+2. **Setup wizard**: no Rust equivalent yet. Needs a design pass.
 
-3. **`corpus-record` two-step migration**: native cpal capture in Rust, then
-   retire `vp_corpus_record.py` + `--record-corpus-item` argparse flag.
-
-4. ~~**`bench` two-step migration**~~ — done. Step 1 (native runner) landed in
-   #625; step 2 retired `vp_benchmark.py` + `vp_benchmark_report.py` and
-   removed the `--run-benchmark` / `--benchmark-files` / `--benchmark-backends`
-   / `--benchmark-jsonl` argparse flags. `vp_benchmark_paths.py` is kept for
-   its corpus-loader (used by `vp_corpus_record.py` pending its own step 2).
-
-5. **Setup wizard**: no Rust equivalent yet. Needs a design pass.
-
-6. **rust-stdin bridge retirement** (pending user go-ahead): drops ~450 lines
+3. **rust-stdin bridge retirement** (pending user go-ahead): drops ~450 lines
    of Python audio decoder once we accept that Rust-audio users switch to full
    Rust engine.
+
+**Recently landed** (already reflected in the tables above):
+
+- GUI Doctor + List Devices → in-process Rust (#623)
+- `bench` two-step: native Rust + Python retirement (#625, #626)
+- `corpus-record` two-step: native Rust + Python retirement (#624, #629)
+- `simulate-ptt` retirement (#627): superseded by `simulate-session` + `dictate-mic`
 
 ## Where this lives
 
