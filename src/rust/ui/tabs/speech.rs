@@ -154,13 +154,24 @@ impl WhisperDictateApp {
             ui_text(&language, UiTextKey::SpeechGroupGeneral),
             "speech_general",
             |ui| {
+                // Filter the offered values by the compiled-in whisper.cpp GPU
+                // backends. On a CPU-only binary "cuda" would silently fall
+                // back to CPU, so hide it entirely and append a footnote to
+                // the help text explaining why the menu is shorter (see
+                // crate::whisper::device_options for the full rationale).
+                let device_values = crate::whisper::device_options::available_device_values();
+                let device_help = format!(
+                    "Local inference device. auto chooses a GPU when available, otherwise CPU. \
+                     Used by the local Whisper backend.{}",
+                    crate::whisper::device_options::missing_device_footnote(),
+                );
                 combo_enabled_short(
                     ui,
                     backend != SttBackendMode::Cloud,
                     "Device",
                     &mut self.settings.device,
-                    &["auto", "cuda", "cpu"],
-                    "Local inference device. auto chooses CUDA when available, otherwise CPU. Used by the local Whisper backend.",
+                    &device_values,
+                    &device_help,
                 );
                 combo_enabled_labeled(
                     ui,

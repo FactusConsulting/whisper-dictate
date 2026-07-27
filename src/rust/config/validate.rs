@@ -6,6 +6,9 @@
 use anyhow::{anyhow, Result};
 
 use crate::config::settings::AppSettings;
+use crate::whisper::device_options::{
+    available_device_values, is_device_supported, missing_device_hint,
+};
 
 impl AppSettings {
     /// Validate every settings field, returning the first violation as an error.
@@ -20,7 +23,13 @@ impl AppSettings {
     fn validate_choices(&self) -> Result<()> {
         validate_choice("stt_backend", &self.stt_backend, &["whisper", "openai"])?;
         validate_choice("stt_provider", &self.stt_provider, &["groq", "openai"])?;
-        validate_choice("device", &self.device, &["auto", "cuda", "cpu"])?;
+        // `device` is enum-checked against the *build-filtered* option set so
+        // `whisper-dictate config set device cuda` on a CPU-only binary fails
+        // loudly instead of silently accepting a value that Whisper will just
+        // demote to CPU at runtime (rc.9 Windows regression). Any dropped
+        // value gets a targeted hint pointing at the rebuild flag; the enum-
+        // choice validator itself handles typos / unknown values.
+        validate_device(&self.device)?;
         validate_choice(
             "inject_mode",
             &self.inject_mode,
@@ -95,6 +104,27 @@ impl AppSettings {
         validate_f32("ui_text_scale", &self.ui_text_scale)?;
         Ok(())
     }
+}
+
+/// Validate `device` against the build-filtered option list.
+///
+/// Uses [`crate::whisper::device_options`] so the CLI setter and the UI
+/// dropdown share a single source of truth. When the value is a *legal*
+/// device name that this binary can't honour (e.g. `cuda` on a CPU-only
+/// build), the error appends the rebuild / installer hint from
+/// [`missing_device_hint`] so scripting users don't have to grep for it.
+fn validate_device(value: &str) -> Result<()> {
+    if is_device_supported(value) {
+        return Ok(());
+    }
+    let allowed = available_device_values();
+    let hint = missing_device_hint(value)
+        .map(|h| format!(" - {h}"))
+        .unwrap_or_default();
+    Err(anyhow!(
+        "device must be one of {}; got {value:?}{hint}",
+        allowed.join(", "),
+    ))
 }
 
 fn validate_choice(name: &str, value: &str, allowed: &[&str]) -> Result<()> {
@@ -211,6 +241,52 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("stt_base_url"));
+    }
+
+    #[test]
+    #[cfg(not(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda")))]
+    fn settings_validation_rejects_cuda_device_on_cpu_only_builds() {
+        // The rc.9 regression fix: the CLI setter (`whisper-dictate config
+        // set device cuda`) must FAIL on a binary that has no GPU backend,
+        // instead of silently accepting a value Whisper will demote to CPU.
+        let settings = AppSettings {
+            device: "cuda".to_owned(),
+            ..AppSettings::default()
+        };
+
+        let err = settings.validate().unwrap_err().to_string();
+        assert!(err.contains("device"), "err = {err}");
+        assert!(
+            err.to_lowercase().contains("cuda"),
+            "err should name the rejected value: {err}",
+        );
+        assert!(
+            err.contains("whisper-rs") || err.contains("GPU"),
+            "err should point at the rebuild flag: {err}",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "whisper-rs-vulkan", feature = "whisper-rs-cuda"))]
+    fn settings_validation_accepts_cuda_device_on_gpu_builds() {
+        let settings = AppSettings {
+            device: "cuda".to_owned(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn settings_validation_accepts_auto_and_cpu_on_every_build() {
+        for value in ["auto", "cpu"] {
+            let settings = AppSettings {
+                device: value.to_owned(),
+                ..AppSettings::default()
+            };
+            settings
+                .validate()
+                .unwrap_or_else(|e| panic!("device={value:?} unexpectedly rejected: {e}"));
+        }
     }
 
     #[test]
