@@ -105,7 +105,22 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 Write-Host "Building Rust desktop UI..." -ForegroundColor Cyan
 # Keep this --features list in lockstep with .github/workflows/windows-installer-build.yml
 # so local installer builds match the artifact CI ships. P2 #400 Codex finding 4.
-cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+# Vulkan GPU acceleration (whisper-rs-vulkan) is appended when the Vulkan SDK is
+# installed locally ($env:VULKAN_SDK is set by LunarG's installer, e.g.
+# `C:\VulkanSDK\1.3.290.0`). Without the SDK the build falls back to CPU-only
+# to keep the local loop green on dev machines that never installed it.
+if ($env:VOICEPI_BUILD_VULKAN -eq '0') {
+  Write-Host "VOICEPI_BUILD_VULKAN=0 — CPU-only build (skipping whisper-rs-vulkan)" -ForegroundColor Yellow
+  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+} elseif ($env:VULKAN_SDK -and (Test-Path (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe'))) {
+  $env:PATH = (Join-Path $env:VULKAN_SDK 'Bin') + ';' + $env:PATH
+  Write-Host "VULKAN_SDK=$env:VULKAN_SDK — building with whisper-rs-vulkan (GPU acceleration)" -ForegroundColor Cyan
+  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+} else {
+  Write-Host "Vulkan SDK not detected (`$env:VULKAN_SDK unset or `$env:VULKAN_SDK\Bin\glslc.exe missing) — building CPU-only." -ForegroundColor Yellow
+  Write-Host "  Install from https://vulkan.lunarg.com/sdk/home to build a GPU-accelerated artefact locally." -ForegroundColor Yellow
+  cargo build --manifest-path (Join-Path $root 'src\rust\Cargo.toml') --target-dir (Join-Path $root 'target') --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+}
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
 $versionFile = Join-Path $root 'VERSION'

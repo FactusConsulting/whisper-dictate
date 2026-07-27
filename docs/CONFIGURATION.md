@@ -962,6 +962,38 @@ setx VOICEPI_DEVICE cuda; setx VOICEPI_MODEL large-v3; setx VOICEPI_BEAM_SIZE 8;
 # restart whisper-dictate; first [stt] line in the log will show your new compute type
 ```
 
+## Rust transcribe backend — GPU acceleration
+
+The Rust transcribe path (opt-in via `VOICEPI_TRANSCRIBE_BACKEND=rust`) runs
+whisper.cpp inside the Rust binary. Its GPU support is a **compile-time**
+concern: the binary was either linked with the `whisper-rs-vulkan` cargo
+feature at build time or it wasn't. Runtime env vars can only _disable_ GPU
+on a GPU-capable binary — they cannot enable GPU on a CPU-only binary.
+
+- **Windows release binary (v1.22.0+)** — built with `whisper-rs-vulkan`.
+  GPU is used automatically on any Windows 10/11 machine with an
+  up-to-date NVIDIA / AMD / Intel GPU driver (the driver ships
+  `vulkan-1.dll`). RTX 3080 / 4070 / etc. all light up. First transcribe
+  log line will read `whisper_init_with_params_no_state: use gpu = 1` and
+  `whisper_backend_init_gpu: using Vulkan backend`.
+- **Older Windows release binaries (≤ rc.9)** — built without
+  `whisper-rs-vulkan`. `use gpu = 0` regardless of GPU/driver — a
+  large-v3-turbo transcribe of a 3-second clip took 5+ minutes on CPU.
+  Upgrade to v1.22.0+ (Chocolatey / Inno / winget) to get the GPU build.
+- **Linux release binary** — CPU-only today; the Vulkan build for Linux
+  has not been enabled in the release pipeline yet. Track the follow-up
+  in the issue tracker.
+- **Homebrew / macOS** — CPU-only today (Metal backend planned).
+- **`VOICEPI_WHISPER_GPU`** — runtime override on a GPU-capable build:
+  `auto` (default) uses GPU, `off`/`cpu` forces CPU, `vulkan` explicitly
+  picks the Vulkan backend. On a CPU-only build all three degrade
+  silently to CPU.
+- **Vendor note** — the Rust transcribe path uses Vulkan (not CUDA)
+  because Vulkan is vendor-agnostic (NVIDIA + AMD + Intel from one
+  feature flag). The Python `faster-whisper` path (default at
+  `stt_backend=whisper` without the Rust opt-in) still uses CUDA
+  directly and is unaffected by this.
+
 ## Quick recommendations
 
 - **Daily Danish dictation:** `VOICEPI_LANG=da` (persistent). Add
