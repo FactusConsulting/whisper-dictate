@@ -123,7 +123,12 @@ pub fn handle_doctor(json: bool, config_override: Option<&str>) -> Result<()> {
 }
 
 /// Build the full check list.
-fn run_all_checks(config_override: Option<&str>) -> Vec<Check> {
+///
+/// Exposed as `pub` so in-process callers (notably the desktop UI's Doctor
+/// button — see `ui::tasks::run_doctor`) can run the exact same battery of
+/// checks the CLI verb runs, without shelling out to the Python worker's
+/// legacy `--doctor` flag.
+pub fn run_all_checks(config_override: Option<&str>) -> Vec<Check> {
     let cfg_path = resolve_config_path(config_override);
     vec![
         check_os(),
@@ -459,20 +464,40 @@ fn parse_python_version(text: &str) -> Option<(u32, u32)> {
 // ---------- rendering --------------------------------------------------------
 
 fn render_text(checks: &[Check], summary: &Summary) {
+    print!("{}", render_text_to_string(checks, summary));
+}
+
+/// Text render used by both the CLI (via [`render_text`]) and the in-process
+/// UI caller (`ui::tasks::run_doctor`), which needs the same output as a
+/// `String` to feed the runtime log without capturing stdout.
+///
+/// Ends with a trailing newline so appending to a log stream keeps the same
+/// visual separation the CLI already had.
+pub fn render_text_to_string(checks: &[Check], summary: &Summary) -> String {
+    let mut out = String::new();
     for c in checks {
-        println!("[{}] {} - {}", c.status.glyph(), c.name, c.detail);
+        out.push_str(&format!(
+            "[{}] {} - {}\n",
+            c.status.glyph(),
+            c.name,
+            c.detail
+        ));
     }
-    println!(
-        "\nsummary: {} ok, {} warn, {} fail",
+    out.push_str(&format!(
+        "\nsummary: {} ok, {} warn, {} fail\n",
         summary.ok, summary.warn, summary.fail
-    );
+    ));
     if summary.fail > 0 {
-        println!("doctor: {} failed check(s) block dictation", summary.fail);
+        out.push_str(&format!(
+            "doctor: {} failed check(s) block dictation\n",
+            summary.fail
+        ));
     } else if summary.warn > 0 {
-        println!("doctor: platform ready (with warnings)");
+        out.push_str("doctor: platform ready (with warnings)\n");
     } else {
-        println!("doctor: platform ready");
+        out.push_str("doctor: platform ready\n");
     }
+    out
 }
 
 fn render_json(checks: &[Check], summary: &Summary) -> Result<()> {
@@ -689,6 +714,54 @@ mod tests {
             out
         };
         assert_eq!(cands[0].program, PathBuf::from("/tmp/fake-python"));
+    }
+
+    #[test]
+    fn render_text_to_string_matches_the_line_shape_the_cli_and_ui_share() {
+        // The UI streams this string verbatim into the runtime log; a shape
+        // change would surprise anyone reading the log or grepping over it.
+        // Pin the per-check row shape, the summary line, and the trailing
+        // status line, plus the exact terminating newline behaviour.
+        let checks = vec![
+            Check::ok("os", "linux / x86_64"),
+            Check::warn("audio-input", "no mic"),
+            Check::fail("python", "not found"),
+        ];
+        let summary = Summary::from(&checks);
+        let text = render_text_to_string(&checks, &summary);
+        assert!(text.starts_with("[OK ] os - linux / x86_64\n"), "{text}");
+        assert!(text.contains("[WARN] audio-input - no mic\n"), "{text}");
+        assert!(text.contains("[FAIL] python - not found\n"), "{text}");
+        assert!(text.contains("\nsummary: 1 ok, 1 warn, 1 fail\n"), "{text}");
+        assert!(
+            text.trim_end()
+                .ends_with("doctor: 1 failed check(s) block dictation"),
+            "{text}"
+        );
+        assert!(text.ends_with('\n'), "must end with a newline: {text:?}");
+    }
+
+    #[test]
+    fn render_text_to_string_reports_platform_ready_with_no_warnings() {
+        let checks = vec![Check::ok("os", "linux / x86_64")];
+        let summary = Summary::from(&checks);
+        let text = render_text_to_string(&checks, &summary);
+        assert!(
+            text.trim_end().ends_with("doctor: platform ready"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn render_text_to_string_reports_ready_with_warnings_when_no_fails() {
+        let checks = vec![Check::warn("audio-input", "no mic")];
+        let summary = Summary::from(&checks);
+        let text = render_text_to_string(&checks, &summary);
+        assert!(
+            text.trim_end()
+                .ends_with("doctor: platform ready (with warnings)"),
+            "{text}"
+        );
     }
 
     #[test]
