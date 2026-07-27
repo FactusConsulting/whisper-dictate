@@ -21,7 +21,33 @@ pub fn config_path() -> PathBuf {
         return PathBuf::from(raw);
     }
 
-    platform_config_dir().join("config.json")
+    #[cfg(test)]
+    {
+        // Unit tests must NEVER fall back to the developer's real
+        // config.json. They did, and it made the suite pass or fail
+        // depending on whose machine it ran on: on a box configured for
+        // cloud STT, 81 tests failed with things like "openai benchmark
+        // backend requires a cloud API key", while the same commit was green
+        // in CI -- runners have no user config, so the bug could only ever be
+        // seen locally, by the people least likely to suspect the harness.
+        //
+        // A test that needs config content sets `VOICEPI_CONFIG` itself (most
+        // already do); everything else now gets a path that does not exist,
+        // which `load_raw_config` treats as `{}` -- i.e. schema defaults.
+        // Per-process so a parallel run cannot collide, and deliberately not
+        // created: a test that writes here without opting in should fail
+        // loudly rather than silently share state with its neighbours.
+        std::env::temp_dir()
+            .join(format!(
+                "whisper-dictate-test-no-config-{}",
+                std::process::id()
+            ))
+            .join("config.json")
+    }
+    #[cfg(not(test))]
+    {
+        platform_config_dir().join("config.json")
+    }
 }
 
 /// Read the raw config.json as untyped JSON, treating a missing file as `{}`.
@@ -179,6 +205,43 @@ fn open_path(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::test_support::ENV_LOCK;
+
+    #[test]
+    fn without_the_env_override_tests_never_reach_the_users_real_config() {
+        // The regression this guards: `config_path()` used to fall back to
+        // `platform_config_dir()/config.json`, so the unit suite read whoever
+        // was running it. On a machine configured for cloud STT that failed 81
+        // tests, while CI stayed green because runners have no user config --
+        // the worst shape for a harness bug, visible only to the people least
+        // likely to suspect the harness.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = env::var_os(CONFIG_ENV);
+        env::remove_var(CONFIG_ENV);
+
+        let path = config_path();
+
+        if let Some(previous) = previous {
+            env::set_var(CONFIG_ENV, previous);
+        }
+
+        assert!(
+            !path.exists(),
+            "unit tests must start from schema defaults, not a file on disk: {}",
+            path.display()
+        );
+        assert_ne!(
+            path,
+            platform_config_dir().join("config.json"),
+            "config_path() must not fall back to the operator's real config in tests"
+        );
+        // Per-process, so a parallel `cargo test` cannot collide.
+        assert!(
+            path.to_string_lossy()
+                .contains(&std::process::id().to_string()),
+            "the test-only path should be process-scoped: {}",
+            path.display()
+        );
+    }
 
     #[test]
     fn config_env_overrides_default_path() {
