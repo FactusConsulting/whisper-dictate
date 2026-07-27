@@ -7,18 +7,23 @@ GUI-wiring phase (Doctor + List Devices buttons currently mid-migration).
 
 ## TL;DR
 
-**No, the CLI does not exclusively use Rust.** Five verbs still shell to Python.
-The Rust in-process dictation engine (`VOICEPI_DICTATE_ENGINE=rust`) IS
-feature-complete relative to the Python engine after Round 1–3, but Python
-remains the default engine — flipping the default is a separate step, gated on
-GUI wiring + a full round of manual + smoke verification.
+**The default dictation engine is now native Rust (Phase 1 flip).** The
+in-process Rust runtime — hotkey listener + coordinator + session sink — runs
+directly in the UI process; no Python worker is spawned for dictation on a
+default install. `VOICEPI_DICTATE_ENGINE=python` is a temporary safety-valve
+opt-out kept for one release cycle so operators can fall back if the Rust
+engine misbehaves; the Python engine modules (vp_dictate.py, vp_history,
+vp_events, vp_feedback, vp_audio_ducking, vp_preview, vp_dictionary_store,
+vp_health) get retired in the Phase 2 PR after user smoke on Ubuntu Wayland.
+Five non-dictation verbs still shell to Python (install, setup-ubuntu, run
+shims listed below).
 
 ## CLI verbs (`whisper-dictate <verb>`)
 
 | Verb | Native Rust | Shells to Python | Notes |
 |---|:-:|:-:|---|
 | `ui`, `settings` | ✅ | | Opens the egui Rust UI. UI itself may spawn Python worker for dictation. |
-| `run` | | ✅ | Alias for the Python dictation loop (`runtime::run_terminal`). |
+| `run` | ✅ default | opt-out only | Default is the native Rust in-process engine (Phase 1 flip). `VOICEPI_DICTATE_ENGINE=python` falls back to the Python `runtime::run_terminal` loop as a transition-window safety valve; retired in Phase 2. |
 | `doctor` | ✅ | | Native (`doctor::handle_doctor`). |
 | `bench` | ✅ | | Native Rust runner (`benchmark::native`) as of step 2 of the retirement (#626); stock dev builds without `whisper-rs-local`+`audio-capture` return a rebuild hint. |
 | `corpus-record` | ✅ | | Native cpal recorder (`corpus_record_native::run_native`) as of step 2 of the retirement (#629); stock dev builds without `audio-capture` return a rebuild hint. |
@@ -44,7 +49,7 @@ GUI wiring + a full round of manual + smoke verification.
 
 | Action | In-process Rust | Shells to Python | Notes |
 |---|:-:|:-:|---|
-| Main dictation (start/stop worker) | opt-in | ✅ default | `VOICEPI_DICTATE_ENGINE=rust` runs full Rust in-process; default still spawns Python worker. |
+| Main dictation (start/stop worker) | ✅ default | opt-out only | Default is the full Rust in-process runtime (Phase 1 flip). `VOICEPI_DICTATE_ENGINE=python` spawns the Python worker as a transition-window safety valve; retired in Phase 2. |
 | **Doctor** button | ❌ (migrating) | ✅ | Currently shells via `doctor_command()`. Being migrated to in-process Rust (PR in-flight). |
 | **List audio devices** | ❌ (migrating) | ✅ | Currently shells via `audio_devices_command()`. Being migrated. |
 | **Test audio device** button | ✅ | | Native since #600 (WASAPI on Windows, cpal on Linux). |
@@ -60,8 +65,9 @@ GUI wiring + a full round of manual + smoke verification.
 
 ## Rust backend modules driving the in-process engine
 
-All available on `VOICEPI_DICTATE_ENGINE=rust`. Each was added in Round 1–3
-of the Python→Rust migration:
+All ship on the default engine after the Phase 1 flip (unset env → Rust;
+`VOICEPI_DICTATE_ENGINE=rust` is the explicit equivalent). Each was added
+in Round 1–3 of the Python→Rust migration:
 
 | Module | Rust path | Status | CLI test verb |
 |---|---|---|---|
@@ -84,9 +90,14 @@ of the Python→Rust migration:
 
 ## Python modules still primary
 
-Modules whose PRIMARY caller is Python (not just a compat shim):
+Modules whose PRIMARY caller is Python (not just a compat shim). After the
+Phase 1 default flip these only run when the operator explicitly sets
+`VOICEPI_DICTATE_ENGINE=python`; they get physically deleted in the
+Phase 2 PR once the Ubuntu Wayland smoke confirms the Rust default is
+stable:
 
-- `vp_dictate.py` + `runtime.py` — the Python dictation loop. Default engine.
+- `vp_dictate.py` + `runtime.py` — the Python dictation loop. Now the
+  safety-valve fallback engine, no longer the default.
 - `vp_transcribe.py` — Python STT dispatcher. Called by Python engine.
 - `vp_capture.py` + `vp_capture_rust_stdin.py` + `vp_rust_audio_source.py` —
   Python audio capture path (sounddevice + optional rust-stdin bridge).
@@ -97,20 +108,22 @@ Modules whose PRIMARY caller is Python (not just a compat shim):
   retirement (#626); may be dropped when the last Python consumer goes.
 - `vp_history.py`, `vp_events.py`, `vp_health.py`, `vp_preview.py`,
   `vp_feedback.py`, `vp_audio_ducking.py`, `vp_dictionary_store.py` — Python
-  primary implementations of features Rust ALSO has (parity ports). Used only
-  by the Python engine path; dead when `VOICEPI_DICTATE_ENGINE=rust` is default.
+  primary implementations of features Rust ALSO has (parity ports). Only
+  used on the `VOICEPI_DICTATE_ENGINE=python` opt-out path; retired in the
+  Phase 2 PR.
 
 ## Migration status
 
 Ranked by remaining Python-primary code that would go away once each item
 lands:
 
-1. **Flip default engine to Rust** — the biggest single retirement. All Round
-   1–3 blockers are closed; the CLI + UI wiring phase is the current focus.
-   When shipped, the ~5,900 lines of Python parity modules (vp_history,
-   vp_events, vp_health, vp_preview, vp_feedback, vp_audio_ducking,
-   vp_dictionary_store, plus most of vp_dictate/runtime/vp_capture/
-   vp_transcribe/vp_inject/vp_postprocess) become dead and can be retired.
+1. **Phase 2: physically delete the Python engine modules** — the follow-up
+   PR after the Phase 1 default flip (this doc). Deletes the ~5,900 lines of
+   Python parity modules (vp_history, vp_events, vp_health, vp_preview,
+   vp_feedback, vp_audio_ducking, vp_dictionary_store, plus most of
+   vp_dictate/runtime/vp_capture/vp_transcribe/vp_inject/vp_postprocess) and
+   the `VOICEPI_DICTATE_ENGINE=python` safety-valve opt-out. Gated on user
+   confirmation the Ubuntu Wayland smoke passed on Phase 1.
 
 2. **Setup wizard**: no Rust equivalent yet. Needs a design pass.
 
@@ -129,9 +142,10 @@ lands:
 
 - CLI dispatch: `src/rust/main.rs` (`match cli.command`).
 - Rust engine entry: `src/rust/runtime/supervisor.rs::RuntimeSupervisor::start` →
-  `runtime/in_process.rs::attempt_in_process_start` on
-  `VOICEPI_DICTATE_ENGINE=rust`; falls back to spawning the Python worker
-  otherwise.
+  `runtime/in_process.rs::attempt_in_process_start` on the default (unset env
+  or `VOICEPI_DICTATE_ENGINE=rust`); falls back to spawning the Python worker
+  on `VOICEPI_DICTATE_ENGINE=python` or on a Rust-engine startup failure
+  (features missing, config load failed, etc.).
 - UI actions: `src/rust/ui/tasks.rs` (`run_background_command` gate),
   `src/rust/ui/corpus_record_tasks.rs` (corpus recording), `src/rust/ui/app.rs`
   (worker command construction).

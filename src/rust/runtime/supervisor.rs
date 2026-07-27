@@ -197,18 +197,25 @@ impl RuntimeSupervisor {
         #[cfg(feature = "audio-in-rust")]
         self.bridge_cancel.store(false, Ordering::SeqCst);
 
-        // Audit item 5 Phase B step 1: `VOICEPI_DICTATE_ENGINE=rust`
-        // routes through the in-process dispatch path (Rust supervisor
-        // installs the hotkey + session sink directly, no Python
-        // worker child spawned). See `docs/design/item5-phase-b-inprocess.md`.
+        // Audit item 5 Phase B step 1 + Phase 1 default flip: the
+        // in-process Rust dispatch path is the DEFAULT (unset env →
+        // Rust). Rust supervisor installs the hotkey + session sink
+        // directly, no Python worker child spawned. See
+        // `docs/design/item5-phase-b-inprocess.md`. An explicit
+        // `VOICEPI_DICTATE_ENGINE=python` is the temporary
+        // safety-valve opt-out kept for one release cycle so operators
+        // can fall back if the Rust engine misbehaves; retired in the
+        // Phase 2 PR that deletes the Python worker modules.
         //
         // The branch runs BEFORE any Python-worker setup so the
         // fallback path is a clean fall-through: on any Err from
         // `attempt_in_process_start` the supervisor emits a stderr
-        // line, clears `VOICEPI_DICTATE_ENGINE` on the effective
+        // line, sets `VOICEPI_DICTATE_ENGINE=python` on the effective
         // command's env so the spawned Python worker does not attempt
-        // to re-enter the Phase A subprocess pipeline, and drops
-        // through to the Python-worker spawn below.
+        // to re-enter the Phase A subprocess pipeline (the child's
+        // own dispatcher also defaults to Rust post-flip, which would
+        // otherwise re-trigger the shell-out we already failed on),
+        // and drops through to the Python-worker spawn below.
         let mut effective_command = command;
         match engine_choice_from_env() {
             EngineChoice::Rust => {

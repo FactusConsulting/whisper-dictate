@@ -15,10 +15,12 @@
 //!
 //! ## Env-var contract
 //!
-//! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) — Phase A/B switch:
-//!   [`ENGINE_PYTHON`] (default), [`ENGINE_RUST`] (in-process).
-//!   Case-insensitive; blank / unknown values fall back to Python
-//!   with a stderr warning.
+//! * [`ENGINE_ENV`] (`VOICEPI_DICTATE_ENGINE`) — Phase 1 default flip:
+//!   [`ENGINE_RUST`] (in-process, the DEFAULT since the Phase 1 flip),
+//!   [`ENGINE_PYTHON`] (temporary safety-valve opt-out during the
+//!   transition window; retired in the Phase 2 PR).
+//!   Case-insensitive; blank / unset values now resolve to Rust.
+//!   Unknown values still fall back to Python with a stderr warning.
 //! * `VOICEPI_DICTATE_BACKEND=rust-session` — older lower-level opt-in.
 //!   When set alongside `VOICEPI_DICTATE_ENGINE=rust`, ENGINE wins
 //!   (design doc risk #5) and an informational stderr line names the
@@ -51,21 +53,31 @@ use super::worker_command::WorkerCommand;
 /// languages ship in separate build systems.
 pub(crate) const ENGINE_ENV: &str = "VOICEPI_DICTATE_ENGINE";
 
-/// Default value — runs the Python `Dictate(...).run()` loop unchanged.
+/// Safety-valve opt-out value — runs the Python `Dictate(...).run()`
+/// loop unchanged. Kept for one release cycle as an escape hatch while
+/// the Rust default beds in; the Python engine path is retired in the
+/// Phase 2 PR that follows the default flip.
 pub(crate) const ENGINE_PYTHON: &str = "python";
 
-/// Opt-in value — installs the Rust runtime in-process.
+/// Default value — installs the Rust runtime in-process. This became
+/// the DEFAULT (unset / empty env → Rust) in the Phase 1 flip; the
+/// explicit `rust` value stays valid and is treated the same as unset.
 pub(crate) const ENGINE_RUST: &str = "rust";
 
 /// Canonical resolution of the raw `VOICEPI_DICTATE_ENGINE` env value.
 /// Returns [`EngineChoice::Unknown`] for anything the caller must warn
 /// on (so `_dispatch_engine`-style callers can log a one-liner before
-/// falling back). Unset / empty resolves to [`EngineChoice::Python`].
+/// falling back). Unset / empty resolves to [`EngineChoice::Rust`]
+/// (Phase 1 default flip); an explicit `python` opts out of the Rust
+/// engine for the transition window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EngineChoice {
-    /// Env var unset, empty, or explicitly `python`.
+    /// Env var explicitly `python` — the temporary safety-valve
+    /// opt-out kept for one release cycle after the Phase 1 default
+    /// flip so operators can fall back if the Rust engine misbehaves.
+    /// Retired in the Phase 2 PR.
     Python,
-    /// Env var explicitly `rust`.
+    /// Env var unset, empty, or explicitly `rust`. The Phase 1 default.
     Rust,
     /// Env var set to something other than the known values. The
     /// supervisor logs a stderr warning naming the raw value and falls
@@ -77,9 +89,14 @@ pub(crate) enum EngineChoice {
 impl EngineChoice {
     /// Resolve from an arbitrary env accessor. Exposed for tests that
     /// need a hermetic value without touching process env.
+    ///
+    /// Phase 1 default flip: unset / empty now resolves to [`Self::Rust`]
+    /// (was [`Self::Python`] before the flip). An explicit `python`
+    /// value is the safety-valve opt-out and still selects the Python
+    /// engine for the transition window.
     pub(crate) fn from_env_value(raw: Option<&str>) -> Self {
         match raw.map(str::trim).unwrap_or("") {
-            "" => Self::Python,
+            "" => Self::Rust,
             v if v.eq_ignore_ascii_case(ENGINE_PYTHON) => Self::Python,
             v if v.eq_ignore_ascii_case(ENGINE_RUST) => Self::Rust,
             other => Self::Unknown(other.to_owned()),

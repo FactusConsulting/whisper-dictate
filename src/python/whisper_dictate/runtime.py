@@ -686,16 +686,21 @@ def _dispatch_engine(a, model, lang, backend: str, dev: str, ctype: str,
                      loaded_model_name: str, model_load_s: float) -> None:
     """Pick the engine that runs the push-to-talk loop.
 
-    Reads ``VOICEPI_DICTATE_ENGINE`` and — when set to ``rust`` — shells
-    out to ``whisper-dictate dictate-run --json-events`` (audit item 5
-    Phase A step 2, see docs/design/item5-wire-dictate-session.md).
-    Anything else (unset, empty, ``python``, or an unknown value) runs
-    the in-process ``Dictate(...).run()`` loop unchanged.
+    Reads ``VOICEPI_DICTATE_ENGINE`` and — post Phase 1 default flip —
+    shells out to ``whisper-dictate dictate-run --json-events`` by
+    default (unset / empty / explicit ``rust``). Explicit ``python``
+    is the transition-window safety-valve opt-out that keeps running
+    the in-process ``Dictate(...).run()`` loop unchanged; retired in
+    the Phase 2 PR. An unknown value warns and falls back to the
+    Python engine.
+
+    See ``docs/design/item5-wire-dictate-session.md`` for the Phase A
+    step 2 dispatch design.
 
     Rust engine failures at start-up (binary missing, features not
     compiled in, spawn error, early crash before the READY signal) are
-    surfaced as a log line and then fall back to the Python engine. The
-    opt-in must never take down the worker.
+    surfaced as a log line and then fall back to the Python engine —
+    a failed default-Rust must never take down the worker.
 
     Split from ``_run_session`` so tests can drive the dispatch decision
     without stubbing out the whole session function's argparse surface.
