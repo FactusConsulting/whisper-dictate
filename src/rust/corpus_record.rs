@@ -1,13 +1,14 @@
 //! Pure-logic Rust port of the user-facing `--record-corpus-item` helpers
 //! (Wave 6 of the Python-removal roadmap, #348).
 //!
-//! Audio capture itself is shell-out: [`handle_corpus_record`] dispatches to the
-//! Python worker via the existing [`runtime::record_corpus_item_command`] (the
-//! same worker mode the System tab's "Record" button already drives). The mic
-//! open path reuses the negotiated `vp_capture` machinery — porting that here
-//! would mean re-implementing the WASAPI→DirectSound→MME fallback matrix and the
-//! Blue-Yeti-friendly native-rate resampler, which is far out of scope for a
-//! user tool that runs once per corpus item.
+//! **Step 1 of vp_corpus_record retirement** (same pattern as PR #600 for
+//! `devices test`): on `audio-capture` builds this module dispatches to a
+//! native cpal recorder ([`crate::corpus_record_native::run_native`]) so a
+//! stock Rust build no longer needs Python's `vp_capture` machinery to
+//! record golden benchmark audio. On stock builds (no `audio-capture`) the
+//! Python `--record-corpus-item` worker is still spawned as a fallback so
+//! any existing dev builds keep working; step 2 will delete the Python
+//! module + argparse flag.
 //!
 //! What lives here, ported with full Rust unit-test coverage:
 //!
@@ -15,9 +16,8 @@
 //!     the `<appdata>/benchmark/audio/<id>.wav` filename stem. Must stay in
 //!     lockstep with `whisper_dictate.vp_corpus_record.is_safe_corpus_id` AND
 //!     `ui::corpus::is_safe_corpus_id` (the picker side). [`handle_corpus_record`]
-//!     rejects an unsafe id BEFORE shelling out so a crafted CLI invocation
-//!     never reaches the worker — defence in depth on top of the worker's own
-//!     guard.
+//!     rejects an unsafe id BEFORE the recorder starts — defence in depth on
+//!     top of the recorder's own guard.
 //!   * [`compute_record_seconds`] — the chars/12 ⤍ [8, 90] + 2s lead-in
 //!     duration heuristic. Pure so it is unit-testable in isolation; identical
 //!     output to the Python implementation so the start-event "seconds" field is
@@ -25,6 +25,7 @@
 
 use anyhow::{anyhow, Result};
 
+#[cfg(not(feature = "audio-capture"))]
 use crate::runtime;
 
 /// Speaking-pace heuristic: ~12 reference characters per spoken second (a
@@ -73,11 +74,17 @@ pub fn compute_record_seconds(text: &str) -> f64 {
 
 /// CLI entry point for `whisper-dictate corpus-record <id>`.
 ///
-/// Validates `id` against [`is_safe_corpus_id`] first (so a bogus id never
-/// reaches the worker, even though the worker re-checks), then shells out to
-/// the existing [`runtime::record_corpus_item_command`] — the same worker
-/// command the UI's "Record" button uses, so the resulting JSON event stream
-/// and the WAV destination are bit-identical regardless of the launcher.
+/// Validates `id` against [`is_safe_corpus_id`] FIRST (so a bogus id never
+/// reaches the recorder, even though the recorder re-checks), then:
+///
+///   * On `audio-capture` builds — the shipping binary — invokes the native
+///     Rust recorder ([`crate::corpus_record_native::run_native`]) which emits
+///     the SAME `corpus_record_{start,progress,done,error}` JSON envelopes the
+///     UI parser expects and writes the SAME `<appdata>/benchmark/audio/<id>.wav`
+///     (16 kHz mono 16-bit PCM) the Python worker did.
+///   * On stock builds (no `audio-capture`) — dev builds only — shells out to
+///     the Python `--record-corpus-item` worker as a transitional fallback so
+///     the CLI verb keeps working while step 2 of the migration lands.
 pub fn handle_corpus_record(id: &str) -> Result<()> {
     let id = id.trim();
     if !is_safe_corpus_id(id) {
@@ -85,6 +92,28 @@ pub fn handle_corpus_record(id: &str) -> Result<()> {
             "unsafe corpus id '{id}': allowed chars are [A-Za-z0-9._-]"
         ));
     }
+    dispatch_recorder(id)
+}
+
+/// Native cpal recorder — the shipping path. See
+/// [`crate::corpus_record_native::run_native`] for the WAV + JSON contract.
+#[cfg(feature = "audio-capture")]
+fn dispatch_recorder(id: &str) -> Result<()> {
+    crate::corpus_record_native::run_native(id)
+}
+
+/// Stock-build fallback: shell out to the Python worker's
+/// `--record-corpus-item` mode until step 2 of the migration deletes it.
+/// A dev build without `audio-capture` would otherwise have no way to record
+/// corpus audio at all — the actionable "rebuild with --features audio-capture"
+/// hint prints on stderr so the user knows the shipping build is preferable.
+#[cfg(not(feature = "audio-capture"))]
+fn dispatch_recorder(id: &str) -> Result<()> {
+    eprintln!(
+        "corpus-record: this dev build has no native cpal recorder; falling back \
+         to the Python worker. Rebuild with `--features audio-capture` for the \
+         shipping in-process path."
+    );
     runtime::run_foreground(&runtime::record_corpus_item_command(id))
 }
 

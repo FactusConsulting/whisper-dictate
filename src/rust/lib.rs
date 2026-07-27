@@ -35,11 +35,21 @@ pub mod dictate;
 // `dictionary build-from-corpus` subcommand.
 pub mod corpus;
 // Pure-logic port of the `--record-corpus-item` user tool (Wave 6 of #348).
-// Audio capture stays in Python (reuses the negotiated `vp_capture` path);
-// this module owns the corpus-id safety guard + the duration heuristic +
-// the thin `corpus-record` CLI handler that shells out to the existing worker
-// command.
+// Owns the corpus-id safety guard + the duration heuristic + the
+// `corpus-record` CLI handler. On `audio-capture` builds the handler
+// dispatches to the native cpal recorder in `corpus_record_native`
+// (step 1 of the Python retirement, same pattern as PR #600); on stock
+// builds it still shells out to the Python worker as a fallback.
 pub mod corpus_record;
+// Native cpal recorder for `corpus-record <id>` — step 1 of the
+// `vp_corpus_record.py` retirement (#348). Emits the SAME JSON envelope
+// the UI parser expects and writes the SAME 16 kHz mono int16 WAV to
+// `<appdata>/benchmark/audio/<id>.wav` so existing recordings remain
+// interchangeable. Gated on `audio-capture` because it needs the
+// `crate::audio` capture stack; the stock-build fallback in
+// `corpus_record` shells out to Python instead.
+#[cfg(feature = "audio-capture")]
+pub mod corpus_record_native;
 // Pure corpus filter-profiles: select a subset of corpus items by
 // language/category (Rust port of `vp_corpus_profile.py`). Used by the
 // `dictionary build-from-corpus` subcommand to mirror the Python flags.
