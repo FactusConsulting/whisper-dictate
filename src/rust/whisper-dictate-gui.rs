@@ -59,6 +59,40 @@ fn main() -> ExitCode {
         }
     }
 
+    // Windows-only PTT hotkey driver default: bypass the WH_KEYBOARD_LL
+    // hook chain by preferring `RegisterHotKey`. Diagnosed on rc.10
+    // (PR #646 GUI diagnostic log): with the default rdev backend, the
+    // GUI-subsystem process context lost function keys, Ctrl, and Pause
+    // to third-party LL hooks (Steam / Logitech Options+ / G HUB /
+    // screen-capture tools) that filter those events out of the chain
+    // before our hook sees them — letters, digits, Shift, and the
+    // Windows key still reached rdev, but the chord keys never did.
+    // The same binary running the CLI `dictate-run` verb (console
+    // subsystem, no GUI-scope LL hooks attached) captures every key
+    // fine, so the fault is specific to GUI-subsystem process context,
+    // not the rdev crate itself.
+    //
+    // `RegisterHotKey` delivers `WM_HOTKEY` through USER32's message
+    // routing AFTER the LL-hook chain runs, so consume-decisions
+    // upstream don't block it. See
+    // `src/rust/hotkey/manager/win_registerhotkey.rs` for the driver
+    // and the limitations table (modifier-only chords are not
+    // supported; the install path falls back to rdev in that case).
+    //
+    // Only set the default if the user hasn't already pinned a
+    // driver — a `VOICEPI_HOTKEY_DRIVER=rdev` escape hatch must
+    // still win so a user with a bare-modifier binding can force
+    // the old backend explicitly.
+    #[cfg(windows)]
+    if std::env::var_os("VOICEPI_HOTKEY_DRIVER").is_none() {
+        std::env::set_var("VOICEPI_HOTKEY_DRIVER", "register");
+        whisper_dictate_app::diag::log!(
+            "[gui] defaulted VOICEPI_HOTKEY_DRIVER=register to bypass the \
+             WH_KEYBOARD_LL hook chain (rc.10 diagnostic fix; set the env \
+             var to rdev/evdev explicitly to override)"
+        );
+    }
+
     whisper_dictate_app::entrypoint::error_exit_shell(
         "error",
         std::io::stderr(),

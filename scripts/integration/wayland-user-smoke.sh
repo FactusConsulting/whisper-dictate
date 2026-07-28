@@ -108,6 +108,21 @@ resolve_hotkey_driver() {
     case "$_drv" in
         rdev|x11)     echo "rdev";  return ;;
         evdev|wayland) echo "evdev"; return ;;
+        register|win_registerhotkey|wm_hotkey)
+            # RegisterHotKey backend: Windows-only. `DriverKind::parse`
+            # accepts the alias on every platform (so the env var is
+            # parseable in the same way everywhere), but `spawn_register`
+            # falls back to rdev on non-Windows targets and the actual
+            # listener name in the install envelope is `rdev`. Report the
+            # POST-fallback listener here so the smoke script's downstream
+            # assertions match what the Rust binary would actually install.
+            if [ "$(uname -s 2>/dev/null)" = "Linux" ] || [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+                echo "rdev"
+            else
+                echo "register"
+            fi
+            return
+            ;;
     esac
     # `auto`, empty, or unrecognised — session detection, Linux only. On any
     # other OS the Rust falls through to rdev unconditionally.
@@ -181,6 +196,17 @@ resolve_hotkey_driver_selftest() {
     _drv_case evdev   "  evdev  " ""         ""
     _drv_case rdev    "  X11 "    "wayland"  ""
     _drv_case evdev   "EVDEV"     ""         ""
+
+    # -- Windows `RegisterHotKey` aliases -----------------------------------
+    # `register` / `win_registerhotkey` / `wm_hotkey` all opt into the
+    # Windows-only RegisterHotKey backend. On Linux (this script's home
+    # turf) the spawn shim falls back to rdev; the shell mirror follows
+    # suit so the downstream `hotkey capture --driver register` assertion
+    # doesn't expect a listener name that only exists on Windows.
+    _drv_case rdev    "register"           "wayland"  "wayland-0"
+    _drv_case rdev    "win_registerhotkey" ""         ""
+    _drv_case rdev    "WM_HOTKEY"          "wayland"  ""
+    _drv_case rdev    "  Register  "       ""         ""
 
     if [ -z "$_drv_fails" ]; then
         ok "hotkey-driver resolution mirrors DriverKind::parse + resolve_driver (auto=$WAYLAND_AUTO on $(uname -s 2>/dev/null || echo unknown))"
@@ -632,6 +658,47 @@ else
         else
             warn "hotkey capture --driver flag not present in this build (pre-item-5-prereq2)"
         fi
+    fi
+
+    # ---------------------------------------------------------------------
+    # `--driver register` acceptance smoke: the Windows RegisterHotKey
+    # backend cannot install on Linux (RegisterHotKey is a USER32 API and
+    # Windows-only), but `DriverKind::parse` accepts the name on every
+    # platform and `spawn_register` falls back to rdev with a diagnostic
+    # line. This assertion pins the fallback contract: the flag must be
+    # ACCEPTED (no "unknown driver" error), the install must not fail on
+    # a working rdev platform, and the envelope must carry the rdev tag
+    # (post-fallback). Regression bait: a future refactor that made
+    # `--driver register` a hard error on Linux would silently break the
+    # cross-platform default set in `whisper-dictate-gui::main` on
+    # Windows, where the same env var is inspected by tests / support
+    # scripts run under WSL.
+    # ---------------------------------------------------------------------
+    if whisper-dictate hotkey capture --help 2>&1 | grep -q -- "register"; then
+        hk_reg_out="$(whisper-dictate hotkey capture --for 0.5 --driver register --json 2>&1)"
+        hk_reg_rc=$?
+        if [ "$hk_reg_rc" -eq 0 ]; then
+            first_line="$(printf '%s\n' "$hk_reg_out" | head -n 1)"
+            # On Linux the register spawn falls back to rdev; the
+            # envelope must reflect the ACTUAL backend that installed.
+            if printf '%s' "$first_line" | grep -q '"driver":"rdev"'; then
+                ok "hotkey capture --driver register falls back to rdev cleanly on non-Windows"
+            elif printf '%s' "$first_line" | grep -q '"driver":"win_registerhotkey"'; then
+                # We're on Windows via WSL somehow; the real backend
+                # took over. Also fine.
+                ok "hotkey capture --driver register installed the RegisterHotKey backend"
+            else
+                warn "hotkey capture --driver register: unexpected envelope: $first_line"
+            fi
+        elif printf '%s' "$hk_reg_out" | grep -qi "rust-hotkeys\|permission\|no display\|listener failed"; then
+            warn "hotkey capture --driver register: rdev fallback unavailable on this platform (expected without display/permissions/feature)"
+        elif printf '%s' "$hk_reg_out" | grep -qi "unknown\|invalid\|unrecognised"; then
+            bad "hotkey capture --driver register rejected as unknown - fallback contract broken"
+        else
+            bad "hotkey capture --driver register failed (exit $hk_reg_rc): $(printf '%s\n' "$hk_reg_out" | head -n 2)"
+        fi
+    else
+        warn "hotkey capture --driver register alias not present in this build (pre-win-registerhotkey PR)"
     fi
 fi
 

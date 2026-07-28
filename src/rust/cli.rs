@@ -800,14 +800,19 @@ pub enum HotkeyCommand {
         config: Option<String>,
         /// Force a specific OS listener: `auto` (default; picks evdev on
         /// Linux Wayland, rdev everywhere else), `rdev` (X11 / Windows /
-        /// macOS global hook), or `evdev` (Linux `/dev/input`, the only
-        /// Wayland-capable backend). `x11`/`wayland` are accepted aliases.
+        /// macOS global hook), `evdev` (Linux `/dev/input`, the only
+        /// Wayland-capable backend), or `register` (Windows-only
+        /// RegisterHotKey backend that bypasses the WH_KEYBOARD_LL hook
+        /// chain). `x11`/`wayland` are accepted aliases for the first
+        /// two; `win_registerhotkey` / `wm_hotkey` are aliases for
+        /// `register`. On non-Windows the `register` name is accepted
+        /// but falls back to rdev with a diagnostic line.
         ///
         /// Setting this flag sets `VOICEPI_HOTKEY_DRIVER` for the process
         /// so the same selection logic the runtime uses fires here. Reject
         /// unrecognised values BEFORE installing anything so a typo does
         /// not silently fall back.
-        #[arg(long, value_name = "AUTO|RDEV|EVDEV", default_value = "auto")]
+        #[arg(long, value_name = "AUTO|RDEV|EVDEV|REGISTER", default_value = "auto")]
         driver: String,
         /// Chord to listen for, instead of the one in the config
         /// (`ctrl_l`, `shift_r+f9`, ...). Same `+`-separated syntax and key
@@ -1166,6 +1171,21 @@ pub enum SelfTestCommand {
         /// support-script pinning.
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Force a specific hotkey driver for this self-test run. Same
+        /// canonical names as the `hotkey capture --driver` flag
+        /// (`auto`, `rdev`, `evdev`, `register`, plus the `x11` /
+        /// `wayland` / `win_registerhotkey` / `wm_hotkey` aliases).
+        /// `register` is the Windows `RegisterHotKey` backend the GUI
+        /// binary uses to bypass the WH_KEYBOARD_LL hook chain - pass
+        /// it here to reproduce a GUI-side wedge fix from the CLI
+        /// where stderr is visible.
+        ///
+        /// The flag sets `VOICEPI_HOTKEY_DRIVER` for this process
+        /// only, so the same selection logic the shipping install
+        /// consults fires here. Unrecognised values are rejected up-
+        /// front (matches the `hotkey capture` fail-fast policy).
+        #[arg(long, value_name = "AUTO|RDEV|EVDEV|REGISTER", default_value = "auto")]
+        driver: String,
     },
 }
 

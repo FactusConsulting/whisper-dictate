@@ -157,6 +157,21 @@ impl ManagerThread {
             let _ = h.join();
         }
     }
+
+    /// Wrap a raw [`JoinHandle`] in a `ManagerThread`. Kept `pub(crate)` so
+    /// backends whose manager loop is NOT the generic [`manager_loop`] — the
+    /// Windows `RegisterHotKey` driver ([`super::win_registerhotkey`]) owns
+    /// its own message pump — can still return the driver-agnostic
+    /// [`ManagerThread`] type through `spawn_with_raw_tap`. The field itself
+    /// stays private so callers only interact via `join`.
+    ///
+    /// The `#[cfg_attr(...)]` `allow(dead_code)` silences the unused-fn
+    /// warning on non-Windows builds where the only caller
+    /// (`win_registerhotkey::spawn_with_raw_tap`) is cfg-gated out.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn from_join(join: JoinHandle<()>) -> Self {
+        Self { join: Some(join) }
+    }
 }
 
 /// Errors a driver's `spawn` surfaces on startup. Translated to

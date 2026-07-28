@@ -74,8 +74,8 @@ use coordinator::{
 pub use inject_guard::{InjectionBracket, InjectionGuard};
 #[cfg(feature = "rust-hotkeys")]
 use manager::{
-    is_rdev_supported_name, spawn_with_raw_tap as spawn_manager_with_tap, ManagerHandle,
-    ManagerThread, RawTap, SpawnError, TrackerOutput,
+    driver_from_env, is_rdev_supported_name, spawn_with_driver as spawn_manager_with_driver,
+    DriverKind, ManagerHandle, ManagerThread, RawTap, SpawnError, TrackerOutput,
 };
 
 /// Alias for the `(driver_name, ManagerHandle, ManagerThread)` triple that
@@ -242,13 +242,44 @@ where
     if config.key_names.is_empty() {
         return Err(InstallError::EmptyConfig);
     }
-    // Reject names rdev cannot translate BEFORE we spawn anything. Without
-    // this the install would succeed but every press would be silently
-    // dropped — and worse, the supervisor would have disabled the Python
-    // listener for a binding that can never fire (P2 #6).
-    for name in &config.key_names {
-        if !is_rdev_supported_name(name) {
-            return Err(InstallError::UnsupportedKey(name.clone()));
+    // Resolve the driver early so the validator can consult the correct
+    // supported-name table. The Windows Register driver accepts a wider
+    // set (VK_ virtual keys) than rdev's hand-rolled table — e.g. `pause`
+    // has no rdev name but has VK_PAUSE — and skipping the rdev-side
+    // validation for that driver lets a GUI user with `pause` install
+    // successfully instead of getting rejected up-front.
+    let driver_kind = resolve_driver_kind_for_install(&config.key_names);
+    match driver_kind {
+        #[cfg(target_os = "windows")]
+        DriverKind::Register => {
+            // Parse via the register driver's own validator. On the fallback
+            // path (`resolve_driver_kind_for_install` downgraded to Rdev
+            // because parse_chord already failed), we don't reach this arm —
+            // the rdev branch below runs instead. If parse_chord fails
+            // here we surface the actionable message from the parser.
+            if let Err(msg) = manager::win_registerhotkey::parse_chord(&config.key_names) {
+                return Err(InstallError::UnsupportedKey(msg));
+            }
+        }
+        _ => {
+            // Reject names rdev cannot translate BEFORE we spawn anything.
+            // Without this the install would succeed but every press would
+            // be silently dropped — and worse, the supervisor would have
+            // disabled the Python listener for a binding that can never
+            // fire (P2 #6).
+            for name in &config.key_names {
+                if !is_rdev_supported_name(name) {
+                    #[cfg(target_os = "windows")]
+                    crate::diag::log!(
+                        "[hotkey] chord key {:?} is not in the rdev name \
+                         table; consider setting VOICEPI_HOTKEY_DRIVER=register \
+                         to use the RegisterHotKey backend which supports a \
+                         wider set of virtual keys (VK_PAUSE, VK_HOME, ...).",
+                        name
+                    );
+                    return Err(InstallError::UnsupportedKey(name.clone()));
+                }
+            }
         }
     }
 
@@ -277,7 +308,11 @@ where
     // callback (rdev on the LL-hook thread, evdev on the per-device
     // reader thread).
     let bridge = coord_handle.clone();
-    let (driver, mgr_handle, mgr_thread): SpawnManagerOk = match spawn_manager_with_tap(
+
+    // `driver_kind` was resolved above (before validation) so the same
+    // decision drives BOTH the supported-name check and the spawn call.
+    let (driver, mgr_handle, mgr_thread): SpawnManagerOk = match spawn_manager_with_driver(
+        driver_kind,
         Arc::clone(&injection_guard),
         move |out| {
             let event = match out {
@@ -332,6 +367,44 @@ fn spawn_err_message(e: SpawnError) -> String {
         SpawnError::ListenerStartup(msg) => msg,
         SpawnError::ListenerHung => "listener thread did not report readiness".to_owned(),
     }
+}
+
+/// Resolve the driver kind for a fresh install, applying the Windows-
+/// specific `Register → Rdev` chord-validity fallback.
+///
+/// The chord is parsed by [`manager::win_registerhotkey::parse_chord`]
+/// BEFORE any thread spawns, so a modifier-only binding (unsupported
+/// by RegisterHotKey) downgrades to rdev with a diagnostic-log line
+/// instead of failing the install. The GUI binary defaults to
+/// `Register` (set in `whisper-dictate-gui::main`); this fallback
+/// exists so a user with a bare-`ctrl_l` binding does NOT lose PTT
+/// because the RegisterHotKey backend can't express the chord.
+///
+/// On non-Windows targets, or for any non-Register selection, this is
+/// a straight `driver_from_env()` pass-through.
+#[cfg(feature = "rust-hotkeys")]
+fn resolve_driver_kind_for_install(key_names: &[String]) -> DriverKind {
+    let kind = driver_from_env();
+    #[cfg(target_os = "windows")]
+    {
+        if kind == DriverKind::Register {
+            if let Err(msg) = manager::win_registerhotkey::parse_chord(key_names) {
+                crate::diag::log!(
+                    "[hotkey] VOICEPI_HOTKEY_DRIVER=register cannot express \
+                     the configured chord ({msg}); falling back to rdev for \
+                     this install so PTT still works (set \
+                     VOICEPI_HOTKEY_DRIVER=rdev in the environment to make \
+                     this the pinned default and silence this line)."
+                );
+                return DriverKind::Rdev;
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = key_names; // silence unused-var warning on non-Windows
+    }
+    kind
 }
 
 /// Stub `install_hotkey` for builds without the feature. Always returns
