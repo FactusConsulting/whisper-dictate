@@ -180,16 +180,16 @@ jobs:
             # whisper.cpp's cmake looks for glslc via PATH; the LunarG
             # installer puts it in $VULKAN_SDK\Bin. Prepend so any bundled
             # MSYS / MinGW shim can't shadow it.
-            if (-not $env:VULKAN_SDK) { throw "VULKAN_SDK not set — the 'Install Vulkan SDK' step did not run or failed silently" }
+            if (-not $env:VULKAN_SDK) { throw "VULKAN_SDK not set - the 'Install Vulkan SDK' step did not run or failed silently" }
             $env:PATH = (Join-Path $env:VULKAN_SDK 'Bin') + ';' + $env:PATH
             Write-Host "VULKAN_SDK = $env:VULKAN_SDK"
             $glslc = (Get-Command glslc -ErrorAction SilentlyContinue).Source
-            if (-not $glslc) { throw "glslc not on PATH after VULKAN_SDK\Bin prepend — SDK layout regression" }
+            if (-not $glslc) { throw "glslc not on PATH after VULKAN_SDK\Bin prepend - SDK layout regression" }
             Write-Host "glslc = $glslc"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
             cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
           } else {
-            Write-Host "VOICEPI_BUILD_VULKAN=0 — building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
+            Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
             cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
           }
           if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
@@ -223,7 +223,7 @@ jobs:
             if ($ascii.Contains($t)) { $hits += $t }
           }
           if ($hits.Count -eq 0) {
-            throw "Vulkan backend NOT linked into whisper-dictate.exe: none of $($tokens -join ', ') found in the binary. The build fell back to CPU-only — this is the #645 regression. Check the 'Install Vulkan SDK' + 'Build Rust desktop UI' steps."
+            throw "Vulkan backend NOT linked into whisper-dictate.exe: none of $($tokens -join ', ') found in the binary. The build fell back to CPU-only - this is the #645 regression. Check the 'Install Vulkan SDK' + 'Build Rust desktop UI' steps."
           }
           Write-Host "OK Vulkan backend linked - found tokens: $($hits -join ', ')"
 
