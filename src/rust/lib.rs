@@ -139,6 +139,8 @@ pub mod credentials;
 #[cfg(test)]
 mod credentials_tests;
 #[cfg(test)]
+pub(crate) mod diag_test_lock;
+#[cfg(test)]
 pub(crate) mod test_env_lock;
 pub mod ui;
 // Local Whisper integration. The catalog / download / cache machinery under

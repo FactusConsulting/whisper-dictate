@@ -506,6 +506,8 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
   the WASAPI auto-convert / native-rate fallbacks) is clear. Trace is high
   volume — use it only while troubleshooting, then return to **Off**/**Basic**.
 
+<a id="privacy-warning-debug-trace-logs-capture-global-keystroke-activity"></a>
+
 > **Privacy warning — debug/trace logs capture global keystroke activity.**
 > When the Rust hotkey backend is active (`whisper-rs-hotkeys`, the default
 > on Windows from v1.22.0 onward), the LL-hook callback observes **every
@@ -516,11 +518,24 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
 > and other sensitive text you type into other apps could therefore be
 > reconstructable from a Verbose/Trace log covering that window.
 >
-> The redaction added in the sweep for Codex #646 replaces non-PTT key
-> names with `<redacted>` in `[hotkey/rdev] raw event` lines, so ordinary
-> typing no longer leaves its literal key identity in the log. Metadata
-> (timing, event counts, Press/Release) is still recorded. **Before
-> attaching a Verbose/Trace log to a bug report:**
+> The redaction added in the sweep for Codex #646 (and extended by
+> the sweep for #665) replaces non-PTT key names with `<redacted>`
+> in both the `[hotkey/rdev] raw event` lines AND the tracker's
+> `[chord]` line, so at **`VOICEPI_LOG=debug`** ordinary typing no
+> longer leaves its literal key identity in the log. Metadata
+> (timing, event counts, Press/Release) is still recorded.
+>
+> **At `VOICEPI_LOG=trace` the redaction is NOT sufficient on its
+> own.** The parallel Windows `WH_KEYBOARD_LL` diagnostic hook
+> (`[win/raw-hook]` lines, Windows only, only enabled at `trace`)
+> records the raw `vkCode` and scan code of every sampled desktop
+> keystroke — those values directly identify ordinary keys and can
+> reconstruct passwords or tokens typed anywhere while the log is
+> capturing. If you must run at `trace` for a Windows PTT-drop
+> investigation, treat the resulting log as sensitive and share it
+> privately with the maintainers rather than on a public issue.
+>
+> **Before attaching a Verbose/Trace log to a bug report:**
 >
 > - keep the capture window as short as possible (only cover the
 >   reproduction),
@@ -530,7 +545,16 @@ The UI **Diagnostics** dropdown maps to three env-named bools:
 > - if in doubt, redact or share the log privately with the maintainers
 >   instead of on a public issue.
 >
-> `Off` and `Basic` do not enable these hotkey trace lines.
+> The `Off` and `Basic` **Diagnostics** choices in the Settings UI
+> only control `VOICEPI_DEBUG` / `VOICEPI_STT_DEBUG` / `VOICEPI_TRACE`;
+> they do **not** silence the hotkey trace lines described here — those
+> follow a separate `VOICEPI_LOG` gate that defaults to `info`. To
+> stop `[hotkey/rdev]`, `[chord]`, and the other Rust-hotkey lines
+> from being written at all (including the `t=<ms> [gui] starting …`
+> startup marker), set `VOICEPI_LOG=off` in the same environment the
+> GUI process reads at startup, then restart. See the
+> [Diagnostic env vars — `VOICEPI_LOG`](#diagnostic-env-vars--voicepi_log)
+> section below for the full level table.
 
 ### Debugging "is my `setx` arriving?" — Verbose diagnostics
 
@@ -619,10 +643,22 @@ t=12ms [gui] whisper-dictate-gui 1.22.0-rc.11 starting; VOICEPI_LOG=trace; diagn
 | `[dispatch]` | Session dispatch (start / stop / cancel emitted or refused) | `debug` |
 | `[win/raw-hook]` | Parallel `WH_KEYBOARD_LL` hook (Windows only) | `trace` |
 
-**Sending a diagnostic log to us:** compress
-`%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log` and attach it to
-the bug report. Reset `VOICEPI_LOG=info` (or delete the file)
-afterwards — the append-mode tee keeps growing across sessions.
+**Before sending a diagnostic log to us — please read the privacy
+warning above.** A `debug`- or `trace`-level log covers every desktop-wide
+keystroke that happened during the capture window: `[rdev/callback]`
+runs on every event (with key identity redacted for non-PTT keys, so
+your typing does _not_ land verbatim), and `[chord]` records the
+sequence of PTT-eligible presses/releases the tracker saw. Set
+`VOICEPI_LOG=info` (or `off`) before typing anything sensitive, and
+open the file to skim `[hotkey/*]` / `[chord]` / `[stt]` /
+`[stt-debug]` lines before attaching. If in doubt, share privately
+with the maintainers rather than on a public issue.
+
+**Sending a diagnostic log to us:** once you have skimmed it,
+compress `%LOCALAPPDATA%\WhisperDictate\gui-diagnostic.log` and
+attach it to the bug report. Reset `VOICEPI_LOG=info` (or delete the
+file) afterwards — the append-mode tee keeps growing across
+sessions.
 
 **Decision tree** when reading a `trace` log:
 
@@ -634,8 +670,14 @@ afterwards — the append-mode tee keeps growing across sessions.
   keylogger prevention, ...).
 - `[rdev/callback]` fires but no `[chord]` line matches → an rdev
   event-boundary bug (regressed `raw_from_rdev` name-filter).
-- `[chord]` fires with `match=chord-press` but no `[coord]` line →
-  the tracker-to-coordinator mpsc channel is disconnected.
+- `[chord]` fires with `match=Some(ChordPress)` (or
+  `match=Some(ChordRelease)`) but no `[coord]` line →
+  the tracker-to-coordinator mpsc channel is disconnected. (The
+  literal field value comes from `Debug` formatting of an
+  `Option<TrackerOutput>` in `manager/tracker.rs`, so `match=None`
+  is emitted when the tracker suppressed the event — e.g. an OS key
+  repeat or a foreign key that broke a bare-modifier chord — and is
+  the expected marker for "raw event received, no chord change".)
 - `[coord]` shows `Idle-->Recording` but no `[dispatch]
   session_start emitted` → sink mutex poison / listener dropped.
 

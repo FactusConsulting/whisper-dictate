@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use crate::hotkey::modifier_match::{
     all_targets_have_distinct_match, canonical_side, modifier_family, modifier_matches,
+    redact_key_name_for_diag,
 };
 
 /// A held foreign key with no observed key-up self-heals after this many
@@ -122,10 +123,20 @@ impl KeyTracker {
         // never pruned by timeout — their lifecycle is bracketed by ChordRelease.)
         self.expire_stale_foreign(event.at);
         // Snapshot the held-set BEFORE the event for the deep trace
-        // (only the debug-gated branch pays the sort/clone cost).
+        // (only the debug-gated branch pays the sort/clone cost). The
+        // snapshot is REDACTED at the same time so an unmapped
+        // foreign key held for the bare-modifier rule-2 self-heal
+        // never leaks its identity into the log — Codex P1 #665
+        // discussion PRRT_kwDOSfNjQs6UXh5C: the previous fix redacted
+        // the `[rdev/callback]` pre-filter line only, but every
+        // `__rdev_KeyA` name then flowed through here verbatim.
         let debug = crate::diag::debug_enabled();
         let held_before: Option<Vec<String>> = debug.then(|| {
-            let mut v: Vec<String> = self.pressed.keys().cloned().collect();
+            let mut v: Vec<String> = self
+                .pressed
+                .keys()
+                .map(|name| redact_key_name_for_diag(name).to_owned())
+                .collect();
             v.sort();
             v
         });
@@ -134,13 +145,17 @@ impl KeyTracker {
             RawKeyKind::Release => self.handle_release(&event.name),
         };
         if let Some(held) = held_before {
-            // Grep-friendly single-line: event= names the OS event;
-            // held_before= is the sorted pre-event held set;
-            // chord_target= is the user's PTT binding; match= is the
-            // resulting TrackerOutput (or none when suppressed).
+            // Grep-friendly single-line: event= names the OS event
+            // (redacted for non-PTT identities so ordinary typing
+            // doesn't leak); held_before= is the redacted sorted
+            // pre-event held set; chord_target= is the user's PTT
+            // binding (already user-authored — never redacted); match=
+            // is the resulting TrackerOutput (or `None` when
+            // suppressed, e.g. OS key-repeat or foreign-key rule-2
+            // cancel).
             crate::diag::log!(
                 "[chord] event={}/{:?} held_before={:?} chord_target={:?} match={:?}",
-                event.name,
+                redact_key_name_for_diag(&event.name),
                 event.kind,
                 held,
                 self.targets,

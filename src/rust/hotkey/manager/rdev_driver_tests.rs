@@ -19,8 +19,9 @@ use std::sync::Arc;
 
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
-    is_rdev_supported_name, raw_from_rdev, redact_raw_event_name, should_log_raw_event, spawn,
-    HeartbeatState, SpawnError, HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
+    is_rdev_supported_name, raw_from_rdev, redact_event_type_for_debug, redact_raw_event_name,
+    should_log_raw_event, spawn, HeartbeatState, SpawnError, HEARTBEAT_HEALTHY_QUOTA,
+    HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
 
@@ -159,6 +160,25 @@ fn right_alt_and_ralt_aliases_are_accepted_by_validator() {
         assert!(
             is_rdev_supported_name(name),
             "{name} should be accepted as an AltGr alias (P2 #346 finding 4)",
+        );
+    }
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #656 r3663653258 — rdev fallback must accept every
+// side-specific alias that `parse_chord` rejects on the RegisterHotKey
+// path. Without this, `win_l+f9`, `win_r+f9`, and `alt_r+f9` bindings
+// installed the RegisterHotKey backend, were rejected as side-specific,
+// and then hit `UnsupportedKey` on the promised rdev fallback.
+// -----------------------------------------------------------------------
+
+#[test]
+fn side_specific_aliases_rejected_by_register_are_accepted_by_rdev() {
+    for name in ["alt_r", "win_l", "win_r", "win"] {
+        assert!(
+            is_rdev_supported_name(name),
+            "{name} must be accepted by the rdev install-time validator so \
+             the RegisterHotKey→rdev fallback works (Codex P2 #656 r3663653258)",
         );
     }
 }
@@ -322,6 +342,83 @@ fn redact_raw_event_name_keeps_ptt_eligible_names_visible() {
             "PTT-eligible name {name} must survive redaction verbatim"
         );
     }
+}
+
+// -----------------------------------------------------------------------
+// Codex P1 #657 r3663766123 — redact pre-filter `[rdev/callback] raw=` trace.
+//
+// The debug-level pre-filter line runs on EVERY event rdev delivers
+// (unsampled), so leaking the raw `Key` variant identity there
+// defeats the sampled-line redaction below it. The redactor keeps
+// PTT-eligible key names visible for the diagnostic use-case (F9
+// rdev sees but key_to_name discards) and strips everything else.
+// -----------------------------------------------------------------------
+
+#[test]
+fn redact_event_type_hides_ordinary_key_identity() {
+    // Ordinary typing (letters/digits/punctuation) would leak
+    // password/token fragments if `event_type` were emitted `{:?}` —
+    // the plain Debug prints `KeyPress(KeyA)`, `KeyPress(Num5)`, etc.
+    for key in [
+        rdev::Key::KeyA,
+        rdev::Key::KeyE,
+        rdev::Key::Num5,
+        rdev::Key::SemiColon,
+        rdev::Key::Slash,
+    ] {
+        let press = rdev::EventType::KeyPress(key);
+        let release = rdev::EventType::KeyRelease(key);
+        assert_eq!(
+            redact_event_type_for_debug(&press),
+            "KeyPress(<redacted>)",
+            "ordinary key {key:?} press must be redacted"
+        );
+        assert_eq!(
+            redact_event_type_for_debug(&release),
+            "KeyRelease(<redacted>)",
+            "ordinary key {key:?} release must be redacted"
+        );
+    }
+}
+
+#[test]
+fn redact_event_type_keeps_ptt_eligible_keys_visible() {
+    // The whole diagnostic purpose of the `[rdev/callback] raw=` line
+    // is to catch cases where rdev sees an F-key or modifier but
+    // key_to_name discards it. PTT-eligible key events must survive
+    // redaction verbatim so that value stays on the diagnostic.
+    let cases: &[(rdev::Key, &str)] = &[
+        (rdev::Key::F1, "KeyPress(f1)"),
+        (rdev::Key::F9, "KeyPress(f9)"),
+        (rdev::Key::F12, "KeyPress(f12)"),
+        (rdev::Key::ControlLeft, "KeyPress(ctrl_l)"),
+        (rdev::Key::ShiftRight, "KeyPress(shift_r)"),
+        (rdev::Key::AltGr, "KeyPress(alt_gr)"),
+        (rdev::Key::MetaLeft, "KeyPress(cmd_l)"),
+        (rdev::Key::Space, "KeyPress(space)"),
+        (rdev::Key::Escape, "KeyPress(esc)"),
+    ];
+    for (key, expected) in cases {
+        let press = rdev::EventType::KeyPress(*key);
+        assert_eq!(
+            redact_event_type_for_debug(&press),
+            *expected,
+            "PTT-eligible key {key:?} press must render as {expected}"
+        );
+    }
+}
+
+#[test]
+fn redact_event_type_passes_through_non_key_events() {
+    // Mouse move / wheel / button events carry no keyboard identity;
+    // their `{:?}` form is useful for diagnosing mouse-hook chain
+    // interaction so they pass through unchanged.
+    let mouse_move = rdev::EventType::MouseMove { x: 10.0, y: 20.0 };
+    let s = redact_event_type_for_debug(&mouse_move);
+    assert!(
+        s.starts_with("MouseMove"),
+        "non-key events must render as their Debug form, got {s:?}"
+    );
 }
 
 // -----------------------------------------------------------------------

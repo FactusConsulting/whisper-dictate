@@ -9,16 +9,19 @@ use crate::diag::{
     current_level, debug_enabled, default_gui_diagnostic_path, info_enabled, init_from_env,
     install_gui_diagnostic_log, reset_level_for_tests, trace_enabled, LogLevel, LOG_ENV_VAR,
 };
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use crate::diag_test_lock::DIAG_WRITER_LOCK;
+use std::sync::MutexGuard;
 
 /// Serialise diag-mutation tests so parallel runs don't race the
-/// shared writer slot: two tests installing to different temp paths
-/// simultaneously would each see the other's writes. Mirrors the
-/// pattern the crate-wide `test_env_lock::ENV_LOCK` uses for
-/// env-mutation tests.
+/// process-wide writer slot. Consolidated onto the crate-wide
+/// [`DIAG_WRITER_LOCK`] in `crate::diag_test_lock` (Codex P2 #665
+/// discussion PRRT_kwDOSfNjQs6UYDJB): the previous function-local
+/// `OnceLock<Mutex<()>>` was a different mutex from the identically
+/// named lock in `hotkey::manager::tracker_tests`, so tests in the
+/// two modules could still race the writer install even though each
+/// suite serialised internally.
 fn diag_test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    DIAG_WRITER_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
 }
@@ -206,6 +209,13 @@ fn log_level_as_str_is_stable_short_name() {
 
 #[test]
 fn init_from_env_reads_env_var_and_caches_into_atomic() {
+    // Hold DIAG_WRITER_LOCK too so we don't flip `LEVEL` to `Off`
+    // mid-log for a concurrent writer-installing test — the `#651`
+    // sink gate makes level and writer state cross-dependent
+    // (Codex P2 #665 discussion PRRT_kwDOSfNjQs6UYXrm). Acquire
+    // the diag lock BEFORE the env lock to match the lock order in
+    // every other diag-touching test in this file.
+    let _diag_guard = diag_test_lock();
     let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
     let prev = std::env::var(LOG_ENV_VAR).ok();
 
@@ -255,6 +265,69 @@ fn init_from_env_reads_env_var_and_caches_into_atomic() {
         LogLevel::Info,
         "an unknown VOICEPI_LOG value must fall back to Info \
          (never silently promote to Trace or demote to Off)"
+    );
+
+    match prev {
+        Some(v) => std::env::set_var(LOG_ENV_VAR, v),
+        None => std::env::remove_var(LOG_ENV_VAR),
+    }
+}
+
+/// Codex P2 #651 r3663372988: `VOICEPI_LOG=off` must actually
+/// silence the diagnostic sink — the docs promise "Nothing, not
+/// even startup markers". Before the sink-level gate the GUI
+/// startup marker and every unconditional lifecycle line still
+/// wrote through, so a user who set `off` still saw file growth.
+///
+/// This asserts the sink itself early-returns at `Off`, without
+/// depending on individual call sites remembering to gate. Runs
+/// on every platform because `install_gui_diagnostic_log` +
+/// `log!` cover the tee path on non-Windows too.
+#[test]
+fn write_line_is_silenced_when_level_is_off() {
+    use std::io::Read;
+    let _lock = diag_test_lock();
+    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let prev = std::env::var(LOG_ENV_VAR).ok();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("silenced.log");
+    install_gui_diagnostic_log(&path).expect("install diag");
+
+    // Level = Off: the sink must drop the message before either
+    // stderr or the tee file is touched. The tee-file path is the
+    // observable half; if it stays empty we know the sink obeyed.
+    std::env::set_var(LOG_ENV_VAR, "off");
+    reset_level_for_tests();
+    assert_eq!(init_from_env(), LogLevel::Off);
+
+    crate::diag::log!("[test] this line must not appear at Off");
+    crate::diag::log!("[test] neither must this one");
+
+    let mut contents = String::new();
+    std::fs::File::open(&path)
+        .expect("open diag file")
+        .read_to_string(&mut contents)
+        .expect("read diag file");
+    assert!(
+        contents.is_empty(),
+        "VOICEPI_LOG=off must silence write_line; tee file grew to {contents:?}"
+    );
+
+    // Sanity: bumping the level back to Info restarts the sink
+    // (no residual latch), so this isn't a one-way trap.
+    std::env::set_var(LOG_ENV_VAR, "info");
+    reset_level_for_tests();
+    assert_eq!(init_from_env(), LogLevel::Info);
+    crate::diag::log!("[test] visible-after-off");
+    let mut contents = String::new();
+    std::fs::File::open(&path)
+        .expect("re-open diag file")
+        .read_to_string(&mut contents)
+        .expect("re-read diag file");
+    assert!(
+        contents.contains("[test] visible-after-off"),
+        "sink must resume after level moves off Off, got {contents:?}"
     );
 
     match prev {
