@@ -5390,7 +5390,7 @@ dependencies = [
  "whisper-rs",
  "windows 0.62.2",
  "windows-native-keyring-store",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "winresource",
  "zbus-secret-service-keyring-store",
 ]
