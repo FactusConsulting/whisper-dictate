@@ -20,7 +20,8 @@ use std::sync::Arc;
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
     is_rdev_supported_name, raw_from_rdev, redact_event_type_for_debug, redact_raw_event_name,
-    should_log_raw_event, spawn, spawn_heartbeat_thread, HeartbeatState, SpawnError,
+    should_log_raw_event, spawn, spawn_heartbeat_thread, spawn_heartbeat_thread_with_config,
+    spawn_with_raw_tap_capturing_heartbeat_for_tests, HeartbeatState, NoopRawTap, SpawnError,
     HEARTBEAT_HEALTHY_QUOTA, HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
@@ -639,45 +640,126 @@ fn spawn_heartbeat_thread_exits_when_stop_is_signalled() {
 }
 
 #[test]
-fn spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop() {
-    // Companion to the stop-driven exit test: even if `stop` is never
-    // set externally, a heartbeat that observes a full healthy run
-    // (HEARTBEAT_HEALTHY_QUOTA consecutive since>0 beats) retires by
-    // storing `stop=true` from inside the loop and returning. This
-    // pins that self-retire is reachable via the SAME JoinHandle
-    // surface — otherwise a future refactor could remove the
-    // self-store and only the process-lifetime path would be
-    // exercised in CI.
+fn spawn_heartbeat_thread_reaches_in_loop_retirement_via_config_shim() {
+    // Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDch: the earlier
+    // `spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop`
+    // test signalled `stop` from OUTSIDE the loop and therefore did not
+    // exercise the retirement branch at all. Deleting the in-loop
+    // `stop.store(true)` + `return` would have left it green while the
+    // real self-retire path rotted.
     //
-    // We don't wait for a real 720-beat run (5 s × 720 = 60 minutes);
-    // instead we drive the pure `HeartbeatState::observe` in a
-    // separate test (already covered by
-    // `heartbeat_state_retires_after_a_full_healthy_run`) and here
-    // just verify the JoinHandle-based exit path works when the stop
-    // atomic is signalled from outside — the two together give the
-    // full lifecycle coverage Codex asked for.
+    // The parametrised `spawn_heartbeat_thread_with_config` shim lets
+    // us drive the retirement branch on a millisecond timescale by
+    // shrinking the interval and healthy-run quota. A background
+    // "poker" thread primes `since` before each beat so `observe`
+    // sees since>0, increments healthy_run, and eventually flips
+    // `stop` from INSIDE the loop. The post-exit `stop.load()`
+    // assertion is the key: only the in-loop `stop.store(true)` in
+    // the retirement branch could have set it (we never set it from
+    // this test).
+    use std::time::{Duration, Instant};
     let total = Arc::new(AtomicU64::new(0));
     let since = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
-
-    let handle = spawn_heartbeat_thread(Arc::clone(&total), Arc::clone(&since), Arc::clone(&stop))
-        .expect("heartbeat thread must spawn");
-
-    // Simulate the "stop set from inside the loop" path by flipping
-    // the atomic externally — the loop checks it on every slice so
-    // the effect is indistinguishable from a self-retire, which is
-    // the property we want to lock (both paths exit via the same
-    // atomic load + return).
-    stop.store(true, Ordering::Relaxed);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while std::time::Instant::now() < deadline && !handle.is_finished() {
-        std::thread::sleep(std::time::Duration::from_millis(25));
+    let handle = spawn_heartbeat_thread_with_config(
+        Arc::clone(&total),
+        Arc::clone(&since),
+        Arc::clone(&stop),
+        Duration::from_millis(5),
+        3, // tiny quota
+    )
+    .expect("heartbeat thread must spawn");
+    // Prime `since` before each beat so `observe` sees since>0 and
+    // increments healthy_run. Poker thread pumps since=1 every 2ms.
+    let since_poker = Arc::clone(&since);
+    let poker = std::thread::spawn(move || {
+        for _ in 0..500 {
+            since_poker.store(1, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    // Wait for the in-loop self-retire to flip stop and exit.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && !handle.is_finished() {
+        std::thread::sleep(Duration::from_millis(25));
     }
     assert!(
         handle.is_finished(),
-        "retirement path (stop=true from inside the loop) must exit through \
-         the same JoinHandle surface as an external stop — Codex P2 #657 \
-         r3663766095",
+        "in-loop retirement branch must fire and exit within budget"
     );
-    handle.join().expect("heartbeat thread panicked");
+    assert!(
+        stop.load(Ordering::Relaxed),
+        "the retirement branch's `stop.store(true)` MUST have been observed — \
+         proves the internal path fired; a regression that removes that store \
+         would leave `stop` false here even though the thread eventually exits \
+         via the outer while-guard (Codex P2 #673 PRRT_kwDOSfNjQs6UaDch)"
+    );
+    handle.join().expect("heartbeat panicked");
+    poker.join().ok();
+}
+
+// -----------------------------------------------------------------------
+// Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDcc — the actual spawn wiring
+// must stop the heartbeat on the startup-failure early-return paths.
+//
+// The `spawn_heartbeat_thread_exits_when_stop_is_signalled` test above
+// flips an INDEPENDENT stop atomic, which only proves the heartbeat
+// loop honours a stop signal — it does NOT prove that
+// `spawn_with_raw_tap`'s error branches actually set the atomic.
+// Deleting every `heartbeat_stop.store(true, ...)` from those branches
+// would still leave that test green while orphan heartbeats
+// accumulated on retry. This test drives the real wiring via the
+// crate-only `spawn_with_raw_tap_capturing_heartbeat_for_tests`
+// shim — on any host where rdev::listen returns Err quickly (headless
+// CI), the shim's returned heartbeat JoinHandle must observe the
+// spawn-wiring's `heartbeat_stop.store(true, ...)` and exit.
+// -----------------------------------------------------------------------
+
+#[test]
+fn spawn_startup_failure_actually_stops_the_heartbeat_via_wiring() {
+    use std::time::{Duration, Instant};
+    let guard = Arc::new(InjectionGuard::new());
+    let (result, heartbeat) =
+        spawn_with_raw_tap_capturing_heartbeat_for_tests(guard, |_out| {}, NoopRawTap);
+    let heartbeat = heartbeat.expect(
+        "heartbeat thread must spawn on any reasonable test host — OOM on \
+         thread::Builder::spawn is the only failure mode",
+    );
+    match result {
+        Ok((handle, _thread)) => {
+            // Host actually has a working display / accessibility perms —
+            // the wiring's error branches don't fire here, so this
+            // regression is only meaningful in a headless environment.
+            // Clean up and skip the assertion; the paired invariant is
+            // covered by the failing-startup branch on CI.
+            handle.shutdown();
+            eprintln!(
+                "skipping spawn_startup_failure_actually_stops_the_heartbeat_via_wiring: \
+                 rdev listener started successfully on this host, so the wiring's \
+                 error-branch `heartbeat_stop.store(true)` was not exercised"
+            );
+            return;
+        }
+        Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+            // Fall through — we expect the heartbeat to exit because
+            // one of the wiring's error branches stored heartbeat_stop.
+        }
+    }
+    // Wait up to 3 s for the heartbeat's slice-sleep to observe the
+    // stop atomic set by the spawn wiring's error branch. Failure
+    // mode against a regression that removes the wiring stores: the
+    // heartbeat runs forever, is_finished() stays false, we hit the
+    // deadline, and the assert below trips.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && !heartbeat.is_finished() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        heartbeat.is_finished(),
+        "spawn's startup-failure early-return branches MUST store to \
+         heartbeat_stop so the heartbeat thread exits — otherwise a caller \
+         that retries after a listener-startup failure accumulates orphan \
+         heartbeat threads (Codex P2 #673 PRRT_kwDOSfNjQs6UaDcc)"
+    );
+    heartbeat.join().expect("heartbeat thread panicked");
 }
