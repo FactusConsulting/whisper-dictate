@@ -167,6 +167,14 @@ pub fn start_capture(
 /// Outcome of [`resolve_device_index`] — either an index into the
 /// enumerated device list or a structured error for the caller to
 /// translate.
+///
+/// **Test-only fixture.** Production callers now go through
+/// [`super::hosts::resolve_input`], which does the same lookup pooled
+/// across every cpal host. Kept under `#[cfg(test)]` because the tests
+/// below encode the per-host precedence contract (exact → longest
+/// substring → numeric index) that the multi-host resolver inlines and
+/// relies on; removing the fixture would remove that documentation.
+#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum DeviceLookup {
     /// The selector matched the device at this index.
@@ -191,6 +199,13 @@ pub(crate) enum DeviceLookup {
 /// Returns [`DeviceLookup::Matched`] with the chosen index on success,
 /// [`DeviceLookup::IndexOutOfRange`] when a parseable index is past the
 /// end of the list, and [`DeviceLookup::NotFound`] otherwise.
+///
+/// See the note on [`DeviceLookup`] for why this is `#[cfg(test)]`: the
+/// multi-host resolver in `super::hosts::resolve_input` is the sole
+/// production caller of this precedence today (inlined so it can pool
+/// exact matches across hosts). The tests below pin the per-host
+/// contract this fixture documents.
+#[cfg(test)]
 pub(crate) fn resolve_device_index(device_names: &[String], selector: &str) -> DeviceLookup {
     let needle = selector.trim().to_lowercase();
     // 1. Exact case-insensitive match wins.

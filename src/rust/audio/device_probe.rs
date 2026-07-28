@@ -198,10 +198,23 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
             // Preserve the historic short-reason wording the UI parser
             // renders for the two most common failure modes: default
             // input missing, and a named device that didn't resolve.
+            //
+            // For the "not found" case, keep the short prefix ("device not
+            // found") but ALSO preserve the Windows DirectSound "pick the
+            // WASAPI variant" hint that `hosts::resolve_input` embeds in
+            // its aggregate error. Without this, a DirectSound-only mic
+            // strips the only actionable remediation the resolver adds,
+            // leaving the user with just "device not found" in both the
+            // `devices test` CLI and the Settings "Test Device" action.
             let reason = if msg.contains("no default input device available") {
                 "no default input device available".to_owned()
             } else if msg.starts_with("input device not found: ") {
-                "device not found".to_owned()
+                let hint = crate::audio::hosts::directsound_only_hint(trimmed).unwrap_or_default();
+                if hint.is_empty() {
+                    "device not found".to_owned()
+                } else {
+                    format!("device not found{hint}")
+                }
             } else {
                 msg
             };
@@ -326,137 +339,5 @@ fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, any
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dtype_label_matches_python_wire_tokens() {
-        // The Python probe emitted "int16" / "float32" — the UI's log-detail
-        // line and JSON envelope must keep those exact tokens so a downstream
-        // consumer that greps for them still works after the migration.
-        assert_eq!(dtype_label(SampleFormat::F32), "float32");
-        assert_eq!(dtype_label(SampleFormat::I16), "int16");
-        assert_eq!(dtype_label(SampleFormat::I32), "int32");
-    }
-
-    #[test]
-    fn endpoint_token_is_platform_specific() {
-        // cpal is WASAPI-only on Windows, ALSA on Linux, CoreAudio on macOS
-        // — one default host per OS, so the mapping is a compile-time
-        // constant. This pins the token so a future refactor can't drop it.
-        let token = default_endpoint_token();
-        if cfg!(windows) {
-            assert_eq!(token, "wasapi");
-        } else {
-            assert_eq!(token, "default");
-        }
-    }
-
-    #[test]
-    fn endpoint_token_for_host_maps_all_known_cpal_labels() {
-        // The UI parser (`crate::ui::device_test::endpoint_label`) renders
-        // whatever lowercase token we emit; sounddevice historically used
-        // the vocabulary below so this locks the mapping in place. A new
-        // cpal host falls through as its own lowercased label so the
-        // probe still emits something inspectable.
-        assert_eq!(endpoint_token_for_host("WASAPI"), "wasapi");
-        assert_eq!(endpoint_token_for_host("ASIO"), "asio");
-        assert_eq!(endpoint_token_for_host("ALSA"), "alsa");
-        assert_eq!(endpoint_token_for_host("PulseAudio"), "pulseaudio");
-        assert_eq!(endpoint_token_for_host("PipeWire"), "pipewire");
-        assert_eq!(endpoint_token_for_host("JACK"), "jack");
-        assert_eq!(endpoint_token_for_host("CoreAudio"), "coreaudio");
-        // Fallback: unknown label passes through lowercased so a future
-        // cpal host is still identifiable from the JSON envelope.
-        assert_eq!(endpoint_token_for_host("MysteryHost"), "mysteryhost");
-    }
-
-    #[test]
-    fn is_resampled_true_only_when_rate_not_16k() {
-        // Live capture always downsamples to 16 kHz, so the `resampled`
-        // flag is true iff the negotiated rate isn't already 16 kHz. Pin
-        // both the boundary (16000 is the ONLY false case) and a few
-        // typical rates so a refactor can't silently move the boundary.
-        assert!(!is_resampled(16_000));
-        assert!(is_resampled(8_000));
-        assert!(is_resampled(44_100));
-        assert!(is_resampled(48_000));
-        assert!(is_resampled(96_000));
-    }
-
-    #[test]
-    fn envelope_success_shape_matches_ui_parser_contract() {
-        // The UI's parse_device_test_json requires `usable`, `endpoint`,
-        // `samplerate`, `dtype`, `resampled`, `reason` fields. Serialise a
-        // canonical success result and cross-check every field lands with
-        // the expected null / value shape.
-        let result = DeviceProbeResult::ok("Yeti".to_owned(), "wasapi", 16_000, "int16", false);
-        let json: serde_json::Value =
-            serde_json::from_str(&result.to_json_line()).expect("valid JSON");
-        assert_eq!(json["device"], "Yeti");
-        assert_eq!(json["usable"], true);
-        assert_eq!(json["endpoint"], "wasapi");
-        assert_eq!(json["samplerate"], 16_000);
-        assert_eq!(json["dtype"], "int16");
-        assert_eq!(json["resampled"], false);
-        assert!(json["reason"].is_null());
-    }
-
-    #[test]
-    fn envelope_failure_shape_matches_ui_parser_contract() {
-        // On failure the reason MUST be populated and every open-only field
-        // MUST serialise as JSON null so the UI renders a red ✗ with the
-        // short reason (and never a spurious samplerate/endpoint pill).
-        let result = DeviceProbeResult::fail("Ghost".to_owned(), "device not found");
-        let json: serde_json::Value =
-            serde_json::from_str(&result.to_json_line()).expect("valid JSON");
-        assert_eq!(json["device"], "Ghost");
-        assert_eq!(json["usable"], false);
-        assert!(json["endpoint"].is_null());
-        assert!(json["samplerate"].is_null());
-        assert!(json["dtype"].is_null());
-        assert_eq!(json["resampled"], false);
-        assert_eq!(json["reason"], "device not found");
-    }
-
-    #[test]
-    fn envelope_json_is_a_single_line() {
-        // The UI parser tolerates surrounding log noise but every worker
-        // envelope has always been a single JSON object on its own line. A
-        // multi-line pretty-print would still parse, but would surprise any
-        // downstream tool that greps by line — so pin this.
-        let json = DeviceProbeResult::ok("Mic".to_owned(), "default", 48_000, "float32", true)
-            .to_json_line();
-        assert!(!json.contains('\n'), "envelope must be one line: {json}");
-    }
-
-    #[test]
-    fn empty_selector_probe_never_panics_and_reports_when_no_default() {
-        // Empty selector = system default. On a headless dev box with no
-        // default input, this must NOT panic — it must produce a
-        // well-formed unusable envelope so the CLI still emits valid JSON.
-        // Whichever way the host answers, the parser MUST cope.
-        let r = probe_device("");
-        let json: serde_json::Value = serde_json::from_str(&r.to_json_line()).expect("valid JSON");
-        // Either the box has a default input (usable=true) OR it doesn't
-        // (usable=false with a reason). No third state.
-        assert!(json["usable"].is_boolean());
-        if !r.usable {
-            assert!(r.reason.is_some(), "unusable result must carry a reason");
-        }
-    }
-
-    #[test]
-    fn missing_named_device_reports_not_found_without_panicking() {
-        // A name that cannot resolve on any host MUST report the short
-        // "device not found" reason (the same string the Python probe used)
-        // — that's what the UI's inline ✗ + reason renders.
-        let r = probe_device("__whisper_dictate_definitely_missing_device__");
-        assert!(!r.usable);
-        assert_eq!(r.reason.as_deref(), Some("device not found"));
-        assert!(r.endpoint.is_none());
-        assert!(r.samplerate.is_none());
-        assert!(r.dtype.is_none());
-        assert!(!r.resampled);
-    }
-}
+#[path = "device_probe_tests.rs"]
+mod tests;

@@ -183,10 +183,14 @@ pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceI
 /// entries keep their cpal-native indices so the capture path's numeric-index
 /// selector still resolves the same physical device.
 ///
-/// When `VOICEPI_AUDIO_BACKEND=rust` the Rust capture path calls
-/// `cpal::default_host()` and cannot open devices from other hosts. In that
-/// configuration only the default host's devices are returned so the picker
-/// never advertises a mic that capture would fail to open.
+/// The Rust capture path (`VOICEPI_AUDIO_BACKEND=rust`) walks the same host
+/// list as this enumeration via [`crate::audio::hosts::resolve_input`], so
+/// non-default cpal hosts (ASIO, JACK, PipeWire, Pulse) are safe to advertise
+/// — capture will pick whichever host actually exposes the selected name.
+/// Windows DirectSound is still skipped under Rust capture, though: cpal 0.18
+/// has no DirectSound host, so a DirectSound-only mic in the picker would
+/// fail to open. The Python `audio-in-python` path can open DirectSound, so
+/// the merge stays on for it.
 fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
     let default_host = cpal::default_host();
     let default_host_id = default_host.id();
@@ -203,18 +207,10 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
         &mut seen_names,
     );
 
-    // When Rust capture is active it uses cpal::default_host() and cannot
-    // resolve non-default-host devices, so skip them entirely.
-    let rust_capture = std::env::var("VOICEPI_AUDIO_BACKEND")
-        .ok()
-        .map(|v| v.trim().eq_ignore_ascii_case("rust"))
-        .unwrap_or(false);
-    if rust_capture {
-        return out;
-    }
-
     // Non-default-host devices are useful for name-based selection so a saved
-    // mic exposed only via JACK/ASIO still shows up in the picker.
+    // mic exposed only via JACK/ASIO still shows up in the picker. The Rust
+    // capture path (`audio::hosts::resolve_input`) walks these too, so
+    // including them here matches what capture will actually open.
     for host_id in cpal::available_hosts() {
         if host_id == default_host_id {
             continue;
@@ -239,11 +235,15 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
 
     // Windows: WASAPI (cpal's only Windows host) misses DirectSound-only
     // inputs the sounddevice picker surfaces. Merge them by name so the Rust
-    // picker reaches parity with sounddevice — the prerequisite for defaulting
-    // the picker to this helper. Only when the caller explicitly asked (the
-    // sounddevice picker), so cpal-based callers never see a device cpal can't
-    // open. No-op on non-Windows and when the enumeration finds nothing.
-    if include_directsound {
+    // picker reaches parity with sounddevice. Only for the sounddevice picker
+    // (the `include_directsound` flag) AND only when the Rust capture backend
+    // is NOT active — cpal 0.18 has no DirectSound host, so under Rust
+    // capture a DirectSound-only entry in the picker would fail to open.
+    let rust_capture = std::env::var("VOICEPI_AUDIO_BACKEND")
+        .ok()
+        .map(|v| v.trim().eq_ignore_ascii_case("rust"))
+        .unwrap_or(false);
+    if include_directsound && !rust_capture {
         append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
     }
 
