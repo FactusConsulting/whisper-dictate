@@ -188,6 +188,42 @@ jobs:
           cache: true
           stripdown: true
 
+      # Cache for the short-CARGO_TARGET_DIR Vulkan build below. The
+      # Swatinem/rust-cache step above (workspaces: "src/rust -> ../target")
+      # only ever caches the workspace-relative `target/` dir, so when the
+      # Vulkan branch redirects cargo output to `D:\t` (the MAX_PATH
+      # workaround for whisper.cpp's vulkan-shaders-gen ExternalProject_Add
+      # -- see the "Build Rust desktop UI" step comment) Swatinem has
+      # nothing to save and every RC re-downloads and re-compiles the whole
+      # Rust + whisper.cpp + Vulkan tree (~5+ min cold). Cache the
+      # per-profile subdirs cargo actually reuses (`.fingerprint`, `deps`,
+      # `build`, `incremental`) so a re-run with the same Cargo.lock is
+      # incremental. Key on the Vulkan-inclusive feature set so a Vulkan
+      # build never restores from a CPU-only warm cache (a Vulkan feature
+      # flip would silently omit GGML_VULKAN symbols on cache-hit).
+      # restore-keys deliberately does NOT strip the Vulkan suffix so a
+      # CPU-only key can never accidentally satisfy a Vulkan restore.
+      # Bump the cache version (`v1`) whenever the whisper-rs-sys /
+      # ExternalProject build surface changes to force a fresh build.
+      #
+      # NOTE: actions/cache@v4 does not have `cache-on-failure` /
+      # `save-always` (removed in v4 in favor of a separate save step).
+      # This step saves only on job success, matching cargo's own "green
+      # then cache" contract. A red build leaves the cache untouched so
+      # a partial C:\t\release\build never poisons the next run.
+      - name: Cache short Vulkan target dir
+        if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0'
+        uses: actions/cache@v4
+        with:
+          path: |
+            D:\t\release\.fingerprint
+            D:\t\release\build
+            D:\t\release\deps
+            D:\t\release\incremental
+          key: rust-release-windows-vulkan-shorttarget-v1-${{ hashFiles('src/rust/Cargo.lock') }}
+          restore-keys: |
+            rust-release-windows-vulkan-shorttarget-v1-
+
       - name: Build Rust desktop UI
         if: steps.win-check.outputs.changed == 'true'
         shell: pwsh
@@ -236,13 +272,74 @@ jobs:
             if (-not $ninja) { throw "ninja not on PATH - the 'Set up MSVC developer environment' step did not run or the VS 2022 Ninja shipment moved" }
             Write-Host "ninja = $ninja"
             Write-Host "CMAKE_GENERATOR = $env:CMAKE_GENERATOR (forced Ninja to avoid MSBuild-in-MSBuild in the vulkan-shaders-gen sub-build)"
+            # Short CARGO_TARGET_DIR to keep the vulkan-shaders-gen
+            # ExternalProject_Add TryCompile probe path below Windows'
+            # MAX_PATH ~260-char cap. The default runner cwd is
+            # `D:\a\whisper-dictate\whisper-dictate\` (33 chars) and
+            # whisper.cpp's ExternalProject writes its cmake compiler probe
+            # into
+            #   .../target/release/build/whisper-rs-sys-<hash>/out/build/
+            #     ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/
+            #     vulkan-shaders-gen-build/CMakeFiles/CMakeScratch/
+            #     TryCompile-<id>/CMakeFiles/cmTC_<id>.dir/testCCompiler.c.obj
+            # which comes out at ~258 chars. cmake first prints a warning
+            # at 246 chars ("has 246 characters. The maximum full path to
+            # an object file is 250 characters (see CMAKE_OBJECT_PATH_MAX)"),
+            # then cl.exe hits classic MAX_PATH while opening its /Fo
+            # object file, truncates the output filename to empty, and
+            # errors with the tell-tale
+            #   fatal error C1083: Cannot open compiler generated file:
+            #   '': Invalid argument
+            # (rc.14 attempt-1 job 90252176432). OS long-path support
+            # (HKLM\...\LongPathsEnabled=1, git core.longpaths, cl.exe's
+            # .manifest longPathAware) does NOT rescue cl.exe here: cl.exe
+            # writes /Fo through a plain CreateFile without a `\\?\`
+            # prefix, so the 260-char ceiling still bites even when the
+            # filesystem accepts longer paths. Moving the cargo target
+            # root to `D:\t` (3 chars) shaves ~40 chars off every nested
+            # cmake path and puts the probe safely under the cap. `D:\`
+            # (not `C:\`) because GitHub-hosted windows-2025 runners
+            # reserve the larger volume for the workspace at `D:\a\...`
+            # -- writing whisper.cpp + vulkan-shaders-gen + ONNX release
+            # output onto the small `C:` OS volume would trade the C1083
+            # bug for a "no space left on device" regression that's
+            # harder to diagnose (Claude review on #670). See the
+            # Copy-Item back to target\release\ below -- downstream steps
+            # (Verify, Build ZIP, Inno) and the test suite's
+            # `Copy-Item target\release\onnxruntime*.dll $bundle`
+            # assertion still read from target\release\, so the local
+            # loop and locked structure tests stay unchanged.
+            $shortTargetDir = 'D:\t'
+            $env:CARGO_TARGET_DIR = $shortTargetDir
+            Write-Host "CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR (short path to keep vulkan-shaders-gen TryCompile below Windows MAX_PATH)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
-            cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+            cargo build --manifest-path src/rust/Cargo.toml --target-dir $shortTargetDir --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
+            if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+            # Copy the release artefacts back to the conventional
+            # target\release\ path so the Verify / Build Windows ZIP / Inno
+            # steps below (and the
+            # test_release_pipelines_bundle_onnx_runtime_next_to_binary
+            # assertion that pins
+            # `Copy-Item target\release\onnxruntime*.dll $bundle`) keep
+            # working without a per-branch fork. Use -Force so a warm
+            # target\release\ from a previous attempt is overwritten.
+            New-Item -ItemType Directory -Force target\release | Out-Null
+            Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate.exe')     target\release\ -Force
+            Copy-Item (Join-Path $shortTargetDir 'release\whisper-dictate-gui.exe') target\release\ -Force
+            # onnxruntime*.dll is dropped by ort's `copy-dylibs` build
+            # feature next to the binary. Glob so any versioned sidecar
+            # (onnxruntime_providers_*.dll) lands too. A missing DLL would
+            # fail loud downstream in "Build Windows ZIP packages" -- do
+            # not swallow errors beyond the "no matches" case.
+            $onnxDlls = @(Get-ChildItem (Join-Path $shortTargetDir 'release') -Filter 'onnxruntime*.dll' -ErrorAction SilentlyContinue)
+            foreach ($dll in $onnxDlls) {
+              Copy-Item $dll.FullName target\release\ -Force
+            }
           } else {
             Write-Host "VOICEPI_BUILD_VULKAN=0 - building whisper-dictate WITHOUT GPU acceleration (CPU-only fallback)"
             cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local
+            if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
           }
-          if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
       # Regression guard for the Vulkan wiring (root cause of #645: the
       # Windows release binary shipped CPU-only, so `use gpu = 1` never
