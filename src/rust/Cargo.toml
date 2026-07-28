@@ -178,7 +178,18 @@ tempfile = { version = "3.14", optional = true }
 # up; this is a workaround for a vad-rs version-range gap and should drop
 # out when vad-rs publishes against a newer ort. The dep itself is unused
 # by our code — we depend on it only for the version pin.
-ort-sys = { version = "=2.0.0-rc.13", optional = true }
+#
+# NOTE: do NOT bump this past rc.9 while vad-rs is still on ort=2.0.0-rc.9.
+# rc.10..rc.13 changed the ort-sys build script to require `ureq ^3` with the
+# `ureq::tls::{RootCerts, TlsConfig, TlsProvider}` module + `Config::builder().
+# tls_config(..)` shape that only exists on some ureq 3.x lines. Combined with
+# our own `ureq = "3.3"` dep, cargo unifies the transitive `ureq` on 3.3 and
+# ort-sys's build script fails to compile with `unresolved import ureq::tls`
+# and `no method tls_config`. Since ort-sys rc.9 still uses `ureq ^2.1`, the
+# rc.9 pin lets ort-sys use ureq 2.x while our own code keeps ureq 3.3 (two
+# ureq majors coexist). Renovate must NOT auto-bump this; see this comment
+# before considering an upgrade.
+ort-sys = { version = "=2.0.0-rc.9", optional = true }
 
 # --- rust-hotkeys feature dep (OPTIONAL; not pulled in for default builds)
 # rdev: cross-platform global key event listener (X11 / Windows / macOS via the
