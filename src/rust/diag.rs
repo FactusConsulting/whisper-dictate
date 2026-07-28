@@ -491,6 +491,16 @@ pub fn enqueue_async(message: String) {
     }
 }
 
+/// True once [`ensure_async_writer`] has populated the process-wide
+/// sender. Callers on the LL-hook path never need this (they
+/// fire-and-forget through [`enqueue_async`]); it exists so a
+/// regression test can assert that a backend's install path actually
+/// installed the writer, rather than silently dropping every queued
+/// trace. Codex P2 #668 discussion 3666165045.
+pub fn async_writer_installed() -> bool {
+    ASYNC_QUEUE_TX.get().is_some()
+}
+
 /// Test-only: block until the async writer has drained every message
 /// enqueued so far. Returns as soon as [`ASYNC_PENDING`] reaches zero
 /// OR after `timeout` — whichever comes first. Callers that read the

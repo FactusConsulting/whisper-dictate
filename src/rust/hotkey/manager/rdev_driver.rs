@@ -337,14 +337,10 @@ where
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
-    // Install the shared off-callback trace writer BEFORE spawning
-    // the listener thread so the first key event's trace line has a
-    // writer ready to receive it. Idempotent across driver spawns.
-    // Shared with the tracker path (`KeyTracker::handle`) so a
-    // `[chord]` debug line issued from `dispatch_raw_event` inside
-    // the same LL-hook callback also stays off the hook thread —
-    // Codex P1 #668 discussion 3665741341.
-    crate::diag::ensure_async_writer();
+    // NOTE: the shared off-callback trace writer is installed by
+    // `manager_channel()` above — moved there (from an explicit call
+    // here) so evdev and win_registerhotkey get it too. Codex P2 #668
+    // discussion 3666165045.
 
     // Liveness flag the listener thread flips to `false` on exit.
     // Handed to callers via `ManagerHandle::is_listener_alive` /

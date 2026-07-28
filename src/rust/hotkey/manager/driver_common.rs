@@ -178,7 +178,22 @@ impl ManagerHandle {
 /// the receiver to [`spawn_manager_thread`]; keeping the split here means the
 /// listener half can be wired to the same `Arc<Mutex<KeyTracker>>` before the
 /// manager thread starts.
+///
+/// Also installs the shared off-callback diagnostic writer
+/// ([`crate::diag::ensure_async_writer`]). This lives HERE — rather
+/// than in each backend's `spawn_with_raw_tap` — because every driver
+/// funnels through `manager_channel`, so no backend can forget it.
+/// Codex P2 #668 discussion 3666165045: the rdev spawn path called
+/// `ensure_async_writer` but evdev and win_registerhotkey did not, so
+/// on an evdev session with `VOICEPI_LOG=debug` the tracker's
+/// `[chord]` trace (routed through `enqueue_async` by the #668
+/// 3665741341 fix) silently dropped every message because
+/// `ASYNC_QUEUE_TX` was never populated.
+///
+/// Idempotent and off the hot path: the writer is `OnceLock`-gated and
+/// this runs once per install, never from the LL-hook callback.
 pub fn manager_channel() -> (ManagerHandle, Receiver<ManagerCommand>) {
+    crate::diag::ensure_async_writer();
     let (tx, rx) = mpsc::channel();
     (
         ManagerHandle {
@@ -435,6 +450,84 @@ mod tests {
                 "{backend}: listener thread must flip listener_alive to false \
                  on exit (typically via a drop-guard so panics count too). \
                  Codex P2 #668 discussion 3664983427."
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #668 discussion 3666165045 — every backend must install
+    // the shared off-callback diagnostic writer.
+    //
+    // The #668 3665741341 fix routed the tracker's `[chord]` trace
+    // through `crate::diag::enqueue_async`, but only rdev's
+    // `spawn_with_raw_tap` called `ensure_async_writer`. On an evdev
+    // session (Wayland) or a win_registerhotkey session with
+    // `VOICEPI_LOG=debug`, `ASYNC_QUEUE_TX` stayed unset and
+    // `enqueue_async` silently dropped EVERY `[chord]` line — exactly
+    // the diagnostic the Windows/Wayland PTT investigation depends on.
+    //
+    // The fix moved the call into `manager_channel()`, the single seam
+    // every backend funnels through. These tests pin that: the runtime
+    // one proves the call actually happens, the structural one proves
+    // no backend re-introduces a private writer-init that could drift.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn manager_channel_installs_the_shared_async_diag_writer() {
+        // Constructing a manager channel — which EVERY backend does as
+        // its first step — must leave the shared async writer
+        // installed, so a later `enqueue_async` from the tracker's
+        // `[chord]` branch actually reaches `write_line` instead of
+        // being dropped on the floor.
+        let (_handle, _rx) = manager_channel();
+        assert!(
+            crate::diag::async_writer_installed(),
+            "manager_channel() must install the shared off-callback diag \
+             writer so every backend (rdev / evdev / win_registerhotkey) \
+             gets it. Without this, `enqueue_async` silently drops the \
+             tracker's `[chord]` trace on non-rdev backends. Codex P2 \
+             #668 discussion 3666165045."
+        );
+    }
+
+    #[test]
+    fn every_backend_spawn_funnels_through_manager_channel() {
+        // Structural guard for the mechanism that makes the runtime
+        // test above cover ALL backends: the writer install lives in
+        // `manager_channel()`, so a backend only inherits it by
+        // calling `manager_channel()`. Every driver does today; a
+        // future backend that built its `ManagerHandle` some other
+        // way would silently lose the writer (and the `[chord]`
+        // trace with it) — exactly the evdev/win gap Codex P2 #668
+        // 3666165045 found, one layer down.
+        use std::fs;
+        for (rel_path, backend) in [
+            ("src/rust/hotkey/manager/rdev_driver.rs", "rdev"),
+            ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
+            (
+                "src/rust/hotkey/manager/win_registerhotkey.rs",
+                "win_registerhotkey",
+            ),
+        ] {
+            let src = fs::read_to_string(rel_path)
+                .or_else(|_| fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
+                .unwrap_or_else(|err| {
+                    panic!("{backend}: driver source {rel_path} must be readable ({err})")
+                });
+            // Strip line comments so prose mentioning the helper does
+            // not stand in for a real call.
+            let code: String = src
+                .lines()
+                .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                code.contains("manager_channel()"),
+                "{backend}: spawn must build its ManagerHandle via \
+                 `manager_channel()` — that is where the shared \
+                 off-callback diag writer is installed, so a backend \
+                 that bypasses it silently drops every queued `[chord]` \
+                 trace. Codex P2 #668 discussion 3666165045."
             );
         }
     }

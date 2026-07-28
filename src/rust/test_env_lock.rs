@@ -23,9 +23,46 @@
 //!
 //! Integration tests in `tests/` live in their own binaries and so do not need
 //! to share this lock with the library suite.
+//!
+//! ## Other process-global singletons
+//!
+//! The same "a module-local lock cannot serialise against another
+//! module's lock" argument applies to any process-global mutable
+//! singleton a test touches, not just env vars. [`GLOBAL_GUARD_LOCK`]
+//! covers the injection-guard slot for that reason; see its docs.
 
 use std::sync::Mutex;
 
 /// The single crate-wide guard serialising env-mutating tests. See the module
 /// docs for the soundness contract.
 pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// The single crate-wide guard serialising tests that install or clear
+/// the process-global injection guard
+/// ([`crate::hotkey::inject_guard::set_global`] /
+/// [`crate::hotkey::inject_guard::global`]).
+///
+/// ## Why a crate-wide lock and not a module-local one
+///
+/// `set_global` is called from TWO places: directly by
+/// `inject_guard`'s own tests, and indirectly by every
+/// `crate::hotkey::install_hotkey` call — which several tests in
+/// `hotkey/mod.rs` make. A lock private to `inject_guard_tests` would
+/// serialise only the first group, so an `install_hotkey` test running
+/// in parallel could replace the singleton between a
+/// `set_global(g1)` / `set_global(g2)` pair and the `Arc::ptr_eq`
+/// assertions that follow — making the last-writer-wins regression
+/// test flaky. That is exactly the failure mode Codex P2 #668
+/// discussion 3666165058 called out, and it is real even when the
+/// interfering test's own headless listener startup later fails,
+/// because `install_hotkey` publishes the guard BEFORE attempting
+/// listener startup.
+///
+/// ## Usage rule
+///
+/// Every `#[test]` in the library that calls `set_global` /
+/// `clear_global_for_tests` (directly) OR `install_hotkey` /
+/// `install_hotkey_with_raw_tap` (which publish a guard internally)
+/// MUST hold this lock for the duration of its global-guard
+/// interaction.
+pub(crate) static GLOBAL_GUARD_LOCK: Mutex<()> = Mutex::new(());

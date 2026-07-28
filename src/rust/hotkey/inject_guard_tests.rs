@@ -23,7 +23,7 @@
 
 #![cfg(test)]
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::hotkey::inject_guard::{
@@ -279,13 +279,18 @@ fn dispatch_forwards_events_when_guard_never_armed() {
 
 // ------- Global guard slot -------
 
-/// Serialise global-slot tests so they don't race each other (or
-/// other integration tests that touch the slot) in the same
-/// binary. The tests here mutate a process-wide singleton.
+/// Take the CRATE-WIDE global-guard lock. Codex P2 #668 discussion
+/// 3666165058: a lock private to this file would only serialise the
+/// tests below — but `crate::hotkey::install_hotkey` also calls
+/// `set_global` (before it even attempts listener startup), and
+/// several tests in `hotkey/mod.rs` call it. One of those running in
+/// parallel could replace the singleton between the
+/// `set_global(g1)` / `set_global(g2)` pair and the `Arc::ptr_eq`
+/// assertions, making `global_slot_last_writer_wins` flaky. The lock
+/// lives in `crate::test_env_lock` so every caller across the crate
+/// shares one instance.
 fn global_slot_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::Mutex as StdMutex;
-    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
+    crate::test_env_lock::GLOBAL_GUARD_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner())
 }
@@ -342,6 +347,72 @@ fn global_slot_returns_none_when_never_set() {
     let _lock = global_slot_test_lock();
     clear_global_for_tests();
     assert!(global().is_none(), "an uninitialised slot must return None");
+}
+
+/// Codex P2 #668 discussion 3666165058 — the global-guard lock must be
+/// CRATE-WIDE, not file-local, because `install_hotkey` publishes a
+/// guard internally and lib tests call it.
+///
+/// Two invariants, both checked from source so a regression is caught
+/// on any platform (the race itself is timing-dependent and would
+/// otherwise only flake intermittently in CI):
+///
+/// 1. This file must take the shared `test_env_lock::GLOBAL_GUARD_LOCK`,
+///    not define a private `static LOCK`.
+/// 2. Every lib test that calls `install_hotkey(` must hold that lock,
+///    because `install_hotkey` reaches `set_global` before its listener
+///    startup can fail.
+#[test]
+fn global_guard_lock_is_crate_wide_and_held_by_install_hotkey_callers() {
+    use std::fs;
+
+    let tests_src = fs::read_to_string("src/rust/hotkey/inject_guard_tests.rs")
+        .or_else(|_| fs::read_to_string("hotkey/inject_guard_tests.rs"))
+        .expect("inject_guard_tests.rs must be readable from the crate root");
+    assert!(
+        tests_src.contains("test_env_lock::GLOBAL_GUARD_LOCK"),
+        "the global-slot tests must serialise on the CRATE-WIDE \
+         `test_env_lock::GLOBAL_GUARD_LOCK`, not a file-local static — \
+         `install_hotkey` publishes a guard from other modules' tests \
+         and would race these assertions. Codex P2 #668 3666165058."
+    );
+
+    // Any lib test that installs the hotkey subsystem publishes a
+    // guard, so it must hold the same lock. `hotkey/mod.rs` is the
+    // only lib-test module that calls `install_hotkey` on a path that
+    // reaches `set_global` (the empty-config / unsupported-key tests
+    // return Err during validation, before the publish).
+    let mod_src = fs::read_to_string("src/rust/hotkey/mod.rs")
+        .or_else(|_| fs::read_to_string("hotkey/mod.rs"))
+        .expect("hotkey/mod.rs must be readable from the crate root");
+    let installs = mod_src.matches("install_then_drive_coordinator_emits_actions_in_order");
+    assert!(
+        installs.count() > 0,
+        "expected the install-and-drive test to still exist; if it was \
+         renamed, update this scanner to match"
+    );
+    let test_start = mod_src
+        .find("fn install_then_drive_coordinator_emits_actions_in_order()")
+        .expect("install-and-drive test must exist");
+    // Look at the first ~800 chars of the body — the lock must be
+    // taken up-front, before any `install_hotkey` call.
+    let window_end = (test_start + 900).min(mod_src.len());
+    let body = &mod_src[test_start..window_end];
+    let lock_idx = body.find("GLOBAL_GUARD_LOCK").unwrap_or(usize::MAX);
+    let install_idx = body.find("install_hotkey(").unwrap_or(usize::MAX);
+    assert!(
+        lock_idx != usize::MAX,
+        "`install_then_drive_coordinator_emits_actions_in_order` must \
+         hold `GLOBAL_GUARD_LOCK` — `install_hotkey` publishes an \
+         `InjectionGuard` into the process-global slot before listener \
+         startup, so without the lock it races the global-slot \
+         assertions in this file. Codex P2 #668 3666165058."
+    );
+    assert!(
+        lock_idx < install_idx,
+        "the lock must be acquired BEFORE `install_hotkey` is called, \
+         otherwise the publish has already raced. Codex P2 #668 3666165058."
+    );
 }
 
 #[test]

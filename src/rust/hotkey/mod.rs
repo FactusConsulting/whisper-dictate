@@ -776,6 +776,18 @@ mod integration {
     /// IS exercised.
     #[test]
     fn install_then_drive_coordinator_emits_actions_in_order() {
+        // `install_hotkey` publishes a fresh `InjectionGuard` into the
+        // process-global slot via `inject_guard::set_global` BEFORE it
+        // attempts listener startup — so this test mutates a
+        // process-global singleton even on the headless path where the
+        // install later fails. Hold the crate-wide guard lock so it
+        // cannot race `inject_guard_tests::global_slot_last_writer_wins`,
+        // whose `Arc::ptr_eq` assertions would otherwise see this
+        // test's guard replace theirs mid-assertion. Codex P2 #668
+        // discussion 3666165058.
+        let _guard_lock = crate::test_env_lock::GLOBAL_GUARD_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let (tx, rx) = mpsc::channel();
         let cfg = HotkeyConfig::hold_to_talk(vec!["ctrl_l".to_owned()]);
         let handle = match install_hotkey(cfg, move |action| {
