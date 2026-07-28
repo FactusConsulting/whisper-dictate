@@ -624,13 +624,18 @@ class RustReleaseWorkflowTests(unittest.TestCase):
         # from a CPU-only warm cache (which would silently omit
         # GGML_VULKAN symbols and re-open the #645 regression).
         workflow = self._windows_installer_workflow_text()
+        # actions/cache was bumped from v4 to v6 by #671 (Renovate); the
+        # regex checks a `v\d+` range so a future minor/major bump does
+        # not re-break this pin. The load-bearing invariant is that the
+        # dedicated cache step exists with the correct if-guard and IS
+        # an actions/cache invocation — not the exact version pin.
         self.assertRegex(
             workflow,
             r"- name: Cache short Vulkan target dir\s*\n"
             r"\s*if: steps\.win-check\.outputs\.changed == 'true' && "
             r"env\.VOICEPI_BUILD_VULKAN != '0'\s*\n"
-            r"\s*uses: actions/cache@v4",
-            "A dedicated actions/cache@v4 step must cache the short "
+            r"\s*uses: actions/cache@v\d+",
+            "A dedicated actions/cache step must cache the short "
             "Vulkan target dir; without it, every Vulkan RC rebuilds "
             "the whole whisper.cpp + Vulkan tree from scratch.",
         )
