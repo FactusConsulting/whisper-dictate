@@ -329,6 +329,46 @@ pub(crate) fn effective_rust_capture_gate(
     feature_available && env_requests_rust
 }
 
+/// Whether [`append_host_devices`] should publish a device to the
+/// picker, given:
+///
+/// * `max_input_channels` — from [`probe_device_config`]. Zero means
+///   neither `supported_input_configs` nor `default_input_config`
+///   reported a usable shape, so no backend can open it.
+/// * `rust_capture_strict` — whether the Rust capture pipeline will
+///   actually serve capture (see [`effective_rust_capture_gate`]).
+/// * `supports_rust_capture` — whether
+///   [`crate::audio::hosts::device_supports_rust_capture`] accepted
+///   the device (i.e. `pick_config` can open it). Callers pass `false`
+///   when `rust_capture_strict` is false, since the value is then
+///   irrelevant and probing it would be wasted work.
+///
+/// Decision matrix (the behavioural seam Codex P2 #674 devices.rs:600
+/// asked for — exhaustively unit-tested in `devices_tests.rs` WITHOUT
+/// live audio hardware, so a headless CI runner still catches
+/// regressions such as ignoring `rust_capture_strict`, inverting the
+/// predicate, or hard-coding one return value):
+///
+/// | channels | strict | openable | publish |
+/// |----------|--------|----------|---------|
+/// | 0        | any    | any      | NO      |
+/// | >0       | false  | any      | YES     |
+/// | >0       | true   | false    | NO      |
+/// | >0       | true   | true     | YES     |
+pub(crate) fn should_publish_device(
+    max_input_channels: u16,
+    rust_capture_strict: bool,
+    supports_rust_capture: bool,
+) -> bool {
+    if max_input_channels == 0 {
+        return false;
+    }
+    if rust_capture_strict {
+        return supports_rust_capture;
+    }
+    true
+}
+
 /// Whether the picker enumeration should merge Windows DirectSound-only
 /// capture endpoints into the list.
 ///
@@ -569,14 +609,16 @@ fn append_host_devices(
                         && !seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
                     {
                         let info = build_device_info(0, &default, &name, true);
-                        // Apply the same strict Rust-capture filter as
-                        // the main enumeration branch — otherwise the
-                        // fallback could publish a device `pick_config`
-                        // cannot open (Codex P2 #669 devices.rs:271).
-                        if info.max_input_channels > 0
-                            && (!rust_capture_strict
-                                || crate::audio::hosts::device_supports_rust_capture(&default))
-                        {
+                        // Same publish decision as the main enumeration
+                        // branch — otherwise the fallback could publish
+                        // a device `pick_config` cannot open (Codex P2
+                        // #669 devices.rs:271).
+                        if should_publish_device(
+                            info.max_input_channels,
+                            rust_capture_strict,
+                            rust_capture_strict
+                                && crate::audio::hosts::device_supports_rust_capture(&default),
+                        ) {
                             seen_names.push(name);
                             out.push(info);
                             *next_synthetic_index = out.len();
@@ -616,21 +658,18 @@ fn append_host_devices(
             *next_synthetic_index
         };
         let info = build_device_info(reported_index, &device, &name, is_default);
-        if info.max_input_channels == 0 {
-            // No usable input configs at all (neither default_input_config nor
-            // supported_input_configs reported channels). Skip — the picker
-            // can't open it.
-            continue;
-        }
-        // Codex P2 (#669 post-merge devices.rs:271): under Rust capture
-        // the picker MUST additionally require the strict pick-config
-        // contract (supported_input_configs succeeds AND at least one
-        // F32/I16/I32 config). Otherwise the picker advertises a
-        // channel-bearing device that `capture::pick_config` cannot
-        // open — e.g. U16-only, or one reachable only via the
-        // `default_input_config` fallback — and capture fails
-        // immediately after the user selects it.
-        if rust_capture_strict && !crate::audio::hosts::device_supports_rust_capture(&device) {
+        // Publish decision (channels > 0, plus the strict pick-config
+        // contract under Rust capture) lives in the pure
+        // [`should_publish_device`] helper so the full matrix is
+        // unit-testable without live audio hardware — Codex P2
+        // (#669 devices.rs:271, #674 devices.rs:600).
+        if !should_publish_device(
+            info.max_input_channels,
+            rust_capture_strict,
+            // Only probed when the strict gate is actually active, so
+            // the non-strict path keeps its previous cost profile.
+            rust_capture_strict && crate::audio::hosts::device_supports_rust_capture(&device),
+        ) {
             continue;
         }
         seen_names.push(name);

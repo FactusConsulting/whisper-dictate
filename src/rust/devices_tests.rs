@@ -24,7 +24,7 @@
 
 use super::{
     effective_rust_capture_gate, enumeration_flow, should_merge_directsound_endpoints,
-    EnumerationFlow,
+    should_publish_device, EnumerationFlow,
 };
 
 #[test]
@@ -108,6 +108,95 @@ fn should_merge_directsound_endpoints_matches_enumeration_flow() {
 // The filter is enforced in `devices::append_host_devices` via the
 // shared `hosts::device_supports_rust_capture` helper.
 
+// ----- Codex P2 (#674 devices.rs:600): behavioural seam for the filter -----
+//
+// `should_publish_device` is the pure decision point
+// `append_host_devices` consults for EVERY enumerated device. Testing
+// it exhaustively catches the exact regressions Codex named — ignoring
+// `rust_capture_strict`, inverting the predicate, or hard-coding one
+// return value — WITHOUT depending on live audio hardware (headless CI
+// runners have no mics, so a live-enumeration test would vacuously
+// pass there).
+
+#[test]
+fn should_publish_device_rejects_zero_channel_devices_in_every_mode() {
+    // Channels == 0 means no backend can open it — reject regardless
+    // of strictness or the openability flag.
+    for strict in [false, true] {
+        for openable in [false, true] {
+            assert!(
+                !should_publish_device(0, strict, openable),
+                "zero-channel device must never be published \
+                 (strict={strict}, openable={openable})"
+            );
+        }
+    }
+}
+
+#[test]
+fn should_publish_device_publishes_any_channel_bearing_device_when_not_strict() {
+    // Non-strict = the Python sounddevice backend is effective. It
+    // handles more formats than `pick_config`, so a channel-bearing
+    // device is published even when the Rust-capture predicate said
+    // no. A regression that ALWAYS applied the strict filter would
+    // fail the `openable=false` arm here — that's the over-pruning
+    // case from Codex P2 #674 devices.rs:206.
+    assert!(
+        should_publish_device(1, false, false),
+        "non-strict mode must publish a U16-only / default-config-only \
+         mic that the Python backend can still open"
+    );
+    assert!(should_publish_device(2, false, true));
+    assert!(should_publish_device(8, false, false));
+}
+
+#[test]
+fn should_publish_device_requires_openability_when_strict() {
+    // Strict = Rust capture is effective. Only devices `pick_config`
+    // can open may be published, otherwise the user picks a mic that
+    // fails to capture. A regression that IGNORED `rust_capture_strict`
+    // (the pre-fix behavior) would fail the `openable=false` arm.
+    assert!(
+        !should_publish_device(1, true, false),
+        "strict mode must NOT publish a device pick_config cannot open"
+    );
+    assert!(
+        !should_publish_device(8, true, false),
+        "channel count does not rescue an unopenable device in strict mode"
+    );
+    assert!(
+        should_publish_device(1, true, true),
+        "strict mode publishes devices pick_config CAN open"
+    );
+    assert!(should_publish_device(2, true, true));
+}
+
+#[test]
+fn should_publish_device_matrix_is_exactly_as_documented() {
+    // Full truth table in one place, mirroring the doc-comment on
+    // `should_publish_device`. An inverted predicate or a hard-coded
+    // return value trips at least one row.
+    let cases: &[(u16, bool, bool, bool)] = &[
+        // (channels, strict, openable, expected_publish)
+        (0, false, false, false),
+        (0, false, true, false),
+        (0, true, false, false),
+        (0, true, true, false),
+        (1, false, false, true),
+        (1, false, true, true),
+        (1, true, false, false),
+        (1, true, true, true),
+    ];
+    for &(channels, strict, openable, expected) in cases {
+        assert_eq!(
+            should_publish_device(channels, strict, openable),
+            expected,
+            "matrix mismatch for (channels={channels}, strict={strict}, \
+             openable={openable})"
+        );
+    }
+}
+
 #[test]
 fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
     // Compile-time pin: `append_host_devices` MUST expose the
@@ -160,6 +249,173 @@ fn effective_rust_capture_gate_requires_both_feature_and_env() {
         effective_rust_capture_gate(true, true),
         "feature + env → Rust backend, strict filter must fire"
     );
+}
+
+// ----- Codex P2 (#674 hosts_tests.rs:173): exercise the REAL picker path ----
+//
+// The earlier Windows verification targeted `hosts::snapshot_all_hosts`,
+// which has NO production picker callers (diagnostic-only listing).
+// The Settings picker actually runs
+// `list_input_devices_for_ui_json_line` → `enumerate_all_hosts` →
+// `append_host_devices`, so regressions in the `rust_capture_strict`
+// threading and DirectSound gating stayed invisible on Windows.
+//
+// The two tests below drive that REAL path on the `rust-features
+// (windows-2025, audio, --features audio-in-rust, test)` CI job.
+//
+// Hermeticity note: both are SINGLE-enumeration invariant checks, NOT
+// comparisons of two live enumerations across an env flip (the
+// non-hermetic pattern Codex correctly flagged on #669
+// devices_tests.rs:129). Whatever hardware exists at the moment of the
+// call, the returned set must satisfy the invariant; a device that
+// disappears mid-test is skipped rather than failing the assertion.
+
+#[cfg(feature = "audio-in-rust")]
+#[test]
+fn picker_under_rust_capture_only_lists_capture_openable_devices() {
+    // Codex P2 (#674 hosts_tests.rs:173) regression pin, on the REAL
+    // picker path. Under `VOICEPI_AUDIO_BACKEND=rust` with the
+    // `audio-in-rust` feature compiled in, EVERY device
+    // `list_input_devices()` publishes MUST satisfy
+    // `hosts::device_supports_rust_capture` — otherwise the picker
+    // advertises a mic `capture::pick_config` cannot open and capture
+    // fails immediately after the user selects it.
+    //
+    // A regression that dropped the `rust_capture_strict` threading
+    // (or inverted the predicate) would surface a U16-only /
+    // default-config-only device here and trip the assertion.
+    //
+    // Deliberately NOT `#[cfg(windows)]`: the invariant holds on every
+    // platform, so this runs on BOTH the `rust-features
+    // (windows-2025, audio, ...)` and `(ubuntu-latest, audio, ...)` CI
+    // legs — Windows coverage as Codex asked for, plus Linux/ALSA
+    // coverage for free. Gated on the feature because the strict
+    // filter only activates when `audio-in-rust` is compiled in (see
+    // `effective_rust_capture_gate`).
+    use cpal::traits::HostTrait;
+
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var_os("VOICEPI_AUDIO_BACKEND");
+    std::env::set_var("VOICEPI_AUDIO_BACKEND", "rust");
+
+    let published = super::list_input_devices();
+
+    // Restore env BEFORE asserting so a failure can't leak the
+    // mutation into other tests.
+    match prev {
+        Some(v) => std::env::set_var("VOICEPI_AUDIO_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_AUDIO_BACKEND"),
+    }
+
+    if published.is_empty() {
+        // Headless CI runner with no mics — nothing to verify.
+        return;
+    }
+
+    // Re-look-up each published name across every cpal host and
+    // verify it passes the strict predicate. A name we can no longer
+    // find (hot-unplug between the two calls) is SKIPPED, keeping the
+    // test hermetic.
+    for info in &published {
+        let mut found_and_openable = None;
+        for host_id in cpal::available_hosts() {
+            let Ok(host) = cpal::host_from_id(host_id) else {
+                continue;
+            };
+            let Ok(devices) = host.input_devices() else {
+                continue;
+            };
+            for device in devices {
+                if device.to_string() == info.name {
+                    found_and_openable =
+                        Some(crate::audio::hosts::device_supports_rust_capture(&device));
+                    break;
+                }
+            }
+            if found_and_openable.is_some() {
+                break;
+            }
+        }
+        if let Some(openable) = found_and_openable {
+            assert!(
+                openable,
+                "picker published {:?} under VOICEPI_AUDIO_BACKEND=rust, \
+                 but capture::pick_config cannot open it. The \
+                 rust_capture_strict filter in append_host_devices is \
+                 not being applied (Codex P2 #674).",
+                info.name
+            );
+        }
+        // else: device vanished between enumerations — skip.
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_picker_under_rust_capture_omits_directsound_only_endpoints() {
+    // Companion pin for the DirectSound gating on the REAL picker
+    // path. cpal 0.18 has no DirectSound host, so under Rust capture
+    // the UI picker envelope
+    // (`list_input_devices_for_ui_json_line`) MUST NOT advertise a
+    // DirectSound-only endpoint — the user would pick a mic that
+    // cannot be opened.
+    //
+    // `enumeration_flow(include_directsound=true, rust_capture=true)`
+    // returns merge_directsound=false, so the merge is skipped. This
+    // test verifies that gate end-to-end through the actual UI entry
+    // point rather than the pure helper.
+    use cpal::traits::HostTrait;
+
+    let _guard = crate::test_env_lock::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var_os("VOICEPI_AUDIO_BACKEND");
+    std::env::set_var("VOICEPI_AUDIO_BACKEND", "rust");
+
+    let line = super::list_input_devices_for_ui_json_line();
+    // Collect every name cpal can actually see, for the
+    // "DirectSound-only" determination below.
+    let mut cpal_names: Vec<String> = Vec::new();
+    for host_id in cpal::available_hosts() {
+        let Ok(host) = cpal::host_from_id(host_id) else {
+            continue;
+        };
+        let Ok(devices) = host.input_devices() else {
+            continue;
+        };
+        for device in devices {
+            let n = device.to_string();
+            if !n.trim().is_empty() {
+                cpal_names.push(n);
+            }
+        }
+    }
+    let ds_names = super::directsound_capture_names_public();
+
+    match prev {
+        Some(v) => std::env::set_var("VOICEPI_AUDIO_BACKEND", v),
+        None => std::env::remove_var("VOICEPI_AUDIO_BACKEND"),
+    }
+
+    let published: Vec<super::DeviceInfo> =
+        serde_json::from_str(line.trim()).expect("picker envelope must be a valid JSON array");
+
+    // A DirectSound-only endpoint = seen by DirectSound but by NO cpal
+    // host. None of those may appear in the picker under Rust capture.
+    for ds in &ds_names {
+        let is_directsound_only = !cpal_names.iter().any(|c| super::name_matches(c, ds));
+        if !is_directsound_only {
+            continue;
+        }
+        assert!(
+            !published.iter().any(|d| super::name_matches(&d.name, ds)),
+            "picker published DirectSound-only endpoint {ds:?} under \
+             VOICEPI_AUDIO_BACKEND=rust; cpal 0.18 cannot open it so \
+             the merge must be gated off (Codex P2 #674)."
+        );
+    }
 }
 
 #[test]

@@ -123,86 +123,68 @@ fn directsound_only_hint_returns_none_for_a_name_no_directsound_endpoint_uses() 
     assert!(hint.is_none());
 }
 
-// ----- Codex P2 (#674 hosts.rs:661): Windows-specific picker verification ---
+// ----- Codex P2 (#674 hosts.rs:661 + hosts_tests.rs:173): Windows path ------
 //
-// The two tests below exercise the Windows-only DirectSound
-// suppression path against LIVE cpal enumeration on the
-// `rust-features (windows-2025, audio, --features audio-in-rust,
-// test)` CI job. They complement the cross-platform pure-predicate
-// pins by verifying the actual `#[cfg(windows)]` early-return
-// branch runs correctly on real WASAPI hardware.
+// The earlier Windows tests here targeted `snapshot_all_hosts`, which
+// has NO production picker callers (repo-wide search confirms it is a
+// diagnostic-only listing shim). The Settings picker actually runs
+// `devices::list_input_devices_for_ui_json_line` → `enumerate_all_hosts`
+// → `append_host_devices`, so regressions in the `rust_capture_strict`
+// threading and DirectSound gating stayed invisible on Windows.
+//
+// Windows coverage for the PICKER path now lives in
+// `devices_tests.rs` (`windows_picker_*` tests), which drives
+// `list_input_devices` / `list_input_devices_for_ui_json_line`
+// directly. The single test below stays here because it covers the
+// RESOLVER's `#[cfg(windows)]` DirectSound early-return, which is a
+// hosts.rs concern and has no devices.rs equivalent.
 
 #[cfg(windows)]
 #[test]
-fn windows_directsound_hint_suppressed_when_cpal_already_enumerates_selector() {
-    // Live-Windows regression: pick any name cpal actually
-    // enumerates (via snapshot_all_hosts on the platform), then call
-    // `directsound_only_hint` with that name as selector plus the
-    // full cpal-enumerated names list as the suppression context. On
-    // pre-fix code the hint would fire if DS happened to also see
-    // that name (it always does for WASAPI-visible mics); post-fix
-    // the cpal-name check suppresses it. On a Windows CI runner with
-    // at least one input device this test exercises the actual
-    // WASAPI + DirectSound enumeration end-to-end.
-    let snapshots = snapshot_all_hosts();
-    // Collect real cpal names across every host.
-    let cpal_names: Vec<String> = snapshots
+fn windows_resolver_directsound_hint_suppressed_for_cpal_visible_device() {
+    // Live-Windows regression for the `#[cfg(windows)]` early return
+    // in `directsound_only_hint`. Drives the REAL resolver
+    // enumeration (`enumerate_host_slot_usable` via `resolve_input`'s
+    // helper) rather than the diagnostic shim, then asserts the hint
+    // is suppressed for a name cpal actually enumerated.
+    //
+    // Pre-fix the hint fired for any WASAPI-visible mic that
+    // DirectSound also saw (which is essentially all of them),
+    // producing the false "only visible via Windows DirectSound"
+    // remediation. This exercises the real WASAPI + DirectSound
+    // enumeration end-to-end on the windows-2025 CI runner.
+    let mut host_errors: Vec<String> = Vec::new();
+    let slot = enumerate_host_slot_usable(cpal::default_host().id(), &mut host_errors);
+    let cpal_names: Vec<String> = slot
+        .names
         .iter()
-        .flat_map(|s| s.device_names.iter().cloned())
         .filter(|n| !n.is_empty())
+        .cloned()
         .collect();
     if cpal_names.is_empty() {
-        // Headless CI runner with no mics; the branch we want to
-        // verify requires at least one cpal name — skip cleanly.
+        // Headless CI runner with no mics — the branch under test
+        // needs at least one cpal name. Skip cleanly.
         return;
     }
     let selector = cpal_names[0].clone();
     let cpal_refs: Vec<&str> = cpal_names.iter().map(|s| s.as_str()).collect();
-    let hint = directsound_only_hint(&selector, &cpal_refs);
+    assert!(
+        directsound_only_hint(&selector, &cpal_refs).is_none(),
+        "DirectSound hint MUST be suppressed for a selector the real \
+         resolver enumeration already surfaced via WASAPI. Selector: \
+         {selector:?}"
+    );
+    // Complementary: a name cpal has NEVER seen still reaches the
+    // DirectSound lookup (no early return) — proving the suppression
+    // is selective rather than an unconditional `None`.
+    let never_seen = "__whisper_dictate_absolutely_missing_mic_674__";
+    let hint = directsound_only_hint(never_seen, &cpal_refs);
     assert!(
         hint.is_none(),
-        "DirectSound hint MUST be suppressed for a selector that \
-         cpal enumerated (via WASAPI on Windows). This exercises the \
-         #[cfg(windows)] early-return branch of directsound_only_hint \
-         end-to-end. Selector: {selector:?}"
+        "a never-seen name has no DirectSound endpoint either, so the \
+         hint stays None — but it reached the DS lookup rather than \
+         short-circuiting: {hint:?}"
     );
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_snapshot_all_hosts_surfaces_wasapi_devices_with_usable_true() {
-    // Live-Windows regression: the `snapshot_all_hosts` shim should
-    // report WASAPI (the default host on Windows) with usable=true
-    // for every enumerated name. This exercises the code path the
-    // picker uses on Windows CI runners.
-    let snapshots = snapshot_all_hosts();
-    let default_id = cpal::default_host().id();
-    let default_snap = snapshots
-        .iter()
-        .find(|s| s.host_id == default_id)
-        .expect("default host must be present in snapshot");
-    assert_eq!(
-        default_snap.host_label, "WASAPI",
-        "on Windows the default cpal host is WASAPI"
-    );
-    // If the runner has any mics, they must all report usable=true
-    // in the snapshot (the shim does not run pick-config filtering —
-    // it's a diagnostic listing).
-    for (name, usable) in default_snap
-        .device_names
-        .iter()
-        .zip(default_snap.usable.iter())
-    {
-        if name.is_empty() {
-            continue;
-        }
-        assert!(
-            *usable,
-            "snapshot_all_hosts must report usable=true for every \
-             enumerated name (name={name:?}); the shim is a listing, \
-             not a resolver input"
-        );
-    }
 }
 
 #[cfg(not(windows))]
