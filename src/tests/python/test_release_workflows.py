@@ -455,53 +455,58 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "Linux tarball must bundle libonnxruntime.so* next to the binary",
         )
 
-    def test_windows_vulkan_build_uses_short_cargo_target_dir(self):
-        # Regression guard for the second-level Vulkan build failure that
-        # bit rc.14 attempt 1 (job 90252176432) after PR #662 fixed the
-        # first-level MSBuild-in-MSBuild wedge. whisper.cpp's
-        # ExternalProject_Add for vulkan-shaders-gen creates a CMake
-        # compiler probe at
-        #   <target>/release/build/whisper-rs-sys-<hash>/out/build/
-        #     ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/
-        #     vulkan-shaders-gen-build/CMakeFiles/CMakeScratch/
-        #     TryCompile-<id>/CMakeFiles/cmTC_<id>.dir/testCCompiler.c.obj
-        # which reaches ~258 chars from the runner's default
-        # D:\a\whisper-dictate\whisper-dictate\ workspace root and trips
-        # cl.exe's classic MAX_PATH (empty /Fo filename, "fatal error
-        # C1083: Cannot open compiler generated file: '': Invalid
-        # argument"). OS long-path support does not rescue cl.exe here --
-        # it writes /Fo through plain CreateFile with no `\\?\` prefix --
-        # so the only reliable fix is to point cargo's target root at a
-        # short path like `D:\t` for the Vulkan build and copy the
-        # release artefacts back to target\release\ so downstream steps
-        # (Verify Vulkan link / Build Windows ZIP / Inno) keep reading
-        # from the conventional location. Dropping the CARGO_TARGET_DIR
-        # override OR the copy-back would silently re-break Vulkan CI.
-        #
-        # The unit-level split below (Codex P2 #670) exercises the
-        # per-branch shape: CARGO_TARGET_DIR override MUST be in the
-        # Vulkan branch (it is what unblocks the build) and MUST NOT be
-        # in the CPU-only branch (which does not run the shaders-gen
-        # ExternalProject and does not need the workaround -- reintroducing
-        # a global override there would move CPU CI's cache off the
-        # Swatinem workspace-relative target dir with no upside).
-        workflow = Path(
+    # --- Vulkan short-CARGO_TARGET_DIR regression tests (PR #670) -------
+    #
+    # Background for all the `test_vulkan_*` methods below: rc.14 attempt 1
+    # (job 90252176432) failed after PR #662 fixed the first-level
+    # MSBuild-in-MSBuild wedge. whisper.cpp's ExternalProject_Add for
+    # vulkan-shaders-gen creates a CMake compiler probe at
+    #   <target>/release/build/whisper-rs-sys-<hash>/out/build/
+    #     ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/
+    #     vulkan-shaders-gen-build/CMakeFiles/CMakeScratch/
+    #     TryCompile-<id>/CMakeFiles/cmTC_<id>.dir/testCCompiler.c.obj
+    # which reaches ~258 chars from the runner's default
+    # D:\a\whisper-dictate\whisper-dictate\ workspace root and trips
+    # cl.exe's classic MAX_PATH (empty /Fo filename, "fatal error
+    # C1083: Cannot open compiler generated file: '': Invalid argument").
+    # OS long-path support does not rescue cl.exe here -- it writes /Fo
+    # through plain CreateFile with no `\\?\` prefix -- so the fix is to
+    # point cargo's target root at `D:\t` for the Vulkan build and copy
+    # the release artefacts back to target\release\ so downstream steps
+    # keep reading from the conventional location.
+    #
+    # The tests were split off the original oversized single method per
+    # Codex P2 (AGENTS.md "no oversized methods" rule): each method below
+    # focuses on ONE assertion cluster so a failure isolates the exact
+    # part of the workaround that regressed.
+
+    def _windows_installer_workflow_text(self):
+        return Path(
             ".github/workflows/windows-installer-build.yml"
         ).read_text(encoding="utf-8")
-        # Isolate the "Build Rust desktop UI" step and split into
-        # Vulkan-if / CPU-else branches so per-branch assertions cannot
-        # be satisfied by the wrong branch's content.
-        build_step_match = re.search(
+
+    def _local_installer_script_text(self):
+        return Path("scripts/windows/build-installer.ps1").read_text(
+            encoding="utf-8"
+        )
+
+    def _isolate_windows_build_step_branches(self, workflow):
+        """Return (vulkan_branch, cpu_branch) inside the "Build Rust desktop
+        UI" step so per-branch assertions cannot be satisfied by the wrong
+        branch's content. Fails the caller test if the step is missing or
+        no longer has the Vulkan-if / CPU-else split.
+        """
+        match = re.search(
             r"- name: Build Rust desktop UI\b.*?(?=\n\s{6}- name: )",
             workflow,
             re.DOTALL,
         )
         self.assertIsNotNone(
-            build_step_match,
+            match,
             "Could not isolate the 'Build Rust desktop UI' step -- has "
             "its name or the following step boundary changed?",
         )
-        build_step = build_step_match.group(0)
+        build_step = match.group(0)
         self.assertIn(
             "if ($env:VOICEPI_BUILD_VULKAN -ne '0') {",
             build_step,
@@ -514,23 +519,30 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "Build step must retain its `} else {` split so the CPU-only "
             "path is reachable.",
         )
-        # ---- Vulkan branch: MUST set CARGO_TARGET_DIR to D:\t and
-        # copy the artefacts back to target\release\ ----
+        return vulkan_branch, cpu_branch
+
+    def test_vulkan_build_sets_short_cargo_target_dir_to_d_drive(self):
+        # The Vulkan branch of the CI build step MUST redirect cargo at
+        # D:\t so the nested vulkan-shaders-gen TryCompile probe stays
+        # below Windows' 260-char MAX_PATH cap. `D:\`, not `C:\`, because
+        # GH-hosted windows-2025 runners reserve the larger volume for
+        # D:\a\... and the small C: OS volume can run out of space under
+        # a full Rust+whisper.cpp+ONNX release build (Claude review on
+        # #670). Regression: removing either the $shortTargetDir literal
+        # or the CARGO_TARGET_DIR export re-opens the C1083 failure mode.
+        workflow = self._windows_installer_workflow_text()
+        vulkan_branch, _ = self._isolate_windows_build_step_branches(workflow)
         self.assertIn(
             "$shortTargetDir = 'D:\\t'",
             vulkan_branch,
-            "The short target dir must be D:\\t (3 chars) so nested "
-            "cmake paths stay under the 260 MAX_PATH ceiling. `D:\\`, "
-            "not `C:\\`, because GitHub-hosted windows-2025 runners "
-            "reserve the larger volume for D:\\a\\... and the C:\\ OS "
-            "volume can run out of space on a full Rust+whisper.cpp+ONNX "
-            "release build (Claude review on #670).",
+            "Vulkan build must define $shortTargetDir = 'D:\\t' (3 chars) "
+            "so nested cmake paths stay under the 260 MAX_PATH ceiling.",
         )
         self.assertIn(
             "$env:CARGO_TARGET_DIR = $shortTargetDir",
             vulkan_branch,
-            "The Vulkan build must export CARGO_TARGET_DIR so cargo AND "
-            "the nested cmake ExternalProject write into the short path.",
+            "Vulkan build must export CARGO_TARGET_DIR so cargo AND the "
+            "nested cmake ExternalProject write into the short path.",
         )
         self.assertIn(
             "cargo build --manifest-path src/rust/Cargo.toml --target-dir "
@@ -541,11 +553,17 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "cargo must be invoked with the short target dir so "
             "whisper-rs-sys writes its ExternalProject scratch there.",
         )
-        # Copy-back landing zone must be the conventional target\release\
-        # so the ZIP / Inno / Verify steps below and the
+
+    def test_vulkan_build_copies_release_artefacts_back_to_target_release(self):
+        # The copy-back is what lets downstream Verify / Build ZIP / Inno
+        # steps -- and the locked
         # test_release_pipelines_bundle_onnx_runtime_next_to_binary
-        # `Copy-Item target\release\onnxruntime*.dll $bundle` assertion
-        # keep working without per-branch forks.
+        # `Copy-Item target\release\onnxruntime*.dll $bundle` assertion --
+        # keep working without a per-branch fork. Regression: dropping any
+        # of the three copies means the Inno installer or portable ZIP
+        # ships a broken (or empty) release, not a Vulkan-linked one.
+        workflow = self._windows_installer_workflow_text()
+        vulkan_branch, _ = self._isolate_windows_build_step_branches(workflow)
         self.assertRegex(
             vulkan_branch,
             r"Copy-Item \(Join-Path \$shortTargetDir 'release\\whisper-dictate\.exe'\)"
@@ -567,20 +585,25 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "Vulkan copy-back must include onnxruntime*.dll or the "
             "Windows ZIP + Inno steps ship a runtime-broken artefact.",
         )
-        # ---- CPU-only branch: MUST NOT touch CARGO_TARGET_DIR ----
+
+    def test_cpu_only_build_does_not_touch_cargo_target_dir(self):
+        # The workaround is Vulkan-specific (only the vulkan-shaders-gen
+        # ExternalProject_Add creates the deep TryCompile path). Adding a
+        # CARGO_TARGET_DIR export to the CPU-only branch would leak the
+        # short path into a code path that does not need it and does not
+        # have a matching actions/cache entry, silently dropping the
+        # Swatinem `src/rust -> ../target` cache for the CPU RC path
+        # (Codex P2 #670). The CPU-only cargo invocation must therefore
+        # keep its default `--target-dir target`.
+        workflow = self._windows_installer_workflow_text()
+        _, cpu_branch = self._isolate_windows_build_step_branches(workflow)
         self.assertNotIn(
             "CARGO_TARGET_DIR",
             cpu_branch,
             "CPU-only branch must NOT set CARGO_TARGET_DIR -- the "
-            "workaround is Vulkan-specific (only the vulkan-shaders-gen "
-            "ExternalProject_Add creates the deep TryCompile path) and "
-            "adding it here would leak the short path into a code path "
-            "that does not need it and does not have a matching cache "
-            "entry (Codex P2 #670).",
+            "workaround is Vulkan-specific and CPU builds have no matching "
+            "cache entry for a short path (Codex P2 #670).",
         )
-        # CPU-only build must keep its default `--target-dir target`
-        # cargo invocation so the Swatinem `src/rust -> ../target`
-        # cache remains effective for CPU-only RCs.
         self.assertIn(
             "cargo build --manifest-path src/rust/Cargo.toml --target-dir "
             "target --release -p whisper-dictate-app --features "
@@ -589,11 +612,18 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "CPU-only fallback must keep its default --target-dir target "
             "so Swatinem/rust-cache stays effective.",
         )
-        # ---- Cache step MUST exist for the short target dir (Codex P2
-        # #670): without an actions/cache entry keyed on D:\t, every RC
+
+    def test_vulkan_build_caches_short_target_directory(self):
+        # Without an actions/cache entry keyed on D:\t, every Vulkan RC
         # re-downloads and re-compiles the whole Rust + whisper.cpp +
         # Vulkan tree (~5+ min cold) because Swatinem's workspace-relative
-        # cache never sees D:\t. ----
+        # cache never sees D:\t (Codex P2 #670). This test locks the
+        # dedicated cache step's shape: the Vulkan-only if-guard, the
+        # exact four cargo-target subdirs cargo actually reuses, and the
+        # -vulkan- key suffix so a Vulkan build can never cross-populate
+        # from a CPU-only warm cache (which would silently omit
+        # GGML_VULKAN symbols and re-open the #645 regression).
+        workflow = self._windows_installer_workflow_text()
         self.assertRegex(
             workflow,
             r"- name: Cache short Vulkan target dir\s*\n"
@@ -602,46 +632,49 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             r"\s*uses: actions/cache@v4",
             "A dedicated actions/cache@v4 step must cache the short "
             "Vulkan target dir; without it, every Vulkan RC rebuilds "
-            "the whole whisper.cpp + Vulkan tree from scratch "
-            "(Codex P2 on #670).",
+            "the whole whisper.cpp + Vulkan tree from scratch.",
         )
-        self.assertIn(
-            "D:\\t\\release\\.fingerprint",
-            workflow,
-            "The Vulkan cache must include cargo's .fingerprint dir so "
-            "incremental rebuilds actually skip unchanged units.",
-        )
-        self.assertIn(
-            "D:\\t\\release\\build",
-            workflow,
-            "The Vulkan cache must include the release build dir so "
-            "whisper-rs-sys's compiled C++ (the ~5 min bottleneck) is "
-            "restored.",
-        )
-        self.assertIn(
-            "D:\\t\\release\\deps",
-            workflow,
-            "The Vulkan cache must include deps/ so cargo does not "
-            "re-link every dependency crate.",
-        )
-        # Cache key MUST include the Vulkan feature suffix so a
-        # Vulkan build never restores from a CPU-only cache (which
-        # would silently omit GGML_VULKAN symbols).
+        for subdir, why in (
+            (
+                "D:\\t\\release\\.fingerprint",
+                "cargo's .fingerprint dir so incremental rebuilds skip "
+                "unchanged units",
+            ),
+            (
+                "D:\\t\\release\\build",
+                "the release build dir so whisper-rs-sys's compiled C++ "
+                "(the ~5 min bottleneck) is restored",
+            ),
+            (
+                "D:\\t\\release\\deps",
+                "deps/ so cargo does not re-link every dependency crate",
+            ),
+        ):
+            self.assertIn(
+                subdir,
+                workflow,
+                f"The Vulkan cache must include {why}.",
+            )
         self.assertIn(
             "rust-release-windows-vulkan-shorttarget-v1-",
             workflow,
-            "Vulkan cache key must carry the -vulkan- suffix so it "
-            "never cross-populates from a CPU-only warm cache.",
+            "Vulkan cache key must carry the -vulkan- suffix so it never "
+            "cross-populates from a CPU-only warm cache.",
         )
-        # ---- Same fix mirrored in the local installer script ----
-        script = Path("scripts/windows/build-installer.ps1").read_text(
-            encoding="utf-8"
-        )
+
+    def test_local_installer_uses_short_cargo_target_dir_for_vulkan(self):
+        # Same short-path fix mirrored in the local installer script so a
+        # developer with a deep project path (e.g. D:\source\projects\
+        # voicepi\whisper-dictate\) doesn't hit the same C1083 wall in
+        # the local loop. Local default is C:\t (not D:\t) because D:\ is
+        # not guaranteed on dev boxes; a developer-set CARGO_TARGET_DIR
+        # is still honoured.
+        script = self._local_installer_script_text()
         self.assertIn(
             "$env:CARGO_TARGET_DIR = $shortTargetDir",
             script,
-            "Local Vulkan build must also override CARGO_TARGET_DIR "
-            "so the local loop matches CI's behaviour.",
+            "Local Vulkan build must also override CARGO_TARGET_DIR so "
+            "the local loop matches CI's behaviour.",
         )
         self.assertIn(
             "'C:\\t'",
@@ -650,18 +683,24 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "dir (`C:\\t` locally since D:\\ is not guaranteed on dev "
             "boxes) unless the developer already set CARGO_TARGET_DIR.",
         )
-        # ---- Restore CARGO_TARGET_DIR after the local build (Codex
-        # P2 #670): the script mutates process-scope env; without a
-        # try/finally restore the developer's shell inherits `C:\t`
-        # for every subsequent cargo command, including commands in
-        # other repositories. Assert the try/finally wrapping the
-        # assignment + copy-back and the Remove-Item on the empty
-        # branch of the restore. ----
+
+    def test_local_installer_restores_cargo_target_dir_after_vulkan_build(self):
+        # The local script mutates process-scope CARGO_TARGET_DIR; without
+        # a try/finally restore the developer's shell inherits `C:\t` for
+        # every subsequent cargo command, including commands in other
+        # repositories (Codex P2 #670). Assert the exact snapshot line,
+        # the try/finally wrapping the assignment + build + copy-back, and
+        # the `Remove-Item env:CARGO_TARGET_DIR` on the unset-restore
+        # branch. `Test-Path env:...` (not truthiness) is what
+        # distinguishes "was unset" from "was empty string" so the
+        # restore never re-introduces a bogus empty value for a variable
+        # the developer never touched.
+        script = self._local_installer_script_text()
         self.assertRegex(
             script,
             r"\$prevCargoTargetDirWasSet = Test-Path env:CARGO_TARGET_DIR",
             "Local script must snapshot whether CARGO_TARGET_DIR was set "
-            "before the build so the restore can distinguish unset vs "
+            "before the build so the restore distinguishes unset vs "
             "empty string.",
         )
         self.assertRegex(
@@ -680,7 +719,7 @@ class RustReleaseWorkflowTests(unittest.TestCase):
             "Local script must restore CARGO_TARGET_DIR to its exact "
             "pre-build state (unset -> Remove-Item; set -> reassign) so "
             "the developer's shell environment is not permanently "
-            "polluted by `C:\\t` (Codex P2 #670).",
+            "polluted by `C:\\t`.",
         )
 
     def test_test_yml_builds_whisper_rs_local_on_both_runners(self):
