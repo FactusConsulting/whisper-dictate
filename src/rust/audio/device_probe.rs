@@ -166,6 +166,147 @@ pub(crate) fn is_resampled(rate: u32) -> bool {
     rate != 16_000
 }
 
+/// Translate a [`crate::audio::hosts::resolve_input`] error message into
+/// the short probe `reason` string the UI parser + JSON envelope render.
+///
+/// * Preserves the historic short wording for the two most common
+///   failure modes (`no default input device available` and `device not
+///   found`) so the UI's ✗ + reason line reads the same as when the
+///   probe was Python.
+/// * For the "not found" case ALSO appends the Windows DirectSound
+///   `pick the WASAPI variant` remediation when the caller-provided
+///   `directsound_hint` says the selector is DirectSound-only. Without
+///   this, the historic un-fixed probe stripped the resolver's enriched
+///   error back to a bare `device not found`, hiding the ONLY
+///   actionable remediation for a DirectSound-only mic in both the
+///   `devices test <NAME>` CLI verb AND the Settings "Test Device"
+///   action.
+///
+/// Pure helper: no I/O, no cpal, no env vars. Regression-tested against
+/// pre-fix behavior in `device_probe_tests.rs`.
+///
+/// The DirectSound hint is extracted from the `resolve_error_msg`
+/// itself via [`extract_directsound_hint_from_error`] rather than
+/// re-queried from cpal: the resolver already ran the enumeration
+/// exactly once, and a re-query risks a hot-plug race where the
+/// hint appears (or disappears) between the resolver and probe calls
+/// — Codex P2 on `device_probe.rs:238` (PR #669).
+pub(crate) fn probe_reason_for_resolve_error(resolve_error_msg: &str) -> String {
+    if resolve_error_msg.contains("no default input device available") {
+        return "no default input device available".to_owned();
+    }
+    if resolve_error_msg.starts_with("input device not found: ") {
+        // Numeric out-of-range takes precedence when present: it's the
+        // actionable remediation for a stale numeric setting. Without
+        // this branch, `hosts::build_not_found_error` embedding the
+        // numeric note inside the same `input device not found: ...`
+        // wrapper as a plain name miss caused the probe to squash both
+        // to a bare `device not found` — losing the remediation text
+        // for `devices test <NAME>` and the Settings "Test Device"
+        // action (regression noted in the review of #669).
+        if let Some(numeric_note) = extract_numeric_note_from_error(resolve_error_msg) {
+            return numeric_note;
+        }
+        let hint = extract_directsound_hint_from_error(resolve_error_msg);
+        return match hint {
+            Some(h) => format!("device not found{h}"),
+            None => "device not found".to_owned(),
+        };
+    }
+    // Any other error (backend outage, unexpected wording) passes through
+    // verbatim so investigations still see the underlying cause.
+    resolve_error_msg.to_owned()
+}
+
+/// The exact literal substring the resolver-generated DirectSound
+/// hint always contains (see
+/// [`crate::audio::hosts::directsound_only_hint`]). Matching on this
+/// distinctive marker — not the generic `; note: ` delimiter — is
+/// what makes the extractor safe against a user-renamed device whose
+/// name contains `; note: ` literally (Codex P2 #669 device_probe.rs:225):
+/// the selector is embedded near the beginning of the aggregate error
+/// and could otherwise be mistaken for the hint start.
+pub(crate) const DIRECTSOUND_HINT_MARKER: &str = "is only visible via Windows DirectSound";
+
+/// The exact literal substring the resolver-generated numeric-out-of-
+/// range note always contains (see `hosts::resolve_over_host_names`).
+/// Matching this — instead of a bare `"out of range"` fragment — keeps
+/// the extractor immune to a device whose name happens to contain
+/// "out of range" as literal text.
+pub(crate) const NUMERIC_OOR_MARKER: &str = "out of range on default host";
+
+/// End-of-note anchor: the resolver-generated note always closes with
+/// this exact fragment. Trailing text after it (like the DirectSound
+/// hint, if both fire) is intentionally NOT part of the extracted
+/// remediation.
+pub(crate) const NUMERIC_OOR_NOTE_END: &str = "pick a device by name instead";
+
+/// Extract the resolver's numeric-out-of-range remediation note from
+/// a `hosts::resolve_input` error message, if present. Returns the
+/// note as-is (e.g. `"index 5 out of range on default host WASAPI (2
+/// device(s)); numeric selectors resolve only against the default host
+/// - pick a device by name instead"`) so it can be surfaced as the
+/// probe reason verbatim — restoring the actionable specificity the
+/// pre-refactor probe emitted for this case
+/// (`"input device index N out of range (have X input device(s))"`).
+///
+/// Anchors on [`NUMERIC_OOR_MARKER`] + [`NUMERIC_OOR_NOTE_END`]
+/// (both distinctive to the resolver-generated text) so a device name
+/// containing either literal string cannot mis-trigger the extractor.
+pub(crate) fn extract_numeric_note_from_error(resolve_error_msg: &str) -> Option<String> {
+    let marker_pos = resolve_error_msg.find(NUMERIC_OOR_MARKER)?;
+    // Walk back to the "index " that introduces the note.
+    let before_marker = &resolve_error_msg[..marker_pos];
+    let index_start = before_marker.rfind("index ")?;
+    // The note ends at (and includes) NUMERIC_OOR_NOTE_END. Anything
+    // after that closing fragment belongs to a separate note (e.g.
+    // the DirectSound hint) and stays out of the extracted string.
+    let tail = &resolve_error_msg[index_start..];
+    let end_offset = tail.find(NUMERIC_OOR_NOTE_END)?;
+    let full_end = index_start + end_offset + NUMERIC_OOR_NOTE_END.len();
+    Some(resolve_error_msg[index_start..full_end].to_owned())
+}
+
+/// Extract the `"; note: ...instead"` DirectSound remediation fragment
+/// from a `hosts::resolve_input` error message, if present. The
+/// resolver builds the fragment via
+/// [`crate::audio::hosts::directsound_only_hint`] and embeds it
+/// verbatim in the aggregate "input device not found" error, so
+/// parsing it back out is a stable round-trip — no second
+/// DirectSound enumeration required.
+///
+/// Robust against a user-renamed device that happens to contain the
+/// generic `; note: ` delimiter in its name: the extractor pivots on
+/// [`DIRECTSOUND_HINT_MARKER`] (unique to the resolver-generated
+/// text), then walks BACK to the introducing `; note: `. So a
+/// selector like `"Studio; note: Mic"` yields `None` here (no
+/// DirectSound marker present) even though `; note: ` appears in the
+/// message — the pre-fix `find("; note: ")` variant would have
+/// mis-sliced everything after the selector.
+///
+/// Returns `None` when the message carries no hint (non-Windows,
+/// unmatched selector, or the resolver simply didn't add one). Pure
+/// helper so the round-trip is exhaustively unit-testable.
+pub(crate) fn extract_directsound_hint_from_error(resolve_error_msg: &str) -> Option<String> {
+    // Anchor on the distinctive marker text, not the ambiguous `;
+    // note: ` delimiter. A user-renamed device name can contain the
+    // delimiter but cannot legitimately contain the marker string.
+    let marker_pos = resolve_error_msg.find(DIRECTSOUND_HINT_MARKER)?;
+    // Walk back to the "; note: " that INTRODUCES this hint, ignoring
+    // any earlier "; note: " that may appear inside the selector.
+    let before_marker = &resolve_error_msg[..marker_pos];
+    let note_start = before_marker.rfind("; note: ")?;
+    let hint_body = &resolve_error_msg[note_start..];
+    // Trim the resolver's closing paren off the end of the fragment
+    // so it's parenthesis-balanced when re-embedded onto "device not
+    // found".
+    let end = hint_body.rfind(')')?;
+    if end == 0 {
+        return None;
+    }
+    Some(hint_body[..end].to_owned())
+}
+
 /// Dry-run open the input device selected by `requested` and return the wire
 /// envelope. Empty `requested` picks the host's default input (same semantics
 /// as `dictate-mic --device ""`).
@@ -194,17 +335,7 @@ pub fn probe_device(requested: &str) -> DeviceProbeResult {
     } = match resolve_input(trimmed) {
         Ok(r) => r,
         Err(err) => {
-            let msg = err.to_string();
-            // Preserve the historic short-reason wording the UI parser
-            // renders for the two most common failure modes: default
-            // input missing, and a named device that didn't resolve.
-            let reason = if msg.contains("no default input device available") {
-                "no default input device available".to_owned()
-            } else if msg.starts_with("input device not found: ") {
-                "device not found".to_owned()
-            } else {
-                msg
-            };
+            let reason = probe_reason_for_resolve_error(&err.to_string());
             return DeviceProbeResult::fail(requested_label, reason);
         }
     };
@@ -326,137 +457,5 @@ fn pick_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, any
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dtype_label_matches_python_wire_tokens() {
-        // The Python probe emitted "int16" / "float32" — the UI's log-detail
-        // line and JSON envelope must keep those exact tokens so a downstream
-        // consumer that greps for them still works after the migration.
-        assert_eq!(dtype_label(SampleFormat::F32), "float32");
-        assert_eq!(dtype_label(SampleFormat::I16), "int16");
-        assert_eq!(dtype_label(SampleFormat::I32), "int32");
-    }
-
-    #[test]
-    fn endpoint_token_is_platform_specific() {
-        // cpal is WASAPI-only on Windows, ALSA on Linux, CoreAudio on macOS
-        // — one default host per OS, so the mapping is a compile-time
-        // constant. This pins the token so a future refactor can't drop it.
-        let token = default_endpoint_token();
-        if cfg!(windows) {
-            assert_eq!(token, "wasapi");
-        } else {
-            assert_eq!(token, "default");
-        }
-    }
-
-    #[test]
-    fn endpoint_token_for_host_maps_all_known_cpal_labels() {
-        // The UI parser (`crate::ui::device_test::endpoint_label`) renders
-        // whatever lowercase token we emit; sounddevice historically used
-        // the vocabulary below so this locks the mapping in place. A new
-        // cpal host falls through as its own lowercased label so the
-        // probe still emits something inspectable.
-        assert_eq!(endpoint_token_for_host("WASAPI"), "wasapi");
-        assert_eq!(endpoint_token_for_host("ASIO"), "asio");
-        assert_eq!(endpoint_token_for_host("ALSA"), "alsa");
-        assert_eq!(endpoint_token_for_host("PulseAudio"), "pulseaudio");
-        assert_eq!(endpoint_token_for_host("PipeWire"), "pipewire");
-        assert_eq!(endpoint_token_for_host("JACK"), "jack");
-        assert_eq!(endpoint_token_for_host("CoreAudio"), "coreaudio");
-        // Fallback: unknown label passes through lowercased so a future
-        // cpal host is still identifiable from the JSON envelope.
-        assert_eq!(endpoint_token_for_host("MysteryHost"), "mysteryhost");
-    }
-
-    #[test]
-    fn is_resampled_true_only_when_rate_not_16k() {
-        // Live capture always downsamples to 16 kHz, so the `resampled`
-        // flag is true iff the negotiated rate isn't already 16 kHz. Pin
-        // both the boundary (16000 is the ONLY false case) and a few
-        // typical rates so a refactor can't silently move the boundary.
-        assert!(!is_resampled(16_000));
-        assert!(is_resampled(8_000));
-        assert!(is_resampled(44_100));
-        assert!(is_resampled(48_000));
-        assert!(is_resampled(96_000));
-    }
-
-    #[test]
-    fn envelope_success_shape_matches_ui_parser_contract() {
-        // The UI's parse_device_test_json requires `usable`, `endpoint`,
-        // `samplerate`, `dtype`, `resampled`, `reason` fields. Serialise a
-        // canonical success result and cross-check every field lands with
-        // the expected null / value shape.
-        let result = DeviceProbeResult::ok("Yeti".to_owned(), "wasapi", 16_000, "int16", false);
-        let json: serde_json::Value =
-            serde_json::from_str(&result.to_json_line()).expect("valid JSON");
-        assert_eq!(json["device"], "Yeti");
-        assert_eq!(json["usable"], true);
-        assert_eq!(json["endpoint"], "wasapi");
-        assert_eq!(json["samplerate"], 16_000);
-        assert_eq!(json["dtype"], "int16");
-        assert_eq!(json["resampled"], false);
-        assert!(json["reason"].is_null());
-    }
-
-    #[test]
-    fn envelope_failure_shape_matches_ui_parser_contract() {
-        // On failure the reason MUST be populated and every open-only field
-        // MUST serialise as JSON null so the UI renders a red ✗ with the
-        // short reason (and never a spurious samplerate/endpoint pill).
-        let result = DeviceProbeResult::fail("Ghost".to_owned(), "device not found");
-        let json: serde_json::Value =
-            serde_json::from_str(&result.to_json_line()).expect("valid JSON");
-        assert_eq!(json["device"], "Ghost");
-        assert_eq!(json["usable"], false);
-        assert!(json["endpoint"].is_null());
-        assert!(json["samplerate"].is_null());
-        assert!(json["dtype"].is_null());
-        assert_eq!(json["resampled"], false);
-        assert_eq!(json["reason"], "device not found");
-    }
-
-    #[test]
-    fn envelope_json_is_a_single_line() {
-        // The UI parser tolerates surrounding log noise but every worker
-        // envelope has always been a single JSON object on its own line. A
-        // multi-line pretty-print would still parse, but would surprise any
-        // downstream tool that greps by line — so pin this.
-        let json = DeviceProbeResult::ok("Mic".to_owned(), "default", 48_000, "float32", true)
-            .to_json_line();
-        assert!(!json.contains('\n'), "envelope must be one line: {json}");
-    }
-
-    #[test]
-    fn empty_selector_probe_never_panics_and_reports_when_no_default() {
-        // Empty selector = system default. On a headless dev box with no
-        // default input, this must NOT panic — it must produce a
-        // well-formed unusable envelope so the CLI still emits valid JSON.
-        // Whichever way the host answers, the parser MUST cope.
-        let r = probe_device("");
-        let json: serde_json::Value = serde_json::from_str(&r.to_json_line()).expect("valid JSON");
-        // Either the box has a default input (usable=true) OR it doesn't
-        // (usable=false with a reason). No third state.
-        assert!(json["usable"].is_boolean());
-        if !r.usable {
-            assert!(r.reason.is_some(), "unusable result must carry a reason");
-        }
-    }
-
-    #[test]
-    fn missing_named_device_reports_not_found_without_panicking() {
-        // A name that cannot resolve on any host MUST report the short
-        // "device not found" reason (the same string the Python probe used)
-        // — that's what the UI's inline ✗ + reason renders.
-        let r = probe_device("__whisper_dictate_definitely_missing_device__");
-        assert!(!r.usable);
-        assert_eq!(r.reason.as_deref(), Some("device not found"));
-        assert!(r.endpoint.is_none());
-        assert!(r.samplerate.is_none());
-        assert!(r.dtype.is_none());
-        assert!(!r.resampled);
-    }
-}
+#[path = "device_probe_tests.rs"]
+mod tests;

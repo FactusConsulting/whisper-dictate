@@ -183,10 +183,14 @@ pub fn find_in<'a>(devices: &'a [DeviceInfo], query: &str) -> Option<&'a DeviceI
 /// entries keep their cpal-native indices so the capture path's numeric-index
 /// selector still resolves the same physical device.
 ///
-/// When `VOICEPI_AUDIO_BACKEND=rust` the Rust capture path calls
-/// `cpal::default_host()` and cannot open devices from other hosts. In that
-/// configuration only the default host's devices are returned so the picker
-/// never advertises a mic that capture would fail to open.
+/// The Rust capture path (`VOICEPI_AUDIO_BACKEND=rust`) walks the same host
+/// list as this enumeration via [`crate::audio::hosts::resolve_input`], so
+/// non-default cpal hosts (ASIO, JACK, PipeWire, Pulse) are safe to advertise
+/// — capture will pick whichever host actually exposes the selected name.
+/// Windows DirectSound is still skipped under Rust capture, though: cpal 0.18
+/// has no DirectSound host, so a DirectSound-only mic in the picker would
+/// fail to open. The Python `audio-in-python` path can open DirectSound, so
+/// the merge stays on for it.
 fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
     let default_host = cpal::default_host();
     let default_host_id = default_host.id();
@@ -203,18 +207,28 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
         &mut seen_names,
     );
 
-    // When Rust capture is active it uses cpal::default_host() and cannot
-    // resolve non-default-host devices, so skip them entirely.
-    let rust_capture = std::env::var("VOICEPI_AUDIO_BACKEND")
-        .ok()
-        .map(|v| v.trim().eq_ignore_ascii_case("rust"))
-        .unwrap_or(false);
-    if rust_capture {
-        return out;
+    let flow = enumeration_flow(include_directsound, current_backend_is_rust());
+    if flow.walk_non_default_hosts {
+        append_non_default_host_devices(default_host_id, &mut out, &mut seen_names);
+    }
+    if flow.merge_directsound {
+        append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
     }
 
-    // Non-default-host devices are useful for name-based selection so a saved
-    // mic exposed only via JACK/ASIO still shows up in the picker.
+    out
+}
+
+/// Walk every cpal host EXCEPT `default_host_id` and append their input
+/// devices to `out`. Split out so [`enumerate_all_hosts`] can express
+/// its decision matrix at one abstraction level AND so the "walked
+/// unconditionally" invariant (Codex P2 on `hosts.rs:129`, PR #663) can
+/// be pinned via [`enumeration_flow`] independently of the live cpal
+/// enumeration.
+fn append_non_default_host_devices(
+    default_host_id: cpal::HostId,
+    out: &mut Vec<DeviceInfo>,
+    seen_names: &mut Vec<String>,
+) {
     for host_id in cpal::available_hosts() {
         if host_id == default_host_id {
             continue;
@@ -226,28 +240,82 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
         // in `out`, not just after `out.len()`. The default host may have gaps
         // (blank-name or zero-channel devices were skipped) so `out.len()` can
         // be lower than the max native index and cause a collision.
-        let mut next_synthetic = next_synthetic_from(&out);
+        let mut next_synthetic = next_synthetic_from(out);
         append_host_devices(
             &host,
             /*default_input_index=*/ None,
             /*is_default_host=*/ false,
             &mut next_synthetic,
-            &mut out,
-            &mut seen_names,
+            out,
+            seen_names,
         );
     }
+}
 
-    // Windows: WASAPI (cpal's only Windows host) misses DirectSound-only
-    // inputs the sounddevice picker surfaces. Merge them by name so the Rust
-    // picker reaches parity with sounddevice — the prerequisite for defaulting
-    // the picker to this helper. Only when the caller explicitly asked (the
-    // sounddevice picker), so cpal-based callers never see a device cpal can't
-    // open. No-op on non-Windows and when the enumeration finds nothing.
-    if include_directsound {
-        append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
+/// Pure summary of the merge decisions [`enumerate_all_hosts`] makes,
+/// given the caller's opt-in flag and whether the Rust capture backend
+/// is active. Encodes the FULL post-fix decision matrix:
+///
+///   * `walk_non_default_hosts` — is the non-default cpal-host loop
+///     invoked? Post-fix this is UNCONDITIONALLY `true`; pre-#663 the
+///     code returned early under `rust_capture` and this was `false`.
+///   * `merge_directsound` — see [`should_merge_directsound_endpoints`].
+///
+/// Split out as a pure function so both properties are unit-testable
+/// without a live cpal backend AND without touching the process
+/// environment. The regression test for the picker fix asserts
+/// `walk_non_default_hosts == true` for BOTH `rust_capture=true` and
+/// `rust_capture=false`, which the pre-#663 code would have failed.
+pub(crate) fn enumeration_flow(include_directsound: bool, rust_capture: bool) -> EnumerationFlow {
+    EnumerationFlow {
+        walk_non_default_hosts: true,
+        merge_directsound: should_merge_directsound_endpoints(include_directsound, rust_capture),
     }
+}
 
-    out
+/// Result of [`enumeration_flow`] — the two boolean gates
+/// [`enumerate_all_hosts`] consults after processing the default host.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnumerationFlow {
+    pub walk_non_default_hosts: bool,
+    pub merge_directsound: bool,
+}
+
+/// Read the `VOICEPI_AUDIO_BACKEND=rust` env var. Split out (a) so
+/// [`enumerate_all_hosts`] reads at most once and (b) so the pure
+/// merge-gate helper doesn't touch the process environment.
+fn current_backend_is_rust() -> bool {
+    std::env::var("VOICEPI_AUDIO_BACKEND")
+        .ok()
+        .map(|v| v.trim().eq_ignore_ascii_case("rust"))
+        .unwrap_or(false)
+}
+
+/// Whether the picker enumeration should merge Windows DirectSound-only
+/// capture endpoints into the list.
+///
+/// * `include_directsound` — the caller's opt-in flag. The sounddevice
+///   picker passes `true`; every cpal-based caller passes `false`
+///   because cpal cannot open DirectSound endpoints.
+/// * `rust_capture` — whether `VOICEPI_AUDIO_BACKEND=rust` is active,
+///   i.e. the Rust capture path (cpal 0.18) will open selected devices.
+///
+/// Matrix:
+///   * `include_directsound=false` → never merge (cpal callers).
+///   * `include_directsound=true` + `rust_capture=false` → merge
+///     (Python sounddevice picker path).
+///   * `include_directsound=true` + `rust_capture=true` → DO NOT merge:
+///     the picker would advertise a mic the Rust capture path cannot
+///     open. This is the Codex P2 case on `hosts.rs:129` (PR #663) —
+///     the pre-fix code short-circuited the entire non-default-host
+///     walk under `rust_capture`, which ALSO hid ASIO/JACK/Pulse/PipeWire
+///     mics from the picker; only the DirectSound merge belongs under
+///     the gate.
+pub(crate) fn should_merge_directsound_endpoints(
+    include_directsound: bool,
+    rust_capture: bool,
+) -> bool {
+    include_directsound && !rust_capture
 }
 
 /// Returns the first synthetic index to use for non-default-host devices:
@@ -999,4 +1067,23 @@ mod tests {
         assert_eq!(out[0].index, 0);
         assert_eq!(out[0].name, "Only DirectSound Mic");
     }
+
+    // ----- Codex P2 (#663) regression tests live in the companion file ------
+    //
+    // The regression-test discipline scanner
+    // (`src/tests/python/test_regression_test_discipline.py`) matches
+    // NEW public symbols on their sibling `*_tests.rs` file, not on an
+    // inline `mod tests` inside the changed production file. The four
+    // regression tests for `EnumerationFlow` / `enumeration_flow` /
+    // `should_merge_directsound_endpoints` therefore live in
+    // `devices_tests.rs`; see the module-level doc-comment there for
+    // the pre-fix / post-fix contract they pin.
 }
+
+// Companion test file discovered by the regression-test discipline
+// scanner. See `devices_tests.rs` for the pinned invariants around
+// `EnumerationFlow`, `enumeration_flow`, and
+// `should_merge_directsound_endpoints`.
+#[cfg(test)]
+#[path = "devices_tests.rs"]
+mod devices_regression_tests;
