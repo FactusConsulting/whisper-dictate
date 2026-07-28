@@ -13,12 +13,13 @@
 //! records closest to the moment of interest (the tail of a PTT wedge
 //! repro) are exactly the ones a support thread never gets to read.
 
+use std::cell::RefCell;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::entrypoint::{
-    drain_diagnostics_on_exit_with, error_exit_shell, DIAG_DRAIN_DEADLINE,
+    drain_diagnostics_on_exit_with, error_exit_shell_with_teardown_using, DIAG_DRAIN_DEADLINE,
     DIAG_DRAIN_TIMEOUT_WARNING,
 };
 
@@ -98,34 +99,108 @@ fn production_exit_drain_warns_through_the_nonblocking_sink() {
     );
 }
 
-/// The composed teardown must not swallow the exit code, and must run
-/// the drain exactly once for either outcome of the wrapped closure.
-/// Uses the injected core so the test never touches the process-wide
-/// writer slot (a `OnceLock` a test cannot reset).
+/// The COMPOSED teardown - `error_exit_shell_with_teardown`'s own body,
+/// reached through its injected core - must run the drain exactly once,
+/// after the wrapped closure, for either outcome, and must not swallow
+/// the exit code.
+///
+/// Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_P: the previous shape called
+/// `error_exit_shell` and `drain_diagnostics_on_exit_with` as two
+/// unrelated statements, so it asserted only that each half works in
+/// isolation - deleting the drain from the production wrapper left it
+/// green. Driving the composition itself is what pins the runtime
+/// ordering; its companion below pins which teardown production
+/// injects.
+///
+/// The teardown stays injected: the real drain talks to a process-wide
+/// `OnceLock` writer that other tests in this binary install and that
+/// no test can reset, so running it here would stop that writer for
+/// every later test.
+///
+/// Un-fixed behaviour (a core that drops its `teardown()` call, or runs
+/// it before `f`): the recorded order is `["run"]` / `["drain", "run"]`
+/// instead of `["run", "drain"]`.
 #[test]
-fn teardown_drains_once_on_both_success_and_failure() {
+fn the_composed_exit_shell_drains_once_after_the_closure_on_both_outcomes() {
     for (label, outcome, expected) in [
         ("success", Ok(()), ExitCode::SUCCESS),
         ("failure", Err(anyhow::anyhow!("boom")), ExitCode::FAILURE),
     ] {
+        let order = RefCell::new(Vec::<&'static str>::new());
         let drains = AtomicUsize::new(0);
         let mut stderr = Vec::<u8>::new();
-        let code = error_exit_shell("error", &mut stderr, move || outcome);
-        drain_diagnostics_on_exit_with(
-            |_deadline| {
-                drains.fetch_add(1, Ordering::SeqCst);
-                true
+
+        let code = error_exit_shell_with_teardown_using(
+            "error",
+            &mut stderr,
+            || {
+                order.borrow_mut().push("run");
+                outcome
             },
-            |_line| panic!("must not warn when the drain completed in time"),
-            DIAG_DRAIN_DEADLINE,
+            || {
+                order.borrow_mut().push("drain");
+                drain_diagnostics_on_exit_with(
+                    |_deadline| {
+                        drains.fetch_add(1, Ordering::SeqCst);
+                        true
+                    },
+                    |_line| panic!("must not warn when the drain completed in time"),
+                    DIAG_DRAIN_DEADLINE,
+                );
+            },
         );
+
         assert!(same_code(code, expected), "{label}: wrong exit code");
+        assert_eq!(
+            *order.borrow(),
+            vec!["run", "drain"],
+            "{label}: the exit shell must run the wrapped closure first and \
+             drain afterwards, so records the closure queued on its way out \
+             still reach the tee file"
+        );
         assert_eq!(
             drains.load(Ordering::SeqCst),
             1,
             "{label}: the exit teardown must drain exactly once"
         );
     }
+}
+
+/// Companion to the composition test above: the production wrapper must
+/// inject the REAL drain.
+///
+/// The runtime test cannot check this - it supplies its own teardown on
+/// purpose - so the one remaining line of `error_exit_shell_with_teardown`
+/// is pinned at the source level, the same technique the sibling test
+/// uses on `drain_diagnostics_on_exit`. Together they close the hole
+/// Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_P named: with only the source-level
+/// `fn main` pin, deleting the drain from this wrapper left every test
+/// green while shipping binaries that exit undrained.
+///
+/// Un-fixed behaviour (wrapper body reduced to `|| {}`): panics with
+/// "must hand the production drain".
+#[test]
+fn the_production_exit_shell_injects_the_real_diagnostic_drain() {
+    let src = include_str!("entrypoint.rs");
+    // `error_exit_shell_with_teardown_using` has a three-parameter
+    // generic list, so this needle matches the wrapper only.
+    let body = src
+        .split_once("pub fn error_exit_shell_with_teardown<F, W>(")
+        .expect("error_exit_shell_with_teardown must exist")
+        .1;
+    let body = body.split_once("\n}").expect("function must terminate").0;
+    assert!(
+        body.contains("error_exit_shell_with_teardown_using"),
+        "the production exit shell must route through the injected core \
+         so the composition itself stays unit-tested. Offending body:\n{body}"
+    );
+    assert!(
+        body.contains("drain_diagnostics_on_exit()"),
+        "the production exit shell must hand the production drain \
+         `drain_diagnostics_on_exit` to its teardown core; a no-op teardown \
+         here ships binaries whose finite rdev verbs exit with the async \
+         diagnostic queue undrained. Offending body:\n{body}"
+    );
 }
 
 /// A drain that misses its deadline must warn - and must warn through

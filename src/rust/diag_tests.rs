@@ -1809,6 +1809,97 @@ fn drain_and_shutdown_gives_up_on_a_wedged_writer_within_the_deadline() {
     );
 }
 
+/// Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_T - the shutdown sweep must not be
+/// extended by traffic queued AFTER the sentinel.
+///
+/// The real scenario: the Windows `WH_KEYBOARD_LL` / rdev callback
+/// thread is unjoinable, so it keeps producing records all through
+/// teardown - the documented high-rate mouse trace is the case that
+/// motivated the queue in the first place. Everything the drain request
+/// covered is ordered ahead of the sentinel and therefore already
+/// written by the time the writer sees it; anything the sweep pulls
+/// afterwards is younger traffic that no `main` on its way out is
+/// waiting for. If the sweep follows that traffic, the caller sits out
+/// its whole deadline and reports a FAILED drain - warning the operator
+/// that the tee file is short - on a run where nothing was lost at all.
+///
+/// ## The deterministic seam (no sleeps, no scheduling race)
+///
+/// The producer IS the sink: every line the writer emits immediately
+/// re-enqueues one record on the writer's own thread, so each dequeue
+/// is replaced before the next `try_recv` runs and the queue provably
+/// never runs dry. That is exactly the "producer keeps up with the
+/// sink" steady state, reproduced without a second thread to race
+/// against. `CAPACITY` (4) is never approached - the steady-state depth
+/// is one record plus the sentinel - so nothing is shed and no marker
+/// perturbs the count.
+///
+/// Un-fixed behaviour (`while let Ok(queued) = rx.try_recv()` with no
+/// budget): the sweep never sees an empty queue, the ack never arrives,
+/// and this fails on "the drain must be acknowledged".
+#[test]
+fn drain_and_shutdown_is_not_extended_by_traffic_queued_after_the_sentinel() {
+    let _guard = diag_test_lock();
+
+    const CAPACITY: usize = 4;
+    const DEADLINE: std::time::Duration = std::time::Duration::from_millis(250);
+
+    let pending = AtomicUsize::new(0);
+    let dropped = AtomicU64::new(0);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
+    let feed = tx.clone();
+    let keep_feeding = std::sync::atomic::AtomicBool::new(true);
+
+    // Observe inside, assert outside: a panic in the scope would unwind
+    // while the writer is still sweeping, and `thread::scope` would then
+    // block forever joining it - an expected FAILURE turned into a HANG.
+    let (acked, elapsed) = std::thread::scope(|scope| {
+        let (pending_ref, dropped_ref) = (&pending, &dropped);
+        let feeding_ref = &keep_feeding;
+        scope.spawn(move || {
+            crate::diag::run_async_writer_loop(rx, CAPACITY, pending_ref, dropped_ref, |_line| {
+                if feeding_ref.load(Ordering::Relaxed) {
+                    // One record out, one record in - the callback
+                    // thread that will not stop firing during teardown.
+                    pending_ref.fetch_add(1, Ordering::Relaxed);
+                    let _ = feed.try_send(crate::diag::AsyncRecord::Line {
+                        drops_before: 0,
+                        message: "post-sentinel callback trace".to_owned(),
+                    });
+                }
+            });
+        });
+
+        // Prime the self-sustaining feed; from here the queue is never
+        // empty again until `keep_feeding` is cleared.
+        crate::diag::enqueue_async_into(&tx, &pending, &dropped, "seed".to_owned());
+
+        let started = std::time::Instant::now();
+        let acked = crate::diag::drain_and_shutdown_into(&tx, DEADLINE);
+        let elapsed = started.elapsed();
+
+        // Let the writer out so `thread::scope` can join it: on the
+        // un-fixed tree it is still chasing its own feed.
+        keep_feeding.store(false, Ordering::Relaxed);
+        (acked, elapsed)
+    });
+
+    assert!(
+        acked,
+        "the drain must be acknowledged even while a producer keeps \
+         feeding the queue: every record the request covered was ordered \
+         AHEAD of the sentinel and is already written, so following the \
+         younger traffic only burns the caller's {DEADLINE:?} budget and \
+         reports a lost-records warning on a run that lost nothing"
+    );
+    assert!(
+        elapsed < DEADLINE,
+        "an acknowledged drain must return well inside its deadline; a \
+         sweep dragged along by post-sentinel traffic took {elapsed:?} of \
+         {DEADLINE:?}"
+    );
+}
+
 /// The post-drain warning path must never wait on the tee-file mutex.
 ///
 /// This is the exact deadlock the deadline exists to avoid: the

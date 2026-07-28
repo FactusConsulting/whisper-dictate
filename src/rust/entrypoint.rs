@@ -101,13 +101,54 @@ where
 /// Wiring the drain here rather than per-verb means every current and
 /// future verb gets it for free, and there is exactly one place where
 /// the teardown order (run -> drain -> exit code) is decided.
+///
+/// The body is deliberately nothing but "hand the real drain to
+/// [`error_exit_shell_with_teardown_using`]", so the composition itself
+/// is unit-tested (against an injected teardown) and this function has
+/// only one thing left for a test to check: that the teardown it
+/// injects is the production drain. `entrypoint_tests` pins both halves
+/// (Codex P2 #681 PRRT_kwDOSfNjQs6UiJ_P).
 pub fn error_exit_shell_with_teardown<F, W>(prefix: &str, stderr: W, f: F) -> ExitCode
 where
     F: FnOnce() -> anyhow::Result<()>,
     W: Write,
 {
+    error_exit_shell_with_teardown_using(prefix, stderr, f, || {
+        drain_diagnostics_on_exit();
+    })
+}
+
+/// Dependency-injected core of [`error_exit_shell_with_teardown`]: run
+/// the closure, then the teardown, then hand back the exit code the
+/// closure earned.
+///
+/// The ordering is the contract, and all three parts of it matter:
+///
+/// * `f` runs FIRST, so the drain flushes records the closure itself
+///   queued on its way out.
+/// * `teardown` runs UNCONDITIONALLY - a failed run is exactly when the
+///   queued trace matters most.
+/// * the exit code survives the teardown: whatever the teardown reports
+///   about the diagnostic queue, it must not change what the process
+///   tells its caller.
+///
+/// Injecting the teardown is what makes that testable at all: the
+/// production drain talks to a process-wide `OnceLock` writer thread
+/// that no test can reset, and running it for real inside the test
+/// binary would shut that writer down for every later test.
+pub(crate) fn error_exit_shell_with_teardown_using<F, W, T>(
+    prefix: &str,
+    stderr: W,
+    f: F,
+    teardown: T,
+) -> ExitCode
+where
+    F: FnOnce() -> anyhow::Result<()>,
+    W: Write,
+    T: FnOnce(),
+{
     let code = error_exit_shell(prefix, stderr, f);
-    drain_diagnostics_on_exit();
+    teardown();
     code
 }
 

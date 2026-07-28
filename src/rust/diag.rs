@@ -828,14 +828,43 @@ fn write_async_record<F>(
     pending.fetch_sub(1, Ordering::Relaxed);
 }
 
-/// Handle an [`AsyncRecord::Shutdown`] sentinel: flush the backlog that
-/// was queued ahead of it, close any open overload episode, then
-/// acknowledge every drainer that asked.
+/// Handle an [`AsyncRecord::Shutdown`] sentinel: sweep up whatever the
+/// producer squeezed in behind it, close any open overload episode,
+/// then acknowledge every drainer that asked.
 ///
-/// `try_recv` (not `recv`) for the backlog because a producer racing the
-/// drain must not extend it past the caller's deadline; everything still
-/// sitting in the channel when the sentinel arrived was enqueued BEFORE
-/// it, so it is exactly the backlog the caller asked for.
+/// ## The backlog the caller asked for is ALREADY written
+///
+/// The sentinel travels the same FIFO queue as the records, so every
+/// record enqueued before [`drain_and_shutdown_into`] was called is
+/// ordered ahead of it and was therefore written by the loop's `Line`
+/// arm before this function was ever entered. Anything still in the
+/// channel here is YOUNGER than the drain request - traffic from an
+/// input callback that is still firing during teardown (the documented
+/// high-rate mouse trace), which no `main` on its way out is waiting
+/// for.
+///
+/// ## Why the sweep is bounded by `capacity`
+///
+/// `try_recv` (never `recv`) is the first half of the bound: a
+/// momentarily idle producer must not park the drain. But `try_recv`
+/// alone is not enough, because a producer that keeps up with the sink
+/// refills every slot the sweep frees, so an unbounded
+/// `while let Ok(..) = rx.try_recv()` follows it forever. The caller
+/// then hits its deadline and reports a FAILED drain - warning the
+/// operator that the tee file is short - even though every record the
+/// request covered had long since landed (Codex P2 #681
+/// PRRT_kwDOSfNjQs6UiJ_T).
+///
+/// `capacity` is the smallest budget that keeps the two things the
+/// sweep is actually for:
+///
+/// * a queue that was full when the sentinel arrived still gets its
+///   records written rather than discarded, and
+/// * a second concurrent drainer's sentinel is found. The channel holds
+///   at most `capacity` messages, so that sentinel can never sit more
+///   than `capacity` positions behind ours.
+///
+/// Past that the sweep stops and acks: bounded work, bounded teardown.
 ///
 /// [`close_burst_with_pending_drops`] before the ack is load-bearing:
 /// draining in the middle of an overload episode would otherwise drop
@@ -855,7 +884,10 @@ fn drain_and_ack_shutdown<F>(
     F: FnMut(&str),
 {
     let mut acks = vec![ack];
-    while let Ok(queued) = rx.try_recv() {
+    let mut budget = capacity;
+    while budget > 0 {
+        let Ok(queued) = rx.try_recv() else { break };
+        budget -= 1;
         match queued {
             AsyncRecord::Line {
                 drops_before,
@@ -938,8 +970,10 @@ pub(crate) fn run_async_writer_loop<F>(
                 &mut burst,
                 &mut sink,
             ),
-            // The orderly exit: flush the backlog queued ahead of the
-            // sentinel, close any open episode, acknowledge, stop.
+            // The orderly exit: the backlog queued ahead of the
+            // sentinel is already written (FIFO), so sweep up a bounded
+            // amount of younger traffic, close any open episode,
+            // acknowledge, stop.
             Ok(AsyncRecord::Shutdown(ack)) => {
                 drain_and_ack_shutdown(&rx, ack, capacity, pending, dropped, &mut burst, &mut sink);
                 return;
