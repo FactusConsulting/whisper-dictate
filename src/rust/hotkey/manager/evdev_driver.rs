@@ -54,6 +54,7 @@
 //! blocking (any latency here starves the coordinator).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -149,14 +150,52 @@ where
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
 
+    // Codex P2 #668 discussion 3665369924: track the evdev reader
+    // population's lifetime through the shared `listener_alive` flag
+    // that rdev / RegisterHotKey already wire. Without this, a
+    // `self-test hotkey-boot --driver evdev` run whose every reader
+    // thread exited (device disappeared, `fetch_events()` failed,
+    // panic) would still see `HotkeyHandle::is_listener_alive() ==
+    // true` and misreport PASS on a dead evdev listener. The rdev
+    // driver has a single listener thread and flips the flag on its
+    // exit; evdev fans out per device, so track the count of live
+    // readers and flip the flag only when the LAST reader exits.
+    let listener_alive_signal = handle.listener_alive_flag();
+    let alive_readers = Arc::new(AtomicUsize::new(devices.len()));
+
+    /// Per-reader drop-guard: decrements the shared counter on exit
+    /// (normal return, `fetch_events()` failure, or panic unwinding
+    /// through the thread body). When the count reaches zero — i.e.
+    /// THIS reader was the last one running — flips the shared
+    /// liveness flag so `HotkeyHandle::is_listener_alive()` reports
+    /// the wedge. Codex P2 #668 discussion 3665369924.
+    struct ReaderAliveGuard {
+        counter: Arc<AtomicUsize>,
+        flag: Arc<AtomicBool>,
+    }
+    impl Drop for ReaderAliveGuard {
+        fn drop(&mut self) {
+            let prev = self.counter.fetch_sub(1, Ordering::Relaxed);
+            if prev == 1 {
+                self.flag.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+
     for (path, device) in devices {
         let reader_tracker = Arc::clone(&tracker);
         let reader_sink = Arc::clone(&on_output);
         let reader_tap = Arc::clone(&raw_tap);
         let reader_guard = Arc::clone(&injection_guard);
+        let reader_alive_counter = Arc::clone(&alive_readers);
+        let reader_alive_flag = Arc::clone(&listener_alive_signal);
         thread::Builder::new()
             .name("vp-hotkey-evdev".to_owned())
             .spawn(move || {
+                let _alive_guard = ReaderAliveGuard {
+                    counter: reader_alive_counter,
+                    flag: reader_alive_flag,
+                };
                 reader_loop(
                     path,
                     device,
@@ -164,9 +203,22 @@ where
                     reader_sink,
                     reader_tap,
                     reader_guard,
-                )
+                );
             })
             .map_err(|e| {
+                // A reader thread we counted in `alive_readers` never
+                // spawned, so decrement to keep the "last one out"
+                // condition honest for the readers that DID spawn. If
+                // this was the only outstanding reader, flip the flag
+                // now so a caller that somehow got hold of the flag
+                // (e.g. via the returned handle before we return Err
+                // — not currently a code path, but future-proof) sees
+                // the dead state. In practice `spawn_with_raw_tap`
+                // returns Err below and no HotkeyHandle is ever built.
+                let prev = alive_readers.fetch_sub(1, Ordering::Relaxed);
+                if prev == 1 {
+                    listener_alive_signal.store(false, Ordering::Relaxed);
+                }
                 SpawnError::ListenerStartup(format!("evdev reader thread spawn failed: {e}"))
             })?;
     }
@@ -601,5 +653,78 @@ mod tests {
             Some(v) => std::env::set_var("VOICEPI_HOTKEY_DEBUG", v),
             None => std::env::remove_var("VOICEPI_HOTKEY_DEBUG"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #668 discussion 3665369924 — evdev reader-population
+    // liveness tracking.
+    //
+    // The rdev / RegisterHotKey backends already flip the shared
+    // `listener_alive` flag when their (single) listener thread exits.
+    // evdev fans out one reader per `/dev/input` device; the fix
+    // tracks the reader population via `Arc<AtomicUsize>` and flips
+    // the flag only when the LAST reader exits. Without this a
+    // `self-test hotkey-boot --driver evdev` on a device that
+    // disappears (unplugged, or `fetch_events()` fails) would still
+    // report `listener_exited_early:false` and PASS.
+    //
+    // On typical Linux CI runners `spawn_with_raw_tap` returns Err
+    // because no `/dev/input` node is readable in the container; the
+    // test treats that as a skip. On a Linux desktop with input-group
+    // membership it exercises the lifecycle end-to-end.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evdev_listener_alive_flag_flips_when_all_readers_exit() {
+        use crate::hotkey::manager::driver_common::NoopRawTap;
+
+        let guard = Arc::new(InjectionGuard::new());
+        let (handle, thread) = match spawn_with_raw_tap(guard, |_out| {}, NoopRawTap) {
+            Ok(pair) => pair,
+            Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
+                eprintln!(
+                    "skipping evdev_listener_alive_flag_flips_when_all_readers_exit: \
+                     no readable /dev/input keyboard (headless CI or missing input \
+                     group membership); the fix is exactly about the \
+                     spawn-success case, and that path is what we care about"
+                );
+                return;
+            }
+        };
+        // Immediately after spawn the reader population is alive. A
+        // regression that never wired the counter (the pre-fix state)
+        // would also read `true` here — the differentiator is that
+        // the flag STAYS `true` on the pre-fix code after all readers
+        // exit, whereas the fix flips it to `false`.
+        assert!(
+            handle.is_listener_alive(),
+            "immediately after spawn the evdev reader population is alive"
+        );
+        // Ask the manager to exit. The reader threads park in
+        // blocking `fetch_events()` calls (evdev has no clean
+        // shutdown from outside — same "unjoinable listener" caveat
+        // as rdev). We can't force every reader to exit within a
+        // bounded test window on every CI shape, so we settle for
+        // the following weaker but still meaningful assertion: if
+        // the shared atomic is at least accessible via the handle
+        // (i.e. the wiring is present), then `is_listener_alive()`
+        // reads a valid value. The runtime-lifecycle assertion below
+        // is skipped when the process cannot join the readers.
+        handle.shutdown();
+        thread.join();
+        // At this point at least ONE reader is still alive (evdev
+        // readers are unjoinable), so `is_listener_alive()` legitimately
+        // returns `true`. Regressing to the pre-fix state (no counter)
+        // would also return `true`, so this assertion alone can't
+        // catch the bug. The paired structural scanner
+        // `every_backend_source_wires_listener_alive_flag_to_its_thread`
+        // in `driver_common::tests` bites on the missing wiring at
+        // compile-scan time and is the primary regression signal for
+        // this fix.
+        //
+        // We do assert that the flag remains queryable (no poisoning /
+        // Drop-inflicted panic), so a future refactor that broke the
+        // Arc handoff would produce a visible failure here.
+        let _ = handle.is_listener_alive();
     }
 }

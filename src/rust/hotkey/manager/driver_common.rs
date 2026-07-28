@@ -379,6 +379,13 @@ mod tests {
                 "src/rust/hotkey/manager/win_registerhotkey.rs",
                 "win_registerhotkey",
             ),
+            // evdev fans out one reader per `/dev/input` device rather
+            // than a single listener, but the requirement is the same:
+            // the shared `listener_alive` flag must flip when the LAST
+            // reader exits so `self-test hotkey-boot --driver evdev`
+            // reports the dead-listener wedge (Codex P2 #668
+            // discussion 3665369924).
+            ("src/rust/hotkey/manager/evdev_driver.rs", "evdev"),
         ] {
             let src = fs::read_to_string(rel_path)
                 .or_else(|_| fs::read_to_string(rel_path.trim_start_matches("src/rust/")))
