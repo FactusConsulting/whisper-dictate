@@ -531,8 +531,8 @@ static ASYNC_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// the writer itself on its [`ASYNC_PARK_POLL`] wakeup.
 static ASYNC_DROPPED: AtomicU64 = AtomicU64::new(0);
 
-/// The coalesced load-shed marker the writer emits before the next
-/// record it writes after one or more drops.
+/// The marker the writer emits ONCE, at the moment an overload episode
+/// starts, immediately ahead of the first record accepted after the gap.
 ///
 /// A named function rather than an inline `format!` so the regression
 /// test can assert the exact shape without duplicating the format
@@ -549,53 +549,179 @@ pub(crate) fn async_dropped_marker(dropped: u64, capacity: usize) -> String {
     )
 }
 
-/// Emit the coalesced [`async_dropped_marker`] if anything was shed
-/// since the last time this ran, then reset the counter.
+/// The marker that CLOSES an overload episode: one line naming the whole
+/// episode's shed total, emitted when the queue has demonstrably caught
+/// up (see [`BurstState`]).
 ///
-/// `swap` rather than `load` + `store` so a drop racing in between the
-/// read and the reset is carried into the NEXT marker instead of being
-/// lost: the accounting is allowed to be late, never wrong.
-///
-/// One marker per burst, never one line per drop — a per-drop marker
-/// would be unbounded write amplification against the very sink that
-/// was too slow to keep up in the first place.
-fn emit_pending_async_drops<F>(dropped: &AtomicU64, capacity: usize, sink: &mut F)
-where
-    F: FnMut(&str),
-{
-    emit_async_drops(dropped.swap(0, Ordering::Relaxed), capacity, sink);
+/// Deliberately reports the episode TOTAL rather than "the part not yet
+/// named above": a reader scanning for the size of the gap should be
+/// able to read one number off one line instead of summing a
+/// start-marker and a remainder, and the wording says `in total` so the
+/// overlap with the start marker cannot be misread as two gaps.
+pub(crate) fn async_burst_summary_marker(dropped: u64, capacity: usize) -> String {
+    format!(
+        "[diag-async] overload burst ended: dropped={dropped} record(s) in \
+         total while the diagnostic queue (capacity={capacity}) stayed \
+         full - the trace is complete again from here on"
+    )
 }
 
-/// Emit the marker for an already-taken shed count. Split out from
-/// [`emit_pending_async_drops`] because the count a record carries was
-/// removed from the shared counter back when that record was ACCEPTED
-/// (see [`enqueue_async_into`]) — there is nothing left to swap by the
-/// time the writer gets there.
-fn emit_async_drops<F>(shed: u64, capacity: usize, sink: &mut F)
-where
-    F: FnMut(&str),
-{
-    if shed > 0 {
-        sink(&async_dropped_marker(shed, capacity));
+/// How many consecutive ACCEPTED records with nothing shed ahead of them
+/// end an overload episode.
+///
+/// The producer and the writer are back in balance once the queue has
+/// room at every enqueue, so a run of clean records is the "caught up"
+/// signal. It is a RUN rather than a single record because a queue
+/// hovering exactly at its bound alternates accept / shed, and ending
+/// the episode on the first clean record would restart it on the next
+/// shed — reintroducing the per-record amplification this exists to
+/// stop. 16 is small enough that the summary lands promptly in a
+/// resumed trace (16 records is a fraction of a second of the debug-level
+/// mouse stream) and large enough that ordinary jitter around the bound
+/// cannot flap it.
+///
+/// Not the only exit: an empty queue observed at an [`ASYNC_PARK_POLL`]
+/// wakeup also closes the episode, which is what covers a burst that
+/// ends the trace outright.
+pub(crate) const ASYNC_BURST_CLEAR_RUN: usize = 16;
+
+/// Writer-side state for one overload episode.
+///
+/// ## The amplification this exists to stop
+///
+/// Codex P2 #680 comment 3668174780. The shed count travels with the
+/// first record ACCEPTED after the gap (see [`enqueue_async_into`]), and
+/// under a SUSTAINED overload — the documented `VOICEPI_LOG=debug` mouse
+/// stream against a stalled AppData volume — every single dequeue frees
+/// exactly one slot, the producer refills it immediately, and more
+/// records are shed while the writer is still writing. So every record
+/// the writer dequeues carries a non-zero count, and a writer that emits
+/// a marker for each of them writes nearly ONE MARKER PER SURVIVING
+/// RECORD: it doubles the write volume against the very sink that was
+/// already too slow, which sheds more records, which emits more markers.
+///
+/// The fix is to treat an overload as an EPISODE rather than as a
+/// property of one record: announce it once when it starts, accumulate
+/// silently while it lasts, and summarise it once when the queue catches
+/// up. Marker volume becomes O(episodes) instead of O(records) while the
+/// two guarantees from the earlier rounds survive:
+///
+/// * **Nothing is lost.** Every carried count lands in [`Self::total`],
+///   and the closing summary names that total. The episode also closes
+///   on an idle-queue wakeup, so a burst that ends the trace outright is
+///   still reported within one [`ASYNC_PARK_POLL`].
+/// * **The start marker keeps its queue position.** It is written
+///   immediately ahead of the first record accepted after the gap, which
+///   is exactly where the previous round put it — records accepted
+///   BEFORE the gap are still written first.
+#[derive(Default)]
+struct BurstState {
+    /// Records shed in the current episode, whether or not a marker has
+    /// named them yet. Zero when no episode is open.
+    total: u64,
+    /// True once the episode-start marker has been written, so the
+    /// remaining records of the episode stay silent.
+    active: bool,
+    /// Consecutive accepted records with nothing shed ahead of them,
+    /// counted only while an episode is open.
+    clean_run: usize,
+}
+
+impl BurstState {
+    /// Fold one dequeued record's carried shed count into the episode,
+    /// writing AT MOST one marker: the start notice on the first shed of
+    /// a new episode, or the summary once [`ASYNC_BURST_CLEAR_RUN`]
+    /// clean records say the queue caught up. Called BEFORE the record
+    /// itself is written, so either marker keeps its queue position.
+    fn observe_record<F>(&mut self, drops_before: u64, capacity: usize, sink: &mut F)
+    where
+        F: FnMut(&str),
+    {
+        if drops_before > 0 {
+            self.clean_run = 0;
+            self.total += drops_before;
+            if !self.active {
+                self.active = true;
+                sink(&async_dropped_marker(drops_before, capacity));
+            }
+            return;
+        }
+        if !self.active {
+            return;
+        }
+        self.clean_run += 1;
+        if self.clean_run >= ASYNC_BURST_CLEAR_RUN {
+            self.close(capacity, sink);
+        }
+    }
+
+    /// Close the open episode and write its single summary line, then
+    /// reset so the next overload reports its own size rather than a
+    /// running total.
+    ///
+    /// When no start marker was ever written (a burst that never got a
+    /// record to ride on — the wedge case) the episode has no "above" to
+    /// summarise, so the plain [`async_dropped_marker`] is the honest
+    /// shape: one line, one gap, one count.
+    fn close<F>(&mut self, capacity: usize, sink: &mut F)
+    where
+        F: FnMut(&str),
+    {
+        if self.total > 0 {
+            let line = if self.active {
+                async_burst_summary_marker(self.total, capacity)
+            } else {
+                async_dropped_marker(self.total, capacity)
+            };
+            sink(&line);
+        }
+        *self = Self::default();
     }
 }
 
-/// Write one dequeued record: its carried gap marker first (so a reader
-/// sees the gap announced immediately ahead of the trace that resumed
-/// after it), then the line itself.
+/// Close the current episode after folding in whatever is still
+/// outstanding on the shared counter.
+///
+/// Called from the two places that KNOW the queue caught up: the
+/// [`ASYNC_PARK_POLL`] timeout (the queue is empty) and the loop exit
+/// (every sender is gone). `swap` rather than `load` + `store` so a drop
+/// racing in between the read and the reset is carried into the NEXT
+/// episode instead of being lost: the accounting is allowed to be late,
+/// never wrong.
+fn close_burst_with_pending_drops<F>(
+    burst: &mut BurstState,
+    dropped: &AtomicU64,
+    capacity: usize,
+    sink: &mut F,
+) where
+    F: FnMut(&str),
+{
+    burst.total += dropped.swap(0, Ordering::Relaxed);
+    burst.close(capacity, sink);
+}
+
+/// Write one dequeued record: its episode marker first, if this record
+/// is the one that opens or closes an episode (so a reader sees the gap
+/// announced immediately ahead of the trace that resumed after it), then
+/// the line itself.
 ///
 /// `pending` is decremented AFTER the write so a test polling
 /// `ASYNC_PENDING == 0` (via [`flush_async_for_tests`]) sees the file has
 /// actually been written to.
-fn write_async_record<F>(record: AsyncRecord, capacity: usize, pending: &AtomicUsize, sink: &mut F)
-where
+fn write_async_record<F>(
+    record: AsyncRecord,
+    capacity: usize,
+    pending: &AtomicUsize,
+    burst: &mut BurstState,
+    sink: &mut F,
+) where
     F: FnMut(&str),
 {
     let AsyncRecord::Line {
         drops_before,
         message,
     } = record;
-    emit_async_drops(drops_before, capacity, sink);
+    burst.observe_record(drops_before, capacity, sink);
     sink(&message);
     pending.fetch_sub(1, Ordering::Relaxed);
 }
@@ -629,6 +755,14 @@ where
 /// "reported within half a second, unconditionally"; the timeout arm is
 /// the only place a marker can be emitted with no record to attach it
 /// to, which is exactly the case that needs it.
+///
+/// ## Why the loop carries [`BurstState`]
+///
+/// A marker per dequeued record with a non-zero carried count is nearly
+/// one marker per surviving record under a sustained overload, which
+/// doubles the load on the sink that was already too slow (Codex P2 #680
+/// comment 3668174780). The state machine collapses that to one notice
+/// when the episode starts plus one summary when the queue catches up.
 pub(crate) fn run_async_writer_loop<F>(
     rx: Receiver<AsyncRecord>,
     capacity: usize,
@@ -638,18 +772,20 @@ pub(crate) fn run_async_writer_loop<F>(
 ) where
     F: FnMut(&str),
 {
+    let mut burst = BurstState::default();
     loop {
         match rx.recv_timeout(ASYNC_PARK_POLL) {
-            Ok(record) => write_async_record(record, capacity, pending, &mut sink),
-            // Parked with an empty queue: nothing shed up to this point
-            // will ever be carried by a record, so report it now.
+            Ok(record) => write_async_record(record, capacity, pending, &mut burst, &mut sink),
+            // Parked with an empty queue: the producer is no longer
+            // outrunning the sink, so the episode is over — report it,
+            // including anything shed that no record will ever carry.
             Err(RecvTimeoutError::Timeout) => {
-                emit_pending_async_drops(dropped, capacity, &mut sink);
+                close_burst_with_pending_drops(&mut burst, dropped, capacity, &mut sink);
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    emit_pending_async_drops(dropped, capacity, &mut sink);
+    close_burst_with_pending_drops(&mut burst, dropped, capacity, &mut sink);
 }
 
 /// Idempotently install the off-callback trace writer thread. Safe to
@@ -685,12 +821,13 @@ pub fn ensure_async_writer() {
 /// [`ASYNC_QUEUE_CAPACITY`] for the rationale).
 ///
 /// A drop is never silent to the LOG READER, though: it bumps
-/// [`ASYNC_DROPPED`], and the writer thread announces the total as one
-/// coalesced [`async_dropped_marker`] line before the next record it
-/// writes. Without that, a shed burst and a quiet period are
-/// indistinguishable in `gui-diagnostic.log`, which makes the trace
-/// untrustworthy for exactly the slow-sink scenario the queue exists
-/// for.
+/// [`ASYNC_DROPPED`], and the writer thread announces the overload as
+/// one [`async_dropped_marker`] line ahead of the first record accepted
+/// after the gap, plus one [`async_burst_summary_marker`] naming the
+/// episode total once the queue catches up (see [`BurstState`]). Without
+/// that, a shed burst and a quiet period are indistinguishable in
+/// `gui-diagnostic.log`, which makes the trace untrustworthy for exactly
+/// the slow-sink scenario the queue exists for.
 ///
 /// Callers on the LL-hook path MUST use this function (or the
 /// [`log_async!`] macro) instead of [`log!`]. The two are otherwise
