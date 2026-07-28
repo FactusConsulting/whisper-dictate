@@ -92,15 +92,46 @@ instead:
 
    ```powershell
    # Delete the saved STT credential first so the post-key path is
-   # exercised without any cross-account fallback.
-   cmdkey /delete:whisper-dictate/stt-api-key:groq   # or :openai
+   # exercised without any cross-account fallback. The credential
+   # target name Windows Credential Manager sees is `<user>.<service>`
+   # per `credential_target_name` in `src/rust/ui/api_keys.rs:404-410`
+   # (Codex P1 #672 `PRRT_kwDOSfNjQs6Uajz7` cmt 3665921389: the
+   # previous form `whisper-dictate/stt-api-key:<provider>` does NOT
+   # match the target the app writes, so the delete silently no-ops
+   # and step 4's post-key regression stays masked by the STT
+   # fallback path). Verify the entry is actually gone before
+   # continuing.
+   cmdkey /delete:stt-api-key:groq.whisper-dictate   # or stt-api-key:openai.whisper-dictate
+   cmdkey /list | Select-String "stt-api-key"        # must return NOTHING
    # Then either save the post key via Settings -> Post-processing ->
    # Save API key (which writes `post-api-key:<provider>`), or set
    # `post_processor=groq`/`openai` in config and save through the UI.
    ```
 
-   With the STT credential gone, launch the app and configure a cloud
-   post-processor. **`api ready` alone is not enough here** (Codex P2
+   **Close the saving app and re-launch with a scrubbed environment
+   before step 4b** (Codex P1 #672 `PRRT_kwDOSfNjQs6Uaj0Q` cmt
+   3665921411): Settings -> Save keeps the plaintext post key in
+   `post_api_key_input` (`src/rust/ui/settings_state.rs:330-334`),
+   and `worker_command` injects that in-memory value directly
+   (`src/rust/ui/app.rs:318-328`). Dictating in the same process
+   would therefore succeed even if reading `post-api-key:<provider>`
+   back from Windows Credential Manager is completely broken, so
+   the post-credential regression this step exists to catch stays
+   masked. Do exactly what step 3 already does for STT: exit the
+   app, open a NEW PowerShell with the key environment scrubbed,
+   then launch `whisper-dictate` fresh for the utterance below:
+
+   ```powershell
+   # Exit the app first (close the window / Ctrl+C the CLI), then:
+   Remove-Item Env:VOICEPI_STT_API_KEY, Env:VOICEPI_POST_API_KEY, `
+               Env:OPENAI_API_KEY, Env:GROQ_API_KEY `
+               -ErrorAction SilentlyContinue
+   whisper-dictate run   # fresh process, no in-memory post_api_key_input
+   ```
+
+   With the STT credential gone AND the app relaunched fresh,
+   configure a cloud post-processor. **`api ready` alone is not
+   enough here** (Codex P2
    #672 `PRRT_kwDOSfNjQs6UZY9r` cmt 3665545681): startup loads the
    post settings but the credential is only validated when
    `postprocess_text` actually processes an utterance
@@ -174,12 +205,15 @@ expected line):
 - Step 2a (`cmdkey /list`):              <paste one line>
 - Step 2b (`api-keys.json` present?):    yes / no
 - Step 3 (`whisper-dictate run` output): <paste 3-5 lines ending at `api ready` or the error>
+- Step 4-pre (STT cred deleted, `cmdkey /list | Select-String stt-api-key` empty): yes / no
+- Step 4-pre (app restarted fresh with env scrubbed after Settings -> Save): yes / no
 - Step 4a (post-processor utterance):    ran / did-not-run
 - Step 4b (post-key evidence line):      <paste history entry / [post] cleaned line / capture line>
 - Result:                                PASS / FAIL / BLOCKED (with reason)
 ```
 
-If step 3 fails, or step 4a is `did-not-run`, or step 4b is empty,
+If step 3 fails, or either of the step 4-pre lines is `no`, or step 4a
+is `did-not-run`, or step 4b is empty,
 DO NOT tag `v1.22.0`. Open a bug with the pasted output and hand back to
 the launcher credential-wiring owner. The unit tests (`credentials::tests`,
 `runtime::cloud_api_keys::cloud_api_keys_tests`,

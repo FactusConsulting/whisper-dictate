@@ -827,8 +827,22 @@ else
         hb_driver="$(printf '%s' "$hb_out" | grep -o '"driver":"[^"]*"' | head -n 1)"
         ok "hotkey-boot install passed (${hb_driver:-driver=?})"
     elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
-        warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
-    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input\|MissingDisplayError\|rdev listener failed to start"; then
+        # Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0I cmt 3665921401: an
+        # INSTALLED release binary is built by `.github/workflows/
+        # release.yml:122-123` with both `rust-hotkeys` and
+        # `rust-injection`, so a rebuild-with message here means the
+        # shipped artifact is missing those features -- a packaging
+        # regression that the smoke exists to catch. Fall through to
+        # `bad` in that case (`CMD_SOURCE=installed`, i.e.
+        # `whisper-dictate` on PATH). Only the dev/source fallback
+        # (`CMD_SOURCE=source`, Python) is allowed to warn-skip,
+        # because that path never claimed to be the shipping binary.
+        if [ "$CMD_SOURCE" = "installed" ]; then
+            bad "hotkey-boot FAILED: installed release binary is missing rust-hotkeys / rust-injection features -- packaging regression: $(printf '%s\n' "$hb_out" | head -n 1)"
+        else
+            warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
+        fi
+    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input\|MissingDisplayError"; then
         # On non-Windows: a headless / no-display box legitimately fails
         # install here and it is an environment gap, not a regression. On
         # Windows (Codex P2 #672 PRRT_kwDOSfNjQs6UZY7Q): a permission
@@ -847,16 +861,26 @@ else
         #   wording the later `dictate-run` smoke matches, so a Wayland
         #   auto-evdev install without input-group membership produces a
         #   warn on the shared Linux path rather than a false-bad.
-        # * `MissingDisplayError` / `rdev listener failed to start` --
-        #   rdev's actual serialized error on headless Linux / WSL when
-        #   auto selects rdev and no X display exists (Codex P2 #672
-        #   PRRT_kwDOSfNjQs6UZ5Bd cmt 3665819810). rdev formats its
-        #   error via `format!("{err:?}")` (rdev_driver.rs:377), and
-        #   `InstallError::ListenerStartup` wraps it as `rdev listener
-        #   failed to start: MissingDisplayError`. That string contains
-        #   neither `ListenerStartup` (the enum-variant name) nor
-        #   `no X display` (rdev never emits that literal), so without
-        #   this addition a headless install falls through to `bad`.
+        # * `MissingDisplayError` -- rdev's actual serialized error on
+        #   headless Linux / WSL when auto selects rdev and no X display
+        #   exists (Codex P2 #672 PRRT_kwDOSfNjQs6UZ5Bd cmt 3665819810).
+        #   rdev formats its error via `format!("{err:?}")`
+        #   (rdev_driver.rs:377), and `InstallError::ListenerStartup`
+        #   wraps it as `rdev listener failed to start: MissingDisplayError`.
+        #   That string contains neither `ListenerStartup` (the
+        #   enum-variant name) nor `no X display` (rdev never emits that
+        #   literal), so without the missing-display token a headless
+        #   install falls through to `bad`.
+        #
+        #   Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0A cmt 3665921394:
+        #   deliberately do NOT match the generic
+        #   `rdev listener failed to start` wrapper -- that string
+        #   prefixes EVERY rdev listener-startup failure (see
+        #   `InstallError::ListenerStartup` in `src/rust/hotkey/mod.rs:191`),
+        #   so a future non-headless rdev regression (permission denied,
+        #   OS refusal, etc.) would silently downgrade to `warn` and let
+        #   the release ship. Only the specific `MissingDisplayError`
+        #   token identifies the genuine headless environment gap.
         case "$(uname -s 2>/dev/null || echo unknown)" in
             MINGW*|MSYS*|CYGWIN*|Windows_NT)
                 bad "hotkey-boot FAILED on Windows: permission/listener refusal is a regression, not an environment gap: $(printf '%s\n' "$hb_out" | head -n 1)"
