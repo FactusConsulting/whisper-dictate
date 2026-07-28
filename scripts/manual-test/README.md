@@ -73,10 +73,39 @@ instead:
    `x startup error: openai API requires OPENAI_API_KEY, ...` -- which means
    the launcher never read the credential store.
 4. Repeat with a cloud **post-processor** configured (`post_processor=groq` or
-   `openai`) and only the post key saved, to cover the second account name.
+   `openai`) and only the post key saved. **`api ready` alone is not enough
+   here** (Codex P2 #672 `PRRT_kwDOSfNjQs6UZY9r` cmt 3665545681): startup
+   loads the post settings but the credential is only validated when
+   `postprocess_text` actually processes an utterance
+   (`src/python/whisper_dictate/vp_dictate.py:384-385`). To exercise the
+   post-key path you MUST trigger at least one utterance through the
+   post-processor and observe one of the following as evidence the saved
+   post key reached the worker:
 
-Record the result in the release-candidate notes. If step 3 fails, the launcher
-credential path is broken on Windows regardless of what the Linux smoke says.
+   * The dictation-history entry's `post_processor` block shows a
+     non-empty `provider` + non-empty `changed`/`text` (i.e. the cleanup
+     actually ran). Setting `metrics_jsonl=<path>` in the config
+     surfaces the same payload as JSONL if the UI history is
+     inconvenient.
+   * OR the runtime-log tab shows a `[post] cleaned in Nms via <provider>`
+     line (or the Rust `postprocess::run` equivalent) for that
+     utterance.
+   * OR, on Windows, a `netsh trace` / Fiddler capture of the
+     dictation confirms the outgoing Authorization header carries the
+     saved key value (redact before pasting).
+
+   A `post_error` containing `refusing to send stored post-processing
+   key` is ALSO a valid pass -- it means #666 landed and the key
+   correctly refused an unrelated endpoint. If instead you see
+   `post_error` containing `requires OPENAI_API_KEY` / `requires
+   GROQ_API_KEY`, the saved post key did NOT reach the worker: same
+   FAIL as step 3.
+
+Record the result in the release-candidate notes. If step 3 fails, or
+step 4 fails to produce ANY of the evidence lines above (i.e. the
+utterance never invoked the post-processor at all), the launcher
+credential path is broken on Windows regardless of what the Linux smoke
+says.
 
 ### Recording template (fill in and paste into the RC release notes)
 
@@ -96,15 +125,18 @@ expected line):
 - Step 2a (`cmdkey /list`):              <paste one line>
 - Step 2b (`api-keys.json` present?):    yes / no
 - Step 3 (`whisper-dictate run` output): <paste 3-5 lines ending at `api ready` or the error>
-- Step 4 (post-key path variant):        pass / fail  (paste output if fail)
+- Step 4a (post-processor utterance):    ran / did-not-run
+- Step 4b (post-key evidence line):      <paste history entry / [post] cleaned line / capture line>
 - Result:                                PASS / FAIL / BLOCKED (with reason)
 ```
 
-If step 3 or 4 fails, DO NOT tag `v1.22.0`. Open a bug with the pasted output
-and hand back to the launcher credential-wiring owner. The unit tests
-(`credentials::tests`, `runtime::cloud_api_keys::cloud_api_keys_tests`,
+If step 3 fails, or step 4a is `did-not-run`, or step 4b is empty,
+DO NOT tag `v1.22.0`. Open a bug with the pasted output and hand back to
+the launcher credential-wiring owner. The unit tests (`credentials::tests`,
+`runtime::cloud_api_keys::cloud_api_keys_tests`,
 `ui::cloud_settings_tests::ui_worker_command_*`) cover the resolution logic
-but cannot reach the real OS keyring on this machine.
+but cannot reach the real OS keyring on this machine, and startup-only
+verification cannot catch a credential that is loaded but never sent.
 
 ## Full-app checklist (run the actual GUI / worker)
 

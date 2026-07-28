@@ -828,7 +828,7 @@ else
         ok "hotkey-boot install passed (${hb_driver:-driver=?})"
     elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
         warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
-    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission"; then
+    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input"; then
         # On non-Windows: a headless / no-display box legitimately fails
         # install here and it is an environment gap, not a regression. On
         # Windows (Codex P2 #672 PRRT_kwDOSfNjQs6UZY7Q): a permission
@@ -837,6 +837,16 @@ else
         # need elevated ones, so a "permission" error at boot means the
         # backend actually failed. Fall through to `bad` in that case
         # so the release gate trips.
+        #
+        # Match set:
+        # * `ListenerStartup` / `no X display` -- rdev pathways under X.
+        # * `permission` -- generic Linux permission text.
+        # * `no readable keyboard` / `usermod -aG input` -- evdev's actual
+        #   permission refusal when the user is not in the `input` group
+        #   (Codex P2 #672 PRRT_kwDOSfNjQs6UZY9m cmt 3665545676). Same
+        #   wording the later `dictate-run` smoke matches, so a Wayland
+        #   auto-evdev install without input-group membership produces a
+        #   warn on the shared Linux path rather than a false-bad.
         case "$(uname -s 2>/dev/null || echo unknown)" in
             MINGW*|MSYS*|CYGWIN*|Windows_NT)
                 bad "hotkey-boot FAILED on Windows: permission/listener refusal is a regression, not an environment gap: $(printf '%s\n' "$hb_out" | head -n 1)"
