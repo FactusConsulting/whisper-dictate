@@ -82,6 +82,9 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Set { key, value, config } => {
             let path = resolve_config_path(config.as_deref());
             let saved_to = set_value(&key, &value, &path)?;
+            if let Some(warning) = post_set_engine_hint(&key, &value) {
+                eprintln!("{warning}");
+            }
             println!("{}", saved_to.display());
             Ok(())
         }
@@ -103,6 +106,28 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Post-set advisory for a key/value that `set_value` accepted — used to
+/// surface engine-mismatch hints so a scripting user learns *before* the
+/// runtime silently falls back. Returns `None` when nothing needs
+/// saying.
+///
+/// Today only wired for the `device` key: `cuda` is a legal config value
+/// on every build (see [`crate::whisper::device_options`]), but on a
+/// CPU-only Rust build only the Python fallback engine can honour it;
+/// [`missing_device_hint`] holds the human-facing explanation for that
+/// engine split. The rejection path already appends the same hint to
+/// the error; this branch mirrors it on the accepted-but-caveated path.
+///
+/// Codex P2 #655 r3663634825.
+pub(crate) fn post_set_engine_hint(key: &str, value: &str) -> Option<String> {
+    if key != "device" {
+        return None;
+    }
+    let canonical = crate::whisper::device_options::canonicalize_device_value(value);
+    let hint = crate::whisper::device_options::missing_device_hint(&canonical)?;
+    Some(format!("warning: {hint}"))
 }
 
 /// Resolve the config file path for a `config get`/`set`/`list` CLI call.
@@ -203,5 +228,75 @@ mod tests {
             reparsed, settings,
             "apply_to_object/from_value round-trip lost or corrupted a value"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Codex P2 #655 r3663634825 — post-set engine hint. `config set
+    // device cuda` on a CPU-only Rust build accepts the value (the
+    // Python fallback engine honours it) but the Rust engine will
+    // silently fall back to CPU. Warn the user at the CLI so scripting
+    // users learn about the engine split without having to read
+    // `docs/CONFIGURATION.md`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn post_set_engine_hint_none_for_non_device_keys() {
+        // Only the `device` key has an engine-split hint today. Other
+        // keys must never trigger a spurious warning — a `model` set
+        // to `"large-v3-turbo"` is universally accepted.
+        assert!(super::post_set_engine_hint("model", "large-v3-turbo").is_none());
+        assert!(super::post_set_engine_hint("audio_device", "Yeti").is_none());
+        assert!(super::post_set_engine_hint("stt_backend", "openai").is_none());
+    }
+
+    #[test]
+    fn post_set_engine_hint_none_for_universally_supported_device_values() {
+        // `auto` and `cpu` work on every build regardless of compiled
+        // GPU backend; must not trip the warning.
+        assert!(super::post_set_engine_hint("device", "auto").is_none());
+        assert!(super::post_set_engine_hint("device", "cpu").is_none());
+        assert!(super::post_set_engine_hint("device", "  AUTO  ").is_none());
+    }
+
+    #[test]
+    fn post_set_engine_hint_fires_for_cuda_on_cpu_only_rust_build() {
+        // On a CPU-only Rust build (no `whisper-rs-vulkan` /
+        // `whisper-rs-cuda` feature), `missing_device_hint` returns
+        // Some(...) for `cuda`; the warning wrapper must surface it.
+        // On a build WITH a GPU backend the hint is None (nothing to
+        // explain), so this only asserts wrapping in the CPU-only
+        // configuration this test crate is built with.
+        if crate::whisper::device_options::any_gpu_backend_compiled() {
+            // No hint expected on GPU builds — nothing to test.
+            assert!(super::post_set_engine_hint("device", "cuda").is_none());
+            return;
+        }
+        let warning = super::post_set_engine_hint("device", "cuda")
+            .expect("cuda on CPU-only Rust build must produce a warning");
+        assert!(
+            warning.starts_with("warning: "),
+            "warning must have a leading `warning: ` prefix so a scripting user \
+             can grep for it, got: {warning:?}",
+        );
+        assert!(
+            warning.contains("Python") && warning.contains("CUDA"),
+            "warning must mention the Python fallback engine and CUDA so the \
+             scripting user learns which engine will pick the value up, got: {warning:?}",
+        );
+    }
+
+    #[test]
+    fn post_set_engine_hint_canonicalises_before_checking() {
+        // The CLI setter canonicalises the value before persisting, but
+        // the caller (handle_command) passes the RAW argv string here.
+        // Uppercase / whitespace input must produce the same warning as
+        // the canonical form so users don't get inconsistent messaging
+        // depending on how they typed the value.
+        if crate::whisper::device_options::any_gpu_backend_compiled() {
+            return; // no hint on GPU builds — nothing to test
+        }
+        assert!(super::post_set_engine_hint("device", "cuda").is_some());
+        assert!(super::post_set_engine_hint("device", "CUDA").is_some());
+        assert!(super::post_set_engine_hint("device", "  cuda\t").is_some());
     }
 }

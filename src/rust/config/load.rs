@@ -59,6 +59,21 @@ impl AppSettings {
         }
         self.stt_timeout_ms = string_value(object, "stt_timeout_ms", &defaults.stt_timeout_ms);
         self.device = string_value(object, "device", &defaults.device);
+        // Codex P2 #655 r3663634829: canonicalise the on-disk device value
+        // (trim + lower-case ASCII) so a hand-edited `config.json` with
+        // `"  CUDA  "` — accepted by the CLI setter's canonicalisation but
+        // NOT trimmed by the Python fallback's `vp_cli._resolve_device`
+        // (case-only) — still resolves to `"cuda"` in memory. The
+        // corresponding `apply_to_object` writer then persists the
+        // canonical form on the next save, so the file self-heals without
+        // a heavy migration pass (the migration pass was removed in #648
+        // because it silently coerced CLI-set values).
+        //
+        // Empty is preserved so a bare `"device"` key falls back to the
+        // schema default (`auto`) via `string_value`'s fallback path.
+        if !self.device.is_empty() {
+            self.device = crate::whisper::device_options::canonicalize_device_value(&self.device);
+        }
         self.compute_type = string_value(object, "compute_type", "");
         self.audio_device = string_value(object, "audio_device", "");
         self.lang = string_value(object, "lang", "");
@@ -376,13 +391,49 @@ mod tests {
     #[test]
     fn unrecognised_device_value_is_left_for_the_validator() {
         // A hand-edited / typo value (`"gpu"`, `"foo"`) must NOT be
-        // silently rewritten — that would hide typos on save. The
-        // validator's "must be one of …" error is the intended UX. Uses a
-        // probe-shaped value to lock in the invariant the schema round-trip
-        // test relies on (see config::tests::every_schema_setting_is_wired…).
+        // silently rewritten to a valid device — that would hide typos on
+        // save. The validator's "must be one of …" error is the intended
+        // UX. Uses a probe-shaped value to lock in the invariant the
+        // schema round-trip test relies on (see
+        // config::tests::every_schema_setting_is_wired…).
+        //
+        // NOTE: after the load-time canonicalisation added for Codex P2
+        // #655 r3663634829, the value IS trimmed + lower-cased (so
+        // `"  GPU  "` becomes `"gpu"`), but only that shape-preserving
+        // normalisation happens — an unrecognised token still stays
+        // unrecognised. The probe fixture (`"auto_wdprobe"`) is already
+        // trimmed lower-case ASCII, so this invariant is unchanged.
         let value = serde_json::json!({ "device": "auto_wdprobe" });
         let settings = AppSettings::from_value(value).unwrap();
         assert_eq!(settings.device, "auto_wdprobe");
+    }
+
+    #[test]
+    fn hand_edited_device_value_is_canonicalised_on_load() {
+        // Codex P2 #655 r3663634829: a hand-edited `config.json` with
+        // `"  CUDA  "` (or `"Auto"`, `"\tCPU\n"`) previously survived the
+        // load-time round-trip unchanged. That broke the Python fallback
+        // engine's `vp_cli._resolve_device`, which lower-cases but does
+        // not trim, so an untrimmed value was rejected at runtime; and
+        // it broke `runtime/install_plan::wants_cuda_runtime`, which
+        // compares the raw string to `"cuda"`. Canonicalising in
+        // `from_value` fixes both by ensuring the in-memory `device`
+        // field is always trimmed + ASCII-lower-cased — the same shape
+        // the CLI setter already writes.
+        for (raw, expected) in [
+            ("  CUDA  ", "cuda"),
+            ("Auto", "auto"),
+            ("\tCPU\n", "cpu"),
+            ("cuda", "cuda"),
+            ("cpu", "cpu"),
+        ] {
+            let json = serde_json::json!({ "device": raw });
+            let settings = AppSettings::from_value(json).unwrap();
+            assert_eq!(
+                settings.device, expected,
+                "hand-edited device={raw:?} must canonicalise to {expected:?}"
+            );
+        }
     }
 
     #[test]
