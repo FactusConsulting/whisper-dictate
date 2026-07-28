@@ -30,7 +30,7 @@ pub struct AudioCaptureOptions {
     /// even the first cpal callback on high-latency devices.
     pub duration: Duration,
     /// Device selector — empty string picks the system default input.
-    /// Same lookup precedence as `crate::audio::capture::pick_device`
+    /// Same lookup precedence as `crate::audio::hosts::resolve_input`
     /// (exact → substring → numeric).
     pub device: String,
     /// When true, treat "captured only silence" (RMS < 1e-6) as a hard
