@@ -326,9 +326,30 @@ impl WhisperDictateApp {
         let mut post_key_provenance = crate::runtime::cloud_api_keys::PostKeyProvenance::None;
         if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
             let post_key = self.post_api_key_input.trim();
+            let stt_key = self.stt_api_key_input.trim();
+            // Codex P1 round-3 (`PRRT_kwDOSfNjQs6UZdNL` cmt 3665509647):
+            // `load_post_api_key_state` (see `ui/api_keys.rs:204-209`)
+            // populates `post_api_key_input` from the `VOICEPI_STT_API_KEY`
+            // env fallback when no post-specific credential is saved. The
+            // field is then NON-EMPTY, so the old "empty post -> SttMirror,
+            // else PostSpecific" rule stamped the OpenAI post endpoint for a
+            // key that was actually the Groq STT key -- another
+            // cross-provider approval. The fix: treat provenance as SttMirror
+            // whenever the post field's VALUE equals the STT field's value.
+            // Reason it's safe both ways: if the user pasted the same key
+            // into both fields intentionally, that key IS the STT key (they
+            // configured it as such), so binding the marker to the STT
+            // endpoint is the correct + strictest classification. If the
+            // values genuinely differ, the post field holds a post-specific
+            // key and PostSpecific applies.
             let (key, provenance) = if post_key.is_empty() {
                 (
-                    self.stt_api_key_input.trim(),
+                    stt_key,
+                    crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,
+                )
+            } else if !stt_key.is_empty() && post_key == stt_key {
+                (
+                    post_key,
                     crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,
                 )
             } else {

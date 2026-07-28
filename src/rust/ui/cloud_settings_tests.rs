@@ -195,6 +195,54 @@ fn ui_worker_command_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() 
 }
 
 #[test]
+fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
+    // Codex P1 round-3 (`PRRT_kwDOSfNjQs6UZdNL` cmt 3665509647)
+    // regression pin. `load_post_api_key_state` in `ui/api_keys.rs`
+    // populates `post_api_key_input` from the `VOICEPI_STT_API_KEY`
+    // fallback when no post-specific credential is saved. In that
+    // shape, the post field is NON-EMPTY but its value is a copy of
+    // the STT key. Un-fixed shape: `App::worker_command` classified
+    // any non-empty post field as `PostSpecific` and stamped the
+    // post endpoint -- so a Groq STT / OpenAI post setup with the
+    // fallback-loaded field got an OpenAI marker for a Groq key,
+    // approving a cross-provider send. Fixed shape: when the post
+    // field's VALUE equals the STT field's value, provenance falls
+    // through to `SttMirror` regardless of how the field got loaded.
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "groq".to_owned(),
+        stt_base_url: "https://api.groq.com/openai/v1".to_owned(),
+        post_processor: "openai".to_owned(),
+        post_base_url: "https://api.openai.com/v1".to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    // Both fields hold the same value -- exactly what happens after
+    // load_post_api_key_state falls back to the STT env var. The user
+    // has NOT typed a post-specific key.
+    app.stt_api_key_input = "groq-stt-key".to_owned();
+    app.post_api_key_input = "groq-stt-key".to_owned();
+
+    let command = app.worker_command();
+
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        marker,
+        Some("https://api.groq.com/openai/v1"),
+        "post field == STT field must classify as SttMirror -- the key IS \
+         the STT key regardless of how it got loaded into the post field. \
+         Stamping the OpenAI post endpoint here (as the un-fixed shape \
+         did) would approve sending the Groq STT key to OpenAI. \
+         command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
 fn ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection() {
     // Codex P1 #666 #2 (`PRRT_kwDOSfNjQs6UXpnu`) UI-side regression pin.
     // When only an STT key is pushed (post_processor local at spawn), the
