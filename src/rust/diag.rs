@@ -366,7 +366,10 @@ pub fn write_line(message: &str) {
     let ms = START.get_or_init(Instant::now).elapsed().as_millis();
     let line = format!("t={ms}ms {message}");
     let stderr = std::io::stderr();
-    write_line_to(&mut stderr.lock(), &line);
+    // The guard is handed over BY VALUE, not by `&mut`: `write_line_to`
+    // drops it before it touches the tee mutex. See its docs for why
+    // that ordering is load-bearing.
+    write_line_to(stderr.lock(), &line);
 }
 
 /// Sink half of [`write_line`], parameterised over the "stderr" writer
@@ -393,11 +396,32 @@ pub fn write_line(message: &str) {
 /// a writer whose `write` always errors and assert both halves of the
 /// contract directly, rather than only banning `eprintln!` textually
 /// (Codex P2 #668 discussion 3666529224).
-pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {
+///
+/// ## Lock ordering: the stderr sink is taken BY VALUE and dropped first
+///
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv. This runs on the async writer
+/// thread, and the tee lock below is the one that a wedged AppData
+/// volume holds for an unbounded time. Production passes
+/// `std::io::stderr().lock()` here, so as long as this function held
+/// that guard across the tee write, a wedged writer pinned the PROCESS
+/// stderr lock too — and [`write_line_nonblocking`], whose whole job is
+/// to log past exactly such a wedge inside
+/// [`crate::entrypoint::DIAG_DRAIN_DEADLINE`], blocked on
+/// `stderr.lock()` and never reached its `try_lock`. The 500 ms exit
+/// budget then bought nothing: teardown hung on the stderr lock instead
+/// of on the tee mutex.
+///
+/// Taking `W` by value (rather than `&mut W`) is what makes the fix
+/// enforceable: the explicit `drop` below releases the caller's guard,
+/// and a regression that reintroduced `&mut W` could not compile the
+/// `drop` at all. Do NOT reorder the tee write above it.
+pub(crate) fn write_line_to<W: Write>(mut stderr_sink: W, line: &str) {
     // Always stderr — CLI users get real-time output, GUI users on
     // non-installed builds still see whatever their console has.
     let _ = writeln!(stderr_sink, "{line}");
     let _ = stderr_sink.flush();
+    // Release the stderr guard BEFORE the potentially wedged tee write.
+    drop(stderr_sink);
     if let Ok(mut guard) = diag_file().lock() {
         if let Some(file) = guard.as_mut() {
             // Best-effort - ignore write errors. A full disk or a
@@ -431,7 +455,7 @@ pub fn write_line_nonblocking(message: &str) -> bool {
     let ms = START.get_or_init(Instant::now).elapsed().as_millis();
     let line = format!("t={ms}ms {message}");
     let stderr = std::io::stderr();
-    write_line_to_nonblocking(&mut stderr.lock(), &line)
+    write_line_to_nonblocking(stderr.lock(), &line)
 }
 
 /// Sink half of [`write_line_nonblocking`], parameterised over the
@@ -442,9 +466,15 @@ pub fn write_line_nonblocking(message: &str) -> bool {
 ///
 /// `try_lock` (never `lock`) is the whole point of this function - do
 /// not "simplify" it back to a blocking lock.
-pub(crate) fn write_line_to_nonblocking<W: Write>(stderr_sink: &mut W, line: &str) -> bool {
+///
+/// The stderr sink is taken by value and dropped before the tee attempt
+/// for the same reason [`write_line_to`] does it: this is a teardown
+/// path, and holding the process stderr lock across ANY tee interaction
+/// is what let a wedged sink stall an unrelated logger.
+pub(crate) fn write_line_to_nonblocking<W: Write>(mut stderr_sink: W, line: &str) -> bool {
     let _ = writeln!(stderr_sink, "{line}");
     let _ = stderr_sink.flush();
+    drop(stderr_sink);
     match diag_file().try_lock() {
         Ok(mut guard) => {
             if let Some(file) = guard.as_mut() {
@@ -1085,11 +1115,15 @@ const ASYNC_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// call is ordered ahead of it; the writer flushes them, emits any
 /// outstanding drop marker, acks and exits.
 ///
-/// Returns `true` when the writer acknowledged within `deadline` (or
-/// when no writer was ever installed - nothing to drain), `false` on
-/// timeout or a writer that had already stopped responding. The bool
-/// is what lets the caller warn the operator that the tee file may be
-/// short of records; production must NOT treat it as fatal.
+/// Returns `true` ONLY when the writer acknowledged within `deadline`,
+/// or when no writer was ever installed (nothing was ever queued, so
+/// nothing can be lost). Everything else is `false`: a timeout, and -
+/// since Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz - a receiver that had
+/// already disappeared, which means the thread never started (
+/// [`ensure_async_writer`] swallows spawn errors) or panicked, and took
+/// the queue with it unacknowledged. The bool is what lets the caller
+/// warn the operator that the tee file may be short of records;
+/// production must NOT treat it as fatal.
 pub fn drain_and_shutdown(deadline: Duration) -> bool {
     match ASYNC_QUEUE_TX.get() {
         Some(tx) => drain_and_shutdown_into(tx, deadline),
@@ -1115,8 +1149,22 @@ pub(crate) fn drain_and_shutdown_into(tx: &SyncSender<AsyncRecord>, deadline: Du
     loop {
         match tx.try_send(sentinel) {
             Ok(()) => break,
-            // Writer thread already gone - nothing left to drain.
-            Err(TrySendError::Disconnected(_)) => return true,
+            // The receiver is gone and our sentinel never reached a
+            // writer, so nothing acknowledged the drain and whatever
+            // was queued died with the thread. Reachable in production:
+            // `ensure_async_writer` deliberately swallows a thread-spawn
+            // error, and a panicking writer drops its receiver the same
+            // way. Reporting success here would suppress the exit
+            // warning and contradict this function's documented
+            // contract on exactly the runs where diagnostics WERE lost
+            // (Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz).
+            //
+            // There is no "already acknowledged, then disconnected"
+            // case to rescue: an ack can only arrive on the `ack_rx`
+            // below, which is reached only after a sentinel was
+            // accepted. Every `Disconnected` on this send is therefore
+            // an unexpected one.
+            Err(TrySendError::Disconnected(_)) => return false,
             Err(TrySendError::Full(returned)) => {
                 let remaining = deadline.saturating_sub(started.elapsed());
                 if remaining.is_zero() {
@@ -1131,6 +1179,11 @@ pub(crate) fn drain_and_shutdown_into(tx: &SyncSender<AsyncRecord>, deadline: Du
         }
     }
     let remaining = deadline.saturating_sub(started.elapsed());
+    // `is_ok()` folds BOTH failure shapes into `false` on purpose: a
+    // `Timeout` (the writer is wedged) and a `Disconnected` (the writer
+    // dropped the ack sender without answering - it panicked mid-drain)
+    // are equally "the tee file may be short of records", which is the
+    // only thing the caller does with this bool.
     ack_rx.recv_timeout(remaining).is_ok()
 }
 

@@ -573,7 +573,7 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
     // half that owns both writes (see `diag.rs`).
     let body = scan_fn_body(
         "src/rust/diag.rs",
-        "pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {",
+        "pub(crate) fn write_line_to<W: Write>(mut stderr_sink: W, line: &str) {",
     );
     assert!(
         !body.code.contains("eprintln!"),
@@ -607,6 +607,21 @@ fn write_line_does_not_use_eprintln_or_panicking_writes_for_stderr_tee() {
         body.raw.contains("diag_file()"),
         "write_line_to must still append to the diagnostic file. \
          Offending body:\n{}",
+        body.raw
+    );
+    // Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv: the stderr guard must be
+    // released BEFORE the blocking tee lock, or a wedged AppData volume
+    // pins the process stderr lock and `write_line_nonblocking` can
+    // never reach its `try_lock`. The runtime companion is
+    // `a_wedged_tee_write_does_not_pin_the_stderr_lock_against_the_teardown_warning`.
+    let drop_at = body.code.find("drop(stderr_sink)");
+    let tee_at = body.code.find("diag_file()");
+    assert!(
+        matches!((drop_at, tee_at), (Some(d), Some(t)) if d < t),
+        "write_line_to must `drop(stderr_sink)` BEFORE it locks \
+         `diag_file()`; holding the process stderr guard across the tee \
+         write lets a wedged sink pin process exit past \
+         DIAG_DRAIN_DEADLINE. Offending body:\n{}",
         body.raw
     );
 }
@@ -1396,6 +1411,84 @@ fn an_overload_burst_is_summarised_once_when_the_queue_catches_up() {
     );
 }
 
+/// The interaction between #680's [`BurstState`] and this PR's drain:
+/// an exit that lands MID-EPISODE must still write the episode summary.
+///
+/// A burst is announced once when it opens and summarised once when the
+/// queue catches up. A drain arriving before the queue caught up is the
+/// LAST thing that will ever happen on this writer, so if the shutdown
+/// arm just acks and returns, the episode's closing summary is never
+/// written and the tee file's final word about a wedged sink is the
+/// episode's OPENING count instead of its total - on precisely the
+/// crash-adjacent exit both mechanisms exist to make readable.
+///
+/// Deterministic and inline: records are handed to the writer pre-built
+/// so the carried counts are chosen rather than raced for, and the
+/// sentinel is already in the channel before the loop starts, so there
+/// is no thread to join and no timing to assert.
+///
+/// Un-fixed behaviour (drain arm without
+/// `close_burst_with_pending_drops`): the summary line is missing and
+/// the outstanding counter is left non-zero.
+#[test]
+fn a_drain_landing_mid_burst_still_writes_the_episode_summary() {
+    let _guard = diag_test_lock();
+
+    const CAPACITY: usize = 16;
+    let pending = AtomicUsize::new(0);
+    let dropped = AtomicU64::new(0);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(CAPACITY);
+
+    // One record carrying a shed count opens the episode...
+    pending.fetch_add(1, Ordering::Relaxed);
+    tx.send(crate::diag::AsyncRecord::Line {
+        drops_before: 7,
+        message: "after the gap".to_owned(),
+    })
+    .expect("the queue accepts the opening record");
+    // ...and the drain arrives while it is still open, far short of the
+    // ASYNC_BURST_CLEAR_RUN clean records that would close it normally.
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
+    tx.send(crate::diag::AsyncRecord::Shutdown(ack_tx))
+        .expect("the queue accepts the sentinel");
+    // Plus a shed that no record will ever carry - the drain is the last
+    // chance to report it.
+    dropped.store(3, Ordering::Relaxed);
+
+    let mut recorded: Vec<String> = Vec::new();
+    crate::diag::run_async_writer_loop(rx, CAPACITY, &pending, &dropped, |line| {
+        recorded.push(line.to_owned());
+    });
+
+    assert_eq!(
+        recorded,
+        vec![
+            crate::diag::async_dropped_marker(7, CAPACITY),
+            "after the gap".to_owned(),
+            crate::diag::async_burst_summary_marker(10, CAPACITY),
+        ],
+        "the shutdown arm must close the open episode, folding in the 3 \
+         records no accepted record could carry, so the tee file names \
+         the episode TOTAL before the process goes away"
+    );
+    assert!(
+        ack_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok(),
+        "the drain must still be acknowledged after the summary is written"
+    );
+    assert_eq!(
+        pending.load(Ordering::Relaxed),
+        0,
+        "the drained record must still be counted out of `pending`"
+    );
+    assert_eq!(
+        dropped.load(Ordering::Relaxed),
+        0,
+        "closing the episode on the drain must reset the shared counter"
+    );
+}
+
 /// A healthy, drained pipeline must report nothing shed. Names
 /// `async_dropped_count` so the accessor has a test that exercises it,
 /// and pins the other half of the contract: the marker is an anomaly
@@ -1773,6 +1866,163 @@ fn write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended() {
         !contents.contains("[test] contended nonblocking line"),
         "the contended write must have been SKIPPED, not queued behind the \
          mutex; got {contents:?}"
+    );
+}
+
+/// Codex P2 #681 PRRT_kwDOSfNjQs6UfWDz - an unexpected writer
+/// disconnect is a drain FAILURE, not a success.
+///
+/// Reachable in production: `ensure_async_writer` deliberately swallows
+/// a thread-spawn error, so the sender can be installed with no writer
+/// behind it at all; a writer that panicked drops its receiver the same
+/// way. Either way the sentinel never reaches anybody, nothing
+/// acknowledges the drain, and whatever was queued dies with the
+/// process. Reporting `true` there suppresses the caller's exit warning
+/// on exactly the runs where diagnostics WERE lost.
+///
+/// Fully deterministic - no threads, no timing: the receiver is dropped
+/// before the call, so `try_send` reports `Disconnected` on its first
+/// attempt.
+///
+/// Un-fixed behaviour (`Err(TrySendError::Disconnected(_)) => true`):
+/// panicked "a drain whose writer is GONE must report failure".
+#[test]
+fn drain_and_shutdown_reports_failure_when_the_writer_is_disconnected() {
+    let _guard = diag_test_lock();
+
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::diag::AsyncRecord>(4);
+    // Whatever is still queued dies here, exactly as it would if the
+    // writer thread had panicked or never spawned.
+    drop(rx);
+
+    let started = std::time::Instant::now();
+    let acked = crate::diag::drain_and_shutdown_into(&tx, std::time::Duration::from_millis(500));
+    let elapsed = started.elapsed();
+
+    assert!(
+        !acked,
+        "a drain whose writer is GONE must report failure: nothing \
+         acknowledged the shutdown and every queued record was lost, so \
+         `true` here silently suppresses the exit warning that tells the \
+         operator the tee file may be short"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "a disconnected channel must be detected immediately, not waited \
+         out for the whole deadline; took {elapsed:?}"
+    );
+}
+
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UfWDv - the PRODUCTION lock ordering,
+/// not just the tee mutex held from the test thread.
+///
+/// `write_line_nonblocking_skips_the_tee_when_the_mutex_is_contended`
+/// above holds `diag_file()` directly, so it proves the `try_lock` but
+/// says nothing about the OTHER lock production takes. The real wedge
+/// has two locks in it: the async writer thread is inside
+/// `write_line_to`, and `write_line` handed it the process
+/// `std::io::stderr()` guard. If `write_line_to` keeps that guard across
+/// its blocking `diag_file().lock()`, a wedged AppData volume pins the
+/// process stderr lock as well - and then `write_line_nonblocking`
+/// blocks on `stderr.lock()` and NEVER REACHES its `try_lock`. The
+/// 500 ms `DIAG_DRAIN_DEADLINE` buys nothing: teardown hangs on the
+/// stderr lock instead of the tee mutex, which is exactly what the
+/// non-blocking sink was added to prevent.
+///
+/// So this reproduces the production ordering: a thread takes the real
+/// stderr guard and hands it to `write_line_to` (the same call
+/// `write_line` makes) while this thread holds the tee mutex, then a
+/// second thread runs the teardown-warning path.
+///
+/// Deterministic seam, no sleeps: the wedger announces itself only
+/// AFTER it holds the stderr lock, so by the time the probe starts the
+/// contended state provably exists. Every rendezvous receive is bounded,
+/// so a harness bug asserts instead of hanging.
+///
+/// Nothing panics while `held` is alive: unwinding through a live
+/// `MutexGuard` would POISON the process-wide tee mutex and silently
+/// disable the file write for every later test in this binary.
+///
+/// Un-fixed behaviour (`write_line_to(&mut stderr.lock(), ...)`, guard
+/// alive across the tee lock): the probe never returns and this test
+/// fails on the bounded receive.
+#[test]
+fn a_wedged_tee_write_does_not_pin_the_stderr_lock_against_the_teardown_warning() {
+    let _guard = diag_test_lock();
+    reset_level_for_tests();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("lock-ordering.log");
+    install_gui_diagnostic_log(&path).expect("install lock-ordering sink");
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+    let (probe_tx, probe_rx) = std::sync::mpsc::channel::<bool>();
+
+    // Hold the lock a wedged AppData volume would be holding.
+    let held = crate::diag::tee_mutex_for_tests().lock().unwrap();
+
+    // The "async writer thread": production ordering, verbatim.
+    std::thread::spawn(move || {
+        let stderr_guard = std::io::stderr().lock();
+        // The token is the seam: it is sent while the stderr lock is
+        // provably held, so the probe below cannot start early.
+        let _ = ready_tx.send(());
+        crate::diag::write_line_to(stderr_guard, "t=0ms [test] wedged writer line");
+    });
+
+    let wedger_ready = ready_rx.recv_timeout(std::time::Duration::from_secs(10));
+
+    // The teardown warning path, on its own thread so a regression
+    // blocks IT rather than the test body.
+    std::thread::spawn(move || {
+        let attempted =
+            crate::diag::write_line_nonblocking("[test] teardown warning past the wedge");
+        let _ = probe_tx.send(attempted);
+    });
+
+    let probed = probe_rx.recv_timeout(std::time::Duration::from_secs(5));
+
+    // Release the wedge BEFORE any assertion can unwind.
+    drop(held);
+
+    assert!(
+        wedger_ready.is_ok(),
+        "harness: the wedging thread never reported holding the stderr \
+         lock, so nothing about the lock ordering was exercised"
+    );
+    assert_eq!(
+        probed,
+        Ok(false),
+        "the teardown warning must reach its `try_lock` and report \
+         `false` (stderr only) while the tee mutex is wedged. An Err \
+         here means it never returned at all - it blocked acquiring the \
+         process stderr lock that `write_line_to` was still holding \
+         across its blocking tee write, so a wedged AppData sink pins \
+         process exit past DIAG_DRAIN_DEADLINE. Release the stderr \
+         guard before the tee write."
+    );
+
+    // The wedger must still complete its tee write once unblocked -
+    // releasing stderr early must not have cost the file record.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut contents = String::new();
+    while std::time::Instant::now() < deadline {
+        contents = std::fs::read_to_string(&path).unwrap_or_default();
+        if contents.contains("[test] wedged writer line") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(
+        contents.contains("[test] wedged writer line"),
+        "the wedged writer must still land its tee record once the mutex \
+         is free; releasing the stderr guard early must not drop the \
+         file write. Tee contents: {contents:?}"
+    );
+    assert!(
+        !contents.contains("[test] teardown warning past the wedge"),
+        "the teardown warning must have SKIPPED the tee, not queued \
+         behind the wedge. Tee contents: {contents:?}"
     );
 }
 
