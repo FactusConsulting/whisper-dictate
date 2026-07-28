@@ -21,6 +21,7 @@
     "autostart",
     "autodetection",
     "arecord",
+    "ASIO",
     "behaviour",
     "bfloat",
     "bindgen",
