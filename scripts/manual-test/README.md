@@ -62,10 +62,17 @@ instead:
    Get-Content "$env:APPDATA\whisper-dictate\api-keys.json" -ErrorAction SilentlyContinue
    ```
 
-3. Close the app. In a NEW PowerShell with no key exported:
+3. Close the app. In a NEW PowerShell with NO key exported (Codex P1 #672
+   `PRRT_kwDOSfNjQs6UZ4Fj` cmt 3665665836: `VOICEPI_POST_API_KEY` MUST
+   be removed too -- both `runtime::cloud_api_keys` and Python
+   `_postprocess_api_key` prefer the environment value, so an ambient
+   post key inherited from the "optional cloud-call setup" at the top
+   of this file would mask a broken Credential Manager lookup in step 4):
 
    ```powershell
-   Remove-Item Env:VOICEPI_STT_API_KEY, Env:OPENAI_API_KEY, Env:GROQ_API_KEY -ErrorAction SilentlyContinue
+   Remove-Item Env:VOICEPI_STT_API_KEY, Env:VOICEPI_POST_API_KEY, `
+               Env:OPENAI_API_KEY, Env:GROQ_API_KEY `
+               -ErrorAction SilentlyContinue
    whisper-dictate run
    ```
 
@@ -80,26 +87,35 @@ instead:
    (`src/python/whisper_dictate/vp_dictate.py:384-385`). To exercise the
    post-key path you MUST trigger at least one utterance through the
    post-processor and observe one of the following as evidence the saved
-   post key reached the worker:
+   post key reached the worker AND the provider request succeeded:
 
    - The dictation-history entry's `post_processor` block shows a
-     non-empty `provider` + non-empty `changed`/`text` (i.e. the cleanup
-     actually ran). Setting `metrics_jsonl=<path>` in the config
-     surfaces the same payload as JSONL if the UI history is
-     inconvenient.
+     non-empty `provider` AND `post_fallback == false` AND
+     `post_error` is EMPTY (Codex P2 #672 `PRRT_kwDOSfNjQs6UZ4Fn`
+     cmt 3665665841: a failed provider request returns the original
+     text and keeps the configured `provider` in the envelope while
+     setting `post_fallback=true` + a `post_error`, so provider-only
+     evidence is NOT enough). `changed` MAY be false because a
+     successful cleanup can legitimately return unchanged text.
+     Setting `metrics_jsonl=<path>` in the config surfaces the same
+     payload as JSONL if the UI history is inconvenient.
    - OR the runtime-log tab shows a `[post] cleaned in Nms via <provider>`
      line (or the Rust `postprocess::run` equivalent) for that
-     utterance.
+     utterance -- that line is emitted only on the success path.
    - OR, on Windows, a `netsh trace` / Fiddler capture of the
      dictation confirms the outgoing Authorization header carries the
-     saved key value (redact before pasting).
+     saved key value AND the server responded with a 2xx (redact
+     credentials before pasting).
 
    A `post_error` containing `refusing to send stored post-processing
    key` is ALSO a valid pass -- it means #666 landed and the key
-   correctly refused an unrelated endpoint. If instead you see
-   `post_error` containing `requires OPENAI_API_KEY` / `requires
-   GROQ_API_KEY`, the saved post key did NOT reach the worker: same
-   FAIL as step 3.
+   correctly refused an unrelated endpoint, which proves the key
+   REACHED the worker. Any other `post_error` (`requires OPENAI_API_KEY`,
+   `requires GROQ_API_KEY`, HTTP 401/403/429, `transport`, `terminal`)
+   is a FAIL: either the saved post key did NOT reach the worker
+   (Credential Manager regression, same class as step 3) OR the key
+   reached but the provider rejected it (bad key, expired, revoked).
+   Either way DO NOT tag the RC.
 
 Record the result in the release-candidate notes. If step 3 fails, or
 step 4 fails to produce ANY of the evidence lines above (i.e. the
