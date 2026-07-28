@@ -82,15 +82,15 @@ instead:
    post-processor and observe one of the following as evidence the saved
    post key reached the worker:
 
-   * The dictation-history entry's `post_processor` block shows a
+   - The dictation-history entry's `post_processor` block shows a
      non-empty `provider` + non-empty `changed`/`text` (i.e. the cleanup
      actually ran). Setting `metrics_jsonl=<path>` in the config
      surfaces the same payload as JSONL if the UI history is
      inconvenient.
-   * OR the runtime-log tab shows a `[post] cleaned in Nms via <provider>`
+   - OR the runtime-log tab shows a `[post] cleaned in Nms via <provider>`
      line (or the Rust `postprocess::run` equivalent) for that
      utterance.
-   * OR, on Windows, a `netsh trace` / Fiddler capture of the
+   - OR, on Windows, a `netsh trace` / Fiddler capture of the
      dictation confirms the outgoing Authorization header carries the
      saved key value (redact before pasting).
 
