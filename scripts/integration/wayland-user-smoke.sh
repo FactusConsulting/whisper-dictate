@@ -166,6 +166,18 @@ resolve_hotkey_driver_selftest() {
     else
         WAYLAND_AUTO=rdev
     fi
+    # Same logic for the RegisterHotKey aliases: `resolve_hotkey_driver`
+    # returns `register` on non-Linux / non-Darwin (i.e. Git Bash on
+    # Windows, which is where this script's `register` cases run for
+    # real), and `rdev` on Linux/Darwin where `spawn_register` falls back
+    # to rdev. Hard-coding `rdev` here would fail the self-test on Git
+    # Bash — Codex P2 review of PR #650 (discussion_r3663290098).
+    _uname_s="$(uname -s 2>/dev/null)"
+    if [ "$_uname_s" = "Linux" ] || [ "$_uname_s" = "Darwin" ]; then
+        REGISTER_FALLBACK=rdev
+    else
+        REGISTER_FALLBACK=register
+    fi
 
     # -- Auto / session detection (platform-dependent expectations) ----------
     #         expect         DRIVER      XDG        WAYLAND_DISPLAY
@@ -199,17 +211,18 @@ resolve_hotkey_driver_selftest() {
 
     # -- Windows `RegisterHotKey` aliases -----------------------------------
     # `register` / `win_registerhotkey` / `wm_hotkey` all opt into the
-    # Windows-only RegisterHotKey backend. On Linux (this script's home
-    # turf) the spawn shim falls back to rdev; the shell mirror follows
-    # suit so the downstream `hotkey capture --driver register` assertion
-    # doesn't expect a listener name that only exists on Windows.
-    _drv_case rdev    "register"           "wayland"  "wayland-0"
-    _drv_case rdev    "win_registerhotkey" ""         ""
-    _drv_case rdev    "WM_HOTKEY"          "wayland"  ""
-    _drv_case rdev    "  Register  "       ""         ""
+    # Windows-only RegisterHotKey backend. On Linux / Darwin the spawn
+    # shim falls back to rdev; on Git Bash the mirror keeps the `register`
+    # name so the downstream `hotkey capture --driver register` assertion
+    # matches the platform. Expectation is platform-derived (see
+    # `$REGISTER_FALLBACK` above) — Codex P2 review of PR #650.
+    _drv_case "$REGISTER_FALLBACK" "register"           "wayland"  "wayland-0"
+    _drv_case "$REGISTER_FALLBACK" "win_registerhotkey" ""         ""
+    _drv_case "$REGISTER_FALLBACK" "WM_HOTKEY"          "wayland"  ""
+    _drv_case "$REGISTER_FALLBACK" "  Register  "       ""         ""
 
     if [ -z "$_drv_fails" ]; then
-        ok "hotkey-driver resolution mirrors DriverKind::parse + resolve_driver (auto=$WAYLAND_AUTO on $(uname -s 2>/dev/null || echo unknown))"
+        ok "hotkey-driver resolution mirrors DriverKind::parse + resolve_driver (auto=$WAYLAND_AUTO, register=$REGISTER_FALLBACK on $(uname -s 2>/dev/null || echo unknown))"
     else
         bad "hotkey-driver mirror has drifted from the Rust:$_drv_fails"
     fi
