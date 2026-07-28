@@ -50,7 +50,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -409,6 +409,64 @@ pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {
     }
 }
 
+/// Non-blocking variant of [`write_line`] for teardown / recovery call
+/// sites that must never wait on the tee-file mutex.
+///
+/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j. The exit drain
+/// ([`crate::entrypoint::drain_diagnostics_on_exit`]) emits a warning
+/// when [`drain_and_shutdown`] misses its deadline. The likeliest
+/// reason that drain timed out is that the async writer thread is
+/// parked INSIDE [`write_line_to`] holding this very mutex - a wedged
+/// AppData volume is exactly the scenario the deadline exists for - so
+/// a blocking `log!` there would queue behind the stuck writer and hang
+/// process teardown indefinitely, well past the deadline that exists to
+/// prevent precisely that.
+///
+/// Returns `true` when the tee-file write was attempted, `false` when
+/// the line went to stderr only (mutex contended or poisoned).
+pub fn write_line_nonblocking(message: &str) -> bool {
+    if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
+        return false;
+    }
+    let ms = START.get_or_init(Instant::now).elapsed().as_millis();
+    let line = format!("t={ms}ms {message}");
+    let stderr = std::io::stderr();
+    write_line_to_nonblocking(&mut stderr.lock(), &line)
+}
+
+/// Sink half of [`write_line_nonblocking`], parameterised over the
+/// "stderr" writer exactly as [`write_line_to`] is, so the companion
+/// test can assert BOTH halves of the contract (stderr still gets the
+/// line; the tee write is skipped rather than waited on) while holding
+/// the tee mutex from the test thread.
+///
+/// `try_lock` (never `lock`) is the whole point of this function - do
+/// not "simplify" it back to a blocking lock.
+pub(crate) fn write_line_to_nonblocking<W: Write>(stderr_sink: &mut W, line: &str) -> bool {
+    let _ = writeln!(stderr_sink, "{line}");
+    let _ = stderr_sink.flush();
+    match diag_file().try_lock() {
+        Ok(mut guard) => {
+            if let Some(file) = guard.as_mut() {
+                let _ = writeln!(file, "{line}");
+                let _ = file.flush();
+            }
+            true
+        }
+        // Contended (a wedged writer holds it) or poisoned - drop the
+        // tee write rather than block. stderr already has the line.
+        Err(_) => false,
+    }
+}
+
+/// Test-only handle on the tee-file mutex so the companion test can
+/// hold it across a [`write_line_nonblocking`] call and prove the
+/// non-blocking contract against the real mutex rather than a mock.
+#[cfg(test)]
+pub(crate) fn tee_mutex_for_tests() -> &'static Mutex<Option<std::fs::File>> {
+    diag_file()
+}
+
 // ---------------------------------------------------------------------------
 // Off-callback async sink (Codex P1 #646 r3661145589 + #668 3665741341).
 //
@@ -467,7 +525,8 @@ pub const ASYNC_QUEUE_CAPACITY: usize = 256;
 /// until [`ensure_async_writer`] runs (from the first callback-path
 /// caller); once installed it persists for the process lifetime because
 /// the writer thread cannot be cleanly torn down (the OS listener that
-/// feeds it is itself unjoinable).
+/// feeds it is itself unjoinable) - except on the shared exit path,
+/// where [`drain_and_shutdown`] stops it deliberately.
 static ASYNC_QUEUE_TX: OnceLock<SyncSender<AsyncRecord>> = OnceLock::new();
 
 /// How long the writer parks on an empty queue before waking up to check
@@ -493,16 +552,32 @@ const ASYNC_PARK_POLL: Duration = Duration::from_millis(500);
 
 /// One item in the off-callback queue.
 ///
-/// Records carry the shed count that preceded them rather than the
-/// writer reading a global counter at write time, so the coalesced
-/// marker lands at the QUEUE POSITION of the gap instead of at whatever
-/// position the writer happened to reach first (Codex P2 #680 comment
-/// 3667524111). See [`enqueue_async_into`] for why that distinction
-/// matters.
+/// Two things travel through this one channel, and both need to:
+///
+/// * Records carry the shed count that preceded them rather than the
+///   writer reading a global counter at write time, so the coalesced
+///   marker lands at the QUEUE POSITION of the gap instead of at
+///   whatever position the writer happened to reach first (Codex P2
+///   #680 comment 3667524111). See [`enqueue_async_into`] for why that
+///   distinction matters.
+/// * A plain record-only channel cannot express "stop": the sender
+///   lives in a process-wide [`OnceLock`] that is never dropped, so the
+///   writer's receive never returns `Disconnected` and the thread is
+///   only ever killed by process exit - with whatever was still queued.
+///   [`Shutdown`] is the in-band sentinel [`drain_and_shutdown`] pushes
+///   so the writer can flush the remaining records and then acknowledge.
+///
+/// [`Shutdown`]: AsyncRecord::Shutdown
 pub(crate) enum AsyncRecord {
     /// One trace line, plus the number of records shed immediately
     /// before this one was accepted (`0` on every healthy enqueue).
     Line { drops_before: u64, message: String },
+    /// Drain everything still queued, then signal the paired ack
+    /// sender and stop. Ordering is what makes the drain meaningful:
+    /// the sentinel travels through the SAME queue as the records, so
+    /// every record enqueued before the drain started is necessarily
+    /// ahead of it.
+    Shutdown(Sender<()>),
 }
 
 /// Number of async messages that have been enqueued but not yet
@@ -709,7 +784,8 @@ fn close_burst_with_pending_drops<F>(
 /// `ASYNC_PENDING == 0` (via [`flush_async_for_tests`]) sees the file has
 /// actually been written to.
 fn write_async_record<F>(
-    record: AsyncRecord,
+    drops_before: u64,
+    message: &str,
     capacity: usize,
     pending: &AtomicUsize,
     burst: &mut BurstState,
@@ -717,13 +793,56 @@ fn write_async_record<F>(
 ) where
     F: FnMut(&str),
 {
-    let AsyncRecord::Line {
-        drops_before,
-        message,
-    } = record;
     burst.observe_record(drops_before, capacity, sink);
-    sink(&message);
+    sink(message);
     pending.fetch_sub(1, Ordering::Relaxed);
+}
+
+/// Handle an [`AsyncRecord::Shutdown`] sentinel: flush the backlog that
+/// was queued ahead of it, close any open overload episode, then
+/// acknowledge every drainer that asked.
+///
+/// `try_recv` (not `recv`) for the backlog because a producer racing the
+/// drain must not extend it past the caller's deadline; everything still
+/// sitting in the channel when the sentinel arrived was enqueued BEFORE
+/// it, so it is exactly the backlog the caller asked for.
+///
+/// [`close_burst_with_pending_drops`] before the ack is load-bearing:
+/// draining in the middle of an overload episode would otherwise drop
+/// that episode's [`async_burst_summary_marker`] on the floor, so the
+/// last thing the tee file records about a wedged sink would be the
+/// episode's OPENING count rather than its total (Codex P2 #680 comment
+/// 3668174780 read together with this PR's drain path).
+fn drain_and_ack_shutdown<F>(
+    rx: &Receiver<AsyncRecord>,
+    ack: Sender<()>,
+    capacity: usize,
+    pending: &AtomicUsize,
+    dropped: &AtomicU64,
+    burst: &mut BurstState,
+    sink: &mut F,
+) where
+    F: FnMut(&str),
+{
+    let mut acks = vec![ack];
+    while let Ok(queued) = rx.try_recv() {
+        match queued {
+            AsyncRecord::Line {
+                drops_before,
+                message,
+            } => write_async_record(drops_before, &message, capacity, pending, burst, sink),
+            // A second concurrent drainer. Collect its ack too rather
+            // than dropping the sender, which would make its
+            // `recv_timeout` report a spurious timeout.
+            AsyncRecord::Shutdown(extra) => acks.push(extra),
+        }
+    }
+    close_burst_with_pending_drops(burst, dropped, capacity, sink);
+    for ack in acks {
+        // Best-effort: a drainer that already gave up on its deadline
+        // has dropped the receiver.
+        let _ = ack.send(());
+    }
 }
 
 /// The writer thread's whole body, parameterised over the receiver,
@@ -737,11 +856,12 @@ fn write_async_record<F>(
 /// production queue is 256 deep and its sink is a file write no test
 /// can pause.
 ///
-/// Loops until every sender is dropped, which never happens in a
-/// shipping process: the `OnceLock` keeps a sender alive for the
-/// process lifetime, matching the rdev listener's own lifetime model.
-/// The trailing [`emit_pending_async_drops`] therefore only runs in
-/// tests and on a future explicit-shutdown path.
+/// Loops until every sender is dropped (tests) or an
+/// [`AsyncRecord::Shutdown`] sentinel arrives (the shared process exit
+/// path, via [`drain_and_shutdown`]). In a shipping process the
+/// `OnceLock` keeps a sender alive for the whole run, so the sentinel
+/// is the only orderly way out; the trailing
+/// [`close_burst_with_pending_drops`] therefore only runs in tests.
 ///
 /// ## Why the park is `recv_timeout` and not `recv`
 ///
@@ -763,6 +883,8 @@ fn write_async_record<F>(
 /// doubles the load on the sink that was already too slow (Codex P2 #680
 /// comment 3668174780). The state machine collapses that to one notice
 /// when the episode starts plus one summary when the queue catches up.
+/// The [`AsyncRecord::Shutdown`] arm closes that episode too, so a drain
+/// that lands mid-overload still records the episode total.
 pub(crate) fn run_async_writer_loop<F>(
     rx: Receiver<AsyncRecord>,
     capacity: usize,
@@ -775,7 +897,23 @@ pub(crate) fn run_async_writer_loop<F>(
     let mut burst = BurstState::default();
     loop {
         match rx.recv_timeout(ASYNC_PARK_POLL) {
-            Ok(record) => write_async_record(record, capacity, pending, &mut burst, &mut sink),
+            Ok(AsyncRecord::Line {
+                drops_before,
+                message,
+            }) => write_async_record(
+                drops_before,
+                &message,
+                capacity,
+                pending,
+                &mut burst,
+                &mut sink,
+            ),
+            // The orderly exit: flush the backlog queued ahead of the
+            // sentinel, close any open episode, acknowledge, stop.
+            Ok(AsyncRecord::Shutdown(ack)) => {
+                drain_and_ack_shutdown(&rx, ack, capacity, pending, dropped, &mut burst, &mut sink);
+                return;
+            }
             // Parked with an empty queue: the producer is no longer
             // outrunning the sink, so the episode is over — report it,
             // including anything shed that no record will ever carry.
@@ -917,6 +1055,83 @@ fn take_pending_drops(dropped: &AtomicU64) -> u64 {
 /// trace. Codex P2 #668 discussion 3666165045.
 pub fn async_writer_installed() -> bool {
     ASYNC_QUEUE_TX.get().is_some()
+}
+
+/// How long [`drain_and_shutdown`] naps between `try_send` attempts
+/// while the bounded queue is full. Short enough that a queue draining
+/// normally costs no measurable teardown latency, long enough that a
+/// genuinely wedged writer is not spun on for the whole deadline.
+const ASYNC_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
+
+/// Flush everything still queued for the off-callback writer and stop
+/// the writer thread, waiting at most `deadline`.
+///
+/// ## Why this exists
+///
+/// The writer is a background thread. A `fn main` that simply returns
+/// takes the process down with whatever is still in the queue, so the
+/// records closest to the moment of interest - the tail of a PTT wedge
+/// repro, the last chord trace before a crash-adjacent exit - are
+/// exactly the ones a support thread never gets to read. Both shipping
+/// binaries hit this: the GUI on tray exit, and the CLI on its finite
+/// rdev-driven verbs (`self-test hotkey-boot`, `hotkey capture
+/// --for-secs ...`) which install the same LL hook, feed the same
+/// queue, and then return normally.
+///
+/// ## How
+///
+/// Pushes an [`AsyncRecord::Shutdown`] sentinel through the SAME
+/// bounded queue as the records, so every record enqueued before the
+/// call is ordered ahead of it; the writer flushes them, emits any
+/// outstanding drop marker, acks and exits.
+///
+/// Returns `true` when the writer acknowledged within `deadline` (or
+/// when no writer was ever installed - nothing to drain), `false` on
+/// timeout or a writer that had already stopped responding. The bool
+/// is what lets the caller warn the operator that the tee file may be
+/// short of records; production must NOT treat it as fatal.
+pub fn drain_and_shutdown(deadline: Duration) -> bool {
+    match ASYNC_QUEUE_TX.get() {
+        Some(tx) => drain_and_shutdown_into(tx, deadline),
+        // Never installed: no writer thread, no queue, nothing lost.
+        None => true,
+    }
+}
+
+/// Sender half of [`drain_and_shutdown`], parameterised over the
+/// channel so `diag_tests` can drive both outcomes (clean flush,
+/// wedged-past-deadline) against a scoped writer instead of the
+/// process-wide `OnceLock`, which no test can reset.
+///
+/// The queue is BOUNDED, so a plain `send` here could park forever
+/// behind a stalled writer with a full queue - exactly the teardown
+/// hang the deadline exists to prevent. `SyncSender::send_timeout` is
+/// still unstable, so poll `try_send` (which hands the message back on
+/// `Full`) inside the same overall budget.
+pub(crate) fn drain_and_shutdown_into(tx: &SyncSender<AsyncRecord>, deadline: Duration) -> bool {
+    let started = Instant::now();
+    let (ack_tx, ack_rx) = mpsc::channel::<()>();
+    let mut sentinel = AsyncRecord::Shutdown(ack_tx);
+    loop {
+        match tx.try_send(sentinel) {
+            Ok(()) => break,
+            // Writer thread already gone - nothing left to drain.
+            Err(TrySendError::Disconnected(_)) => return true,
+            Err(TrySendError::Full(returned)) => {
+                let remaining = deadline.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    // The queue stayed full for the whole budget: the
+                    // writer is wedged and the caller (a `main` on its
+                    // way out) must not wait any longer.
+                    return false;
+                }
+                sentinel = returned;
+                thread::sleep(ASYNC_DRAIN_POLL_INTERVAL.min(remaining));
+            }
+        }
+    }
+    let remaining = deadline.saturating_sub(started.elapsed());
+    ack_rx.recv_timeout(remaining).is_ok()
 }
 
 /// Records shed by [`enqueue_async`] that the writer has not yet

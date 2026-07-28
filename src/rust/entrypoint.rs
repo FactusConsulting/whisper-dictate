@@ -21,6 +21,38 @@
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::time::Duration;
+
+/// How long the shared exit teardown waits for the async diagnostic
+/// writer ([`crate::diag::drain_and_shutdown`]) to flush its queue.
+///
+/// 500 ms, chosen as the smallest value that is unambiguously on the
+/// right side of both bounds:
+///
+/// * **Lower bound - never a false timeout.** The writer's per-record
+///   work is two `writeln!` calls plus a `flush`, and the queue holds
+///   at most [`crate::diag::ASYNC_QUEUE_CAPACITY`] (256) records, so a
+///   healthy drain finishes in single-digit milliseconds. 500 ms is
+///   two orders of magnitude of headroom - a CI box under load, or a
+///   cold `%LOCALAPPDATA%` first write, still completes well inside
+///   it. The same number is already the proven-good budget for
+///   `diag::flush_async_for_tests`.
+/// * **Upper bound - never a visible stall.** This runs after the UI
+///   loop / CLI verb has returned, when the user expects the process
+///   to be gone. Half a second of extra teardown is below the
+///   threshold where a tray exit reads as "hung"; a multi-second wait
+///   on a wedged AppData volume would be worse than the missing log
+///   records it is trying to save.
+pub const DIAG_DRAIN_DEADLINE: Duration = Duration::from_millis(500);
+
+/// Warning emitted when the exit drain misses [`DIAG_DRAIN_DEADLINE`].
+///
+/// A named constant so the companion tests assert on the same string
+/// production emits, without duplicating the prose. ASCII only - it
+/// reaches a console (pinned by `console_ascii_tests`).
+pub const DIAG_DRAIN_TIMEOUT_WARNING: &str =
+    "[exit] diag async writer drain-and-shutdown deadline expired; pending \
+     records may not have landed in the tee file";
 
 /// Run `f`, print its `Err` (if any) to `stderr` prefixed with `prefix`, and
 /// return the resulting process exit code.
@@ -44,6 +76,82 @@ where
             ExitCode::FAILURE
         }
     }
+}
+
+/// [`error_exit_shell`] plus the shared process teardown every binary
+/// needs. **This is the entrypoint both `fn main`s call.**
+///
+/// ## Why (Codex P2 #675 PRRT_kwDOSfNjQs6Uc5kn)
+///
+/// The async diagnostic writer ([`crate::diag::enqueue_async`]) buffers
+/// records on a background thread so file I/O stays off the Windows
+/// `WH_KEYBOARD_LL` callback. A bare `main` return kills that thread
+/// with whatever is still queued, so the queue has to be drained on the
+/// way out.
+///
+/// The abandoned first attempt at this wired the drain into the GUI
+/// binary only. But the CLI binary has finite rdev-driven verbs -
+/// `self-test hotkey-boot`, `hotkey capture --for-secs ...` - that
+/// install the same LL hook, emit the same `raw=` / chord records
+/// through the same queue, and then return normally. Those records were
+/// discarded at process exit, which is precisely backwards: the CLI
+/// verbs exist *because* the operator is capturing a wedge repro from
+/// PowerShell.
+///
+/// Wiring the drain here rather than per-verb means every current and
+/// future verb gets it for free, and there is exactly one place where
+/// the teardown order (run -> drain -> exit code) is decided.
+pub fn error_exit_shell_with_teardown<F, W>(prefix: &str, stderr: W, f: F) -> ExitCode
+where
+    F: FnOnce() -> anyhow::Result<()>,
+    W: Write,
+{
+    let code = error_exit_shell(prefix, stderr, f);
+    drain_diagnostics_on_exit();
+    code
+}
+
+/// Drain the async diagnostic queue, warning (non-blockingly) if the
+/// drain misses its deadline. Production wiring for
+/// [`drain_diagnostics_on_exit_with`].
+pub fn drain_diagnostics_on_exit() -> bool {
+    drain_diagnostics_on_exit_with(
+        crate::diag::drain_and_shutdown,
+        |line| {
+            // Discard the "did the tee write land" bool - on this path
+            // stderr already has the line and there is nothing further
+            // to do about a contended tee mutex.
+            crate::diag::write_line_nonblocking(line);
+        },
+        DIAG_DRAIN_DEADLINE,
+    )
+}
+
+/// Dependency-injected core of [`drain_diagnostics_on_exit`]. Returns
+/// whether the drain completed within `deadline`.
+///
+/// `warn` MUST be a non-blocking sink. Codex P2 #675
+/// PRRT_kwDOSfNjQs6Ub__j: the likeliest reason the drain timed out is
+/// that the writer thread is wedged INSIDE `crate::diag::write_line_to`
+/// still holding the tee-file mutex, so a blocking `diag::log!` here
+/// would queue on that same mutex and hang teardown indefinitely - well
+/// past the deadline that exists to prevent exactly that.
+/// [`crate::diag::write_line_nonblocking`] `try_lock`s and falls back
+/// to stderr-only.
+pub(crate) fn drain_diagnostics_on_exit_with<D, W>(
+    drain: D,
+    mut warn: W,
+    deadline: Duration,
+) -> bool
+where
+    D: FnOnce(Duration) -> bool,
+    W: FnMut(&str),
+{
+    if drain(deadline) {
+        return true;
+    }
+    warn(DIAG_DRAIN_TIMEOUT_WARNING);
+    false
 }
 
 #[cfg(test)]
