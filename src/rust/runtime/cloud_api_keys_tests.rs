@@ -7,7 +7,7 @@ use super::super::worker_command::default_worker_command;
 use super::{
     cloud_api_key_env_additions, effective_endpoint, post_credential_and_endpoint_with,
     post_credential_for, post_credential_with, stamp_post_api_key_endpoint_marker,
-    stt_credential_for,
+    stamp_post_api_key_endpoint_marker_with, stt_credential_for, PostKeyProvenance,
 };
 
 fn none(_: &str) -> Option<String> {
@@ -382,6 +382,7 @@ fn stamp_marker_shim_covers_ui_worker_command_post_processor_cloud() {
         .push(("VOICEPI_POST_API_KEY".to_owned(), "groq-key".to_owned()));
     stamp_post_api_key_endpoint_marker(
         &mut command,
+        PostKeyProvenance::PostSpecific,
         "groq",
         "https://api.groq.com/openai/v1",
         "whisper",
@@ -407,7 +408,8 @@ fn stamp_marker_shim_uses_stt_endpoint_for_stt_as_post_fallback() {
         .push(("VOICEPI_STT_API_KEY".to_owned(), "groq-stt".to_owned()));
     stamp_post_api_key_endpoint_marker(
         &mut command,
-        "none", // post is local at spawn
+        PostKeyProvenance::None, // STT-only injection, no post key pushed
+        "none",                  // post is local at spawn
         "http://localhost:11434",
         "openai", // stt is cloud
         "https://api.groq.com/openai/v1",
@@ -429,6 +431,7 @@ fn stamp_marker_shim_no_op_when_neither_key_is_present() {
     let before = command.env.len();
     stamp_post_api_key_endpoint_marker(
         &mut command,
+        PostKeyProvenance::None,
         "none",
         "http://localhost:11434",
         "whisper",
@@ -452,6 +455,7 @@ fn stamp_marker_shim_leaves_existing_marker_alone() {
     ));
     stamp_post_api_key_endpoint_marker(
         &mut command,
+        PostKeyProvenance::PostSpecific,
         "groq",
         "https://api.groq.com/openai/v1",
         "whisper",
@@ -528,6 +532,91 @@ fn post_credential_strips_trailing_slash_before_normalising() {
 }
 
 #[test]
+fn stamp_marker_shim_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() {
+    // Codex P1 round-2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618)
+    // regression pin. The UI mirrors the STT key into VOICEPI_POST_API_KEY
+    // when the user has NO post-specific key but wants a cloud
+    // post-processor. Un-fixed shape: the shim classified has_post
+    // presence as "post-key provenance" and stamped the POST endpoint --
+    // so a Groq-STT + OpenAI-post setup got an OpenAI marker for a Groq
+    // key, which the revalidation check then approved for OpenAI, a
+    // cross-provider send of the Groq STT key. Fixed shape: the caller
+    // passes `PostKeyProvenance::SttMirror` and the shim binds the marker
+    // to the STT endpoint the key was actually resolved for.
+    let mut command = default_worker_command();
+    // The UI has mirrored the Groq STT key into VOICEPI_POST_API_KEY
+    // because post_api_key_input was empty.
+    command
+        .env
+        .push(("VOICEPI_STT_API_KEY".to_owned(), "groq-stt-key".to_owned()));
+    command
+        .env
+        .push(("VOICEPI_POST_API_KEY".to_owned(), "groq-stt-key".to_owned()));
+    stamp_post_api_key_endpoint_marker(
+        &mut command,
+        PostKeyProvenance::SttMirror,     // provenance the UI now passes
+        "openai",                         // cloud post processor selected
+        "https://api.openai.com/v1",      // OpenAI post endpoint (WRONG for the Groq STT key)
+        "openai",                         // cloud STT backend
+        "https://api.groq.com/openai/v1", // Groq STT endpoint (RIGHT for this key)
+    );
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        marker,
+        Some("https://api.groq.com/openai/v1"),
+        "SttMirror provenance MUST bind to the STT endpoint. A wrong marker \
+         (OpenAI endpoint) would let the revalidation check approve sending \
+         the Groq STT key to OpenAI -- exactly the cross-provider leak the \
+         P1 round-2 finding calls out. command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
+fn stamp_marker_shim_preserves_ambient_post_key_ownership() {
+    // Codex P2 round-2 #3 (`PRRT_kwDOSfNjQs6UXpn3` cmt 3665199623)
+    // regression pin. When the ambient env already has
+    // VOICEPI_POST_API_KEY (user's explicit override), the launcher must
+    // not stamp a marker at all. Un-fixed shape: the STT-fallback stamping
+    // path still triggered when wrote_stt_key was true, clamping the
+    // configured endpoint onto the caller-owned post key and rejecting a
+    // later live provider or endpoint change.
+    // Use the testable `_with` variant so we don't have to touch (and
+    // race on) the real process env from a parallel-testing perspective.
+    let ambient_env =
+        |name: &str| (name == "VOICEPI_POST_API_KEY").then(|| "user-owned-key".to_owned());
+    let mut command = default_worker_command();
+    // Simulate the launcher having injected the STT key (as it does).
+    command
+        .env
+        .push(("VOICEPI_STT_API_KEY".to_owned(), "groq-stt".to_owned()));
+    stamp_post_api_key_endpoint_marker_with(
+        &mut command,
+        PostKeyProvenance::None,
+        "none",
+        "http://localhost:11434",
+        "openai",
+        "https://api.groq.com/openai/v1",
+        ambient_env,
+    );
+    let marker_present = command
+        .env
+        .iter()
+        .any(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT");
+    assert!(
+        !marker_present,
+        "an ambient VOICEPI_POST_API_KEY means the user owns their post-key \
+         resolution; the launcher must not stamp a marker that would later \
+         reject their key on a legitimate live change. command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
 fn stamp_marker_shim_strips_trailing_slash_for_ui_launcher() {
     // Same fix as post_credential_strips_trailing_slash_before_normalising,
     // but via the UI shim (`stamp_post_api_key_endpoint_marker`) so the
@@ -538,6 +627,7 @@ fn stamp_marker_shim_strips_trailing_slash_for_ui_launcher() {
         .push(("VOICEPI_POST_API_KEY".to_owned(), "groq-key".to_owned()));
     stamp_post_api_key_endpoint_marker(
         &mut command,
+        PostKeyProvenance::PostSpecific,
         "groq",
         "http://localhost:11434/", // trailing slash
         "whisper",
@@ -560,6 +650,7 @@ fn stamp_marker_shim_strips_trailing_slash_from_stt_endpoint() {
         .push(("VOICEPI_STT_API_KEY".to_owned(), "groq-stt".to_owned()));
     stamp_post_api_key_endpoint_marker(
         &mut command,
+        PostKeyProvenance::None,
         "none",
         "http://localhost:11434",
         "openai",

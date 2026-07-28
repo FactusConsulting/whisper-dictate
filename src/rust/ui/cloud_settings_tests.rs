@@ -153,6 +153,48 @@ fn ui_worker_command_stamps_post_api_key_endpoint_marker_for_cloud_processor() {
 }
 
 #[test]
+fn ui_worker_command_binds_mirrored_stt_key_to_stt_endpoint_not_post_endpoint() {
+    // Codex P1 round-2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618)
+    // UI-side regression pin. Scenario: Groq STT configured, OpenAI
+    // post-processing selected, NO post-specific key. `App::worker_command`
+    // mirrors the Groq STT key into VOICEPI_POST_API_KEY. Un-fixed shape
+    // stamped the OpenAI post endpoint as the marker -- so a subsequent
+    // live change was approved as "same provider = OpenAI" and the Groq
+    // key was sent to OpenAI (cross-provider leak). Fixed shape stamps
+    // the GROQ STT endpoint because that is where the mirrored key is
+    // actually valid.
+    let settings = AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "groq".to_owned(),
+        stt_base_url: "https://api.groq.com/openai/v1".to_owned(),
+        post_processor: "openai".to_owned(), // OpenAI post + Groq STT
+        post_base_url: "https://api.openai.com/v1".to_owned(),
+        ..Default::default()
+    };
+    let mut app = test_app(settings);
+    app.stt_api_key_input = "groq-stt-key".to_owned();
+    // NO post_api_key_input -> UI mirrors STT into POST env.
+
+    let command = app.worker_command();
+
+    let marker = command
+        .env
+        .iter()
+        .find(|(k, _)| k == "VOICEPI_POST_API_KEY_ENDPOINT")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        marker,
+        Some("https://api.groq.com/openai/v1"),
+        "SttMirror provenance MUST bind the marker to the STT endpoint. \
+         Binding it to the OpenAI post endpoint would let the revalidation \
+         check approve sending the Groq STT key to OpenAI -- exactly the \
+         cross-provider leak the P1 round-2 finding calls out. \
+         command.env = {:?}",
+        command.env
+    );
+}
+
+#[test]
 fn ui_worker_command_stamps_stt_endpoint_marker_for_stt_only_injection() {
     // Codex P1 #666 #2 (`PRRT_kwDOSfNjQs6UXpnu`) UI-side regression pin.
     // When only an STT key is pushed (post_processor local at spawn), the

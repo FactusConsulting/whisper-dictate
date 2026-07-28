@@ -315,17 +315,33 @@ impl WhisperDictateApp {
                     .push((STT_API_KEY_ENV.to_owned(), key.to_owned()));
             }
         }
+        // Track provenance of the pushed post key so
+        // `stamp_post_api_key_endpoint_marker` can bind the marker to the
+        // ENDPOINT the underlying credential was resolved for -- not the
+        // configured post endpoint blindly. Codex P1 round-2 #1
+        // (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618): a Groq-STT + OpenAI-post
+        // setup used to stamp the OpenAI marker for a mirrored Groq STT
+        // key, which the revalidation check then APPROVED for OpenAI --
+        // a cross-provider leak of the STT key.
+        let mut post_key_provenance = crate::runtime::cloud_api_keys::PostKeyProvenance::None;
         if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
             let post_key = self.post_api_key_input.trim();
-            let key = if post_key.is_empty() {
-                self.stt_api_key_input.trim()
+            let (key, provenance) = if post_key.is_empty() {
+                (
+                    self.stt_api_key_input.trim(),
+                    crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,
+                )
             } else {
-                post_key
+                (
+                    post_key,
+                    crate::runtime::cloud_api_keys::PostKeyProvenance::PostSpecific,
+                )
             };
             if !key.is_empty() {
                 command
                     .env
                     .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
+                post_key_provenance = provenance;
             }
         }
         // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
@@ -339,6 +355,7 @@ impl WhisperDictateApp {
         // endpoint check regardless of which entry point launched it.
         crate::runtime::cloud_api_keys::stamp_post_api_key_endpoint_marker(
             &mut command,
+            post_key_provenance,
             &self.settings.post_processor,
             &self.settings.post_base_url,
             &self.settings.stt_backend,

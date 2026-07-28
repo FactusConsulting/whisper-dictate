@@ -8,6 +8,30 @@
 
 use super::worker_command::WorkerCommand;
 
+/// Which key the caller has pushed as `VOICEPI_POST_API_KEY`.
+///
+/// Codex P1 #666-round2 #1 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618): the
+/// UI's `App::worker_command` mirrors the STT key into `VOICEPI_POST_API_KEY`
+/// when the user has NO post-specific key but wants a cloud post-processor.
+/// The shim previously classified any `has_post` presence as "post-key
+/// provenance" and stamped the POST endpoint -- so a Groq-STT + OpenAI-post
+/// setup got an OpenAI marker for a key that was actually a Groq STT key,
+/// approving a cross-provider send. The provenance now travels IN so the
+/// marker binds to the endpoint the underlying key was actually resolved for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostKeyProvenance {
+    /// No `VOICEPI_POST_API_KEY` on the command.
+    None,
+    /// The caller pushed a key that came from the user's post-key input
+    /// (or was resolved for the post endpoint by the launcher). Marker
+    /// binds to the post endpoint.
+    PostSpecific,
+    /// The caller pushed the STT key AS the post key (UI mirror
+    /// behaviour, or STT-as-post-fallback). Marker binds to the STT
+    /// endpoint so a live post-endpoint change is refused.
+    SttMirror,
+}
+
 /// Public seam for callers that build a [`WorkerCommand`] outside the
 /// [`attach_cloud_api_keys`] flow -- notably `ui::app::App::worker_command`,
 /// which pushes the API-key envs directly from the user's Settings input.
@@ -23,12 +47,11 @@ use super::worker_command::WorkerCommand;
 /// * Marker only stamped when either `VOICEPI_STT_API_KEY` or
 ///   `VOICEPI_POST_API_KEY` is present on `command.env` -- either because
 ///   the caller just pushed it or because a prior helper added it.
-/// * Post-specific processor (`openai`/`groq`) wins: marker = normalised
-///   post endpoint. The STT key present or absent does not change this.
-/// * Otherwise, if the STT backend is cloud (`openai`) and the STT key is on
-///   the command, marker = normalised STT endpoint (Codex P1 #666 #2):
-///   the STT key can serve as a post-key fallback, so it needs the same
-///   endpoint guard.
+/// * `provenance = PostSpecific`: marker = normalised post endpoint.
+/// * `provenance = SttMirror` OR `None` + cloud STT: marker = normalised
+///   STT endpoint (STT key is what will serve post-processing). Codex
+///   round-2 #1 fix: without provenance the shim used to stamp the POST
+///   endpoint for a mirrored STT key, approving cross-provider sends.
 /// * Never overwrites an existing marker already on `command.env` -- caller
 ///   ownership stays intact, matching the `attach_cloud_api_keys` rule.
 ///
@@ -36,24 +59,59 @@ use super::worker_command::WorkerCommand;
 /// local; keeps the local-Whisper install path zero-cost.
 pub fn stamp_post_api_key_endpoint_marker(
     command: &mut WorkerCommand,
+    post_key_provenance: PostKeyProvenance,
     post_processor: &str,
     post_base_url: &str,
     stt_backend: &str,
     stt_base_url: &str,
 ) {
+    stamp_post_api_key_endpoint_marker_with(
+        command,
+        post_key_provenance,
+        post_processor,
+        post_base_url,
+        stt_backend,
+        stt_base_url,
+        |name| std::env::var(name).ok(),
+    );
+}
+
+/// Testable core of [`stamp_post_api_key_endpoint_marker`]. Injecting the
+/// env lookup lets the ownership-preservation test model an ambient
+/// `VOICEPI_POST_API_KEY` without touching (and racing on) `std::env`.
+pub(crate) fn stamp_post_api_key_endpoint_marker_with(
+    command: &mut WorkerCommand,
+    post_key_provenance: PostKeyProvenance,
+    post_processor: &str,
+    post_base_url: &str,
+    stt_backend: &str,
+    stt_base_url: &str,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) {
     const MARKER: &str = "VOICEPI_POST_API_KEY_ENDPOINT";
     if command.env.iter().any(|(k, _)| k == MARKER) {
         return; // caller owns the marker
+    }
+    // Codex P2 round-2 #3 (`PRRT_kwDOSfNjQs6UXpn3` cmt 3665199623): if a
+    // caller-provided `VOICEPI_POST_API_KEY` is already present in the
+    // ambient env (documented compatibility contract: explicit env keys
+    // own their resolution), the launcher must not stamp a marker at all
+    // -- otherwise our STT-fallback stamping path would clamp a marker
+    // onto the user's own post key and a later live change would be
+    // rejected.
+    let ambient_post_key = env_lookup("VOICEPI_POST_API_KEY").is_some_and(|v| !v.trim().is_empty());
+    if ambient_post_key {
+        return;
     }
     let has_stt = command
         .env
         .iter()
         .any(|(k, v)| k == "VOICEPI_STT_API_KEY" && !v.trim().is_empty());
-    let has_post = command
+    let has_post_env = command
         .env
         .iter()
         .any(|(k, v)| k == "VOICEPI_POST_API_KEY" && !v.trim().is_empty());
-    if !(has_stt || has_post) {
+    if !(has_stt || has_post_env) {
         return;
     }
     // Both branches strip trailing `/` BEFORE normalising so the launcher
@@ -61,7 +119,12 @@ pub fn stamp_post_api_key_endpoint_marker(
     // both worker loaders do `raw.rstrip("/")` before their local-default
     // substitution table, and a mismatched marker vs. worker URL causes the
     // revalidation check to reject a legitimate key.
-    let endpoint = if has_post && matches!(post_processor, "openai" | "groq") {
+    let is_post_specific = matches!(post_key_provenance, PostKeyProvenance::PostSpecific);
+    // Pick the endpoint based on PROVENANCE, not just presence. A
+    // mirrored STT key OR an STT-only injection falls through to the
+    // `has_stt` branch (STT endpoint); a genuine post key uses the
+    // post endpoint.
+    let endpoint = if is_post_specific && matches!(post_processor, "openai" | "groq") {
         // `normalized_base_url` swaps the URL when the saved value is a
         // DIFFERENT processor's default -- the same substitution the
         // post-processing pipeline itself applies.

@@ -811,6 +811,43 @@ class FormatCommandTests(unittest.TestCase):
             "message must direct the user to a full application restart",
         )
 
+    def test_endpoint_provider_strips_trailing_root_dot(self):
+        # Codex P2 round-2 #4 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199633)
+        # regression pin. `parsed.hostname` keeps the DNS root dot, so
+        # `api.groq.com.` used to classify as Custom while
+        # `api.groq.com` classified as Groq -- a false origin mismatch
+        # that made post-processing backend-dependent (Rust's classifier
+        # already strips terminal dots). Fix: strip terminal dots
+        # consistently.
+        from whisper_dictate import vp_postprocess
+
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://api.groq.com./v1"),
+            "groq",
+        )
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://api.openai.com./v1"),
+            "openai",
+        )
+        # `endpoint_marker_mismatch` therefore treats trailing-dot URLs
+        # as the same origin -- so a marker for `https://api.groq.com./v1`
+        # matches a live URL of `https://api.groq.com/v1`.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://api.groq.com/openai/v1",
+                marker="https://api.groq.com./openai/v1",
+            ),
+            "",
+        )
+        # Custom FQDNs get the same normalization.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://llm-a.example./v1",
+                marker="https://llm-a.example/v1",
+            ),
+            "",
+        )
+
     def test_endpoint_marker_absent_is_backward_compatible(self):
         # A user who exports their own VOICEPI_POST_API_KEY without the
         # launcher-side marker must never be blocked.

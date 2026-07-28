@@ -171,7 +171,13 @@ def _endpoint_provider(url: str) -> str:
         parsed = urllib.parse.urlparse((url or "").strip())
     except ValueError:
         return "custom"
-    host = (parsed.hostname or "").lower()
+    # Codex P2 round-2 #4 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199633): strip
+    # a trailing DNS root dot so `api.groq.com.` and `api.groq.com`
+    # classify to the same provider. Rust's classifier
+    # (`cloud_api::transcribe::provider_host`) already does this;
+    # without the strip here, `parsed.hostname` keeps the dot and a live
+    # URL with/without one would false-mismatch.
+    host = (parsed.hostname or "").lower().rstrip(".")
     if not host:
         return "custom"
     if host == "groq.com" or host.endswith(".groq.com"):
@@ -197,7 +203,9 @@ def _origin_parts(url: str) -> tuple[str, str, int]:
     """
     parsed = urllib.parse.urlparse((url or "").strip())
     scheme = (parsed.scheme or "").lower()
-    host = (parsed.hostname or "").lower()
+    # Same trailing-dot strip as `_endpoint_provider` (Codex P2 round-2
+    # #4) so origin comparisons behave the same as provider classification.
+    host = (parsed.hostname or "").lower().rstrip(".")
     try:
         port = parsed.port
     except ValueError:
