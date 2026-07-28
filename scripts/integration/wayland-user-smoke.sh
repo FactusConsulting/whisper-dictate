@@ -766,6 +766,135 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# SECTION: self-test hotkey-boot (Windows PTT-boot regression — GUI wedge)
+#
+# End-to-end install of the Rust hotkey subsystem (rdev / evdev) with a
+# fixed PTT chord. Fast, headless smoke: does NOT open the audio pump or
+# load the Whisper model, only exercises the OS hook, driver selection,
+# and coordinator wiring.
+#
+# What this catches (added after the Windows PTT bug where the GUI
+# started with `VOICEPI_DICTATE_ENGINE=rust` but the chord fired no
+# event — the GUI's `windows_subsystem = "windows"` had discarded every
+# rdev-side error). On Linux / Wayland the same install path runs, so
+# this section is a co-op smoke that would trip on a Linux-side
+# regression to the shared install path.
+#
+# Restored per Codex P2 #642 (PRRT_kwDOSfNjQs6UKRsU): the earlier delete
+# left this the only shell caller of `self-test hotkey-boot`, so a
+# shared-install-path regression could again escape the integration
+# run. We use `--chord ctrl_l` so the run doesn't depend on the
+# operator's on-disk config.
+#
+# WHAT THIS CATCHES today, and what it does NOT:
+#
+# * Catches: `install_hotkey` returning an error along the shared code
+#   path (missing feature gate, display refusal, missing device
+#   permission, driver selection failure). Any Linux-side regression to
+#   that path trips this section, and the same install path is what
+#   the Windows GUI runs into first at startup.
+#
+# * Does NOT (Codex P2 #672 PRRT_kwDOSfNjQs6UZQ8Y): a listener thread
+#   that installs cleanly but exits silently before the hold window
+#   ends -- `BootSelfTestReport.listener_exited_early` is hardcoded
+#   `false` on every success path (see
+#   `src/rust/hotkey/boot_self_test.rs` L82-84: "Future refinement:
+#   expose a `is_listener_alive()`"). Catching that class needs the
+#   `is_listener_alive()` follow-up to land first.
+#
+# * Does NOT cover the Windows RegisterHotKey backend (Codex P2 #672
+#   PRRT_kwDOSfNjQs6UZQ8I): this script is the Linux/Wayland smoke,
+#   and `--driver auto` on Linux resolves to `evdev` (rdev on
+#   X-forwarded builds). The Windows GUI sets
+#   `VOICEPI_HOTKEY_DRIVER=register` at startup and, even under
+#   `--driver register`, a modifier-only chord like `ctrl_l` is
+#   intentionally routed back to rdev (see
+#   `src/rust/hotkey/win_backend.rs`). So this section trips on
+#   shared-code regressions but NOT on a Windows-specific register-
+#   backend regression -- that needs a separate Windows-CI invocation
+#   with a non-modifier-only chord, or the manual-test walkthrough in
+#   `scripts/manual-test/README.md`.
+# --------------------------------------------------------------------------
+section "self-test hotkey-boot (Windows PTT-boot regression — same install path the GUI uses)"
+if [ "$CMD_MODE" = "python" ]; then
+    warn "self-test is a Rust subcommand — not exposed by the Python fallback"
+else
+    hb_out="$(whisper-dictate self-test hotkey-boot --hold-ms 500 --chord ctrl_l --json 2>&1)"
+    hb_rc=$?
+    if [ "$hb_rc" -eq 0 ] && printf '%s' "$hb_out" | grep -q '"ok":true'; then
+        # Report the driver so a future Wayland/X11 selector regression
+        # (evdev vs rdev) surfaces in the smoke output.
+        hb_driver="$(printf '%s' "$hb_out" | grep -o '"driver":"[^"]*"' | head -n 1)"
+        ok "hotkey-boot install passed (${hb_driver:-driver=?})"
+    elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
+        # Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0I cmt 3665921401: an
+        # INSTALLED release binary is built by `.github/workflows/
+        # release.yml:122-123` with both `rust-hotkeys` and
+        # `rust-injection`, so a rebuild-with message here means the
+        # shipped artifact is missing those features -- a packaging
+        # regression that the smoke exists to catch. Fall through to
+        # `bad` in that case (`CMD_SOURCE=installed`, i.e.
+        # `whisper-dictate` on PATH). Only the dev/source fallback
+        # (`CMD_SOURCE=source`, Python) is allowed to warn-skip,
+        # because that path never claimed to be the shipping binary.
+        if [ "$CMD_SOURCE" = "installed" ]; then
+            bad "hotkey-boot FAILED: installed release binary is missing rust-hotkeys / rust-injection features -- packaging regression: $(printf '%s\n' "$hb_out" | head -n 1)"
+        else
+            warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
+        fi
+    elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission\|no readable keyboard\|usermod -aG input\|MissingDisplayError"; then
+        # On non-Windows: a headless / no-display box legitimately fails
+        # install here and it is an environment gap, not a regression. On
+        # Windows (Codex P2 #672 PRRT_kwDOSfNjQs6UZY7Q): a permission
+        # refusal from the RegisterHotKey backend IS a regression -- the
+        # tray runs with per-user permissions and RegisterHotKey does not
+        # need elevated ones, so a "permission" error at boot means the
+        # backend actually failed. Fall through to `bad` in that case
+        # so the release gate trips.
+        #
+        # Match set:
+        # * `ListenerStartup` / `no X display` -- rdev pathways under X.
+        # * `permission` -- generic Linux permission text.
+        # * `no readable keyboard` / `usermod -aG input` -- evdev's actual
+        #   permission refusal when the user is not in the `input` group
+        #   (Codex P2 #672 PRRT_kwDOSfNjQs6UZY9m cmt 3665545676). Same
+        #   wording the later `dictate-run` smoke matches, so a Wayland
+        #   auto-evdev install without input-group membership produces a
+        #   warn on the shared Linux path rather than a false-bad.
+        # * `MissingDisplayError` -- rdev's actual serialized error on
+        #   headless Linux / WSL when auto selects rdev and no X display
+        #   exists (Codex P2 #672 PRRT_kwDOSfNjQs6UZ5Bd cmt 3665819810).
+        #   rdev formats its error via `format!("{err:?}")`
+        #   (rdev_driver.rs:377), and `InstallError::ListenerStartup`
+        #   wraps it as `rdev listener failed to start: MissingDisplayError`.
+        #   That string contains neither `ListenerStartup` (the
+        #   enum-variant name) nor `no X display` (rdev never emits that
+        #   literal), so without the missing-display token a headless
+        #   install falls through to `bad`.
+        #
+        #   Codex P2 #672 PRRT_kwDOSfNjQs6Uaj0A cmt 3665921394:
+        #   deliberately do NOT match the generic
+        #   `rdev listener failed to start` wrapper -- that string
+        #   prefixes EVERY rdev listener-startup failure (see
+        #   `InstallError::ListenerStartup` in `src/rust/hotkey/mod.rs:191`),
+        #   so a future non-headless rdev regression (permission denied,
+        #   OS refusal, etc.) would silently downgrade to `warn` and let
+        #   the release ship. Only the specific `MissingDisplayError`
+        #   token identifies the genuine headless environment gap.
+        case "$(uname -s 2>/dev/null || echo unknown)" in
+            MINGW*|MSYS*|CYGWIN*|Windows_NT)
+                bad "hotkey-boot FAILED on Windows: permission/listener refusal is a regression, not an environment gap: $(printf '%s\n' "$hb_out" | head -n 1)"
+                ;;
+            *)
+                warn "hotkey-boot: listener refused (missing display / permissions — expected on headless non-Windows): $(printf '%s\n' "$hb_out" | head -n 1)"
+                ;;
+        esac
+    else
+        bad "hotkey-boot FAILED — install-path regression (this is the class of bug that broke Windows PTT in the GUI): $(printf '%s\n' "$hb_out" | tail -n 3)"
+    fi
+fi
+
+# --------------------------------------------------------------------------
 # SECTION: self-test audio-capture (item 5 prereq 4 — cpal + PipeWire quantum)
 #
 # Opens the cpal input stream for 1 s, tallies samples, and reports RMS +

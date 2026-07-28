@@ -62,21 +62,214 @@ instead:
    Get-Content "$env:APPDATA\whisper-dictate\api-keys.json" -ErrorAction SilentlyContinue
    ```
 
-3. Close the app. In a NEW PowerShell with no key exported:
+3. Close the app. In a NEW PowerShell with NO key exported (Codex P1 #672
+   `PRRT_kwDOSfNjQs6UZ4Fj` cmt 3665665836: `VOICEPI_POST_API_KEY` MUST
+   be removed too -- both `runtime::cloud_api_keys` and Python
+   `_postprocess_api_key` prefer the environment value, so an ambient
+   post key inherited from the "optional cloud-call setup" at the top
+   of this file would mask a broken Credential Manager lookup in step 4):
 
    ```powershell
-   Remove-Item Env:VOICEPI_STT_API_KEY, Env:OPENAI_API_KEY, Env:GROQ_API_KEY -ErrorAction SilentlyContinue
+   Remove-Item Env:VOICEPI_STT_API_KEY, Env:VOICEPI_POST_API_KEY, `
+               Env:OPENAI_API_KEY, Env:GROQ_API_KEY `
+               -ErrorAction SilentlyContinue
    whisper-dictate run
    ```
 
    It must start and reach `api ready`. The failure this guards against is
    `x startup error: openai API requires OPENAI_API_KEY, ...` -- which means
    the launcher never read the credential store.
-4. Repeat with a cloud **post-processor** configured (`post_processor=groq` or
-   `openai`) and only the post key saved, to cover the second account name.
+4. Now exercise the cloud **post-processor** with only its post-specific
+   credential in the store. **First delete the saved STT credential for
+   the same provider** (Codex P1 #672 `PRRT_kwDOSfNjQs6UZ5B7` cmt
+   3665819798): `credentials::resolve_post_api_key` deliberately falls
+   back to the STT account for the same provider
+   (`src/rust/credentials.rs:147-155`), so leaving the step-1 STT
+   credential in place means the required successful utterance could
+   pass on the STT fallback even when the post-specific
+   `post-api-key:<provider>` lookup is BROKEN -- masking the exact
+   regression this step exists to catch.
 
-Record the result in the release-candidate notes. If step 3 fails, the launcher
-credential path is broken on Windows regardless of what the Linux smoke says.
+   ```powershell
+   # Delete the saved STT credential first so the post-key path is
+   # exercised without any cross-account fallback. The credential
+   # target name Windows Credential Manager sees is `<user>.<service>`
+   # per `credential_target_name` in `src/rust/ui/api_keys.rs:404-410`
+   # (Codex P1 #672 `PRRT_kwDOSfNjQs6Uajz7` cmt 3665921389: the
+   # previous form `whisper-dictate/stt-api-key:<provider>` does NOT
+   # match the target the app writes, so the delete silently no-ops
+   # and step 4's post-key regression stays masked by the STT
+   # fallback path). Verify the entry is actually gone before
+   # continuing.
+   cmdkey /delete:stt-api-key:groq.whisper-dictate   # or stt-api-key:openai.whisper-dictate
+   cmdkey /list | Select-String "stt-api-key"        # must return NOTHING
+   # Then either save the post key via Settings -> Post-processing ->
+   # Save API key (which writes `post-api-key:<provider>`), or set
+   # `post_processor=groq`/`openai` in config and save through the UI.
+   ```
+
+   **Switch STT off the now-keyless cloud provider before dictating**
+   (Codex P1 #672 `PRRT_kwDOSfNjQs6UbpeI` cmt 3666333641). Deleting the
+   STT credential above makes `cloud_stt_missing_api_key()` true whenever
+   `stt_backend == "openai"` and the provider is not `Custom`
+   (`src/rust/ui/app.rs:462-468`), and `start_runtime` returns BEFORE
+   launching the worker in that case (`src/rust/ui/app.rs:261-265`). The
+   tester would then be unable to produce the step-4 utterance at all,
+   so the release gate could never be completed as written. Do ONE of:
+
+   - **Preferred** — Settings -> Speech -> set the STT backend to
+     **local Whisper** (`stt_backend` = `local`). Local STT needs no
+     credential, so `cloud_stt_missing_api_key()` is false and the
+     worker starts; the post-processor still exercises the
+     `post-api-key:<provider>` lookup, which is the ONLY thing this
+     step is measuring.
+   - **Or** — keep cloud STT but point it at a DIFFERENT provider whose
+     STT credential is still saved (e.g. delete `stt-api-key:groq` and
+     leave `stt-api-key:openai` in place while post-processing uses
+     Groq). `resolve_post_api_key`'s STT fallback is per-provider
+     (`src/rust/credentials.rs:147-155`), so a different-provider STT
+     key cannot mask the post-key lookup under test.
+
+   Do NOT simply re-save the STT key you just deleted -- that restores
+   the cross-account fallback and the step measures nothing.
+
+   **Close the saving app and re-launch with a scrubbed environment
+   before step 4b** (Codex P1 #672 `PRRT_kwDOSfNjQs6Uaj0Q` cmt
+   3665921411): Settings -> Save keeps the plaintext post key in
+   `post_api_key_input` (`src/rust/ui/settings_state.rs:330-334`),
+   and `worker_command` injects that in-memory value directly
+   (`src/rust/ui/app.rs:318-328`). Dictating in the same process
+   would therefore succeed even if reading `post-api-key:<provider>`
+   back from Windows Credential Manager is completely broken, so
+   the post-credential regression this step exists to catch stays
+   masked. Do exactly what step 3 already does for STT: exit the
+   app, open a NEW PowerShell with the key environment scrubbed,
+   then launch `whisper-dictate` fresh for the utterance below:
+
+   ```powershell
+   # Exit the app first (close the window / Ctrl+C the CLI), then:
+   Remove-Item Env:VOICEPI_STT_API_KEY, Env:VOICEPI_POST_API_KEY, `
+               Env:OPENAI_API_KEY, Env:GROQ_API_KEY `
+               -ErrorAction SilentlyContinue
+   whisper-dictate run   # fresh process, no in-memory post_api_key_input
+   ```
+
+   With the STT credential gone AND the app relaunched fresh,
+   configure a cloud post-processor. **`api ready` alone is not
+   enough here** (Codex P2
+   #672 `PRRT_kwDOSfNjQs6UZY9r` cmt 3665545681): startup loads the
+   post settings but the credential is only validated when
+   `postprocess_text` actually processes an utterance
+   (`src/python/whisper_dictate/vp_dictate.py:384-395`). To exercise
+   the post-key path you MUST trigger at least one utterance through
+   the post-processor and observe one of the following as evidence the
+   saved post key reached the worker AND the provider request
+   succeeded:
+
+   - The dictation-history JSONL entry has a non-empty
+     **`post_processor`** AND **`post_fallback == false`** AND an
+     EMPTY **`post_error`**. These are FLAT top-level keys, not a
+     nested block (Codex P2 #672 `PRRT_kwDOSfNjQs6UbpeP` cmt
+     3666333651): `_history_event` in
+     `src/python/whisper_dictate/vp_history.py:92-105` writes exactly
+     `post_processor`, `post_mode`, `post_model`, `post_latency_ms`,
+     `post_changed`, `post_fallback`, `post_error` at the top level,
+     and the UI history preview renders that JSONL directly -- there
+     is no `post_processor.provider` field to look for.
+     Why all three: a failed provider request returns the original
+     text and KEEPS the configured processor name in the envelope
+     while setting `post_fallback=true` + a `post_error` (Codex P2
+     #672 `PRRT_kwDOSfNjQs6UZ4Fn` cmt 3665665841), so a non-empty
+     `post_processor` on its own is NOT enough. `post_changed` MAY
+     be false because a successful cleanup can legitimately return
+     unchanged text.
+     If the UI history is inconvenient, the same payload can be
+     written as JSONL -- but you must set **BOTH** `inject_json=true`
+     AND `metrics_jsonl=<path>` (Codex P2 #672
+     `PRRT_kwDOSfNjQs6UbpeY` cmt 3666333662). `append_record_sinks`
+     (`vp_history.py:47-59`) only honours `metrics_jsonl` when
+     `json_output` is truthy, and `inject_json` defaults to `false`
+     on the fresh profile step 1 requires
+     (`src/rust/config/settings.rs:124-125`), so setting the path
+     alone leaves the promised file absent.
+   - OR the runtime-log tab shows one of the actual success-path
+     lines the Python worker emits from
+     `vp_dictate.py:390-395` (Codex P2 #672 `PRRT_kwDOSfNjQs6UZ5B_`
+     cmt 3665819805): `[post] <mode>/<provider> <N>ms text=...` (a
+     successful cleanup that changed the text) OR
+     `[post] <mode>/<provider> <N>ms unchanged` (a successful
+     cleanup that legitimately returned unchanged text). Both are
+     success signals -- avoid the `[post] fallback after Nms: ...`
+     and `[post] skipped ...` lines, which are the FAIL / not-run
+     paths respectively. The in-process Rust engine emits the
+     equivalent through the utterance-card fields (`provider`,
+     `fallback=false`, `error` empty) instead of a raw `[post]`
+     line, and `ui/log_render.rs:175-204` may suppress the raw
+     `[post]` line in the UI when the utterance card is showing --
+     rely on the utterance card in that case.
+   - OR, on Windows, a `netsh trace` / Fiddler capture of the
+     dictation confirms the outgoing Authorization header carries the
+     saved key value AND the server responded with a 2xx (redact
+     credentials before pasting).
+
+   A `post_error` containing `refusing to send stored post-processing
+   key` is ALSO a valid pass -- it means #666 landed and the key
+   correctly refused an unrelated endpoint, which proves the key
+   REACHED the worker. Any other `post_error` (`requires OPENAI_API_KEY`,
+   `requires GROQ_API_KEY`, HTTP 401/403/429, `transport`, `terminal`)
+   is a FAIL: either the saved post key did NOT reach the worker
+   (Credential Manager regression, same class as step 3) OR the key
+   reached but the provider rejected it (bad key, expired, revoked).
+   Either way DO NOT tag the RC.
+
+Record the result in the release-candidate notes. If step 3 fails, or
+step 4 fails to produce ANY of the evidence lines above (i.e. the
+utterance never invoked the post-processor at all), the launcher
+credential path is broken on Windows regardless of what the Linux smoke
+says.
+
+### Recording template (fill in and paste into the RC release notes)
+
+Per Codex P2 #642 (`PRRT_kwDOSfNjQs6UJFJb`): "written steps alone do not
+verify" -- an RC does not ship until the checklist is executed on Windows AND
+the outcome is captured verbatim. Copy the template below into the RC notes
+and fill in the actual output (or "OK" if the observed output matches the
+expected line):
+
+```markdown
+### Manual: Windows Credential Manager -> worker key injection (docs/manual-test/README.md)
+
+- Machine / OS:              e.g. ThinkPad X13 / Windows 11 24H2
+- Whisper-dictate version:   1.22.0-rc.N
+- Date / tester:             YYYY-MM-DD / <initials>
+- Step 1 (Save API key status line):     <paste>
+- Step 2a (`cmdkey /list`):              <paste one line>
+- Step 2b (`api-keys.json` present?):    yes / no
+- Step 3 (`whisper-dictate run` output): <paste 3-5 lines ending at `api ready` or the error>
+- Step 4-pre (STT cred deleted, `cmdkey /list | Select-String stt-api-key` empty): yes / no
+- Step 4-pre (STT switched to local Whisper or a different keyed provider): local / other-provider
+- Step 4-pre (app restarted fresh with env scrubbed after Settings -> Save): yes / no
+- Step 4a (post-processor utterance):    ran / did-not-run
+- Step 4b (post-key evidence, paste ONE of):
+  - history JSONL entry showing flat `post_processor=<name>`,
+    `post_fallback=false`, `post_error=""`:            <paste>
+  - runtime-log success line, i.e. verbatim
+    `[post] <mode>/<provider> <N>ms text=...` or
+    `[post] <mode>/<provider> <N>ms unchanged`:        <paste>
+  - Rust utterance card fields (`provider`, `fallback=false`,
+    `error` empty):                                    <paste>
+  - `netsh trace` / Fiddler 2xx line (credentials redacted): <paste>
+- Result:                                PASS / FAIL / BLOCKED (with reason)
+```
+
+If step 3 fails, or either of the step 4-pre lines is `no`, or step 4a
+is `did-not-run`, or step 4b is empty,
+DO NOT tag `v1.22.0`. Open a bug with the pasted output and hand back to
+the launcher credential-wiring owner. The unit tests (`credentials::tests`,
+`runtime::cloud_api_keys::cloud_api_keys_tests`,
+`ui::cloud_settings_tests::ui_worker_command_*`) cover the resolution logic
+but cannot reach the real OS keyring on this machine, and startup-only
+verification cannot catch a credential that is loaded but never sent.
 
 ## Full-app checklist (run the actual GUI / worker)
 
