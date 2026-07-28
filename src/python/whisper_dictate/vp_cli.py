@@ -93,7 +93,17 @@ def _truthy_env(name: str) -> bool:
 
 
 def _resolve_device(want: str) -> tuple[str, str]:
-    want = (want or "auto").lower()
+    # Canonicalise (trim whitespace + lower-case ASCII) BEFORE the
+    # membership check so a hand-edited config.json with "  CUDA  "
+    # (accepted by the Rust CLI's `config set device` canonicalisation
+    # but persisted as-is when the user hand-edits the file directly)
+    # still resolves to a valid device instead of failing startup with
+    # `invalid device`. Mirrors `AppSettings::from_value` s load-time
+    # canonicalisation on the Rust side so the two engines agree on
+    # what a legal device value looks like regardless of which one
+    # loaded the config first. Codex P2 #667 discussion
+    # PRRT_kwDOSfNjQs6UXoRH.
+    want = (want or "auto").strip().lower()
     if want not in VALID_DEVICES:
         raise ValueError(f"invalid device '{want}' (expected: "
                          f"{', '.join(VALID_DEVICES)})")

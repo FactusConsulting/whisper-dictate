@@ -23,6 +23,17 @@ mod schema;
 mod settings;
 mod validate;
 
+// Companion tests for `post_set_engine_hint` (added on this branch
+// for Codex P2 #655 r3663634825). Kept in a sibling file so the
+// regression-test discipline scanner
+// (`src/tests/python/test_regression_test_discipline.py`) — which
+// looks for `mod_tests.rs` next to `mod.rs` — sees a matching
+// companion; the pre-existing inline `#[cfg(test)] mod tests` block
+// below stays for its own historical wiring tests.
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod mod_tests;
+
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -82,6 +93,9 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Set { key, value, config } => {
             let path = resolve_config_path(config.as_deref());
             let saved_to = set_value(&key, &value, &path)?;
+            if let Some(warning) = post_set_engine_hint(&key, &value) {
+                eprintln!("{warning}");
+            }
             println!("{}", saved_to.display());
             Ok(())
         }
@@ -103,6 +117,28 @@ pub fn handle_command(command: ConfigCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Post-set advisory for a key/value that `set_value` accepted — used to
+/// surface engine-mismatch hints so a scripting user learns *before* the
+/// runtime silently falls back. Returns `None` when nothing needs
+/// saying.
+///
+/// Today only wired for the `device` key: `cuda` is a legal config value
+/// on every build (see [`crate::whisper::device_options`]), but on a
+/// CPU-only Rust build only the Python fallback engine can honour it;
+/// [`missing_device_hint`] holds the human-facing explanation for that
+/// engine split. The rejection path already appends the same hint to
+/// the error; this branch mirrors it on the accepted-but-caveated path.
+///
+/// Codex P2 #655 r3663634825.
+pub(crate) fn post_set_engine_hint(key: &str, value: &str) -> Option<String> {
+    if key != "device" {
+        return None;
+    }
+    let canonical = crate::whisper::device_options::canonicalize_device_value(value);
+    let hint = crate::whisper::device_options::missing_device_hint(&canonical)?;
+    Some(format!("warning: {hint}"))
 }
 
 /// Resolve the config file path for a `config get`/`set`/`list` CLI call.
