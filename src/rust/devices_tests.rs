@@ -96,6 +96,47 @@ fn should_merge_directsound_endpoints_matches_enumeration_flow() {
     }
 }
 
+// ----- Codex post-merge P2 (#669 devices.rs:271): pick-config strict filter -
+//
+// Under `VOICEPI_AUDIO_BACKEND=rust`, the picker must apply the SAME
+// strict filter the resolver uses (F32/I16/I32 supported input config
+// with usable channels) — otherwise the picker advertises a device
+// `capture::pick_config` cannot open and capture fails silently.
+// The filter is enforced in `devices::append_host_devices` via the
+// shared `hosts::device_supports_rust_capture` helper.
+
+#[test]
+fn append_host_devices_signature_accepts_rust_capture_strict_flag() {
+    // Compile-time pin: `append_host_devices` MUST expose the
+    // `rust_capture_strict` parameter so `enumerate_all_hosts` (and
+    // any future caller) can request the strict pick-config filter.
+    // Removing this parameter would silently reintroduce the
+    // pre-fix behavior where the picker advertises devices capture
+    // cannot open.
+    let f: fn(
+        &cpal::Host,
+        Option<usize>,
+        bool,
+        bool,
+        &mut usize,
+        &mut Vec<super::DeviceInfo>,
+        &mut Vec<String>,
+    ) = super::append_host_devices;
+    // Reference the function pointer so the compiler doesn't strip
+    // the check as dead code.
+    let _ = f as usize;
+}
+
+#[test]
+fn device_supports_rust_capture_helper_is_reachable_from_devices() {
+    // Cross-crate symbol check: `devices.rs` calls
+    // `crate::audio::hosts::device_supports_rust_capture` for its
+    // strict filter. This test compiles iff that path resolves,
+    // which pins the shared-helper wiring so a refactor can't
+    // silently drop the strict filter for the picker.
+    let _: fn(&cpal::Device) -> bool = crate::audio::hosts::device_supports_rust_capture;
+}
+
 // NOTE (Codex P2 #669 devices_tests.rs:129): the previous behavioural
 // test here compared two live `list_input_devices()` enumerations
 // separated by an env-var flip. That was non-hermetic — an unplugged

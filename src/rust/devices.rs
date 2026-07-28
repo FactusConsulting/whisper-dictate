@@ -195,6 +195,7 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
     let default_host = cpal::default_host();
     let default_host_id = default_host.id();
     let default_input_index = default_input_index(&default_host);
+    let rust_capture = current_backend_is_rust();
 
     let mut out: Vec<DeviceInfo> = Vec::new();
     let mut seen_names: Vec<String> = Vec::new();
@@ -202,14 +203,15 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
         &default_host,
         /*default_input_index=*/ default_input_index,
         /*is_default_host=*/ true,
+        /*rust_capture_strict=*/ rust_capture,
         /*next_synthetic_index=*/ &mut 0,
         &mut out,
         &mut seen_names,
     );
 
-    let flow = enumeration_flow(include_directsound, current_backend_is_rust());
+    let flow = enumeration_flow(include_directsound, rust_capture);
     if flow.walk_non_default_hosts {
-        append_non_default_host_devices(default_host_id, &mut out, &mut seen_names);
+        append_non_default_host_devices(default_host_id, rust_capture, &mut out, &mut seen_names);
     }
     if flow.merge_directsound {
         append_extra_named_devices(&directsound_capture_names(), &mut out, &mut seen_names);
@@ -226,6 +228,7 @@ fn enumerate_all_hosts(include_directsound: bool) -> Vec<DeviceInfo> {
 /// enumeration.
 fn append_non_default_host_devices(
     default_host_id: cpal::HostId,
+    rust_capture: bool,
     out: &mut Vec<DeviceInfo>,
     seen_names: &mut Vec<String>,
 ) {
@@ -245,6 +248,7 @@ fn append_non_default_host_devices(
             &host,
             /*default_input_index=*/ None,
             /*is_default_host=*/ false,
+            /*rust_capture_strict=*/ rust_capture,
             &mut next_synthetic,
             out,
             seen_names,
@@ -508,6 +512,7 @@ fn append_host_devices(
     host: &cpal::Host,
     default_input_index: Option<usize>,
     is_default_host: bool,
+    rust_capture_strict: bool,
     next_synthetic_index: &mut usize,
     out: &mut Vec<DeviceInfo>,
     seen_names: &mut Vec<String>,
@@ -530,7 +535,14 @@ fn append_host_devices(
                         && !seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
                     {
                         let info = build_device_info(0, &default, &name, true);
-                        if info.max_input_channels > 0 {
+                        // Apply the same strict Rust-capture filter as
+                        // the main enumeration branch — otherwise the
+                        // fallback could publish a device `pick_config`
+                        // cannot open (Codex P2 #669 devices.rs:271).
+                        if info.max_input_channels > 0
+                            && (!rust_capture_strict
+                                || crate::audio::hosts::device_supports_rust_capture(&default))
+                        {
                             seen_names.push(name);
                             out.push(info);
                             *next_synthetic_index = out.len();
@@ -574,6 +586,17 @@ fn append_host_devices(
             // No usable input configs at all (neither default_input_config nor
             // supported_input_configs reported channels). Skip — the picker
             // can't open it.
+            continue;
+        }
+        // Codex P2 (#669 post-merge devices.rs:271): under Rust capture
+        // the picker MUST additionally require the strict pick-config
+        // contract (supported_input_configs succeeds AND at least one
+        // F32/I16/I32 config). Otherwise the picker advertises a
+        // channel-bearing device that `capture::pick_config` cannot
+        // open — e.g. U16-only, or one reachable only via the
+        // `default_input_config` fallback — and capture fails
+        // immediately after the user selects it.
+        if rust_capture_strict && !crate::audio::hosts::device_supports_rust_capture(&device) {
             continue;
         }
         seen_names.push(name);

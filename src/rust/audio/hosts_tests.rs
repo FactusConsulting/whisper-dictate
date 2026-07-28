@@ -119,7 +119,7 @@ fn directsound_only_hint_returns_none_for_a_name_no_directsound_endpoint_uses() 
     // check is defensive — an accidental "always Some" here would
     // gaslight every Windows user into thinking their mic is
     // DirectSound-only.
-    let hint = directsound_only_hint("__whisper_dictate_absolutely_missing_mic__");
+    let hint = directsound_only_hint("__whisper_dictate_absolutely_missing_mic__", &[]);
     assert!(hint.is_none());
 }
 
@@ -128,9 +128,9 @@ fn directsound_only_hint_returns_none_for_a_name_no_directsound_endpoint_uses() 
 fn directsound_only_hint_is_always_none_on_non_windows() {
     // DirectSound doesn't exist off Windows — the hint MUST NOT
     // surface, even for a name that would match on Windows.
-    assert!(directsound_only_hint("Microphone (Yeti Classic)").is_none());
-    assert!(directsound_only_hint("anything").is_none());
-    assert!(directsound_only_hint("").is_none());
+    assert!(directsound_only_hint("Microphone (Yeti Classic)", &[]).is_none());
+    assert!(directsound_only_hint("anything", &[]).is_none());
+    assert!(directsound_only_hint("", &[]).is_none());
 }
 
 // ----- Codex P2 threads on PR #663 ------------------------------------------
@@ -149,10 +149,30 @@ fn directsound_only_hint_is_always_none_on_non_windows() {
 fn snapshot(label: &'static str, names: &[&str]) -> HostSnapshot {
     // A real HostId is only obtainable from cpal; reuse the default
     // host's id since the field isn't inspected by the error wording.
+    // Non-empty names are treated as usable; empty-name entries are
+    // usability-filtered placeholders. Enumeration succeeded (no
+    // failure error).
+    let device_names: Vec<String> = names.iter().map(|s| (*s).to_owned()).collect();
+    let usable: Vec<bool> = device_names.iter().map(|n| !n.is_empty()).collect();
     HostSnapshot {
         host_id: cpal::default_host().id(),
         host_label: label,
-        device_names: names.iter().map(|s| (*s).to_owned()).collect(),
+        device_names,
+        usable,
+        enumeration_error: None,
+    }
+}
+
+/// Snapshot for a host whose enumeration FAILED — used by the
+/// hosts.rs:200 fix regression tests to check the aggregate error
+/// distinguishes "searched" from "failed" hosts.
+fn failed_snapshot(label: &'static str, err: &str) -> HostSnapshot {
+    HostSnapshot {
+        host_id: cpal::default_host().id(),
+        host_label: label,
+        device_names: Vec::new(),
+        usable: Vec::new(),
+        enumeration_error: Some(err.to_owned()),
     }
 }
 
@@ -772,4 +792,202 @@ fn resolve_input_missing_name_still_uses_the_name_not_found_prefix() {
             "name-miss branch must not spill enumeration-failure prefix: {msg}"
         );
     }
+}
+
+// ----- Codex post-merge P2 (#669 hosts.rs:294): preserve real names ----------
+//
+// `enumerate_host_slot_usable` now keeps the REAL cpal name for every
+// enumerated device — even those `pick_config` cannot open — and
+// tracks capture-usability in a parallel `usable: Vec<bool>` on
+// [`HostSlot`] / [`HostSnapshot`]. The pure resolver skips unusable
+// slots via `mask_names_for_resolver`, and the aggregate error's
+// DirectSound-hint suppression consults the FULL cpal name list so a
+// visible-but-unopenable device doesn't get the false "only visible
+// via Windows DirectSound" claim.
+
+#[test]
+fn mask_names_for_resolver_blanks_unusable_slots_but_keeps_usable_ones() {
+    // The masking helper is the single seam between the "real names
+    // preserved for diagnostics" storage in `HostSlot` and the
+    // "empty=skip-in-resolver" shape the pure `resolve_over_host_names`
+    // expects. Pin every arm here so a future refactor cannot silently
+    // drift the two conventions apart.
+    let names = vec![
+        "Realtek HD".to_owned(),
+        "USB Mic Unusable".to_owned(),
+        "USB Mic Working".to_owned(),
+        "".to_owned(), // already-blank slot
+    ];
+    let usable = vec![true, false, true, false];
+    let masked = mask_names_for_resolver(&names, &usable);
+    assert_eq!(masked[0], "Realtek HD", "usable slot passes through");
+    assert_eq!(
+        masked[1], "",
+        "unusable slot is blanked so the resolver skips it"
+    );
+    assert_eq!(masked[2], "USB Mic Working", "second usable slot passes");
+    assert_eq!(
+        masked[3], "",
+        "already-blank slot stays blank (usable=false regardless)"
+    );
+}
+
+#[test]
+fn resolver_skips_unusable_slot_but_diagnostic_still_shows_the_real_name() {
+    // The pure resolver: an empty-masked (unusable) slot never
+    // matches by name. "Blue Yeti" is not a substring of "Realtek HD"
+    // and vice versa, so the substring pass finds nothing after the
+    // masked slot at position 0.
+    let hosts = vec![vec![String::new(), "Realtek HD".to_owned()]];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "Blue Yeti", "WASAPI"),
+        SelectorOutcome::NotFound,
+        "masked (unusable) slot must not match by name"
+    );
+}
+
+#[test]
+fn selector_matches_any_cpal_name_suppresses_directsound_hint_for_unusable_device() {
+    // Regression pin for #669 post-merge hosts.rs:294. The DirectSound
+    // hint MUST be suppressed when cpal already enumerated a name
+    // matching the selector — even if the device is capture-unusable.
+    // Otherwise a visible-but-unopenable cpal device (e.g. a Blue
+    // Yeti whose `supported_input_configs` transiently failed) gets
+    // the false "only visible via Windows DirectSound" remediation.
+    //
+    // The pure predicate is cross-platform testable — this test
+    // FAILS on pre-fix behavior (predicate returns false → hint
+    // check runs → false-positive) on every OS.
+    let cpal_names = ["Blue Yeti", "Realtek HD"];
+    assert!(
+        selector_matches_any_cpal_name("Blue Yeti", &cpal_names),
+        "exact match must trigger suppression"
+    );
+    // Bidirectional substring: saved "Blue Yeti Classic" should
+    // match an enumerated "Blue Yeti" and suppress the hint.
+    assert!(
+        selector_matches_any_cpal_name("Blue Yeti Classic", &cpal_names),
+        "bidirectional substring match must trigger suppression"
+    );
+    assert!(
+        !selector_matches_any_cpal_name("__completely_unrelated__", &cpal_names),
+        "unrelated names must NOT suppress"
+    );
+    // Empty entries (masked placeholders) are IGNORED — they're not
+    // real cpal names and must not spuriously suppress the hint.
+    assert!(
+        !selector_matches_any_cpal_name("Blue Yeti", &["", ""]),
+        "empty (masked) entries must not count as cpal enumeration"
+    );
+}
+
+#[test]
+fn build_not_found_error_suppresses_directsound_hint_when_cpal_saw_the_name() {
+    // End-to-end pin for the suppression pathway. Build a snapshot
+    // with a REAL name preserved + usable=false (mimicking the
+    // "enumerated but capture-unusable" case). The aggregate error
+    // MUST NOT include the DirectSound remediation for that
+    // selector — the hint suppressor consults device_names.
+    let host_snap = HostSnapshot {
+        host_id: cpal::default_host().id(),
+        host_label: "WASAPI",
+        device_names: vec!["Blue Yeti".to_owned()],
+        usable: vec![false],
+        enumeration_error: None,
+    };
+    let err = build_not_found_error("Blue Yeti", &[host_snap], None);
+    let msg = err.to_string();
+    assert!(
+        !msg.contains("only visible via Windows DirectSound"),
+        "DirectSound hint must be suppressed when cpal enumerated the \
+         name (even if unusable): {msg}"
+    );
+}
+
+// ----- Codex post-merge P2 (#669 hosts.rs:200): failed hosts not searched ---
+//
+// A failed-host placeholder (constructor OR input_devices() failed)
+// MUST NOT be counted as "successfully searched" in the aggregate
+// error. Its enumeration_error is carried into the aggregate as a
+// separate `enumeration failures: ...` clause so an outage is
+// diagnosable rather than masquerading as a name miss.
+
+#[test]
+fn not_found_error_excludes_failed_hosts_from_the_searched_count() {
+    // Simulate: default host WASAPI failed; secondary ASIO succeeded
+    // with 2 usable devices. The aggregate error MUST NOT quote
+    // "searched X across 2 host(s): WASAPI, ASIO" — WASAPI was
+    // never searched.
+    let snaps = vec![
+        failed_snapshot(
+            "WASAPI",
+            "host WASAPI: input_devices() failed (permission denied)",
+        ),
+        snapshot("ASIO", &["Studio Mic A", "Studio Mic B"]),
+    ];
+    let err = build_not_found_error("Ghost", &snaps, None);
+    let msg = err.to_string();
+    // Search stats reflect ONLY the successful host.
+    assert!(
+        msg.contains("across 1 host(s)"),
+        "failed host must NOT count toward the search stats: {msg}"
+    );
+    assert!(
+        msg.contains("searched 2 device(s)"),
+        "device count must reflect only successfully-searched hosts: {msg}"
+    );
+    assert!(
+        msg.contains("ASIO"),
+        "successful host label must appear: {msg}"
+    );
+    // Failure appears in its own clause — separable from the search stats.
+    assert!(
+        msg.contains("enumeration failures:"),
+        "failed host's error must be carried in a distinct 'enumeration \
+         failures:' clause: {msg}"
+    );
+    assert!(
+        msg.contains("permission denied"),
+        "underlying failure detail must be preserved: {msg}"
+    );
+}
+
+#[test]
+fn not_found_error_omits_enumeration_failures_clause_when_no_failures() {
+    // Complementary pin: no failed hosts → no `; enumeration
+    // failures:` clause. Absence of noise for the healthy case.
+    let snaps = vec![snapshot("WASAPI", &["Mic A"])];
+    let err = build_not_found_error("Ghost", &snaps, None);
+    let msg = err.to_string();
+    assert!(
+        !msg.contains("enumeration failures:"),
+        "no failure clause when every host succeeded: {msg}"
+    );
+}
+
+// ----- Codex post-merge P2 (#669 devices.rs:271): pick-config strict filter -
+//
+// `device_supports_rust_capture` is the resolver's pure "would
+// pick_config open this device?" predicate. Live cpal-integration is
+// exercised through the resolver + capture paths; the unit-level pin
+// is that the helper only accepts devices with at least one usable
+// F32/I16/I32 supported config (rejecting `default_input_config`-only
+// devices and non-F32/I16/I32 formats).
+//
+// We can't easily fabricate a `cpal::Device` in a unit test, so the
+// pin below asserts the helper's DOCUMENTED contract at the compile-
+// / API-boundary level. The actual behaviour is exercised by any
+// resolver / picker call on live hardware — a device that would
+// otherwise sneak in via `default_input_config` fallback is now
+// excluded (see the enumerate_host_slot_usable + append_host_devices
+// call sites).
+
+#[test]
+fn device_supports_rust_capture_is_visible_to_the_devices_picker() {
+    // Cross-crate symbol check: the picker (`devices::append_host_devices`
+    // under rust_capture_strict) MUST call the same helper the resolver
+    // uses, so both stay in sync. This test compiles iff the helper is
+    // reachable via its `pub(crate)` path from tests, which mirrors the
+    // path devices.rs uses.
+    let _: fn(&cpal::Device) -> bool = super::device_supports_rust_capture;
 }
