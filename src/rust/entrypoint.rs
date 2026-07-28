@@ -127,12 +127,29 @@ where
 /// * `f` runs FIRST, so the drain flushes records the closure itself
 ///   queued on its way out.
 /// * `teardown` runs UNCONDITIONALLY - a failed run is exactly when the
-///   queued trace matters most.
+///   queued trace matters most. "Unconditionally" includes a PANIC, see
+///   below.
 /// * the exit code survives the teardown: whatever the teardown reports
 ///   about the diagnostic queue, it must not change what the process
 ///   tells its caller.
 ///
-/// Injecting the teardown is what makes that testable at all: the
+/// ## Why the teardown is a `Drop` guard and not a plain call
+///
+/// Codex P2 #681 comment 3669249183. A straight-line
+/// `let code = error_exit_shell(..); teardown(); code` covers exactly
+/// two of the three ways this function can be left: `Ok` and `Err`. The
+/// third is an unwinding panic inside `f`, and the release profile uses
+/// Rust's default unwind behaviour, so an ordinary main-thread panic
+/// takes that path. Control then never reaches the `teardown()`
+/// statement and the process dies with the queued trace tail unwritten -
+/// on precisely the run where a support thread most wants it, because
+/// the records nearest the panic are the ones that explain it.
+///
+/// A scope guard is left on every path, so the drain runs while the
+/// stack unwinds. `Option::take` in the `Drop` keeps it exactly-once:
+/// the normal path does not drain twice.
+///
+/// Injecting the teardown is what makes any of this testable: the
 /// production drain talks to a process-wide `OnceLock` writer thread
 /// that no test can reset, and running it for real inside the test
 /// binary would shut that writer down for every later test.
@@ -147,38 +164,82 @@ where
     W: Write,
     T: FnOnce(),
 {
-    let code = error_exit_shell(prefix, stderr, f);
-    teardown();
-    code
+    /// Runs `teardown` when the enclosing scope is left - by `return`
+    /// **or** by an unwinding panic out of `f`.
+    struct TeardownGuard<T: FnOnce()> {
+        /// `Option` so the `FnOnce` can be moved out of `&mut self` in
+        /// `Drop`, which also makes "exactly once" structural.
+        teardown: Option<T>,
+    }
+
+    impl<T: FnOnce()> Drop for TeardownGuard<T> {
+        fn drop(&mut self) {
+            if let Some(teardown) = self.teardown.take() {
+                teardown();
+            }
+        }
+    }
+
+    // Named binding, NOT `let _ = ...`: the latter drops immediately and
+    // would run the teardown BEFORE `f`.
+    let _teardown_guard = TeardownGuard {
+        teardown: Some(teardown),
+    };
+    error_exit_shell(prefix, stderr, f)
 }
 
-/// Drain the async diagnostic queue, warning (non-blockingly) if the
-/// drain misses its deadline. Production wiring for
+/// Drain the async diagnostic queue, warning through a **tee-free**
+/// sink if the drain misses its deadline. Production wiring for
 /// [`drain_diagnostics_on_exit_with`].
 pub fn drain_diagnostics_on_exit() -> bool {
     drain_diagnostics_on_exit_with(
         crate::diag::drain_and_shutdown,
-        |line| {
-            // Discard the "did the tee write land" bool - on this path
-            // stderr already has the line and there is nothing further
-            // to do about a contended tee mutex.
-            crate::diag::write_line_nonblocking(line);
-        },
+        exit_timeout_warning_sink,
         DIAG_DRAIN_DEADLINE,
     )
+}
+
+/// The sink the exit-teardown timeout warning is emitted through.
+///
+/// A named function rather than an inline closure so a RUNTIME test can
+/// drive the role instead of an implementation it picked itself. The
+/// injected-core tests below necessarily supply their own `warn`, so
+/// without this seam the only thing pinning production's choice would be
+/// a source-level string match, and Codex P1 #681
+/// PRRT_kwDOSfNjQs6UjZeP is precisely a case where the wrong choice
+/// (`crate::diag::write_line_nonblocking`) looks bounded and is not:
+/// its `try_lock` succeeds whenever the tee mutex is free, and the
+/// synchronous file write behind it can then stall process exit for as
+/// long as the AppData volume is wedged.
+/// `diag_tests::the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee`
+/// calls THIS function against exactly that tee.
+pub(crate) fn exit_timeout_warning_sink(line: &str) {
+    crate::diag::write_line_stderr_only(line);
 }
 
 /// Dependency-injected core of [`drain_diagnostics_on_exit`]. Returns
 /// whether the drain completed within `deadline`.
 ///
-/// `warn` MUST be a non-blocking sink. Codex P2 #675
-/// PRRT_kwDOSfNjQs6Ub__j: the likeliest reason the drain timed out is
-/// that the writer thread is wedged INSIDE `crate::diag::write_line_to`
-/// still holding the tee-file mutex, so a blocking `diag::log!` here
-/// would queue on that same mutex and hang teardown indefinitely - well
-/// past the deadline that exists to prevent exactly that.
-/// [`crate::diag::write_line_nonblocking`] `try_lock`s and falls back
-/// to stderr-only.
+/// `warn` MUST NOT TOUCH THE TEE AT ALL - not with a blocking `lock`,
+/// and not with a `try_lock` either.
+///
+/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j established the first half: the
+/// likeliest reason the drain timed out is that the writer thread is
+/// wedged INSIDE `crate::diag::write_line_to` still holding the tee-file
+/// mutex, so a blocking `diag::log!` here would queue on that same mutex
+/// and hang teardown indefinitely - well past the deadline that exists
+/// to prevent exactly that.
+///
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP established the second: the
+/// `try_lock` fallback (`crate::diag::write_line_nonblocking`) is not
+/// enough either, because it bounds only the LOCK. When the drain fails
+/// while the mutex happens to be free - the writer disconnected, or it
+/// released the mutex just before the warning ran - the `try_lock`
+/// succeeds and the warning then does a synchronous `writeln!` +
+/// `flush` on the same stalled volume, hanging exit inside the warning
+/// about the wedged sink. Production therefore wires
+/// `crate::diag::write_line_stderr_only`, which has no tee interaction
+/// to bound.
 pub(crate) fn drain_diagnostics_on_exit_with<D, W>(
     drain: D,
     mut warn: W,

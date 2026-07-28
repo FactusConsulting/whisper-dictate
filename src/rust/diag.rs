@@ -259,16 +259,29 @@ pub(crate) fn reset_level_for_tests() {
     LEVEL.store(LogLevel::Info.as_u8(), Ordering::Relaxed);
 }
 
+/// The tee sink's type. A boxed `dyn Write` rather than a bare
+/// `std::fs::File`.
+///
+/// Production only ever stores the `File` that
+/// [`install_gui_diagnostic_log`] opened, and the extra indirection is
+/// invisible next to the `writeln!` + `flush` syscalls it guards. The
+/// box buys the one thing a concrete `File` cannot give a test: a tee
+/// whose mutex is FREE but whose `write` BLOCKS. That combination is
+/// the whole of Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP — `try_lock` bounds
+/// lock acquisition, not the file I/O behind it — and no temp file can
+/// be made to stall on demand.
+type TeeSink = Box<dyn Write + Send>;
+
 /// Process-wide slot for the diagnostic file writer. `None` means "not
-/// installed" (readers skip the file write). Uses `Mutex<Option<File>>`
-/// rather than `OnceLock<Mutex<File>>` so re-installing swaps the file
+/// installed" (readers skip the file write). Uses `Mutex<Option<..>>`
+/// rather than `OnceLock<Mutex<..>>` so re-installing swaps the file
 /// (important for tests that install with a temp path and expect their
 /// writes to land there rather than in a sibling test's leftover file).
 /// Production callers install exactly once from
 /// `whisper-dictate-gui::main`, so the swap semantics are invisible in
 /// shipping code.
-fn diag_file() -> &'static Mutex<Option<std::fs::File>> {
-    static DIAG_FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
+fn diag_file() -> &'static Mutex<Option<TeeSink>> {
+    static DIAG_FILE: OnceLock<Mutex<Option<TeeSink>>> = OnceLock::new();
     DIAG_FILE.get_or_init(|| Mutex::new(None))
 }
 
@@ -333,7 +346,7 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
         .open(path)?;
     let slot = diag_file();
     if let Ok(mut guard) = slot.lock() {
-        *guard = Some(file);
+        *guard = Some(Box::new(file));
     }
     let _ = START.set(Instant::now());
     Ok(())
@@ -433,18 +446,23 @@ pub(crate) fn write_line_to<W: Write>(mut stderr_sink: W, line: &str) {
     }
 }
 
-/// Non-blocking variant of [`write_line`] for teardown / recovery call
-/// sites that must never wait on the tee-file mutex.
+/// Non-blocking variant of [`write_line`] for call sites that must
+/// never WAIT on the tee-file mutex but still want the record in the
+/// file when the mutex happens to be free.
 ///
-/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j. The exit drain
-/// ([`crate::entrypoint::drain_diagnostics_on_exit`]) emits a warning
-/// when [`drain_and_shutdown`] misses its deadline. The likeliest
-/// reason that drain timed out is that the async writer thread is
-/// parked INSIDE [`write_line_to`] holding this very mutex - a wedged
-/// AppData volume is exactly the scenario the deadline exists for - so
-/// a blocking `log!` there would queue behind the stuck writer and hang
-/// process teardown indefinitely, well past the deadline that exists to
-/// prevent precisely that.
+/// Codex P2 #675 PRRT_kwDOSfNjQs6Ub__j introduced this for the exit
+/// drain's timeout warning, on the reasoning that a blocking `log!`
+/// there would queue behind a writer parked inside [`write_line_to`]
+/// holding this very mutex.
+///
+/// ## NOT the exit-teardown warning sink any more
+///
+/// Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP: `try_lock` bounds the LOCK, not
+/// the file I/O behind it, so on a FREE mutex this still performs a
+/// synchronous `writeln!` + `flush` on the very volume that just failed
+/// to drain. That path now uses [`write_line_stderr_only`], which
+/// touches no tee state at all. Do not wire a teardown / deadline path
+/// back to this function.
 ///
 /// Returns `true` when the tee-file write was attempted, `false` when
 /// the line went to stderr only (mutex contended or poisoned).
@@ -489,12 +507,78 @@ pub(crate) fn write_line_to_nonblocking<W: Write>(mut stderr_sink: W, line: &str
     }
 }
 
+/// Emit one diagnostic line to stderr and to **nothing else**.
+///
+/// ## Why a third sink (Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP)
+///
+/// This is the sink [`crate::entrypoint::drain_diagnostics_on_exit`]
+/// warns through when [`drain_and_shutdown`] misses
+/// [`crate::entrypoint::DIAG_DRAIN_DEADLINE`]. That warning is *about* a
+/// tee sink that has already proven itself unresponsive, so it must not
+/// go anywhere near it.
+///
+/// [`write_line_nonblocking`] is NOT good enough for that job, which is
+/// the correction this function exists to make. Its `try_lock` bounds
+/// only the LOCK ACQUISITION. When the drain fails while the tee mutex
+/// happens to be free — the writer thread disconnected, or it released
+/// the mutex a microsecond before the warning ran — the `try_lock`
+/// SUCCEEDS and the warning then performs a synchronous `writeln!` +
+/// `flush` on the same stalled AppData volume that wedged the writer in
+/// the first place. Process exit blocks there indefinitely, past the
+/// 500 ms deadline, inside the warning about the wedged sink.
+///
+/// A timeout warning has nothing to gain from the tee anyway: the whole
+/// message is "the tee file may be short of records", so the operator
+/// reading that file is not the audience. Stderr is.
+///
+/// The [`LogLevel::Off`] gate is kept for the same reason
+/// [`write_line`] has one: `off` promises no output at all, including
+/// from teardown paths.
+pub fn write_line_stderr_only(message: &str) {
+    if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
+        return;
+    }
+    let ms = START.get_or_init(Instant::now).elapsed().as_millis();
+    let line = format!("t={ms}ms {message}");
+    let stderr = std::io::stderr();
+    write_line_to_stderr_only(stderr.lock(), &line);
+}
+
+/// Sink half of [`write_line_stderr_only`], parameterised over the
+/// writer exactly as its two siblings are.
+///
+/// The body must stay exactly this: one `writeln!`, one `flush`, and no
+/// reference to [`diag_file`] in any form (not `lock`, not `try_lock`).
+/// Adding one back reintroduces Codex P1 #681
+/// PRRT_kwDOSfNjQs6UjZeP — see [`write_line_stderr_only`].
+pub(crate) fn write_line_to_stderr_only<W: Write>(mut stderr_sink: W, line: &str) {
+    let _ = writeln!(stderr_sink, "{line}");
+    let _ = stderr_sink.flush();
+}
+
 /// Test-only handle on the tee-file mutex so the companion test can
 /// hold it across a [`write_line_nonblocking`] call and prove the
 /// non-blocking contract against the real mutex rather than a mock.
 #[cfg(test)]
-pub(crate) fn tee_mutex_for_tests() -> &'static Mutex<Option<std::fs::File>> {
+pub(crate) fn tee_mutex_for_tests() -> &'static Mutex<Option<TeeSink>> {
     diag_file()
+}
+
+/// Test-only: put an arbitrary writer in the process-wide tee slot.
+///
+/// [`install_gui_diagnostic_log`] can only install a real file, and a
+/// real file cannot be made to stall on demand. This is how
+/// `diag_tests::the_exit_timeout_warning_does_not_write_to_a_free_but_blocked_tee`
+/// builds the exact shape Codex P1 #681 PRRT_kwDOSfNjQs6UjZeP names: a
+/// tee whose mutex is acquirable and whose `write` never returns.
+///
+/// Callers MUST hold `crate::diag_test_lock::DIAG_WRITER_LOCK` and put
+/// the slot back (`None`, or a fresh install) before releasing it.
+#[cfg(test)]
+pub(crate) fn install_tee_sink_for_tests(sink: Option<TeeSink>) {
+    if let Ok(mut guard) = diag_file().lock() {
+        *guard = sink;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -828,9 +912,9 @@ fn write_async_record<F>(
     pending.fetch_sub(1, Ordering::Relaxed);
 }
 
-/// Handle an [`AsyncRecord::Shutdown`] sentinel: sweep up whatever the
-/// producer squeezed in behind it, close any open overload episode,
-/// then acknowledge every drainer that asked.
+/// Handle an [`AsyncRecord::Shutdown`] sentinel: close any open
+/// overload episode, **acknowledge immediately**, and only then sweep up
+/// whatever the producer squeezed in behind the sentinel.
 ///
 /// ## The backlog the caller asked for is ALREADY written
 ///
@@ -843,35 +927,49 @@ fn write_async_record<F>(
 /// high-rate mouse trace), which no `main` on its way out is waiting
 /// for.
 ///
-/// ## Why the sweep is bounded by `capacity`
+/// ## Why the ack comes BEFORE the sweep
 ///
-/// `try_recv` (never `recv`) is the first half of the bound: a
-/// momentarily idle producer must not park the drain. But `try_recv`
-/// alone is not enough, because a producer that keeps up with the sink
-/// refills every slot the sweep frees, so an unbounded
-/// `while let Ok(..) = rx.try_recv()` follows it forever. The caller
-/// then hits its deadline and reports a FAILED drain - warning the
-/// operator that the tee file is short - even though every record the
-/// request covered had long since landed (Codex P2 #681
-/// PRRT_kwDOSfNjQs6UiJ_T).
+/// Codex P2 #681 comment 3669249174. The previous shape swept first and
+/// acked afterwards, bounded by a count (`capacity`). A count is the
+/// wrong currency for a deadline: against a slow-but-functional sink,
+/// 256 records of post-sentinel traffic can cost far more than the
+/// caller's [`crate::entrypoint::DIAG_DRAIN_DEADLINE`], so the caller
+/// times out and warns the operator that the tee file is short - on a
+/// run where every record the request covered was already durable. The
+/// earlier round's infinite sweep had the same failure with a worse
+/// constant.
 ///
-/// `capacity` is the smallest budget that keeps the two things the
-/// sweep is actually for:
+/// Acking first removes the sweep from the caller's critical path
+/// entirely, which is the only bound that does not depend on how fast
+/// the sink happens to be. Nothing the caller asked for is skipped: the
+/// FIFO argument above is what makes that safe, and the episode close
+/// below still runs BEFORE the ack.
+///
+/// ## The sweep still happens - on borrowed time
+///
+/// It keeps its `capacity` budget and its two jobs, now off the
+/// deadline:
 ///
 /// * a queue that was full when the sentinel arrived still gets its
 ///   records written rather than discarded, and
-/// * a second concurrent drainer's sentinel is found. The channel holds
-///   at most `capacity` messages, so that sentinel can never sit more
-///   than `capacity` positions behind ours.
+/// * a second concurrent drainer's sentinel is found and acked as soon
+///   as it is seen. The channel holds at most `capacity` messages, so
+///   that sentinel can never sit more than `capacity` positions behind
+///   ours. Dropping it instead would make that drainer's
+///   `recv_timeout` report a spurious failure.
 ///
-/// Past that the sweep stops and acks: bounded work, bounded teardown.
+/// If the process exits mid-sweep, only younger-than-the-request
+/// traffic is lost - which is precisely the trade the deadline exists
+/// to make.
 ///
 /// [`close_burst_with_pending_drops`] before the ack is load-bearing:
 /// draining in the middle of an overload episode would otherwise drop
 /// that episode's [`async_burst_summary_marker`] on the floor, so the
 /// last thing the tee file records about a wedged sink would be the
 /// episode's OPENING count rather than its total (Codex P2 #680 comment
-/// 3668174780 read together with this PR's drain path).
+/// 3668174780 read together with this PR's drain path). It is ONE line
+/// against the sink, not a queue's worth, so it cannot blow the budget
+/// the way the sweep could.
 fn drain_and_ack_shutdown<F>(
     rx: &Receiver<AsyncRecord>,
     ack: Sender<()>,
@@ -883,7 +981,13 @@ fn drain_and_ack_shutdown<F>(
 ) where
     F: FnMut(&str),
 {
-    let mut acks = vec![ack];
+    // Part of the requested backlog: the episode summary describes
+    // records that were shed BEFORE the drain request.
+    close_burst_with_pending_drops(burst, dropped, capacity, sink);
+    // Best-effort: a drainer that already gave up on its deadline has
+    // dropped the receiver.
+    let _ = ack.send(());
+
     let mut budget = capacity;
     while budget > 0 {
         let Ok(queued) = rx.try_recv() else { break };
@@ -893,18 +997,14 @@ fn drain_and_ack_shutdown<F>(
                 drops_before,
                 message,
             } => write_async_record(drops_before, &message, capacity, pending, burst, sink),
-            // A second concurrent drainer. Collect its ack too rather
-            // than dropping the sender, which would make its
-            // `recv_timeout` report a spurious timeout.
-            AsyncRecord::Shutdown(extra) => acks.push(extra),
+            AsyncRecord::Shutdown(extra) => {
+                let _ = extra.send(());
+            }
         }
     }
+    // The swept records may themselves have opened an episode; close it
+    // so the very last thing written names the gap.
     close_burst_with_pending_drops(burst, dropped, capacity, sink);
-    for ack in acks {
-        // Best-effort: a drainer that already gave up on its deadline
-        // has dropped the receiver.
-        let _ = ack.send(());
-    }
 }
 
 /// The writer thread's whole body, parameterised over the receiver,
