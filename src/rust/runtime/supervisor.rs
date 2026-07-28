@@ -559,10 +559,29 @@ impl RuntimeSupervisor {
             if key_names.is_empty() {
                 return Err(InProcessInstallError::EmptyChord);
             }
-            handle
-                .resume(key_names.clone())
-                .map_err(InProcessInstallError::HotkeyInstallFailed)?;
-            key_names
+            match handle.resume(key_names.clone()) {
+                Ok(()) => key_names,
+                Err(err) => {
+                    // Codex P2 #668 discussion 3665200198: DROP the
+                    // unusable handle before propagating so the
+                    // Python-worker fallback path in `start()` sees
+                    // `hotkey_handle == None` and does NOT take the
+                    // `else if let Some(handle) = self.hotkey_handle`
+                    // restart branch (which would then decide
+                    // `park_python` under
+                    // `VOICEPI_DICTATE_BACKEND=rust-session`, disable
+                    // the Python listener, retry the same dead
+                    // manager, and ignore that second Err — leaving
+                    // the spawned Python worker with no functioning
+                    // PTT at all). Clearing the slot forces the
+                    // fallback path to install fresh via
+                    // `install_rust_hotkey_from_command`, or (when
+                    // that isn't wired) leaves Python driving PTT
+                    // unmodified.
+                    self.hotkey_handle = None;
+                    return Err(InProcessInstallError::HotkeyInstallFailed(err));
+                }
+            }
         } else {
             let installation =
                 in_process::try_install(self.tx.clone(), self.repaint_notifier.clone())?;

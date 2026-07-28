@@ -321,9 +321,18 @@ fn handle_self_test_hotkey_boot(
     let config_key =
         reconcile_config_load(chord, load_result).map_err(|msg| anyhow::anyhow!(msg))?;
     if had_load_err {
-        eprintln!(
+        // Codex P2 #668 discussion 3665200198 (main.rs:324): a plain
+        // `eprintln!` panics on `write_all` failure, and a self-test
+        // invoked from a hidden Windows launcher or with a closed /
+        // redirected stderr consumer would abort the CLI before
+        // `run_boot_test` ever runs — the exact class of failure the
+        // same commit fixed inside `diag::write_line`. Route through
+        // the fallible-writer path (`diag::write_line`) instead so a
+        // dead stderr is swallowed and the boot self-test still emits
+        // its final report to stdout.
+        whisper_dictate_app::diag::write_line(
             "[self-test hotkey-boot] warning: config load failed; \
-             continuing with --chord override"
+             continuing with --chord override",
         );
     }
     let resolved = resolve_chord(chord, &config_key);

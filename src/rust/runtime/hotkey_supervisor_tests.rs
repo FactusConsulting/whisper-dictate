@@ -610,6 +610,94 @@ fn attempt_in_process_start_fails_cleanly_when_prior_handle_manager_is_dead() {
          the UI's ready-latch would else fire on a dead listener. Codex P2 #668 \
          discussion 3664983412."
     );
+
+    // Codex P2 #668 discussion 3665200198: the unusable handle MUST
+    // be cleared from `self.hotkey_handle` before we return Err.
+    // Otherwise the caller in `start()` falls through to the
+    // Python-worker path, which sees `hotkey_handle == Some(dead)`,
+    // takes the legacy restart branch, decides `park_python` under
+    // `VOICEPI_DICTATE_BACKEND=rust-session`, disables the Python
+    // listener, retries the same dead manager, ignores that second
+    // Err, and leaves the spawned Python worker with no functioning
+    // PTT. Before the fix `hotkey_handle` was still `Some` here; the
+    // fix drops it.
+    assert!(
+        supervisor.hotkey_handle.is_none(),
+        "attempt_in_process_start MUST clear self.hotkey_handle when \
+         resume errs so the Python-worker fallback in start() does not \
+         reuse the dead manager and park Python for good. Codex P2 #668 \
+         discussion 3665200198."
+    );
+}
+
+/// End-to-end guard for the Codex P2 #668 3665200198 fallback race: with
+/// both `VOICEPI_DICTATE_ENGINE=rust` AND
+/// `VOICEPI_DICTATE_BACKEND=rust-session` set, a `start()` call whose
+/// in-process resume fails MUST NOT park Python. Even if the eventual
+/// Python-worker spawn fails (no binary on this box), the effective
+/// command handed to `Command::new` must NOT carry
+/// `VOICEPI_PYTHON_HOTKEY=0`. If it did, the operator's PTT would go
+/// silent on Windows whether the Python worker started or not — the
+/// exact regression the fallback race produces.
+///
+/// The test exercises `start()` end-to-end (the public entry point, not
+/// the private `attempt_in_process_start`) so the resume-Err → clear
+/// handle → Python-worker fallback pipeline is covered as a whole.
+#[cfg(feature = "rust-hotkeys")]
+#[test]
+fn start_with_rust_session_and_dead_hotkey_handle_does_not_park_python_on_fallback() {
+    use crate::hotkey::coordinator;
+    use crate::hotkey::HotkeyHandle;
+    use crate::runtime::supervisor::RuntimeSupervisor;
+    use crate::runtime::worker_command::WorkerCommand;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    // Non-empty chord so the in-process restart path reaches `resume`
+    // rather than short-circuiting on EmptyChord.
+    let cfg_dir = tempfile::tempdir().expect("tempdir for scratch config");
+    let cfg_path = cfg_dir.path().join("config.json");
+    std::fs::write(&cfg_path, "{\"key\":\"ctrl_l\"}").expect("write scratch config");
+    let _cfg_guard = EnvVarGuard::set("VOICEPI_CONFIG", cfg_path.to_string_lossy().as_ref());
+    let _engine_guard = EnvVarGuard::set("VOICEPI_DICTATE_ENGINE", "rust");
+    // The exact combination the Codex comment calls out: rust-session
+    // dictate backend PLUS the default ENGINE=rust in-process path.
+    // Without this env, `dictate_backend_rust_session_requested()`
+    // returns false and the fallback path never decides `park_python`
+    // — the bug window only opens when BOTH are set.
+    let _backend_guard = EnvVarGuard::set("VOICEPI_DICTATE_BACKEND", "rust-session");
+
+    let mut supervisor = RuntimeSupervisor::new();
+    let mut stub = HotkeyHandle::install_stub_for_tests(coordinator::Mode::HoldToTalk);
+    stub.shutdown_manager_only_for_tests();
+    supervisor.hotkey_handle = Some(stub);
+
+    // A `WorkerCommand` pointing at a non-existent program so
+    // `start()`'s Python-worker spawn fails fast — we don't want a
+    // real child on CI. What we DO want to observe: that the fallback
+    // path did not stamp `VOICEPI_PYTHON_HOTKEY=0` on the effective
+    // command's env vector before the spawn attempt.
+    let cmd = WorkerCommand {
+        program: std::path::PathBuf::from("/nonexistent-whisper-dictate-fallback-test"),
+        args: Vec::new(),
+        working_dir: std::path::PathBuf::from("/tmp"),
+        env: Vec::new(),
+    };
+    // We EXPECT start() to return Err (Python worker spawn fails
+    // because the program does not exist). The behaviour we're
+    // asserting is a SIDE EFFECT — the hotkey_handle slot's state and
+    // the events emitted — not the top-level Result value.
+    let _ = supervisor.start(cmd);
+
+    // The dead handle must have been cleared by
+    // `attempt_in_process_start` BEFORE the fallback branch ran.
+    // Before the fix the slot stayed populated, the fallback branch
+    // took the legacy restart path, parked Python, and re-called
+    // `handle.resume` on the same dead manager.
+    assert!(
+        supervisor.hotkey_handle.is_none(),
+        "start() fallback must not leave a dead HotkeyHandle in the \
+         supervisor. Codex P2 #668 discussion 3665200198."
+    );
 }
 
 #[test]

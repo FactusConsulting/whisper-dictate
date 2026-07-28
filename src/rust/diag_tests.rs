@@ -464,6 +464,83 @@ fn write_line_does_not_use_eprintln_for_stderr_tee() {
     );
 }
 
+// -----------------------------------------------------------------------
+// Codex P2 #668 discussion 3665200207 — the `handle_self_test_hotkey_boot`
+// warning path in `main.rs` (added by the #644 sweep to preserve
+// config-load errors) originally used `eprintln!` for the "config load
+// failed; continuing with --chord override" line. That is the SAME
+// panic-on-closed-stderr class of failure this commit removed from
+// `diag::write_line` — a self-test invoked from a hidden Windows
+// launcher (or with a closed / redirected stderr consumer) would abort
+// before `run_boot_test` ever runs. The fix routes the warning through
+// `diag::write_line` (fallible) so a dead stderr is swallowed and the
+// self-test's stdout report still lands. This scanner catches any
+// regression that reintroduces `eprintln!` inside that function body.
+// -----------------------------------------------------------------------
+
+#[test]
+fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
+    let src = std::fs::read_to_string("src/rust/main.rs")
+        .or_else(|_| std::fs::read_to_string("main.rs"))
+        .expect(
+            "main.rs must be readable from the test working dir; \
+             cargo test runs from the crate root by default",
+        );
+    let fn_marker = "fn handle_self_test_hotkey_boot(";
+    let fn_start = src
+        .find(fn_marker)
+        .expect("handle_self_test_hotkey_boot function must exist in main.rs");
+    // Walk from the first `{` after the signature until the matching
+    // top-level `}` via a brace-depth counter. Mirrors the
+    // `write_line_does_not_use_eprintln_for_stderr_tee` scanner.
+    let open_brace_offset = src[fn_start..]
+        .find('{')
+        .map(|i| fn_start + i)
+        .expect("handle_self_test_hotkey_boot must have an opening brace");
+    let mut depth: i32 = 0;
+    let mut end: Option<usize> = None;
+    for (i, ch) in src[open_brace_offset..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open_brace_offset + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let fn_end = end.expect("handle_self_test_hotkey_boot must have a matching `}`");
+    let body = &src[fn_start..fn_end];
+    let body_no_line_comments: String = body
+        .lines()
+        .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !body_no_line_comments.contains("eprintln!"),
+        "handle_self_test_hotkey_boot MUST NOT use `eprintln!` — it panics \
+         on stderr write failure and would abort the CLI before \
+         `run_boot_test` runs on a closed / redirected stderr (the exact \
+         Windows/hidden-launcher failure `diag::write_line` was rewritten \
+         to survive). Route the warning through \
+         `whisper_dictate_app::diag::write_line(...)` instead. Codex P2 \
+         #668 discussion 3665200207. Offending function body:\n{body}"
+    );
+    // Sanity: the fix's warning must still land SOMEWHERE — if a future
+    // refactor deleted the warning entirely, the "config load failed"
+    // signal an operator debugging a wedge relies on would be lost.
+    assert!(
+        body.contains("config load failed"),
+        "the config-load-failed warning path must still emit its \
+         diagnostic; a regression that dropped the warning would make a \
+         corrupt-config self-test silently look like a normal `--chord` \
+         run. Codex P2 #644 r3658983556 + Codex P2 #668 3665200207."
+    );
+}
+
 #[test]
 fn write_line_stays_stable_across_many_calls() {
     // Belt-and-braces: call `write_line` several thousand times to
