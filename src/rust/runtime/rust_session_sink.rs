@@ -193,9 +193,7 @@ where
                 match &start_result {
                     Ok(_) => {
                         if crate::diag::debug_enabled() {
-                            crate::diag::log!(
-                                "[dispatch] session_start emitted coord_id={id}"
-                            );
+                            crate::diag::log!("[dispatch] session_start emitted coord_id={id}");
                         }
                     }
                     Err(err) => {
@@ -233,9 +231,7 @@ where
                         "[rust-session] stop failed (coord id={id}): {err}"
                     )));
                 } else if crate::diag::debug_enabled() {
-                    crate::diag::log!(
-                        "[dispatch] session_stop emitted coord_id={id}"
-                    );
+                    crate::diag::log!("[dispatch] session_stop emitted coord_id={id}");
                 }
                 // Unblock the coordinator's `Stage::Processing` guard so
                 // the next press is acted on. Always called -- even on
@@ -243,9 +239,7 @@ where
                 // callback's `finally:` semantics.
                 on_processing_finished(id);
                 if crate::diag::debug_enabled() {
-                    crate::diag::log!(
-                        "[dispatch] processing_finished_signalled coord_id={id}"
-                    );
+                    crate::diag::log!("[dispatch] processing_finished_signalled coord_id={id}");
                 }
             }
             CoordinatorAction::CancelRecording(id) => {
@@ -262,9 +256,7 @@ where
                 match &cancel_result {
                     Ok(_) => {
                         if crate::diag::debug_enabled() {
-                            crate::diag::log!(
-                                "[dispatch] session_cancel emitted coord_id={id}"
-                            );
+                            crate::diag::log!("[dispatch] session_cancel emitted coord_id={id}");
                         }
                     }
                     Err(err) => {

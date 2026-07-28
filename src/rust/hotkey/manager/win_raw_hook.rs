@@ -269,9 +269,7 @@ pub fn install() -> bool {
             //    keyboard hooks."
             let mut msg: MSG = unsafe { std::mem::zeroed() };
             loop {
-                let ret = unsafe {
-                    GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0)
-                };
+                let ret = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
                 if ret <= 0 {
                     // 0 = WM_QUIT, -1 = error. Either way, exit the
                     // pump. In production this branch is not
@@ -292,9 +290,7 @@ pub fn install() -> bool {
             true
         }
         Err(err) => {
-            crate::diag::log!(
-                "[win/raw-hook] failed to spawn diagnostic pump thread: {err}"
-            );
+            crate::diag::log!("[win/raw-hook] failed to spawn diagnostic pump thread: {err}");
             // Clear the installed latch so a follow-up install call
             // (unlikely in production, but possible in tests) can
             // retry. Ordering::Release pairs with the AcqRel swap

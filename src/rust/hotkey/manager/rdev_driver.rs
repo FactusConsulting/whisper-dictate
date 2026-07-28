@@ -254,7 +254,8 @@ where
                     if debug {
                         crate::diag::log!(
                             "[rdev/callback] mapped_name={:?} kind={:?}",
-                            raw.name, raw.kind
+                            raw.name,
+                            raw.kind
                         );
                     }
                     listener_tap.tap(&raw);

@@ -600,17 +600,17 @@ afterwards — the append-mode tee keeps growing across sessions.
 
 **Decision tree** when reading a `trace` log:
 
-* F9 press generates `[win/raw-hook]` but no `[rdev/callback]` → rdev
+- F9 press generates `[win/raw-hook]` but no `[rdev/callback]` → rdev
   is silently dropping the event on its own listen() plumbing.
-* No `[win/raw-hook]` for F9 either → another program's LL hook
+- No `[win/raw-hook]` for F9 either → another program's LL hook
   higher in the chain is consuming F9 before either of our hooks is
   called (Logi G HUB / Options+, NVIDIA Broadcast, antivirus
   keylogger prevention, ...).
-* `[rdev/callback]` fires but no `[chord]` line matches → an rdev
+- `[rdev/callback]` fires but no `[chord]` line matches → an rdev
   event-boundary bug (regressed `raw_from_rdev` name-filter).
-* `[chord]` fires with `match=chord-press` but no `[coord]` line →
+- `[chord]` fires with `match=chord-press` but no `[coord]` line →
   the tracker-to-coordinator mpsc channel is disconnected.
-* `[coord]` shows `Idle-->Recording` but no `[dispatch]
+- `[coord]` shows `Idle-->Recording` but no `[dispatch]
   session_start emitted` → sink mutex poison / listener dropped.
 
 ## CLI flags
