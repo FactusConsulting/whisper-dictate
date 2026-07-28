@@ -17,7 +17,8 @@ class PostprocessTests(unittest.TestCase):
             "VOICEPI_POST_PROCESSOR", "VOICEPI_POST_MODE", "VOICEPI_POST_MODEL",
             "VOICEPI_POST_BASE_URL", "VOICEPI_POST_TIMEOUT_MS",
             "VOICEPI_POST_MAX_INPUT_CHARS", "VOICEPI_POST_MAX_OUTPUT_CHARS",
-            "VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY", "OPENAI_API_KEY",
+            "VOICEPI_POST_API_KEY", "VOICEPI_POST_API_KEY_ENDPOINT",
+            "VOICEPI_STT_API_KEY", "OPENAI_API_KEY",
             "GROQ_API_KEY", "VOICEPI_LOCAL_ONLY",
         )}
         for n in ("vp_postprocess", "vp_config", "vp_external_api"):
@@ -592,6 +593,602 @@ class FormatCommandTests(unittest.TestCase):
                 patch("whisper_dictate.runtime.subprocess.run", return_value=completed):
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 runtime.apply_format_commands("first comma", "en")
+
+    def test_endpoint_marker_mismatch_rejects_groq_key_going_to_openai(self):
+        # Codex P1 #642 exact leak scenario: launcher injected a Groq key +
+        # marker, live change moved base_url to OpenAI, must NOT send the
+        # Groq key across the wire.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://api.openai.com/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertIn("refusing to send", err)
+        self.assertIn("groq", err)
+        self.assertIn("openai", err)
+
+    def test_endpoint_marker_mismatch_rejects_groq_key_going_to_custom_host(self):
+        # The most dangerous case: a live change to a self-hosted URL. The
+        # stored Groq key must never be exfiltrated to an arbitrary host.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://llm.internal.example/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertIn("refusing to send", err)
+        self.assertIn("custom", err)
+
+    def test_endpoint_marker_mismatch_allows_same_provider_url_edit(self):
+        # Groq default -> Groq beta URL is legitimate: same provider, same
+        # key. Classification is by HOST suffix, so both sides map to Groq.
+        from whisper_dictate import vp_postprocess
+
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://api.groq.com/openai/v1",
+                marker="https://api.groq.com/openai/v1",
+            ),
+            "",
+        )
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://api.groq.com/beta/v1",
+                marker="https://api.groq.com/openai/v1",
+            ),
+            "",
+        )
+
+    def test_endpoint_marker_rejects_scheme_downgrade_to_http(self):
+        # Codex P1 #666 #3 (`PRRT_kwDOSfNjQs6UXpn3`) Python parity: both
+        # Rust and Python HTTP paths attach the Bearer to the initial
+        # unencrypted request, so an https-marker -> http-base downgrade
+        # must be rejected even when the provider still matches.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="http://api.groq.com/openai/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertIn("plaintext http", err)
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="http://api.openai.com/v1",
+            marker="https://api.openai.com/v1",
+        )
+        self.assertIn("plaintext http", err)
+        # http marker -> https base is a legitimate upgrade -- allowed.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://api.groq.com/openai/v1",
+                marker="http://api.groq.com/openai/v1",
+            ),
+            "",
+        )
+
+    def test_endpoint_marker_rejects_custom_origin_change(self):
+        # Codex P1 #666 #4 (`PRRT_kwDOSfNjQs6UXpnz`) Python parity: two
+        # different custom hosts share the "custom" provider label, so a
+        # live change between self-hosted origins must be rejected on an
+        # exact scheme+host+port match rather than the provider label.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://llm-b.example/v1",
+            marker="https://llm-a.example/v1",
+        )
+        self.assertIn("different self-hosted origin", err)
+        # Different port on the same host is a different origin.
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://llm-a.example:8081/v1",
+            marker="https://llm-a.example:8080/v1",
+        )
+        self.assertIn("different self-hosted origin", err)
+        # Same origin still passes.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://llm-a.example/v1",
+                marker="https://llm-a.example/v1",
+            ),
+            "",
+        )
+        # Same-origin with a different path -- still fine (check is on
+        # origin, not full URL).
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://llm-a.example/other/path",
+                marker="https://llm-a.example/v1",
+            ),
+            "",
+        )
+
+    def test_endpoint_marker_mismatch_handles_invalid_port_without_raising(self):
+        # Codex P2 #666 #5 (`PRRT_kwDOSfNjQs6UYNj9`) regression pin: a
+        # marked custom endpoint with a nonnumeric or out-of-range port
+        # used to trip `parsed.port` -> ValueError inside
+        # `_origin_parts`, aborting the postprocess call entirely.
+        # `validate_postprocess_settings` only checks scheme + netloc, so
+        # such a URL DOES reach the pipeline. The check must therefore
+        # tolerate the parse error and treat the malformed origin as a
+        # mismatch (fail-closed) rather than raising.
+        from whisper_dictate import vp_postprocess
+
+        # No raise: mismatch returns a string (empty or non-empty is fine,
+        # what matters is that it doesn't ValueError out).
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://host:notaport/v1",
+            marker="https://host:8080/v1",
+        )
+        # Different provider vs. different origin -> at minimum the check
+        # must return SOMETHING and not raise. If it does return an error,
+        # it must not be empty when the ports differ meaningfully.
+        self.assertIsInstance(err, str)
+
+        # Symmetry: invalid port in marker also must not raise.
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://host:8080/v1",
+            marker="https://host:notaport/v1",
+        )
+        self.assertIsInstance(err, str)
+
+    def test_redact_url_for_error_strips_userinfo_and_query(self):
+        # Codex P2 #666 #6 (`PRRT_kwDOSfNjQs6UYNkA`) regression pin. The
+        # display helper MUST return an origin-only form (no userinfo, no
+        # query) for URLs carrying credentials, so mismatch errors can be
+        # safely logged/persisted.
+        from whisper_dictate import vp_postprocess
+
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://user:token@api.example/v1"),
+            "https://api.example [redacted: userinfo]",
+        )
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://api.example/api?sig=SECRET&k=x"),
+            "https://api.example [redacted: query]",
+        )
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://u:t@api.example/api?sig=x"),
+            "https://api.example [redacted: userinfo+query]",
+        )
+        # Clean URL passes through as an origin (no misleading "redacted"
+        # tag on URLs that don't need it).
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("https://api.groq.com/openai/v1"),
+            "https://api.groq.com",
+        )
+        # Port preserved so mismatch errors still show which port was
+        # contacted.
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("http://localhost:11434/api"),
+            "http://localhost:11434",
+        )
+        # Unparseable / empty falls through to a safe placeholder.
+        self.assertEqual(vp_postprocess._redact_url_for_error(""), "<unparseable url>")
+        self.assertEqual(
+            vp_postprocess._redact_url_for_error("not a url"), "<unparseable url>"
+        )
+
+    def test_mismatch_error_message_never_leaks_userinfo_or_query(self):
+        # End-to-end pin: `endpoint_marker_mismatch` must route both URLs
+        # through the redactor, so a URL carrying credentials cannot leak
+        # them into `PostprocessResult.error` -> `post_error` -> UI log /
+        # persisted history (Codex P2 #666 #6, `vp_dictate.py:388-389,475`).
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://intruder:secret@evil.example/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertNotIn("secret", err, f"leaked userinfo in error: {err}")
+        self.assertNotIn("intruder", err, f"leaked username in error: {err}")
+        self.assertIn("[redacted", err)
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://api.example/api?sig=SUPERSECRET",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertNotIn("SUPERSECRET", err, f"leaked query in error: {err}")
+        self.assertIn("[redacted", err)
+
+    def test_mismatch_error_message_points_at_application_restart(self):
+        # Codex P2 #666 #7 (`PRRT_kwDOSfNjQs6UYNkD`) recovery-advice pin.
+        # On the in-process Rust engine, the UI's "restart" button reuses
+        # the session backend / stashed hotkey handle, so re-resolving
+        # credentials really requires a full APPLICATION restart. The
+        # error message must reflect that so users don't follow bad
+        # advice.
+        from whisper_dictate import vp_postprocess
+
+        err = vp_postprocess.endpoint_marker_mismatch(
+            base_url="https://api.openai.com/v1",
+            marker="https://api.groq.com/openai/v1",
+        )
+        self.assertIn("restart the application", err)
+        self.assertNotIn(
+            "restart the worker",
+            err,
+            "in-process 'worker' restart does not rebuild the session backend -- "
+            "message must direct the user to a full application restart",
+        )
+
+    def test_endpoint_provider_strips_trailing_root_dot(self):
+        # Codex P2 round-2 #4 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199633)
+        # regression pin. `parsed.hostname` keeps the DNS root dot, so
+        # `api.groq.com.` used to classify as Custom while
+        # `api.groq.com` classified as Groq -- a false origin mismatch
+        # that made post-processing backend-dependent (Rust's classifier
+        # already strips terminal dots). Fix: strip terminal dots
+        # consistently.
+        from whisper_dictate import vp_postprocess
+
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://api.groq.com./v1"),
+            "groq",
+        )
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://api.openai.com./v1"),
+            "openai",
+        )
+        # `endpoint_marker_mismatch` therefore treats trailing-dot URLs
+        # as the same origin -- so a marker for `https://api.groq.com./v1`
+        # matches a live URL of `https://api.groq.com/v1`.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://api.groq.com/openai/v1",
+                marker="https://api.groq.com./openai/v1",
+            ),
+            "",
+        )
+        # Custom FQDNs get the same normalization.
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://llm-a.example./v1",
+                marker="https://llm-a.example/v1",
+            ),
+            "",
+        )
+
+    def test_endpoint_marker_absent_is_backward_compatible(self):
+        # A user who exports their own VOICEPI_POST_API_KEY without the
+        # launcher-side marker must never be blocked.
+        from whisper_dictate import vp_postprocess
+
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://api.openai.com/v1", marker=""
+            ),
+            "",
+        )
+        self.assertEqual(
+            vp_postprocess.endpoint_marker_mismatch(
+                base_url="https://llm.internal.example/v1", marker="  "
+            ),
+            "",
+        )
+
+    def test_endpoint_marker_classification_is_host_not_substring(self):
+        # `_endpoint_provider` must classify by HOST, not `contains` --
+        # otherwise `https://api.groq.com@evil.example/v1` (host =
+        # evil.example) and `https://groq.com.attacker.example/v1` (suffix
+        # trap) would falsely classify as Groq and get the stored key.
+        from whisper_dictate import vp_postprocess
+
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://api.groq.com@evil.example/v1"),
+            "custom",
+        )
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://groq.com.attacker.example/v1"),
+            "custom",
+        )
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://api.groq.com/openai/v1"),
+            "groq",
+        )
+        self.assertEqual(
+            vp_postprocess._endpoint_provider("https://api.openai.com/v1"),
+            "openai",
+        )
+
+    def test_postprocess_text_refuses_send_when_endpoint_moved_after_worker_spawn(self):
+        # End-to-end shape of the leak: launcher stamped `groq` marker + key,
+        # user changed post_processor / base_url live to OpenAI. The worker
+        # sees the new URL AND still holds the Groq key from its env. The
+        # pipeline must return a fallback WITHOUT calling openai_chat_completion.
+        from whisper_dictate import vp_postprocess
+
+        def blow_up(**kw):  # would issue the leaking request
+            raise AssertionError(
+                f"openai_chat_completion must not be called with a stale key: {kw}"
+            )
+
+        def rust_json(command, *_a, **_k):
+            return {"ok": True} if command == "privacy" else None
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="openai",
+            mode="clean",
+            model="gpt-4o-mini",
+            base_url="https://api.openai.com/v1",
+            api_key="stolen-groq-key",
+            api_key_endpoint="https://api.groq.com/openai/v1",
+        )
+        with patch(
+            "whisper_dictate.vp_postprocess.openai_chat_completion", side_effect=blow_up
+        ), patch("whisper_dictate.vp_postprocess._rust_json", side_effect=rust_json), patch(
+            "whisper_dictate.vp_postprocess._rust_postprocess_text", return_value=None
+        ):
+            result = vp_postprocess.postprocess_text("please clean this", settings)
+
+        self.assertTrue(result.fallback)
+        self.assertIn("refusing to send", result.error)
+        # No dictation is dropped: caller sees the input verbatim.
+        self.assertEqual(result.text, "please clean this")
+
+    def test_postprocess_text_same_provider_call_still_reaches_the_backend(self):
+        # Sanity: the marker only blocks CROSS-provider calls. A same-provider
+        # call (both Groq) must still dispatch normally.
+        from whisper_dictate import vp_postprocess
+
+        called = {"count": 0}
+
+        def fake_chat(*, base_url, api_key, model, prompt, timeout_ms):
+            called["count"] += 1
+            return "cleaned", 5
+
+        def rust_json(command, *_a, **_k):
+            return {"ok": True} if command == "privacy" else None
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="groq",
+            mode="clean",
+            model="llama-3.1-8b-instant",
+            base_url="https://api.groq.com/openai/v1",
+            api_key="groq-key",
+            api_key_endpoint="https://api.groq.com/openai/v1",
+        )
+        with patch(
+            "whisper_dictate.vp_postprocess.openai_chat_completion", side_effect=fake_chat
+        ), patch("whisper_dictate.vp_postprocess._rust_json", side_effect=rust_json), patch(
+            "whisper_dictate.vp_postprocess._rust_postprocess_text", return_value=None
+        ):
+            result = vp_postprocess.postprocess_text("hello", settings)
+
+        self.assertEqual(called["count"], 1)
+        self.assertEqual(result.text, "cleaned")
+        self.assertFalse(result.fallback)
+
+    def test_load_postprocess_settings_reads_endpoint_marker(self):
+        # The marker flows from env -> `PostprocessSettings.api_key_endpoint`
+        # via `load_postprocess_settings` so the downstream check sees it.
+        # FormatCommandTests has no env-cleanup setUp, so scope env writes
+        # with `patch.dict` and force a fresh vp_config import (module-level
+        # `apply_config_to_environ` cache).
+        with patch.dict(
+            os.environ,
+            {
+                "VOICEPI_POST_PROCESSOR": "groq",
+                "VOICEPI_POST_API_KEY": "groq-key",
+                "VOICEPI_POST_API_KEY_ENDPOINT": "https://api.groq.com/openai/v1",
+            },
+        ):
+            for n in ("vp_postprocess", "vp_config"):
+                sys.modules.pop(n, None)
+            from whisper_dictate import vp_postprocess
+
+            settings = vp_postprocess.load_postprocess_settings()
+
+            self.assertEqual(settings.api_key, "groq-key")
+            self.assertEqual(settings.api_key_endpoint, "https://api.groq.com/openai/v1")
+
+    def test_rust_postprocess_envelope_forwards_endpoint_marker(self):
+        # The shell-out to `whisper-dictate postprocess` must include the
+        # marker so the Rust `postprocess` verb enforces the same rule for
+        # cross-provider live changes.
+        from whisper_dictate import vp_postprocess
+
+        captured = {}
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = json.dumps({
+                "text": "ok",
+                "raw_text": "ok",
+                "changed": False,
+                "provider": "groq",
+                "mode": "clean",
+                "model": "llama-3.1-8b-instant",
+                "latency_ms": 0,
+                "fallback": False,
+                "error": "",
+                "redacted": False,
+                "redactions": [],
+            })
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["input"] = json.loads(kwargs["input"])
+            return FakeCompleted()
+
+        settings = vp_postprocess.PostprocessSettings(
+            processor="groq",
+            mode="clean",
+            model="llama-3.1-8b-instant",
+            base_url="https://api.groq.com/openai/v1",
+            api_key="groq-key",
+            api_key_endpoint="https://api.groq.com/openai/v1",
+        )
+        with patch.dict(os.environ, {"VOICEPI_RUST_INJECTOR": "whisper-dictate"}), \
+                patch("whisper_dictate.vp_postprocess.helper_path", return_value="whisper-dictate"), \
+                patch("whisper_dictate.vp_postprocess.subprocess.run", side_effect=fake_run):
+            vp_postprocess._rust_postprocess_text("hello", settings)
+
+        self.assertEqual(
+            captured["input"]["settings"]["api_key_endpoint"],
+            "https://api.groq.com/openai/v1",
+        )
+
+    def test_regression_p1_642_stale_groq_key_not_sent_after_live_endpoint_change(self):
+        # Codex P1 #642 regression pin (safety-net memory `tests-as-safety-net.md`).
+        #
+        # Un-fixed code path: `attach_cloud_api_keys` injects
+        # VOICEPI_POST_API_KEY into the worker env for a Groq resolution, the
+        # worker later reloads a different `post_base_url` from live config,
+        # and `openai_chat_completion` sends the SAME Groq bearer to the new
+        # host -- exactly the leak the finding describes.
+        #
+        # This test exercises the ENTIRE seam without referencing the new
+        # `api_key_endpoint` FIELD directly, so it would run under un-fixed
+        # code and observe the leak: the outgoing Bearer would carry the
+        # Groq key.
+        #
+        # * On un-fixed code (no marker plumbing):
+        #     - `load_postprocess_settings` reads `api_key=groq-key`, has no
+        #       marker awareness, and `postprocess_text` calls
+        #       `openai_chat_completion` with the Groq key against the new
+        #       custom URL. captured[0]['api_key'] == 'groq-key' -> ASSERT
+        #       FAILS -> regression caught.
+        # * On fixed code (marker + refuse):
+        #     - `load_postprocess_settings` also reads
+        #       VOICEPI_POST_API_KEY_ENDPOINT into `settings.api_key_endpoint`.
+        #     - After the live change, `postprocess_text` classifies the new
+        #       base_url (Custom) vs the marker (Groq) and REFUSES to call
+        #       `openai_chat_completion`. captured stays empty -> assert
+        #       passes.
+        import dataclasses
+
+        # Simulate what `attach_cloud_api_keys` injects into the worker env
+        # when a user has saved a Groq credential and configured a Groq
+        # post-processor with the default URL. FormatCommandTests has no
+        # env-cleanup setUp, so scope env writes with `addCleanup`.
+        # The marker (VOICEPI_POST_API_KEY_ENDPOINT) is what the launcher
+        # stamps; un-fixed code silently ignores it, fixed code plumbs it
+        # into `settings.api_key_endpoint` and refuses cross-provider sends.
+        launcher_env = {
+            "VOICEPI_POST_PROCESSOR": "groq",
+            "VOICEPI_POST_MODE": "clean",
+            "VOICEPI_POST_BASE_URL": "https://api.groq.com/openai/v1",
+            "VOICEPI_POST_API_KEY": "groq-secret-key",
+            "VOICEPI_POST_API_KEY_ENDPOINT": "https://api.groq.com/openai/v1",
+        }
+        env_ctx = patch.dict(os.environ, launcher_env)
+        env_ctx.start()
+        self.addCleanup(env_ctx.stop)
+        for n in ("vp_postprocess", "vp_config"):
+            sys.modules.pop(n, None)
+        self.addCleanup(lambda: [sys.modules.pop(n, None) for n in ("vp_postprocess", "vp_config")])
+
+        from whisper_dictate import vp_postprocess
+
+        settings = vp_postprocess.load_postprocess_settings()
+        # Sanity: worker really has the Groq key after "spawn".
+        self.assertEqual(settings.api_key, "groq-secret-key")
+        self.assertEqual(settings.processor, "groq")
+
+        # LIVE CHANGE: user edits `post_base_url` in Settings to a
+        # self-hosted / arbitrary URL. In the running worker this shows up
+        # as a fresh settings snapshot; we model that by rebuilding the
+        # settings dataclass with the swapped base_url. Uses
+        # `dataclasses.replace` so the test compiles under both un-fixed
+        # (only original fields) and fixed (adds `api_key_endpoint`) code.
+        live_changed = dataclasses.replace(
+            settings, base_url="https://llm.internal.example/v1"
+        )
+
+        captured = []
+
+        def spy_chat(**kw):
+            captured.append(kw)
+            # Return a plausible response so the pipeline finishes cleanly.
+            return "unused", 5
+
+        def rust_json(command, *_a, **_k):
+            return {"ok": True} if command == "privacy" else None
+
+        with patch(
+            "whisper_dictate.vp_postprocess.openai_chat_completion", side_effect=spy_chat
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_json", side_effect=rust_json
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_postprocess_text", return_value=None
+        ):
+            vp_postprocess.postprocess_text("please clean this", live_changed)
+
+        # The whole point: whatever the pipeline does, it must NOT have sent
+        # the Groq bearer token to a different-provider host. Two acceptable
+        # shapes for a fix: (A) the call was skipped entirely; (B) the key
+        # was re-resolved to something else. Either passes; the un-fixed
+        # `Authorization: Bearer groq-secret-key` fails.
+        leaks = [c for c in captured if c.get("api_key") == "groq-secret-key"]
+        self.assertEqual(
+            leaks,
+            [],
+            "SECURITY REGRESSION (Codex P1 #642): launcher-injected Groq key "
+            "was sent to a different-provider endpoint after a live "
+            f"post_base_url change. Captured calls: {captured}",
+        )
+
+    def test_regression_p1_642_stale_groq_key_not_sent_when_processor_flipped_to_openai(self):
+        # Companion to the base_url-change regression above: same leak
+        # scenario but exercised via a `post_processor` flip (Groq -> OpenAI).
+        # A `_normalized_base_url` substitution then lands the request on
+        # `api.openai.com`, where the stored Groq key would be an exact
+        # cross-provider leak. Same fail-on-unfixed / pass-on-fixed shape.
+        import dataclasses
+
+        launcher_env = {
+            "VOICEPI_POST_PROCESSOR": "groq",
+            "VOICEPI_POST_MODE": "clean",
+            "VOICEPI_POST_BASE_URL": "https://api.groq.com/openai/v1",
+            "VOICEPI_POST_API_KEY": "groq-secret-key",
+            "VOICEPI_POST_API_KEY_ENDPOINT": "https://api.groq.com/openai/v1",
+        }
+        env_ctx = patch.dict(os.environ, launcher_env)
+        env_ctx.start()
+        self.addCleanup(env_ctx.stop)
+        for n in ("vp_postprocess", "vp_config"):
+            sys.modules.pop(n, None)
+        self.addCleanup(lambda: [sys.modules.pop(n, None) for n in ("vp_postprocess", "vp_config")])
+
+        from whisper_dictate import vp_postprocess
+
+        settings = vp_postprocess.load_postprocess_settings()
+        # LIVE CHANGE: processor swapped, and the settings a live reload
+        # would produce include the OpenAI-default URL (the normaliser
+        # substitutes it because the saved base_url matched the previous
+        # processor's default).
+        live_changed = dataclasses.replace(
+            settings,
+            processor="openai",
+            base_url="https://api.openai.com/v1",
+        )
+
+        captured = []
+
+        def spy_chat(**kw):
+            captured.append(kw)
+            return "unused", 5
+
+        def rust_json(command, *_a, **_k):
+            return {"ok": True} if command == "privacy" else None
+
+        with patch(
+            "whisper_dictate.vp_postprocess.openai_chat_completion", side_effect=spy_chat
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_json", side_effect=rust_json
+        ), patch(
+            "whisper_dictate.vp_postprocess._rust_postprocess_text", return_value=None
+        ):
+            vp_postprocess.postprocess_text("please clean this", live_changed)
+
+        leaks = [c for c in captured if c.get("api_key") == "groq-secret-key"]
+        self.assertEqual(
+            leaks,
+            [],
+            "SECURITY REGRESSION (Codex P1 #642): launcher-injected Groq key "
+            "was sent to OpenAI after a live post_processor flip. Captured "
+            f"calls: {captured}",
+        )
 
     def test_runtime_applies_formatting_before_injection_and_metrics(self):
         with open("src/python/whisper_dictate/vp_dictate.py", encoding="utf-8") as f:

@@ -89,6 +89,14 @@ class PostprocessSettings:
     max_input_chars: int = 4000
     max_output_chars: int = 4000
     api_key: str = ""
+    # Codex P1 #642: the NORMALISED endpoint the Rust launcher resolved
+    # ``api_key`` for, stamped as ``VOICEPI_POST_API_KEY_ENDPOINT``. Empty
+    # when the user set the key themselves (backward-compat: nothing blocks a
+    # key without a marker). When set AND the current ``base_url`` classifies
+    # to a different provider, the pipeline refuses to send the key so a live
+    # ``post_processor`` / ``post_base_url`` change cannot leak the stored
+    # provider key to a different host.
+    api_key_endpoint: str = ""
     redact: bool = False
     redact_terms: str = ""
 
@@ -135,6 +143,186 @@ def _postprocess_api_key(snapshot=None) -> str:
     ).strip()
 
 
+def _postprocess_api_key_endpoint(snapshot=None) -> str:
+    """Endpoint marker the Rust launcher stamped for the injected post key.
+
+    Populated by ``runtime::cloud_api_keys`` alongside ``VOICEPI_POST_API_KEY``
+    when the key came from the credential store; empty otherwise. Consumed
+    downstream by ``endpoint_marker_mismatch`` (Rust ``run.rs``'s
+    ``require_endpoint_matches_marker`` mirrors the same rule for the
+    in-process Rust engine).
+    """
+    getter = snapshot.get_value if snapshot is not None else get_value
+    return (getter("VOICEPI_POST_API_KEY_ENDPOINT") or "").strip()
+
+
+def _endpoint_provider(url: str) -> str:
+    """Classify ``url`` by HOST (not substring) into Groq / OpenAI / Custom.
+
+    Mirrors ``crate::credentials::Provider::from_base_url`` so the Python
+    endpoint-marker check refuses / allows the same set of URLs the Rust
+    launcher does. Host classification, not ``contains``: the URL
+    ``https://api.groq.com@evil.example/v1`` has host ``evil.example`` and
+    the URL ``https://groq.com.attacker.example/v1`` merely contains
+    ``groq.com`` -- getting this wrong would hand a stored provider
+    credential to an unrelated host.
+    """
+    try:
+        parsed = urllib.parse.urlparse((url or "").strip())
+    except ValueError:
+        return "custom"
+    # Codex P2 round-2 #4 (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199633): strip
+    # a trailing DNS root dot so `api.groq.com.` and `api.groq.com`
+    # classify to the same provider. Rust's classifier
+    # (`cloud_api::transcribe::provider_host`) already does this;
+    # without the strip here, `parsed.hostname` keeps the dot and a live
+    # URL with/without one would false-mismatch.
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return "custom"
+    if host == "groq.com" or host.endswith(".groq.com"):
+        return "groq"
+    if host == "openai.com" or host.endswith(".openai.com"):
+        return "openai"
+    return "custom"
+
+
+def _origin_parts(url: str) -> tuple[str, str, int]:
+    """Parse ``url`` into ``(scheme, host, effective_port)`` for origin
+    comparison. Kept in sync with the Rust ``origin_parts`` in
+    ``postprocess/run.rs`` so both paths reject the same set of URLs.
+
+    Codex P2 #666 #5 (`PRRT_kwDOSfNjQs6UYNj9`): ``parsed.port`` raises
+    ``ValueError`` on a nonnumeric or out-of-range port
+    (e.g. ``https://host:abc/``). ``validate_postprocess_settings`` only
+    checks scheme + netloc, so such a URL reaches this function and would
+    otherwise abort ``postprocess_text`` with an unhandled exception. Treat
+    a malformed port as ``None`` -> falls through to the scheme default
+    port, and the origin-mismatch check then rejects (as it should for any
+    malformed URL: fail-closed).
+    """
+    parsed = urllib.parse.urlparse((url or "").strip())
+    scheme = (parsed.scheme or "").lower()
+    # Same trailing-dot strip as `_endpoint_provider` (Codex P2 round-2
+    # #4) so origin comparisons behave the same as provider classification.
+    host = (parsed.hostname or "").lower().rstrip(".")
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, host, port
+
+
+def _redact_url_for_error(url: str) -> str:
+    """Return a display-safe form of ``url`` for error messages / logs.
+
+    Codex P2 #666 #6 (`PRRT_kwDOSfNjQs6UYNkA`): mismatch errors travel
+    into ``PostprocessResult.error`` -> ``post_error`` in the metrics
+    envelope -> UI log + persisted history (``vp_dictate.py:388-389,475``).
+    A URL that carries credentials -- userinfo (``https://user:token@host/``)
+    or a signed query (``https://host/api?sig=SECRET&key=xyz``) -- would
+    otherwise be copied verbatim, exfiltrating the credential to any log
+    reader. Return just the origin (scheme://host[:port]) plus a
+    placeholder for stripped userinfo/query, so the debugging value
+    survives without the sensitive material.
+    """
+    try:
+        parsed = urllib.parse.urlparse((url or "").strip())
+    except ValueError:
+        return "<unparseable url>"
+    scheme = parsed.scheme or ""
+    host = parsed.hostname or ""
+    if not scheme or not host:
+        return "<unparseable url>"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    origin = f"{scheme}://{host}"
+    if port is not None:
+        origin = f"{origin}:{port}"
+    had_userinfo = bool(parsed.username or parsed.password)
+    had_query = bool(parsed.query)
+    if had_userinfo or had_query:
+        markers = []
+        if had_userinfo:
+            markers.append("userinfo")
+        if had_query:
+            markers.append("query")
+        return f"{origin} [redacted: {'+'.join(markers)}]"
+    return origin
+
+
+def endpoint_marker_mismatch(base_url: str, marker: str) -> str:
+    """Return an error string when the marker rejects sending the key.
+
+    ``""`` when the check passes (no marker, or same-provider AND
+    same-scheme AND -- for Custom -- same origin). Non-empty on any of the
+    three leaks below, mirroring Rust ``require_endpoint_matches_marker``:
+
+    * Provider mismatch (Codex P1 #642): Groq marker + OpenAI/custom
+      base_url etc.
+    * Scheme downgrade (Codex P1 #666 #3, ``PRRT_kwDOSfNjQs6UXpn3``): an
+      ``https://`` marker must not send to an ``http://`` base_url. Both
+      Python and Rust HTTP paths attach the Bearer token to the initial
+      unencrypted request, so a downgrade is a plaintext key leak even if
+      the server later redirects to https.
+    * Custom origin mismatch (Codex P1 #666 #4,
+      ``PRRT_kwDOSfNjQs6UXpnz``): two different self-hosted hosts share the
+      ``custom`` provider classification. When the marker is ``custom``,
+      require an exact scheme+host+port match so a live change from one
+      custom origin to another is rejected.
+    """
+    marker = (marker or "").strip()
+    if not marker:
+        return ""
+    # All URLs going into error strings are routed through
+    # `_redact_url_for_error` (Codex P2 #666 #6) so a URL carrying userinfo
+    # or a signed query cannot leak from the mismatch text into the metrics
+    # envelope / UI log / persisted history.
+    marker_display = _redact_url_for_error(marker)
+    base_display = _redact_url_for_error(base_url)
+    # `_redact_url_for_error` may return "<unparseable url>" on a broken
+    # URL; providers below still classify by host so the check remains
+    # accurate against the ORIGINAL string, only the human-readable copy
+    # in the error is redacted.
+    base_provider = _endpoint_provider(base_url)
+    marker_provider = _endpoint_provider(marker)
+    if base_provider != marker_provider:
+        return (
+            "refusing to send stored post-processing key to a different endpoint: "
+            f"key was resolved for {marker_display} ({marker_provider}) but current base URL is "
+            f"{base_display} ({base_provider}). Update the API key for the new provider in "
+            "Settings, or restart the application so the launcher re-resolves the right key."
+        )
+    base_scheme, base_host, base_port = _origin_parts(base_url)
+    marker_scheme, marker_host, marker_port = _origin_parts(marker)
+    # Scheme downgrade rejection (marker https -> base http). An
+    # http-marker -> https-base is a legitimate upgrade and stays allowed.
+    if marker_scheme == "https" and base_scheme == "http":
+        return (
+            "refusing to send stored post-processing key over plaintext http:// "
+            f"(Codex P1 #666 #3): marker requires https ({marker_display}) but current base URL "
+            f"downgrades to http ({base_display}). An attacker able to observe the initial "
+            "request would capture the Bearer token even if the server later redirects to "
+            "https. Restore the https endpoint or restart the application."
+        )
+    if marker_provider == "custom":
+        # Custom marker: exact scheme+host+port match required. Two custom
+        # hosts otherwise share the same classification and permit the key
+        # travel between unrelated self-hosted endpoints.
+        if (base_scheme, base_host, base_port) != (marker_scheme, marker_host, marker_port):
+            return (
+                "refusing to send stored post-processing key to a different self-hosted "
+                f"origin (Codex P1 #666 #4): key was resolved for {marker_display} but current "
+                f"base URL is {base_display}. Self-hosted endpoints have no cross-account "
+                "trust; update the API key for the new host or restart the application."
+            )
+    return ""
+
+
 def _normalized_model(processor: str, raw_model: str) -> str:
     if processor == "groq" and raw_model in ("", DEFAULT_OLLAMA_POST_MODEL):
         return "llama-3.1-8b-instant"
@@ -172,6 +360,7 @@ def load_postprocess_settings() -> PostprocessSettings:
         max_input_chars=_int_setting("VOICEPI_POST_MAX_INPUT_CHARS", 4000, 100, snapshot),
         max_output_chars=_int_setting("VOICEPI_POST_MAX_OUTPUT_CHARS", 4000, 100, snapshot),
         api_key=_postprocess_api_key(snapshot),
+        api_key_endpoint=_postprocess_api_key_endpoint(snapshot),
         redact=(snapshot.get_value("VOICEPI_POST_REDACT") or "").strip().lower() not in (
             "", "0", "false", "no", "off"),
         redact_terms=snapshot.get_value("VOICEPI_POST_REDACT_TERMS", "") or "",
@@ -395,6 +584,11 @@ def _rust_postprocess_text(text: str, settings: PostprocessSettings) -> Postproc
             "max_input_chars": int(settings.max_input_chars),
             "max_output_chars": int(settings.max_output_chars),
             "api_key": settings.api_key,
+            # Codex P1 #642: pass the marker across the JSON envelope so the
+            # Rust `postprocess` verb can refuse the injected key if the
+            # worker's live endpoint no longer matches the endpoint the
+            # launcher resolved it for.
+            "api_key_endpoint": settings.api_key_endpoint,
             "redact": bool(settings.redact),
             "redact_terms": settings.redact_terms,
             "local_only": _local_only_enabled(),
@@ -503,6 +697,24 @@ def postprocess_text(text: str, settings: PostprocessSettings | None = None) -> 
         return rust_result
 
     validate_postprocess_settings(settings)
+    # Codex P1 #642: refuse to send the injected key to a different endpoint
+    # than the one the launcher resolved it for. Only applies to the cloud
+    # branches (ollama has no bearer). Empty marker => user set the key
+    # themselves => no check.
+    if settings.processor in ("openai", "groq"):
+        mismatch = endpoint_marker_mismatch(settings.base_url, settings.api_key_endpoint)
+        if mismatch:
+            return PostprocessResult(
+                text=text,
+                raw_text=text,
+                changed=False,
+                provider=settings.processor,
+                mode=mode,
+                model=settings.model,
+                latency_ms=0,
+                fallback=True,
+                error=mismatch,
+            )
     clipped = text[: settings.max_input_chars]
     redaction = _redact_for_cloud(clipped, settings)
     prompt_text = redaction.text

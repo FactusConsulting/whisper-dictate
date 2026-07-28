@@ -210,6 +210,23 @@ impl eframe::App for WhisperDictateApp {
     }
 }
 
+/// Return true when the post key we would push equals the ambient
+/// `VOICEPI_POST_API_KEY` (Codex P2 round-4 `PRRT_kwDOSfNjQs6UZxN2`).
+/// Pure function -- takes only strings, avoids touching `std::env` from
+/// the hot path so this is testable without racing on process env from
+/// parallel-running tests. Empty / whitespace-only ambient values do
+/// not qualify as ownership: an unset variable is not a caller
+/// declaration, and `export VOICEPI_POST_API_KEY=` is a leftover.
+pub(in crate::ui) fn post_key_is_ambient_env_owned(
+    pushed_key: &str,
+    ambient_post_key: Option<&str>,
+) -> bool {
+    ambient_post_key
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .is_some_and(|v| pushed_key == v)
+}
+
 impl WhisperDictateApp {
     /// Recolour the system-tray icon to mirror the current dictation state and
     /// react to a tray left-click by focusing the main window. Purely additive:
@@ -315,19 +332,95 @@ impl WhisperDictateApp {
                     .push((STT_API_KEY_ENV.to_owned(), key.to_owned()));
             }
         }
+        // Track provenance of the pushed post key so
+        // `stamp_post_api_key_endpoint_marker` can bind the marker to the
+        // ENDPOINT the underlying credential was resolved for -- not the
+        // configured post endpoint blindly. Codex P1 round-2 #1
+        // (`PRRT_kwDOSfNjQs6UXpn-` cmt 3665199618): a Groq-STT + OpenAI-post
+        // setup used to stamp the OpenAI marker for a mirrored Groq STT
+        // key, which the revalidation check then APPROVED for OpenAI --
+        // a cross-provider leak of the STT key.
+        let mut post_key_provenance = crate::runtime::cloud_api_keys::PostKeyProvenance::None;
         if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
             let post_key = self.post_api_key_input.trim();
-            let key = if post_key.is_empty() {
-                self.stt_api_key_input.trim()
+            let stt_key = self.stt_api_key_input.trim();
+            // Codex P1 round-3 (`PRRT_kwDOSfNjQs6UZdNL` cmt 3665509647):
+            // `load_post_api_key_state` (see `ui/api_keys.rs:204-209`)
+            // populates `post_api_key_input` from the `VOICEPI_STT_API_KEY`
+            // env fallback when no post-specific credential is saved. The
+            // field is then NON-EMPTY, so the old "empty post -> SttMirror,
+            // else PostSpecific" rule stamped the OpenAI post endpoint for a
+            // key that was actually the Groq STT key -- another
+            // cross-provider approval. The fix: treat provenance as SttMirror
+            // whenever the post field's VALUE equals the STT field's value.
+            // Reason it's safe both ways: if the user pasted the same key
+            // into both fields intentionally, that key IS the STT key (they
+            // configured it as such), so binding the marker to the STT
+            // endpoint is the correct + strictest classification. If the
+            // values genuinely differ, the post field holds a post-specific
+            // key and PostSpecific applies.
+            let (key, provenance) = if post_key.is_empty() {
+                (
+                    stt_key,
+                    crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,
+                )
+            } else if !stt_key.is_empty() && post_key == stt_key {
+                (
+                    post_key,
+                    crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,
+                )
             } else {
-                post_key
+                (
+                    post_key,
+                    crate::runtime::cloud_api_keys::PostKeyProvenance::PostSpecific,
+                )
             };
             if !key.is_empty() {
-                command
-                    .env
-                    .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
+                // Codex P2 round-4 (`PRRT_kwDOSfNjQs6UZxN2` cmt 3665701506):
+                // if the value we are about to push equals the ambient
+                // `VOICEPI_POST_API_KEY` (i.e. it was loaded from the parent
+                // env via `load_post_api_key_state`'s env fallback -- see
+                // `ui/api_keys.rs:204-209`), the child inherits it from the
+                // parent env automatically (`std::process::Command::envs`
+                // extends rather than clears). Skipping the push AND the
+                // marker preserves the documented "explicit env keys own
+                // their resolution" compatibility contract -- an
+                // env-provided key intentionally travels marker-free, and
+                // a launcher marker stamped for the current endpoint would
+                // otherwise reject the user's own key after any live
+                // provider/profile change, with a restart producing the
+                // same rejection because the same env value would load and
+                // stamp again.
+                let ambient_post_key = std::env::var("VOICEPI_POST_API_KEY").ok();
+                if post_key_is_ambient_env_owned(key, ambient_post_key.as_deref()) {
+                    // Caller-owned via ambient env; leave command.env alone
+                    // (child inherits) and keep provenance = None so the
+                    // shim's ambient-ownership rule fires.
+                } else {
+                    command
+                        .env
+                        .push((POST_API_KEY_ENV.to_owned(), key.to_owned()));
+                    post_key_provenance = provenance;
+                }
             }
         }
+        // Codex P1 #666 #1 (`PRRT_kwDOSfNjQs6UXpn-`): the UI Start button
+        // built the worker command directly and never called
+        // `attach_cloud_api_keys`, so `VOICEPI_POST_API_KEY_ENDPOINT` was
+        // never stamped for the primary Windows tray path -- the exact
+        // Groq-to-OpenAI/custom live-change leak from #642 remained
+        // exploitable through the shipping default flow. This shim stamps
+        // the marker with the same rules as `attach_cloud_api_keys`, so
+        // `require_endpoint_matches_marker` in the worker enforces the
+        // endpoint check regardless of which entry point launched it.
+        crate::runtime::cloud_api_keys::stamp_post_api_key_endpoint_marker(
+            &mut command,
+            post_key_provenance,
+            &self.settings.post_processor,
+            &self.settings.post_base_url,
+            &self.settings.stt_backend,
+            &self.settings.stt_base_url,
+        );
         command
     }
 
