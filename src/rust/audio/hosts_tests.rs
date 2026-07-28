@@ -615,6 +615,134 @@ fn secondary_wins_via_substring_when_default_was_filtered_by_usability() {
     );
 }
 
+// ----- Codex P2 (#669 hosts.rs:280): filter preserves native cpal indices ---
+
+#[test]
+fn numeric_selector_maps_to_native_cpal_index_when_default_host_has_placeholders() {
+    // Regression pin for the sparse-index case. Default host raw cpal
+    // enumeration returns [unusable, usable_A, usable_B] and
+    // `enumerate_host_slot_usable` preserves positions with empty-
+    // string placeholders at slot 0 - so `hosts[0]` is ["", "A", "B"].
+    // The picker in `devices::enumerate_all_hosts` publishes usable_A
+    // at cpal-native index 1 and usable_B at cpal-native index 2. A
+    // user selecting index 1 in the picker MUST open usable_A, not
+    // usable_B — pre-fix code compacted the vec (skipping slot 0),
+    // shifting usable_A into position 0 and usable_B into position 1,
+    // silently opening the wrong device.
+    let hosts = vec![vec![
+        String::new(),  // cpal index 0: unusable → placeholder
+        "A".to_owned(), // cpal index 1: usable_A (picker index 1)
+        "B".to_owned(), // cpal index 2: usable_B (picker index 2)
+    ]];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "1", "WASAPI"),
+        SelectorOutcome::Matched { host: 0, device: 1 },
+        "numeric selector must map to native cpal index (matching \
+         picker), not the compacted usable-only position"
+    );
+    assert_eq!(
+        resolve_over_host_names(&hosts, "2", "WASAPI"),
+        SelectorOutcome::Matched { host: 0, device: 2 },
+        "numeric selector must map to native cpal index for the second \
+         usable device too"
+    );
+}
+
+#[test]
+fn numeric_selector_hitting_placeholder_slot_reports_out_of_range() {
+    // If a numeric selector lands on an EMPTY placeholder (unusable
+    // slot the picker never advertised), the resolver MUST NOT return
+    // that device — treat it as out-of-range so capture doesn't fail
+    // silently on an unpublished index.
+    let hosts = vec![vec![
+        String::new(), // cpal index 0: unusable placeholder
+        "A".to_owned(),
+        "B".to_owned(),
+    ]];
+    match resolve_over_host_names(&hosts, "0", "WASAPI") {
+        SelectorOutcome::NumericOutOfRange { note } => {
+            assert!(
+                note.contains("index 0 out of range"),
+                "must report the specific numeric index: {note}"
+            );
+            // Count reflects the picker's published (usable) count, not
+            // the raw enumeration length. `["", "A", "B"]` has 2 usable.
+            assert!(
+                note.contains("2 device(s)"),
+                "must quote the USABLE device count (matches picker's \
+                 published set): {note}"
+            );
+        }
+        other => panic!(
+            "numeric selector landing on an unusable placeholder must not \
+             resolve, got {other:?}"
+        ),
+    }
+}
+
+// ----- Codex P2 (#669 hosts.rs:424): numeric selectors bypass substring -----
+
+#[test]
+fn numeric_selector_wins_over_secondary_substring_containing_digit() {
+    // Codex scenario: selector "2" is valid on the default host (3
+    // usable devices) AND matches "ASIO Input 2" on a secondary host
+    // via substring. Pre-fix the substring pass fired FIRST across all
+    // hosts, so "ASIO Input 2" hijacked selector "2" and opened the
+    // ASIO device — defeating the "numeric selectors resolve only
+    // against the default host" safety rule. Post-fix: parseable
+    // numeric selectors skip the substring pass entirely.
+    let hosts = vec![
+        names(&["Mic A", "Mic B", "Mic C"]), // default host, 3 usable
+        names(&["ASIO Input 0", "ASIO Input 1", "ASIO Input 2"]), // digit-bearing names
+    ];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "2", "WASAPI"),
+        SelectorOutcome::Matched { host: 0, device: 2 },
+        "numeric selector must resolve to default host, not a \
+         digit-bearing secondary substring match"
+    );
+}
+
+#[test]
+fn numeric_selector_still_falls_through_when_default_has_no_usable_slot_at_index() {
+    // Cross-check for #669 hosts.rs:424 + hosts.rs:280 interaction:
+    // when the numeric selector is out of range on the default host
+    // AND a secondary device name contains that digit as substring,
+    // we STILL return NumericOutOfRange (never fall through to the
+    // secondary substring match).
+    let hosts = vec![
+        names(&["Only Default Mic"]), // default has 1 usable device
+        names(&["ASIO Input 2"]),     // secondary contains "2" as substring
+    ];
+    match resolve_over_host_names(&hosts, "2", "WASAPI") {
+        SelectorOutcome::NumericOutOfRange { .. } => {}
+        SelectorOutcome::Matched { host, device } => panic!(
+            "numeric selector must return NumericOutOfRange, NEVER \
+             substring-match a secondary device (got host={host}, \
+             device={device})"
+        ),
+        other => panic!("expected NumericOutOfRange, got {other:?}"),
+    }
+}
+
+#[test]
+fn exact_match_on_device_literally_named_digit_still_wins() {
+    // Complementary pin: skipping substring for numeric selectors must
+    // NOT skip exact-match. A device LITERALLY named "2" is a
+    // legitimate exact hit on any host and should win before the
+    // default-host-only numeric branch runs.
+    let hosts = vec![
+        names(&["Mic A", "Mic B"]), // default: no exact "2"
+        names(&["2"]),              // secondary: literal exact "2"
+    ];
+    assert_eq!(
+        resolve_over_host_names(&hosts, "2", "WASAPI"),
+        SelectorOutcome::Matched { host: 1, device: 0 },
+        "an exact-match on a device literally named '2' must win over \
+         the numeric interpretation of the selector"
+    );
+}
+
 #[test]
 fn resolve_input_missing_name_still_uses_the_name_not_found_prefix() {
     // The complementary invariant: a name that fails to resolve

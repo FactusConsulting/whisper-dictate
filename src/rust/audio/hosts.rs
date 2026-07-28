@@ -243,16 +243,26 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     }
 }
 
-/// Construct + enumerate ONE cpal host into a [`HostSlot`], keeping
-/// ONLY devices the capture path could actually open (i.e., at least
-/// one supported input config with usable channels; see
-/// [`device_is_usable`]). Returns `None` on constructor /
-/// `input_devices()` failure, pushing the failure message onto
-/// `host_errors` so [`resolve_input`] can surface it in the propagated
-/// no-searchable-hosts error. An empty-but-successful enumeration
-/// (headless box, no mics) returns `Some` with empty name / device
-/// vectors — see [`should_propagate_enumeration_failure`] for why the
-/// two outcomes must not be conflated.
+/// Construct + enumerate ONE cpal host into a [`HostSlot`]. Devices
+/// the capture path cannot open (no supported input config with usable
+/// channels; see [`device_is_usable`]) OR with blank names are kept at
+/// their raw cpal enumeration position as EMPTY-NAME PLACEHOLDERS —
+/// they never match by name (guarded in `resolve_over_host_names`) but
+/// they occupy the position so numeric selectors on the default host
+/// resolve to the raw cpal index the picker in [`crate::devices`]
+/// publishes as the device's `index` field. Compacting them (a plain
+/// `continue`) would shift downstream usable devices into the
+/// filtered-out slot's position and open the wrong microphone when the
+/// user selects an index the picker advertised — Codex P2 (#669
+/// hosts.rs:280).
+///
+/// Returns `None` on constructor / `input_devices()` failure, pushing
+/// the failure message onto `host_errors` so [`resolve_input`] can
+/// surface it in the propagated no-searchable-hosts error. An
+/// empty-but-successful enumeration (headless box, no mics) returns
+/// `Some` with empty name / device vectors — see
+/// [`should_propagate_enumeration_failure`] for why the two outcomes
+/// must not be conflated.
 fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) -> Option<HostSlot> {
     let host_label = host_id.name();
     let host = match cpal::host_from_id(host_id) {
@@ -276,17 +286,22 @@ fn enumerate_host_slot_usable(host_id: HostId, host_errors: &mut Vec<String>) ->
     let mut devices = Vec::with_capacity(raw_devices.len());
     let mut names = Vec::with_capacity(raw_devices.len());
     for device in raw_devices {
-        if !device_is_usable(&device) {
-            continue;
-        }
-        let name = device.to_string();
-        if name.trim().is_empty() {
-            // Blank names collide with the picker's "System default"
-            // sentinel and can never legitimately match a user selector.
-            continue;
-        }
-        names.push(name);
+        // Preserve the raw cpal enumeration position. Devices the
+        // picker filtered out (unusable / blank-name) become
+        // empty-name placeholders so `names[N]` stays aligned with the
+        // picker's published `cpal_index` for this device.
+        let name = if !device_is_usable(&device) {
+            String::new()
+        } else {
+            let n = device.to_string();
+            if n.trim().is_empty() {
+                String::new()
+            } else {
+                n
+            }
+        };
         devices.push(device);
+        names.push(name);
     }
     Some(HostSlot {
         host_id,
@@ -389,6 +404,14 @@ pub(crate) fn resolve_over_host_names(
 ) -> SelectorOutcome {
     let trimmed = selector.trim();
     let needle_lower = trimmed.to_lowercase();
+    // Codex P2 (#669 hosts.rs:424): a parseable numeric selector MUST
+    // go straight to the default-host-only numeric pass — bypassing
+    // the cross-host substring pass — so a secondary device named
+    // e.g. "ASIO Input 2" cannot hijack selector "2" before the
+    // numeric branch runs. The exact-match pass is still allowed to
+    // fire (a device LITERALLY named "2" is a legitimate exact hit
+    // and should win on any host); only substring is skipped.
+    let selector_is_numeric = trimmed.parse::<usize>().is_ok();
 
     // Pass 1: exact case-insensitive match across every host, in
     // preferred_host_order. First hit wins - but exactness always beats
@@ -412,9 +435,12 @@ pub(crate) fn resolve_over_host_names(
     // Keep the LONGEST matching device name irrespective of host so a
     // truncated/generic saved value binds to its fullest sibling wherever
     // that lives - same longest-wins precedence as capture's single-host
-    // resolver, just pooled across hosts.
+    // resolver, just pooled across hosts. Skipped for numeric selectors
+    // (see `selector_is_numeric` note above): a digit-bearing secondary
+    // name must not steal a numeric selector before the default-host-
+    // only numeric branch runs.
     let mut best: Option<(usize, usize, usize)> = None; // (h_idx, d_idx, name_len)
-    if !needle_lower.is_empty() {
+    if !needle_lower.is_empty() && !selector_is_numeric {
         for (h_idx, names) in hosts.iter().enumerate() {
             for (d_idx, name) in names.iter().enumerate() {
                 let lower = name.to_lowercase();
@@ -447,22 +473,35 @@ pub(crate) fn resolve_over_host_names(
     // are unstable across host constellations, so accepting them by
     // number would let a stale numeric setting silently record from an
     // unrelated mic when an extra host comes online.
+    //
+    // Codex P2 (#669 hosts.rs:280): the default host's `names` vector
+    // has empty-string placeholders at the raw cpal positions of
+    // filtered-out (unusable / blank-name) devices, so `names[N]`
+    // stays aligned with the picker's published `cpal_index`. Empty
+    // slots are treated as "not published at that index" so a numeric
+    // selector cannot open a device the picker never advertised.
     if let Ok(idx) = trimmed.parse::<usize>() {
         // Guard against an empty host slice: caller should have returned
         // early with the enumeration-failure error before reaching here,
         // but be defensive so the pure resolver never panics.
         if let Some(default_names) = hosts.first() {
-            if idx < default_names.len() {
-                return SelectorOutcome::Matched {
-                    host: 0,
-                    device: idx,
-                };
+            if let Some(name) = default_names.get(idx) {
+                if !name.is_empty() {
+                    return SelectorOutcome::Matched {
+                        host: 0,
+                        device: idx,
+                    };
+                }
+                // idx is within the raw enumeration but the slot is a
+                // usability-filter placeholder — fall through to the
+                // out-of-range note, quoting the USABLE device count
+                // (matches the picker's published set).
             }
+            let usable_count = default_names.iter().filter(|n| !n.is_empty()).count();
             let note = format!(
                 "index {idx} out of range on default host {default_host_label} \
-                 ({} device(s)); numeric selectors resolve only against the \
-                 default host - pick a device by name instead",
-                default_names.len()
+                 ({usable_count} device(s)); numeric selectors resolve only against \
+                 the default host - pick a device by name instead"
             );
             return SelectorOutcome::NumericOutOfRange { note };
         }
@@ -547,7 +586,14 @@ fn build_not_found_error(
     host_snapshots: &[HostSnapshot],
     numeric_note: Option<String>,
 ) -> anyhow::Error {
-    let total_devices: usize = host_snapshots.iter().map(|h| h.device_names.len()).sum();
+    // Count USABLE devices (non-empty names) to match the picker's
+    // published set — empty-string entries are placeholders for
+    // filtered-out unusable/blank devices and would inflate the count
+    // in a way the user cannot verify against the mic picker.
+    let total_devices: usize = host_snapshots
+        .iter()
+        .map(|h| h.device_names.iter().filter(|n| !n.is_empty()).count())
+        .sum();
     let hosts_tried: Vec<&str> = host_snapshots.iter().map(|h| h.host_label).collect();
     let hosts_str = if hosts_tried.is_empty() {
         String::from("no hosts")
