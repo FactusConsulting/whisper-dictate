@@ -829,9 +829,22 @@ else
     elif printf '%s' "$hb_out" | grep -qi "rust-hotkeys\|rust-injection\|rebuild with"; then
         warn "self-test hotkey-boot requires rust-hotkeys,rust-injection features (skipped on this build)"
     elif printf '%s' "$hb_out" | grep -q "ListenerStartup\|no X display\|permission"; then
-        # A headless / no-display box legitimately fails install here;
-        # this is not a regression signal, just an environment gap.
-        warn "hotkey-boot: listener refused (missing display / permissions — expected on headless): $(printf '%s\n' "$hb_out" | head -n 1)"
+        # On non-Windows: a headless / no-display box legitimately fails
+        # install here and it is an environment gap, not a regression. On
+        # Windows (Codex P2 #672 PRRT_kwDOSfNjQs6UZY7Q): a permission
+        # refusal from the RegisterHotKey backend IS a regression -- the
+        # tray runs with per-user permissions and RegisterHotKey does not
+        # need elevated ones, so a "permission" error at boot means the
+        # backend actually failed. Fall through to `bad` in that case
+        # so the release gate trips.
+        case "$(uname -s 2>/dev/null || echo unknown)" in
+            MINGW*|MSYS*|CYGWIN*|Windows_NT)
+                bad "hotkey-boot FAILED on Windows: permission/listener refusal is a regression, not an environment gap: $(printf '%s\n' "$hb_out" | head -n 1)"
+                ;;
+            *)
+                warn "hotkey-boot: listener refused (missing display / permissions — expected on headless non-Windows): $(printf '%s\n' "$hb_out" | head -n 1)"
+                ;;
+        esac
     else
         bad "hotkey-boot FAILED — install-path regression (this is the class of bug that broke Windows PTT in the GUI): $(printf '%s\n' "$hb_out" | tail -n 3)"
     fi
