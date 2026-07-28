@@ -176,6 +176,42 @@ pub(crate) fn redact_raw_event_name(name: &str) -> &str {
     }
 }
 
+/// Redact an `rdev::EventType` for the debug-level pre-filter trace so
+/// the `[rdev/callback] raw=…` line does not leak key identity for
+/// ordinary desktop typing when `VOICEPI_LOG=debug`/`trace` is on.
+///
+/// The plain `{:?}` format of `rdev::EventType` prints the raw `Key`
+/// variant — `KeyPress(KeyA)`, `KeyPress(Num5)`, `KeyPress(Semicolon)`
+/// — for every desktop-wide keydown/keyup. That's exactly the identity
+/// the sampled `[hotkey/rdev] raw event #n` line redacts a few lines
+/// below; leaving this line unredacted defeats the redaction because
+/// **every** event lands here (unsampled), so passwords, tokens and
+/// URLs typed anywhere on the desktop can be reconstructed from a
+/// debug/trace log window.
+///
+/// The rule mirrors [`redact_raw_event_name`]: for a key event, if the
+/// resolved name is PTT-eligible ([`is_rdev_supported_name`]) keep it
+/// (that's the debug-diagnostic signal we care about — an F9 rdev sees
+/// but `key_to_name` discards vs. one it maps cleanly); otherwise emit
+/// `KeyPress(<redacted>)` / `KeyRelease(<redacted>)`. Non-key events
+/// (mouse move, wheel, button) carry no keyboard PII and pass through
+/// as their `{:?}` form so mouse-hook interaction stays diagnosable.
+///
+/// Codex P1 #657 discussion r3663766123.
+pub(crate) fn redact_event_type_for_debug(event_type: &rdev::EventType) -> String {
+    match event_type {
+        rdev::EventType::KeyPress(k) => match key_to_name(*k) {
+            Some(name) if is_rdev_supported_name(&name) => format!("KeyPress({name})"),
+            _ => "KeyPress(<redacted>)".to_owned(),
+        },
+        rdev::EventType::KeyRelease(k) => match key_to_name(*k) {
+            Some(name) if is_rdev_supported_name(&name) => format!("KeyRelease({name})"),
+            _ => "KeyRelease(<redacted>)".to_owned(),
+        },
+        other => format!("{other:?}"),
+    }
+}
+
 /// Spawn the manager thread plus the `rdev` listener thread. Every tracker
 /// output produced by a real OS key event is dispatched to `on_output`,
 /// which the coordinator hooks up to its press/release/cancel events.
@@ -283,7 +319,18 @@ where
                 // hook (raw hook = OS pump delivered vk; this line =
                 // rdev's callback fired with a matching variant).
                 if debug {
-                    crate::diag::log!("[rdev/callback] raw={:?}", event.event_type);
+                    // Redact key identity but preserve event kind
+                    // (Press/Release/mouse variants). Ordinary
+                    // desktop typing at `VOICEPI_LOG=debug`/`trace`
+                    // would otherwise dump `KeyPress(KeyA)` etc. on
+                    // every keystroke, defeating the redaction of
+                    // the sampled `[hotkey/rdev] raw event #n` line
+                    // just below — Codex P1 #657 discussion
+                    // r3663766123.
+                    crate::diag::log!(
+                        "[rdev/callback] raw={}",
+                        redact_event_type_for_debug(&event.event_type)
+                    );
                 }
                 if let Some(raw) = raw_from_rdev(&event) {
                     // Update counters BEFORE the guard / tracker check —
@@ -616,6 +663,13 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     "shift_r",
     "shift",
     "alt_l",
+    // `alt_r` is a valid side-specific binding: `modifier_family` classifies
+    // it as `alt`, `canonical_side("alt_gr") == canonical_side("alt_r")`, and
+    // an OS-delivered `alt_gr` / `right_alt` press satisfies the binding.
+    // Without it in this list, install-time validation rejected `alt_r+...`
+    // chords the moment RegisterHotKey rejected them for being side-specific
+    // (Codex P2 #656 r3663653258, PR #650 fallback path).
+    "alt_r",
     "alt",
     "alt_gr",
     // `right_alt` and `ralt` are accepted aliases for `alt_gr` / AltGr
@@ -627,6 +681,15 @@ const RDEV_SUPPORTED_NAMES: &[&str] = &[
     "cmd_l",
     "cmd_r",
     "cmd",
+    // Windows-terminology aliases for the Meta / Super key family
+    // (rdev emits `cmd_l` / `cmd_r`). `modifier_family` / `canonical_side`
+    // treat these as `cmd`-family equivalents so a `win_l+f9` binding
+    // (rejected by RegisterHotKey as side-specific, PR #650) reaches the
+    // rdev fallback and matches real Meta-key presses. Codex P2 #656
+    // r3663653258.
+    "win",
+    "win_l",
+    "win_r",
     "f1",
     "f2",
     "f3",

@@ -255,20 +255,29 @@ impl Injector {
                             // avoid double-typing. Codex P1 dispatcher.rs
                             // findings on PR #613.
                             //
-                            // `sent == 0` is a POSITIVE PROOF that nothing
-                            // reached the compositor -- use
-                            // `HelperError::none_landed` (not `opaque`) so
-                            // the dispatcher does not stamp `partial=true`
-                            // via the idx>0 opaque-failure branch, and the
-                            // Python outer fallback is free to retry (Codex
-                            // P2 #636 dispatcher.rs:708).
+                            // A `sent == 0` outcome is NOT positive proof
+                            // that nothing reached the compositor: the
+                            // single failing `ydotool type -- <buffer>`
+                            // subprocess can stream part of its Unicode
+                            // buffer through ydotoold BEFORE erroring
+                            // (typical dictation text is one big Type op
+                            // — `build_ydotool_ops` only splits on
+                            // layout-mapped keys). `run_ydotool` sees
+                            // only the whole-process exit status, so a
+                            // partially typed payload is indistinguishable
+                            // from a socket-refused start. Stamp `opaque`
+                            // so `try_helpers_over` (idx>0) marks it
+                            // `partial=true` and the Python outer
+                            // fallback does not double-type on top of
+                            // whatever leaked. This reopens #636's
+                            // data-loss case (a fully failed ydotool
+                            // dropping the transcript), but data-loss
+                            // is preferable to double-typing into an
+                            // active window — Codex P1 #657 discussion
+                            // r3663766083.
                             match wayland_type_tracked(text, &self.xkb_layout) {
                                 Ok(_) => Ok(()),
-                                Err((err, sent)) => Err(if sent > 0 {
-                                    HelperError::partial(err)
-                                } else {
-                                    HelperError::none_landed(err)
-                                }),
+                                Err((err, _sent)) => Err(HelperError::opaque(err)),
                             }
                         } else {
                             // kwtype / wtype / dotool / xdotool: single

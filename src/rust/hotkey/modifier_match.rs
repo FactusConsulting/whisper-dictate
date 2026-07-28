@@ -43,7 +43,14 @@ pub fn modifier_family(name: &str) -> Option<&'static str> {
         // `right_alt` / `ralt` are accepted aliases for `alt_gr` / `alt_r`
         // (P2 #346 finding 4): some users and documentation use these names.
         "alt" | "alt_l" | "alt_r" | "alt_gr" | "right_alt" | "ralt" => Some("alt"),
-        "cmd" | "cmd_l" | "cmd_r" => Some("cmd"),
+        // `win` / `win_l` / `win_r` are Windows-terminology aliases for the
+        // Meta / Super key family that rdev emits as `cmd_l` / `cmd_r`.
+        // `settings_schema.json` advertises the win_* names, but until we
+        // accepted them as `cmd` family here a binding of `win_l+f9` never
+        // matched any rdev press (`modifier_family("win_l")` was `None`, so
+        // `modifier_matches` fell through to `pressed == target` and every
+        // real `cmd_l` press missed). Codex P2 #656 discussion r3663653258.
+        "cmd" | "cmd_l" | "cmd_r" | "win" | "win_l" | "win_r" => Some("cmd"),
         _ => None,
     }
 }
@@ -51,7 +58,7 @@ pub fn modifier_family(name: &str) -> Option<&'static str> {
 /// The set of bare-modifier names (no side) — a press carrying one of these
 /// is a sideless event whose side the OS did not report.
 fn is_generic_modifier(name: &str) -> bool {
-    matches!(name, "ctrl" | "shift" | "alt" | "cmd")
+    matches!(name, "ctrl" | "shift" | "alt" | "cmd" | "win")
 }
 
 /// `alt_gr`, `right_alt`, and `ralt` are all the same physical key on every
@@ -61,6 +68,12 @@ fn is_generic_modifier(name: &str) -> bool {
 pub fn canonical_side(name: &str) -> &str {
     match name {
         "alt_gr" | "right_alt" | "ralt" => "alt_r",
+        // Windows-terminology aliases: normalise to the `cmd_*` side names
+        // rdev actually emits (`K::MetaLeft` → `"cmd_l"`, `K::MetaRight` →
+        // `"cmd_r"`) so a `win_l` target and a `cmd_l` press canonicalise
+        // to the same side and match. Codex P2 #656 r3663653258.
+        "win_l" => "cmd_l",
+        "win_r" => "cmd_r",
         other => other,
     }
 }
@@ -299,5 +312,70 @@ mod tests {
         // right_alt / ralt are right-side only; left-Alt binding must not fire.
         assert!(!modifier_matches("right_alt", "alt_l"));
         assert!(!modifier_matches("ralt", "alt_l"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex P2 #656 r3663653258 — win_* aliases (Windows-key family).
+    //
+    // `settings_schema.json` advertises the win_* names, but rdev emits
+    // `cmd_l`/`cmd_r` for the physical Meta/Super keys. Without treating
+    // win_* as `cmd`-family aliases a `win_l+f9` binding parsed by the
+    // supervisor (RegisterHotKey side-specific rejection → rdev fallback)
+    // would never fire because `modifier_matches` fell through to plain
+    // equality (`"cmd_l" == "win_l"`).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn win_aliases_share_cmd_family() {
+        assert_eq!(modifier_family("win"), Some("cmd"));
+        assert_eq!(modifier_family("win_l"), Some("cmd"));
+        assert_eq!(modifier_family("win_r"), Some("cmd"));
+    }
+
+    #[test]
+    fn win_side_specific_matches_cmd_press_from_rdev() {
+        // rdev delivers `cmd_l` / `cmd_r` for the physical Windows key;
+        // a user-configured `win_l` / `win_r` target must accept them.
+        assert!(modifier_matches("cmd_l", "win_l"));
+        assert!(modifier_matches("cmd_r", "win_r"));
+        // ...and the reverse (a synthetic `win_l` press satisfies a
+        // configured `cmd_l` target) — same physical key.
+        assert!(modifier_matches("win_l", "cmd_l"));
+        assert!(modifier_matches("win_r", "cmd_r"));
+    }
+
+    #[test]
+    fn win_side_specific_rejects_opposite_side() {
+        // Same rule as ctrl/shift/alt: a sided win binding must not fire
+        // on the opposite physical side.
+        assert!(!modifier_matches("cmd_r", "win_l"));
+        assert!(!modifier_matches("cmd_l", "win_r"));
+        assert!(!modifier_matches("win_r", "win_l"));
+    }
+
+    #[test]
+    fn generic_win_matches_any_cmd_press() {
+        // A user who binds bare `win` (side-insensitive) must have both
+        // physical sides satisfy it, and the rdev-emitted `cmd_l`/`cmd_r`
+        // must pass.
+        assert!(modifier_matches("cmd_l", "win"));
+        assert!(modifier_matches("cmd_r", "win"));
+        assert!(modifier_matches("win_l", "win"));
+        assert!(modifier_matches("win_r", "win"));
+        // ... and the generic-fallback branch: a sideless `win` / `cmd`
+        // press satisfies a side-specific `win_l` target (chord still
+        // starts when the OS did not report a side).
+        assert!(modifier_matches("win", "win_l"));
+        assert!(modifier_matches("cmd", "win_l"));
+    }
+
+    #[test]
+    fn win_l_and_cmd_l_share_a_canonical_side() {
+        // `all_targets_have_distinct_match` uses `canonical_side` when
+        // comparing "same physical key". A binding of `win_l+cmd_l+f9`
+        // should NOT succeed on a single physical Windows-key press
+        // (they're the same key), just like `ctrl_l+ctrl_l+f9` wouldn't.
+        assert_eq!(canonical_side("win_l"), canonical_side("cmd_l"));
+        assert_eq!(canonical_side("win_r"), canonical_side("cmd_r"));
     }
 }

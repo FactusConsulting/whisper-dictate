@@ -345,7 +345,22 @@ pub fn install_gui_diagnostic_log(path: &PathBuf) -> std::io::Result<()> {
 /// Callers use the [`log!`] macro rather than this function directly —
 /// the macro forwards a `format_args!` result so the caller pays no
 /// allocation when the diagnostic sink is not installed.
+///
+/// A resolved level of [`LogLevel::Off`] short-circuits before any
+/// write happens — no stderr line, no tee-file write, no timer
+/// initialisation. The docs promise "`off` — Nothing — not even
+/// startup markers", so lifecycle call sites that predate a level
+/// gate (the GUI startup marker, unconditional supervisor Phase-B
+/// notes, ...) still respect `VOICEPI_LOG=off`. Codex P2 #651
+/// discussion r3663372988.
 pub fn write_line(message: &str) {
+    if LEVEL.load(Ordering::Relaxed) == LogLevel::Off.as_u8() {
+        // Suppress unconditionally: no stderr, no tee, no timer init.
+        // Startup markers, error surfaces, and every other call site
+        // funnels through here, so a single gate at the sink makes
+        // `Off` an actual no-op without touching every caller.
+        return;
+    }
     let ms = START.get_or_init(Instant::now).elapsed().as_millis();
     let line = format!("t={ms}ms {message}");
     // Always stderr — CLI users get real-time output, GUI users on
