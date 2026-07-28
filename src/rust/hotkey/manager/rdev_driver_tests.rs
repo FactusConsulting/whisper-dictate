@@ -15,8 +15,9 @@
 #![cfg(all(test, feature = "rust-hotkeys"))]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 
+use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
     // Merged when rebasing #668 onto main. KEEP BOTH sides:
@@ -48,6 +49,32 @@ use crate::hotkey::manager::rdev_driver::{
     HEARTBEAT_IDLE_EMIT_EVERY,
 };
 use crate::hotkey::manager::tracker::RawKeyKind;
+
+/// Take the crate-wide [`DIAG_WRITER_LOCK`].
+///
+/// The callback-queue flood tests below push thousands of lines
+/// through the SAME process-wide async queue and writer thread that
+/// `crate::diag`'s tee file sits behind. Without this lock they race
+/// the diagnostic-log tests in `diag_tests` and `tracker_tests` two
+/// ways (Codex P2 #668 discussion 3666690064):
+///
+///  1. The queue is a bounded `sync_channel` — a flood can fill it so
+///     a concurrent tracker test's `[chord]` line is silently dropped
+///     by `try_send`, and its `contains("[chord]")` assertion fails.
+///  2. `flush_async_for_tests` waits for the pending-count to reach
+///     zero; a concurrent flood keeps it non-zero, so the waiter times
+///     out and reads the tee file before the line it needs has landed.
+///
+/// Flood lines can also be written into whichever tempfile the other
+/// suite installed, which is harmless for today's assertions but is
+/// exactly the cross-test bleed the lock exists to prevent.
+///
+/// Poison-tolerant (`into_inner`) so one failing test does not cascade
+/// into unrelated failures across the suite — same shape as the
+/// helpers in `diag_tests` and `tracker_tests`.
+fn diag_test_lock() -> MutexGuard<'static, ()> {
+    DIAG_WRITER_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 #[test]
 fn register_and_unregister_roundtrip() {
@@ -645,6 +672,13 @@ fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
     // populated it), but we CAN bound the enqueue time. On a working
     // implementation this is microseconds; a regression would spin or
     // block for the write duration.
+    //
+    // Serialised against the diagnostic-log tests: these 1000 enqueues
+    // share the process-wide bounded queue and writer thread, so
+    // without the lock they can evict a concurrent tracker test's
+    // `[chord]` line or stall its `flush_async_for_tests` wait.
+    // Codex P2 #668 discussion 3666690064.
+    let _diag_lock = diag_test_lock();
     let start = std::time::Instant::now();
     for i in 0..1000 {
         enqueue_callback_trace(format!("trace-nop-{i}"));
@@ -654,6 +688,12 @@ fn enqueue_callback_trace_does_not_block_when_writer_is_absent() {
         elapsed < std::time::Duration::from_millis(500),
         "1000 enqueues took {elapsed:?}; the callback path must be effectively free"
     );
+    // Drain before releasing the lock. Holding it only across the
+    // enqueues is not enough: the writer thread keeps draining after
+    // this test returns, so the next diagnostic-log test could still
+    // acquire the lock while our backlog is in flight and blow its
+    // `flush_async_for_tests` budget. Codex P2 #668 discussion 3666690064.
+    crate::diag::flush_async_for_tests();
 }
 
 #[test]
@@ -663,6 +703,12 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
     // caller — that's the whole point of the queue on the LL-hook thread.
     // Pump enough lines to certainly exceed the queue capacity so we
     // exercise both branches; the enqueue call is still bounded time.
+    //
+    // This test DELIBERATELY overfills the shared bounded queue, so it
+    // is the more dangerous of the two floods to leave unserialised —
+    // hold the crate-wide diagnostic lock across it. Codex P2 #668
+    // discussion 3666690064.
+    let _diag_lock = diag_test_lock();
     ensure_callback_trace_writer_for_tests();
     let start = std::time::Instant::now();
     let burst = CALLBACK_TRACE_QUEUE_CAPACITY * 4;
@@ -675,6 +721,10 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
         "flooding {burst} enqueues took {elapsed:?}; try_send must never block \
          on a full queue or the LL-hook callback wedges"
     );
+    // Drain the backlog before releasing the lock — see the sibling
+    // flood test for why holding it across the enqueues alone leaves a
+    // window open. Codex P2 #668 discussion 3666690064.
+    crate::diag::flush_async_for_tests();
 }
 
 // -----------------------------------------------------------------------
