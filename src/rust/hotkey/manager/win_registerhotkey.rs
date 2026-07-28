@@ -408,6 +408,18 @@ where
                 "[hotkey/win_registerhotkey] msg-loop thread started \
                  (bypasses WH_KEYBOARD_LL hook chain)"
             );
+            // Codex P2 #668 discussion 3665741337: flip the alive
+            // flag to `true` HERE — after any potentially-stalling
+            // pre-loop `diag::log!` has returned, and just before we
+            // enter `run_msg_loop` which owns the RegisterHotKey
+            // subscription for the rest of the thread's lifetime.
+            // Same rationale as the rdev branch (see there for the
+            // full story): manager-channel default is `false`, so a
+            // stalled AppData sink would keep the flag `false` and
+            // the boot self-test correctly reports the dead-listener
+            // wedge rather than passing on a listener that never
+            // reached the OS API.
+            listener_alive_for_thread.store(true, std::sync::atomic::Ordering::Relaxed);
             run_msg_loop(cmd_rx, loop_on_output);
             // Same Codex-P2 #668 3664983439 ordering rationale as the
             // rdev branch: flip the atomic BEFORE the post-loop

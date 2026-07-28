@@ -619,9 +619,20 @@ impl HotkeyHandle {
     #[cfg(test)]
     pub(crate) fn install_stub_for_tests(mode: coordinator::Mode) -> Self {
         use crate::hotkey::manager::{driver_common, tracker::KeyTracker};
+        use std::sync::atomic::Ordering;
         use std::sync::Mutex as StdMutex;
 
         let (manager, cmd_rx) = driver_common::manager_channel();
+        // Codex P2 #668 discussion 3665741337 changed the
+        // manager-channel default to `false`. The stub represents a
+        // backend that HAS reached its "installed" moment (that's
+        // what makes it a valid drop-in for the resume-fallback
+        // supervisor tests), so explicitly stamp `true` here — the
+        // shipping backends do the same in their listener-thread
+        // bodies. Without this stamp, tests that assert the stub is
+        // alive immediately after construction panic and cascade
+        // ENV_LOCK poisoning across the whole lib-test binary.
+        manager.listener_alive_flag().store(true, Ordering::Relaxed);
         let tracker = Arc::new(StdMutex::new(KeyTracker::new(Vec::new())));
         let manager_thread =
             driver_common::spawn_manager_thread(cmd_rx, tracker).expect("stub manager spawns");
@@ -646,12 +657,22 @@ impl HotkeyHandle {
     /// handle so callers can drive the "manager gone" failure mode of
     /// [`Self::resume`] without also tearing down the coordinator.
     /// Codex P2 #668 discussion 3664983412.
+    ///
+    /// Also flips the stub's shared `listener_alive` flag to `false`
+    /// so a caller polling `is_listener_alive()` sees the dead-
+    /// listener state — the shipping backends' listener-thread drop-
+    /// guards do this automatically, but the stub has no platform
+    /// listener to run one.
     #[cfg(test)]
     pub(crate) fn shutdown_manager_only_for_tests(&mut self) {
+        use std::sync::atomic::Ordering;
         self.manager.shutdown();
         if let Some(t) = self.manager_thread.take() {
             t.join();
         }
+        self.manager
+            .listener_alive_flag()
+            .store(false, Ordering::Relaxed);
     }
 
     fn shutdown_inner(&mut self) {

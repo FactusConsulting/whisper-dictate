@@ -614,15 +614,23 @@ fn registerhotkey_listener_alive_flag_flips_on_thread_exit() {
             return;
         }
     };
-    // Immediately after spawn the listener thread is running its
-    // message loop; the alive flag must be `true`. A regression that
-    // never wired the shared atomic (the pre-fix state) would still
-    // read `true` here too — the differentiator is the SHUTDOWN
-    // assertion below.
+    // After spawn, the listener thread runs its pre-loop
+    // `diag::log!` then flips the flag to `true` right before
+    // entering `run_msg_loop` (Codex P2 #668 3665741337 changed the
+    // manager-channel default to `false`, so the "installed"
+    // transition now requires the backend to have actively reached
+    // that flip). Poll up to 200ms so healthy CI shapes see the
+    // transition.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    while std::time::Instant::now() < deadline && !handle.is_listener_alive() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(
         handle.is_listener_alive(),
-        "immediately after spawn the RegisterHotKey msg-loop thread is \
-         running; is_listener_alive() must be true"
+        "immediately after spawn the RegisterHotKey msg-loop thread \
+         should have reached its `store(true)` right before \
+         run_msg_loop; is_listener_alive() must be true (Codex P2 #668 \
+         3664983427 + 3665741337)"
     );
     // Ask the message loop to exit cleanly.
     handle.shutdown();

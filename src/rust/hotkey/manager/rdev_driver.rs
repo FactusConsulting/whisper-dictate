@@ -65,8 +65,8 @@
 //!    a rebuild.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -152,86 +152,34 @@ pub(crate) fn should_log_raw_event(n: u64) -> bool {
     n.is_multiple_of(RAW_EVENT_TRACE_EVERY)
 }
 
-/// Bounded queue capacity for the off-callback trace writer. On Windows
-/// the `WH_KEYBOARD_LL` callback runs synchronously in the OS input thread
-/// and its total time budget (per the low-level hook contract) is a few
-/// milliseconds before Windows silently unhooks the callback — which
-/// re-creates the exact PTT-wedge this instrumentation was written to
-/// diagnose. So the callback MUST NOT block on I/O; it hands each trace
-/// line to the writer thread via [`enqueue_callback_trace`], which does
-/// a non-blocking [`SyncSender::try_send`] and drops the line if the
-/// queue is full. 256 lines absorbs realistic bursts (rate-limited per
-/// [`RAW_EVENT_INITIAL_TRACE`] / [`RAW_EVENT_TRACE_EVERY`]) even with
-/// a stalled AppData volume; genuine flood is preferable to a wedged
-/// hook. Codex P1 #646 discussion r3661145589.
-pub(crate) const CALLBACK_TRACE_QUEUE_CAPACITY: usize = 256;
+// The off-callback queue infrastructure moved to `crate::diag` (see
+// `enqueue_async` / `ensure_async_writer` there). Codex P1 #668
+// discussion 3665741341: the tracker's `[chord]` debug trace ALSO
+// runs on the LL-hook callback thread and needs the same protection,
+// so the queue is now shared across every callback-path call site.
+// Historical name preserved as a re-export so `rdev_driver_tests`
+// keeps compiling and any out-of-tree caller continues to work. The
+// `allow(unused_imports)` is because production code inside this
+// module no longer references the constant directly — only the test
+// module (which lives in a companion `_tests.rs` compiled under
+// `cfg(test)`) does.
+#[allow(unused_imports)]
+pub(crate) use crate::diag::ASYNC_QUEUE_CAPACITY as CALLBACK_TRACE_QUEUE_CAPACITY;
 
-/// Process-wide sender to the off-callback trace writer thread. `None`
-/// until [`ensure_callback_trace_writer`] runs (from `spawn_with_raw_tap`);
-/// once installed it persists for the process lifetime because the writer
-/// thread cannot be cleanly torn down without the same "unjoinable OS
-/// listener" caveat that applies to `rdev::listen` itself.
-static CALLBACK_TRACE_TX: OnceLock<SyncSender<String>> = OnceLock::new();
-
-/// Idempotently install the off-callback trace writer thread. Safe to
-/// call from every `spawn_with_raw_tap` invocation because the writer is
-/// gated by [`OnceLock`]; only the first caller spawns the thread, every
-/// subsequent caller no-ops.
-///
-/// Codex P1 #646 discussion r3661145589: moving `crate::diag::log!` off
-/// the LL-hook callback thread prevents a stalled AppData I/O (antivirus,
-/// slow disk) from tripping Windows' hook time budget and causing the
-/// OS to silently unhook the callback — which would recreate the exact
-/// permanent PTT failure this instrumentation is meant to diagnose.
-fn ensure_callback_trace_writer() {
-    CALLBACK_TRACE_TX.get_or_init(|| {
-        let (tx, rx) = mpsc::sync_channel::<String>(CALLBACK_TRACE_QUEUE_CAPACITY);
-        // Best-effort spawn — a thread-spawn failure here would still let
-        // the driver install (the callback simply won't tee its traces
-        // for that process), so we swallow the Err rather than propagate.
-        // Named for `taskkill /t` traces and future panic-hook attribution.
-        let _ = thread::Builder::new()
-            .name("vp-hotkey-rdev-trace".to_owned())
-            .spawn(move || {
-                // Loop until every sender is dropped (which never happens
-                // in a shipping process — the OnceLock keeps at least one
-                // clone alive for process lifetime, matching the rdev
-                // listener's own lifetime model).
-                while let Ok(line) = rx.recv() {
-                    crate::diag::write_line(&line);
-                }
-            });
-        tx
-    });
-}
-
-/// Enqueue one trace line for the off-callback writer thread. Returns
-/// silently when the writer has not been installed yet (early startup
-/// racing the driver spawn) OR when the queue is full — dropping the
-/// line is always preferable to blocking the LL-hook callback (see
-/// [`CALLBACK_TRACE_QUEUE_CAPACITY`] for the rationale).
-///
-/// Callers on the LL-hook path MUST use this function instead of
-/// `crate::diag::log!`. The two are otherwise equivalent — the writer
-/// thread invokes the same `crate::diag::write_line` sink internally,
-/// so the resulting `gui-diagnostic.log` line format is unchanged.
+/// Historical wrapper — forwards to the shared [`crate::diag::enqueue_async`]
+/// so an rdev-callback caller doesn't need to be updated to the new
+/// name. Kept `pub(crate)` for the same reason: rdev_driver_tests and
+/// the callback closure below still use this name.
 pub(crate) fn enqueue_callback_trace(message: String) {
-    if let Some(tx) = CALLBACK_TRACE_TX.get() {
-        // try_send drops on Full; the alternative (send / block until
-        // the writer catches up) would defeat the entire purpose of the
-        // queue on the exact "slow AppData volume" scenario the queue
-        // exists for.
-        let _ = tx.try_send(message);
-    }
+    crate::diag::enqueue_async(message);
 }
 
 /// Test-only alias for [`ensure_callback_trace_writer`] so
 /// `rdev_driver_tests.rs` can drive the queue without going through a
-/// full `spawn` (which would require the OS listener to install). Kept
-/// `pub(crate)` and `#[cfg(test)]` so the shipping surface is unchanged.
+/// full `spawn` (which would require the OS listener to install).
 #[cfg(test)]
 pub(crate) fn ensure_callback_trace_writer_for_tests() {
-    ensure_callback_trace_writer();
+    crate::diag::ensure_async_writer();
 }
 
 /// Redact a raw-event name for the diagnostic-log trace line so ordinary
@@ -389,12 +337,14 @@ where
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
     let raw_tap = Arc::new(raw_tap);
-    // Install the off-callback trace writer BEFORE spawning the
-    // listener thread so the first key event's trace line has a
-    // writer ready to receive it. Idempotent across driver spawns;
-    // see [`ensure_callback_trace_writer`] for the rationale (Codex
-    // P1 #646 discussion r3661145589).
-    ensure_callback_trace_writer();
+    // Install the shared off-callback trace writer BEFORE spawning
+    // the listener thread so the first key event's trace line has a
+    // writer ready to receive it. Idempotent across driver spawns.
+    // Shared with the tracker path (`KeyTracker::handle`) so a
+    // `[chord]` debug line issued from `dispatch_raw_event` inside
+    // the same LL-hook callback also stays off the hook thread —
+    // Codex P1 #668 discussion 3665741341.
+    crate::diag::ensure_async_writer();
 
     // Liveness flag the listener thread flips to `false` on exit.
     // Handed to callers via `ManagerHandle::is_listener_alive` /
@@ -486,6 +436,19 @@ where
                 "[hotkey/rdev] listener thread started; installing global hook \
                  (WH_KEYBOARD_LL on Windows / XRecord on X11 / CGEventTap on macOS)"
             );
+            // Codex P2 #668 discussion 3665741337: flip the alive
+            // flag to `true` HERE — after any potentially-stalling
+            // pre-listen `diag::log!` has returned, and just before
+            // we enter `rdev::listen` where the hook is actually
+            // installed. The manager-channel default is `false`, so
+            // if the log call above stalls (blocked AppData I/O on
+            // Windows), the flag stays `false` and the boot self-test
+            // correctly reports `listener_exited_early:true` for a
+            // hook that was never installed. On the healthy path the
+            // spawn-side waits READY_PROBE_WINDOW after `Started`
+            // before returning, so this store lands before any
+            // external observer polls `is_listener_alive()`.
+            listener_alive_for_thread.store(true, Ordering::Relaxed);
             let cb = move |event: rdev::Event| {
                 let debug = crate::diag::debug_enabled();
                 // Debug: log every rdev event BEFORE name-filter, so

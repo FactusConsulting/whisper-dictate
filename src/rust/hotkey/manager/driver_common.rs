@@ -183,10 +183,23 @@ pub fn manager_channel() -> (ManagerHandle, Receiver<ManagerCommand>) {
     (
         ManagerHandle {
             tx,
-            // Start alive; the platform listener thread flips this to
-            // `false` on exit. See the field-level doc for the
-            // Codex-#644 dead-hook regression this signal catches.
-            listener_alive: Arc::new(AtomicBool::new(true)),
+            // Codex P2 #668 discussion 3665741337: start `false`. The
+            // platform listener thread flips this to `true` ONLY once
+            // its OS hook is confirmed installed (rdev: right before
+            // `rdev::listen`; win_registerhotkey: right before
+            // `run_msg_loop`; evdev: inside `ReaderPopulationFlag::new`
+            // once the reader count is known). Previously we defaulted
+            // to `true`, but that let `HotkeyHandle::is_listener_alive`
+            // report the hook as alive between the moment the listener
+            // thread was spawned and the moment it actually reached
+            // the OS API — including the entire duration of any
+            // pre-listen `diag::log!` stall, which is the exact
+            // Windows-stalled-AppData wedge the boot self-test exists
+            // to catch. Defaulting to `false` means an "alive"
+            // reading now REQUIRES the backend to have observably
+            // reached the OS hook; the drop-guard still flips back
+            // to `false` on any exit.
+            listener_alive: Arc::new(AtomicBool::new(false)),
         },
         rx,
     )
@@ -322,23 +335,33 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn listener_alive_flag_defaults_true_and_reflects_stores_from_outside_handle() {
+    fn listener_alive_flag_defaults_false_and_reflects_stores_from_outside_handle() {
         use std::sync::atomic::Ordering;
         let (handle, _rx) = manager_channel();
+        // Codex P2 #668 discussion 3665741337: default is now `false`
+        // (was `true`). Each backend explicitly flips to `true` only
+        // when its OS hook is confirmed installed — otherwise a
+        // pre-listen `diag::log!` stall would let the boot self-test
+        // pass on a hook that was never installed.
         assert!(
-            handle.is_listener_alive(),
-            "freshly-constructed handle must report the listener as alive"
+            !handle.is_listener_alive(),
+            "freshly-constructed handle must default to `not alive` — \
+             the backend explicitly flips to `true` when the OS hook \
+             is confirmed installed"
         );
         let flag = handle.listener_alive_flag();
+        flag.store(true, Ordering::Relaxed);
+        assert!(
+            handle.is_listener_alive(),
+            "flipping the flag via listener_alive_flag() must be \
+             visible through is_listener_alive()"
+        );
         flag.store(false, Ordering::Relaxed);
         assert!(
             !handle.is_listener_alive(),
-            "listener death signal set via listener_alive_flag() must be visible via is_listener_alive()"
+            "flipping the flag back to `false` (the listener exited) \
+             must also be visible through is_listener_alive()"
         );
-        // A second store to `false` remains false — the atomic is a
-        // one-shot latch, and boot_self_test relies on that.
-        flag.store(false, Ordering::Relaxed);
-        assert!(!handle.is_listener_alive());
     }
 
     // -----------------------------------------------------------------------

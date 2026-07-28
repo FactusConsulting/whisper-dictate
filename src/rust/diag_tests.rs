@@ -541,6 +541,79 @@ fn hotkey_boot_self_test_dispatcher_does_not_use_eprintln_for_config_warning() {
     );
 }
 
+// -----------------------------------------------------------------------
+// Codex P1 #668 discussion 3665741341 — the tracker's `[chord]` trace
+// runs on the LL-hook callback thread (via `dispatch_raw_event` from
+// rdev's cb) and therefore MUST use `log_async!`, not `log!`. Before
+// the fix, `tracker.rs` called `crate::diag::log!` synchronously,
+// which on Windows can exceed the `WH_KEYBOARD_LL` time budget on a
+// stalled AppData sink and silently unhook the callback — defeating
+// the earlier off-callback queue for the rdev boundary trace.
+//
+// Structural scanner: pin the fix by rejecting any synchronous
+// `crate::diag::log!` inside `KeyTracker::handle`. The debug branch
+// is the only diagnostic call site there today; a future addition
+// that used `log!` instead of `log_async!` would re-introduce the
+// wedge.
+// -----------------------------------------------------------------------
+
+#[test]
+fn tracker_handle_does_not_use_synchronous_diag_log_on_callback_path() {
+    let src = std::fs::read_to_string("src/rust/hotkey/manager/tracker.rs")
+        .or_else(|_| std::fs::read_to_string("hotkey/manager/tracker.rs"))
+        .expect(
+            "tracker.rs must be readable from the test working dir; \
+             cargo test runs from the crate root by default",
+        );
+    let fn_marker = "pub fn handle(&mut self, event: &RawKeyEvent) -> Option<TrackerOutput> {";
+    let fn_start = src
+        .find(fn_marker)
+        .expect("KeyTracker::handle function must exist in tracker.rs");
+    let open_brace_offset = fn_start + fn_marker.len() - 1;
+    let mut depth: i32 = 0;
+    let mut end: Option<usize> = None;
+    for (i, ch) in src[open_brace_offset..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open_brace_offset + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let fn_end = end.expect("KeyTracker::handle body must have a matching `}`");
+    let body = &src[fn_start..fn_end];
+    // Strip line comments so mentions of `diag::log!` inside doc
+    // rationale don't false-fail the check.
+    let body_no_line_comments: String = body
+        .lines()
+        .map(|line| line.find("//").map_or(line, |idx| &line[..idx]))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !body_no_line_comments.contains("crate::diag::log!"),
+        "KeyTracker::handle MUST NOT use `crate::diag::log!` — it \
+         runs on the rdev LL-hook callback thread on Windows and a \
+         synchronous write on a stalled diag sink would silently \
+         unhook the callback. Use `crate::diag::log_async!` instead. \
+         Codex P1 #668 discussion 3665741341. Offending function body:\n{body}"
+    );
+    // Sanity: the fix's async path must still be present — a
+    // regression that dropped the trace entirely would remove the
+    // `[chord]` line that the redaction tests below rely on.
+    assert!(
+        body.contains("log_async!"),
+        "KeyTracker::handle must still emit the `[chord]` trace at \
+         debug level (via `crate::diag::log_async!`). Regression \
+         that dropped the trace would silence the wedge diagnostic. \
+         Codex P1 #668 3665741341."
+    );
+}
+
 #[test]
 fn write_line_stays_stable_across_many_calls() {
     // Belt-and-braces: call `write_line` several thousand times to

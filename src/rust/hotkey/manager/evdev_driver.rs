@@ -229,8 +229,18 @@ impl ReaderPopulationFlag {
     /// bails with "no readable keyboard" before reaching here) and a
     /// counter starting at 0 would allow a single `reader_guard()`
     /// Drop to underflow via `fetch_sub`. Public for tests only.
+    ///
+    /// The flag is stamped `true` here — evdev has no meaningful
+    /// "later" moment analogous to rdev's `rdev::listen()` call
+    /// because the per-device reader threads enter their `fetch_events()`
+    /// loops immediately after spawn (no pre-loop `diag::log!` to
+    /// stall on). Codex P2 #668 discussion 3665741337 changed the
+    /// manager-channel default to `false` so rdev / win_registerhotkey
+    /// can defer their "installed" transition; the evdev backend
+    /// asserts alive up-front here.
     pub(crate) fn new(size: usize, flag: Arc<AtomicBool>) -> Self {
         debug_assert!(size >= 1, "reader population must be non-empty");
+        flag.store(true, Ordering::Relaxed);
         Self {
             counter: Arc::new(AtomicUsize::new(size)),
             flag,
@@ -733,7 +743,31 @@ mod tests {
         assert_eq!(pop.outstanding_for_tests(), 3);
         assert!(
             flag.load(Ordering::Relaxed),
-            "population construction must not touch the alive flag"
+            "population construction MUST stamp the alive flag `true` \
+             so the manager-channel default of `false` (Codex P2 #668 \
+             3665741337) does not misreport the population as dead \
+             before any reader has had a chance to run"
+        );
+    }
+
+    #[test]
+    fn reader_population_flag_stamps_alive_true_even_when_input_flag_is_false() {
+        // Codex P2 #668 discussion 3665741337 changed the
+        // manager-channel default to `false`. The evdev backend has
+        // no meaningful "hook installed" moment analogous to rdev's
+        // `rdev::listen()` call, so the population constructor is
+        // the single stamp point — it MUST flip the flag to `true`
+        // regardless of the input state. Without this, `spawn_with_raw_tap`
+        // would hand back a HotkeyHandle whose `is_listener_alive()`
+        // stayed `false` forever on evdev, breaking every existing
+        // caller.
+        let flag = Arc::new(AtomicBool::new(false));
+        assert!(!flag.load(Ordering::Relaxed));
+        let _pop = ReaderPopulationFlag::new(1, Arc::clone(&flag));
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "ReaderPopulationFlag::new must stamp the flag `true` \
+             regardless of its input state (Codex P2 #668 3665741337)"
         );
     }
 

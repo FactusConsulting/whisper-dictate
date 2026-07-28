@@ -689,24 +689,45 @@ fn enqueue_callback_trace_after_writer_install_still_returns_immediately() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn is_listener_alive_is_true_immediately_after_successful_spawn() {
-    // On a working host (X11 / Windows / macOS), the listener stays
-    // alive across the immediate post-install window. On headless CI
-    // rdev::listen fails within READY_PROBE_WINDOW and spawn returns
-    // Err — no HotkeyHandle is produced, so the assertion below is
-    // vacuously skipped. Either way the test proves the signal is not
-    // pinned false on the healthy path.
+fn is_listener_alive_becomes_true_after_successful_spawn_reaches_listen() {
+    // Codex P2 #668 discussion 3665741337 changed the manager-channel
+    // default to `false`; the rdev listener thread now flips it to
+    // `true` ONLY after any pre-listen `diag::log!` has returned,
+    // right before entering `rdev::listen`. On the healthy path
+    // (X11 / Windows / macOS with a working diag sink) that store
+    // happens within a handful of microseconds of the spawn-side
+    // observing `ListenerSignal::Started`, and the spawn-side then
+    // waits READY_PROBE_WINDOW before returning — so by the time
+    // this test reads the flag, a healthy listener has already
+    // stamped `true`.
+    //
+    // On headless CI rdev::listen fails within READY_PROBE_WINDOW and
+    // spawn returns Err — no HotkeyHandle is produced and the
+    // assertion is vacuously skipped.
     let guard = Arc::new(InjectionGuard::new());
     let (handle, thread) = match spawn(guard, |_out| {}) {
         Ok(pair) => pair,
         Err(SpawnError::ListenerStartup(_)) | Err(SpawnError::ListenerHung) => {
-            eprintln!("skipping is_listener_alive_after_spawn: headless env");
+            eprintln!("skipping is_listener_alive_after_spawn_reaches_listen: headless env");
             return;
         }
     };
+    // Poll up to 200ms for the "installed" transition. The listener
+    // thread has to run its two pre-listen statements (ready_tx.send
+    // + diag::log!) then flip the flag; on a healthy CI runner this
+    // is microseconds, but a small polling window keeps the test
+    // resilient to timing skew on shared runners.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    while std::time::Instant::now() < deadline && !handle.is_listener_alive() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(
         handle.is_listener_alive(),
-        "listener_alive must start true after a successful spawn"
+        "listener_alive must transition to `true` after the rdev \
+         listener thread reaches its pre-`rdev::listen` store. If \
+         this fails, either the diag sink stalled (regression bite \
+         Codex #668 3665741337 is meant to preserve) or the \
+         `store(true)` reordering was reverted"
     );
     handle.shutdown();
     // Join the manager thread but do NOT expect the listener atomic to
@@ -716,6 +737,28 @@ fn is_listener_alive_is_true_immediately_after_successful_spawn() {
     // signal is aimed at the "listener died mid-session" regression,
     // not at graceful shutdown attribution.
     thread.join();
+}
+
+/// Codex P2 #668 discussion 3665741337 — the primary regression bite:
+/// on a stalled diag sink, the flag MUST stay `false` (not flip to
+/// `true`) so a boot self-test polling `is_listener_alive()` reports
+/// the dead-hook wedge.
+///
+/// We can't easily install a real stalled diag sink, so we assert the
+/// invariant at the atomic level: a freshly-constructed `ManagerHandle`
+/// (before ANY listener thread runs) reads `false`. This nails down
+/// the default so a regression that flipped it back to `true` — the
+/// pre-fix state — fails immediately.
+#[test]
+fn freshly_constructed_manager_handle_reports_listener_not_yet_installed() {
+    use crate::hotkey::manager::driver_common::manager_channel;
+    let (handle, _rx) = manager_channel();
+    assert!(
+        !handle.is_listener_alive(),
+        "default must be `false` — otherwise a stalled pre-listen \
+         `diag::log!` would let the boot self-test report PASS for \
+         a hook that was never installed. Codex P2 #668 3665741337."
+    );
 }
 
 /// Codex P2 #668 discussion 3664983439 — the liveness atomic MUST be

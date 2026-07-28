@@ -79,7 +79,7 @@
 //! without spawning any OS listener.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::manager::tracker::{KeyTracker, RawKeyEvent, TrackerOutput};
@@ -353,23 +353,65 @@ pub fn dispatch_raw_event(
 // injector via `EnigoInjectBackend::with_injection_guard` — that
 // override takes precedence over [`global`] on the read path.
 
-static GLOBAL_INJECTION_GUARD: OnceLock<Arc<InjectionGuard>> = OnceLock::new();
+/// Process-wide slot for the currently-installed injection guard.
+///
+/// Was `OnceLock<Arc<InjectionGuard>>` (first-writer-wins) until
+/// Codex P2 #668 discussion 3665741347 pointed out that the
+/// supervisor's failed-resume fallback path (which clears the dead
+/// `hotkey_handle` and lets the Python-worker path install a fresh
+/// listener with a NEW `InjectionGuard`) would leave the injector
+/// arming the STALE guard from the first install while the new
+/// listener's callback checked the fresh guard. Injected transcript
+/// keystrokes then bypassed the tracker's self-injection filter and
+/// reproduced the exact "PTT works once, then wedges" failure the
+/// guard is meant to prevent.
+///
+/// A `Mutex<Option<Arc<...>>>` slot lets `set_global` REPLACE the
+/// current guard on every install, so the injector's `global()`
+/// lookup always returns the same guard the current listener callback
+/// is checking. Cheap: contention is startup-only (install path) and
+/// per-inject (`global()` clone under a short lock), and the injector
+/// already pays a call-per-inject overhead for its normal path.
+static GLOBAL_INJECTION_GUARD: OnceLock<Mutex<Option<Arc<InjectionGuard>>>> = OnceLock::new();
 
-/// Publish `guard` as the process-wide injection guard. First writer
-/// wins; subsequent calls are silently ignored so a test binary that
-/// installs the hotkey subsystem twice (e.g. two integration tests in
-/// the same process) does not panic. In production `install_hotkey`
-/// runs exactly once per process lifetime.
-pub fn set_global(guard: Arc<InjectionGuard>) {
-    let _ = GLOBAL_INJECTION_GUARD.set(guard);
+fn global_slot() -> &'static Mutex<Option<Arc<InjectionGuard>>> {
+    GLOBAL_INJECTION_GUARD.get_or_init(|| Mutex::new(None))
 }
 
-/// Fetch the process-wide injection guard, if `install_hotkey` has
-/// populated it. Returns a cheap `Arc` clone. Used by the injector's
-/// arm-around-SendInput fallback path (see
+/// Publish `guard` as the process-wide injection guard. REPLACES any
+/// previously-published guard so a supervisor reinstall (e.g. Phase-B
+/// resume-fallback landing on the Python-worker install path) sees a
+/// consistent guard between the listener callback and the injector's
+/// `arm()` call. Codex P2 #668 discussion 3665741347.
+///
+/// Production `install_hotkey` runs at most once per install pass —
+/// the `Mutex` is contended only for that startup moment. Tests that
+/// install multiple times in a single process (integration harness,
+/// this module's own test suite) now observe the LATEST install,
+/// which is closer to the real behaviour the fix is preserving.
+pub fn set_global(guard: Arc<InjectionGuard>) {
+    if let Ok(mut slot) = global_slot().lock() {
+        *slot = Some(guard);
+    }
+}
+
+/// Fetch the process-wide injection guard, if any [`set_global`]
+/// caller has populated it. Returns a cheap `Arc` clone. Used by the
+/// injector's arm-around-SendInput fallback path (see
 /// `crate::dictate::backends::EnigoInjectBackend::inject`).
 pub fn global() -> Option<Arc<InjectionGuard>> {
-    GLOBAL_INJECTION_GUARD.get().cloned()
+    global_slot().lock().ok().and_then(|s| s.clone())
+}
+
+/// Test-only helper: drop any previously-published global guard so a
+/// fresh test isn't polluted by an earlier test's install. Not
+/// exposed on the shipping API — production callers only ever
+/// publish, never unpublish.
+#[cfg(test)]
+pub(crate) fn clear_global_for_tests() {
+    if let Ok(mut slot) = global_slot().lock() {
+        *slot = None;
+    }
 }
 
 #[cfg(test)]
@@ -628,18 +670,68 @@ mod tests {
 
     // ------- Global guard slot -------
 
+    /// Serialise global-slot tests so they don't race each other (or
+    /// other integration tests that touch the slot) in the same
+    /// binary. The tests here mutate a process-wide singleton.
+    fn global_slot_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::Mutex as StdMutex;
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
     #[test]
-    fn global_slot_first_writer_wins() {
-        // `set_global` is idempotent — subsequent writers silently lose
-        // (a test host that installs the hotkey subsystem twice must not
-        // panic).
+    fn global_slot_last_writer_wins() {
+        // Codex P2 #668 discussion 3665741347 changed `set_global` from
+        // OnceLock (first-writer-wins) to a Mutex<Option<Arc<_>>>
+        // (last-writer-wins). Rationale: on a supervisor
+        // resume-failure fallback, the Python-worker install path
+        // publishes a FRESH `InjectionGuard`, and the injector's
+        // `global()` lookup MUST see that fresh guard — otherwise it
+        // arms the stale guard while the new listener's callback
+        // checks the fresh one, reproducing the exact self-injection
+        // wedge the guard exists to prevent.
+        //
+        // Verifies via `Arc::ptr_eq` that the pointer returned by
+        // `global()` matches the LAST call to `set_global`, not the
+        // first. Pre-fix code would fail this test (it would return
+        // the g1 pointer from the initial install).
+        let _lock = global_slot_test_lock();
+        clear_global_for_tests();
         let g1 = Arc::new(InjectionGuard::new());
         set_global(Arc::clone(&g1));
+        let fetched_after_g1 = global().expect("g1 install must populate the slot");
+        assert!(
+            Arc::ptr_eq(&fetched_after_g1, &g1),
+            "after the first install, global() must return g1"
+        );
+
         let g2 = Arc::new(InjectionGuard::new());
         set_global(Arc::clone(&g2));
-        // The exact pointer depends on test ordering (other tests in the
-        // same binary may have populated the slot first) — we can only
-        // assert `global()` returns *some* guard now.
-        assert!(global().is_some(), "global slot must be populated");
+        let fetched_after_g2 = global().expect("g2 install must populate the slot");
+        assert!(
+            Arc::ptr_eq(&fetched_after_g2, &g2),
+            "after the second install, global() MUST return g2 (the \
+             fresh guard), not g1. Pre-fix first-writer-wins would \
+             stubbornly return g1 and re-open the self-injection \
+             wedge on supervisor resume-failure fallback. Codex P2 \
+             #668 discussion 3665741347."
+        );
+        assert!(
+            !Arc::ptr_eq(&fetched_after_g2, &g1),
+            "the fresh guard must be a different Arc than the \
+             original — sanity check that g1 and g2 aren't the same \
+             pointer by test-construction accident"
+        );
+
+        clear_global_for_tests();
+    }
+
+    #[test]
+    fn global_slot_returns_none_when_never_set() {
+        let _lock = global_slot_test_lock();
+        clear_global_for_tests();
+        assert!(global().is_none(), "an uninitialised slot must return None");
     }
 }
