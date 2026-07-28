@@ -250,6 +250,59 @@ where
     F: Fn(TrackerOutput) + Send + Sync + 'static,
     R: RawTap,
 {
+    // Discard the heartbeat handle — production has never had a use for it.
+    // See `spawn_with_raw_tap_capturing_heartbeat_for_tests` for the test-only
+    // surface that observes it (Codex P2 #673, thread PRRT_kwDOSfNjQs6UaDcc).
+    spawn_with_raw_tap_inner(injection_guard, on_output, raw_tap).0
+}
+
+/// Result of the internal spawn helper: the normal spawn outcome plus the
+/// heartbeat thread's `JoinHandle` (or `None` if `thread::Builder::spawn`
+/// failed to launch it, essentially OOM only). Kept as a type alias to
+/// tame `clippy::type_complexity` — the tuple appears on multiple signatures.
+type SpawnWithHeartbeatResult = (
+    Result<(ManagerHandle, ManagerThread), SpawnError>,
+    Option<thread::JoinHandle<()>>,
+);
+
+/// Test-only shim that returns both the normal `spawn_with_raw_tap` result
+/// AND the heartbeat thread's `JoinHandle`. Callers can then observe that
+/// the actual production wiring in `spawn_with_raw_tap_inner`'s error
+/// branches (all four `heartbeat_stop.store(true, ...)` calls) genuinely
+/// makes the heartbeat thread exit — a property the earlier
+/// `spawn_heartbeat_thread_exits_when_stop_is_signalled` test could not
+/// pin because it flipped an INDEPENDENT stop atomic instead of exercising
+/// the spawn wiring itself. Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDcc.
+///
+/// The `Option` in the second slot is `None` iff `thread::Builder::spawn`
+/// failed to launch the heartbeat thread (essentially OOM only) — tests
+/// that require the handle should `expect(...)` it.
+#[cfg(test)]
+pub(crate) fn spawn_with_raw_tap_capturing_heartbeat_for_tests<F, R>(
+    injection_guard: Arc<InjectionGuard>,
+    on_output: F,
+    raw_tap: R,
+) -> SpawnWithHeartbeatResult
+where
+    F: Fn(TrackerOutput) + Send + Sync + 'static,
+    R: RawTap,
+{
+    spawn_with_raw_tap_inner(injection_guard, on_output, raw_tap)
+}
+
+/// Shared body of `spawn_with_raw_tap` and its test-only companion. Returns
+/// the heartbeat `JoinHandle` alongside the usual spawn result so tests can
+/// observe that the spawn error-branch wiring actually stops the heartbeat
+/// (Codex P2 #673). Production callers ignore the handle.
+fn spawn_with_raw_tap_inner<F, R>(
+    injection_guard: Arc<InjectionGuard>,
+    on_output: F,
+    raw_tap: R,
+) -> SpawnWithHeartbeatResult
+where
+    F: Fn(TrackerOutput) + Send + Sync + 'static,
+    R: RawTap,
+{
     let (handle, cmd_rx) = manager_channel();
     let tracker: Arc<Mutex<KeyTracker>> = Arc::new(Mutex::new(KeyTracker::new(Vec::new())));
     let on_output = Arc::new(on_output);
@@ -271,11 +324,21 @@ where
     // reshaping the spawn signature.
     let heartbeat_stop = Arc::new(AtomicBool::new(false));
 
-    spawn_heartbeat_thread(
+    // Production ignores the returned `JoinHandle` (the heartbeat runs
+    // for process life on shipping installs and the `HotkeyHandle` is
+    // never dropped). The handle is threaded up through the outer
+    // `(_, Option<JoinHandle>)` return so the test-only companion
+    // `spawn_with_raw_tap_capturing_heartbeat_for_tests` can observe the
+    // thread actually exits when the spawn error branches store to
+    // `heartbeat_stop` — Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDcc.
+    // `.ok()` matches the pre-existing "log-and-swallow" behaviour on
+    // the essentially-impossible OOM path where the OS refused a thread.
+    let heartbeat_handle: Option<thread::JoinHandle<()>> = spawn_heartbeat_thread(
         Arc::clone(&events_total),
         Arc::clone(&events_since_heartbeat),
         Arc::clone(&heartbeat_stop),
-    );
+    )
+    .ok();
 
     // Listener thread — owns rdev. Translates raw events through the shared
     // tracker. Signals readiness / startup failure on a sync channel so
@@ -410,9 +473,12 @@ where
         // heartbeat before returning so a caller that retries doesn't
         // stack orphans either.
         heartbeat_stop.store(true, Ordering::Relaxed);
-        return Err(SpawnError::ListenerStartup(format!(
-            "thread spawn failed: {e}"
-        )));
+        return (
+            Err(SpawnError::ListenerStartup(format!(
+                "thread spawn failed: {e}"
+            ))),
+            heartbeat_handle,
+        );
     }
 
     // Wait for the listener thread to report it's up. Without this we'd
@@ -424,11 +490,11 @@ where
         Ok(ListenerSignal::Started) => {}
         Ok(ListenerSignal::Failed(msg)) => {
             heartbeat_stop.store(true, Ordering::Relaxed);
-            return Err(SpawnError::ListenerStartup(msg));
+            return (Err(SpawnError::ListenerStartup(msg)), heartbeat_handle);
         }
         Err(_) => {
             heartbeat_stop.store(true, Ordering::Relaxed);
-            return Err(SpawnError::ListenerHung);
+            return (Err(SpawnError::ListenerHung), heartbeat_handle);
         }
     }
     // Give rdev a short window to fail fast. On platforms where listen()
@@ -444,7 +510,7 @@ where
         match ready_rx.recv_timeout(remaining) {
             Ok(ListenerSignal::Failed(msg)) => {
                 heartbeat_stop.store(true, Ordering::Relaxed);
-                return Err(SpawnError::ListenerStartup(msg));
+                return (Err(SpawnError::ListenerStartup(msg)), heartbeat_handle);
             }
             Ok(ListenerSignal::Started) => {} // duplicate, ignore
             Err(RecvTimeoutError::Timeout) => break,
@@ -459,28 +525,66 @@ where
             // above: the heartbeat is already running, so stop it before
             // returning or a retry-happy caller stacks orphans.
             heartbeat_stop.store(true, Ordering::Relaxed);
-            return Err(err);
+            return (Err(err), heartbeat_handle);
         }
     };
-    Ok((handle, manager_thread))
+    (Ok((handle, manager_thread)), heartbeat_handle)
 }
 
 /// Spawn the heartbeat thread. Runs until `stop` flips to `true`, which in
 /// production never happens — the rdev listener itself cannot be joined so
 /// there is no clean shutdown for the diagnostic layer above it either.
 /// Test hosts flip the atomic to keep the tee file from growing across a
-/// full unit-test run; production callers ignore it and accept a
-/// process-lifetime thread.
+/// full unit-test run; production callers ignore the returned handle and
+/// accept a process-lifetime thread.
+///
+/// Returns the [`std::thread::JoinHandle`] so a test can observe the thread
+/// actually exits when `stop` is set — the pre-existing
+/// `spawn_startup_failure_stops_heartbeat_thread` test could only assert
+/// that `spawn` returned promptly, which was true even before the
+/// heartbeat-stop lifecycle fix (Codex P2 #657 r3663766095).
 ///
 /// The thread name is set explicitly so a Windows dump / a `taskkill /f
 /// /t` trace names it, and so `Thread::current().name()` in a future
 /// panic hook can attribute stack traces to the right subsystem.
-fn spawn_heartbeat_thread(
+pub(crate) fn spawn_heartbeat_thread(
     events_total: Arc<AtomicU64>,
     events_since_heartbeat: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
-) {
-    let _ = thread::Builder::new()
+) -> std::io::Result<thread::JoinHandle<()>> {
+    spawn_heartbeat_thread_with_config(
+        events_total,
+        events_since_heartbeat,
+        stop,
+        HEARTBEAT_INTERVAL,
+        HEARTBEAT_HEALTHY_QUOTA,
+    )
+}
+
+/// Parametrised variant of [`spawn_heartbeat_thread`]. Production always
+/// calls the constant-driven wrapper above; tests use this shim to reach
+/// the in-loop `action.retire` branch on a millisecond timescale rather
+/// than the production 60-minute one.
+///
+/// Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDch — the earlier
+/// `spawn_heartbeat_thread_exits_on_retirement_even_without_external_stop`
+/// test signalled `stop` from OUTSIDE the loop and therefore did not
+/// exercise the retirement branch at all. Deleting the in-loop
+/// `stop.store(true)` + `return` would have left that test green while
+/// the real self-retire path rotted.
+///
+/// The sleep-slice cap is `min(interval, 250 ms)` so millisecond-scale
+/// test intervals don't over-sleep. Production callers with the 5-second
+/// interval keep the pre-existing 250 ms slice cadence — no behaviour
+/// change.
+pub(crate) fn spawn_heartbeat_thread_with_config(
+    events_total: Arc<AtomicU64>,
+    events_since_heartbeat: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    interval: Duration,
+    healthy_quota: u64,
+) -> std::io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
         .name("vp-hotkey-rdev-heartbeat".to_owned())
         .spawn(move || {
             // First heartbeat also emits an install-time marker so the
@@ -488,21 +592,22 @@ fn spawn_heartbeat_thread(
             // the listener-start moment even if the LL hook is silent.
             crate::diag::log!(
                 "[hotkey/rdev] heartbeat thread started; interval={:?}",
-                HEARTBEAT_INTERVAL
+                interval
             );
-            let mut state = HeartbeatState::default();
+            let slice_cap = interval.min(Duration::from_millis(250));
+            let mut state = HeartbeatState::with_healthy_quota(healthy_quota);
             while !stop.load(Ordering::Relaxed) {
                 // Sleep in small slices so the stop signal is honoured
                 // promptly in tests. A production process never toggles
                 // stop, so the sliced sleep is a no-op there.
-                let deadline = Instant::now() + HEARTBEAT_INTERVAL;
+                let deadline = Instant::now() + interval;
                 while Instant::now() < deadline {
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
                     let remaining = deadline
                         .saturating_duration_since(Instant::now())
-                        .min(Duration::from_millis(250));
+                        .min(slice_cap);
                     thread::sleep(remaining);
                 }
                 let total = events_total.load(Ordering::Relaxed);
@@ -532,14 +637,14 @@ fn spawn_heartbeat_thread(
                              beat to bound gui-diagnostic.log growth on long-running tray installs \
                              (Codex P2 #646 r3661145603). A future wedge will no longer be visible \
                              via heartbeat lines; rely on the tracker/coordinator diagnostics.",
-                            HEARTBEAT_HEALTHY_QUOTA
+                            healthy_quota
                         );
                     }
                     stop.store(true, Ordering::Relaxed);
                     return;
                 }
             }
-        });
+        })
 }
 
 /// Pure decision state for the heartbeat thread — kept out of the sleep
@@ -548,10 +653,10 @@ fn spawn_heartbeat_thread(
 /// and [`HEARTBEAT_IDLE_EMIT_EVERY`] for the policy documentation.
 ///
 /// Codex P2 #646 r3661145603.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct HeartbeatState {
     /// Consecutive beats with `events_since > 0`. Once this hits
-    /// [`HEARTBEAT_HEALTHY_QUOTA`] the thread retires. Any zero-event
+    /// [`Self::healthy_quota`] the thread retires. Any zero-event
     /// beat resets it to 0 — a wedge that appears late still gets full
     /// heartbeat coverage.
     healthy_run: u64,
@@ -561,6 +666,18 @@ pub(crate) struct HeartbeatState {
     /// [`HEARTBEAT_IDLE_EMIT_EVERY`], keeping the tee file bounded on
     /// truly idle sessions.
     idle_run: u64,
+    /// Number of consecutive healthy beats required before the thread
+    /// retires. Production uses [`HEARTBEAT_HEALTHY_QUOTA`]; tests use
+    /// a tiny value via [`Self::with_healthy_quota`] so the retirement
+    /// path can be exercised in milliseconds instead of the ~60-minute
+    /// production window (Codex P2 #673 thread PRRT_kwDOSfNjQs6UaDch).
+    healthy_quota: u64,
+}
+
+impl Default for HeartbeatState {
+    fn default() -> Self {
+        Self::with_healthy_quota(HEARTBEAT_HEALTHY_QUOTA)
+    }
 }
 
 /// What the heartbeat thread should do after one beat's counter read.
@@ -571,6 +688,20 @@ pub(crate) struct HeartbeatAction {
 }
 
 impl HeartbeatState {
+    /// Build a state that retires after `healthy_quota` consecutive
+    /// healthy beats. Used both by the [`Default`] impl (which passes
+    /// [`HEARTBEAT_HEALTHY_QUOTA`]) and by
+    /// [`spawn_heartbeat_thread_with_config`] so tests can trip the
+    /// retirement branch on a millisecond timescale — Codex P2 #673
+    /// thread PRRT_kwDOSfNjQs6UaDch.
+    pub(crate) fn with_healthy_quota(healthy_quota: u64) -> Self {
+        Self {
+            healthy_run: 0,
+            idle_run: 0,
+            healthy_quota,
+        }
+    }
+
     /// Update the healthy/idle counters and return whether this beat
     /// should emit and/or retire the thread.
     ///
@@ -591,7 +722,7 @@ impl HeartbeatState {
             let transitioned_from_idle = self.idle_run > 0;
             self.idle_run = 0;
             self.healthy_run = self.healthy_run.saturating_add(1);
-            let retire = self.healthy_run >= HEARTBEAT_HEALTHY_QUOTA;
+            let retire = self.healthy_run >= self.healthy_quota;
             // Always emit on an active beat AND on the first active
             // beat after an idle run (the log reader wants to see the
             // resumption timestamp). The unconditional emit here is a
