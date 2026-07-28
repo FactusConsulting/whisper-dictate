@@ -134,9 +134,33 @@ jobs:
           # separate from any prior CPU-only release-windows cache so a warm cache
           # from a pre-Vulkan run cannot pollute this build (a cached whisper-rs-sys
           # artefact from the CPU build would silently omit GGML_VULKAN symbols).
-          # Bump this suffix again if the Vulkan link surface changes.
-          shared-key: "rust-release-windows-vulkan"
+          # Bump this suffix again if the Vulkan link surface changes -- e.g. the
+          # `-ninja` suffix below was added when the outer cmake generator flipped
+          # from Visual Studio 17 to Ninja (see the "Build Rust desktop UI" step
+          # comment) so a warm VS-generator cache cannot pollute the Ninja build.
+          shared-key: "rust-release-windows-vulkan-ninja"
           cache-on-failure: true
+
+      # MSVC developer environment (INCLUDE / LIB / LIBPATH / cl.exe on PATH).
+      # Needed by the Vulkan Ninja build below: with the outer cmake generator
+      # forced to Ninja (see the "Build Rust desktop UI" step comment), Ninja
+      # invokes cl.exe directly instead of going through MSBuild -- and cl.exe
+      # requires the vcvars-style env to find <stdio.h> etc. `ilammy/msvc-dev-cmd`
+      # exports those into $GITHUB_ENV so every later step (cargo, the outer
+      # cmake, the ExternalProject_Add sub-cmake for vulkan-shaders-gen, the
+      # nested Ninja/cl.exe compile of `CMakeTestCCompiler`'s probe program)
+      # inherits them. Without this the sub-cmake's CMakeTestCCompiler check
+      # fails with "The C compiler is not able to compile a simple test
+      # program" (the #647 rc.10/rc.11 vulkan-shaders-gen ExternalProject
+      # failure with `error MSB8066: Custom build for '...vulkan-shaders-gen*
+      # .rule;...ggml-vulkan\CMakeLists.txt' exited with code 1`).
+      # Skipped when Vulkan is off since the CPU build takes cmake-rs's default
+      # Visual Studio generator and does not need this.
+      - name: Set up MSVC developer environment (Vulkan build)
+        if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       # Vulkan SDK is needed at BUILD time to compile whisper.cpp's GGML_VULKAN
       # backend: whisper.cpp compiles its GPU shaders at build time via `glslc`
@@ -186,6 +210,32 @@ jobs:
             $glslc = (Get-Command glslc -ErrorAction SilentlyContinue).Source
             if (-not $glslc) { throw "glslc not on PATH after VULKAN_SDK\Bin prepend - SDK layout regression" }
             Write-Host "glslc = $glslc"
+            # Force cmake generator to Ninja for BOTH the outer whisper-rs-sys
+            # build AND the nested vulkan-shaders-gen ExternalProject_Add.
+            # cmake-rs reads CMAKE_GENERATOR when the crate's build.rs did not
+            # call `.generator(...)` (whisper-rs-sys does not), and whisper.cpp's
+            # ExternalProject_Add for vulkan-shaders-gen does not pass -G to its
+            # nested cmake so the env var propagates there too. Why NOT the
+            # Visual Studio generator (cmake-rs's msvc default): the vulkan
+            # backend's shaders-gen sub-build then runs MSBuild-inside-MSBuild
+            # (outer MSBuild -> Custom Build Step -> nested cmake -> nested
+            # MSBuild for CMakeTestCCompiler), and the nested MSBuild's
+            # implicit toolset detection lost the vcvars env from the outer
+            # Custom Build Step, tripping "The C compiler is not able to
+            # compile a simple test program" (#647 rc.10/rc.11: `error MSB8066:
+            # Custom build for '...vulkan-shaders-gen*.rule;...ggml-vulkan\
+            # CMakeLists.txt' exited with code 1`). Ninja invokes cl.exe
+            # directly with no MSBuild layer -- cheaper and, combined with the
+            # "Set up MSVC developer environment" step above that puts vcvars
+            # in $GITHUB_ENV, gives the nested cmake's compiler probe a working
+            # cl.exe on the first try. Ninja is preinstalled on
+            # windows-2025 via VS 2022 Build Tools; ilammy/msvc-dev-cmd adds
+            # its bin dir to PATH.
+            $env:CMAKE_GENERATOR = 'Ninja'
+            $ninja = (Get-Command ninja -ErrorAction SilentlyContinue).Source
+            if (-not $ninja) { throw "ninja not on PATH - the 'Set up MSVC developer environment' step did not run or the VS 2022 Ninja shipment moved" }
+            Write-Host "ninja = $ninja"
+            Write-Host "CMAKE_GENERATOR = $env:CMAKE_GENERATOR (forced Ninja to avoid MSBuild-in-MSBuild in the vulkan-shaders-gen sub-build)"
             Write-Host "Building whisper-dictate with Vulkan GPU acceleration for whisper.cpp"
             cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --features rust-injection,rust-hotkeys,audio-in-rust,whisper-rs-local,whisper-rs-vulkan
           } else {
