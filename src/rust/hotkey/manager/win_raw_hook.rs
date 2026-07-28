@@ -174,7 +174,7 @@ unsafe extern "system" fn ll_keyboard_hook_proc(
         let kb_ptr = lparam as *const KBDLLHOOKSTRUCT;
         if !kb_ptr.is_null() {
             let kb = unsafe { *kb_ptr };
-            let wm = wm_message_name(wparam as usize);
+            let wm = wm_message_name(wparam);
             // Extended-key bit (bit 0) and injected bit (bit 4) —
             // per KBDLLHOOKSTRUCT docs. The injected bit is the same
             // one InjectionGuard reads on the rdev callback side, so
