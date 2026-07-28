@@ -345,6 +345,18 @@ fn wayland_smoke_hotkey_boot_env_matcher_omits_generic_rdev_wrapper() {
 // P2: rebuild-with branch must FAIL on installed release binaries.
 // ---------------------------------------------------------------------------
 
+// Executes the guard under `bash`, so it is scoped to the platforms the
+// script itself targets. `wayland-user-smoke.sh` only ever runs on Linux
+// (the user's Ubuntu Wayland box and the ubuntu-2604 integration
+// container); the Windows CI leg has no Wayland session and its `bash`
+// is whatever Git-for-Windows/MSYS ships, whose exit-status and pipeline
+// semantics differ from the shell that will actually interpret this
+// script. Running it there produced a non-zero exit with empty stderr on
+// windows-2025 while passing on both Linux CI and a local Git-bash --
+// i.e. pure runner noise about a file Windows never executes. The
+// structural assertions above (guard exists, references CMD_SOURCE)
+// stay cross-platform; only the execution is gated.
+#[cfg(not(windows))]
 #[test]
 fn wayland_smoke_hotkey_boot_missing_features_fails_on_installed_release() {
     // Codex P2 PRRT_kwDOSfNjQs6Ubpeb cmt 3666333668: the earlier version
@@ -391,6 +403,7 @@ fn wayland_smoke_hotkey_boot_missing_features_fails_on_installed_release() {
 /// indentation inside the located branch) rather than matching the guard's
 /// text, so the test cannot pass by "recognising" the correct condition --
 /// whatever condition is actually there gets run.
+#[cfg(not(windows))]
 fn extract_rebuild_with_guard() -> String {
     let smoke = read_wayland_smoke();
     let header = "self-test hotkey-boot (Windows PTT-boot regression";
@@ -430,6 +443,7 @@ fn extract_rebuild_with_guard() -> String {
 ///
 /// Returns the verdict the guard actually reached: `"bad"`, `"warn"`, or
 /// `"(none)"` if it took neither branch.
+#[cfg(not(windows))]
 fn run_guard_with_cmd_source(block: &str, cmd_source: &str) -> String {
     use std::process::Command;
 
