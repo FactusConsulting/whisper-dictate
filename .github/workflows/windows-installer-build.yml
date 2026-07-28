@@ -213,7 +213,7 @@ jobs:
       # a partial C:\t\release\build never poisons the next run.
       - name: Cache short Vulkan target dir
         if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             D:\t\release\.fingerprint
