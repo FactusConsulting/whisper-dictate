@@ -1071,7 +1071,7 @@ that engine spawns:
   This is the knob most users think of when they say "use the Python
   path": it picks the engine, not the STT worker.
 - **`VOICEPI_TRANSCRIBE_BACKEND=rust`** — a Python-worker-internal switch
-  that swaps the *worker's* STT backend from `faster-whisper` to
+  that swaps the _worker's_ STT backend from `faster-whisper` to
   whisper.cpp-in-Rust. It only takes effect when the Python engine is
   active (i.e. `VOICEPI_DICTATE_ENGINE=python`); the default in-process
   Rust engine always uses the whisper.cpp path directly. Codex P2 #647
