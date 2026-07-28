@@ -49,8 +49,8 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Instant;
@@ -434,6 +434,33 @@ pub(crate) fn write_line_to<W: Write>(stderr_sink: &mut W, line: &str) {
 /// AppData volume; a genuine flood dropping lines is preferable to a
 /// wedged hook. Codex P1 #646 discussion r3661145589 + Codex P1 #668
 /// discussion 3665741341.
+///
+/// ## Why this stays at 256 now that shedding is *visible*
+///
+/// The obvious follow-on to the drop accounting below is "the queue is
+/// too small, raise it". Deliberately not done here, for four reasons:
+///
+/// 1. No finite bound survives the worst case anyway. The rdev callback
+///    emits its `raw=` line BEFORE `raw_from_rdev` filters non-key
+///    events, so at `VOICEPI_LOG=debug` a mouse reporting at ~1 kHz
+///    feeds the queue continuously. Against a genuinely stalled sink a
+///    4096-deep queue fills in ~4 s instead of ~256 ms: it moves the
+///    threshold, it does not remove the failure mode.
+/// 2. A deeper queue would MASK the signal this change just added. The
+///    `dropped=` marker is the evidence that tells us empirically
+///    whether 256 is too small on a real Windows box; sizing up in the
+///    same commit that starts measuring throws away the measurement.
+/// 3. Queue depth is trace staleness. This is a wedge-TIMING
+///    diagnostic: the operator correlates `t=<ms>` prefixes against the
+///    moment PTT died. A 4096-deep backlog can put seconds between the
+///    event and its log line, which is the wrong trade for the one
+///    question the log exists to answer.
+/// 4. 256 records is a ~50 KB ceiling, so the memory argument for
+///    growing it is weak in both directions.
+///
+/// If field evidence (a `dropped=` marker with a large `n` on an
+/// otherwise healthy host) says otherwise, raising this is a one-line,
+/// now-measurable follow-up.
 pub const ASYNC_QUEUE_CAPACITY: usize = 256;
 
 /// Process-wide sender to the off-callback trace writer thread. `None`
@@ -451,7 +478,97 @@ static ASYNC_QUEUE_TX: OnceLock<SyncSender<String>> = OnceLock::new();
 /// reading the tee file; production code never reads it (the queue is
 /// deliberately fire-and-forget so a slow disk cannot back-pressure
 /// the LL-hook callback).
-static ASYNC_PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static ASYNC_PENDING: AtomicUsize = AtomicUsize::new(0);
+
+/// Records [`enqueue_async`] has shed since the writer thread last
+/// emitted a coalesced `[diag-async] dropped=` marker.
+///
+/// Before this existed, a full queue dropped the line and told nobody:
+/// `gui-diagnostic.log` looked identical whether the LL-hook callback
+/// was quiet or whether the queue had shed a burst, so a reader could
+/// not distinguish "nothing happened" from "the sink was too slow to
+/// record what happened" — on exactly the slow-AppData scenario the
+/// queue exists for. Bumped with a single relaxed `fetch_add` on the
+/// LL-hook thread (no allocation, no lock) and `swap`ped back to zero
+/// by the writer thread when it emits the marker.
+static ASYNC_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// The coalesced load-shed marker the writer emits before the next
+/// record it writes after one or more drops.
+///
+/// A named function rather than an inline `format!` so the regression
+/// test can assert the exact shape without duplicating the format
+/// string, and so a future log-parsing tool has one place to match.
+///
+/// ASCII only: this string reaches stderr via [`write_line`] and
+/// typographic punctuation renders as mojibake under cmd.exe on a
+/// legacy code page (AGENTS.md; pinned by `console_ascii_tests`).
+pub(crate) fn async_dropped_marker(dropped: u64, capacity: usize) -> String {
+    format!(
+        "[diag-async] dropped={dropped} record(s): the diagnostic queue \
+         (capacity={capacity}) filled while the sink was slow - the trace \
+         below has a gap"
+    )
+}
+
+/// Emit the coalesced [`async_dropped_marker`] if anything was shed
+/// since the last time this ran, then reset the counter.
+///
+/// `swap` rather than `load` + `store` so a drop racing in between the
+/// read and the reset is carried into the NEXT marker instead of being
+/// lost: the accounting is allowed to be late, never wrong.
+///
+/// One marker per burst, never one line per drop — a per-drop marker
+/// would be unbounded write amplification against the very sink that
+/// was too slow to keep up in the first place.
+fn emit_pending_async_drops<F>(dropped: &AtomicU64, capacity: usize, sink: &mut F)
+where
+    F: FnMut(&str),
+{
+    let shed = dropped.swap(0, Ordering::Relaxed);
+    if shed > 0 {
+        sink(&async_dropped_marker(shed, capacity));
+    }
+}
+
+/// The writer thread's whole body, parameterised over the receiver,
+/// the two counters and the sink.
+///
+/// Production calls this from [`ensure_async_writer`] with the
+/// process-wide statics and [`write_line`]; `diag_tests` calls it on a
+/// scoped thread with a tiny channel and a sink it can stall on demand,
+/// which is the only way to drive the "queue filled while the sink was
+/// wedged" path deterministically — the production sink is a file write
+/// no test can pause.
+///
+/// Loops until every sender is dropped, which never happens in a
+/// shipping process: the `OnceLock` keeps a sender alive for the
+/// process lifetime, matching the rdev listener's own lifetime model.
+/// The trailing [`emit_pending_async_drops`] therefore only runs in
+/// tests and on a future explicit-shutdown path, and exists so records
+/// shed after the LAST surviving record are still accounted for (there
+/// is no "next record" to prefix them onto).
+pub(crate) fn run_async_writer_loop<F>(
+    rx: Receiver<String>,
+    capacity: usize,
+    pending: &AtomicUsize,
+    dropped: &AtomicU64,
+    mut sink: F,
+) where
+    F: FnMut(&str),
+{
+    while let Ok(line) = rx.recv() {
+        // Marker FIRST, so a reader of the log sees the gap announced
+        // immediately before the first record that followed it.
+        emit_pending_async_drops(dropped, capacity, &mut sink);
+        sink(&line);
+        // Decrement AFTER the write so a test polling
+        // `ASYNC_PENDING == 0` (via `flush_async_for_tests`) sees the
+        // file has actually been written to.
+        pending.fetch_sub(1, Ordering::Relaxed);
+    }
+    emit_pending_async_drops(dropped, capacity, &mut sink);
+}
 
 /// Idempotently install the off-callback trace writer thread. Safe to
 /// call from every callback-path caller because the writer is gated by
@@ -467,17 +584,13 @@ pub fn ensure_async_writer() {
         let _ = thread::Builder::new()
             .name("vp-hotkey-diag-async".to_owned())
             .spawn(move || {
-                // Loop until every sender is dropped (which never happens
-                // in a shipping process — the OnceLock keeps at least one
-                // clone alive for process lifetime, matching the rdev
-                // listener's own lifetime model).
-                while let Ok(line) = rx.recv() {
-                    write_line(&line);
-                    // Decrement AFTER the write so a test polling
-                    // `ASYNC_PENDING == 0` (via `flush_async_for_tests`)
-                    // sees the file has actually been written to.
-                    ASYNC_PENDING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                }
+                run_async_writer_loop(
+                    rx,
+                    ASYNC_QUEUE_CAPACITY,
+                    &ASYNC_PENDING,
+                    &ASYNC_DROPPED,
+                    write_line,
+                );
             });
         tx
     });
@@ -489,6 +602,14 @@ pub fn ensure_async_writer() {
 /// line is always preferable to blocking the LL-hook callback (see
 /// [`ASYNC_QUEUE_CAPACITY`] for the rationale).
 ///
+/// A drop is never silent to the LOG READER, though: it bumps
+/// [`ASYNC_DROPPED`], and the writer thread announces the total as one
+/// coalesced [`async_dropped_marker`] line before the next record it
+/// writes. Without that, a shed burst and a quiet period are
+/// indistinguishable in `gui-diagnostic.log`, which makes the trace
+/// untrustworthy for exactly the slow-sink scenario the queue exists
+/// for.
+///
 /// Callers on the LL-hook path MUST use this function (or the
 /// [`log_async!`] macro) instead of [`log!`]. The two are otherwise
 /// equivalent — the writer thread invokes the same `write_line` sink
@@ -496,12 +617,37 @@ pub fn ensure_async_writer() {
 /// unchanged.
 pub fn enqueue_async(message: String) {
     if let Some(tx) = ASYNC_QUEUE_TX.get() {
-        // try_send drops on Full; the alternative (send / block until
-        // the writer catches up) would defeat the entire purpose of the
-        // queue on the exact "slow AppData volume" scenario the queue
-        // exists for.
-        if tx.try_send(message).is_ok() {
-            ASYNC_PENDING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        enqueue_async_into(tx, &ASYNC_PENDING, &ASYNC_DROPPED, message);
+    }
+}
+
+/// Sender half of [`enqueue_async`], parameterised over the channel and
+/// the two counters so `diag_tests` can drive the shedding path against
+/// a queue small enough to fill deterministically.
+///
+/// `try_send` (never `send`) is the whole point: this runs on the
+/// Windows `WH_KEYBOARD_LL` callback thread, where the only acceptable
+/// outcomes are "queued" and "shed" — never "parked". Blocking until
+/// the writer caught up would defeat the entire purpose of the queue on
+/// the exact "slow AppData volume" scenario it exists for.
+pub(crate) fn enqueue_async_into(
+    tx: &SyncSender<String>,
+    pending: &AtomicUsize,
+    dropped: &AtomicU64,
+    message: String,
+) {
+    match tx.try_send(message) {
+        Ok(()) => {
+            pending.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(TrySendError::Full(_)) => {
+            // Shed the newest record but ACCOUNT for it, so the writer
+            // can tell the log reader the trace has a gap and how big.
+            dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            // The writer thread is gone. Not counted: the marker could
+            // never be emitted, so the counter would only grow forever.
         }
     }
 }
@@ -514,6 +660,19 @@ pub fn enqueue_async(message: String) {
 /// trace. Codex P2 #668 discussion 3666165045.
 pub fn async_writer_installed() -> bool {
     ASYNC_QUEUE_TX.get().is_some()
+}
+
+/// Records shed by [`enqueue_async`] that the writer has not yet
+/// reported as an [`async_dropped_marker`] line.
+///
+/// Test-only (mirrors [`async_writer_installed`]'s shape but stays
+/// `#[cfg(test)]`): production has no use for the raw number because
+/// the marker in the log IS the product, and exposing a counter that
+/// the writer resets under the reader's feet would invite call sites
+/// that treat a transient zero as "nothing was ever dropped".
+#[cfg(test)]
+pub(crate) fn async_dropped_count() -> u64 {
+    ASYNC_DROPPED.load(Ordering::Relaxed)
 }
 
 /// Test-only: block until the async writer has drained every message
